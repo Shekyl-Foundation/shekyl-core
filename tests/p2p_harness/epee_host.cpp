@@ -3,66 +3,61 @@
 // All rights reserved.
 // BSD-3-Clause
 
-// epee-host SEED TRANSCRIPT
+// epee-host SEED TRANSCRIPT [--after none|follow|send-over|pause]
+//                          [--wait-ms N] [--pause-ms N] [--settle-ms N]
+//                          [--over-bytes N]
 //
-// One connection on boosted_tcp_server. The transcript text is version 1
-// in docs/design/P2P_DIFFERENTIAL_HARNESS.md. Seed 1's handshake fields
-// are that document's in-process legs. This binary does not read the
-// Rust encoder.
+// Recording server for boosted_tcp_server. The seed is a label on the
+// transcript. Host behaviour after the first invoke is `--after`; the
+// Rust driver owns the seed table and the durations. Handshake encode
+// and decode stay here: that is the epee reference the harness diffs.
 
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
-extern "C" int32_t shekyl_levin_ingress_admit(uint32_t command, uint32_t flags, uint64_t* out_cap);
-
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
 #include "misc_log_ex.h"
 #include "net/abstract_tcp_server2.h"
+#include "net/levin_base.h"
 #include "net/levin_protocol_handler_async.h"
 #include "p2p/p2p_protocol_defs.h"
+#include "shekyl/shekyl_ffi.h"
 #include "storages/levin_abstract_invoke2.h"
 
 namespace {
 
-constexpr uint64_t kSeedBackpressure = 40;
-constexpr uint64_t kSeedConcurrent = 20;
-constexpr uint64_t kSeedSendOver = 32;
-constexpr auto kPause = std::chrono::milliseconds(400);
-constexpr std::size_t kSendCap = 64 * 1024;
+enum class after_handshake { none, follow, send_over, pause };
 
-bool known_seed(uint64_t seed) {
-  switch (seed) {
-    case 1:
-    case 2:
-    case 3:
-    case 10:
-    case 11:
-    case 20:
-    case 30:
-    case 31:
-    case 32:
-    case 40:
-      return true;
-    default:
-      return seed >= 100 && seed < 116;
-  }
-}
+using handshake = nodetool::COMMAND_HANDSHAKE_T<cryptonote::CORE_SYNC_DATA>;
+using timed_sync = nodetool::COMMAND_TIMED_SYNC_T<cryptonote::CORE_SYNC_DATA>;
 
-std::chrono::seconds wait_for(uint64_t seed) {
-  if (seed == 11 || seed == 40)
-    return std::chrono::seconds(20);
-  return std::chrono::seconds(8);
-}
+constexpr std::chrono::milliseconds kDefaultWait{8000};
+constexpr uint32_t kServerStopMs = 5000;
+constexpr uint16_t kAdvertisedPort = 18080;
+constexpr uint8_t kNetworkIdByte = 0x11;
+constexpr uint8_t kTopIdByte = 0xab;
+
+struct host_plan {
+  uint64_t seed = 0;
+  std::string transcript;
+  after_handshake after = after_handshake::none;
+  std::chrono::milliseconds wait{kDefaultWait};
+  std::chrono::milliseconds pause{0};
+  std::chrono::milliseconds settle{0};
+  std::size_t over_bytes = 0;
+};
 
 struct record {
   std::mutex mu;
@@ -72,13 +67,69 @@ struct record {
   bool invoke_done = false;
   bool closed = false;
   bool established = false;
+  bool after_done = false;
 };
 
 record g_record;
-uint64_t g_seed = 0;
-bool g_paused = false;
-bool g_followed = false;
-bool g_over_sent = false;
+host_plan g_plan;
+
+after_handshake parse_after(const std::string& text) {
+  if (text == "none")
+    return after_handshake::none;
+  if (text == "follow")
+    return after_handshake::follow;
+  if (text == "send-over")
+    return after_handshake::send_over;
+  if (text == "pause")
+    return after_handshake::pause;
+  throw std::runtime_error("unknown after " + text);
+}
+
+unsigned long parse_ulong(const char* text, const char* name) {
+  char* end = nullptr;
+  const unsigned long value = std::strtoul(text, &end, 10);
+  if (end == text || *end != '\0')
+    throw std::runtime_error(std::string(name) + " is not an integer");
+  return value;
+}
+
+host_plan parse_args(int argc, char** argv) {
+  if (argc < 3)
+    throw std::runtime_error(
+        "epee-host SEED TRANSCRIPT [--after none|follow|send-over|pause] "
+        "[--wait-ms N] [--pause-ms N] [--settle-ms N] [--over-bytes N]");
+  host_plan plan;
+  char* end = nullptr;
+  plan.seed = std::strtoull(argv[1], &end, 10);
+  if (end == argv[1] || *end != '\0')
+    throw std::runtime_error("seed");
+  plan.transcript = argv[2];
+  for (int i = 3; i < argc; ++i) {
+    const std::string flag = argv[i];
+    auto need = [&](const char* name) -> const char* {
+      if (i + 1 >= argc)
+        throw std::runtime_error(std::string("missing ") + name);
+      return argv[++i];
+    };
+    if (flag == "--after")
+      plan.after = parse_after(need("after"));
+    else if (flag == "--wait-ms")
+      plan.wait = std::chrono::milliseconds(parse_ulong(need("wait-ms"), "wait-ms"));
+    else if (flag == "--pause-ms")
+      plan.pause = std::chrono::milliseconds(parse_ulong(need("pause-ms"), "pause-ms"));
+    else if (flag == "--settle-ms")
+      plan.settle = std::chrono::milliseconds(parse_ulong(need("settle-ms"), "settle-ms"));
+    else if (flag == "--over-bytes")
+      plan.over_bytes = static_cast<std::size_t>(parse_ulong(need("over-bytes"), "over-bytes"));
+    else
+      throw std::runtime_error("unknown flag " + flag);
+  }
+  if (plan.after == after_handshake::pause && plan.pause.count() <= 0)
+    throw std::runtime_error("pause requires --pause-ms");
+  if (plan.after == after_handshake::send_over && plan.over_bytes == 0)
+    throw std::runtime_error("send-over requires --over-bytes");
+  return plan;
+}
 
 struct harness_context : epee::net_utils::connection_context_base {
   bool established_session = false;
@@ -92,7 +143,7 @@ struct harness_context : epee::net_utils::connection_context_base {
       return std::nullopt;
     return static_cast<size_t>(cap);
   }
-  static constexpr int handshake_command() noexcept { return 1001; }
+  static constexpr int handshake_command() noexcept { return handshake::ID; }
   bool session_established() const noexcept { return established_session; }
 };
 
@@ -120,7 +171,32 @@ epee::byte_slice relay_notify() {
   epee::levin::message_writer writer;
   const char payload[] = {'r', 'e', 'l', 'a', 'y'};
   writer.buffer.write(payload, sizeof payload);
-  return writer.finalize_notify(1002);
+  return writer.finalize_notify(static_cast<uint32_t>(timed_sync::ID));
+}
+
+void apply_after(tap& endpoint) {
+  {
+    std::lock_guard<std::mutex> lock(g_record.mu);
+    if (g_record.after_done || !g_record.established)
+      return;
+    g_record.after_done = true;
+  }
+  switch (g_plan.after) {
+    case after_handshake::follow:
+      endpoint.do_send(relay_notify());
+      break;
+    case after_handshake::send_over: {
+      std::this_thread::sleep_for(g_plan.settle);
+      std::vector<uint8_t> over(g_plan.over_bytes, 0);
+      endpoint.do_send(epee::byte_slice{std::move(over)});
+      break;
+    }
+    case after_handshake::pause:
+      std::this_thread::sleep_for(g_plan.pause);
+      break;
+    case after_handshake::none:
+      break;
+  }
 }
 
 struct recording_handler {
@@ -140,41 +216,7 @@ struct recording_handler {
       g_record.delivered.insert(g_record.delivered.end(), bytes, bytes + cb);
     }
     const bool ok = inner.handle_recv(ptr, cb);
-    if (g_seed == kSeedConcurrent && !g_followed) {
-      bool established = false;
-      {
-        std::lock_guard<std::mutex> lock(g_record.mu);
-        established = g_record.established;
-      }
-      if (established) {
-        g_followed = true;
-        endpoint.do_send(relay_notify());
-      }
-    }
-    if (g_seed == kSeedSendOver && !g_over_sent) {
-      bool established = false;
-      {
-        std::lock_guard<std::mutex> lock(g_record.mu);
-        established = g_record.established;
-      }
-      if (established) {
-        g_over_sent = true;
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        std::vector<uint8_t> over(kSendCap + 1, 0);
-        endpoint.do_send(epee::byte_slice{std::move(over)});
-      }
-    }
-    if (g_seed == kSeedBackpressure && !g_paused) {
-      bool established = false;
-      {
-        std::lock_guard<std::mutex> lock(g_record.mu);
-        established = g_record.established;
-      }
-      if (established) {
-        g_paused = true;
-        std::this_thread::sleep_for(kPause);
-      }
-    }
+    apply_after(endpoint);
     std::lock_guard<std::mutex> lock(g_record.mu);
     if (!g_record.invoke_done && (!g_record.sent.empty() || !ok)) {
       g_record.invoke_done = true;
@@ -188,13 +230,11 @@ struct recording_handler {
   bool release_protocol() { return inner.release_protocol(); }
 };
 
-using handshake = nodetool::COMMAND_HANDSHAKE_T<cryptonote::CORE_SYNC_DATA>;
-
 nodetool::basic_node_data seed1_node() {
   nodetool::basic_node_data node{};
   for (auto& byte : node.network_id)
-    byte = 0x11;
-  node.address = epee::net_utils::network_address(epee::net_utils::ipv4_network_address(0, 18080));
+    byte = kNetworkIdByte;
+  node.address = epee::net_utils::network_address(epee::net_utils::ipv4_network_address(0, kAdvertisedPort));
   node.support_flags = 0;
   return node;
 }
@@ -204,7 +244,7 @@ cryptonote::CORE_SYNC_DATA seed1_sync() {
   sync.current_height = 1;
   sync.cumulative_difficulty = 2;
   sync.cumulative_difficulty_top64 = 0;
-  std::memset(sync.top_id.data, 0xab, sizeof sync.top_id.data);
+  std::memset(sync.top_id.data, kTopIdByte, sizeof sync.top_id.data);
   sync.top_version = 0;
   return sync;
 }
@@ -223,9 +263,8 @@ struct commands : epee::levin::levin_commands_handler<harness_context> {
       rsp.store(out_ps);
       if (!out_ps.store_to_binary(buff_out))
         return LEVIN_ERROR_FORMAT;
-    }
-    if (loaded)
       ctx.established_session = true;
+    }
     {
       std::lock_guard<std::mutex> lock(g_record.mu);
       g_record.established = loaded;
@@ -266,10 +305,10 @@ const char* end_word() {
 void write_events(std::ostream& out) {
   std::size_t off = 0;
   bool first = true;
-  while (off + 29 <= g_record.delivered.size()) {
-    uint64_t payload = 0;
-    std::memcpy(&payload, g_record.delivered.data() + off + 8, sizeof payload);
-    const std::size_t total = 29 + static_cast<std::size_t>(payload);
+  while (off + sizeof(epee::levin::bucket_head2) <= g_record.delivered.size()) {
+    epee::levin::bucket_head2 head{};
+    std::memcpy(&head, g_record.delivered.data() + off, sizeof head);
+    const std::size_t total = sizeof(head) + static_cast<std::size_t>(head.m_cb);
     if (off + total > g_record.delivered.size())
       break;
     std::vector<uint8_t> message(g_record.delivered.begin() + static_cast<std::ptrdiff_t>(off),
@@ -285,18 +324,18 @@ void write_events(std::ostream& out) {
   }
 }
 
-bool write_transcript(const std::string& path, uint64_t seed) {
+bool write_transcript(const std::string& path) {
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   if (!out)
     return false;
-  const char* version = seed == kSeedBackpressure ? "shekyl-p2p-transcript 2" : "shekyl-p2p-transcript 1";
-  out << version << "\n"
-      << "seed " << seed << "\n"
+  const bool version2 = g_plan.after == after_handshake::pause;
+  out << (version2 ? "shekyl-p2p-transcript 2" : "shekyl-p2p-transcript 1") << "\n"
+      << "seed " << g_plan.seed << "\n"
       << "role host\n"
       << "sent " << hex(g_record.sent) << "\n"
       << "recv " << hex(g_record.delivered) << "\n"
       << "end " << end_word() << "\n";
-  if (seed == kSeedBackpressure)
+  if (version2)
     write_events(out);
   return static_cast<bool>(out);
 }
@@ -304,21 +343,12 @@ bool write_transcript(const std::string& path, uint64_t seed) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 3) {
-    std::cerr << "epee-host SEED TRANSCRIPT\n";
+  try {
+    g_plan = parse_args(argc, argv);
+  } catch (const std::exception& err) {
+    std::cerr << err.what() << "\n";
     return 1;
   }
-  char* end = nullptr;
-  const unsigned long long seed = std::strtoull(argv[1], &end, 10);
-  if (end == argv[1] || *end != '\0') {
-    std::cerr << "seed\n";
-    return 1;
-  }
-  if (!known_seed(seed)) {
-    std::cerr << "no script for seed " << seed << "\n";
-    return 1;
-  }
-  g_seed = seed;
 
   mlog_configure("", true);
 
@@ -345,20 +375,19 @@ int main(int argc, char** argv) {
 
   {
     std::unique_lock<std::mutex> lock(g_record.mu);
-    const auto wait = wait_for(seed);
-    if (!g_record.cv.wait_for(lock, wait, [] { return g_record.invoke_done || g_record.closed; })) {
+    if (!g_record.cv.wait_for(lock, g_plan.wait, [] { return g_record.invoke_done || g_record.closed; })) {
       std::cerr << "epee host timed out\n";
       server.send_stop_signal();
-      server.timed_wait_server_stop(5 * 1000);
+      server.timed_wait_server_stop(kServerStopMs);
       return 1;
     }
     if (g_record.established || g_record.invoke_done)
-      g_record.cv.wait_for(lock, wait_for(seed), [] { return g_record.closed; });
+      g_record.cv.wait_for(lock, g_plan.wait, [] { return g_record.closed; });
   }
 
-  const bool wrote = write_transcript(argv[2], seed);
+  const bool wrote = write_transcript(g_plan.transcript);
   server.send_stop_signal();
-  server.timed_wait_server_stop(5 * 1000);
+  server.timed_wait_server_stop(kServerStopMs);
   server.deinit_server();
   if (!wrote) {
     std::cerr << "epee host failed to write the transcript\n";

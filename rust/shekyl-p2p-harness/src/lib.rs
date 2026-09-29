@@ -5,29 +5,36 @@
 
 //! The p2p conformance harness.
 //!
-//! One scripted peer, one seam host, and a comparator. The epee host is a
-//! separate C++ binary that writes the same transcript. This crate does
-//! not link epee. Before cutover the comparator diffs the two hosts.
-//! At cutover the epee transcripts for the parity fields become goldens.
-//! A golden changes only with a ruling, in that ruling's pull request.
+//! One scripted peer, one seam host, a comparator, and a driver that
+//! runs every seed against both stacks. The epee host is a separate C++
+//! recording binary: it takes [`script::AfterHandshake`] on the command
+//! line and does not own the seed table. This crate does not link epee.
+//! Before cutover the comparator diffs the two hosts. At cutover the
+//! epee transcripts for the parity fields become goldens. After cutover
+//! the same peer stays as the CI check on the Rust transport;
+//! [`compare::DeferredInvariant`] is the vocabulary those later checks
+//! use. A golden changes only with a ruling, in that ruling's pull request.
 
 #![deny(unsafe_code)]
 
 mod compare;
+mod driver;
 mod handshake;
 mod peer;
 mod script;
 mod seam_host;
 mod transcript;
 
-pub use compare::{
-    diff, is_expected_divergence, is_parity_field, run_agrees, Finding, Run, EXPECTED_DIVERGENCES,
-};
-pub use handshake::{handshake, Handshake, HANDSHAKE_SEED};
+pub use compare::{diff, run_agrees, run_matches_script, DeferredInvariant, Field, Finding, Run};
+pub use driver::{epee_cli_args, host_wait_ms, run_all};
+pub use handshake::{handshake, Handshake};
 pub use peer::run_peer;
-pub use script::{all_seeds, known_seed, script, whole_message_count, SEED_CONCURRENT};
+pub use script::{
+    all_seeds, known_seed, script, whole_message_count, AfterHandshake, NamedSeed, Script,
+    PROPERTY_SEEDS, READ_PAUSE, SEND_QUEUE_BYTES,
+};
 pub use seam_host::{serve_seam_once, SeamHost};
-pub use transcript::{End, Event, Role, Transcript};
+pub use transcript::{End, Event, Role, Transcript, TranscriptVersion};
 
 /// A harness failure. The seed, when there is one, stays on the transcript.
 #[derive(Debug)]
@@ -63,7 +70,7 @@ impl From<shekyl_levin::Error> for Error {
     }
 }
 
-/// Run seed 1 against the seam host. The epee host is not in this process.
+/// Run a seed against the seam host. The epee host is not in this process.
 pub fn run_seam(seed: u64) -> Result<Run, Error> {
     let host = serve_seam_once(seed)?;
     let peer = run_peer(host.addr(), seed)?;
@@ -78,8 +85,8 @@ mod tests {
     #[test]
     fn a_transcript_round_trips_and_keeps_the_seed() {
         let transcript = Transcript {
-            version: 1,
-            seed: HANDSHAKE_SEED,
+            version: TranscriptVersion::V1,
+            seed: NamedSeed::Handshake.as_u64(),
             role: Role::Peer,
             sent: vec![1, 2, 255],
             recv: vec![],
@@ -91,78 +98,13 @@ mod tests {
     }
 
     #[test]
-    fn parity_fields_are_not_expected_divergences() {
-        for field in [
-            "peer-sent",
-            "peer-recv",
-            "peer-end",
-            "host-delivered",
-            "host-sent",
-            "host-session",
-        ] {
-            assert!(is_parity_field(field), "{field}");
-            assert!(!is_expected_divergence(field), "{field}");
-        }
-        assert_eq!(EXPECTED_DIVERGENCES.len(), 7);
-    }
-
-    #[test]
-    fn a_byte_field_requires_the_separating_space() {
-        let bare = "shekyl-p2p-transcript 1\nseed 1\nrole peer\nsent\nrecv \nend established\n";
-        assert!(Transcript::decode(bare).is_err());
-        let glued =
-            "shekyl-p2p-transcript 1\nseed 1\nrole peer\nsentinel\nrecv \nend established\n";
-        assert!(Transcript::decode(glued).is_err());
-    }
-
-    #[test]
-    fn swapped_roles_are_a_finding() {
-        let peer = Transcript {
-            version: 1,
-            seed: 1,
-            role: Role::Host,
-            sent: vec![1],
-            recv: vec![2],
-            end: End::Established,
-            events: vec![],
-        };
-        let host = Transcript {
-            version: 1,
-            seed: 1,
-            role: Role::Peer,
-            sent: vec![2],
-            recv: vec![1],
-            end: End::Established,
-            events: vec![],
-        };
-        let run = Run { peer, host };
-        assert!(diff(&run, &run)
-            .iter()
-            .any(|finding| finding.field == "role"));
-    }
-
-    #[test]
-    fn the_runner_lists_every_seed() {
-        let script = include_str!("../../../tests/p2p_harness/run_seeds.sh");
-        let line = script
-            .lines()
-            .find(|line| line.starts_with("SEEDS=\""))
-            .expect("SEEDS");
-        let listed: Vec<u64> = line
-            .trim_start_matches("SEEDS=\"")
-            .trim_end_matches('"')
-            .split_whitespace()
-            .map(|text| text.parse().expect("seed"))
-            .collect();
-        assert_eq!(listed, all_seeds());
-    }
-
-    #[test]
     fn the_same_seed_replays_against_the_seam_host() {
-        let first = run_seam(HANDSHAKE_SEED).expect("first");
-        let second = run_seam(HANDSHAKE_SEED).expect("second");
+        let seed = NamedSeed::Handshake.as_u64();
+        let first = run_seam(seed).expect("first");
+        let second = run_seam(seed).expect("second");
+        let plan = script(seed).expect("script");
         assert!(
-            super::run_agrees(&first),
+            run_matches_script(&first, &plan),
             "peer sent {} recv {} {:?} host sent {} recv {} {:?}",
             first.peer.sent.len(),
             first.peer.recv.len(),
@@ -176,16 +118,19 @@ mod tests {
         let mut broken = second;
         broken.peer.recv.push(0);
         let findings = diff(&first, &broken);
-        assert!(findings.iter().any(|finding| finding.field == "run"));
-        assert!(findings.iter().any(|finding| finding.field == "peer-recv"));
+        assert!(findings.iter().any(|finding| finding.field == Field::Run));
+        assert!(findings
+            .iter()
+            .any(|finding| finding.field == Field::PeerRecv));
     }
 
     #[test]
-    fn each_leg_agrees_on_the_seam_host() {
-        for seed in [1, 2, 3, 10, 11, 20, 30, 31, 32, 40, 100, 107] {
+    fn each_leg_matches_the_script_on_the_seam_host() {
+        for seed in all_seeds() {
+            let plan = script(seed).unwrap_or_else(|err| panic!("script {seed}: {err}"));
             let run = run_seam(seed).unwrap_or_else(|err| panic!("seed {seed}: {err}"));
             assert!(
-                run_agrees(&run),
+                run_matches_script(&run, &plan),
                 "seed {seed} peer sent {} recv {} {:?} host sent {} recv {} {:?}",
                 run.peer.sent.len(),
                 run.peer.recv.len(),
@@ -194,10 +139,11 @@ mod tests {
                 run.host.recv.len(),
                 run.host.end
             );
+            assert_eq!(run.peer.end, plan.end, "seed {seed} end");
         }
-        let concurrent = run_seam(SEED_CONCURRENT).expect("concurrent");
+        let concurrent = run_seam(NamedSeed::Concurrent.as_u64()).expect("concurrent");
         assert_eq!(whole_message_count(&concurrent.peer.recv), Some(2));
-        let stalled = run_seam(40).expect("backpressure");
+        let stalled = run_seam(NamedSeed::Backpressure.as_u64()).expect("backpressure");
         assert!(
             stalled
                 .peer

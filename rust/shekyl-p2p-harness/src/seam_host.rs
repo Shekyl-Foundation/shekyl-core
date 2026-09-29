@@ -26,9 +26,20 @@ use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
 use shekyl_transport_layer::{CloseCause, CloseKind, ConnectorId, Sockets};
 
-use crate::script::{script, Script, SEND_QUEUE_BYTES};
-use crate::transcript::{End, Event, Role, Transcript};
+use crate::script::{
+    script, AfterHandshake, Script, READ_PAUSE, SEND_OVER_SETTLE, SEND_QUEUE_BYTES,
+};
+use crate::transcript::{End, Event, Role, Transcript, TranscriptVersion};
 use crate::Error;
+
+const HOST_ACCEPT_WAIT: Duration = Duration::from_secs(8);
+const HOST_READ_WAIT: Duration = Duration::from_secs(8);
+const HOST_SHUTDOWN: Duration = Duration::from_millis(50);
+const HOST_ACCEPT_BACKOFF: Duration = Duration::from_millis(1);
+const HOST_HANDSHAKE_NS: u64 = 5_000_000_000;
+const HOST_WORKERS: usize = 2;
+const HOST_BLOCKING: usize = 1;
+const HOST_INBOUND_CEILING: u32 = 4;
 
 /// One connection, then the host stops.
 pub struct SeamHost {
@@ -50,12 +61,12 @@ impl SeamHost {
 
 /// Bind on loopback and serve one seeded handshake.
 pub fn serve_seam_once(seed: u64) -> Result<SeamHost, Error> {
-    let script = script(seed)?;
+    let plan = script(seed)?;
     let engine = EngineService::start(MonotonicClock::new());
     let pool = runtime(
         RuntimeBudget {
-            workers: nonzero(2)?,
-            blocking: nonzero(1)?,
+            workers: nonzero(HOST_WORKERS)?,
+            blocking: nonzero(HOST_BLOCKING)?,
         },
         &ThreadName::new("p2p-harness").map_err(|err| Error::new(err.to_string()))?,
     )?;
@@ -69,18 +80,17 @@ pub fn serve_seam_once(seed: u64) -> Result<SeamHost, Error> {
             option: ClearnetOption::Off,
             column: ConnectorId::Clearnet.column(),
             network_id: [0x11; 16],
-            ceiling: InboundCeiling::Bounded(4),
-            handshake_within: Tick::new(5_000_000_000),
-            shutdown_timeout: Duration::from_millis(50),
-            // One handshake bucket, and the cap seed 32 steps one byte past.
+            ceiling: InboundCeiling::Bounded(HOST_INBOUND_CEILING),
+            handshake_within: Tick::new(HOST_HANDSHAKE_NS),
+            shutdown_timeout: HOST_SHUTDOWN,
             send_queue_bytes: SEND_QUEUE_BYTES,
-            accept_backoff: Duration::from_millis(1),
+            accept_backoff: HOST_ACCEPT_BACKOFF,
             on_cause,
         },
     )?;
     let addr = listener.local_addr();
     let done = std::thread::spawn(move || {
-        let result = serve(&mut listener, seed, &script);
+        let result = serve(&mut listener, seed, &plan);
         listener.shutdown();
         drop(engine);
         result
@@ -91,11 +101,11 @@ pub fn serve_seam_once(seed: u64) -> Result<SeamHost, Error> {
 fn serve(
     listener: &mut Listener<MonotonicClock>,
     seed: u64,
-    script: &Script,
+    plan: &Script,
 ) -> Result<Transcript, Error> {
     let handle = listener.runtime_handle().clone();
     let mut session = handle.block_on(async {
-        tokio::time::timeout(Duration::from_secs(8), listener.sessions.recv())
+        tokio::time::timeout(HOST_ACCEPT_WAIT, listener.sessions.recv())
             .await
             .map_err(|_| Error::new("seam host timed out"))?
             .ok_or_else(|| Error::new("seam host session closed"))
@@ -107,21 +117,21 @@ fn serve(
     let mut end = End::Closed;
     let mut raised = false;
     loop {
-        let message = match read_one(&handle, &mut session, &mut reader, &mut delivered) {
-            Read::Message(bytes) => bytes,
+        let framed = match read_one(&handle, &mut session, &mut reader, &mut delivered) {
+            Read::Message(framed) => framed,
             Read::Closed => break,
             Read::Failed(err) => return Err(err),
         };
-        if script.version == 2 {
-            events.push(Event::Read(message.clone()));
+        if plan.version() == TranscriptVersion::V2 {
+            events.push(Event::Read(framed.bytes.clone()));
         }
-        match answer(&message, &handshake_response(script)) {
+        match answer(&framed.received, &plan.invoke_reply) {
             Answer::Handshake(bytes) => {
                 session
                     .try_send(bytes.clone())
                     .map_err(|_| Error::new("send refused"))?;
                 sent.extend_from_slice(&bytes);
-                if script.version == 2 {
+                if plan.version() == TranscriptVersion::V2 {
                     events.push(Event::Wrote(bytes));
                 }
                 end = End::Established;
@@ -129,31 +139,7 @@ fn serve(
                     reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
                     raised = true;
                 }
-                if let Some(follow) = &script.follow {
-                    session
-                        .try_send(follow.clone())
-                        .map_err(|_| Error::new("send refused"))?;
-                    sent.extend_from_slice(follow);
-                }
-                if script.send_over_cap {
-                    // Let the handshake response leave before the cap refusal closes the queue.
-                    std::thread::sleep(Duration::from_millis(50));
-                    let over = vec![0u8; SEND_QUEUE_BYTES + 1];
-                    match session.try_send(over) {
-                        Err(CloseKind::SendQueueFull) => {}
-                        Ok(()) => return Err(Error::new("oversize send was accepted")),
-                        Err(kind) => return Err(Error::new(format!("oversize send: {kind:?}"))),
-                    }
-                }
-                if script.pause_after_handshake {
-                    if script.version == 2 {
-                        events.push(Event::Stalled);
-                    }
-                    std::thread::sleep(crate::script::READ_PAUSE);
-                    if script.version == 2 {
-                        events.push(Event::Resumed);
-                    }
-                }
+                apply_after(&mut session, plan, &mut sent, &mut events)?;
             }
             Answer::EmptyInvoke(bytes) => {
                 session
@@ -171,17 +157,11 @@ fn serve(
             }
         }
     }
-    if delivered.is_empty() && sent.is_empty() {
+    if sent.is_empty() {
         end = End::Closed;
-    } else if sent.is_empty() && end != End::Established {
-        end = if handshake_started(&delivered) {
-            End::Closed
-        } else {
-            End::Refused
-        };
     }
     Ok(Transcript {
-        version: script.version,
+        version: plan.version(),
         seed,
         role: Role::Host,
         sent,
@@ -191,10 +171,55 @@ fn serve(
     })
 }
 
+fn apply_after(
+    session: &mut Session,
+    plan: &Script,
+    sent: &mut Vec<u8>,
+    events: &mut Vec<Event>,
+) -> Result<(), Error> {
+    match plan.after {
+        AfterHandshake::None => Ok(()),
+        AfterHandshake::Follow => {
+            let follow = plan
+                .follow_bytes()
+                .ok_or_else(|| Error::new("follow plan without bytes"))?;
+            session
+                .try_send(follow.clone())
+                .map_err(|_| Error::new("send refused"))?;
+            sent.extend_from_slice(&follow);
+            Ok(())
+        }
+        AfterHandshake::SendOver => {
+            std::thread::sleep(SEND_OVER_SETTLE);
+            let over = vec![0u8; SEND_QUEUE_BYTES + 1];
+            match session.try_send(over) {
+                Err(CloseKind::SendQueueFull) => Ok(()),
+                Ok(()) => Err(Error::new("oversize send was accepted")),
+                Err(kind) => Err(Error::new(format!("oversize send: {kind:?}"))),
+            }
+        }
+        AfterHandshake::Pause => {
+            if plan.version() == TranscriptVersion::V2 {
+                events.push(Event::Stalled);
+            }
+            std::thread::sleep(READ_PAUSE);
+            if plan.version() == TranscriptVersion::V2 {
+                events.push(Event::Resumed);
+            }
+            Ok(())
+        }
+    }
+}
+
 enum Read {
-    Message(Vec<u8>),
+    Message(Framed),
     Closed,
     Failed(Error),
+}
+
+struct Framed {
+    received: Received,
+    bytes: Vec<u8>,
 }
 
 enum Answer {
@@ -212,12 +237,17 @@ fn read_one(
     let start = raw.len();
     loop {
         match reader.next_message() {
-            Ok(Some(_)) => return Read::Message(raw[start..].to_vec()),
+            Ok(Some(received)) => {
+                return Read::Message(Framed {
+                    received,
+                    bytes: raw[start..].to_vec(),
+                })
+            }
             Ok(None) => {}
             Err(err) => return Read::Failed(Error::from(err)),
         }
-        let waited: Result<Option<Vec<u8>>, tokio::time::error::Elapsed> = handle
-            .block_on(async { tokio::time::timeout(Duration::from_secs(8), session.recv()).await });
+        let waited: Result<Option<Vec<u8>>, tokio::time::error::Elapsed> =
+            handle.block_on(async { tokio::time::timeout(HOST_READ_WAIT, session.recv()).await });
         match waited {
             Err(_) => return Read::Failed(Error::new("seam host read timed out")),
             Ok(None) => return Read::Closed,
@@ -231,33 +261,16 @@ fn read_one(
     }
 }
 
-fn handshake_response(script: &Script) -> Vec<u8> {
-    if let Some(follow) = &script.follow {
-        if script.expected_recv.ends_with(follow.as_slice()) {
-            return script.expected_recv[..script.expected_recv.len() - follow.len()].to_vec();
-        }
-    }
-    script.expected_recv.clone()
-}
-
-fn answer(message: &[u8], handshake_response: &[u8]) -> Answer {
-    let mut reader = BucketReader::new();
-    if reader.feed(message).is_err() {
-        return Answer::Notify;
-    }
-    match reader.next_message() {
-        Ok(Some(Received::Request { command, payload }))
-            if command == COMMAND_HANDSHAKE && HandshakeRequest::load(&payload).is_ok() =>
+fn answer(received: &Received, invoke_reply: &[u8]) -> Answer {
+    match received {
+        Received::Request { command, payload }
+            if *command == COMMAND_HANDSHAKE && HandshakeRequest::load(payload).is_ok() =>
         {
-            Answer::Handshake(handshake_response.to_vec())
+            Answer::Handshake(invoke_reply.to_vec())
         }
-        Ok(Some(Received::Request { command, .. })) => Answer::EmptyInvoke(response(command, &[])),
-        _ => Answer::Notify,
+        Received::Request { command, .. } => Answer::EmptyInvoke(response(*command, &[])),
+        Received::Notification { .. } | Received::Response { .. } => Answer::Notify,
     }
-}
-
-fn handshake_started(bytes: &[u8]) -> bool {
-    !bytes.is_empty()
 }
 
 fn nonzero(n: usize) -> Result<NonZeroUsize, Error> {

@@ -265,9 +265,9 @@ members = [
     # Production still builds epee's server until cutover.
     "shekyl-seam",
     # P2P conformance harness (P2P_DIFFERENTIAL_HARNESS.md). The scripted
-    # peer, the seam host, and the transcript comparator. Nothing in the
-    # production graph depends on it. The epee host is the C++ reference
-    # and is not linked into this crate.
+    # peer, the seam host, the transcript comparator, and the run-seeds
+    # driver. Nothing in the production graph depends on it. The epee host
+    # is the C++ recording binary and is not linked into this crate.
     "shekyl-p2p-harness",
 
     # Persona serving loop: loopback shard server behind the P onion

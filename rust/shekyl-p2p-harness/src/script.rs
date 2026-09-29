@@ -3,8 +3,15 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The seeds. Each one is a script for the peer and a plan for both hosts.
-//! The byte layout is `P2P_DIFFERENTIAL_HARNESS.md`.
+//! The seeds. Each one is a script for the peer and a host plan for both
+//! stacks. The byte layout is `P2P_DIFFERENTIAL_HARNESS.md`.
+//!
+//! Host-side behaviour after the first invoke is [`AfterHandshake`], not a
+//! pile of booleans. The epee binary takes that plan on its command line;
+//! it does not own the seed table.
+
+use std::ops::Range;
+use std::time::Duration;
 
 use shekyl_levin::{
     ingress_payload_cap, notify, response, BucketHead, Flags, COMMAND_HANDSHAKE,
@@ -12,32 +19,102 @@ use shekyl_levin::{
 };
 
 use crate::handshake::handshake;
-use crate::transcript::End;
+use crate::transcript::{End, TranscriptVersion};
 use crate::Error;
 
-pub const SEED_HANDSHAKE: u64 = 1;
-pub const SEED_SPLIT_HEADER: u64 = 2;
-pub const SEED_SPLIT_EACH_BYTE: u64 = 3;
-pub const SEED_SIZE_SUPPORT: u64 = 10;
-pub const SEED_SIZE_COMPACT: u64 = 11;
-pub const SEED_CONCURRENT: u64 = 20;
-pub const SEED_CLOSE_MID: u64 = 30;
-pub const SEED_REFUSE: u64 = 31;
-pub const SEED_SEND_OVER: u64 = 32;
-pub const SEED_BACKPRESSURE: u64 = 40;
+/// Named legs. Property splits occupy [`PROPERTY_SEEDS`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u64)]
+pub enum NamedSeed {
+    Handshake = 1,
+    SplitHeader = 2,
+    SplitEachByte = 3,
+    SizeSupport = 10,
+    SizeCompact = 11,
+    Concurrent = 20,
+    CloseMid = 30,
+    Refuse = 31,
+    SendOver = 32,
+    Backpressure = 40,
+}
+
+impl NamedSeed {
+    pub const ALL: [Self; 10] = [
+        Self::Handshake,
+        Self::SplitHeader,
+        Self::SplitEachByte,
+        Self::SizeSupport,
+        Self::SizeCompact,
+        Self::Concurrent,
+        Self::CloseMid,
+        Self::Refuse,
+        Self::SendOver,
+        Self::Backpressure,
+    ];
+
+    pub const fn as_u64(self) -> u64 {
+        self as u64
+    }
+
+    pub fn from_u64(seed: u64) -> Option<Self> {
+        Self::ALL.into_iter().find(|named| named.as_u64() == seed)
+    }
+}
+
+/// Handshake invoke split on a stride derived from the seed.
+pub const PROPERTY_SEEDS: Range<u64> = 100..116;
 
 /// The seam host's send queue. One byte past it does not fit.
 pub const SEND_QUEUE_BYTES: usize = 64 * 1024;
 
 /// How long a backpressure host stops reading. A harness pause, not a deadline.
-pub const READ_PAUSE: std::time::Duration = std::time::Duration::from_millis(400);
+pub const READ_PAUSE: Duration = Duration::from_millis(400);
 
-const PROPERTY_SEEDS: std::ops::Range<u64> = 100..116;
+/// Let the handshake response leave before the cap refusal closes the queue.
+pub const SEND_OVER_SETTLE: Duration = Duration::from_millis(50);
+
+/// Stay up long enough for seed 32's refusal to be the cap, not a closed socket.
+pub const PEER_SEND_OVER_DRAIN: Duration = Duration::from_millis(200);
+
 const CLOSE_AFTER: usize = 10;
 /// Larger than this host's TCP window (`tcp_rmem` max is 6 MiB), so a write
 /// while the host is not reading cannot hide in the kernel buffer.
 const BACKPRESSURE_CHUNK: usize = 2 * 1024 * 1024;
 const BACKPRESSURE_CHUNKS: usize = 4;
+const SPLIT_STRIDE_MOD: usize = 17;
+
+/// What the host does after it has answered the first invoke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AfterHandshake {
+    None,
+    /// Queue a `COMMAND_TIMED_SYNC` notify of the bytes `relay`.
+    Follow,
+    /// Queue one byte past [`SEND_QUEUE_BYTES`].
+    SendOver,
+    /// Stop reading for [`READ_PAUSE`].
+    Pause,
+}
+
+impl AfterHandshake {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Follow => "follow",
+            Self::SendOver => "send-over",
+            Self::Pause => "pause",
+        }
+    }
+
+    pub fn from_cli(text: &str) -> Result<Self, Error> {
+        match text {
+            "none" => Ok(Self::None),
+            "follow" => Ok(Self::Follow),
+            "send-over" => Ok(Self::SendOver),
+            "pause" => Ok(Self::Pause),
+            _ => Err(Error::new(format!("unknown after {text}"))),
+        }
+    }
+}
 
 /// One stretch of bytes the peer writes, then how many whole messages it reads.
 pub struct Phase {
@@ -48,60 +125,75 @@ pub struct Phase {
     pub close_after: Option<usize>,
 }
 
-/// What seed `N` does.
+/// What seed `N` does. The comparator uses this as the oracle.
 pub struct Script {
     pub phases: Vec<Phase>,
-    pub expected_recv: Vec<u8>,
+    /// Bytes the host sends answering the first invoke.
+    pub invoke_reply: Vec<u8>,
+    pub after: AfterHandshake,
     pub end: End,
-    pub version: u8,
-    pub pause_after_handshake: bool,
-    pub follow: Option<Vec<u8>>,
-    pub send_over_cap: bool,
+}
+
+impl Script {
+    pub fn version(&self) -> TranscriptVersion {
+        match self.after {
+            AfterHandshake::Pause => TranscriptVersion::V2,
+            AfterHandshake::None | AfterHandshake::Follow | AfterHandshake::SendOver => {
+                TranscriptVersion::V1
+            }
+        }
+    }
+
+    pub fn follow_bytes(&self) -> Option<Vec<u8>> {
+        match self.after {
+            AfterHandshake::Follow => Some(timed_sync_relay()),
+            AfterHandshake::None | AfterHandshake::SendOver | AfterHandshake::Pause => None,
+        }
+    }
+
+    /// What the peer should read if both stacks follow the plan.
+    ///
+    /// Seed 32 may then see a suffix the epee host accepted past the seam cap.
+    pub fn expected_recv(&self) -> Vec<u8> {
+        let mut out = self.invoke_reply.clone();
+        if let Some(follow) = self.follow_bytes() {
+            out.extend_from_slice(&follow);
+        }
+        out
+    }
+
+    pub fn recv_matches(&self, recv: &[u8]) -> bool {
+        let expected = self.expected_recv();
+        recv == expected.as_slice()
+            || (self.after == AfterHandshake::SendOver && recv.starts_with(&expected))
+    }
 }
 
 pub fn known_seed(seed: u64) -> bool {
-    matches!(
-        seed,
-        SEED_HANDSHAKE
-            | SEED_SPLIT_HEADER
-            | SEED_SPLIT_EACH_BYTE
-            | SEED_SIZE_SUPPORT
-            | SEED_SIZE_COMPACT
-            | SEED_CONCURRENT
-            | SEED_CLOSE_MID
-            | SEED_REFUSE
-            | SEED_SEND_OVER
-            | SEED_BACKPRESSURE
-    ) || PROPERTY_SEEDS.contains(&seed)
+    NamedSeed::from_u64(seed).is_some() || PROPERTY_SEEDS.contains(&seed)
 }
 
-/// Every seed the ctest runner must execute. The shell script's `SEEDS`
-/// line is checked against this list.
+/// Every seed the differential runner must execute.
 pub fn all_seeds() -> Vec<u64> {
-    let mut seeds = vec![
-        SEED_HANDSHAKE,
-        SEED_SPLIT_HEADER,
-        SEED_SPLIT_EACH_BYTE,
-        SEED_SIZE_SUPPORT,
-        SEED_SIZE_COMPACT,
-        SEED_CONCURRENT,
-        SEED_CLOSE_MID,
-        SEED_REFUSE,
-        SEED_SEND_OVER,
-        SEED_BACKPRESSURE,
-    ];
+    let mut seeds: Vec<u64> = NamedSeed::ALL.into_iter().map(NamedSeed::as_u64).collect();
     seeds.extend(PROPERTY_SEEDS);
     seeds
 }
 
 pub fn script(seed: u64) -> Result<Script, Error> {
-    if !known_seed(seed) {
-        return Err(Error::new(format!("no script for seed {seed}")));
+    if let Some(named) = NamedSeed::from_u64(seed) {
+        return named_script(named);
     }
-    let base = handshake(SEED_HANDSHAKE)?;
-    let relay = notify(COMMAND_TIMED_SYNC, b"relay");
-    match seed {
-        SEED_HANDSHAKE => {
+    if PROPERTY_SEEDS.contains(&seed) {
+        return property_script(seed);
+    }
+    Err(Error::new(format!("no script for seed {seed}")))
+}
+
+fn named_script(named: NamedSeed) -> Result<Script, Error> {
+    let base = handshake()?;
+    match named {
+        NamedSeed::Handshake => {
             let len = base.invoke.len();
             Ok(one_write(
                 base.invoke,
@@ -110,25 +202,19 @@ pub fn script(seed: u64) -> Result<Script, Error> {
                 vec![len],
             ))
         }
-        SEED_SPLIT_HEADER => Ok(one_write(
+        NamedSeed::SplitHeader => Ok(one_write(
             base.invoke.clone(),
             base.response,
             End::Established,
             vec![HEADER_SIZE, base.invoke.len()],
         )),
-        SEED_SPLIT_EACH_BYTE => Ok(one_write(
+        NamedSeed::SplitEachByte => Ok(one_write(
             base.invoke.clone(),
             base.response,
             End::Established,
             (1..=base.invoke.len()).collect(),
         )),
-        seed if PROPERTY_SEEDS.contains(&seed) => Ok(one_write(
-            base.invoke.clone(),
-            base.response,
-            End::Established,
-            stride_splits(base.invoke.len(), stride(seed)),
-        )),
-        SEED_SIZE_SUPPORT => {
+        NamedSeed::SizeSupport => {
             let cap = payload_cap(COMMAND_REQUEST_SUPPORT_FLAGS)?;
             let invoke = shekyl_levin::invoke(COMMAND_REQUEST_SUPPORT_FLAGS, &vec![0x5a; cap]);
             let expected = response(COMMAND_REQUEST_SUPPORT_FLAGS, &[]);
@@ -139,7 +225,7 @@ pub fn script(seed: u64) -> Result<Script, Error> {
                 vec![invoke.len()],
             ))
         }
-        SEED_SIZE_COMPACT => {
+        NamedSeed::SizeCompact => {
             // The notify follows the response, so the host has already raised
             // its packet cap. One concatenated write can land in the same
             // read that still has the pre-handshake limit.
@@ -162,47 +248,34 @@ pub fn script(seed: u64) -> Result<Script, Error> {
                         close_after: None,
                     },
                 ],
-                expected_recv: base.response,
+                invoke_reply: base.response,
+                after: AfterHandshake::None,
                 end: End::Established,
-                version: 1,
-                pause_after_handshake: false,
-                follow: None,
-                send_over_cap: false,
             })
         }
-        SEED_CONCURRENT => {
-            let mut expected = base.response.clone();
-            expected.extend_from_slice(&relay);
-            Ok(Script {
-                phases: vec![Phase {
-                    write: base.invoke.clone(),
-                    splits: vec![base.invoke.len()],
-                    read_messages: 2,
-                    close_after: None,
-                }],
-                expected_recv: expected,
-                end: End::Established,
-                version: 1,
-                pause_after_handshake: false,
-                follow: Some(relay),
-                send_over_cap: false,
-            })
-        }
-        SEED_CLOSE_MID => Ok(Script {
+        NamedSeed::Concurrent => Ok(Script {
+            phases: vec![Phase {
+                write: base.invoke.clone(),
+                splits: vec![base.invoke.len()],
+                read_messages: 2,
+                close_after: None,
+            }],
+            invoke_reply: base.response,
+            after: AfterHandshake::Follow,
+            end: End::Established,
+        }),
+        NamedSeed::CloseMid => Ok(Script {
             phases: vec![Phase {
                 write: base.invoke[..CLOSE_AFTER].to_vec(),
                 splits: vec![CLOSE_AFTER],
                 read_messages: 0,
                 close_after: Some(CLOSE_AFTER),
             }],
-            expected_recv: Vec::new(),
+            invoke_reply: Vec::new(),
+            after: AfterHandshake::None,
             end: End::Closed,
-            version: 1,
-            pause_after_handshake: false,
-            follow: None,
-            send_over_cap: false,
         }),
-        SEED_REFUSE => {
+        NamedSeed::Refuse => {
             let invoke = shekyl_levin::invoke(COMMAND_HANDSHAKE, &[1, 2, 3, 4]);
             let expected = response(COMMAND_HANDSHAKE, &[]);
             Ok(one_write(
@@ -212,21 +285,18 @@ pub fn script(seed: u64) -> Result<Script, Error> {
                 vec![invoke.len()],
             ))
         }
-        SEED_SEND_OVER => Ok(Script {
+        NamedSeed::SendOver => Ok(Script {
             phases: vec![Phase {
                 write: base.invoke.clone(),
                 splits: vec![base.invoke.len()],
                 read_messages: 1,
                 close_after: None,
             }],
-            expected_recv: base.response,
+            invoke_reply: base.response,
+            after: AfterHandshake::SendOver,
             end: End::Established,
-            version: 1,
-            pause_after_handshake: false,
-            follow: None,
-            send_over_cap: true,
         }),
-        SEED_BACKPRESSURE => {
+        NamedSeed::Backpressure => {
             let chunk = notify(NOTIFY_NEW_COMPACT_BLOCK, &vec![0u8; BACKPRESSURE_CHUNK]);
             let mut blob = Vec::with_capacity(chunk.len() * BACKPRESSURE_CHUNKS);
             for _ in 0..BACKPRESSURE_CHUNKS {
@@ -248,20 +318,26 @@ pub fn script(seed: u64) -> Result<Script, Error> {
                         close_after: None,
                     },
                 ],
-                expected_recv: base.response,
+                invoke_reply: base.response,
+                after: AfterHandshake::Pause,
                 end: End::Established,
-                version: 2,
-                pause_after_handshake: true,
-                follow: None,
-                send_over_cap: false,
             })
         }
-        _ => Err(Error::new(format!("no script for seed {seed}"))),
     }
 }
 
-fn one_write(outbound: Vec<u8>, expected: Vec<u8>, end: End, splits: Vec<usize>) -> Script {
-    let read_messages = if end == End::Closed { 0 } else { 1 };
+fn property_script(seed: u64) -> Result<Script, Error> {
+    let base = handshake()?;
+    Ok(one_write(
+        base.invoke.clone(),
+        base.response,
+        End::Established,
+        stride_splits(base.invoke.len(), split_stride(seed)?),
+    ))
+}
+
+fn one_write(outbound: Vec<u8>, invoke_reply: Vec<u8>, end: End, splits: Vec<usize>) -> Script {
+    let read_messages = usize::from(end != End::Closed);
     Script {
         phases: vec![Phase {
             write: outbound,
@@ -269,13 +345,14 @@ fn one_write(outbound: Vec<u8>, expected: Vec<u8>, end: End, splits: Vec<usize>)
             read_messages,
             close_after: None,
         }],
-        expected_recv: expected,
+        invoke_reply,
+        after: AfterHandshake::None,
         end,
-        version: 1,
-        pause_after_handshake: false,
-        follow: None,
-        send_over_cap: false,
     }
+}
+
+pub fn timed_sync_relay() -> Vec<u8> {
+    notify(COMMAND_TIMED_SYNC, b"relay")
 }
 
 fn payload_cap(command: u32) -> Result<usize, Error> {
@@ -284,8 +361,9 @@ fn payload_cap(command: u32) -> Result<usize, Error> {
     usize::try_from(cap).map_err(|_| Error::new("cap"))
 }
 
-fn stride(seed: u64) -> usize {
-    1 + (usize::try_from(seed).unwrap_or(0) % 17)
+fn split_stride(seed: u64) -> Result<usize, Error> {
+    let seed = usize::try_from(seed).map_err(|_| Error::new("seed"))?;
+    Ok(1 + (seed % SPLIT_STRIDE_MOD))
 }
 
 fn stride_splits(len: usize, stride: usize) -> Vec<usize> {
@@ -317,4 +395,48 @@ pub fn whole_message_count(bytes: &[u8]) -> Option<usize> {
         count += 1;
     }
     Some(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn after_handshake_cli_round_trips() {
+        for after in [
+            AfterHandshake::None,
+            AfterHandshake::Follow,
+            AfterHandshake::SendOver,
+            AfterHandshake::Pause,
+        ] {
+            assert_eq!(
+                AfterHandshake::from_cli(after.as_str()).expect("cli"),
+                after
+            );
+        }
+    }
+
+    #[test]
+    fn every_named_and_property_seed_has_a_script() {
+        let seeds = all_seeds();
+        let property: Vec<u64> = PROPERTY_SEEDS.collect();
+        assert_eq!(
+            seeds.len(),
+            NamedSeed::ALL.len() + property.len(),
+            "the driver list is the named legs plus the property range"
+        );
+        assert!(!seeds.is_empty());
+        for seed in seeds {
+            script(seed).unwrap_or_else(|err| panic!("seed {seed}: {err}"));
+        }
+    }
+
+    #[test]
+    fn follow_expected_recv_is_reply_plus_relay() {
+        let plan = script(NamedSeed::Concurrent.as_u64()).expect("script");
+        let mut expected = plan.invoke_reply.clone();
+        expected.extend_from_slice(&timed_sync_relay());
+        assert_eq!(plan.expected_recv(), expected);
+        assert_eq!(plan.after, AfterHandshake::Follow);
+    }
 }

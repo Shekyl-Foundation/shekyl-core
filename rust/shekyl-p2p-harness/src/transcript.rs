@@ -5,10 +5,9 @@
 
 //! One run, written so a later run of the same seed can be diffed.
 //!
-//! The text is version 1 of the transcript in
-//! `docs/design/P2P_DIFFERENTIAL_HARNESS.md`. That section is the
-//! format both writers emit. A golden changes only when a ruling
-//! changes the wire, in the same pull request as that ruling.
+//! The text is the transcript in `docs/design/P2P_DIFFERENTIAL_HARNESS.md`.
+//! That section is the format both writers emit. A golden changes only when
+//! a ruling changes the wire, in the same pull request as that ruling.
 
 use std::fs;
 use std::path::Path;
@@ -16,8 +15,38 @@ use std::str::FromStr;
 
 use crate::Error;
 
-const VERSION_1: &str = "shekyl-p2p-transcript 1";
-const VERSION_2: &str = "shekyl-p2p-transcript 2";
+const VERSION_1_LINE: &str = "shekyl-p2p-transcript 1";
+const VERSION_2_LINE: &str = "shekyl-p2p-transcript 2";
+
+/// Wire format of one transcript file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TranscriptVersion {
+    /// Six fields, no event log. Every seed except backpressure.
+    V1,
+    /// Version 1 fields plus the backpressure event log.
+    V2,
+}
+
+impl TranscriptVersion {
+    pub fn line(self) -> &'static str {
+        match self {
+            Self::V1 => VERSION_1_LINE,
+            Self::V2 => VERSION_2_LINE,
+        }
+    }
+}
+
+impl FromStr for TranscriptVersion {
+    type Err = Error;
+
+    fn from_str(text: &str) -> Result<Self, Error> {
+        match text {
+            VERSION_1_LINE => Ok(Self::V1),
+            VERSION_2_LINE => Ok(Self::V2),
+            other => Err(Error::new(format!("unknown transcript {other}"))),
+        }
+    }
+}
 
 /// How the run ended. Parity compares this. It is not a transport cause.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,7 +60,7 @@ pub enum End {
 }
 
 impl End {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Established => "established",
             Self::Closed => "closed",
@@ -63,7 +92,7 @@ pub enum Role {
 }
 
 impl Role {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Peer => "peer",
             Self::Host => "host",
@@ -106,8 +135,7 @@ impl Event {
 /// A seeded run. The seed is how a failing case is replayed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Transcript {
-    /// 1, or 2 when [`Self::events`] is the backpressure log.
-    pub version: u8,
+    pub version: TranscriptVersion,
     pub seed: u64,
     pub role: Role,
     pub sent: Vec<u8>,
@@ -127,20 +155,16 @@ impl Transcript {
     }
 
     pub fn encode(&self) -> String {
-        let version = if self.version == 2 {
-            VERSION_2
-        } else {
-            VERSION_1
-        };
         let mut out = format!(
-            "{version}\nseed {}\nrole {}\nsent {}\nrecv {}\nend {}\n",
+            "{}\nseed {}\nrole {}\nsent {}\nrecv {}\nend {}\n",
+            self.version.line(),
             self.seed,
             self.role.as_str(),
             hex(&self.sent),
             hex(&self.recv),
             self.end.as_str(),
         );
-        if self.version == 2 {
+        if self.version == TranscriptVersion::V2 {
             for event in &self.events {
                 out.push_str(&encode_event(event));
             }
@@ -151,18 +175,14 @@ impl Transcript {
     pub fn decode(text: &str) -> Result<Self, Error> {
         let mut lines = text.lines();
         let version_line = lines.next().ok_or_else(|| Error::new("empty transcript"))?;
-        let version = match version_line {
-            VERSION_1 => 1,
-            VERSION_2 => 2,
-            other => return Err(Error::new(format!("unknown transcript {other}"))),
-        };
+        let version = TranscriptVersion::from_str(version_line)?;
         let seed = value(lines.next(), "seed")?;
         let role = value(lines.next(), "role")?;
         let sent = value(lines.next(), "sent")?;
         let recv = value(lines.next(), "recv")?;
         let end = value(lines.next(), "end")?;
         let mut events = Vec::new();
-        if version == 2 {
+        if version == TranscriptVersion::V2 {
             for line in lines {
                 events.push(decode_event(line)?);
             }
@@ -220,8 +240,8 @@ fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        out.push(DIGITS[(byte >> 4) as usize] as char);
-        out.push(DIGITS[(byte & 0xf) as usize] as char);
+        out.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        out.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
     out
 }
@@ -247,5 +267,25 @@ fn unhex_digit(byte: u8) -> Result<u8, Error> {
         b'0'..=b'9' => Ok(byte - b'0'),
         b'a'..=b'f' => Ok(byte - b'a' + 10),
         _ => Err(Error::new("hex digit")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_byte_field_requires_the_separating_space() {
+        let bare = "shekyl-p2p-transcript 1\nseed 1\nrole peer\nsent\nrecv \nend established\n";
+        assert!(Transcript::decode(bare).is_err());
+        let glued =
+            "shekyl-p2p-transcript 1\nseed 1\nrole peer\nsentinel\nrecv \nend established\n";
+        assert!(Transcript::decode(glued).is_err());
+    }
+
+    #[test]
+    fn unknown_version_line_does_not_decode() {
+        let text = "shekyl-p2p-transcript 3\nseed 1\nrole peer\nsent \nrecv \nend established\n";
+        assert!(Transcript::decode(text).is_err());
     }
 }

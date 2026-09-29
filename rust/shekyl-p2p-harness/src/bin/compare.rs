@@ -6,7 +6,8 @@
 //! `compare PEER_A HOST_A PEER_B HOST_B`
 //!
 //! Diff two seeded runs. A parity mismatch exits 1 and names the seed
-//! and the field. An expected divergence is not a mismatch.
+//! and the field. [`shekyl_p2p_harness::Field::ByteBounds`] is classified
+//! away. An unknown version line is a parse failure.
 
 use std::env;
 use std::path::Path;
@@ -45,7 +46,7 @@ fn run() -> Result<bool, shekyl_p2p_harness::Error> {
         return Ok(true);
     }
     for finding in findings {
-        eprintln!("seed {} {}", finding.seed, finding.field);
+        eprintln!("{finding}");
     }
     Ok(false)
 }

@@ -5,7 +5,7 @@
 
 [package]
 name = "shekyl-p2p-harness"
-description = "P2P conformance harness. A scripted peer, a seam host, and a transcript comparator. The epee host is a separate C++ binary."
+description = "P2P conformance harness. A scripted peer, a seam host, a comparator, and the run-seeds driver. The epee host is a separate C++ recording binary."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

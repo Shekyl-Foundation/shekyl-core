@@ -7,26 +7,43 @@ per-connector deadlines.
 
 ## Expected divergences
 
-A difference on one of these is expected. It is not a regression
-toward epee, and it is not something the harness "fixes":
+The loopback transcript records Levin bytes and the session outcome.
+It does not observe these stack differences; they are not a filter
+on a parity field. After cutover they become standalone CI checks
+on the Rust transport (`DeferredInvariant` in `shekyl-p2p-harness`).
+That list is in-flight vocabulary, not dead code: the cutover pull
+request is the named consumer.
 
-- FIN after zero bytes when a connection fails before the channel exists;
-- typed causes, with the first one recorded winning;
-- admission refusal at accept via atomic reservation;
-- derived deadlines, not epee's;
-- no local/remote timer split;
-- no TOS setting;
-- send and receive bounds in bytes.
+- FIN after zero bytes when a connection fails before the channel exists
+  (`fin-after-zero-bytes`);
+- typed causes, with the first one recorded winning
+  (`typed-cause-first-wins`);
+- admission refusal at accept via atomic reservation
+  (`admission-reservation`);
+- derived deadlines, not epee's (`derived-deadline`);
+- no local/remote timer split (`no-timer-split`);
+- no TOS setting (`no-tos`).
 
-The comparator's names for these are `fin-after-zero-bytes`,
-`typed-cause-first-wins`, `admission-reservation`, `derived-deadline`,
-`no-timer-split`, `no-tos`, and `byte-bounds`. A parity field is not
-one of those names.
+Seed 32 is the one divergence the transcript can see. After the
+handshake response the host queues one byte past the seam send
+queue (64 KiB). The seam refuses that buffer (`SendQueueFull`) and
+the epee host accepts it. `compare` names that `host-sent` /
+`peer-recv` suffix `byte-bounds` only when both sides still start
+with the script's handshake response. A difference inside that
+prefix is a parity finding. The handshake the peer wrote still has
+to match.
 
 ## How two stacks are compared
 
 The epee side is C++, in `boosted_tcp_server`. The seam side is Rust.
-The harness does not link epee into a Rust test.
+The harness does not link epee into a Rust test. C++ is the recording
+reference, not the behaviour to copy (rule 20).
+
+The typed plan lives in Rust. `NamedSeed` plus `PROPERTY_SEEDS`
+(100–115) is the seed table. `AfterHandshake` (`none`, `follow`,
+`send-over`, `pause`) is what both hosts do after the first invoke.
+`all_seeds()` is the list `run-seeds` executes. There is no second
+copy of that list in C++ or in a shell script.
 
 One scripted peer, `shekyl-p2p-harness`'s `peer`, is built on
 `shekyl-levin`. It connects to an address, runs a seed, and writes a
@@ -42,24 +59,46 @@ Two hosts, each with a recording handler:
   connector's tests, and it does not open a second admission table.
 - `epee-host`, the C++ binary. It hosts `boosted_tcp_server`, serves
   one connection, and writes this transcript. It is the only C++ in
-  the harness, and it is not linked into the Rust crate. A P2P
-  connection enables epee's rate limiter, whose unset target is
-  16 KiB/s. The harness sets that limit to the maximum so this run
-  compares Levin bytes. It does not test the operator link budget.
+  the harness, and it is not linked into the Rust crate. Handshake
+  encode and decode stay in this binary: that is the epee reference.
+  Host behaviour after the invoke is a CLI plan
+  (`--after none|follow|send-over|pause`, `--wait-ms`, `--pause-ms`,
+  `--settle-ms`, `--over-bytes`). Durations and the send-queue cap
+  come from the Rust driver so this binary does not own the seed
+  table. A P2P connection enables epee's rate limiter, whose unset
+  target is 16 KiB/s. The harness sets that limit to the maximum so
+  this run compares Levin bytes. It does not test the operator link
+  budget.
 
-`seam-host SEED TRANSCRIPT` and `epee-host SEED TRANSCRIPT` each print
-`host:port` on stdout, serve one connection, and write the host
-transcript. `peer ADDR SEED TRANSCRIPT` dials that address.
+`seam-host SEED TRANSCRIPT` and `epee-host SEED TRANSCRIPT [...]`
+each print `host:port` on stdout, serve one connection, and write
+the host transcript. `peer ADDR SEED TRANSCRIPT` dials that address.
+`compare PEER_A HOST_A PEER_B HOST_B` diffs two runs. Those three
+bins stay for replay of a kept `p2p-harness-fail/` directory.
+
+The gate is `run-seeds EPEE_HOST`. It owns the seed list, runs the
+seam in-process (in parallel with the epee process), requires the
+seam run to match the script, and diffs the two hosts. A mismatch
+keeps the four transcripts under `p2p-harness-fail/seed-N/`.
+ctest `p2p-harness-seeds` is that driver plus the staged `epee-host`.
+The test job unpacks `build/` and has no cargo, so CMake copies
+`run-seeds`, `peer`, `seam-host`, and `compare` next to `epee-host`.
+On UNIX without cargo the test still exists and fails: absence of
+the bins is not a green skip.
 
 `compare` diffs the two transcripts. A difference in a parity field
 (`peer-sent`, `peer-recv`, `peer-end`, `host-delivered`, `host-sent`,
-`host-session`) is a finding. A difference on the expected-divergences
-list is not. An unknown version line is a parse failure, not a
-mismatch.
+`host-session`) is a finding. A run whose peer and host disagree on
+role, version, or direction is a finding before the stacks are
+compared. Seed 32 may carry a host-sent suffix the peer has not
+read; any other mismatch is a malformed run. An unknown version
+line is a parse failure, not a mismatch.
 
 Seed 1 is the handshake invoke. The dialer sends it and waits. The
 session is established when the response is back. `the_same_seed_replays_against_the_seam_host`
-runs that seed twice against the seam host.
+runs that seed twice against the seam host. `each_leg_matches_the_script_on_the_seam_host`
+runs every seed in `all_seeds()` against the seam host and checks
+the script.
 
 ## Transcript
 
@@ -120,10 +159,10 @@ line is the version, so the format it uses is on the golden.
 
 Two pull requests, not five steps.
 
-This one finishes the harness. The five legs are seeds for the peer
-and the two hosts already here. It merges when every leg has run
-against both hosts. A mismatch is either on the expected-divergences
-list or it is fixed in this pull request.
+This one finishes the harness. Every seed in `all_seeds()` runs
+against both hosts. It merges when that gate is green. A mismatch
+that is not seed 32's classified send-queue suffix is fixed in this
+pull request.
 
 The next pull request is the cutover. The zone binding and the
 deletion land together: a period where production runs on the seam
@@ -146,16 +185,17 @@ Before cutover, the peer runs against both hosts and `compare` diffs
 them.
 
 At cutover, the epee host's transcripts for the parity scope — wire
-bytes and session outcomes, nothing on the expected-divergences list —
-are recorded as golden transcripts and committed, keyed by seed. Then
-the epee host is deleted with the rest of epee.
+bytes and session outcomes, not a `DeferredInvariant` and not
+`byte-bounds` — are recorded as golden transcripts and committed,
+keyed by seed. Then the epee host is deleted with the rest of epee.
 
 After cutover, in CI, the same peer runs every seed against the Rust
 transport. Each run checks the goldens (the peer still sees the same
-Levin bytes and gets the same session outcome) and the invariants that
-need no reference: whole messages only, stopping reading rather than
-closing under backpressure, one cause with the first recorded winning,
-FIN after zero bytes, and the byte bounds.
+Levin bytes and gets the same session outcome) and the
+`DeferredInvariant` checks that need no epee reference: whole messages
+only, stopping reading rather than closing under backpressure, one
+cause with the first recorded winning, FIN after zero bytes, and the
+byte bounds. The epee host is gone; the peer and the script stay.
 
 A golden changes only on purpose. When a ruled change alters the wire
 — the flip adding Noise, or fixed-window framing — the goldens are
