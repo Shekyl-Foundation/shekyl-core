@@ -259,7 +259,7 @@ fn assert_place(mutation: Mutation, locus: Locus) {
 /// `assert_lands` takes the other branch and this arm is never reached again.
 fn assert_pinned_gap(mutation: Mutation, at: u64, outcome: &Outcome) {
     match mutation {
-        Mutation::WrongReward | Mutation::ReorderedBodies => {
+        Mutation::WrongReward => {
             let report = match outcome {
                 Outcome::Report(report) => report,
                 Outcome::Fault(fault) => panic!(
@@ -284,12 +284,19 @@ fn assert_pinned_gap(mutation: Mutation, at: u64, outcome: &Outcome) {
         // taxonomy — a belt firing is the validator's hole — observed, not
         // accepted); E6 slice 6 commit 4 ported I7 and the pin was deleted
         // with the hole. It refuses at its input now, like the six.
+        // `ReorderedBodies` pinned "connects" while G2 was Pending; slice 7
+        // commit 6 ported G2 as a `FormRule` and the pin went with the gap
+        // — it and the two G2 mutations written with the rule refuse at
+        // their loci.
         Mutation::HeaderVersion
         | Mutation::Orphan
         | Mutation::WrongRoot
         | Mutation::FutureTimestamp
         | Mutation::StaleTimestamp
         | Mutation::PowUnderWrongSeed
+        | Mutation::ReorderedBodies
+        | Mutation::MissingBody
+        | Mutation::SubstitutedBody
         | Mutation::DoubleSpend
         | Mutation::UnknownReference
         | Mutation::ReferenceTooRecent
@@ -389,12 +396,16 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
             )
             .await
         }
+        // `chain(n)` lists one spend per block from `FIRST_SPEND_HEIGHT`:
+        // one body to drop or to substitute at `AT`.
         Mutation::HeaderVersion
         | Mutation::Orphan
         | Mutation::WrongRoot
         | Mutation::FutureTimestamp
         | Mutation::StaleTimestamp
         | Mutation::WrongReward
+        | Mutation::MissingBody
+        | Mutation::SubstitutedBody
         | Mutation::DoubleSpend
         | Mutation::UnknownReference
         | Mutation::ReferenceTooRecent
@@ -572,7 +583,7 @@ fn a_candidate_that_cannot_carry_the_mutation_names_why() {
 }
 
 #[test]
-fn every_mutation_names_a_row_and_the_pending_ones_are_the_two_the_plan_lists() {
+fn every_mutation_names_a_row_and_the_pending_ones_are_those_the_plan_lists() {
     let pending: Vec<CenRow> = Mutation::ALL
         .iter()
         .map(|m| m.expected())
@@ -584,8 +595,9 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_the_two_the_plan_lists() 
     // re-keyed WrongReward F13 → F18, Q8: F13 landed as a definition, and
     // the predicate a wrong amount trips is F18, blocked on G6. Slice 6
     // commit 4 ported I7: `DoubleSpend` now refuses at its input, and the
-    // family's landing arm below holds it.)
-    assert_eq!(pending, vec![CenRow::F18, CenRow::G2]);
+    // family's landing arm below holds it. Slice 7 commit 6 ported G2: the
+    // three G2 mutations refuse at their loci; F18 is wave B's.)
+    assert_eq!(pending, vec![CenRow::F18]);
     for m in Mutation::ALL {
         assert!(
             m.to_string().contains(m.expected().as_str()),
@@ -606,7 +618,11 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_the_two_the_plan_lists() 
             (Mutation::StaleTimestamp, ExpectedPlace::Block),
             (Mutation::PowUnderWrongSeed, ExpectedPlace::Block),
             (Mutation::WrongReward, ExpectedPlace::Miner),
-            (Mutation::ReorderedBodies, ExpectedPlace::Unnamed),
+            // Slice 7 commit 6 (Q8): G2's index arm names the first
+            // mismatching listed slot; its length arm names the block.
+            (Mutation::ReorderedBodies, ExpectedPlace::Listed),
+            (Mutation::MissingBody, ExpectedPlace::Block),
+            (Mutation::SubstitutedBody, ExpectedPlace::Listed),
             (Mutation::DoubleSpend, ExpectedPlace::Input),
             // Slice 6 commit 5: the reference rows name the transaction.
             (Mutation::UnknownReference, ExpectedPlace::Listed),

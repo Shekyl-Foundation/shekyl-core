@@ -131,6 +131,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::F15,
             CenRow::F16,
             CenRow::F20,
+            // Slice 7 commit 6: the body's pairing, a `FormRule`
+            // (`CHAIN_RULES_SLICE_7.md` §5 row 6).
+            CenRow::G2,
             // Slice 7 commit 4: the two block-weight definitions
             // (`CHAIN_RULES_SLICE_7.md` §5 row 4).
             CenRow::G6,

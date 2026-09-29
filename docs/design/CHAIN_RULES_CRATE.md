@@ -3,8 +3,12 @@
 **Status:** OPEN — increment 1 **implemented 2026-09-15** (branch
 `feat/drs-e6-inc1-chain-rules-scaffold`). Round 1 ruled §11; round 2's three
 questions (§12) **ruled at PR #753 review** (defaults kept; G4 tightened to
-`ChainValid<'id, V>`). §4 reflects what landed — **§4.6 and §8.5
-last verified against slice 5 (`CHAIN_RULES_SLICE_5.md`), 2026-09-23.**
+`ChainValid<'id, V>`). §4 reflects what landed — **§4.3 last verified against
+slice 7 commit 6 (`CHAIN_RULES_SLICE_7.md`), 2026-09-29: the E3 and slice-7
+reads and `RecordedBlock`'s five fields, which two prior docs commits had
+left at three; §4.6 and §8.5 last verified against slice 5
+(`CHAIN_RULES_SLICE_5.md`), 2026-09-23 — `judge_emission` and G2 in `form`
+are owed there by slice 7 commit 10.**
 Stays in `docs/design/` while
 increments 2+ are open (it owns their template, §7.5.1). Implements *from*
 [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
@@ -373,11 +377,31 @@ pub enum AtHeight<T> {
     AboveTip,
 }
 
-/// A block the chain has **recorded** (ruling Q4). Fields justified per Q3:
-/// `hash` — CEN-A2 (`prev_id == top_hash`), CEN-A4 (parent is known);
-/// `header` — CEN-C2/C3 (the timestamps of the 11 preceding blocks).
+/// A block the chain has **recorded** (ruling Q4). Every field is here
+/// because a named row reads it (Q3): `hash` — CEN-A2 (`prev_id ==
+/// top_hash`), CEN-A4 (parent is known), CEN-D3 (the seed block); `header`
+/// — CEN-C2/C3 (the timestamps of the 11 preceding blocks), CEN-D4;
+/// `cumulative_difficulty` — CEN-D4, the LWMA-1 window's work (slice 2);
+/// `coins_generated` — CEN-F13, the parent's accumulator is the subsidy
+/// curve's operand (slice 4); `cumulative_tx_count` — CEN-F20, two prefix
+/// sums make the volume window (slice 4). Fields grow with rows, never
+/// ahead of them. The block's *weights* are not here: G6 reads them in bulk
+/// through `weights_window`, below.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecordedBlock { pub hash: BlockHash, pub header: shekyl_wire::BlockHeader, pub cumulative_difficulty: CumulativeDifficulty } // the third field landed with 4.D (slice 2): the LWMA-1 window's work
+pub struct RecordedBlock {
+    pub hash: BlockHash,
+    pub header: shekyl_wire::BlockHeader,
+    pub cumulative_difficulty: CumulativeDifficulty,
+    pub coins_generated: AtomicUnits,
+    pub cumulative_tx_count: u64,
+}
+
+/// The two weights the store records for one block — what CEN-G6's two
+/// rolling medians are over. A projection of `block_info`'s two weight
+/// columns, named rather than a tuple so they cannot be swapped by position
+/// (slice 7 commit 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordedWeights { pub weight: BlockWeight, pub long_term_weight: LongTermWeight }
 
 /// The narrow, read-only view a rule consumes. Implemented by the store over
 /// its `WriteBatch<'_, 'id>` (S-CHAIN-W) and by `MockView<'id>` in this crate's
@@ -426,6 +450,22 @@ pub trait ChainView<'id> {
     fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Self::Fault>;
     /// Provided: CEN-I13's operand, `layer_count_for_leaves(leaf_count_at(h)) − 1`.
     fn depth_at(&self, height: BlockHeight) -> Result<AtHeight<u8>, Self::Fault> { /* derived */ }
+    // E6 slice 7 commit 3 (2026-09-27): the two 4.G reads. **No default
+    // bodies** — a default answering "no weights" / "no such transaction"
+    // would make G6 and G1 silently vacuous on a mock, the opposite of
+    // `depth_at`, which defaults because it *derives*.
+    /// The up-to-`at_most` recorded blocks strictly below `end`, in height
+    /// order — CEN-G6/G6b's operand: one read over the long window
+    /// (`min(100 000, h)`), the short window (100) its suffix. `end > tip + 1`
+    /// is `AboveTip`; a hole inside the window is a **fault** (SI-7), never
+    /// a shorter vector a median would silently be taken over (slice 7 Q2,
+    /// ruled (b) on the Pi 4 floor: one range cursor, 36.6 ms vs 598 ms).
+    fn weights_window(&self, end: BlockHeight, at_most: BlockCount) -> Result<AtHeight<Vec<RecordedWeights>>, Self::Fault>;
+    /// Whether a transaction with this identity is recorded on the chain —
+    /// any block, the miner transaction included (the C++'s `tx_exists`).
+    /// By hash, so `bool`, not `AtHeight`: absence has one meaning.
+    /// CEN-G1's chain half (slice 7 commit 7).
+    fn has_transaction(&self, hash: &TxHash) -> Result<bool, Self::Fault>;
 }
 
 /// The last recorded block. `Option`, not a bespoke absence enum: an empty
@@ -436,7 +476,9 @@ pub struct Tip { pub height: BlockHeight, pub hash: BlockHash }
 
 Three of the ruling's illustrative four (`output_at` — §3.3) plus `tip()`,
 added by slice 1 with CEN-A2 and CEN-B5 (**Q12-2 discharged**; *records-was:*
-increment 1 shipped without it, "not added here without its row"). No
+increment 1 shipped without it, "not added here without its row"); `height_of`
+(slice 6, CEN-I10); E3's three tree reads (2026-09-26); slice 7's two 4.G
+reads (2026-09-27), each with its row named above. No
 `fork_version()` / `rule_set()` on the view (ruling Q7). The trait has no
 `'id`-carrying method — the brand lives in the implementor's type and in
 `ChainValid<'id, V>`; the trait's parameter is what ties the two in

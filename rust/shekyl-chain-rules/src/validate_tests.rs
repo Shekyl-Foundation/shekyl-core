@@ -42,7 +42,8 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
         // form; D3's verification, D4 the target, D6 at its mint, D1b the
         // comparison, D1 the predicate), slice 3's E1, and slice 4's 4.F
         // rows (F1, F3, F7, F9, F10 in form; F4, F5, F6 view-bound; F11,
-        // F13, F15, F20 the emission definitions), slice 7's two
+        // F13, F15, F20 the emission definitions), slice 7's G2 (the
+        // body's pairing, in form), its two
         // block-weight definitions (G6 before the slot loop, G6b after
         // it) and its reward chain after them (F14 the bound, F14b the
         // paid reward, F16 the split, G12 the supply), and nothing else
@@ -83,6 +84,7 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::F15,
                 CenRow::F16,
                 CenRow::F20,
+                CenRow::G2,
                 CenRow::G6,
                 CenRow::G6b,
                 CenRow::G12,
@@ -307,8 +309,8 @@ fn form_carries_the_clock_the_seed_and_the_attempt_it_was_given() {
     assert_eq!(formed.hash(), formed.candidate().block.hash());
     // The stateless rows, and only those, are recorded before the view
     // stage runs — the three version rows, the two definitions B6 (the
-    // identity) and D2 (the longhash), and the coinbase's stateless shape
-    // (F1, F3, F7, F9, F10).
+    // identity) and D2 (the longhash), the coinbase's stateless shape
+    // (F1, F3, F7, F9, F10), and the body's pairing (G2, slice 7).
     assert_eq!(
         formed.coverage().iter().collect::<Vec<_>>(),
         [
@@ -322,6 +324,7 @@ fn form_carries_the_clock_the_seed_and_the_attempt_it_was_given() {
             CenRow::F7,
             CenRow::F9,
             CenRow::F10,
+            CenRow::G2,
         ]
     );
 }

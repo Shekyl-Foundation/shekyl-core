@@ -395,7 +395,7 @@ census_rows! {
         F21 by_construction(crate::rules::miner::EMISSION_SPLIT_EPOCH, "the_emission_split_epoch_is_the_hardfork_tables_first_row"),
         // 4.G Block body (per-tx and block-level, main-chain connect)
         G1 pending,
-        G2 pending,
+        G2 implemented(crate::rules::body::G2),
         G3 pending,
         G4 pending,
         G5 pending,

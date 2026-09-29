@@ -123,7 +123,16 @@ pub enum Mutation {
     /// expecting a refusal that never comes the day the row is ported).
     WrongReward,
     /// Two listed bodies swapped; the header's `tx_hashes` untouched.
+    /// CEN-G2's index arm at `Listed(0)` — the first mismatching index.
     ReorderedBodies,
+    /// One listed body dropped; the header still declares its hash.
+    /// CEN-G2's length arm, at the block (the evidence is two lengths).
+    MissingBody,
+    /// The listed body at index 0 replaced by a transaction the header
+    /// never lists (the same body, its `unlock_time` moved, so it parses,
+    /// hashes differently, and is otherwise the spend it was); the count
+    /// unchanged. CEN-G2's index arm at `Listed(0)`.
+    SubstitutedBody,
     /// A listed spend reuses a key image an earlier block spent.
     DoubleSpend,
     /// A listed spend's `referenceBlock` names a hash the chain never held
@@ -168,7 +177,7 @@ pub enum ExpectedPlace {
 
 impl Mutation {
     /// Every mutation, in the table's order (§3.10).
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 14] = [
         Self::HeaderVersion,
         Self::Orphan,
         Self::WrongRoot,
@@ -177,6 +186,8 @@ impl Mutation {
         Self::PowUnderWrongSeed,
         Self::WrongReward,
         Self::ReorderedBodies,
+        Self::MissingBody,
+        Self::SubstitutedBody,
         Self::DoubleSpend,
         Self::UnknownReference,
         Self::ReferenceTooRecent,
@@ -195,7 +206,7 @@ impl Mutation {
             Self::StaleTimestamp => CenRow::C2,
             Self::PowUnderWrongSeed => CenRow::D1,
             Self::WrongReward => CenRow::F18,
-            Self::ReorderedBodies => CenRow::G2,
+            Self::ReorderedBodies | Self::MissingBody | Self::SubstitutedBody => CenRow::G2,
             Self::DoubleSpend => CenRow::I7,
             Self::UnknownReference => CenRow::I10,
             Self::ReferenceTooRecent => CenRow::I11,
@@ -208,19 +219,25 @@ impl Mutation {
     #[must_use]
     pub const fn expected_place(self) -> ExpectedPlace {
         match self {
+            // The header rows and D1 name the block; so does CEN-G2's
+            // length arm (slice 7 Q8: two lengths, no slot) — `MissingBody`.
             Self::HeaderVersion
             | Self::Orphan
             | Self::WrongRoot
             | Self::FutureTimestamp
             | Self::StaleTimestamp
-            | Self::PowUnderWrongSeed => ExpectedPlace::Block,
+            | Self::PowUnderWrongSeed
+            | Self::MissingBody => ExpectedPlace::Block,
             Self::DoubleSpend | Self::ForgedSignature => ExpectedPlace::Input,
-            Self::UnknownReference | Self::ReferenceTooRecent => ExpectedPlace::Listed,
+            // I10/I11 name the transaction; so does CEN-G2's index arm (slice
+            // 7 Q8: the first mismatching index — `Listed(0)` for both G2
+            // mutations, since both move the body at 0).
+            Self::UnknownReference
+            | Self::ReferenceTooRecent
+            | Self::ReorderedBodies
+            | Self::SubstitutedBody => ExpectedPlace::Listed,
             // 4.F named its locus with slice 4 (Q6): the miner transaction.
             Self::WrongReward => ExpectedPlace::Miner,
-            // 4.G has not named a locus. Guessing `Block` would make the
-            // port go red for the test's assumption.
-            Self::ReorderedBodies => ExpectedPlace::Unnamed,
         }
     }
 
@@ -305,6 +322,27 @@ impl Mutation {
                     });
                 }
                 candidate.transactions.swap(0, 1);
+            }
+            Self::MissingBody => {
+                // The header keeps every hash; the last body is gone.
+                if candidate.transactions.pop().is_none() {
+                    return Err(Unmutable::TooFewBodies { listed: 0 });
+                }
+            }
+            Self::SubstitutedBody => {
+                // The header keeps its hash; the body under it is another
+                // transaction — this one with its `unlock_time` moved, which
+                // changes the prefix and so the hash while leaving a body
+                // that parses. One violation: the header is not re-listed,
+                // because the disagreement *is* the violation.
+                let Some(first) = candidate.transactions.first_mut() else {
+                    return Err(Unmutable::TooFewBodies { listed: 0 });
+                };
+                first.prefix.unlock_time = first
+                    .prefix
+                    .unlock_time
+                    .checked_add(1)
+                    .ok_or(Unmutable::UnlockTimeSaturated)?;
             }
             Self::DoubleSpend => {
                 let &reused = spent_before.first().ok_or(Unmutable::NothingSpentBefore)?;
@@ -479,12 +517,17 @@ pub enum Unmutable {
     /// The clear amount is `u64::MAX`; one atomic unit does not fit.
     #[error("the coinbase amount is u64::MAX; one atomic unit does not fit")]
     RewardSaturated,
-    /// Fewer than two listed bodies.
-    #[error("{listed} listed body(ies); two are needed to reorder")]
+    /// Too few listed bodies for the mutation: two to reorder, one to drop
+    /// or substitute.
+    #[error("{listed} listed body(ies); the mutation needs more")]
     TooFewBodies {
         /// Bodies the candidate lists.
         listed: usize,
     },
+    /// [`Mutation::SubstitutedBody`] on a body whose `unlock_time` is
+    /// `u64::MAX`; moving it by one does not fit.
+    #[error("the body's unlock_time is u64::MAX; nothing to move it to")]
+    UnlockTimeSaturated,
     /// No key image was spent before this height.
     #[error("nothing was spent before this height; no key image to reuse")]
     NothingSpentBefore,

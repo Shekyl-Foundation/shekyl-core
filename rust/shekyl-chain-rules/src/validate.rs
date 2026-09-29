@@ -50,6 +50,7 @@ use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::anchors::E1;
 use crate::rules::block_weight::{Medians, Weights};
+use crate::rules::body::G2;
 use crate::rules::difficulty::D4;
 use crate::rules::header::{B1, B2, B5, B6, B7};
 use crate::rules::miner::{Emission, F1, F10, F3, F4, F5, F6, F7, F9};
@@ -126,10 +127,12 @@ pub fn form<S: Substrate>(
     let mut coverage = RuleCoverage::EMPTY;
 
     // Stateless block-level predicates, in census order: the header rows,
+    // then the body's pairing (4.G — G2: the declared list is the carried
+    // list, judged before anything reads a body *as* its declared hash),
     // then the coinbase's shape (4.F — one field of the block, judged here
     // because the coinbase never passes the per-transaction path).
     let cx = FormContext::new(&candidate, rule_set);
-    judge_form!(cx, coverage; B1, B2, B7, F1, F3, F7, F9, F10);
+    judge_form!(cx, coverage; B1, B2, B7, G2, F1, F3, F7, F9, F10);
 
     // Two definitions, after the cheap refusals and outside any
     // transaction. The identity first (B6: one keccak over the hashing
