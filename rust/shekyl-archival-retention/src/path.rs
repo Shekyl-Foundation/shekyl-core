@@ -85,9 +85,9 @@ fn leaf_node_from_layer_scalars(scalars: &[[u8; 32]]) -> [u8; 32] {
 ///
 /// `recompute_subroot` hashes a layer as `hash_grow(init, 0, ZERO, chunk)`: a vector
 /// commitment `Σ chunk[i]·G_i`, positional, so a scalar dropped or moved changes the
-/// hash — but a zero scalar **appended** adds nothing. Without this check a layer
-/// widened with zeros (up to `MAX_BRANCH_SCALARS`) verified, a second encoding of the
-/// same opening, bound only by the ML-DSA leg over `encode(path)`. An honest layer is
+/// hash — but a zero scalar **appended** adds nothing. A layer widened with zeros (up
+/// to `MAX_BRANCH_SCALARS`) would therefore recompute the same sub-root: a second
+/// encoding of the same opening, which this refuses. An honest layer is
 /// the chunk as built (`shekyl_curve_tree::assemble`, unpadded), and its last entry is
 /// a child's x-coordinate — a hash output, never zero. A frontier chunk shorter than the
 /// width stays valid: the rule is about trailing zeros, not width.

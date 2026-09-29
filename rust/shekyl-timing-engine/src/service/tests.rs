@@ -153,10 +153,17 @@ fn a_waiting_wake_does_not_forget_a_same_tick_rearm() {
     service.barrier();
     service.advance(Tick::new(10));
     service.barrier();
+    // The re-arm is due the moment it is applied, and its wake replaces a
+    // wake still in the slot. Hold the worker so the stale wake is the one
+    // polled; unheld, the scheduler decides the order, and when the worker
+    // wins the stale wake is replaced before this poll and the scenario the
+    // test names never runs.
+    service.hold();
     owner.clear().unwrap();
     owner.arm(Tick::new(10)).unwrap();
     let stale = owner.poll_wake().unwrap().expect("waiting wake");
     assert_eq!(stale.deadline, Tick::new(10));
+    service.release();
     service.barrier();
     let wake = owner.poll_wake().unwrap().expect("re-arm");
     assert_eq!(wake.deadline, Tick::new(10));

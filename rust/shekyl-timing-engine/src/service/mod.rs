@@ -356,6 +356,12 @@ impl Gate {
         *self.held.lock().expect("gate lock") = false;
         self.cvar.notify_all();
     }
+
+    /// Close the gate again. The worker checks it once per command, so a
+    /// command it is already waiting on is still applied; nothing after it is.
+    fn hold(&self) {
+        *self.held.lock().expect("gate lock") = true;
+    }
 }
 
 #[cfg(test)]
@@ -952,6 +958,13 @@ impl<C: Clock + Clone + Send + 'static> EngineService<C> {
 
     fn release(&self) {
         self.gate.release();
+    }
+
+    /// Stop the worker in front of the mailbox until [`Self::release`]: a test
+    /// that must observe the slot before a queued command is applied holds it
+    /// rather than racing the worker for the order.
+    fn hold(&self) {
+        self.gate.hold();
     }
 
     /// Join the worker and remove its ledger row. The service stays alive.

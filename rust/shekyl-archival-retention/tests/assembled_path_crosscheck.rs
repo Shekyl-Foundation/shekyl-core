@@ -272,8 +272,8 @@ fn tj_f_forged_material_does_not_verify() {
         .expect("the canonical opening verifies");
 
     // Forgery 3 (SHT-11): zero scalars appended to a branch layer. The layer hash is a
-    // positional vector commitment, so the recomputed root is unchanged — this verified
-    // before the canonical-layer rule — and it must now be refused as non-canonical.
+    // positional vector commitment, so the recomputed root is unchanged; only the
+    // canonical-layer rule tells this encoding from the honest one.
     for pad in [1usize, 40] {
         let mut padded = opening.clone();
         let last = padded.c2_layers.len() - 1;

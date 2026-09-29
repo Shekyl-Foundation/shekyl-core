@@ -1154,24 +1154,11 @@ fn deserialize_helios_scalar(bytes: &[u8; 32]) -> Option<<Helios as Ciphersuite>
     }
 }
 
-/// Zero-pad a deserialized branch-layer chunk to the FCMP circuit's fixed chunk
-/// `width`, rejecting an over-wide chunk instead of silently truncating it.
-///
-/// The consensus curve tree stores PARTIAL (narrow) chunks for incomplete nodes
-/// (`shekyl-curve-tree::assemble` slices `prev[start..end]`), but the FCMP
-/// membership circuit is built for fixed-width chunks. Zero scalars vanish in the
-/// layer hash (`hash_grow([c]) == hash_grow([c, 0…])`), so zero-padding here
-/// satisfies the circuit while leaving the consensus root unchanged.
-///
-/// A real chunk has at most `width` children, so `len > width` is malformed
-/// input and is rejected: silently dropping the extra siblings would produce a
-/// proof for a *different* path, and a wrong proof from bad input is the failure
-/// class the security precondition forbids.
 /// `SHT-10`: a proof's bytes are exactly its canonical encoding. The upstream `read`
-/// consumes `proof_size(inputs, layers)` bytes and stops, so anything left over would be
-/// a second valid encoding of the same statement — a proof with bytes appended verified
-/// before this. Refused here, where every verifying caller (the C++ connect path through
-/// the FFI, the daemon's submit verifier, the emission backing proof) passes.
+/// consumes `proof_size(inputs, layers)` bytes and stops, so a remainder would be a
+/// second valid encoding of the same statement, and it is refused. Every verifying
+/// caller reaches this through [`verify`] or [`verify_membership_only`]: the C++ connect
+/// path through the FFI, the daemon's submit verifier, and the emission backing proof.
 fn refuse_trailing_bytes(rest: &[u8], proof_len: usize, layers: usize) -> Result<(), VerifyError> {
     if rest.is_empty() {
         return Ok(());
@@ -1185,6 +1172,19 @@ fn refuse_trailing_bytes(rest: &[u8], proof_len: usize, layers: usize) -> Result
     Err(VerifyError::DeserializationFailed)
 }
 
+/// Zero-pad a deserialized branch-layer chunk to the FCMP circuit's fixed chunk
+/// `width`, rejecting an over-wide chunk instead of silently truncating it.
+///
+/// The consensus curve tree stores PARTIAL (narrow) chunks for incomplete nodes
+/// (`shekyl-curve-tree::assemble` slices `prev[start..end]`), but the FCMP
+/// membership circuit is built for fixed-width chunks. Zero scalars vanish in the
+/// layer hash (`hash_grow([c]) == hash_grow([c, 0…])`), so zero-padding here
+/// satisfies the circuit while leaving the consensus root unchanged.
+///
+/// A real chunk has at most `width` children, so `len > width` is malformed
+/// input and is rejected: silently dropping the extra siblings would produce a
+/// proof for a *different* path, and a wrong proof from bad input is the failure
+/// class the security precondition forbids.
 fn pad_branch_chunk<C: Ciphersuite>(
     mut scalars: Vec<C::F>,
     width: usize,
@@ -1446,8 +1446,8 @@ mod tests {
         .expect("verify should succeed");
         assert!(ok, "valid proof must verify");
 
-        // SHT-10: bytes past the canonical encoding are refused. Before the fix each
-        // of these verified `Ok(true)` — a second valid encoding of the same statement.
+        // SHT-10: bytes past the canonical encoding are refused. Each padded proof is a
+        // second encoding of a valid statement, which the upstream read alone accepts.
         for pad in [1usize, 64, 4096] {
             let mut padded = result.proof.clone();
             padded.data.resize(padded.data.len() + pad, 0);
