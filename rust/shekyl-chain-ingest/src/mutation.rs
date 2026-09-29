@@ -29,6 +29,8 @@
 //!   pin is not acceptance of the gap; it is the
 //!   gap made a red test the moment the row is ported, because the branch
 //!   is chosen by the census at every run. The census is the falsifier.
+//!   **No member names a pending row since E6 slice 7 wave B** (F18 was
+//!   the last); the arm is a panic naming what a new member must add.
 //!
 //! A regtest daemon's verdict is secondary evidence (§1.3) and lives in
 //! item 8's regtest leg; trace tag `0x03` stays RESERVED.

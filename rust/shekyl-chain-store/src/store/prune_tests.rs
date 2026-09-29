@@ -114,13 +114,11 @@ impl Builder {
                     .collect();
                 let root = batch_root_going_into(&view, h)?;
                 let cand = candidate_over(root, h, previous, txs.clone());
-                self.hashes.push(cand.block.hash());
+                // The identity is the priced block's (`judge_under`).
+                let judged = judge_under(&view, cand, &self.rules)?;
+                self.hashes.push(judged.block().hash());
                 self.listed.push(txs);
-                out.push(batch.connect(
-                    judge_under(&view, cand, &self.rules)?,
-                    facts(h),
-                    self.rules,
-                )?);
+                out.push(batch.connect(judged, facts(h), self.rules)?);
             }
             Ok(out)
         });

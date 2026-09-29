@@ -14,22 +14,22 @@
 //! a fresh file (SCW-17). Fixtures live in `connect_fixtures.rs`.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::{RowStatus, RuleSet, RuleSetId};
+use shekyl_chain_rules::{Corrupt, Fault, RowStatus, RuleSet, RuleSetId, Trust};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
     at, candidate, connect_chain, connect_chain_with_burn, connect_genesis, connect_genesis_judged,
-    connect_with_image_planted_under_the_token, facts, judge, spend_at, spendable_prefix,
-    FIRST_SPEND_HEIGHT,
+    connect_with_image_planted_under_the_token, facts, judge, priced_on, spend_at,
+    spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, production_horizons, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
 use super::*;
 use crate::codec::{
-    stored_timelock, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, Raw, RuleSetInForce,
-    TotalBurnedCell, TxIndex, TxOutputIndices, TxPrunedSegment, FACT_FIELDS,
+    stored_timelock, BlockInfo, Canonical, CodecError, CoverageGaps, OutKey, OutTx, Raw,
+    RuleSetInForce, TotalBurnedCell, TxIndex, TxOutputIndices, TxPrunedSegment, FACT_FIELDS,
 };
 use crate::ids::OutputSlot;
 use crate::lmdb_order::{Hash32, LmdbHashKey};
@@ -286,23 +286,27 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     // coinbase-only block and, on it, the first block that may list a spend.
     let s = FIRST_SPEND_HEIGHT;
     let below = connect_chain(&store, &vec![Vec::new(); at(s - 1)]);
-    let g = candidate(s - 1, below[at(s - 2)], Vec::new());
+    // Priced against the committed chain so its identity — the parent the
+    // spend block names — is the block that connects (CEN-F18).
+    let g = priced_on(&store, candidate(s - 1, below[at(s - 2)], Vec::new()));
     let g_hash = g.block.hash();
     let mut hashes = below.clone();
     hashes.push(g_hash);
     let b1 = candidate(s, g_hash, vec![spend_at(&hashes, s, 9, 2)]);
-    let b1_hash = b1.block.hash();
     let spend_hash = b1.transactions[0].hash();
 
-    let out: Result<(Connected, Connected), TestErr> = store.write(|batch| {
+    let out: Result<(Connected, Connected, BlockHash), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let c0 = batch.connect(judge(&view, g)?, facts(0), RuleSet::GENESIS)?;
         // The spend block is validated against a view that already holds
-        // its parent and connected in the same batch.
-        let c1 = batch.connect(judge(&view, b1)?, facts(25), RuleSet::GENESIS)?;
-        Ok((c0, c1))
+        // its parent and connected in the same batch; its coinbase is
+        // priced against that view, so its identity is the verdict's.
+        let judged = judge(&view, b1)?;
+        let b1_hash = judged.block().hash();
+        let c1 = batch.connect(judged, facts(25), RuleSet::GENESIS)?;
+        Ok((c0, c1, b1_hash))
     });
-    let (c0, c1) = out.expect("both connect");
+    let (c0, c1, b1_hash) = out.expect("both connect");
     assert_eq!(c0.height, BlockHeight::from_raw(s - 1));
     assert_eq!(c1.height, BlockHeight::from_raw(s));
     // the spend block: miner tx 7 (tx_indices, txs_pruned, txs_prunable,
@@ -707,6 +711,17 @@ fn a_key_image_recorded_under_a_judged_token_is_si1() {
     cleanup(&path);
 }
 
+/// Reach the SI-3 belt. Since E6 slice 7 commit 7 CEN-G1 refuses a listed
+/// transaction the chain already records, at `validate` — so a body listed
+/// in two blocks no longer walks through `judge` to the store (it did
+/// until then; this test connected block 1 listing the body and let block
+/// 2's connect find the row). What the belt beneath the rule still guards
+/// is the table **moving under a judged token**: the block is judged
+/// against a view that does not record the body, the `tx_indices` row is
+/// planted as connect would write it, and only then does the connect run
+/// — the same shape as the SI-1 test above. *Records-was:* red from
+/// commit 7 (a) until this commit; the store suite was not run when G1
+/// landed.
 #[test]
 fn the_same_transaction_in_two_blocks_is_si3() {
     let path = tmp("connect-txhash");
@@ -714,34 +729,48 @@ fn the_same_transaction_in_two_blocks_is_si3() {
     let (_, genesis) = connect_genesis(&store, 0);
     // A spend with a fresh key image each time but the SAME body cannot be
     // built (the key image is in the body). The one legal listed shape with
-    // no key image is a serve-credit-only transaction: listed twice across
-    // blocks, same hash, nothing for SI-1 to see. (A coinbase-shaped body
-    // served here until E6 slice 5 landed CEN-H5, which refuses `gen`
-    // outside the miner slot — the fixture was the input the row exists to
-    // refuse.)
+    // no key image is a serve-credit-only transaction: the same hash twice,
+    // nothing for SI-1 to see. (A coinbase-shaped body served here until
+    // E6 slice 5 landed CEN-H5, which refuses `gen` outside the miner slot
+    // — the fixture was the input the row exists to refuse.)
     let dup = fixture::serve_credit_only([0x77; 32]);
-    let b1 = candidate(1, genesis.hash(), vec![dup.clone()]);
-    let b1_hash = b1.block.hash();
+    let dup_hash = dup.hash();
+    let b1 = candidate(1, genesis.hash(), vec![dup]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(0), RuleSet::GENESIS)?)
-    });
-    out.expect("block 1");
-    let b2 = candidate(2, b1_hash, vec![dup]);
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b2)?, facts(0), RuleSet::GENESIS)?)
+        let judged = judge(&view, b1)?;
+        batch
+            .open_insert_table(TX_INDICES, StoreInvariant::TxHashNotFresh)?
+            .insert(
+                LmdbHashKey::from(dup_hash),
+                TxIndex {
+                    tx_id: crate::ids::TxStorageId::from_raw(1),
+                    unlock_time: stored_timelock(0),
+                    height: BlockHeight::from_raw(0),
+                }
+                .encoded()
+                .as_encoded(),
+            )?;
+        Ok(batch.connect(judged, facts(0), RuleSet::GENESIS)?)
     });
     expect_row(&out, StoreInvariant::TxHashNotFresh);
     cleanup(&path);
 }
 
+/// A `total_burned` register seeded at `u64::MAX` — the pre-image of the
+/// SI-8 wrap this test once drove `connect` into — is now observed **one
+/// stage earlier**: CEN-F17 (E6 slice 7 wave B) reads the register beside
+/// the parent's `coins_generated` and a fold above the accumulator is
+/// `Corrupt::BurnExceedsEmission`, which the writer halts on as the SI-7
+/// row on the register. The write-side `checked_add` in `connect` stands
+/// behind it, unreachable from a verdict: no valid block can carry a
+/// register the validator refused to price from. *Records-was:* until
+/// 2026-09-29 this test reached `FoldOverflow { total_burned }` because
+/// nothing read the register before the fold.
 #[test]
-fn a_total_burned_fold_that_would_wrap_is_si8_never_a_saturate() {
+fn a_total_burned_register_above_the_emission_halts_the_writer_before_the_fold() {
     let path = tmp("connect-fold");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    // Genesis records no burn (the `h > 0` guard), so the fold that must
-    // overflow is block 1's.
     let (_, genesis) = connect_genesis(&store, 0);
     let seeded: Result<(), TestErr> = store.write(|batch| {
         batch.upsert_property::<TotalBurnedCell>(&AtomicUnits::from_raw(u64::MAX))?;
@@ -750,17 +779,33 @@ fn a_total_burned_fold_that_would_wrap_is_si8_never_a_saturate() {
     seeded.expect("seed");
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(
-            judge(&view, candidate(1, genesis.hash(), Vec::new()))?,
-            facts(1),
-            RuleSet::GENESIS,
-        )?)
+        let formed =
+            super::connect_fixtures::formed(&view, candidate(1, genesis.hash(), Vec::new()))?;
+        match shekyl_chain_rules::validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+            Err(Fault::Corrupt(corrupt)) => {
+                assert!(
+                    matches!(corrupt, Corrupt::BurnExceedsEmission { .. }),
+                    "{corrupt}"
+                );
+                Err(batch.refuse_corrupt(corrupt).into())
+            }
+            other => panic!("F17 observes the register before any fold: {other:?}"),
+        }
     });
-    expect_row(
-        &out,
-        StoreInvariant::FoldOverflow {
-            cell: "total_burned",
-        },
+    let row = StoreInvariant::CellCorrupt {
+        key: "total_burned",
+        fault: CellFault::Undecodable(CodecError::Invalid {
+            codec: "total_burned",
+            reason: "the burned fold exceeds the parent's coins_generated (FL-R16c)",
+        }),
+    };
+    expect_row(&out, row);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(1),
+            row,
+        }
     );
     let snap = store.begin_read().expect("read");
     assert_eq!(

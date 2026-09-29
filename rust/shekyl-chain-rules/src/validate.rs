@@ -223,6 +223,9 @@ pub fn form<S: Substrate>(
 ///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
 ///         Ok(false)
 ///     }
+///     fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
+///         Ok(shekyl_units::AtomicUnits::ZERO)
+///     }
 /// }
 /// // Each call brands a fresh view, as the store's `write` does.
 /// fn with_view<R>(f: impl for<'id> FnOnce(View<'id>) -> R) -> R {
@@ -294,6 +297,9 @@ pub fn form<S: Substrate>(
 ///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
 ///         Ok(false)
 ///     }
+///     fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
+///         Ok(shekyl_units::AtomicUnits::ZERO)
+///     }
 /// }
 /// struct Evil;
 /// impl<'id> ChainView<'id> for Evil {
@@ -329,6 +335,9 @@ pub fn form<S: Substrate>(
 ///     }
 ///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
 ///         Ok(false)
+///     }
+///     fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
+///         Ok(shekyl_units::AtomicUnits::ZERO)
 ///     }
 /// }
 /// fn connect<'id>(_: &View<'id>, _: ChainValid<'id, View<'id>>) {}
@@ -432,16 +441,18 @@ pub fn validate<'id, V: ChainView<'id>>(
     // definition the 4.F consumers (F14, F14b — commit 5) read next.
     let weights = Weights::derive(medians, cx.candidate(), &mut coverage);
 
-    // The reward chain (slice 7 commit 5): F14 refuses a block over twice
-    // the median, F14b prices the penalised reward, F16 splits it, G12
-    // advances the supply — one sequence after the medians, in the C++'s
-    // order (`validate_miner_transaction` runs after every body is
-    // judged). The verdict carries what it yields.
+    // The reward chain (slice 7 commits 5 and 9): F14 refuses a block over
+    // twice the median, F14b prices the penalised reward, F16 splits it,
+    // F17 splits the listed fees, G11/G13 state the accrual and the burn,
+    // F18 holds the coinbase to the two miner legs, G12 advances the
+    // supply — one sequence after the medians, in the C++'s order
+    // (`validate_miner_transaction` runs after every body is judged). The
+    // verdict carries what it yields.
     let paid = match reward::judge_emission(
         connecting,
         &emission,
         &weights,
-        &cx.candidate().block.miner_transaction,
+        cx.candidate(),
         &mut coverage,
     ) {
         Ok(paid) => paid,

@@ -433,17 +433,15 @@ fn block_blob_above_the_tip_is_above_tip_and_a_hole_is_si7() {
 /// to read: genesis records none whatever it is handed (the `h > 0` half of
 /// the C++ guard), a zero writes no row.
 fn connect_burning(store: &ChainStore, burns: &[u64]) {
-    let mut previous = BlockHash::NULL;
-    let mut cands = Vec::new();
-    for h in 0..burns.len() as u64 {
-        let cand = candidate(h, previous, Vec::new());
-        previous = cand.block.hash();
-        cands.push(cand);
-    }
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        for (h, cand) in cands.into_iter().enumerate() {
-            batch.connect(judge(&view, cand)?, facts(burns[h]), RuleSet::GENESIS)?;
+        let mut previous = BlockHash::NULL;
+        for (h, burned) in burns.iter().enumerate() {
+            // Built and judged per height: the coinbase is priced against
+            // the chain so far, and the identity is the priced block's.
+            let judged = judge(&view, candidate(h as u64, previous, Vec::new()))?;
+            previous = judged.block().hash();
+            batch.connect(judged, facts(*burned), RuleSet::GENESIS)?;
         }
         Ok(())
     });

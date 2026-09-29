@@ -181,14 +181,15 @@ fn admitted(chain: &MockChain, template: Template) -> Vec<CenRow> {
 
 /// The 4.F rows the validator has landed: every one of them judged the
 /// template, and none refused it. F14, F14b and F16 landed with slice 7
-/// commit 5 (the reward chain after the medians) and judge every template,
-/// the genesis one included — its arm records them as evaluated. The rows
-/// this list still omits (F17, F18) are wave B's and are held by
-/// construction below until they land; when they land they belong here.
-/// The 4.G rows that judge a template (G6, G6b, G12) are the validator's
-/// chain-side definitions, held to the corpus by the ingest's oracles, not
-/// miner rows — this list is the producer/validator ratchet on 4.F.
-const LANDED_MINER_ROWS: [CenRow; 11] = [
+/// commit 5 (the reward chain after the medians); F17 and F18 with slice 7
+/// wave B (2026-09-29) — every template is now held by the validator to
+/// the exact payout it priced, the genesis one included (its arm records
+/// F17/F18 as evaluated: nothing listed, nothing owed beyond the
+/// configured amount). The 4.G rows that judge a template (G6, G6b, G11,
+/// G12, G13) are the validator's chain-side definitions, held to the
+/// corpus by the ingest's oracles, not miner rows — this list is the
+/// producer/validator ratchet on 4.F.
+const LANDED_MINER_ROWS: [CenRow; 13] = [
     CenRow::F1,
     CenRow::F3,
     CenRow::F4,
@@ -200,6 +201,8 @@ const LANDED_MINER_ROWS: [CenRow; 11] = [
     CenRow::F14,
     CenRow::F14b,
     CenRow::F16,
+    CenRow::F17,
+    CenRow::F18,
 ];
 
 #[test]
@@ -215,6 +218,35 @@ fn the_genesis_template_is_admitted_and_judged_by_every_landed_miner_row() {
             "{row} did not judge the genesis template"
         );
     }
+}
+
+/// CEN-G13 on the producer's side: the genesis template pays the whole
+/// priced reward — no staker leg is split off at height 0, because the
+/// validator accrues none (F11 takes the configured coinbase entire). The
+/// same operands one block later split; the pair is asserted together so
+/// the arm cannot quietly widen to height 1 or narrow to nothing. Found by
+/// slice 7 commit 5 (a driver-built genesis paid only the miner leg of a
+/// share nobody accrued), closed by wave B.
+#[test]
+fn the_genesis_template_pays_the_reward_whole_and_the_next_height_splits_it() {
+    let params = EconomicParams::default();
+    let miner = miner();
+    let genesis = build(&context(&MockChain::default(), &params, &miner, &[])).expect("builds");
+    assert_eq!(
+        genesis.miner_emission, genesis.block_reward,
+        "G13: no staker leg at genesis"
+    );
+    assert_eq!(
+        genesis.block.miner_transaction.prefix.outputs[0].amount,
+        genesis.block_reward.to_raw()
+    );
+    let next = build(&context(&chain_of(1), &params, &miner, &[])).expect("builds");
+    assert!(
+        next.miner_emission < next.block_reward,
+        "from height 1 the staker share is split off: {} of {}",
+        next.miner_emission.to_raw(),
+        next.block_reward.to_raw()
+    );
 }
 
 #[test]
@@ -283,10 +315,11 @@ fn the_coinbase_has_one_gen_input_at_the_connecting_height_and_one_output() {
 
 #[test]
 fn the_coinbase_pays_exactly_the_miners_leg_of_the_split_plus_its_fee_share() {
-    // CEN-F18 over F13/F14/F15/F16/F17/F20. The validator's row is pending
-    // on G6 (slice 7); until it lands, this is the identity it will
-    // falsify, computed here from the owners on the template's own
-    // operands — including the weight the template reports it priced at.
+    // CEN-F18 over F13/F14/F15/F16/F17/F20, computed here from the owners
+    // on the template's own operands — including the weight the template
+    // reports it priced at. The validator's F18 (slice 7 wave B) falsifies
+    // the same identity through `admitted` above; this is the producer's
+    // side of it, with the figures named.
     let params = EconomicParams::default();
     let miner = miner();
     let chain = chain_of(2);

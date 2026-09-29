@@ -87,10 +87,11 @@ fn nonce_meeting_target(
     height: u64,
     previous: BlockHash,
     txs: &[Transaction],
+    reward: u64,
 ) -> u32 {
     let difficulty = Difficulty::from_raw(MINED_DIFFICULTY);
     first_nonce(NONCE_BUDGET, |nonce| {
-        let block = block_with_nonce(root, height, previous, txs, nonce);
+        let block = block_with_nonce(root, height, previous, txs, reward, nonce);
         check_hash(seeded_keccak(&block.pow_blob(), seed).as_bytes(), difficulty)
     })
     .unwrap_or_else(|| {
@@ -117,12 +118,12 @@ fn mined_chain(n: u64) -> Vec<(Block, Vec<Transaction>)> {
         })
         .collect();
     let mut recorded: Vec<BlockHash> = Vec::with_capacity(listed.len());
-    chain_listing_with(listed, |root, height, previous, txs| {
+    chain_listing_with(listed, |root, height, previous, txs, reward| {
         let seed = seed_for(height, |at| {
             recorded[usize::try_from(at).expect("seed height fits an index")]
         });
-        let nonce = nonce_meeting_target(&seed, root, height, previous, txs);
-        let block = block_with_nonce(root, height, previous, txs, nonce);
+        let nonce = nonce_meeting_target(&seed, root, height, previous, txs, reward);
+        let block = block_with_nonce(root, height, previous, txs, reward, nonce);
         recorded.push(block.hash());
         block
     })
@@ -226,7 +227,16 @@ fn assert_lands(mutation: Mutation, at: u64, outcome: &Outcome) {
                 "{mutation}: everything below the mutation connected"
             );
         }
-        RowStatus::Pending => assert_pinned_gap(mutation, at, outcome),
+        // No family member names a pending row since E6 slice 7 wave B
+        // landed F18 (the last one, `WrongReward`'s). A mutation written
+        // for an unported row re-adds the pinned-gap arm — a `match` over
+        // `Mutation` naming what Rust does today, the shape `WrongReward`
+        // carried from increment 3 to wave B — rather than loosening this.
+        RowStatus::Pending => panic!(
+            "{mutation}: {} is Pending and the family has no pin for it; pin today's shape \
+             per mutation (the arm deleted with wave B), never a guessed verdict",
+            expected.as_str()
+        ),
         other => panic!("{mutation}: no family member expects a {other:?} row"),
     }
 }
@@ -264,66 +274,13 @@ fn assert_place(mutation: Mutation, locus: Locus) {
     }
 }
 
-/// §3.10's last column: what Rust does today with a violation whose row is
-/// not ported. The match is exhaustive over [`Mutation`], so a new variant
-/// names its pin at compile time. When a row flips to `Implemented`,
-/// `assert_lands` takes the other branch and this arm is never reached again.
-fn assert_pinned_gap(mutation: Mutation, at: u64, outcome: &Outcome) {
-    match mutation {
-        Mutation::WrongReward => {
-            let report = match outcome {
-                Outcome::Report(report) => report,
-                Outcome::Fault(fault) => panic!(
-                    "{mutation}: the run faulted; {} is Pending and connects today: {fault}",
-                    mutation.expected().as_str()
-                ),
-            };
-            assert_eq!(
-                report.refused,
-                None,
-                "{mutation}: {} is Pending, so the block connects today; a refusal here means \
-                 the row landed — flip the census, not this test",
-                mutation.expected().as_str()
-            );
-            assert_eq!(
-                report.connected.len(),
-                usize::try_from(at + 1).expect("small"),
-                "{mutation}: the mutated block connected"
-            );
-        }
-        // `DoubleSpend` pinned the SI-1 halt while I7 was Pending (C2-R8's
-        // taxonomy — a belt firing is the validator's hole — observed, not
-        // accepted); E6 slice 6 commit 4 ported I7 and the pin was deleted
-        // with the hole. It refuses at its input now, like the six.
-        // `ReorderedBodies` pinned "connects" while G2 was Pending; slice 7
-        // commit 6 ported G2 as a `FormRule` and the pin went with the gap
-        // — it and the two G2 mutations written with the rule refuse at
-        // their loci.
-        Mutation::HeaderVersion
-        | Mutation::Orphan
-        | Mutation::WrongRoot
-        | Mutation::FutureTimestamp
-        | Mutation::StaleTimestamp
-        | Mutation::PowUnderWrongSeed
-        | Mutation::ReorderedBodies
-        | Mutation::MissingBody
-        | Mutation::SubstitutedBody
-        | Mutation::RelistedTransaction
-        | Mutation::DoubledListing
-        | Mutation::DuplicateServeCredit
-        | Mutation::DuplicateClaim
-        | Mutation::DuplicateBondPost
-        | Mutation::OverweightBlock
-        | Mutation::DoubleSpend
-        | Mutation::UnknownReference
-        | Mutation::ReferenceTooRecent
-        | Mutation::ForgedSignature => panic!(
-            "{mutation}: the census says {} is pending, and the family has no pin for a row \
-             that was Implemented at the pin",
-            mutation.expected().as_str()
-        ),
-    }
-}
+// The pinned-gap arm — §3.10's last column, what Rust did with a violation
+// whose row was not ported — went with its last member. `DoubleSpend`
+// pinned the SI-1 halt while I7 was Pending (C2-R8's taxonomy — a belt
+// firing is the validator's hole — observed, not accepted); E6 slice 6
+// commit 4 ported I7. `ReorderedBodies` pinned "connects" while G2 was
+// Pending; slice 7 commit 6 ported G2. `WrongReward` pinned "connects"
+// while F18 was Pending; slice 7 wave B ported F18 and the arm is gone.
 
 // ---------------------------------------------------------------------------
 // The family, one run each
@@ -704,15 +661,17 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_those_the_plan_lists() {
         .map(|m| m.expected())
         .filter(|row| row.status() == RowStatus::Pending)
         .collect();
-    // §3.10's table at the pin. When an E6 slice ports one of these, this
-    // line and the family's pinned-gap arm both go red together — the plan's
-    // table is then updated with the row, not the test loosened. (Slice 4
-    // re-keyed WrongReward F13 → F18, Q8: F13 landed as a definition, and
-    // the predicate a wrong amount trips is F18, blocked on G6. Slice 6
-    // commit 4 ported I7: `DoubleSpend` now refuses at its input, and the
-    // family's landing arm below holds it. Slice 7 commit 6 ported G2: the
-    // three G2 mutations refuse at their loci; F18 is wave B's.)
-    assert_eq!(pending, vec![CenRow::F18]);
+    // §3.10's table at the pin: **empty** since E6 slice 7 wave B ported
+    // F18. When a mutation is written for an unported row, this line and
+    // the family's `Pending` arm both go red together — the plan's table
+    // is then updated with the row and the arm pins today's shape, not the
+    // test loosened. (Slice 4 re-keyed WrongReward F13 → F18, Q8: F13
+    // landed as a definition, and the predicate a wrong amount trips is
+    // F18. Slice 6 commit 4 ported I7: `DoubleSpend` refuses at its input.
+    // Slice 7 commit 6 ported G2: the three G2 mutations refuse at their
+    // loci. Slice 7 wave B ported F18: `WrongReward` refuses at the miner
+    // slot, the last pending row.)
+    assert_eq!(pending, Vec::<CenRow>::new());
     for m in Mutation::ALL {
         assert!(
             m.to_string().contains(m.expected().as_str()),

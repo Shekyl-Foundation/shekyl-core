@@ -40,7 +40,8 @@ fn three_blocks() -> Vec<(Vec<u8>, Vec<Vec<u8>>)> {
         .iter()
         .enumerate()
         .map(|(hh, txs)| {
-            let b = block(CurveTreeRoot::EMPTY, hh as u64, previous, txs);
+            // Bytes for the artifact round-trip, never judged: unpriced.
+            let b = block(CurveTreeRoot::EMPTY, hh as u64, previous, txs, 0);
             previous = b.hash();
             wire(&b, txs)
         })

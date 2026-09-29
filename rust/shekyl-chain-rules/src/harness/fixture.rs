@@ -20,6 +20,10 @@
 //! refuse on.
 
 use super::*;
+use crate::coverage::RuleCoverage;
+use crate::rules::block_weight::{Medians, Weights};
+use crate::rules::miner::Emission;
+use crate::rules::reward;
 use crate::verdict::TxSlot;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
@@ -814,7 +818,115 @@ pub fn candidate_on(chain: &MockChain, listed: Vec<Transaction>) -> Candidate {
         miner_transaction: coinbase(connecting.to_raw()),
         transaction_hashes: listed.iter().map(Transaction::hash).collect(),
     };
-    Candidate::new(block, listed)
+    chain.with_view(|view| priced_at(&view, connecting, Candidate::new(block, listed)))
+}
+
+/// [`priced_at`] on `chain`'s tip — for a fixture that replaced the
+/// coinbase [`candidate_on`] had already priced (a trip's coinbase, a
+/// shape under test at the miner slot) and needs it priced again.
+pub fn repriced(chain: &MockChain, candidate: Candidate) -> Candidate {
+    let connecting = Tip::connecting_height(chain.tip().as_ref());
+    chain.with_view(|view| priced_at(&view, connecting, candidate))
+}
+
+/// [`priced_at`] at the height `view`'s tip says a candidate connects at
+/// — for a fixture built over a store's own view (the store's and the
+/// ingest's chain builders). A view that answers no tip (a tree-only view)
+/// is genesis here; a view with one prices at `tip + 1`.
+///
+/// # Errors
+///
+/// The view's fault on the tip read.
+pub fn priced<'id, V: ChainView<'id>>(
+    view: &V,
+    candidate: Candidate,
+) -> Result<Candidate, V::Fault> {
+    let connecting = Tip::connecting_height(view.tip()?.as_ref());
+    Ok(priced_at(view, connecting, candidate))
+}
+
+/// `candidate` with its coinbase paying **what CEN-F18 requires of it** on
+/// `view` at `connecting`: the block's own figure, `miner_emission +
+/// miner_fee_income`, derived by the crate's reward chain over the view
+/// the candidate will be judged against — the 4.F definitions, the medians
+/// (G6), the block's weight (G6b), the paid reward (F14b), the split (F16)
+/// and the fee split (F17) — never by a second copy of the arithmetic. The
+/// one builder every crate's chain fixture prices through, so no fixture
+/// pays a coinbase differently from the rule that judges it (the anchoring
+/// discipline of [`anchored_at`], for the reward).
+///
+/// At genesis the configured emission stands (F11), so the coinbase is
+/// returned as it came. A candidate the chain refuses before F18 — over
+/// twice the median (F14), say — is returned as it came too: its amount is
+/// moot, and a fixture built to be refused there stays refused there.
+///
+/// The reward is penalised at the block's weight, and the block's weight
+/// includes the coinbase carrying it: the amount's varint can grow with
+/// the amount. Below the median nothing moves; over it the price is
+/// re-taken at the weight the block actually has until the two meet
+/// (`shekyl-block-template`'s settle loop, the producer's answer to the
+/// same circularity). A pair that will not meet within the budget is a
+/// fixture at a boundary no test has asked for, and panics rather than
+/// pays a figure F18 would refuse.
+pub fn priced_at<'id, V: ChainView<'id>>(
+    view: &V,
+    connecting: BlockHeight,
+    mut candidate: Candidate,
+) -> Candidate {
+    const REPRICING_PASSES: usize = 4;
+    let mut scratch = RuleCoverage::EMPTY;
+    let Ok(emission) = Emission::derive(view, connecting, &mut scratch) else {
+        return candidate;
+    };
+    let Ok(medians) = Medians::derive(view, connecting, &mut scratch) else {
+        return candidate;
+    };
+    let configured = candidate
+        .block
+        .miner_transaction
+        .prefix
+        .outputs
+        .iter()
+        .fold(0u64, |sum, output| sum.saturating_add(output.amount));
+    for _ in 0..REPRICING_PASSES {
+        let weights = Weights::derive(medians, &candidate, &mut scratch);
+        let Ok(paid) = reward::price(
+            connecting,
+            &emission,
+            &weights,
+            &candidate.transactions,
+            configured,
+            &mut scratch,
+        ) else {
+            return candidate;
+        };
+        let Some(first) = candidate.block.miner_transaction.prefix.outputs.first_mut() else {
+            return candidate;
+        };
+        if first.amount == paid.owed.to_raw() {
+            return candidate;
+        }
+        first.amount = paid.owed.to_raw();
+    }
+    let weights = Weights::derive(medians, &candidate, &mut scratch);
+    match reward::price(
+        connecting,
+        &emission,
+        &weights,
+        &candidate.transactions,
+        configured,
+        &mut scratch,
+    ) {
+        Ok(paid) if paid.owed.to_raw() == candidate.block.miner_transaction.prefix.outputs[0].amount => {
+            candidate
+        }
+        Ok(paid) => panic!(
+            "the fixture's coinbase does not settle: priced at {} carrying {} (a penalty-boundary shape no fixture asked for)",
+            paid.owed.to_raw(),
+            candidate.block.miner_transaction.prefix.outputs[0].amount
+        ),
+        Err(_) => candidate,
+    }
 }
 
 /// A well-formed **genesis** candidate: [`candidate_on`] an empty chain.

@@ -165,6 +165,26 @@ fn expected_seed<'id, V: ChainView<'id>>(view: &V) -> Result<BlockHash, V::Fault
     })
 }
 
+/// `candidate` with its coinbase paying what CEN-F18 owes it on `view` —
+/// the harness's one pricer, at the height the view says the candidate
+/// connects at. The view's own fault is the only error: pricing reads the
+/// store the same way the rules will.
+pub(super) fn priced<'b, 'id>(
+    view: &BatchView<'b, 'id>,
+    candidate: Candidate,
+) -> Result<Candidate, StoreError> {
+    fixture::priced(view, candidate)
+}
+
+/// [`priced`] against the **committed** store — for a test that needs a
+/// block's identity (to build its child, to read it back) before the batch
+/// that connects it. Opens a batch that only reads.
+pub(super) fn priced_on(store: &ChainStore, candidate: Candidate) -> Candidate {
+    let out: Result<Candidate, TestErr> =
+        store.write(|batch| Ok(priced(&batch.chain_view(), candidate)?));
+    out.expect("pricing only reads")
+}
+
 /// The stateless stage over the fixture substrate, under `GENESIS`,
 /// claiming the seed `view` expects.
 pub(super) fn formed<'id, V: ChainView<'id>>(
@@ -208,11 +228,23 @@ pub(super) fn judge<'b, 'id>(
 }
 
 /// [`judge`] under an explicit rule set.
+///
+/// The candidate's coinbase is **priced here**, against the view it is
+/// judged on, before the stateless stage: `candidate_over` builds a
+/// coinbase paying zero (no fixture can price without the chain), and
+/// CEN-F18 (E6 slice 7 wave B) refuses any block above genesis whose
+/// coinbase does not pay exactly what the block owes it. The harness's
+/// `priced_at` is the one pricer every crate's fixtures share. A
+/// consequence for the caller: a block's identity is known **after** it is
+/// judged, so a chain of fixtures takes each `previous` from the verdict
+/// ([`ChainValid::block`]), not from the unpriced candidate — except at
+/// genesis, whose configured coinbase stands as built.
 pub(super) fn judge_under<'b, 'id>(
     view: &BatchView<'b, 'id>,
     candidate: Candidate,
     rules: &RuleSet,
 ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
+    let candidate = priced(view, candidate)?;
     match validate(
         formed_under(view, candidate, rules)?,
         view,
@@ -346,9 +378,11 @@ pub(super) fn connect_chain_anchored(
             anchored.push(txs.clone());
             let root = batch_root_going_into(&view, h)?;
             let cand = candidate_over(root, h, previous, txs);
-            previous = cand.block.hash();
+            let judged = judge(&view, cand)?;
+            // The identity is the priced block's (`judge_under` docs).
+            previous = judged.block().hash();
             hashes.push(previous);
-            batch.connect(judge(&view, cand)?, facts(burned), RuleSet::GENESIS)?;
+            batch.connect(judged, facts(burned), RuleSet::GENESIS)?;
         }
         Ok(())
     });

@@ -178,21 +178,19 @@ impl<P> Composed<P> {
 impl<P: PricedAt> FactsFor for Composed<P> {
     fn facts_for<'id, V: ChainView<'id>>(
         &self,
-        height: BlockHeight,
-        _valid: &ChainValid<'id, V>,
+        _height: BlockHeight,
+        valid: &ChainValid<'id, V>,
         _view: &V,
     ) -> Result<ConnectFacts, FactsFault<V::Fault>> {
-        let priced = self
-            .priced
-            .priced_at(height)
-            .ok_or(FactsFault::None { height })?;
-        // `PassedThrough` — the producer computed it on its own operands;
-        // no landed row has derived it on the verdict (module docs). The
-        // flip is one line, here. Nothing is read from the view any more:
-        // the parent-side read this function made for `coins_generated`
-        // left with the field (the validator makes it, once, under F13).
+        // `Derived` — CEN-F17 / G11 (E6 slice 7 wave B, 2026-09-29): the
+        // validator prices the fee split over its own parent-state reads
+        // and the verdict carries the destroyed amount. The producer's
+        // priced figure is no longer consulted; the last pass-through is
+        // gone, and with it the reason this type, `Fact` and `Origin`
+        // exist (the store's `DELETED_BY`; deleted in the commit after
+        // this flip).
         Ok(ConnectFacts {
-            burned: Fact::passed_through(priced.burned),
+            burned: Fact::derived(valid.block().emission().burned()),
         })
     }
 }

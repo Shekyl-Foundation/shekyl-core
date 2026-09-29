@@ -130,6 +130,10 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::F14b,
             CenRow::F15,
             CenRow::F16,
+            // Slice 7 commit 9 (wave B): F17 the fee split, F18 the exact
+            // payout — with G11/G13 below.
+            CenRow::F17,
+            CenRow::F18,
             CenRow::F20,
             // Slice 7 commit 7: G1 before the slot loop
             // (`CHAIN_RULES_SLICE_7.md` §5 row 7); G7/G9/G10 below, after it.
@@ -144,7 +148,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::G7,
             CenRow::G9,
             CenRow::G10,
+            CenRow::G11,
             CenRow::G12,
+            CenRow::G13,
             CenRow::H1,
             CenRow::H3,
             CenRow::H4,

@@ -311,7 +311,7 @@ async fn replay(replay: Replay) -> Result<(), Failure> {
                 eprintln!("block weights at height {at}: derived != trace, DIVERGE");
             }
             Disagreement::EmissionDiverged { at } => {
-                eprintln!("coins_generated at height {at}: derived != trace, DIVERGE");
+                eprintln!("coins_generated / burned at height {at}: derived != trace, DIVERGE");
             }
         }
     }

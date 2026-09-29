@@ -265,6 +265,12 @@ pub struct ChainFacts {
     pub parent_coins_generated: shekyl_units::AtomicUnits,
     /// Everything burned through the tip.
     pub total_burned: shekyl_units::AtomicUnits,
+    /// The curve-tree leaf count at `connecting` — CEN-F17's `n` is its
+    /// frozen-segment count, through the one owner
+    /// (`shekyl_archival_retention::frozen_segment_count`), so the producer
+    /// prices the fee split at the operand the validator reads
+    /// (`rules::miner::BurnOperands`; E6 slice 7 wave B).
+    pub leaf_count: u64,
     /// CEN-F20's window at `connecting`.
     pub tx_volume: shekyl_economics::TxVolume,
     /// CEN-C2's median at `connecting`; `None` at genesis.
@@ -535,6 +541,12 @@ impl<F: FactsFor + Send + Sync + 'static> Message<TemplateFacts> for Connector<F
                 None => shekyl_units::AtomicUnits::ZERO,
                 Some(t) => definition(batch, recorded(&view, t.height))?.coins_generated,
             };
+            let leaf_count = present(
+                batch,
+                connecting,
+                PerHeightRecord::LeafCount,
+                view.leaf_count_at(connecting),
+            )?;
             let tx_volume = definition(
                 batch,
                 shekyl_chain_rules::tx_volume_window(&view, connecting),
@@ -551,6 +563,7 @@ impl<F: FactsFor + Send + Sync + 'static> Message<TemplateFacts> for Connector<F
                 curve_tree_root,
                 parent_coins_generated,
                 total_burned,
+                leaf_count,
                 tx_volume,
                 median_timestamp,
                 medians,

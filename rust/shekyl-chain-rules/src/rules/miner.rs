@@ -69,10 +69,12 @@
 
 use std::sync::OnceLock;
 
+use shekyl_archival_retention::frozen_segment_count;
 use shekyl_ct_balance::{check_commitment_masks, check_output_keys, MaskSubject};
 use shekyl_economics::params::TX_VOLUME_WINDOW;
 use shekyl_economics::{
-    base_block_reward, effective_emission, tail_subsidy_per_block, EconomicParams, TxVolume,
+    base_block_reward, effective_emission, tail_subsidy_per_block, CirculatingSupply,
+    EconomicParams, FrozenSegmentCount, TxVolume,
 };
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
@@ -80,9 +82,10 @@ use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::{Corrupt, Fault, ViewRead};
+use crate::fault::{Corrupt, Fault, PerHeightRecord, ViewRead};
 use crate::rules::{recorded, BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
+use crate::view::AtHeight;
 use crate::view::ChainView;
 
 /// The refusal locus of every 4.F predicate: the miner transaction.
@@ -418,7 +421,33 @@ pub(crate) enum Subsidy {
         /// The release-modulated emission, tail-floored (CEN-F15). The
         /// weight penalty (F14b) applies to *this*, in slice 7.
         effective: AtomicUnits,
+        /// The fee burn's two chain-state operands (CEN-F17), read at the
+        /// same parent state as the accumulator.
+        burn: BurnOperands,
     },
+}
+
+/// CEN-F17's operands that come from the chain rather than the block —
+/// read once, at parent state, beside the accumulator (F19's single-read
+/// discipline; the C++ reads both at `blockchain.cpp:5810`–`:5819` and
+/// hands them to verify and the accrual alike).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BurnOperands {
+    /// The circulating supply the burn ratio reads: `coins_generated −
+    /// total_burned` at parent state (FL-R16c's definition, derived by the
+    /// one owner; `total_burned > coins_generated` is
+    /// [`Corrupt::BurnExceedsEmission`], never a zero).
+    pub(crate) supply: CirculatingSupply,
+    /// The D2 escalation operand `n`: `frozen_segment_count` of the
+    /// curve-tree leaf count **at** the connecting height — the count after
+    /// the parent drained, [`ChainView::leaf_count_at`] — through the one
+    /// owner (`shekyl_archival_retention::frozen_segment_count`, the
+    /// function the C++ marshals as `shekyl_archival_frozen_segment_count`
+    /// at `:1504`). What `n` *counts* is the shard re-key's open question
+    /// (`docs/FOLLOWUPS.md`, the segment-keyed `n` row; behaviour-neutral
+    /// while the escalation ships flat); this is the operand the C++ reads
+    /// today, adopted so the two validators price one figure.
+    pub(crate) frozen_segments: FrozenSegmentCount,
 }
 
 impl Emission {
@@ -466,10 +495,12 @@ impl Emission {
                 coverage.insert(F11::ROW);
                 coverage.insert(F13::ROW);
                 coverage.insert(F15::ROW);
+                let burn = BurnOperands::read(view, connecting, parent_coins)?;
                 (
                     Subsidy::Derived {
                         base: AtomicUnits::from_raw(base),
                         effective: AtomicUnits::from_raw(effective),
+                        burn,
                     },
                     parent_coins,
                 )
@@ -486,6 +517,60 @@ impl Emission {
     /// once.
     pub(crate) const fn parent_coins_generated(&self) -> AtomicUnits {
         self.parent_coins_generated
+    }
+}
+
+/// CEN-F17's escalation operand `n` from the curve-tree leaf count at the
+/// connecting height: `frozen_segment_count` through the one owner
+/// (`shekyl_archival_retention`), the function the C++ marshals as
+/// `shekyl_archival_frozen_segment_count` at `blockchain.cpp:1504`.
+///
+/// **Public for the one reason [`tx_volume_window`] and
+/// [`effective_median_at`](crate::effective_median_at) are**: the block
+/// producer prices its coinbase at the operand the validator judges it by
+/// (`shekyl-block-template` takes `frozen_segments` as a context field, and
+/// the caller composing that context reads it *here*), never from a second
+/// copy of the definition. What `n` counts is the shard re-key's open
+/// question (`docs/FOLLOWUPS.md`, the segment-keyed `n` row); this is the
+/// operand both validators read today.
+#[must_use]
+pub fn frozen_segments_at(leaf_count: u64) -> FrozenSegmentCount {
+    FrozenSegmentCount::new(frozen_segment_count(leaf_count))
+}
+
+impl BurnOperands {
+    /// The two reads, at parent state, for a candidate connecting at
+    /// `connecting` whose parent's accumulator is `parent_coins`.
+    ///
+    /// The leaf count at `connecting` is a per-height record a conforming
+    /// view has for `tip + 1` (E3 records it as the parent connects), so
+    /// `AboveTip` there is [`Corrupt::HoleBelowTip`]; a burned fold above
+    /// the accumulator is [`Corrupt::BurnExceedsEmission`].
+    fn read<'id, V: ChainView<'id>>(
+        view: &V,
+        connecting: BlockHeight,
+        parent_coins: AtomicUnits,
+    ) -> Result<Self, ViewRead<V::Fault>> {
+        let total_burned = view.total_burned().map_err(ViewRead::View)?;
+        let supply = CirculatingSupply::derive(parent_coins, total_burned).map_err(|_| {
+            ViewRead::Corrupt(Corrupt::BurnExceedsEmission {
+                coins_generated: parent_coins,
+                total_burned,
+            })
+        })?;
+        let leaf_count = match view.leaf_count_at(connecting).map_err(ViewRead::View)? {
+            AtHeight::Recorded(count) => count,
+            AtHeight::AboveTip => {
+                return Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
+                    at: connecting,
+                    record: PerHeightRecord::LeafCount,
+                }))
+            }
+        };
+        Ok(Self {
+            supply,
+            frozen_segments: frozen_segments_at(leaf_count),
+        })
     }
 }
 

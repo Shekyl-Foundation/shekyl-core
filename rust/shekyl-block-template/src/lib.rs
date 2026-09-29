@@ -100,7 +100,7 @@ use shekyl_crypto_pq::CryptoError;
 use shekyl_difficulty::is_timestamp_below_ftl;
 use shekyl_economics::{
     compute_emission_split, compute_fee_burn, paid_block_reward, CirculatingSupply, EconomicParams,
-    EmissionError, FrozenSegmentCount, SupplyInvariantViolation, TxVolume,
+    EmissionError, EmissionSplit, FrozenSegmentCount, SupplyInvariantViolation, TxVolume,
 };
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, Timestamp, TxHash,
@@ -494,12 +494,24 @@ fn price_and_pay(
         e.tx_volume,
         cx.params,
     )?;
-    // CEN-F16/F21: the miner's leg of the split.
-    let split = compute_emission_split(
-        block_reward,
-        cx.height.to_raw(),
-        e.emission_split_epoch.to_raw(),
-    );
+    // CEN-F16/F21: the miner's leg of the split — **whole at genesis**
+    // (CEN-G13, F11: height 0 has no staker leg; the validator takes the
+    // configured coinbase entire and accrues nothing, `blockchain.cpp:1516`,
+    // `:5888`). Until E6 slice 7 wave B this arm split at height 0 too and
+    // a driver-built genesis paid only the miner leg of a share the chain
+    // never accrued — found by slice 7 commit 5, closed here.
+    let split = if cx.height == BlockHeight::ZERO {
+        EmissionSplit {
+            miner_emission: block_reward,
+            staker_emission: 0,
+        }
+    } else {
+        compute_emission_split(
+            block_reward,
+            cx.height.to_raw(),
+            e.emission_split_epoch.to_raw(),
+        )
+    };
     // CEN-F17: the miner's share of the fees after the burn.
     let supply = CirculatingSupply::derive(e.already_generated_coins, e.total_burned)?;
     let burn = compute_fee_burn(

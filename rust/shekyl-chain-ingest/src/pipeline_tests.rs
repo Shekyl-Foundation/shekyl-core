@@ -35,7 +35,7 @@ use crate::source::{IngestEvent, SequenceNo, Sequenced};
 use crate::test_support::{anchor, at};
 use crate::test_support::{
     block_with_nonce, chain, cleanup, corpus_from, corpus_of, corpus_of_reorg, expected_state, h,
-    key_image, open_store, reorg, spend, tmp, trace_of, Family, GrownTree, Scripted,
+    key_image, open_store, reorg, reward_for, spend, tmp, trace_of, Family, GrownTree, Scripted,
     FIRST_SPEND_HEIGHT,
 };
 use crate::trace::Trace;
@@ -416,12 +416,14 @@ async fn a_refusal_ends_the_run_and_is_a_disagreement_the_report_names() {
     // so a caller with no register cannot read the run as a pass.
     let path = tmp("pipeline-refusal");
     let main = chain(3);
-    // Block 2 chained on a wrong parent: A2 refuses it.
+    // Block 2 chained on a wrong parent: A2 refuses it — before the reward
+    // chain, so its coinbase is not priced (`0`).
     let orphan = block_with_nonce(
         CurveTreeRoot::EMPTY,
         2,
         BlockHash::from_bytes([0x77; 32]),
         &[],
+        0,
         5,
     );
     let trace = Arc::new(trace_of(&main, false));
@@ -638,22 +640,38 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
     // The fork's tree is the main chain's through `f`, then its own.
     let mut fork_tree = GrownTree::over(&main[..=at(f)]);
     let fork_a_spend = fork_spend(&fork_hashes, f + 1);
+    let root_a = fork_tree.root_going_into(f + 1);
     let fork_a = block_with_nonce(
-        fork_tree.root_going_into(f + 1),
+        root_a,
         f + 1,
         main_hashes[at(f)],
         core::slice::from_ref(&fork_a_spend),
+        reward_for(
+            &fork_tree,
+            root_a,
+            f + 1,
+            main_hashes[at(f)],
+            core::slice::from_ref(&fork_a_spend),
+        ),
         99,
     );
     assert_ne!(fork_a.hash(), main_hashes[at(f + 1)]);
     fork_hashes.push(fork_a.hash());
     fork_tree.push(&fork_a, core::slice::from_ref(&fork_a_spend));
     let fork_b_spend = fork_spend(&fork_hashes, f + 2);
+    let root_b = fork_tree.root_going_into(f + 2);
     let fork_b = block_with_nonce(
-        fork_tree.root_going_into(f + 2),
+        root_b,
         f + 2,
         fork_a.hash(),
         core::slice::from_ref(&fork_b_spend),
+        reward_for(
+            &fork_tree,
+            root_b,
+            f + 2,
+            fork_a.hash(),
+            core::slice::from_ref(&fork_b_spend),
+        ),
         7,
     );
     // Facts for every height (the fork reuses height `f + 1`'s facts: same
@@ -1299,12 +1317,78 @@ async fn a_wrong_recorded_accumulator_at_one_height_goes_red_and_names_the_heigh
     let diverged: Vec<EmissionDivergence> = report.emission.diverged().copied().collect();
     assert_eq!(diverged.len(), 1);
     assert_eq!(diverged[0].at, h(2));
-    assert_eq!(diverged[0].theirs, wrong);
+    assert_eq!(diverged[0].theirs.coins_generated, wrong);
     assert_eq!(diverged[0].ours.coins_generated, tree.coins_generated_at(2));
     // The verdict's chain: the paid reward is what advanced the parent.
     assert_eq!(
         diverged[0].ours.coins_generated.to_raw(),
         tree.coins_generated_at(1).to_raw() + diverged[0].ours.paid.to_raw()
+    );
+    assert_eq!(
+        report.disagreements().collect::<Vec<_>>(),
+        vec![Disagreement::EmissionDiverged { at: h(2) }]
+    );
+    cleanup(&path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wrong_recorded_burn_at_one_height_goes_red_and_names_the_height() {
+    // The burn half of the emission oracle's negative control (rule 47;
+    // CEN-F17 / G11, slice 7 wave B): a trace whose `burned` at one height
+    // is one atomic unit above what the chain destroys (nothing — no
+    // driver-built body carries a fee) is a disagreement at that height
+    // and no other, with the accumulator agreeing — so a burn the C++
+    // recorded and the Rust did not derive cannot hide behind a matching
+    // `coins_generated`.
+    use crate::pipeline::{Disagreement, EmissionDivergence};
+    use crate::trace::{Facts, Trace, TraceWriter};
+    let path = tmp("pipeline-burn-oracle-control");
+    let chain = chain(3);
+    let tree = GrownTree::over(&chain);
+    let trace = {
+        let mut w = TraceWriter::new(Vec::new()).expect("header");
+        for hh in 0..3u64 {
+            let mut facts: Facts = crate::test_support::facts_at(
+                hh,
+                tree.root_after(hh),
+                tree.weights_of(hh),
+                tree.median_for(hh),
+                tree.coins_generated_at(hh),
+            );
+            if hh == 2 {
+                facts.burned = AtomicUnits::from_raw(1);
+            }
+            w.push_facts(h(hh), &facts).expect("facts");
+        }
+        w.push_checkpoint(&expected_state(&chain))
+            .expect("the true checkpoint");
+        Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
+    };
+    let bytes = corpus_of(&chain);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("the run itself completes");
+    assert!(report.checkpoint.expect("covered tip").identical());
+    assert_eq!(report.roots.diverged().count(), 0);
+    assert_eq!(report.weights.diverged().count(), 0);
+    assert_eq!(report.emission.compared(), 3);
+    let diverged: Vec<EmissionDivergence> = report.emission.diverged().copied().collect();
+    assert_eq!(diverged.len(), 1);
+    assert_eq!(diverged[0].at, h(2));
+    assert_eq!(diverged[0].theirs.burned, AtomicUnits::from_raw(1));
+    assert_eq!(diverged[0].ours.burned(), AtomicUnits::ZERO);
+    assert_eq!(
+        diverged[0].theirs.coins_generated, diverged[0].ours.coins_generated,
+        "the accumulator agrees; the burn alone moved it"
     );
     assert_eq!(
         report.disagreements().collect::<Vec<_>>(),

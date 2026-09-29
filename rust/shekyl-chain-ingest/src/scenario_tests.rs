@@ -54,13 +54,16 @@ async fn a_mined_chain_is_admitted_block_by_block_and_the_record_is_the_owners()
     assert_eq!(facts.connecting, BlockHeight::from_raw(6));
     assert_eq!(facts.previous, mined[5].hash);
     // CEN-G12's accumulator is the validator's (slice 7 commit 5): at every
-    // height past genesis it advances by the paid reward F14b prices, which
-    // is what the template priced (`paid_block_reward`, one owner) — so the
-    // fold agrees with the templates from height 1 on. At genesis the
-    // validator takes the coinbase's configured total (F11, the C++'s
-    // `base_reward = money_in_use`), and a template-built genesis pays only
-    // the miner leg of its priced reward — so height 0 contributes what the
-    // coinbase paid, not `block_reward`. Two owners, one number each.
+    // height it advances by the paid reward F14b prices, which is what the
+    // template priced (`paid_block_reward`, one owner) — so the fold is the
+    // sum of the templates' rewards. At genesis the validator takes the
+    // coinbase's configured total (F11, the C++'s `base_reward =
+    // money_in_use`), and since wave B the template pays its priced reward
+    // **whole** there (CEN-G13: no staker leg at height 0), so the two
+    // agree at genesis too. *Records-was:* from slice 7 commit 5 to wave B
+    // this test pinned the finding — a template-built genesis paid only the
+    // miner leg of a share the validator never accrued, so height 0
+    // contributed less than `block_reward`.
     let genesis_paid: u64 = mined[0]
         .template
         .block
@@ -70,16 +73,24 @@ async fn a_mined_chain_is_admitted_block_by_block_and_the_record_is_the_owners()
         .iter()
         .map(|o| o.amount)
         .sum();
-    let priced: u64 = mined[1..]
-        .iter()
-        .map(|m| m.template.block_reward.to_raw())
-        .sum();
-    assert_eq!(facts.parent_coins_generated.to_raw(), genesis_paid + priced);
-    assert!(
-        genesis_paid < mined[0].template.block_reward.to_raw(),
-        "the template's genesis coinbase pays the miner leg of a split reward; the validator \
-         records what it paid"
+    assert_eq!(
+        genesis_paid,
+        mined[0].template.block_reward.to_raw(),
+        "G13: the genesis template pays the priced reward whole"
     );
+    let priced: u64 = mined.iter().map(|m| m.template.block_reward.to_raw()).sum();
+    assert_eq!(facts.parent_coins_generated.to_raw(), priced);
+    // CEN-F18 held every one of them: each coinbase paid exactly the miner
+    // legs the template priced, and the validator's F17 split (over the
+    // leaf count the facts carry, `frozen_segments_at`) agreed with the
+    // producer's — zero fees, the split at zero.
+    for m in &mined {
+        assert!(
+            m.judged_by.contains(&CenRow::F18),
+            "F18 judged {}",
+            m.height
+        );
+    }
     // Empty blocks: the volume window counts none, over min(h, W) blocks.
     assert_eq!(facts.tx_volume, shekyl_economics::TxVolume::window(0, 6));
     // The next header will carry the root the store recorded after block

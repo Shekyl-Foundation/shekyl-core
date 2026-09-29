@@ -34,8 +34,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
-    effective_median_at, tree_after, tx_volume_window, AtHeight, BlockOutputs, ChainView,
-    LeafSource, RecordedBlock, RecordedWeights, RuleSet, Tip, TreeFrontier,
+    effective_median_at, tree_after, tx_volume_window, AtHeight, BlockOutputs, Candidate,
+    ChainView, LeafSource, RecordedBlock, RecordedWeights, RuleSet, Tip, TreeFrontier,
 };
 use shekyl_chain_store::codec::SettlementEpochBlocks;
 use shekyl_chain_store::digest_v0::digest_v0;
@@ -383,6 +383,13 @@ impl<'id> ChainView<'id> for GrownTree {
     fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
         Ok(Self::recorded(&self.outputs, height))
     }
+
+    /// Nothing a driver-built chain lists carries a fee, so nothing burns
+    /// (CEN-F17 at zero fees is the split at zero) — the fold the store
+    /// would hold for these chains.
+    fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
+        Ok(AtomicUnits::ZERO)
+    }
 }
 
 /// The miner transaction for `height`: the rules harness's, which since
@@ -547,14 +554,19 @@ pub fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction
 
 /// A block at `height` on `previous`, listing `listed`, with `nonce`, whose
 /// header carries `root` — the tree state going into `height`
-/// ([`GrownTree::root_going_into`]; CEN-B5).
+/// ([`GrownTree::root_going_into`]; CEN-B5) — and whose coinbase pays
+/// `reward`: what CEN-F18 owes it, priced by [`reward_for`] over the tree
+/// the block extends (a block nothing will judge may pass `0`).
 pub fn block_with_nonce(
     root: CurveTreeRoot,
     height: u64,
     previous: BlockHash,
     listed: &[Transaction],
+    reward: u64,
     nonce: u32,
 ) -> Block {
+    let mut miner_transaction = coinbase(height);
+    miner_transaction.prefix.outputs[0].amount = reward;
     Block {
         header: BlockHeader {
             major_version: 1,
@@ -565,7 +577,7 @@ pub fn block_with_nonce(
             curve_tree_root: root,
             attestation_root: AttestationRoot::from_bytes([0x33; 32]),
         },
-        miner_transaction: coinbase(height),
+        miner_transaction,
         transaction_hashes: listed.iter().map(Transaction::hash).collect(),
     }
 }
@@ -575,8 +587,33 @@ pub fn block(
     height: u64,
     previous: BlockHash,
     listed: &[Transaction],
+    reward: u64,
 ) -> Block {
-    block_with_nonce(root, height, previous, listed, 7)
+    block_with_nonce(root, height, previous, listed, reward, 7)
+}
+
+/// What CEN-F18 owes the coinbase of a block at `height` on `previous`
+/// listing `listed`, over the chain `tree` holds — the rules harness's
+/// one pricer (`priced_at`: the 4.F definitions, the medians, the block's
+/// weight, the paid reward, the split and the fee split, over this tree as
+/// the validator will read the store), so a driver-built block pays what
+/// the validator computes and never a second copy of it. `0` at genesis
+/// (the configured emission stands) and for a block the chain refuses
+/// before F18.
+pub fn reward_for(
+    tree: &GrownTree,
+    root: CurveTreeRoot,
+    height: u64,
+    previous: BlockHash,
+    listed: &[Transaction],
+) -> u64 {
+    let provisional = block(root, height, previous, listed, 0);
+    let priced = fixture::priced_at(
+        tree,
+        BlockHeight::from_raw(height),
+        Candidate::new(provisional, listed.to_vec()),
+    );
+    priced.block.miner_transaction.prefix.outputs[0].amount
 }
 
 /// A chain listing `listed[h]` at height `h`, each block on the last.
@@ -587,10 +624,11 @@ pub fn chain_listing(listed: Vec<Vec<Transaction>>) -> Vec<(Block, Vec<Transacti
 /// [`chain_listing`] with the block builder supplied — a mined chain hands
 /// one that searches nonces (the mutation family's D1 case). Each block is
 /// anchored on the chain so far and `make` receives the root the tree has
-/// going into its height ([`GrownTree`], advanced per block).
+/// going into its height ([`GrownTree`], advanced per block) and the
+/// reward its coinbase must pay ([`reward_for`] over the same tree).
 pub fn chain_listing_with(
     listed: Vec<Vec<Transaction>>,
-    mut make: impl FnMut(CurveTreeRoot, u64, BlockHash, &[Transaction]) -> Block,
+    mut make: impl FnMut(CurveTreeRoot, u64, BlockHash, &[Transaction], u64) -> Block,
 ) -> Vec<(Block, Vec<Transaction>)> {
     let mut hashes: Vec<BlockHash> = Vec::new();
     let mut tree = GrownTree::new();
@@ -601,7 +639,9 @@ pub fn chain_listing_with(
             let hh = hh as u64;
             let txs: Vec<Transaction> = txs.into_iter().map(|tx| anchor(&hashes, hh, tx)).collect();
             let previous = hashes.last().copied().unwrap_or(BlockHash::NULL);
-            let b = make(tree.root_going_into(hh), hh, previous, &txs);
+            let root = tree.root_going_into(hh);
+            let reward = reward_for(&tree, root, hh, previous, &txs);
+            let b = make(root, hh, previous, &txs, reward);
             tree.push(&b, &txs);
             hashes.push(b.hash());
             (b, txs)
@@ -671,11 +711,14 @@ pub fn reorg(main_len: u64, to: u64, fork_len: u64) -> Reorg {
                 fixture::spend(key_image(Family::Fork, height), 3),
             )]
         };
+        let root = tree.root_going_into(height);
+        let previous = *hashes.last().expect("non-empty");
         let b = block_with_nonce(
-            tree.root_going_into(height),
+            root,
             height,
-            *hashes.last().expect("non-empty"),
+            previous,
             &txs,
+            reward_for(&tree, root, height, previous, &txs),
             99 + u32::try_from(i).expect("small"),
         );
         tree.push(&b, &txs);

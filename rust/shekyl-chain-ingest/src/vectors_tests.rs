@@ -250,11 +250,16 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // The expected value is Shekyl's ratified composition (FL-R12′: the
     // release-modulated, tail-floored emission under C2-R2 Q4's penalty,
     // `paid_block_reward`), which the C++ marshals; the C++ is the oracle
-    // only insofar as it agrees with that.
+    // only insofar as it agrees with that. CEN-F17 / G11 (wave B): the
+    // verdict's burn against the C++'s `block_burn` at the same heights —
+    // the fee split over the FL-R16c supply and the escalation operand,
+    // held wherever a captured block carries a fee. And every one of these
+    // coinbases connected under CEN-F18: the C++ paid exactly what the
+    // Rust derives it owed.
     assert_eq!(
         report.emission.compared(),
         manifest.block_count,
-        "{}: {} of {} heights had a recorded accumulator to compare against",
+        "{}: {} of {} heights had a recorded accumulator and burn to compare against",
         manifest.shape,
         report.emission.compared(),
         manifest.block_count
@@ -262,9 +267,9 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     let diverged: Vec<_> = report.emission.diverged().collect();
     assert!(
         diverged.is_empty(),
-        "{} ({}): the derived accumulator differs from the daemon's at {} height(s), first at \
-         {:?} — a FINDING about CEN-F14b / G12's derivation, adjudicated against the ratified \
-         composition, never a fixture problem",
+        "{} ({}): the derived accumulator or burn differs from the daemon's at {} height(s), \
+         first at {:?} — a FINDING about CEN-F14b / G12 or CEN-F17 / G11's derivation, \
+         adjudicated against the ratified composition, never a fixture problem",
         manifest.shape,
         manifest.generator,
         diverged.len(),
@@ -380,7 +385,8 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
         hold(&dir, &manifest, &report);
         eprintln!(
             "{}: {} blocks connected, digest MATCH at {}, roots MATCH at all {} heights, weights \
-             MATCH at all {} heights, accumulator MATCH at all {} heights, rows exercised: {}",
+             MATCH at all {} heights, accumulator and burn MATCH at all {} heights, rows \
+             exercised: {}",
             manifest.shape,
             report.connected.len(),
             manifest.tip_height,

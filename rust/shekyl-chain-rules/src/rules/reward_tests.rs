@@ -20,15 +20,18 @@ use crate::fault::FormAttempt;
 use crate::harness::fixture::{
     candidate, candidate_on, chain_of, listed_on, point_at, spendable_chain,
 };
-use crate::harness::{assert_refused, expected_seed, judged, Faulted, MockChain, MockSubstrate};
+use crate::harness::{
+    assert_refused, defined, expected_seed, judged, Faulted, MockChain, MockSubstrate,
+};
 use crate::rule_set::RuleSet;
-use crate::rules::block_weight::{EffectiveMedian, Weights};
+use crate::rules::block_weight::{EffectiveMedian, Medians, Weights};
 use crate::rules::miner::Emission;
 use crate::trust::Trust;
 use crate::validate::{form, validate};
 use crate::verdict::InvalidBlock;
 use shekyl_economics::{effective_emission, FULL_REWARD_ZONE};
 use shekyl_types::{BlockWeight, LongTermWeight};
+use shekyl_wire::Ct;
 
 const ZONE: u64 = FULL_REWARD_ZONE;
 
@@ -56,12 +59,16 @@ fn emission_on(chain: &MockChain, connecting: u64) -> Emission {
     })
 }
 
+/// The definitions ([`price`]) at `connecting` on `chain` under the
+/// supplied weights, listing nothing — what a test of the bound, the
+/// penalty or the accumulator asks, with the coinbase out of the picture
+/// (F18 is [`judge_emission`]'s, tested through it below).
 fn judge(chain: &MockChain, connecting: u64, w: Weights) -> Verdict<PaidEmission> {
     judge_paying(chain, connecting, w, None)
 }
 
-/// [`judge`] with the coinbase's first output paying `amount` when given
-/// — the genesis arm reads the configured total off the coinbase.
+/// [`judge`] with the coinbase's configured total `amount` when given —
+/// the genesis arm takes it as the emission.
 fn judge_paying(
     chain: &MockChain,
     connecting: u64,
@@ -69,22 +76,57 @@ fn judge_paying(
     amount: Option<u64>,
 ) -> Verdict<PaidEmission> {
     let emission = emission_on(chain, connecting);
-    let mut miner = candidate_on(chain, Vec::new()).block.miner_transaction;
-    if let Some(amount) = amount {
-        miner.prefix.outputs[0].amount = amount;
-    }
     let mut coverage = RuleCoverage::EMPTY;
-    let verdict = judge_emission(
+    let verdict = price(
         BlockHeight::from_raw(connecting),
         &emission,
         &w,
-        &miner,
+        &[],
+        amount.unwrap_or(0),
         &mut coverage,
     );
     if verdict.is_ok() {
-        for row in [CenRow::F14, CenRow::F14b, CenRow::F16, CenRow::G12] {
+        for row in [
+            CenRow::F14,
+            CenRow::F14b,
+            CenRow::F16,
+            CenRow::F17,
+            CenRow::G11,
+            CenRow::G13,
+            CenRow::G12,
+        ] {
             assert!(coverage.contains(row), "{row} recorded on the passing path");
         }
+    }
+    verdict
+}
+
+/// [`judge_emission`] over `candidate` at the chain's own connecting
+/// height, weights derived from the chain as `validate` derives them.
+fn judge_candidate(chain: &MockChain, candidate: &Candidate) -> Verdict<PaidEmission> {
+    let connecting = chain.tip().map_or(0, |t| t.height.to_raw() + 1);
+    let emission = emission_on(chain, connecting);
+    let mut coverage = RuleCoverage::EMPTY;
+    let medians = chain.with_view(|view| {
+        defined(Medians::derive(
+            &view,
+            BlockHeight::from_raw(connecting),
+            &mut coverage,
+        ))
+    });
+    let weights = Weights::derive(medians, candidate, &mut coverage);
+    let verdict = judge_emission(
+        BlockHeight::from_raw(connecting),
+        &emission,
+        &weights,
+        candidate,
+        &mut coverage,
+    );
+    if verdict.is_ok() {
+        assert!(
+            coverage.contains(CenRow::F18),
+            "F18 recorded on the passing path"
+        );
     }
     verdict
 }
@@ -228,14 +270,18 @@ fn g12_advances_the_parent_accumulator_by_the_paid_reward() {
 /// At height 0 the configured emission stands: F14 is recorded vacuous
 /// (no bound is evaluated, whatever the weight), the paid amount is the
 /// coinbase's total, the split is the whole of it to the miner (G13's
-/// arm), and the accumulator starts at it.
+/// arm: no staker leg, no accrual, no fee split), and the accumulator
+/// starts at it. Through `judge_emission` the fixture's own genesis — a
+/// coinbase paying zero, the harness leaves it as it came — is admitted
+/// with F18 recorded vacuous: nothing is owed beyond what was configured.
 #[test]
 fn at_genesis_the_configured_emission_stands_unbounded_and_unsplit() {
     let chain = MockChain::default();
     // The fixture coinbase pays zero; name a configured amount so the
-    // three equalities below are not `0 == 0`.
+    // equalities below are not `0 == 0`.
     let configured = 7_000_000_000u64;
-    let fixture_pays: u64 = candidate(Vec::new())
+    let genesis = candidate(Vec::new());
+    let fixture_pays: u64 = genesis
         .block
         .miner_transaction
         .prefix
@@ -250,7 +296,138 @@ fn at_genesis_the_configured_emission_stands_unbounded_and_unsplit() {
     assert_eq!(paid.paid.to_raw(), configured);
     assert_eq!(paid.split.miner_emission, configured);
     assert_eq!(paid.split.staker_emission, 0);
+    assert_eq!(paid.fee_burn.miner_fee_income, 0);
+    assert_eq!(paid.fee_burn.actually_destroyed, 0);
+    assert_eq!(paid.owed.to_raw(), configured);
+    assert_eq!(
+        paid.accrual,
+        AtomicUnits::ZERO,
+        "G13: no accrual at genesis"
+    );
     assert_eq!(paid.coins_generated.to_raw(), configured);
+    let admitted = judge_candidate(&chain, &genesis).expect("genesis pays what it pays");
+    assert_eq!(admitted.paid, AtomicUnits::ZERO);
+}
+
+// ---------------------------------------------------------------------------
+// F17 / F18 / G11: the fee split, the exact payout, the accrual
+// ---------------------------------------------------------------------------
+
+/// F18 in both directions at the miner slot: the harness prices the
+/// coinbase at what the block owes it and that candidate is admitted; the
+/// same block with the coinbase one unit over or one unit under is refused
+/// on F18 at `Locus::Tx { slot: Miner }` — the C++'s `<` and `!=` arms
+/// (`blockchain.cpp:1551`–`:1560`), one row here.
+#[test]
+fn f18_the_coinbase_pays_exactly_the_two_miner_legs_or_is_refused_at_the_miner_slot() {
+    let chain = spendable_chain();
+    let priced = candidate_on(&chain, vec![listed_on(&chain, point_at(9))]);
+    let owed = priced.block.miner_transaction.prefix.outputs[0].amount;
+    assert!(owed > 0, "above genesis the miner leg is non-zero");
+    let paid = judge_candidate(&chain, &priced).expect("priced exactly");
+    assert_eq!(paid.owed.to_raw(), owed);
+    assert_eq!(
+        owed,
+        paid.split.miner_emission + paid.fee_burn.miner_fee_income,
+        "owed is the two miner legs and nothing else"
+    );
+    for off in [owed + 1, owed - 1] {
+        let mut wrong = priced.clone();
+        wrong.block.miner_transaction.prefix.outputs[0].amount = off;
+        assert_refused(
+            judge_candidate(&chain, &wrong),
+            CenRow::F18,
+            Locus::Tx {
+                slot: TxSlot::Miner,
+            },
+        );
+    }
+}
+
+/// F17 / G11 over the listed fees: with a fee-bearing body listed, the
+/// fee split is `compute_fee_burn` over the block's fee sum and the
+/// parent-state operands (the one owner, called with the same operands),
+/// the coinbase's due grows by exactly `miner_fee_income`, the accrual is
+/// the staker legs of both splits, and the burn is what is destroyed. A
+/// zero-fee block is the split at zero, not a separate arm.
+#[test]
+fn f17_and_g11_split_the_listed_fees_with_the_one_owner() {
+    let chain = spendable_chain();
+    let fee = 3_000_000u64;
+    let mut body = listed_on(&chain, point_at(9));
+    if let Ct::Fcmp { fee: f, .. } = &mut body.ct {
+        *f = fee;
+    }
+    let with_fee = candidate_on(&chain, vec![body]);
+    let free = candidate_on(&chain, vec![listed_on(&chain, point_at(9))]);
+    let connecting = chain.tip().expect("tip").height.to_raw() + 1;
+    let emission = emission_on(&chain, connecting);
+    let Subsidy::Derived { burn, .. } = emission.subsidy() else {
+        unreachable!("above genesis")
+    };
+    let expected = shekyl_economics::compute_fee_burn(
+        fee,
+        emission.tx_volume(),
+        burn.supply,
+        burn.frozen_segments,
+        economics(),
+    );
+    let paid = judge_candidate(&chain, &with_fee).expect("priced with the fee");
+    let paid_free = judge_candidate(&chain, &free).expect("priced without");
+    assert_eq!(paid.fee_burn, expected);
+    assert_eq!(
+        paid.owed.to_raw() - paid_free.owed.to_raw(),
+        expected.miner_fee_income,
+        "the coinbase's due grows by the miner's fee income alone"
+    );
+    assert_eq!(
+        paid.accrual.to_raw(),
+        paid.split.staker_emission + expected.staker_pool_amount
+    );
+    assert_eq!(paid.burned().to_raw(), expected.actually_destroyed);
+    assert_eq!(
+        paid_free.fee_burn,
+        shekyl_economics::BurnSplit {
+            miner_fee_income: 0,
+            staker_pool_amount: 0,
+            actually_destroyed: 0
+        }
+    );
+    assert_eq!(paid_free.accrual.to_raw(), paid_free.split.staker_emission);
+}
+
+/// F17's overflow arm: a fee sum that does not fit `u64` is refused on F17
+/// at `Locus::Block` before anything is priced from it — where the C++'s
+/// `fee_summary += fee` wraps. Reached here by hand-built bodies (H18
+/// bounds every real fee by the inputs it is paid from).
+#[test]
+fn f17_a_fee_sum_that_does_not_fit_is_refused_at_the_block() {
+    let chain = spendable_chain();
+    let bodies: Vec<Transaction> = [9u64, 10]
+        .into_iter()
+        .map(|k| {
+            let mut body = listed_on(&chain, point_at(k));
+            if let Ct::Fcmp { fee, .. } = &mut body.ct {
+                *fee = u64::MAX / 2 + 1;
+            }
+            body
+        })
+        .collect();
+    let connecting = chain.tip().expect("tip").height.to_raw() + 1;
+    let emission = emission_on(&chain, connecting);
+    let mut coverage = RuleCoverage::EMPTY;
+    assert_refused(
+        price(
+            BlockHeight::from_raw(connecting),
+            &emission,
+            &weights(ZONE, ZONE / 2),
+            &bodies,
+            0,
+            &mut coverage,
+        ),
+        CenRow::F17,
+        Locus::Block,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -277,7 +454,16 @@ fn validated_on(chain: &MockChain, candidate: Candidate) -> Verdict<(Weights, Pa
             &Trust::UNANCHORED,
         ))
         .map(|valid| {
-            for row in [CenRow::F14, CenRow::F14b, CenRow::F16, CenRow::G12] {
+            for row in [
+                CenRow::F14,
+                CenRow::F14b,
+                CenRow::F16,
+                CenRow::F17,
+                CenRow::F18,
+                CenRow::G11,
+                CenRow::G12,
+                CenRow::G13,
+            ] {
                 assert!(valid.coverage().contains(row), "{row} recorded");
             }
             (*valid.block().weights(), *valid.block().emission())

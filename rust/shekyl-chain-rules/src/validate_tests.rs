@@ -46,9 +46,11 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
         // body's pairing, in form), its two
         // block-weight definitions (G6 before the slot loop, G6b after
         // it) and its reward chain after them (F14 the bound, F14b the
-        // paid reward, F16 the split, G12 the supply), and nothing else
-        // (the per-tx entry points are still empty; F2/F8/F19/F21 hold by
-        // construction and are never in a coverage).
+        // paid reward, F16 the split, F17 the fee split, G11/G13 the
+        // accrual and its genesis arm, F18 the exact payout, G12 the
+        // supply), and nothing else (the per-tx entry points are still
+        // empty; F2/F8/F19/F21 and G3/G4/G5 hold by construction and are
+        // never in a coverage).
         assert_eq!(
             valid.coverage().iter().collect::<Vec<_>>(),
             [
@@ -83,6 +85,8 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::F14b,
                 CenRow::F15,
                 CenRow::F16,
+                CenRow::F17,
+                CenRow::F18,
                 CenRow::F20,
                 CenRow::G1,
                 CenRow::G2,
@@ -91,7 +95,9 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::G7,
                 CenRow::G9,
                 CenRow::G10,
+                CenRow::G11,
                 CenRow::G12,
+                CenRow::G13,
                 CenRow::H1,
                 CenRow::H3,
                 CenRow::H4,
