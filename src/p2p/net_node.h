@@ -535,7 +535,7 @@ namespace nodetool
     //! is descriptors another subsystem has promised but not opened. An
     //! explicit cap is left as stored. The probe counts descriptors open at
     //! the call, so the daemon calls this again after RPC listeners bind.
-    void apply_inbound_ceiling(std::uint64_t reserved_beyond_p2p);
+    bool apply_inbound_ceiling(std::uint64_t reserved_beyond_p2p);
     virtual bool block_host(epee::net_utils::network_address address, time_t seconds = P2P_IP_BLOCKTIME, bool add_only = false);
     virtual bool unblock_host(const epee::net_utils::network_address &address);
     virtual bool block_subnet(const epee::net_utils::ipv4_network_subnet &subnet, time_t seconds = P2P_IP_BLOCKTIME);

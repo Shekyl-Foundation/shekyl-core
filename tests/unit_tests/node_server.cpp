@@ -2886,8 +2886,19 @@ TEST(node_server, in_peers_explicit_value_bypasses_the_derivation)
   // bound. A derivation that overrode it would silently discard the one
   // input that is a choice rather than a reading.
   in_peers_fixture d;
-  ASSERT_TRUE(d.init("48091", 50));
-  EXPECT_EQ(50u, d.server->get_max_in_public_peers());
+  ASSERT_TRUE(d.init("48091", 1));
+  EXPECT_EQ(1u, d.server->get_max_in_public_peers());
+}
+
+TEST(node_server, in_peers_above_the_descriptor_ceiling_is_refused)
+{
+  in_peers_fixture probe;
+  ASSERT_TRUE(probe.init("48094", -1));
+  const uint32_t derived = probe.server->get_max_in_public_peers();
+  if (derived == std::numeric_limits<uint32_t>::max())
+    return;
+  in_peers_fixture over;
+  EXPECT_FALSE(over.init("48095", static_cast<int>(derived) + 1));
 }
 
 TEST(node_server, in_peers_zero_is_a_choice_and_not_the_sentinel)

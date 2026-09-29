@@ -208,6 +208,9 @@ struct Inner {
     occupancy: Occupancy,
     live: HashMap<SocketId, Live>,
     bans: BanList,
+    /// An operator cap for one connector. `None` leaves that connector on
+    /// the process ceiling.
+    zone_caps: [Option<u32>; ConnectorId::COUNT],
 }
 
 impl Inner {
@@ -217,6 +220,7 @@ impl Inner {
             occupancy: Occupancy::new(),
             live: HashMap::new(),
             bans: BanList::new(),
+            zone_caps: [None; ConnectorId::COUNT],
         }
     }
 
@@ -247,6 +251,23 @@ fn refuse_over_process_ceiling(inner: &Inner, ceiling: InboundCeiling) -> Result
     Ok(())
 }
 
+/// A zone with an operator cap is limited by that cap alone. A zone
+/// without one shares the process ceiling.
+fn refuse_inbound(
+    inner: &Inner,
+    connector: ConnectorId,
+    ceiling: InboundCeiling,
+) -> Result<(), OpenError> {
+    if let Some(cap) = inner.zone_caps[connector.index()] {
+        let held = inner.occupancy.get(connector, Direction::Inbound);
+        if held >= u64::from(cap) {
+            return Err(admission_refused());
+        }
+        return Ok(());
+    }
+    refuse_over_process_ceiling(inner, ceiling)
+}
+
 /// The socket table. Clones share it. A poisoned lock aborts the process:
 /// a panic while the table was held has already broken the count.
 #[derive(Clone, Debug)]
@@ -265,6 +286,12 @@ impl Sockets {
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().expect("socket table lock poisoned")
+    }
+
+    /// The operator's inbound cap for one connector. `None` leaves that
+    /// connector on the process ceiling.
+    pub fn set_zone_cap(&self, connector: ConnectorId, cap: Option<u32>) {
+        self.lock().zone_caps[connector.index()] = cap;
     }
 
     /// Inbound clearnet.
@@ -287,7 +314,7 @@ impl Sockets {
         if inner.bans.is_banned(ip, now) {
             return Err(admission_refused());
         }
-        refuse_over_process_ceiling(&inner, ceiling)?;
+        refuse_inbound(&inner, ConnectorId::Clearnet, ceiling)?;
         self.mint(
             &mut inner,
             ConnectorId::Clearnet,
@@ -321,7 +348,7 @@ impl Sockets {
             "tor inbound observation does not match its declaration"
         );
         let mut inner = self.lock();
-        refuse_over_process_ceiling(&inner, ceiling)?;
+        refuse_inbound(&inner, ConnectorId::Tor, ceiling)?;
         self.mint(&mut inner, ConnectorId::Tor, Direction::Inbound, endpoint)
     }
 
@@ -578,7 +605,7 @@ mod tests {
     use crate::{CloseCause, CloseKind};
     use shekyl_net_address::NetworkAddress;
     use shekyl_onion_v3::v3_onion_hostname;
-    use shekyl_peer_policy::InboundCeiling;
+    use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
     use shekyl_timing_engine::Tick;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::sync::{Arc, Mutex};
@@ -684,6 +711,21 @@ mod tests {
             .expect("open");
         drop(open);
         assert_eq!(sockets.live(), 0);
+    }
+
+    #[test]
+    fn an_explicit_zone_cap_is_enforced_at_accept_and_skips_the_process_ceiling() {
+        let sockets = Sockets::new();
+        sockets.set_zone_cap(ConnectorId::Clearnet, Some(1));
+        let ceiling = InboundCeiling::Unbounded(UnboundedReason::Unlimited);
+        let _first = sockets
+            .accept_clearnet(ip([10, 0, 0, 1]), ceiling, now())
+            .expect("under the cap");
+        let error = sockets
+            .accept_clearnet(ip([10, 0, 0, 2]), ceiling, now())
+            .expect_err("over the cap");
+        assert_eq!(refused(error), CloseKind::AdmissionRefused);
+        let _tor = sockets.accept_tor(ceiling).expect("tor has no zone cap");
     }
 
     #[test]

@@ -37,7 +37,8 @@
   epee-to-epee control crossed the stem with the relay filter empty;
   fluff found nobody. A peer's recorded height still lags a block
   it has delivered; that is a relay-lane follow-up, not a cutover
-  blocker.
+  blocker. An explicit `--in-peers` is enforced at accept, and a
+  cap above the descriptor ceiling is refused at startup.
 
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 

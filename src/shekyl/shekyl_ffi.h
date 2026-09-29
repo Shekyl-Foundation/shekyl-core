@@ -4306,6 +4306,10 @@ int shekyl_zone_listen_tor(
     const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling,
     int* out_port);
 int shekyl_zone_set_ceiling(const shekyl_inbound_ceiling* ceiling);
+/// Operator inbound cap for one connector. Accept enforces it there and
+/// does not also apply the process ceiling. Returns 0, or -1 for an
+/// unknown connector.
+int shekyl_zone_set_connector_cap(std::uint32_t connector, std::uint32_t cap);
 void shekyl_zone_session_established(std::uint64_t id);
 void shekyl_zone_shutdown(void);
 

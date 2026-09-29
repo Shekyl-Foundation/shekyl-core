@@ -594,6 +594,33 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_ceiling_refuses_before_any_handshake() {
+        let (engine, listener, seen) = start(
+            ClearnetOption::Off,
+            Tick::new(5_000_000_000),
+            InboundCeiling::Bounded(0),
+        );
+        let mut client = connect(listener.local_addr());
+        client.write_all(b"handshake").expect("write");
+        let mut buf = [0u8; 4];
+        let n = client.read(&mut buf).expect("read");
+        assert_eq!(n, 0);
+        let start = Instant::now();
+        while !seen
+            .lock()
+            .expect("causes")
+            .contains(&CloseKind::AdmissionRefused)
+        {
+            assert!(start.elapsed() < Duration::from_secs(2), "refused");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(listener.tally.queued(), 0);
+        assert_eq!(listener.tally.computed(), 0);
+        listener.shutdown();
+        drop(engine);
+    }
+
+    #[test]
     fn the_second_inbound_past_the_ceiling_is_not_a_handshake() {
         let (engine, mut listener, seen) = start(
             ClearnetOption::Off,

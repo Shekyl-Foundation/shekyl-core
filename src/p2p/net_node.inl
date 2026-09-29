@@ -1033,7 +1033,8 @@ namespace nodetool
     // from here onwards, it's online stuff
     if (m_offline)
     {
-      apply_inbound_ceiling(0);
+      if (!apply_inbound_ceiling(0))
+        return false;
       ephemeral_tor_guard.armed = false;
       return res;
     }
@@ -1107,7 +1108,8 @@ namespace nodetool
       }
     }
 
-    apply_inbound_ceiling(0);
+    if (!apply_inbound_ceiling(0))
+      return false;
     ephemeral_tor_guard.armed = false;
     return res;
   }
@@ -3174,37 +3176,59 @@ namespace nodetool
   }
 
   template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::apply_inbound_ceiling(std::uint64_t reserved_beyond_p2p)
+  bool node_server<t_payload_net_handler>::apply_inbound_ceiling(std::uint64_t reserved_beyond_p2p)
   {
     const auto found = m_network_zones.find(epee::net_utils::zone::public_);
     if (found == m_network_zones.end())
-      return;
+      return true;
     network_zone& public_zone = found->second;
+
+    m_reserved_beyond_p2p = reserved_beyond_p2p;
+    const std::uint64_t reserved = descriptor_reservations(reserved_beyond_p2p);
+    const std::uint64_t inbound_held = shekyl_seam_inbound_held();
+    shekyl_inbound_ceiling decision{};
+    shekyl_inbound_ceiling_resolve(reserved, inbound_held, &decision);
+
+    for (const auto& entry : m_network_zones)
+    {
+      if (!entry.second.m_inbound_cap_explicit)
+        continue;
+      const std::uint32_t cap = entry.second.m_config.m_net_config.max_in_connection_count;
+      if (decision.kind == SHEKYL_INBOUND_CEILING_BOUNDED && cap > decision.ceiling)
+      {
+        MERROR("Inbound cap " << cap << " for " << epee::net_utils::zone_to_string(entry.first)
+            << " exceeds the descriptor ceiling " << decision.ceiling
+            << "; refusing to start.");
+        return false;
+      }
+      std::uint32_t connector = SHEKYL_CONNECTOR_CLEARNET;
+      if (entry.first == epee::net_utils::zone::tor)
+        connector = SHEKYL_CONNECTOR_TOR;
+      else if (entry.first != epee::net_utils::zone::public_)
+        continue;
+      shekyl_zone_set_connector_cap(connector, cap);
+    }
+
+    const bool announce = decision.kind != m_applied_ceiling_kind
+      || decision.ceiling != m_applied_ceiling_value;
+    m_applied_ceiling_kind = decision.kind;
+    m_applied_ceiling_value = decision.ceiling;
     if (public_zone.m_inbound_cap_explicit)
     {
       m_process_inbound_ceiling.reset();
-      return;
+      shekyl_seam_set_ceiling(&decision);
+      shekyl_zone_set_ceiling(&decision);
+      return true;
     }
 
-    // Remembered so a later re-derive (an `out_peers` change, say) does not
-    // need to know what the daemon reserved beyond p2p.
-    m_reserved_beyond_p2p = reserved_beyond_p2p;
-    const std::uint64_t reserved = descriptor_reservations(reserved_beyond_p2p);
     // Descriptors already spent on ACCEPTED inbound connections are excluded
-    // from the observation, because this ceiling is what measures them. At
-    // startup the count is zero and it made no difference; a runtime
+    // from the observation above, because this ceiling is what measures them.
+    // At startup the count is zero and it made no difference; a runtime
     // re-derive (an `out_peers` change) runs with peers connected, and
     // leaving them inside the observed count would subtract each one from the
     // headroom AND then compare it against the smaller result — the ceiling
     // would fall as the node filled, so a routine outbound change on a busy
     // node could start refusing every new peer.
-    const std::uint64_t inbound_held = shekyl_seam_inbound_held();
-    shekyl_inbound_ceiling decision{};
-    shekyl_inbound_ceiling_resolve(reserved, inbound_held, &decision);
-    const bool announce = decision.kind != m_applied_ceiling_kind
-      || decision.ceiling != m_applied_ceiling_value;
-    m_applied_ceiling_kind = decision.kind;
-    m_applied_ceiling_value = decision.ceiling;
     switch (decision.kind)
     {
       case SHEKYL_INBOUND_CEILING_BOUNDED:
@@ -3264,6 +3288,7 @@ namespace nodetool
     }
     shekyl_seam_set_ceiling(&decision);
     shekyl_zone_set_ceiling(&decision);
+    return true;
   }
 
   template<class t_payload_net_handler>
@@ -3286,6 +3311,7 @@ namespace nodetool
     if (public_zone != m_network_zones.end())
     {
       const auto current = public_zone->second.m_net_server.get_config_object().get_out_connections_count();
+      const size_t previous = public_zone->second.m_config.m_net_config.max_out_connection_count;
       public_zone->second.m_config.m_net_config.max_out_connection_count = count;
       if(current > count)
         public_zone->second.m_net_server.get_config_object().del_out_connections(current - count);
@@ -3297,8 +3323,15 @@ namespace nodetool
       // exceed the descriptor limit -- the exact exhaustion the ceiling
       // exists to prevent. Re-derives against the same non-p2p reservation
       // the last call used, so a caller that never knew the RPC budget does
-      // not have to learn it.
-      apply_inbound_ceiling(m_reserved_beyond_p2p);
+      // not have to learn it. A cap the new ceiling cannot hold is refused
+      // and the previous outbound cap is put back; lowering the cap is the
+      // path that drops live connections, and that path widens the ceiling.
+      if (!apply_inbound_ceiling(m_reserved_beyond_p2p))
+      {
+        public_zone->second.m_config.m_net_config.max_out_connection_count = previous;
+        m_payload_handler.set_max_out_peers(epee::net_utils::zone::public_, previous);
+        apply_inbound_ceiling(m_reserved_beyond_p2p);
+      }
     }
   }
 
@@ -3352,10 +3385,19 @@ namespace nodetool
       const uint32_t cap = count > std::numeric_limits<uint32_t>::max()
         ? std::numeric_limits<uint32_t>::max()
         : static_cast<uint32_t>(count);
+      if (m_applied_ceiling_kind == SHEKYL_INBOUND_CEILING_BOUNDED && cap > m_applied_ceiling_value)
+      {
+        MERROR("Inbound cap " << cap << " exceeds the descriptor ceiling "
+            << m_applied_ceiling_value << "; leaving the previous cap.");
+        return;
+      }
       // A runtime change is an explicit cap. The derived process backstop
       // stops applying, matching an explicit `--in-peers` at startup.
+      // The mark follows the refusal: a cap the descriptors cannot hold
+      // leaves the previous cap, including a derived one.
       public_zone->second.m_inbound_cap_explicit = true;
       m_process_inbound_ceiling.reset();
+      shekyl_zone_set_connector_cap(SHEKYL_CONNECTOR_CLEARNET, cap);
       const auto current = public_zone->second.m_net_server.get_config_object().get_in_connections_count();
       public_zone->second.m_config.m_net_config.max_in_connection_count = cap;
       if(current > cap)

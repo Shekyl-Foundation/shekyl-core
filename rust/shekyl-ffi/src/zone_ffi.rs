@@ -250,7 +250,11 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
     let (clearnet_tx, clearnet_rx) = mpsc::unbounded_channel();
     let (tor_tx, tor_rx) = mpsc::unbounded_channel();
     let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|cause| {
-        tracing::debug!(kind = ?cause.kind(), "zone socket");
+        if cause.kind() == CloseKind::AdmissionRefused {
+            tracing::info!("seam accept refused cause AdmissionRefused");
+        } else {
+            tracing::debug!(kind = ?cause.kind(), "zone socket");
+        }
     });
     let host = Arc::new(Host {
         pool: Mutex::new(Some(pool)),
@@ -609,6 +613,24 @@ pub extern "C" fn shekyl_zone_set_ceiling(ceiling: *const ShekylInboundCeiling) 
         return 0;
     };
     *host.ceiling.lock().expect("ceiling") = ceiling;
+    0
+}
+
+/// The operator's inbound cap for one connector. Accept enforces it for
+/// that connector and does not also apply the process ceiling.
+///
+/// `connector` is `SHEKYL_CONNECTOR_CLEARNET` or `SHEKYL_CONNECTOR_TOR`.
+/// Returns 0, or -1 when `connector` is not one of those.
+#[no_mangle]
+pub extern "C" fn shekyl_zone_set_connector_cap(connector: u32, cap: u32) -> i32 {
+    let Some(connector) = (match connector {
+        0 => Some(ConnectorId::Clearnet),
+        1 => Some(ConnectorId::Tor),
+        _ => None,
+    }) else {
+        return -1;
+    };
+    process_sockets().set_zone_cap(connector, Some(cap));
     0
 }
 
