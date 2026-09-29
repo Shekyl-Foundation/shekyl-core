@@ -5,7 +5,7 @@ use rand_core::OsRng;
 use dalek_ff_group::{EdwardsPoint, FieldElement};
 use group::{
     ff::{Field as _, PrimeField as _},
-    Group as _, GroupEncoding,
+    Group as _, GroupEncoding as _,
 };
 
 use crate::{new_divisor, DivisorCurve, Poly};
