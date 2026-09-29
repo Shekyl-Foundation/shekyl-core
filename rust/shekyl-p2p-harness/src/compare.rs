@@ -49,6 +49,14 @@ pub struct Run {
 pub fn diff(left: &Run, right: &Run) -> Vec<Finding> {
     let seed = left.peer.seed;
     let mut findings = Vec::new();
+    push_run(&mut findings, left);
+    push_run(&mut findings, right);
+    if left.peer.version != right.peer.version || left.host.version != right.host.version {
+        findings.push(Finding {
+            seed,
+            field: "version",
+        });
+    }
     if left.peer.seed != right.peer.seed || left.host.seed != seed || right.host.seed != seed {
         findings.push(Finding {
             seed,
@@ -143,6 +151,42 @@ fn push_bytes(
     if left != right {
         findings.push(Finding { seed, field });
     }
+}
+
+fn push_run(findings: &mut Vec<Finding>, run: &Run) {
+    if run.peer.role != Role::Peer || run.host.role != Role::Host {
+        findings.push(Finding {
+            seed: run.peer.seed,
+            field: "role",
+        });
+    }
+    if run.peer.version != run.host.version {
+        findings.push(Finding {
+            seed: run.peer.seed,
+            field: "version",
+        });
+    }
+    if !directions_hold(run) {
+        findings.push(Finding {
+            seed: run.peer.seed,
+            field: "run",
+        });
+    }
+}
+
+/// One run's peer and host describe the same connection.
+///
+/// Seed 32's host may send bytes the peer has not read yet. Those bytes
+/// are a suffix of what the host sent. Any other disagreement is a
+/// malformed run, not a stack difference.
+fn directions_hold(run: &Run) -> bool {
+    if run.peer.sent != run.host.recv || run.peer.end != run.host.end {
+        return false;
+    }
+    if run.peer.recv == run.host.sent {
+        return true;
+    }
+    run.peer.seed == crate::script::SEED_SEND_OVER && run.host.sent.starts_with(&run.peer.recv)
 }
 
 /// The peer and the host of one run agree on the bytes and the outcome.

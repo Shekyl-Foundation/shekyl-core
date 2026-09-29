@@ -212,7 +212,8 @@ fn value<'a>(line: Option<&'a str>, key: &str) -> Result<&'a str, Error> {
     let rest = line
         .strip_prefix(key)
         .ok_or_else(|| Error::new(format!("expected {key}")))?;
-    Ok(rest.strip_prefix(' ').unwrap_or(""))
+    rest.strip_prefix(' ')
+        .ok_or_else(|| Error::new(format!("expected {key}")))
 }
 
 fn hex(bytes: &[u8]) -> String {

@@ -75,6 +75,25 @@ pub fn known_seed(seed: u64) -> bool {
     ) || PROPERTY_SEEDS.contains(&seed)
 }
 
+/// Every seed the ctest runner must execute. The shell script's `SEEDS`
+/// line is checked against this list.
+pub fn all_seeds() -> Vec<u64> {
+    let mut seeds = vec![
+        SEED_HANDSHAKE,
+        SEED_SPLIT_HEADER,
+        SEED_SPLIT_EACH_BYTE,
+        SEED_SIZE_SUPPORT,
+        SEED_SIZE_COMPACT,
+        SEED_CONCURRENT,
+        SEED_CLOSE_MID,
+        SEED_REFUSE,
+        SEED_SEND_OVER,
+        SEED_BACKPRESSURE,
+    ];
+    seeds.extend(PROPERTY_SEEDS);
+    seeds
+}
+
 pub fn script(seed: u64) -> Result<Script, Error> {
     if !known_seed(seed) {
         return Err(Error::new(format!("no script for seed {seed}")));

@@ -25,7 +25,7 @@ pub use compare::{
 };
 pub use handshake::{handshake, Handshake, HANDSHAKE_SEED};
 pub use peer::run_peer;
-pub use script::{known_seed, script, whole_message_count, SEED_CONCURRENT};
+pub use script::{all_seeds, known_seed, script, whole_message_count, SEED_CONCURRENT};
 pub use seam_host::{serve_seam_once, SeamHost};
 pub use transcript::{End, Event, Role, Transcript};
 
@@ -107,6 +107,57 @@ mod tests {
     }
 
     #[test]
+    fn a_byte_field_requires_the_separating_space() {
+        let bare = "shekyl-p2p-transcript 1\nseed 1\nrole peer\nsent\nrecv \nend established\n";
+        assert!(Transcript::decode(bare).is_err());
+        let glued =
+            "shekyl-p2p-transcript 1\nseed 1\nrole peer\nsentinel\nrecv \nend established\n";
+        assert!(Transcript::decode(glued).is_err());
+    }
+
+    #[test]
+    fn swapped_roles_are_a_finding() {
+        let peer = Transcript {
+            version: 1,
+            seed: 1,
+            role: Role::Host,
+            sent: vec![1],
+            recv: vec![2],
+            end: End::Established,
+            events: vec![],
+        };
+        let host = Transcript {
+            version: 1,
+            seed: 1,
+            role: Role::Peer,
+            sent: vec![2],
+            recv: vec![1],
+            end: End::Established,
+            events: vec![],
+        };
+        let run = Run { peer, host };
+        assert!(diff(&run, &run)
+            .iter()
+            .any(|finding| finding.field == "role"));
+    }
+
+    #[test]
+    fn the_runner_lists_every_seed() {
+        let script = include_str!("../../../tests/p2p_harness/run_seeds.sh");
+        let line = script
+            .lines()
+            .find(|line| line.starts_with("SEEDS=\""))
+            .expect("SEEDS");
+        let listed: Vec<u64> = line
+            .trim_start_matches("SEEDS=\"")
+            .trim_end_matches('"')
+            .split_whitespace()
+            .map(|text| text.parse().expect("seed"))
+            .collect();
+        assert_eq!(listed, all_seeds());
+    }
+
+    #[test]
     fn the_same_seed_replays_against_the_seam_host() {
         let first = run_seam(HANDSHAKE_SEED).expect("first");
         let second = run_seam(HANDSHAKE_SEED).expect("second");
@@ -125,13 +176,8 @@ mod tests {
         let mut broken = second;
         broken.peer.recv.push(0);
         let findings = diff(&first, &broken);
-        assert_eq!(
-            findings,
-            vec![Finding {
-                seed: HANDSHAKE_SEED,
-                field: "peer-recv",
-            }]
-        );
+        assert!(findings.iter().any(|finding| finding.field == "run"));
+        assert!(findings.iter().any(|finding| finding.field == "peer-recv"));
     }
 
     #[test]

@@ -24,7 +24,7 @@ use shekyl_levin::{
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
-use shekyl_transport_layer::{CloseCause, ConnectorId, Sockets};
+use shekyl_transport_layer::{CloseCause, CloseKind, ConnectorId, Sockets};
 
 use crate::script::{script, Script, SEND_QUEUE_BYTES};
 use crate::transcript::{End, Event, Role, Transcript};
@@ -140,7 +140,9 @@ fn serve(
                     std::thread::sleep(Duration::from_millis(50));
                     let over = vec![0u8; SEND_QUEUE_BYTES + 1];
                     match session.try_send(over) {
-                        Ok(()) | Err(_) => {}
+                        Err(CloseKind::SendQueueFull) => {}
+                        Ok(()) => return Err(Error::new("oversize send was accepted")),
+                        Err(kind) => return Err(Error::new(format!("oversize send: {kind:?}"))),
                     }
                 }
                 if script.pause_after_handshake {

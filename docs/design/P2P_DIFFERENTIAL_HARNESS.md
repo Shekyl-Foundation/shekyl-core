@@ -44,8 +44,8 @@ Two hosts, each with a recording handler:
   one connection, and writes this transcript. It is the only C++ in
   the harness, and it is not linked into the Rust crate. A P2P
   connection enables epee's rate limiter, whose unset target is
-  16 KiB/s. The harness sets that limit to the maximum: the comparison
-  is the Levin bytes, and the seam has no rate limiter.
+  16 KiB/s. The harness sets that limit to the maximum so this run
+  compares Levin bytes. It does not test the operator link budget.
 
 `seam-host SEED TRANSCRIPT` and `epee-host SEED TRANSCRIPT` each print
 `host:port` on stdout, serve one connection, and write the host
