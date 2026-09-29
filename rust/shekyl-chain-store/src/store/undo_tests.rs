@@ -491,9 +491,10 @@ fn a_row_that_does_not_decode_or_names_no_table_or_wrong_shape_is_si7() {
     // An `Inserted` entry has no `prior` for `well_formed` to refuse, so an
     // entry naming an `Unshaped` table must be refused on the shape alone —
     // before `remove` could reach the uninhabited `from_bytes`.
-    // `archival_budget_accrual` has no Rust writer at this layout.
+    // `archival_settlement` has no Rust writer at this layout (held for
+    // SO-D8's cutover, `DRS_E4_ARCHIVAL_WRITER.md` §3.4).
     let unshaped = UndoLog(vec![UndoEntry::Inserted {
-        table: ordinal_of("archival_budget_accrual").expect("catalogued"),
+        table: ordinal_of("archival_settlement").expect("catalogued"),
         key: Box::new([0; 8]),
         post: post_image(&[0]),
     }]);

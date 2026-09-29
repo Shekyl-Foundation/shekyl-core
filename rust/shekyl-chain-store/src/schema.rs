@@ -167,8 +167,8 @@ use shekyl_units::AtomicUnits;
 use crate::codec::{
     AltBlock, AttestationWitnessBytes, Blob, BlockBody, BlockInfo, BondRecord, Coded,
     CurveTreeState, LayerHash, LeafCount, OutKey, OutTx, Present, PropertyCellBytes, RMarket,
-    RuleSetInForce, SigmaWorkMilli, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
-    TxPrunedSegment, UndoLog, Unshaped,
+    RuleSetInForce, SigmaWorkMilli, SlashLogEntry, TxIndex, TxOutputIndices, TxPqcAuthsSegment,
+    TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
 };
 use crate::lmdb_order::LmdbHashKey;
 use crate::store::undo::UndoTarget;
@@ -282,6 +282,47 @@ pub const FOLDED_INTO: &[(&str, &str, &str)] = &[(
 /// requirement without the table, and why.
 pub const NOT_PORTED: &[(&str, &str)] = &[
     (
+        "archival_emission_claim_log",
+        "the C++ pop journal for an emission claim's record update (db_lmdb.cpp:6080, restores \
+         the claimed set and first_paying): a reversal-only journal is a materialised view of the \
+         undo log, which holds the record's pre-image (DRS-E4 ARW-2, ARW-Q2)",
+    ),
+    (
+        "archival_bond_unbond_log",
+        "the C++ pop journal for a Release (db_lmdb.cpp:6198, `release_pop` reconstructs the \
+         pre-image): the undo log holds the record's and the total's pre-images, and the pop \
+         fold has no caller (DRS-E4 ARW-2, ARW-Q2)",
+    ),
+    (
+        "archival_bond_holdings_update_log",
+        "HoldingsUpdate is REJECTED (immutable bond, 2026-09-20): its appliers are no-ops and its \
+         revert a named no-op (db_lmdb.cpp:6270, blockchain_db.cpp:773); the table was empty by \
+         construction (DRS-E4 ARW-14)",
+    ),
+    (
+        "archival_bond_reinstate_log",
+        "the C++ pop journal for a Reinstate (db_lmdb.cpp:6342, `reinstate_pop`): the undo log \
+         holds the record's pre-image (DRS-E4 ARW-2, ARW-Q2)",
+    ),
+    (
+        "archival_epoch_close_log",
+        "the C++ pop journal naming which epoch a height closed so the revert can find the rows \
+         to delete (db_lmdb.cpp:7888): the undo log holds the close's rows as pre-images and pop \
+         restores them without a lookup (DRS-E4 ARW-2, ARW-Q2)",
+    ),
+    (
+        "archival_budget_accrual",
+        "per-height accrual rows read once, by the close's range-sum (db_lmdb.cpp:7830), and \
+         deleted per block on pop: a view of the emission split the verdict carries; the job is \
+         `archival_budget_accruing`'s one row per open epoch (DRS-E4 ARW-5, ARW-Q3)",
+    ),
+    (
+        "archival_shard_segment",
+        "the segment-freeze registry, retired by ruling (PDM-Q12, 2026-09-18) and never a fact \
+         of this store: shards are fixed-cardinality T over cumulative_tx_count (PDM-Q6 item 5); \
+         the C++ table and its writer live until cutover (DRS-E4 ARW-4, SAR-5)",
+    ),
+    (
         "pending_tree_leaves",
         "a view of the block index, not a fact: maturity is a pure function of (height, \
          is_miner) — blockchain_db.cpp:554-567, no per-output unlock_time enters — so the \
@@ -321,6 +362,12 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
 /// class table is the LMDB inventory, and a table absent from it with a
 /// reason here is a named exclusion, not an omission.
 pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
+    (
+        "archival_budget_accruing",
+        "the open epoch's accrued staker inflow as one row, keyed by epoch, deleted at the close \
+         that freezes it into archival_budget (DRS-E4 ARW-Q3): the C++ kept a row per height and \
+         range-summed them once; nothing read one height's row, so the sum is the fact",
+    ),
     (
         "curve_tree_leaf_counts",
         "the leaf count at each height, keyed as curve_tree_roots is (DRS-E3, CTW-Q4): the \
@@ -504,33 +551,27 @@ tables! {
     pub const ARCHIVAL_BOND: TableDefinition<[u8; 32], Coded<BondRecord>> =
         TableDefinition::new("archival_bond");
 
-    /// `archival_shard_segment` — default flags, `BE(x)` keys (u64 preserves numeric order).
-    pub const ARCHIVAL_SHARD_SEGMENT: TableDefinition<u64, Unshaped> =
-        TableDefinition::new("archival_shard_segment");
-
-    /// `archival_slash_applied` — default flags.
-    pub const ARCHIVAL_SLASH_APPLIED: TableDefinition<&[u8], Unshaped> =
+    /// `archival_slash_applied` — default flags in LMDB over the packed
+    /// `P_id ‖ BE64(shard) ‖ BE64(epoch)`; here the tuple `([u8; 32], u64,
+    /// u64)`, the same order (`SlashAppliedKey`). A row is the fact that the
+    /// scheduler has applied the slash for `(P, shard, E)` — the dedup
+    /// `archival_challenge_failed_at_height` reads first (`db_lmdb.cpp:5471`).
+    /// A set-table: [`Present`]. DRS-E4 (phase 9 writes; SI-22 ties every
+    /// slash-log row to one of these).
+    pub const ARCHIVAL_SLASH_APPLIED: TableDefinition<([u8; 32], u64, u64), Present> =
         TableDefinition::new("archival_slash_applied");
 
-    /// `archival_slash_log` — default flags.
-    pub const ARCHIVAL_SLASH_LOG: TableDefinition<&[u8], Unshaped> =
+    /// `archival_slash_log` — default flags in LMDB over `BE(height) ‖
+    /// BE(seq)`; here the tuple `(u64, u32)` (`SlashLogKey`), the same order.
+    /// **The one archival journal that is a fact** (DRS-E4 `ARW-Q2`,
+    /// `DRS_E4_ARCHIVAL_WRITER.md` §3.3): read forward by the as-of-height
+    /// holdings fold (`holds_shard_at`, A2), which reaches back past the
+    /// window `undo_log` covers. The C++ epoch-marker row kind
+    /// (`kArchivalSlashLogEpochMarkerSeq`) is not carried — its job is the
+    /// `archival_last_slash_epoch` cell's own pre-image. Dense per height
+    /// (SI-22). DRS-E4 (phase 9 writes; A2 reads).
+    pub const ARCHIVAL_SLASH_LOG: TableDefinition<(u64, u32), Coded<SlashLogEntry>> =
         TableDefinition::new("archival_slash_log");
-
-    /// `archival_emission_claim_log` — default flags.
-    pub const ARCHIVAL_EMISSION_CLAIM_LOG: TableDefinition<&[u8], Unshaped> =
-        TableDefinition::new("archival_emission_claim_log");
-
-    /// `archival_bond_unbond_log` — default flags.
-    pub const ARCHIVAL_BOND_UNBOND_LOG: TableDefinition<&[u8], Unshaped> =
-        TableDefinition::new("archival_bond_unbond_log");
-
-    /// `archival_bond_holdings_update_log` — default flags.
-    pub const ARCHIVAL_BOND_HOLDINGS_UPDATE_LOG: TableDefinition<&[u8], Unshaped> =
-        TableDefinition::new("archival_bond_holdings_update_log");
-
-    /// `archival_bond_reinstate_log` — default flags.
-    pub const ARCHIVAL_BOND_REINSTATE_LOG: TableDefinition<&[u8], Unshaped> =
-        TableDefinition::new("archival_bond_reinstate_log");
 
     /// `archival_r_market` — default flags over `BE64(shard) ‖ BE64(epoch)`;
     /// here the tuple `(u64, u64)`, the same order. The co-holder count frozen
@@ -543,18 +584,23 @@ tables! {
     pub const ARCHIVAL_SIGMA_WORK: TableDefinition<u64, Coded<SigmaWorkMilli>> =
         TableDefinition::new("archival_sigma_work");
 
-    /// `archival_epoch_close_log` — default flags, `BE(x)` keys (u64 preserves numeric order).
-    pub const ARCHIVAL_EPOCH_CLOSE_LOG: TableDefinition<u64, Unshaped> =
-        TableDefinition::new("archival_epoch_close_log");
-
-    /// `archival_budget_accrual` — default flags, `BE(x)` keys (u64 preserves numeric order).
-    pub const ARCHIVAL_BUDGET_ACCRUAL: TableDefinition<u64, Unshaped> =
-        TableDefinition::new("archival_budget_accrual");
-
     /// `archival_budget` — default flags, `BE(x)` keys (u64 preserves numeric
     /// order). The frozen `budget(E)` close row (S-ARCH A8).
     pub const ARCHIVAL_BUDGET: TableDefinition<u64, Coded<AtomicUnits>> =
         TableDefinition::new("archival_budget");
+
+    /// `archival_budget_accruing` — **Rust-only** (`RUST_ONLY_TABLES`; DRS-E4
+    /// `ARW-Q3`, `DRS_E4_ARCHIVAL_WRITER.md` §3.5): the redirected staker
+    /// inflow accrued so far in the **open** epoch, one `AtomicUnits` row
+    /// keyed by that epoch, upserted every connect with its pre-image
+    /// journaled. The close reads it, writes `archival_budget[E]` and
+    /// **deletes it in the same transaction**, so the table holds at most one
+    /// row — the open epoch's (SI-23) — and a closed epoch's accrual has one
+    /// home. Replaces the C++'s per-height `archival_budget_accrual` rows,
+    /// which nothing read singly (`NOT_PORTED`). DRS-E4 (phase 9 writes; the
+    /// digest reads).
+    pub const ARCHIVAL_BUDGET_ACCRUING: TableDefinition<u64, Coded<AtomicUnits>> =
+        TableDefinition::new("archival_budget_accruing");
 
     /// `output_to_leaf` — INTEGERKEY; `GlobalOutputIndex` (as `u64`) → the
     /// [`TreePosition`] the drain assigned it. Written at drain, pairwise
@@ -675,12 +721,19 @@ mod tests {
             // `block_pending_additions` (34–36) and `curve_tree_checkpoints`
             // (42) — so `curve_tree_roots` moved 43 → 39, and
             // `curve_tree_leaf_counts` was born at 40 ahead of the two
-            // older Rust-only tables.
-            ("output_to_leaf", 34),
-            ("curve_tree_roots", 39),
-            ("curve_tree_leaf_counts", 40),
-            ("undo_log", 41),
-            ("txs_pqc_auth_hash", 42),
+            // older Rust-only tables. Layout 18: seven archival tables **not
+            // ported** (DRS-E4 commit 1, `NOT_PORTED`) — `archival_shard_segment`
+            // (22), the four revert logs (25–28), `archival_epoch_close_log`
+            // (31), `archival_budget_accrual` (32) — and `archival_budget_accruing`
+            // born at 27, so everything from `output_to_leaf` moved up by six.
+            ("archival_slash_applied", 22),
+            ("archival_slash_log", 23),
+            ("archival_budget_accruing", 27),
+            ("output_to_leaf", 28),
+            ("curve_tree_roots", 33),
+            ("curve_tree_leaf_counts", 34),
+            ("undo_log", 35),
+            ("txs_pqc_auth_hash", 36),
         ];
         for &(name, index) in pinned {
             assert_eq!(

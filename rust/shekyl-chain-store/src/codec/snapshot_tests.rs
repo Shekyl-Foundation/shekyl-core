@@ -118,8 +118,8 @@ use super::{
     Coded, CoverageGaps, CurveTreeState, FirstPayingHeight, HeldShard, Holdings, LayerHash,
     LeafCount, OriginatedPhase, OutKey, OutTx, PoolRecord, ProbeCell, PropertyCell, RMarket,
     Readiness, RelayState, Responsibility, RuleSetInForce, SchemaVersion, SettlementEpochBlocks,
-    SigmaWorkMilli, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS,
-    SCHEMA_VERSION,
+    SigmaWorkMilli, SlashLogEntry, SlashedHolding, TreeDepth, TxIndex, TxOutputIndices, UndoEntry,
+    UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -127,8 +127,8 @@ use shekyl_chain_rules::{CenRow, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
     BadInterval, BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot,
-    GlobalOutputIndex, LongTermWeight, OneTimePubkey, OutputIndexInTx, PqcAuthHash, PrunableHash,
-    SettlementEpoch, ShardId, Timestamp, TreeLeaf, TreePosition, TxHash,
+    GlobalOutputIndex, LongTermWeight, OneTimePubkey, OutputIndexInTx, PCanonicalId, PqcAuthHash,
+    PrunableHash, SettlementEpoch, ShardId, Timestamp, TreeLeaf, TreePosition, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -632,6 +632,34 @@ impl Fixtures for PoolRecord {
                         responsibility: Responsibility::Disarmed,
                     },
                     ..arrived
+                },
+            ),
+        ]
+    }
+}
+
+impl Fixtures for SlashLogEntry {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        let persona = PCanonicalId::from_bytes([0x5a; 32]);
+        vec![
+            (
+                "compact_erase",
+                SlashLogEntry {
+                    persona,
+                    shard: ShardId::from_raw(7),
+                    epoch: SettlementEpoch::from_raw(0x0102_0304_0506_0708),
+                    holding: SlashedHolding::Shard {
+                        add_epoch: SettlementEpoch::from_raw(3),
+                    },
+                },
+            ),
+            (
+                "complete_tree_demotion",
+                SlashLogEntry {
+                    persona,
+                    shard: ShardId::from_raw(0),
+                    epoch: SettlementEpoch::from_raw(1),
+                    holding: SlashedHolding::CompleteTree,
                 },
             ),
         ]
@@ -1228,6 +1256,7 @@ snapshotted_codecs! {
     BondRecord => codec_snapshot_bond_record,
     RMarket => codec_snapshot_r_market,
     SigmaWorkMilli => codec_snapshot_sigma_work_milli,
+    SlashLogEntry => codec_snapshot_slash_log_entry,
     SettlementEpoch => codec_snapshot_settlement_epoch,
     ShardId => codec_snapshot_shard_id,
     PoolRecord => codec_snapshot_pool_record,

@@ -53,10 +53,10 @@
 
 use shekyl_types::archival::{
     BadInterval, BondRecord, FirstPayingHeight, HeldShard, Holdings, HoldingsError, HoldingsKind,
-    RMarket, SigmaWorkMilli, MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES, MAX_CLAIMED_EPOCH_ENTRIES,
-    MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
+    RMarket, SigmaWorkMilli, SlashLogEntry, SlashedHolding, MAX_BOND_BAD_INTERVALS,
+    MAX_BOND_KEY_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
 };
-use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
+use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::reader::{put_bytes, put_count, Reader};
@@ -237,5 +237,57 @@ impl Canonical for SigmaWorkMilli {
         u64::decode(bytes)
             .map(Self::from_raw)
             .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
+/// `archival_slash_log`'s row (DRS-E4 `ARW-Q2`). Layout, all little-endian:
+///
+/// ```text
+/// persona   [u8; 32]
+/// shard     u64
+/// epoch     u64
+/// holding   u8 kind: 0 = Shard ‖ u64 add_epoch;  1 = CompleteTree
+/// ```
+///
+/// Variable width by the kind byte (57 or 49 bytes); a third kind byte or
+/// trailing bytes are refused.
+impl Canonical for SlashLogEntry {
+    const NAME: &'static str = "slash_log_entry";
+    const FIXED_WIDTH: Option<usize> = None;
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.persona.to_bytes());
+        out.extend_from_slice(&self.shard.to_raw().to_le_bytes());
+        out.extend_from_slice(&self.epoch.to_raw().to_le_bytes());
+        match self.holding {
+            SlashedHolding::Shard { add_epoch } => {
+                out.push(0);
+                out.extend_from_slice(&add_epoch.to_raw().to_le_bytes());
+            }
+            SlashedHolding::CompleteTree => out.push(1),
+        }
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let persona = PCanonicalId::from_bytes(r.array::<32>("buffer ends inside the persona")?);
+        let shard = ShardId::from_raw(r.u64()?);
+        let epoch = SettlementEpoch::from_raw(r.u64()?);
+        let holding = match r.u8()? {
+            0 => SlashedHolding::Shard {
+                add_epoch: SettlementEpoch::from_raw(r.u64()?),
+            },
+            1 => SlashedHolding::CompleteTree,
+            _ => return Err(r.invalid("slashed-holding kind byte names neither shape")),
+        };
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the slash log entry"));
+        }
+        Ok(Self {
+            persona,
+            shard,
+            epoch,
+            holding,
+        })
     }
 }

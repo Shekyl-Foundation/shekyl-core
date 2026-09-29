@@ -426,6 +426,136 @@ impl ServeCreditKey {
     }
 }
 
+/// The key of one applied slash: `archival_slash_applied[(P, shard, E)]`
+/// (DRS-E4; `DRS_E4_ARCHIVAL_WRITER.md` §3.3).
+///
+/// The C++ packed it as `P_id ‖ BE64(shard) ‖ BE64(epoch)` under LMDB's
+/// default byte comparator; the tuple `([u8; 32], u64, u64)` orders
+/// component-wise, the same order, with nothing to pin. Fields are private:
+/// the tuple is assembled only through [`Self::key`] / [`Self::from_key`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct SlashAppliedKey {
+    persona: PCanonicalId,
+    shard: ShardId,
+    epoch: SettlementEpoch,
+}
+
+/// The redb tuple a [`SlashAppliedKey`] is stored under.
+pub type SlashAppliedTuple = ([u8; 32], u64, u64);
+
+impl SlashAppliedKey {
+    /// The key for one applied slash.
+    #[must_use]
+    pub const fn new(persona: PCanonicalId, shard: ShardId, epoch: SettlementEpoch) -> Self {
+        Self {
+            persona,
+            shard,
+            epoch,
+        }
+    }
+
+    /// Whose slash.
+    #[must_use]
+    pub const fn persona(&self) -> &PCanonicalId {
+        &self.persona
+    }
+
+    /// Which shard's challenge failed.
+    #[must_use]
+    pub const fn shard(self) -> ShardId {
+        self.shard
+    }
+
+    /// Which epoch's failure it settles.
+    #[must_use]
+    pub const fn epoch(self) -> SettlementEpoch {
+        self.epoch
+    }
+
+    /// The stored tuple.
+    #[must_use]
+    pub const fn key(self) -> SlashAppliedTuple {
+        (
+            self.persona.to_bytes(),
+            self.shard.to_raw(),
+            self.epoch.to_raw(),
+        )
+    }
+
+    /// The key a stored tuple names.
+    #[must_use]
+    pub const fn from_key((persona, shard, epoch): SlashAppliedTuple) -> Self {
+        Self {
+            persona: PCanonicalId::from_bytes(persona),
+            shard: ShardId::from_raw(shard),
+            epoch: SettlementEpoch::from_raw(epoch),
+        }
+    }
+}
+
+/// The key of one slash-log row: `archival_slash_log[(height, seq)]` — the
+/// connecting height the scheduler ran at and the row's ordinal within it
+/// (DRS-E4 `ARW-Q2`; dense per height, SI-22).
+///
+/// The C++ packed it as `BE(height) ‖ BE(seq)` with a reserved
+/// `u32::MAX` seq for its epoch-marker row kind; the tuple `(u64, u32)`
+/// orders the same way, and the marker kind is not carried, so every seq is
+/// a slash. Fields are private: the tuple is assembled only through
+/// [`Self::key`] / [`Self::from_key`], and the one scan the read takes —
+/// every row strictly above a height — is [`Self::above`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct SlashLogKey {
+    height: BlockHeight,
+    seq: u32,
+}
+
+/// The redb tuple a [`SlashLogKey`] is stored under.
+pub type SlashLogTuple = (u64, u32);
+
+impl SlashLogKey {
+    /// The key of the `seq`-th slash applied at `height`.
+    #[must_use]
+    pub const fn new(height: BlockHeight, seq: u32) -> Self {
+        Self { height, seq }
+    }
+
+    /// The connecting height the slash was applied at.
+    #[must_use]
+    pub const fn height(self) -> BlockHeight {
+        self.height
+    }
+
+    /// The row's ordinal within its height, from `0`.
+    #[must_use]
+    pub const fn seq(self) -> u32 {
+        self.seq
+    }
+
+    /// The stored tuple.
+    #[must_use]
+    pub const fn key(self) -> SlashLogTuple {
+        (self.height.to_raw(), self.seq)
+    }
+
+    /// The key a stored tuple names.
+    #[must_use]
+    pub const fn from_key((height, seq): SlashLogTuple) -> Self {
+        Self {
+            height: BlockHeight::from_raw(height),
+            seq,
+        }
+    }
+
+    /// Every row at a height **strictly above** `h`: `(h + 1, 0) ..` — the
+    /// scan A2 `slash_log_after` takes (`db_lmdb.cpp:4804`, the C++ start
+    /// key `(at_height + 1, 0)`). Empty when `h` is the last height, which
+    /// the saturating step keeps well-defined.
+    #[must_use]
+    pub const fn above(h: BlockHeight) -> core::ops::RangeFrom<SlashLogTuple> {
+        (h.to_raw().saturating_add(1), 0)..
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

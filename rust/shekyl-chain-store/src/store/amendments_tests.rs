@@ -32,8 +32,8 @@ use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::{BlockInfo, Canonical, CurveTreeState};
 use crate::schema::{
-    self, ARCHIVAL_BUDGET_ACCRUAL, BLOCKS, BLOCK_BURN, BLOCK_INFO, CURVE_TREE_LEAVES,
-    CURVE_TREE_META, TXS_PQC_AUTH_HASH, UNDO_LOG,
+    self, ARCHIVAL_SETTLEMENT, BLOCKS, BLOCK_BURN, BLOCK_INFO, CURVE_TREE_LEAVES, CURVE_TREE_META,
+    TXS_PQC_AUTH_HASH, UNDO_LOG,
 };
 
 fn block_info(store: &ChainStore, height: u64) -> Option<BlockInfo> {
@@ -180,8 +180,8 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
     // presence for, and creating them would make "no writer yet" a fact the
     // file could not tell from "empty".
     assert!(
-        snap.open_table(ARCHIVAL_BUDGET_ACCRUAL).is_err(),
-        "archival_budget_accrual is Unshaped and not sealed"
+        snap.open_table(ARCHIVAL_SETTLEMENT).is_err(),
+        "archival_settlement is Unshaped and not sealed"
     );
     // S-CURVE's shaped curve tables are sealed; the summary is a **written**
     // row, not an empty table (`SCU-Q1`, SCU-1).
@@ -220,7 +220,15 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
     // index, two were the C++'s pop journals, the checkpoint is a view of
     // the meta row — `DRS_E3_CURVE_WRITER.md` §3.7) and **shaped** the two
     // position maps (`Coded<TreePosition>` / `Coded<GlobalOutputIndex>`).
-    assert_eq!(unshaped, 12, "the §11.1(f) count at this layout");
+    // 12 → 3 at layout 18: DRS-E4 commit 1 **did not port** seven archival
+    // tables (`NOT_PORTED`: five pop journals and the close log are views of
+    // the undo log, the per-height accrual rows a view of the emission
+    // split, the freeze registry retired — `DRS_E4_ARCHIVAL_WRITER.md`
+    // §3.3, §3.4) and **shaped** `archival_slash_log` and
+    // `archival_slash_applied`. What remains `Unshaped` is the two dead
+    // tables (`txs`, `hf_starting_heights`) and `archival_settlement`, held
+    // for SO-D8's cutover with its blocker named.
+    assert_eq!(unshaped, 3, "the §11.1(f) count at this layout");
     cleanup(&path);
 }
 
@@ -400,19 +408,26 @@ fn the_second_rust_only_table_is_catalogued_last_and_named() {
         catalogue_len,
         "txs_pqc_auth_hash is the final catalogue slot"
     );
-    // 40 LMDB mirrors plus the three Rust-only tables
-    // (`curve_tree_leaf_counts`, `undo_log`, `txs_pqc_auth_hash`) at
-    // SCHEMA_VERSION 15 — 47 mirrors until S-POOL moved `txpool_meta` /
-    // `txpool_blob` to the pool file (layout 12, `schema::MIRRORED_ELSEWHERE`),
-    // 45 until S-ALT folded `archival_alt_attestation_witness` into
-    // `alt_blocks` (layout 13, `schema::FOLDED_INTO`), 44 until DRS-E3 did
-    // not port four tree-side tables (layout 15, `schema::NOT_PORTED`) and
-    // added `curve_tree_leaf_counts`.
-    assert_eq!(catalogue_len, 43);
+    // 33 LMDB mirrors plus the four Rust-only tables
+    // (`archival_budget_accruing`, `curve_tree_leaf_counts`, `undo_log`,
+    // `txs_pqc_auth_hash`) at SCHEMA_VERSION 18 — 47 mirrors until S-POOL
+    // moved `txpool_meta` / `txpool_blob` to the pool file (layout 12,
+    // `schema::MIRRORED_ELSEWHERE`), 45 until S-ALT folded
+    // `archival_alt_attestation_witness` into `alt_blocks` (layout 13,
+    // `schema::FOLDED_INTO`), 44 until DRS-E3 did not port four tree-side
+    // tables (layout 15, `schema::NOT_PORTED`) and added
+    // `curve_tree_leaf_counts`, 40 until DRS-E4 did not port seven archival
+    // tables (layout 18) and added `archival_budget_accruing`.
+    assert_eq!(catalogue_len, 37);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names,
-        ["curve_tree_leaf_counts", "undo_log", "txs_pqc_auth_hash"]
+        [
+            "archival_budget_accruing",
+            "curve_tree_leaf_counts",
+            "undo_log",
+            "txs_pqc_auth_hash"
+        ]
     );
     // One 32-byte codec; `Coded<PqcAuthHash>` on the value side.
     assert_eq!(
