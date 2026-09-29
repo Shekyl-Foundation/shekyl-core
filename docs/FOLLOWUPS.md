@@ -26,6 +26,30 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
+- **Stems draw from the zone's own registry.** `get_out_connections` (`levin_notify.cpp`) still snapshots the Levin registry into an `outs` vector on every epoch rollover and filters it by `state_normal`, which is whether *we* are pulling blocks from the peer, not whether it is a peer. The zone already holds `contexts` (`zone/mod.rs`), filled at session-established with direction, and fluff walks it. Stems draw from that registry filtered to `Outbound`; `get_out_connections`, the `outs` argument to `rebuild_stems` / `update_stems` / `force_epoch`, and the C++ walk go; the empty-walk log dies with the walk or moves into Rust. Reviewed 2026-09-29 as not a #909 blocker: `state_normal` removed the steerable height bias and leaves a seconds-scale, non-adversarial residue. Blocked on #909 merging (this is relay behaviour, not transport). Falsify by `rg get_out_connections src/` returning nothing and a stem-selection test that never reads `m_state`.
+  - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
+  - Target: pre-genesis
+
+- **An honest receiver black-holes a stem from a peer it is pulling from.** `handle_notify_new_transactions` returns before any relay when `m_state != state_normal` (`cryptonote_protocol_handler.inl`), and `Including transaction` logs *before* that check, so the line does not mean the transaction was accepted. D++ §4.4 sizes the embargo on the premise that a dropped stem is a spy's choice; this is an honest drop that fluffs the origin's transaction from the origin. The gate reduces to `state_before_handshake` (`is_synchronized()` already answers "can I validate this"), and the log moves below both gates. Blocked on #909 merging, same reason as the row above. Falsify by a test in which a stem from a peer in `state_synchronizing` enters the receiver's pool.
+  - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
+  - Target: pre-genesis
+
+- **Write the transactions-per-epoch bound the epoch length rests on.** Sharma–Gosain–Diaz §VII-A reconstruct 98.5 % of a static privacy subgraph from about 100 transactions relayed per honest node. Epoch rotation (`rebuild_stems`) is the answer only while transactions per node per epoch stays well under that, which is a claim about Shekyl's rate and the 10-minute epoch that is currently assumed, not derived. Derive it, state the rate at which the epoch must shorten as the reopen criterion. Blocked on nothing but the derivation; scheduled with the two rows above. Falsify by the number and its reopen rate appearing in the owner document.
+  - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
+  - Target: pre-genesis
+
+- **A node that accepts no inbound refuses with the same cause as a full cap.** A derived ceiling of 0 and an explicit `--in-peers 1` at capacity both surface as `AdmissionRefused` on the seam, so a dialer's log cannot tell "try later" from "this node will never accept inbound" (rule 82). D12's set gains a distinct cause for the second. Blocked on #909 merging (D12 is the cutover's cause set; extending it there widens the cutover). Falsify by the dialer's `seam close` line naming the ceiling-0 case differently from the full-cap case.
+  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D12
+  - Target: pre-genesis
+
+- **Onion-valued options validate the address at option time.** `--add-exclusive-node <onion>` creates the tor zone while options are parsed, and `handle_command_line` then refuses "did not set `--tx-proxy`" before the managed Tor could have supplied its SOCKS address, so a daemon under the default posture cannot be told to dial a named onion. The option validates by asking a zone that is not up instead of checking the address; an onion v3 is checkable offline (56 base32 characters, version byte, checksum — rule 65). Validate at option time, hand the address to the tor zone when it comes up, and the ordering dependency between option parsing and zone start goes for every onion-valued option. Observed 2026-09-29 on the Tor dial leg, which ran the pinned Tor externally to get around it. Blocked on #909 merging. Falsify by a daemon with no `--tx-proxy` and `--add-exclusive-node <onion>` publishing its managed onion and dialing the named one.
+  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
+  - Target: pre-genesis
+
+- **`tor-pin-verify` has no `linux-aarch64` leg.** The workflow downloads, GPG-verifies, extracts, and re-verifies one target, `linux-x86_64`, and runs the live lifecycle tests on it. The aarch64 pin (16.0a12, ruled 2026-09-29) was verified by hand on the floor device. The download-verify-hash chain does not need an aarch64 runner; the lifecycle tests do. Blocked on a decision between a hash-only aarch64 job and an aarch64 runner. Falsify by a dispatch of the workflow that checks the aarch64 digest against `CURRENT_PIN`'s `aarch64` arm.
+  - Owner: [`ARCHIVAL_BOND_2D2_SP_T0_TOR.md`](design/ARCHIVAL_BOND_2D2_SP_T0_TOR.md)
+  - Target: pre-genesis
+
 - **Coordinate the ban list with the peerlist.** They are separate today, and discovery's pre-dial check (`net_node.inl:1902`) is the only link, so a banned host stays in the gray and white lists, is drawn, and is rejected only at dial time. Under slice 1's uniform draw a list full of banned hosts lowers the dial success rate, and peer exchange can hand those addresses on. The slice decides, per connector (only clearnet addresses can be banned, D7): whether a ban removes or marks entries, whether banned addresses are refused at admit and excluded from disclosure, and what an expiry does. Falsify by: the slice 1 brief states that rule, and a test shows a banned host is never drawn and never disclosed. Reopen if a banned host's address is drawn or disclosed.
   - Owner: [`P2P_3_SLICE_1_PEERLIST_BRIEF.md`](design/P2P_3_SLICE_1_PEERLIST_BRIEF.md) together with [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis

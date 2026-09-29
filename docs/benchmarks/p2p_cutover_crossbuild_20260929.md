@@ -256,13 +256,19 @@ Conditions, per D9:
 | --- | --- | --- | --- | --- | --- |
 | Tor dial (`dial_ns`: SOCKS exchange, circuit, rendezvous) | 1.84 s | 3.40 s | 4.54 s | 4.76 s | **9.1 s** |
 | loopback connect to the SOCKS port (`proxy_connect_ns`) | 0.4 ms | 0.5 ms | 0.5 ms | 0.5 ms | — |
-| channel to session (`gap_ns`, outbound side) | 626 ms | 827 ms | 1.26 s | 1.32 s | **2.5 s** |
+| channel to session (`gap_ns`, outbound side) | 626 ms | 827 ms | 1.26 s | 1.32 s | **2.6 s** |
 
-The placeholder both clocks run on today is the Levin invoke timeout,
-5 s. This run's slowest dial cleared it by 240 ms. A deadline written
-from this distribution is 9.1 s for the Tor dial and 2.5 s for the Tor
-gap; neither is wired yet, and the clearnet distributions are owed
-before the deadline commit.
+p99 is the 99th of the 100 sorted samples (4.537 s and 1.260 s), one
+sample from each max. Twice each is 9.07 s and 2.52 s, rounded up to
+9.1 s and 2.6 s per D9. The placeholder both clocks run on today is
+the Levin invoke timeout, 5 s. This run's slowest dial cleared it by
+240 ms. A later run under these conditions whose p99 exceeds 4.55 s
+or 1.30 s reopens the respective deadline. Neither is wired yet, and
+the clearnet distributions are owed before the deadline commit.
+
+The inbound drive's wake was per hub when these samples were taken:
+every strand answer woke every waiting driver. One other session was
+live, so the herd here was two. The wake is per row from `212c3260e`.
 
 ## Not this run
 

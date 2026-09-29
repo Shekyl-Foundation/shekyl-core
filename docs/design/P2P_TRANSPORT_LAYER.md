@@ -1482,6 +1482,14 @@ that will not exist:
   binary pin at each end, the option state, the proof-of-work state,
   and the miner state. A later distribution on another device or
   circuit set is compared to this one, not written over it.
+- The p99 is the value at rank ⌈0.99 n⌉ of the sorted samples; at
+  n = 100 that is the second-largest observation, one sample from the
+  max. Twice it is rounded **up** to the precision the deadline is
+  stated in. Rounding down spends the margin the factor of two is.
+- Reopen, per deadline: a later distribution taken under these
+  conditions whose p99 exceeds the derived deadline reopens it, and
+  the deadline is re-derived from the larger run. The same shape D5
+  gives a mining floor device.
 
 One rekey is 5.06 µs against 889 µs to seal and open a 65,535-byte
 record, under one percent at that size. Fixed windows are smaller than
