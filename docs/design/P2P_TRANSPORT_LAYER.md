@@ -679,8 +679,12 @@ It does not sleep. A delivery posted before `closed` is parsed.
 a floor-sized pool both complete. `above_floor` with one worker
 below the floor returns `BelowFloor` and records no row.
 `inbound_held` counts inbound rows and leaves outbound out. The
-differential harness and the cross-build interop run are the next
-step. Cutover waits on the thread budget and the per-connector
+differential harness is
+[`P2P_DIFFERENTIAL_HARNESS.md`](P2P_DIFFERENTIAL_HARNESS.md), crate
+`shekyl-p2p-harness`. Seed 1 is the handshake invoke. `run-seeds` drives
+every seed against both hosts; `epee-host` is the C++ recorder and
+takes the typed plan on its command line. The cross-build run waits
+on the zone-binding commit. Cutover waits on the thread budget and the per-connector
 deadlines, measured on this build and written down. The budget is
 at least the floor.
 
@@ -1510,14 +1514,28 @@ round can reject them.
   session result. *Records-was: compare close causes and timeout
   behaviour.* Deadlines per connector, typed first-wins causes, FIN
   after zero bytes, Rust admission, no local/remote timer split, no
-  TOS knob, and byte bounds are listed in the harness document as
-  expected. A difference on one of them is not a regression. The
-  current server stays in the tree as the wire reference until this
-  passes. It is not a test host for the option.
+  TOS knob, and byte bounds are listed in
+  [`P2P_DIFFERENTIAL_HARNESS.md`](P2P_DIFFERENTIAL_HARNESS.md) as
+  expected. The scripted peer and the seam host are
+  `shekyl-p2p-harness`. Seed 1 is a handshake invoke, the response,
+  and the session established when that response is back. `run-seeds`
+  is the ctest driver: it owns the seed list, runs the seam in-process,
+  and diffs it against `epee-host`. `epee-host` is the C++ recorder
+  and is not linked into that crate. The transcript format is version
+  1 in the harness document; version 2 is the backpressure event log,
+  written for that seed. The cross-build run waits on the zone-binding
+  commit, not on this harness. Seed 32's send-queue suffix is classified
+  `byte-bounds` when the handshake prefix still matches; the other
+  listed divergences are post-cutover CI invariants, not a comparator
+  swallow list. The current server stays in the tree as the wire
+  reference until this passes. It is not a test host for the option.
 - **Cross-build interop.** A connector node and an epee node, option
   off, peering on testnet through sync, relay, and both dial
-  directions. The loopback harness is one build. The claim that
-  cutover is not a flag day is about two builds talking to each other.
+  directions. It waits on the zone-binding commit: production still
+  uses epee, so a daemon whose zones use the seam does not exist yet.
+  The in-process harness is not what blocks it. The loopback harness
+  is one build. The claim that cutover is not a flag day is about two
+  builds talking to each other.
 - **One descriptor per connection.** Count `readlink` results equal to
   that socket's `socket:[inode]`. Assert one. Do not count
   `/proc/self/fd` for the whole process.

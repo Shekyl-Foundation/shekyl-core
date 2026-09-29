@@ -1,0 +1,26 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-p2p-harness"
+description = "P2P conformance harness. A scripted peer, a seam host, a comparator, and the run-seeds driver. The epee host is a separate C++ recording binary."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+shekyl-clearnet = { path = "../shekyl-clearnet" }
+shekyl-levin = { path = "../shekyl-levin" }
+shekyl-peer-policy = { path = "../shekyl-peer-policy" }
+shekyl-runtime = { path = "../shekyl-runtime" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+tokio = { version = "1", default-features = false, features = ["rt", "time"] }
+
+[lints]
+workspace = true
