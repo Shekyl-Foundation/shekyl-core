@@ -21,21 +21,18 @@ pub type FrameSender = mpsc::Sender<Vec<u8>>;
 #[derive(Clone)]
 pub struct SendHalf {
     queue: ByteQueue,
-    overfull: Arc<Overfull>,
 }
 
 impl SendHalf {
     /// Queue one whole message. A buffer that does not fit is not stored.
     ///
-    /// [`CloseKind::SendQueueFull`] trips [`Overfull`] and closes the queue.
+    /// [`CloseKind::SendQueueFull`]: the queue closed as overfull and
+    /// tripped [`Overfull`], in one step (`ByteQueue`'s module docs).
     /// [`CloseKind::IoError`] means the queue is already closed.
     pub fn try_send(&self, bytes: Vec<u8>) -> Result<(), CloseKind> {
         match self.queue.try_push(bytes) {
             Ok(()) => Ok(()),
-            Err(PushError::Full) => {
-                self.overfull.trip();
-                Err(CloseKind::SendQueueFull)
-            }
+            Err(PushError::Full) => Err(CloseKind::SendQueueFull),
             Err(PushError::Closed) => Err(CloseKind::IoError),
         }
     }
@@ -65,7 +62,6 @@ impl Drop for QueueHold {
 pub struct Session {
     inbound: mpsc::Receiver<Vec<u8>>,
     queue: ByteQueue,
-    overfull: Arc<Overfull>,
 }
 
 impl Drop for Session {
@@ -91,7 +87,6 @@ impl Session {
     pub fn send_half(&self) -> SendHalf {
         SendHalf {
             queue: self.queue.clone(),
-            overfull: Arc::clone(&self.overfull),
         }
     }
 
@@ -115,7 +110,7 @@ pub struct StreamEnds {
     pub writer_queue: ByteQueue,
     /// Drop this when the connection task ends.
     pub hold: QueueHold,
-    /// The full-queue signal the copy selects on.
+    /// The full-queue signal the copy selects on: the queue's own.
     pub overfull: Arc<Overfull>,
     /// The reader sends decoded frames here.
     pub inbound: mpsc::Sender<Vec<u8>>,
@@ -126,12 +121,11 @@ impl StreamEnds {
     #[must_use]
     pub fn open(send_queue_bytes: usize) -> Self {
         let queue = ByteQueue::new(send_queue_bytes);
-        let overfull = Arc::new(Overfull::new());
+        let overfull = queue.overfull();
         let (inbound, inbound_rx) = mpsc::channel(UNREAD_FRAMES);
         let session = Session {
             inbound: inbound_rx,
             queue: queue.clone(),
-            overfull: Arc::clone(&overfull),
         };
         Self {
             session,

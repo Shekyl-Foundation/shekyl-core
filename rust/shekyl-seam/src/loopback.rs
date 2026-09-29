@@ -63,7 +63,7 @@ impl Dial for Loopback {
         let ends = StreamEnds::open(self.send_cap);
         let writer_queue = ends.writer_queue.clone();
         let writer = thread::spawn(move || {
-            while let Some(bytes) = writer_queue.pop_blocking() {
+            while let Ok(bytes) = writer_queue.pop_blocking() {
                 writer_queue.release(bytes.len());
             }
         });
