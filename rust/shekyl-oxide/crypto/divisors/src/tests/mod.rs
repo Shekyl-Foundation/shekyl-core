@@ -288,10 +288,12 @@ fn test_to_xy_matches_upstream() {
         match command {
             "point_to_wei_x_y" => {
                 let point = hex::decode(words.next().unwrap()).unwrap();
-                let point: subtle::CtOption<EdwardsPoint> =
-                    EdwardsPoint::from_bytes(&point.try_into().unwrap());
-                let res: Option<(FieldElement, FieldElement)> = EdwardsPoint::to_xy(point.unwrap());
-                let (actual_wei_x, actual_wei_y) = res.unwrap();
+                let point = Option::<EdwardsPoint>::from(EdwardsPoint::from_bytes(
+                    &point.try_into().unwrap(),
+                ))
+                .expect("ed25519 test vector must decode");
+                let (actual_wei_x, actual_wei_y) =
+                    EdwardsPoint::to_xy(point).expect("decoded point must have affine coordinates");
 
                 let mut get_next_fe = || {
                     let fe_repr = hex::decode(words.next().unwrap()).unwrap();
