@@ -20,6 +20,20 @@ use std::collections::{HashMap, VecDeque};
 
 const NANOS_PER_SEC: u128 = 1_000_000_000;
 
+/// How many slots "recent" covers, and how long each slot is.
+///
+/// Ten seconds, in one-second slots. That is what an operator means by
+/// the speed of a connection right now: long enough that one chunk is
+/// not the whole reading, short enough that a connection which stopped
+/// reads as stopped. The newest slot weighs [`SPEED_BUCKETS`], the
+/// oldest weighs one. Display only. It limits nothing.
+const SPEED_BUCKETS: usize = 10;
+const SPEED_SLOT_NS: u64 = 1_000_000_000;
+const SPEED_WEIGHT_SUM: u128 = {
+    let n = SPEED_BUCKETS as u128;
+    n * (n + 1) / 2
+};
+
 /// Which way the bytes are moving. Up leaves the node. Down arrives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkDirection {
@@ -59,73 +73,109 @@ struct Flow {
 
 /// The recent rate of one direction on one connection.
 ///
-/// The sample is the last gap between chunks: those bytes over that
-/// gap. Idle time after the chunk dilutes the same bytes, so a quiet
-/// connection falls toward zero when the speed is read. There is no
-/// timer and no separate window. One chunk has no gap yet, so its
-/// rate is zero until the next one.
+/// [`SPEED_BUCKETS`] slots of [`SPEED_SLOT_NS`]. Index 0 is the oldest
+/// and weighs 1; the last index is the newest and weighs
+/// [`SPEED_BUCKETS`]. Speed is the weighted sum of bytes divided by
+/// the weighted window. Slots move forward from the caller's clock on
+/// the next write or report. There is no timer. A quiet connection
+/// reaches zero once every slot that held bytes has left the window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Pace {
-    bytes: u64,
-    span_ns: u64,
-    at_ns: u64,
+    /// Oldest at index 0, newest at the last index.
+    buckets: [u64; SPEED_BUCKETS],
+    /// Start of the newest slot, on the caller's clock.
+    slot_ns: u64,
     started: bool,
     saved: Option<SavedPace>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SavedPace {
-    bytes: u64,
-    span_ns: u64,
-    at_ns: u64,
+    buckets: [u64; SPEED_BUCKETS],
+    slot_ns: u64,
     started: bool,
 }
 
 impl Pace {
     fn observe(&mut self, n: u64, now: u64) {
         self.saved = Some(SavedPace {
-            bytes: self.bytes,
-            span_ns: self.span_ns,
-            at_ns: self.at_ns,
+            buckets: self.buckets,
+            slot_ns: self.slot_ns,
             started: self.started,
         });
-        if self.started && now > self.at_ns {
-            self.span_ns = now - self.at_ns;
-            self.bytes = n;
-            self.at_ns = now;
-        } else if self.started {
-            self.bytes = self.bytes.saturating_add(n);
-        } else {
-            self.bytes = n;
-            self.span_ns = 0;
-            self.at_ns = now;
-            self.started = true;
-        }
+        self.advance(now);
+        let newest = &mut self.buckets[SPEED_BUCKETS - 1];
+        *newest = newest.saturating_add(n);
     }
 
     fn undo(&mut self) {
         if let Some(saved) = self.saved.take() {
-            self.bytes = saved.bytes;
-            self.span_ns = saved.span_ns;
-            self.at_ns = saved.at_ns;
+            self.buckets = saved.buckets;
+            self.slot_ns = saved.slot_ns;
             self.started = saved.started;
         }
     }
 
     fn shrink(&mut self, n: u64) {
-        self.bytes = self.bytes.saturating_sub(n);
+        let newest = &mut self.buckets[SPEED_BUCKETS - 1];
+        *newest = newest.saturating_sub(n);
+    }
+
+    /// Move slots forward to `now`. A jump of a whole window or more
+    /// empties every slot. A clock reading behind the newest slot
+    /// leaves the window where it is.
+    fn advance(&mut self, now: u64) {
+        if !self.started {
+            self.slot_ns = now;
+            self.started = true;
+            return;
+        }
+        if now < self.slot_ns {
+            return;
+        }
+        let steps = (now - self.slot_ns) / SPEED_SLOT_NS;
+        let Ok(steps_us) = usize::try_from(steps) else {
+            self.buckets = [0; SPEED_BUCKETS];
+            self.slot_ns = now;
+            return;
+        };
+        if steps_us == 0 {
+            return;
+        }
+        if steps_us >= SPEED_BUCKETS {
+            self.buckets = [0; SPEED_BUCKETS];
+            self.slot_ns = now;
+            return;
+        }
+        self.buckets.copy_within(steps_us.., 0);
+        self.buckets[SPEED_BUCKETS - steps_us..].fill(0);
+        self.slot_ns = self
+            .slot_ns
+            .saturating_add(steps.saturating_mul(SPEED_SLOT_NS));
     }
 
     fn bytes_per_sec(self, now: u64) -> u64 {
-        if !self.started || self.span_ns == 0 {
+        let mut pace = self;
+        pace.advance(now);
+        if !pace.started {
             return 0;
         }
-        let denom =
-            u128::from(self.span_ns).saturating_add(u128::from(now.saturating_sub(self.at_ns)));
+        let mut weighted = 0u128;
+        for (i, bytes) in pace.buckets.iter().enumerate() {
+            let Ok(index) = u128::try_from(i) else {
+                continue;
+            };
+            let weight = index + 1;
+            weighted = weighted.saturating_add(u128::from(*bytes).saturating_mul(weight));
+        }
+        if weighted == 0 {
+            return 0;
+        }
+        let denom = SPEED_WEIGHT_SUM.saturating_mul(u128::from(SPEED_SLOT_NS));
         if denom == 0 {
             return 0;
         }
-        let numer = u128::from(self.bytes).saturating_mul(1_000_000_000);
+        let numer = weighted.saturating_mul(NANOS_PER_SEC);
         u64::try_from(numer / denom).unwrap_or(u64::MAX)
     }
 }
@@ -211,6 +261,9 @@ impl Lane {
     fn forget_mark(&mut self) {
         if let Some(bucket) = self.bucket.as_mut() {
             bucket.last = None;
+        }
+        for flow in self.per.values_mut() {
+            flow.pace = Pace::default();
         }
     }
 
@@ -391,8 +444,9 @@ impl LinkBudget {
 
     /// Bytes per second on this connection, as of `now`.
     ///
-    /// The last gap between chunks, diluted by any idle time since.
-    /// A connection with one chunk so far is zero: there is no gap yet.
+    /// The window is [`SPEED_BUCKETS`] slots of [`SPEED_SLOT_NS`]. The
+    /// reading advances to `now` without a timer. A connection with no
+    /// bytes in that window is zero.
     #[must_use]
     pub fn speed(&self, conn: u64, now: u64) -> (u64, u64) {
         let up = self
@@ -515,20 +569,51 @@ mod tests {
     }
 
     #[test]
-    fn current_speed_is_the_last_gap_and_idle_time_dilutes_it() {
+    fn a_steady_rate_reads_back_as_that_rate() {
+        assert_eq!(super::SPEED_BUCKETS, 10);
+        assert_eq!(super::SPEED_SLOT_NS, SEC);
         let mut budget = LinkBudget::new();
         let conn = 4u64;
+        let rate = 1_000u64;
+        let mut now = 0u64;
+        for _ in 0..super::SPEED_BUCKETS {
+            assert_eq!(
+                budget.take(LinkDirection::Up, conn, MessageClass::Session, rate, now),
+                Turn::Granted(rate)
+            );
+            now += SEC;
+        }
+        assert_eq!(budget.speed(conn, now - SEC).0, rate);
+    }
+
+    #[test]
+    fn a_burst_lands_in_the_newest_bucket_and_ages_out() {
+        let mut budget = LinkBudget::new();
+        let conn = 5u64;
+        // Weight sum is 55. 5_500 bytes in the newest slot (weight 10)
+        // reads as 1_000 bytes/sec. One slot later that weight is 9.
+        let burst = 5_500u64;
         assert_eq!(
-            budget.take(LinkDirection::Up, conn, MessageClass::Session, 1_000, 0),
-            Turn::Granted(1_000)
+            budget.take(LinkDirection::Up, conn, MessageClass::Session, burst, 0),
+            Turn::Granted(burst)
         );
-        assert_eq!(budget.speed(conn, 0).0, 0);
+        assert_eq!(budget.speed(conn, 0).0, 1_000);
+        assert_eq!(budget.speed(conn, SEC).0, 900);
+        assert_eq!(budget.speed(conn, 0).1, 0);
+    }
+
+    #[test]
+    fn an_idle_connection_is_zero_once_the_window_has_passed() {
+        let mut budget = LinkBudget::new();
+        let conn = 6u64;
+        let window = super::SPEED_BUCKETS as u64 * SEC;
         assert_eq!(
-            budget.take(LinkDirection::Up, conn, MessageClass::Session, 1_000, SEC),
-            Turn::Granted(1_000)
+            budget.take(LinkDirection::Down, conn, MessageClass::Session, 5_500, 0),
+            Turn::Granted(5_500)
         );
-        assert_eq!(budget.speed(conn, SEC).0, 1_000);
-        assert_eq!(budget.speed(conn, 2 * SEC).0, 500);
+        assert_eq!(budget.speed(conn, window - 1).1, 100);
+        assert_eq!(budget.speed(conn, window).1, 0);
+        assert_eq!(budget.speed(conn, window + SEC).1, 0);
     }
 
     #[test]

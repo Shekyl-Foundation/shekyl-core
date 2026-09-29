@@ -689,9 +689,8 @@ pub extern "C" fn shekyl_link_totals(
     }
 }
 
-/// Bytes per second on this connection, from the engine's clock.
-/// The last gap between chunks, diluted by idle time since. Null
-/// pointers are skipped.
+/// Bytes per second on this connection, from the engine's clock, over
+/// the link budget's recent-speed window. Null pointers are skipped.
 #[no_mangle]
 pub extern "C" fn shekyl_link_speed(
     id: u64,

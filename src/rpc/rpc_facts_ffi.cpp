@@ -1248,9 +1248,9 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
       e.current_speed_down = ctx.m_current_speed_down;
       e.current_speed_up = ctx.m_current_speed_up;
       {
-        // Totals feed the lifetime average. Current speed is the last
-        // gap between chunks, diluted by idle time, from the engine's
-        // clock. It is not a second limit.
+        // Totals feed the lifetime average. Current speed is the
+        // budget's recent window, from the engine's clock. It is not
+        // a second limit.
         std::uint64_t socket_id = 0;
         std::memcpy(&socket_id, ctx.m_connection_id.data + 8, sizeof(socket_id));
         if (socket_id != 0)

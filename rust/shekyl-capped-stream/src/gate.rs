@@ -170,8 +170,8 @@ impl LinkGate {
         self.inner.budget.lock().expect("link budget").totals()
     }
 
-    /// Bytes per second as of the installed clock. The last gap between
-    /// chunks, diluted by idle time since that chunk.
+    /// Bytes per second as of the installed clock, over the link
+    /// budget's recent-speed window.
     #[must_use]
     pub fn speed(&self, conn: u64) -> (u64, u64) {
         let now = self.now();
