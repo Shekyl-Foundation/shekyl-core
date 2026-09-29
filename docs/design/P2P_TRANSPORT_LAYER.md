@@ -42,7 +42,7 @@ the pipe would not carry; protocol evidence does not need the pipe.
 | 3 | Pi-4 crypto bench and protocol fuzz | After this round opens; results count at the flip |
 | 4 | This design round | Closed. This document is the spec |
 | 5 | Transport-layer implementation, then a differential harness against epee. The thread budget and the per-connector deadlines are measured on this build | Code, after the round closes |
-| 6 | Cutover: epee's transport and the pipe deleted. Does not land until those two measurements are in the record | Not a flag day (D11) |
+| 6 | Cutover, one branch (ruled 2026-09-28): zone binding, the operator link budget, the call sites that move with them, the cross-build and the measurements on that build, then the deletions and the goldens. Merges once, when the run records are in | Not a flag day (D11) |
 | 7 | Option evaluation: window size, rekey cost, Nagle, flood. Not the source of the cutover numbers | Evaluation record |
 | 8 | The flip | Flag day (rule 07), only after step 7 |
 
@@ -62,8 +62,9 @@ that sits between the connectors and the harness. It measures nothing
 and deletes nothing.
 
 What is not a number yet is named in the section that owns it: deadline
-values (D9) and the executor's thread budget (D6), both measured on the
-step-5 build before cutover, and the fixed-window size and whether
+values (D9) and the executor's thread budget (D6), both measured on
+the cutover build and written as run records before the deletions, and
+the fixed-window size and whether
 every-record rekey is affordable (D14 item 4), measured in step 7.
 Those measurements do not reopen the direction. Step 7 is option
 evaluation. It is not an identifier family; this document mints none.
@@ -913,7 +914,7 @@ and the mechanism does not. "Refuse" means it does not survive.
 | Graceful stop | `send_stop_signal`, then connections drained, then `deinit_server` (`net_node.inl:1187` is one `deinit_server` site) | Carry the order: stop accepting, drain or cancel live connections, then tear the listeners down. |
 | `call_run_once_service_io` | Called from `levin_protocol_handler_async.h:753`. The synchronous `invoke_remote_command2` (`levin_abstract_invoke2.h:60`) has no caller under `src/` at this pin. p2p uses `async_invoke_remote_command2` only (`net_node.inl:1270`, `:1351`, `:2802`). Tests call the async form too | **Delete**, not carry. The sync invoke path goes with it. A test-only caller found later reopens this row. |
 | New-connection, idle, bytes, and aggressive timers | `abstract_tcp_server2.inl:59-63` | Re-derive each. Channel-established and session-established bound different waits. The inherited values are inputs, not the answer. |
-| Rate limit and per-connection speed stats | `network_throttle*`; the pipe's `on_wire` path on the parked branch | Carry the limit. Stats are observed facts reported upward, not a second policy. |
+| Rate limit and per-connection speed stats | `network_throttle*`; the pipe's `on_wire` path on the parked branch | **Operator link budget, default unlimited (ruled 2026-09-28).** The four jobs are below. Stats stay observed facts reported upward. *Records-was "Carry the limit."* |
 | Send-queue bounds | 1,000 messages and 100 MiB (`abstract_tcp_server2.h:72-73`) | **Carry the mechanism, with one source, and re-derive the value.** The value is PWD-T6's session-established limit (the largest legitimate message) plus measurement. It is not 100 MiB. That inherited round number gives no memory bound once it is multiplied by the inbound ceiling. The pipe's `PIPE_PLAINTEXT_BUDGET` was a second copy and is not repeated. |
 | Send backpressure and strand order | `do_send` at `abstract_tcp_server2.inl:823-870` takes `m_state.lock` and posts on `m_strand`. C++ calls it from more than one executor thread | **One writer per direction, owned by the transport layer.** Callers enqueue. They do not write the socket. Nonce order is wire order because that writer is the only one. The strand is not copied. A full queue closes with `SendQueueFull` (D4, D12). |
 | `--proxy` | `daemon.cpp:156-157` passes `arg_proxy` (`command_line_args.h:97`). `net_node.inl:926-935` sets the public zone's `m_connect = socks_connect` | **Carry as a dial duty.** The clearnet connector can dial through a SOCKS proxy the operator configures. The daemon speaks SOCKS. How the operator reaches that proxy, including a non-loopback address, is the operator's job (D14, settled: accept). It changes no declared capability. Clearnet still needs the Noise layer because its declaration has no native encryption. |
@@ -924,6 +925,64 @@ and the mechanism does not. "Refuse" means it does not survive.
 | Executor for invoke timers and idle handlers | `levin_protocol_handler_async.h:229` takes `get_io_context()` for the invoke timer. The pool is 10 threads (`net_node.inl:1150`) | **D6, ruled.** A socketless `io_context` is the interim until the timing engine lands. Its pool is a measured budget, not 10. |
 | Serial outbound dialing | `connections_maker` at `net_node.inl:2009`, call at `:1917` | **Stays serial through cutover.** The transport layer exposes an asynchronous dial and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7. |
 | SSL | `m_state.ssl` on the connection | **Refuse.** |
+
+## Rate limit is four jobs (RULED 2026-09-28)
+
+One name has been covering four jobs. Each has its own threat, its own
+unit, and its own owner. The cutover carries the first. The fourth is
+the open design, so the writer is not built as arrival order and later
+rebuilt.
+
+| Job | Threat or need | What is counted | Owner | Mechanism |
+| --- | --- | --- | --- | --- |
+| Operator link budget | The operator's link is metered, shared, or small | Wire bytes, per direction, for the whole node, across every connector. Once the flip lands, the count includes Noise overhead | Transport layer | Backpressure against a budget refilled from the engine's clock. Connections share it. Unlimited unless the operator sets one |
+| What a peer can make us do | A peer inside a session | Work: the cost of answering a command, per peer. A small request can be expensive | Session layer | Per-peer, per-command budgets costed by what answering takes (PWD-B1, PWD-B3). A request whose reply would exceed the budget is refused |
+| Who can reach us | Anyone who can open a TCP connection or a Tor rendezvous | Connections, and the cryptographic work before a session exists | Transport layer | The accept-rate bound before cryptography, the admission ceiling, pre-channel deadlines, and Tor proof-of-work (D4, D10). Already built |
+| What goes first when the link is full | Saturation, under a budget or at the link's own limit | Message class | The session layer names the class. The transport writer schedules it | New blocks and relay go ahead of bulk such as historical sync replies. One connection's sync does not hold relay to the others. Relay-lane conformance holds under saturation. The classes, who assigns them, and the schedule are not designed yet |
+
+**The operator's budget is the carried duty.** `--limit-rate-up`,
+`--limit-rate-down`, and `--limit-rate` (`net_node.cpp:184-186`) keep
+working. The default is unlimited. `P2P_DEFAULT_LIMIT_RATE_UP` (8192)
+and `P2P_DEFAULT_LIMIT_RATE_DOWN` (32768) are inherited numbers, not
+the policy. An operator sets a budget when the link needs one. The
+budget is the operator's bandwidth preference. It has no security role.
+
+A token bucket per direction. The refill is computed from the engine's
+clock when the bucket is used, so the bucket has no timer. Hitting the
+budget stops that direction until the bucket refills. It does not close
+the connection, and it does not drop the bytes. `SendQueueFull` remains
+the close for a queue that cannot hold another message.
+
+`core_rpc_server.cpp`'s `get_rate_*` / `set_rate_*`,
+`rpc_facts_ffi.cpp`'s read of the throttle, and
+`cryptonote_protocol_handler-base.cpp`'s accounting reach this limiter
+(D13). Per-connection speed stats are observed facts reported upward.
+
+The test runs in virtual time. Under a configured rate, bytes in and
+bytes out stay within the bound, and nothing is dropped or closed.
+
+The differential harness raises epee's P2P throttle, whose unset target
+is 16 KiB/s, so that run compares Levin bytes. It does not test this
+budget. A seam host without a limiter in that run is not a divergence.
+
+**A peer is bounded in the session layer, as work.** A byte budget
+treats a cheap large message and an expensive small request as the same
+thing, and one shared budget is a lever against every other peer. The
+session layer is where a command's cost is known.
+
+**Reachability is already built** (D4, D10).
+
+**Saturation scheduling is the open design.** It needs the classes, who
+assigns them, and how the writer chooses among them. That row is in
+`docs/FOLLOWUPS.md`, owned by this section. The cutover writer enforces
+the operator's budget and shares it across connections. Arrival order
+is not the policy for a full link.
+
+**Cutover order, after the harness merges.** One branch, one merge,
+when the run records are in: the zone binding, this budget, the call
+sites that move with them, the cross-build run and the measurements on
+that build, then D13's deletions, the epee goldens, I2P recorded as
+removed, and the pipe branch deleted.
 
 ---
 
@@ -1571,7 +1630,7 @@ The set:
 
 - `contrib/epee/include/net/abstract_tcp_server2.h`
 - `contrib/epee/include/net/abstract_tcp_server2.inl`
-- `connection_basic.hpp` / `connection_basic.cpp` and `network_throttle*`, after the rate-limit calls move in this same cutover. Today `core_rpc_server.cpp` calls `connection_basic::get_rate_*` / `set_rate_*`, `rpc_facts_ffi.cpp` reads `network_throttle_manager`, and `cryptonote_protocol_handler-base.cpp` sleeps and accounts through the global out-throttle. Those three call the transport layer's rate limit. The files go only once that `rg` is empty.
+- `connection_basic.hpp` / `connection_basic.cpp` and `network_throttle*`, after the rate-limit calls move in this same cutover. Today `core_rpc_server.cpp` calls `connection_basic::get_rate_*` / `set_rate_*`, `rpc_facts_ffi.cpp` reads `network_throttle_manager`, and `cryptonote_protocol_handler-base.cpp` sleeps and accounts through the global out-throttle. Those three call the operator link budget in "Rate limit is four jobs": default unlimited, backpressure, no close. The files go only once that `rg` is empty.
 - the SOCKS dial: `socks_connect.cpp`, `socks_connect.h`, and the client `net_node` calls. Not a wildcard over `src/net/socks*`. `parse.cpp` parses a proxy URL (`src/net/parse.cpp:34`, the `socks` parser at `:260`), and `tests/unit_tests/net.cpp` exercises that API. The endpoint type those use stays, or moves with them in this cutover. The deletion gate is no remaining dial, not an empty `socks.h` while the parser still includes it.
 - `network_pipe_ops` and `set_network_pipe`
 - `rust/shekyl-p2p-transport/src/pipe.rs`, and its module and re-export in `rust/shekyl-p2p-transport/src/lib.rs`

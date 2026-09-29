@@ -14,6 +14,10 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **Design saturation scheduling before the transport writer freezes as arrival order.** When the link is full, message class decides what is sent first, and one connection's bulk does not hold relay to the others. The session layer names the class; the transport writer schedules it. Relay-lane conformance has to hold under saturation. The classes, who assigns them, and the schedule are the open part of "Rate limit is four jobs". Falsify by: that section names the classes, the assigner, and the schedule, and the writer applies them. Reopen if a writer ships that sends in arrival order under saturation.
+  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
+  - Target: pre-genesis
+
 - **Move daemon RPC and Tor control onto `shekyl-runtime::runtime`, then print the thread ledger once at startup.** Both still build their own (`shekyl-daemon-rpc` `ffi_exports.rs:162`, `shekyl-tor-control-daemon` `blocking.rs:120`). A startup total taken before that move omits those pools. After both call `runtime`, `shekyld` prints `shekyl_thread_ledger::report` once before the p2p loop. Falsify by: those two builders call `runtime`, and `daemon.cpp` logs the report before the p2p loop. Reopen if another `Builder::new_multi_thread` appears outside `shekyl-runtime`.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
