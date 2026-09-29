@@ -88,8 +88,9 @@ at 46, last written by timed sync. Receiving a block does not
 update the sender's recorded height. On a two-node network fluff
 had nobody else to send to anyway. On a larger network the same
 lag leaves fluff with only the peers whose timed sync landed since
-the last block. That is a relay-lane defect, recorded in
-`FOLLOWUPS.md`, and it is not a cutover blocker: epee does it too.
+the last block. epee does it too. This branch raises the sender's
+recorded chain length when the block is accepted, and relay
+eligibility is the session's normal state rather than that height.
 
 The seam-versus-epee run failed earlier than this. That run logged
 `Unable to send transaction(s) via Dandelion++ stem` and the

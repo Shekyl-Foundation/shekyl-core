@@ -49,6 +49,7 @@ set(unit_tests_sources
   epee_boosted_tcp_server.cpp
   epee_levin_protocol_handler_async.cpp
   seam_endpoint.cpp
+  relay_peer_height.cpp
   epee_serialization.cpp
   epee_utils.cpp
   expect.cpp

@@ -14,10 +14,6 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
-- **A peer's recorded height advances when it delivers a block we accept, or fluff stops using that height.** The relay filter keeps an outbound peer only when its recorded height is at least ours, and that height is written by the handshake and the 60-second timed sync. A peer that has just delivered block N can still be recorded far behind N, so after every block fluff reaches only the peers whose timed sync happened to land since. Not a cutover blocker: the epee-to-epee control showed it (`p2p_cutover_crossbuild_20260929.md`). Falsify by: after a peer delivers block N, its recorded height is at least N. Reopen if a delivered block leaves the sender's recorded height behind that block.
-  - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
-  - Target: pre-genesis
-
 - **Name the saturation classes, who assigns one, and their order.** The cutover writer takes a class on each send and serves connections in turn under the operator's bucket while one class exists (`P2P_TRANSPORT_LAYER.md`, "Rate limit is four jobs"). What remains is the class list, the assigner, and the order, including that relay-lane conformance holds under saturation. Falsify by: that section names the three and the writer schedules them. Reopen if adding a class means replacing the bucket.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis

@@ -39,6 +39,7 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <optional>
 #include <cstdint>
+#include <limits>
 #include "net/net_utils_base.h"
 #include "crypto/hash.h"
 
@@ -117,15 +118,17 @@ namespace cryptonote
 
     std::optional<crypto::hash> get_expected_hash(uint64_t height) const;
 
-    //! Which message last wrote `m_remote_blockchain_height`. The relay
-    //! filter reads that height; a reader of a failed send needs the writer.
+    //! Which message last wrote `m_remote_blockchain_height`.
+    //! Relay eligibility does not read this field. A reader of a
+    //! failed send, and the sync span, still do.
     enum class remote_height_source : std::uint8_t
     {
       none,
       handshake,
       timed_sync,
       get_objects,
-      chain_entry
+      chain_entry,
+      accepted_block
     };
 
     state m_state;
@@ -158,6 +161,8 @@ namespace cryptonote
       return "get_objects";
     case cryptonote_connection_context::remote_height_source::chain_entry:
       return "chain_entry";
+    case cryptonote_connection_context::remote_height_source::accepted_block:
+      return "accepted_block";
     case cryptonote_connection_context::remote_height_source::none:
       return "none";
     }
@@ -169,6 +174,26 @@ namespace cryptonote
   {
     context.m_remote_blockchain_height = height;
     context.m_remote_height_source = source;
+  }
+
+  //! Chain length of a block whose coinbase height is `coinbase_height`.
+  //! The recorded field, the handshake write, and `get_current_blockchain_height`
+  //! are that length. A coinbase height of 84 is chain length 85.
+  inline std::uint64_t chain_length_of_accepted_block(std::uint64_t coinbase_height)
+  {
+    if (coinbase_height == std::numeric_limits<std::uint64_t>::max())
+      return coinbase_height;
+    return coinbase_height + 1;
+  }
+
+  //! Raise the recorded chain length. A delivered block never lowers it.
+  //! A later handshake or timed sync may still replace the value with a claim.
+  inline void raise_remote_height(cryptonote_connection_context& context, std::uint64_t chain_length)
+  {
+    if (chain_length <= context.m_remote_blockchain_height)
+      return;
+    note_remote_height(context, chain_length,
+        cryptonote_connection_context::remote_height_source::accepted_block);
   }
 
   inline std::string get_protocol_state_string(cryptonote_connection_context::state s)

@@ -613,6 +613,8 @@ namespace cryptonote
     // shekyl-peer-policy::BlockAnnounceAction (PWD-B7): C++ asks predicates
     // on the returned action, never on the classification bytes.
     const uint8_t announce = block_announce_action(bvc, handle_block_res);
+    if (block_added(bvc))
+      raise_remote_height(context, chain_length_of_accepted_block(get_block_height(new_block)));
     if (block_announce_re_request_txs(announce))
     {
         // PoW checking happens before missing transactions checks, so if
@@ -1541,6 +1543,21 @@ namespace cryptonote
               // in case the peer had dropped beforehand, remove the span anyway so other threads can wake up and get it
               m_block_queue.remove_spans(span_connection_id, start_height);
               return 1;
+            }
+            if (block_added(bvc) && m_p2p)
+            {
+              const block* added = !pblocks.empty() ? &pblocks[blockidx] : nullptr;
+              block parsed;
+              if (added == nullptr && parse_and_validate_block_from_blob(block_entry.block, parsed))
+                added = &parsed;
+              if (added != nullptr)
+              {
+                const uint64_t chain_length = chain_length_of_accepted_block(get_block_height(*added));
+                m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& origin, uint32_t) {
+                  raise_remote_height(origin, chain_length);
+                  return true;
+                });
+              }
             }
             if (block_sync_orphan_resync(sync))
             {
