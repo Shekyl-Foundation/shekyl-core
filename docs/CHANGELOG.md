@@ -59,10 +59,15 @@
   A snapshot whose own leaf count is not the store's is **refused**, never
   repaired: the ring and the leaf tables are written together, so a
   disagreement is corruption and the answer to corruption is resync.
-- **Store `SCHEMA_VERSION` 5 → 6.** *Reading* a pre-ring store needs no
-  migration — no rows, every height falls through to `root_at_count`, the ring
-  refills forward, the ring is a cache. That is one direction. The other is a
-  pre-ring **writer**, which cannot see `frontier_snapshots` and so rolls back
+- **Store `SCHEMA_VERSION` 5 → 6 — existing stores are refused and must be
+  re-synced.** `check_schema_version` runs before `init_tables`, so a ≤5 store
+  never reaches the code that creates `frontier_snapshots`; there is no one-way
+  upgrade, which is C8's `refuse-and-resync` and rule 15's no-migration-code.
+  The ring being a cache buys the *absence of migration code*, not
+  compatibility: after a re-sync the table starts empty, every height falls
+  through to `root_at_count`, and the ring refills as blocks arrive. The bump
+  exists to stop a pre-ring **writer**, which cannot see `frontier_snapshots`
+  and so rolls back
   and replays while leaving rows above the new tip in place; a stale row can
   carry the leaf count the C3 check expects over the abandoned branch's root.
   Nothing in-band stops a writer that cannot see the table, so the version cell

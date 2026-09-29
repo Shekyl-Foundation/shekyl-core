@@ -532,13 +532,23 @@ plus the one they fork from. The wrap test takes its expected span from that
 sentence and not from the delete's own bound, which would have asserted the
 implementation back at itself.
 
-**`SCHEMA_VERSION` 5 → 6, and the reason is C8.** *Reading* a pre-ring store
-needs no migration: it simply has no rows, every height falls through to
-`root_at_count`, and the ring refills forward — the ring is a cache, so its
-absence is slow rather than wrong.
+**`SCHEMA_VERSION` 5 → 6, and the reason is C8.** **A pre-ring (≤5) store is
+refused at open and re-synced.** `check_schema_version` runs before
+`init_tables`, so a ≤5 store never reaches the code that would create
+`frontier_snapshots`; there is no one-way upgrade and none is wanted
+pre-genesis (rule 15). That refusal *is* the upgrade path.
 
-But that covers one direction only, and a binding replaces a check only per
-direction. The other is a pre-ring **writer**: it cannot see
+What the ring being a **cache** buys is therefore not compatibility but the
+absence of migration code: after the re-sync the table starts empty, every
+height falls through to `root_at_count`, and the ring refills as blocks
+arrive. Nothing has to be reconstructed.
+
+**Corrected 2026-09-29.** This paragraph read "*Reading* a pre-ring store
+needs no migration", which described a path the exact-version guard makes
+unreachable — the store is refused before any read of it happens. The bump's
+*motivation* was stated correctly and its *consequence* was not.
+
+The motivation is a pre-ring **writer**: it cannot see
 `frontier_snapshots`, so it can roll back and replay while leaving rows above
 the new tip untouched, and a stale row can carry the leaf count §10.3's C3
 check expects while composing the abandoned branch's root. Nothing in-band

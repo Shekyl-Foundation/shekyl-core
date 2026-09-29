@@ -298,6 +298,19 @@ fn main() -> ExitCode {
     // The ratio of the two is a printed observation of this run; it is not
     // an extrapolation input, and an off-rig ratio does not speak for the
     // pinned rig.
+    // The storage attestation names a device; this names the path the ring is
+    // actually written to. `rig::decide` can only check the attestation's
+    // *value*, so without this the two are unbound: a graded run could attest
+    // `usb-ssd` while the ring's `fsync` landed on the microSD or tmpfs that
+    // `TMPDIR` resolves to on the pinned board — a label keying a gate must be
+    // bound to the mechanism it claims.
+    if !rig::storage_attestation_is_bound(rig_verdict.grading, args.advance_store_dir.as_deref()) {
+        eprintln!(
+            "refusing to grade: --advance-store-dir is required, because the ring commit is an \
+             fsync and the storage attestation cannot bind itself to a path it was not given"
+        );
+        return ExitCode::from(3);
+    }
     let mut advance_rig = AdvanceRig::new(
         &corpus,
         leaf_rate.leaves_per_block,

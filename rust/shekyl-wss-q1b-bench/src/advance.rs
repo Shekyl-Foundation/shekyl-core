@@ -27,8 +27,11 @@
 //!    `push_leaf`;
 //! 2. `encode` the advanced frontier — the capture;
 //! 3. commit it to the ring through the production
-//!    [`LeafStore::append_block_deltas`], which is where the horizon
-//!    eviction and the store transaction are paid.
+//!    [`LeafStore::append_block_with_snapshot`], which is where the horizon
+//!    eviction and the store transaction are paid. It is that door and not
+//!    [`LeafStore::append_block_deltas`]: the leaf door cannot write a ring
+//!    row at all, so naming it here would name a call that measures none of
+//!    the cost this module exists to measure.
 //!
 //! **What it deliberately leaves out**: the leaf and pending table writes,
 //! block decode, and leaf collection. Those are not new — they are what

@@ -56,14 +56,16 @@ const PENDING_TABLE: TableDefinition<GindexKey, &[u8; 320]> = TableDefinition::n
 // `h - horizon` and that is the row a rewind restores from
 // (`write_frontier_snapshot_in_txn`).
 //
-// A store written before this table existed simply has none of these rows:
-// the ring is a cache (C8), a missing row falls through to `root_at_count`,
-// and the ring refills as blocks arrive. That direction needs no migration
-// — but it is only one direction. `SCHEMA_VERSION` is bumped to 6 for the
-// other one: a pre-ring **writer** cannot see this table, so it can roll
-// back and replay while leaving rows above the new tip in place, and a stale
-// row can hold the expected leaf count over the abandoned branch's root. A
-// binding replaces a check only per direction.
+// A store that has none of these rows — a freshly re-synced one — needs no
+// migration: the ring is a cache (C8), a missing row falls through to
+// `root_at_count`, and the ring refills as blocks arrive.
+//
+// That is not backward compatibility. A pre-ring (≤5) store is **refused at
+// open** and re-synced; `SCHEMA_VERSION` is 6 precisely so it is, because a
+// pre-ring **writer** cannot see this table and can roll back and replay
+// while leaving rows above the new tip in place, where a stale row can hold
+// the expected leaf count over the abandoned branch's root. A binding
+// replaces a check only per direction.
 const FRONTIER_SNAPSHOTS_TABLE: TableDefinition<BlockHeightKey, &[u8]> =
     TableDefinition::new("frontier_snapshots");
 // `META_TABLE` is a heterogeneous `&str`-keyed counter store; its `u64`
@@ -110,9 +112,19 @@ const META_PRUNE_DISABLED: &str = "prune_disabled";
 /// any mismatch: delete the store and re-sync (`15-deletion-and-debt.mdc` —
 /// no in-Shekyl migration code).
 ///
-/// **6** adds the CT-6 increment-4 frontier snapshot ring. The bump is not
-/// about *reading* a ≤5 store — the ring is a cache and refills forward —
-/// but about stopping a ≤5 **writer**: a pre-ring binary does not know
+/// **6** adds the CT-6 increment-4 frontier snapshot ring. **A ≤5 store is
+/// refused at open and must be re-synced** — [`Self::check_schema_version`]
+/// runs before `init_tables`, so no ≤5 store ever reaches the code that would
+/// create this table. That is C8's `refuse-and-resync`, and it is the whole
+/// upgrade path; there is no one-way migration and none is wanted pre-genesis
+/// (rule 15).
+///
+/// What the ring being a **cache** buys is not compatibility but the *absence
+/// of migration code*: after the resync the table starts empty, every height
+/// falls through to `root_at_count`, and the ring refills as blocks arrive. No
+/// row has to be reconstructed from anything.
+///
+/// The bump exists to stop a ≤5 **writer**: a pre-ring binary does not know
 /// [`FRONTIER_SNAPSHOTS_TABLE`], so it can roll back and replay without
 /// truncating it, and a stale row left at a replayed height can carry the
 /// expected leaf count while composing the abandoned branch's root. Nothing

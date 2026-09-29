@@ -235,3 +235,22 @@ fn a_cortex_a72_core_string_alone_no_longer_grades() {
         "a core name must not stand in for a board"
     );
 }
+
+/// The bound exists because the attestation and the path were unbound: a
+/// graded run could claim `usb-ssd` while the ring's `fsync` landed wherever
+/// `TMPDIR` pointed. Both directions, so the rule is shown to gate on
+/// `grading` rather than simply demanding a path of every run.
+#[test]
+fn a_graded_run_must_name_the_path_its_writes_land_on() {
+    let path = std::path::Path::new("/mnt/ssd/ring");
+
+    // Grading is exactly where the claim is made, so it is the only place the
+    // path is required.
+    assert!(!super::storage_attestation_is_bound(true, None));
+    assert!(super::storage_attestation_is_bound(true, Some(path)));
+
+    // A measurement run is never blocked: an off-rig run with no attested
+    // device is useful and claims nothing.
+    assert!(super::storage_attestation_is_bound(false, None));
+    assert!(super::storage_attestation_is_bound(false, Some(path)));
+}
