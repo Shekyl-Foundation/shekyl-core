@@ -183,6 +183,73 @@ impl BlockRule for G1 {
     }
 }
 
+/// The key one archival input contributes to its block-level uniqueness
+/// pass — what G7, G9 and G10 collide on. `None` for a non-archival input
+/// and for an archival vin that does not parse (the parse is CEN-J1's and
+/// the emission rows' refusal; a vin without a key cannot collide, module
+/// docs). Public so the E2 mutation family can build a duplicate against
+/// the same parse the rules use, rather than a second one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ArchivalKey {
+    /// A serve-credit vin's `(P, shard, E)` — CEN-G7.
+    ServeCredit {
+        /// `P_canonical_id`.
+        p: [u8; 32],
+        /// The shard served.
+        shard: u64,
+        /// The settlement epoch credited.
+        epoch: u64,
+    },
+    /// An emission vin's claims — one `(P, E)` per settlement epoch — CEN-G9.
+    Claims {
+        /// `P_canonical_id`, derived from the vin's hybrid pubkey as the
+        /// C++ extractor derives it.
+        p: [u8; 32],
+        /// The epochs claimed, in vin order.
+        epochs: Vec<u64>,
+    },
+    /// A bond post's `P` — CEN-G10, whatever the post's kind.
+    BondPost {
+        /// `P_canonical_id`.
+        p: [u8; 32],
+    },
+}
+
+impl ArchivalKey {
+    /// The key `input` carries, if it is a parseable archival vin.
+    #[must_use]
+    pub fn of(input: &Input) -> Option<Self> {
+        match input {
+            Input::ServeCredit { canonical_bytes } => {
+                let kept =
+                    ArchivalServeCreditResponse::read_exact(&mut Cursor::new(canonical_bytes))
+                        .ok()?;
+                Some(Self::ServeCredit {
+                    p: kept.p_canonical_id,
+                    shard: kept.shard_id,
+                    epoch: kept.settlement_epoch,
+                })
+            }
+            Input::ArchivalRewardEmission { canonical_bytes } => {
+                // Length-exact, as the FFI extractor parses it.
+                let mut cursor = canonical_bytes.as_slice();
+                let vin = ArchivalRewardEmissionVin::read(&mut cursor).ok()?;
+                if !cursor.is_empty() {
+                    return None;
+                }
+                Some(Self::Claims {
+                    p: *p_canonical_id_from_hybrid_pubkey(&vin.p_pubkey).as_bytes(),
+                    epochs: vin.settlement_epochs,
+                })
+            }
+            Input::BondPost(post) => Some(Self::BondPost {
+                p: *post.p_canonical_id.as_bytes(),
+            }),
+            Input::Gen(_) | Input::ToKey { .. } => None,
+        }
+    }
+}
+
 /// Every listed body's inputs with their loci, in block order — the
 /// iteration the three archival passes and their loci share.
 fn listed_inputs<'a>(cx: &'a BlockContext<'_>) -> impl Iterator<Item = (Locus, &'a Input)> + 'a {
@@ -232,17 +299,10 @@ impl BlockRule for G7 {
         let mut loci = Vec::new();
         let mut triples = Vec::new();
         for (locus, item) in listed_inputs(cx) {
-            let Input::ServeCredit { canonical_bytes } = item else {
-                continue;
-            };
-            // An unparseable vin is CEN-J1's refusal, not a key (module docs).
-            let Ok(kept) =
-                ArchivalServeCreditResponse::read_exact(&mut Cursor::new(canonical_bytes))
-            else {
-                continue;
-            };
-            loci.push(locus);
-            triples.push((kept.p_canonical_id, kept.shard_id, kept.settlement_epoch));
+            if let Some(ArchivalKey::ServeCredit { p, shard, epoch }) = ArchivalKey::of(item) {
+                loci.push(locus);
+                triples.push((p, shard, epoch));
+            }
         }
         Ok(match serve_credit_block_unique(&triples) {
             BlockUniqueVerdict::Unique => Ok(()),
@@ -268,24 +328,9 @@ impl BlockRule for G9 {
     ) -> Result<Verdict<()>, V::Fault> {
         let mut pairs: Vec<(Locus, ([u8; 32], u64))> = Vec::new();
         for (locus, item) in listed_inputs(cx) {
-            let Input::ArchivalRewardEmission { canonical_bytes } = item else {
-                continue;
-            };
-            // Length-exact, as the FFI extractor parses it; an unparseable
-            // vin is the emission rows' refusal, not a key (module docs).
-            let mut cursor = canonical_bytes.as_slice();
-            let Ok(vin) = ArchivalRewardEmissionVin::read(&mut cursor) else {
-                continue;
-            };
-            if !cursor.is_empty() {
-                continue;
+            if let Some(ArchivalKey::Claims { p, epochs }) = ArchivalKey::of(item) {
+                pairs.extend(epochs.into_iter().map(|epoch| (locus, (p, epoch))));
             }
-            let p = *p_canonical_id_from_hybrid_pubkey(&vin.p_pubkey).as_bytes();
-            pairs.extend(
-                vin.settlement_epochs
-                    .iter()
-                    .map(|&epoch| (locus, (p, epoch))),
-            );
         }
         let keys: Vec<([u8; 32], u64)> = pairs.iter().map(|(_, key)| *key).collect();
         Ok(if emission_block_claims_unique(&keys) {
@@ -312,8 +357,8 @@ impl BlockRule for G10 {
         _view: &V,
     ) -> Result<Verdict<()>, V::Fault> {
         let ids: Vec<(Locus, [u8; 32])> = listed_inputs(cx)
-            .filter_map(|(locus, item)| match item {
-                Input::BondPost(post) => Some((locus, *post.p_canonical_id.as_bytes())),
+            .filter_map(|(locus, item)| match ArchivalKey::of(item) {
+                Some(ArchivalKey::BondPost { p }) => Some((locus, p)),
                 _ => None,
             })
             .collect();

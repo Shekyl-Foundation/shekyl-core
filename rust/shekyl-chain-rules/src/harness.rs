@@ -30,7 +30,8 @@ use shekyl_wire::tx_extra::{
     self, conforming_pqc_leaf_blob, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES,
 };
 use shekyl_wire::{
-    Block, BlockHeader, BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix,
+    Block, BlockHeader, BondPost, BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable,
+    Transaction, TxPrefix,
 };
 
 use crate::block::{Candidate, StructurallyValid};

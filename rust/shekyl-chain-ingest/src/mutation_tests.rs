@@ -18,15 +18,16 @@ use shekyl_wire::{Block, Transaction};
 
 use crate::metrics::Metrics;
 use crate::mutation::{
-    first_nonce, Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Pow, Unmutable,
-    UNHELD_ROOT,
+    first_nonce, Before, Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Overweight,
+    Pow, Unmutable, UNHELD_ROOT,
 };
 use crate::pipeline::{run, PipelineConfig, PipelineFault, RunReport};
 use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{
-    block_with_nonce, chain_listing, chain_listing_with, cleanup, h, key_image, open_store, spend,
-    tmp, trace_of, Family, GrownTree, Scripted, FIRST_SPEND_HEIGHT,
+    block_with_nonce, bond_post_body, chain_listing, chain_listing_with, cleanup,
+    emission_claim_body, h, key_image, open_store, serve_credit_body, spend, tmp, trace_of, Family,
+    GrownTree, Scripted, FIRST_SPEND_HEIGHT,
 };
 
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
@@ -140,6 +141,14 @@ fn scripted(chain: &[(Block, Vec<Transaction>)]) -> Scripted {
     )
 }
 
+/// The optional legs of an [`Environment`], as one run supplies them.
+#[derive(Default)]
+struct Legs<'a> {
+    pow: Option<Pow<'a>>,
+    overweight: Option<Overweight<'a>>,
+    twins: &'a [Transaction],
+}
+
 /// How one mutated run ended.
 enum Outcome {
     Report(Box<RunReport>),
@@ -155,12 +164,14 @@ async fn judge(
     mutation: Mutation,
     rules: ChainRules,
     substrate: MockSubstrate,
-    pow: Option<Pow<'_>>,
+    legs: Legs<'_>,
 ) -> Outcome {
     let path = tmp(&format!("mutation-{name}"));
     let env = Environment {
         clock: substrate.clock,
-        pow,
+        pow: legs.pow,
+        overweight: legs.overweight,
+        twins: legs.twins,
     };
     let mut source = Mutated::new(scripted(chain), h(at), mutation, env);
     let trace = Arc::new(trace_of(chain, false));
@@ -297,6 +308,12 @@ fn assert_pinned_gap(mutation: Mutation, at: u64, outcome: &Outcome) {
         | Mutation::ReorderedBodies
         | Mutation::MissingBody
         | Mutation::SubstitutedBody
+        | Mutation::RelistedTransaction
+        | Mutation::DoubledListing
+        | Mutation::DuplicateServeCredit
+        | Mutation::DuplicateClaim
+        | Mutation::DuplicateBondPost
+        | Mutation::OverweightBlock
         | Mutation::DoubleSpend
         | Mutation::UnknownReference
         | Mutation::ReferenceTooRecent
@@ -362,7 +379,10 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
                 mutation,
                 mined_rules(),
                 substrate,
-                Some(pow),
+                Legs {
+                    pow: Some(pow),
+                    ..Legs::default()
+                },
             )
             .await
         }
@@ -392,12 +412,101 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
                 mutation,
                 GENESIS_RULES,
                 MockSubstrate::default(),
-                None,
+                Legs::default(),
+            )
+            .await
+        }
+        // A chain whose block `AT` lists one archival body of the kind the
+        // mutation duplicates, beside the spend `chain(n)` would list. The
+        // serve credit's twin is the body itself, `unlock_time` moved; the
+        // emission's and the bond post's are signed over their content, so
+        // the run supplies a second valid body with the same key.
+        Mutation::DuplicateServeCredit | Mutation::DuplicateClaim | Mutation::DuplicateBondPost => {
+            let (archival, twin): (Transaction, Option<Transaction>) = match mutation {
+                Mutation::DuplicateServeCredit => (serve_credit_body(P1, 7, 11), None),
+                Mutation::DuplicateClaim => (
+                    emission_claim_body(key_image(Family::Fork, AT), 0xa1, &[11, 12]),
+                    Some(emission_claim_body(
+                        key_image(Family::Fork, AT + 1),
+                        0xa1,
+                        &[12],
+                    )),
+                ),
+                _ => (
+                    bond_post_body(key_image(Family::Fork, AT), P1),
+                    Some(bond_post_body(key_image(Family::Fork, AT + 1), P1)),
+                ),
+            };
+            let listed: Vec<Vec<Transaction>> = (0..n)
+                .map(|hh| {
+                    if hh < FIRST_SPEND_HEIGHT {
+                        Vec::new()
+                    } else if hh == AT {
+                        vec![spend(key_image(Family::Main, hh)), archival.clone()]
+                    } else {
+                        vec![spend(key_image(Family::Main, hh))]
+                    }
+                })
+                .collect();
+            let chain = chain_listing(listed);
+            // The twin is anchored at `AT` like every listed body there.
+            let hashes: Vec<BlockHash> = chain.iter().map(|(b, _)| b.hash()).collect();
+            let twins: Vec<Transaction> = twin
+                .into_iter()
+                .map(|t| crate::test_support::anchor(&hashes, AT, t))
+                .collect();
+            judge(
+                &format!("{mutation:?}").to_lowercase(),
+                &chain,
+                AT,
+                mutation,
+                GENESIS_RULES,
+                MockSubstrate::default(),
+                Legs {
+                    twins: &twins,
+                    ..Legs::default()
+                },
+            )
+            .await
+        }
+        // Spare valid spends at `AT`, each with a fresh key image, until the
+        // block passes twice the zone — the median in force on a young
+        // chain (CEN-G6's floor arm).
+        Mutation::OverweightBlock => {
+            let chain = crate::test_support::chain(n);
+            let hashes: Vec<BlockHash> = chain.iter().map(|(b, _)| b.hash()).collect();
+            let bound = 2 * shekyl_economics::FULL_REWARD_ZONE;
+            let one = spend(key_image(Family::Fork, 5_000)).weight() as u64;
+            let count = bound / one + 2;
+            let bodies: Vec<Transaction> = (0..count)
+                .map(|k| {
+                    crate::test_support::anchor(
+                        &hashes,
+                        AT,
+                        spend(key_image(Family::Fork, 5_000 + k)),
+                    )
+                })
+                .collect();
+            judge(
+                "overweight-block",
+                &chain,
+                AT,
+                mutation,
+                GENESIS_RULES,
+                MockSubstrate::default(),
+                Legs {
+                    overweight: Some(Overweight {
+                        bodies: &bodies,
+                        bound,
+                    }),
+                    ..Legs::default()
+                },
             )
             .await
         }
         // `chain(n)` lists one spend per block from `FIRST_SPEND_HEIGHT`:
-        // one body to drop or to substitute at `AT`.
+        // one body to drop, substitute or double at `AT`, and one below it
+        // to re-list.
         Mutation::HeaderVersion
         | Mutation::Orphan
         | Mutation::WrongRoot
@@ -406,6 +515,8 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
         | Mutation::WrongReward
         | Mutation::MissingBody
         | Mutation::SubstitutedBody
+        | Mutation::RelistedTransaction
+        | Mutation::DoubledListing
         | Mutation::DoubleSpend
         | Mutation::UnknownReference
         | Mutation::ReferenceTooRecent
@@ -418,12 +529,14 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
                 mutation,
                 GENESIS_RULES,
                 MockSubstrate::default(),
-                None,
+                Legs::default(),
             )
             .await
         }
     }
 }
+
+const P1: [u8; 32] = [0xa1; 32];
 
 /// The mined chain itself replays clean under the seeded hasher — so a D1
 /// refusal in the family is the mutation's, not the fixture's.
@@ -468,6 +581,8 @@ fn env() -> Environment<'static> {
     Environment {
         clock: MockSubstrate::CLOCK,
         pow: None,
+        overweight: None,
+        twins: &[],
     }
 }
 
@@ -623,6 +738,15 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_those_the_plan_lists() {
             (Mutation::ReorderedBodies, ExpectedPlace::Listed),
             (Mutation::MissingBody, ExpectedPlace::Block),
             (Mutation::SubstitutedBody, ExpectedPlace::Listed),
+            // Slice 7 commit 7 (Q8): G1 names the slot whose hash it looked
+            // up; the three archival passes name the second vin; F14 the
+            // block's summed weight.
+            (Mutation::RelistedTransaction, ExpectedPlace::Listed),
+            (Mutation::DoubledListing, ExpectedPlace::Listed),
+            (Mutation::DuplicateServeCredit, ExpectedPlace::Input),
+            (Mutation::DuplicateClaim, ExpectedPlace::Input),
+            (Mutation::DuplicateBondPost, ExpectedPlace::Input),
+            (Mutation::OverweightBlock, ExpectedPlace::Block),
             (Mutation::DoubleSpend, ExpectedPlace::Input),
             // Slice 6 commit 5: the reference rows name the transaction.
             (Mutation::UnknownReference, ExpectedPlace::Listed),
@@ -664,6 +788,8 @@ fn a_clock_with_no_representable_future_does_not_pretend_to_be_past_the_ftl() {
     let env = Environment {
         clock: Timestamp::from_raw(u64::MAX - FTL_SECONDS),
         pow: None,
+        overweight: None,
+        twins: &[],
     };
     let mut source = Mutated::new(scripted(&chain), h(1), Mutation::FutureTimestamp, env);
     source.next().expect("block 0 is not the mutation");
@@ -683,7 +809,7 @@ fn an_amount_at_the_top_of_the_range_cannot_move_by_one() {
     let mut candidate = candidate(&chain[0].0, &chain[0].1);
     candidate.block.miner_transaction.prefix.outputs[0].amount = u64::MAX;
     let err = Mutation::WrongReward
-        .apply(candidate, &env(), &[], h(0))
+        .apply(candidate, &env(), &Before::default(), h(0))
         .expect_err("u64::MAX + 1 does not fit");
     assert_eq!(err, Unmutable::RewardSaturated);
 }

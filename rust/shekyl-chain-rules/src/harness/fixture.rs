@@ -678,6 +678,75 @@ pub fn bp_plus_layout_for(outputs: usize) -> BpPlus {
     }
 }
 
+/// `k·G + amount·H`, compressed: a mask that commits to `amount` under the
+/// crate's own `H` (`shekyl_ct_balance::amount_commitment`) with `k·G` as
+/// its blinding — what a balanced archival fixture needs and what the
+/// production rules only ever *verify*. Test-only curve arithmetic.
+#[must_use]
+pub fn mask_committing(k: u64, amount: u64) -> [u8; 32] {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+    use curve25519_dalek::scalar::Scalar;
+    let blinding = ED25519_BASEPOINT_POINT * Scalar::from(k);
+    let value = shekyl_ct_balance::amount_commitment(shekyl_units::AtomicUnits::from_raw(amount));
+    (blinding + value).compress().to_bytes()
+}
+
+/// A **balanced bond post** (CEN-H21's shape): one funding spend of
+/// `key_image`, the two outputs CEN-I1 requires (masks `2·G` and `3·G`),
+/// zero fee, one auth per input, a non-empty proof, and a pseudo-out of
+/// `5·G + credit·H` — so `Σ pseudoOuts + debit·H = Σ masks + fee·H +
+/// credit·H` holds with `(credit, debit) = (post.bond_credit, 0)`. `post`
+/// is the caller's: the shape rows read its kind and key length, the
+/// block-level G10 its `p_canonical_id`. Unanchored and with filler auths;
+/// [`anchored_on`] / [`signed`] make it a body `tx_against` admits.
+pub fn balanced_bond_post(key_image: [u8; 32], post: BondPost) -> Transaction {
+    let credit = post.bond_credit;
+    let mut tx = listed(key_image);
+    tx.prefix.inputs.push(Input::BondPost(Box::new(post)));
+    if let Ct::Fcmp {
+        pqc_auths,
+        prunable: Some(p),
+        ..
+    } = &mut tx.ct
+    {
+        pqc_auths.push(pqc_auth_filler());
+        p.pseudo_outs = vec![mask_committing(5, credit)];
+    }
+    tx
+}
+
+/// A **balanced emission** (CEN-H22's shape) with one fee spend of
+/// `key_image` and the emission vin `canonical_bytes` (the type's minimum
+/// for the shape rows, which read the variant; a parseable vin for the
+/// block-level G9, which reads the claims): the loud vouts sum to `reward`
+/// (the first carries it, the second is a loud zero — I1 wants two); the
+/// mint rides the debit slot, so `Σ pseudoOuts + reward·H = Σ masks +
+/// fee·H` — a pseudo-out of `5·G` against masks of `2·G + reward·H` and
+/// `3·G`, zero fee. Unanchored and with filler auths, as above.
+pub fn balanced_emission(
+    key_image: [u8; 32],
+    canonical_bytes: Vec<u8>,
+    reward: u64,
+) -> Transaction {
+    let mut tx = listed(key_image);
+    tx.prefix
+        .inputs
+        .push(Input::ArchivalRewardEmission { canonical_bytes });
+    tx.prefix.outputs[0].amount = reward;
+    if let Ct::Fcmp {
+        pqc_auths,
+        base,
+        prunable: Some(p),
+        ..
+    } = &mut tx.ct
+    {
+        pqc_auths.push(pqc_auth_filler());
+        base.commitments = vec![mask_committing(2, reward), multiple_of_g(3)];
+        p.pseudo_outs = vec![multiple_of_g(5)];
+    }
+    tx
+}
+
 /// A **serve-credit-only** transaction (CEN-H20's shape: serve-credit
 /// inputs and nothing else, no outputs, zero fee, no spend material),
 /// carrying `record` as its one pass record. The one legal non-coinbase
