@@ -1068,6 +1068,13 @@ gets its own runtime, with a stated thread budget. The budgets are
 explicit and have to add up to something the Pi-4 can carry. The
 numbers come from measurement, not from this ruling.
 
+UPDATE 2026-09-29: the sum is the daemon's own pools against four
+cores. The RandomX miner is outside it. Mining is the operator's
+choice, its threads are the operator's, and they compete with these
+pools for the same cores. The budget record states that the miner
+was off. A mining floor device is measured as its own record, and its
+executor tail is compared to the idle one (D9).
+
 The transport layer faces attackers: any peer can drive its load. The
 RPC and Tor-control runtimes serve the operator. A tokio multi-thread
 runtime has no task priorities, so a shared pool would let a peer flood
@@ -1450,6 +1457,31 @@ tries another peer. The factor of two is the margin for honest links
 this measurement does not include (mobile, satellite, a congested
 overlay). It is one policy for every deadline. The distributions
 produce the p99; they do not produce the factor.
+
+UPDATE 2026-09-29, measurement conditions. Each distribution is taken
+on the configuration that ships, or it is a distribution of a link
+that will not exist:
+
+- The clearnet handshake is measured through NNhfs, with
+  `--clearnet-transport-encrypt` on at both ends. The plaintext path
+  is deleted at the flip and is not the one the deadline guards.
+- The Tor dial is the SOCKS exchange, the circuit build, and the
+  rendezvous (D3's clock), against an onion service published with
+  proof-of-work on (D10). Our own onion is published that way by
+  default, so the peer is a daemon on the same pin. A distribution
+  taken against a service without proof-of-work is not this
+  distribution.
+- The daemon's pools are the only load on the four cores. The
+  RandomX miner is off (D5). A mining node is a second distribution
+  with its own record, and it is the reopen criterion: when that
+  record's p99 exceeds a derived deadline, the deadline is re-derived
+  from it.
+- Every distribution states its sample count, both endpoints and
+  their roles, the link (loopback is not a link; LAN and internet are
+  named as such; Tor names the circuit set and the Tor version), the
+  binary pin at each end, the option state, the proof-of-work state,
+  and the miner state. A later distribution on another device or
+  circuit set is compared to this one, not written over it.
 
 One rekey is 5.06 µs against 889 µs to seal and open a 65,535-byte
 record, under one percent at that size. Fixed windows are smaller than
