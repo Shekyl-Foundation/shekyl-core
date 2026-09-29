@@ -82,13 +82,20 @@ The stem send still completed. The peer added the transaction to
 its pool. Fluff on both nodes then logged `no available
 connections`.
 
+The peer's own local height was 85, because it had received those
+blocks from the mining node, and it still recorded the mining node
+at 46, last written by timed sync. Receiving a block does not
+update the sender's recorded height. On a two-node network fluff
+had nobody else to send to anyway. On a larger network the same
+lag leaves fluff with only the peers whose timed sync landed since
+the last block. That is a relay-lane defect, recorded in
+`FOLLOWUPS.md`, and it is not a cutover blocker: epee does it too.
+
 The seam-versus-epee run failed earlier than this. That run logged
 `Unable to send transaction(s) via Dandelion++ stem` and the
 transaction stayed in the origin pool. Two epee nodes, with the
-filter in the same empty state, still stemmed. The stale recorded
-height is what left fluff with nobody, and that height is refreshed
-by the chain-state backstop. It is not what stopped the stem here.
-The stem failure in the cross-build remains the seam's.
+filter in the same empty state, still stemmed. The stem failure is
+the send, not the choice of peer.
 
 ## Not this run
 

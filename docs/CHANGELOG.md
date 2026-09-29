@@ -35,7 +35,9 @@
   relay, and both dial directions passed against the pre-cutover
   peer; transaction stem and fluff did not cross. The same record's
   epee-to-epee control crossed the stem with the relay filter empty;
-  fluff found nobody.
+  fluff found nobody. A peer's recorded height still lags a block
+  it has delivered; that is a relay-lane follow-up, not a cutover
+  blocker.
 
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 
