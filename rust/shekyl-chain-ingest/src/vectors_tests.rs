@@ -79,6 +79,45 @@ struct Manifest {
     genesis_hash: String,
     /// The `dev` tree the daemon that built the chain was compiled at.
     built_at_dev_sha: String,
+    /// Every row in the daemon's state that **no block produced** — a
+    /// regtest injector's direct LMDB write. Required, so a manifest asserts
+    /// "wholly block-derived" positively (`[]`) rather than by silence: a
+    /// block-driven replay cannot reach such a row, and an archival digest
+    /// over the chain diverges by construction at exactly the height a
+    /// writer bug would (`DRS_E4_ARCHIVAL_WRITER.md` ARW-1).
+    out_of_band_writes: Vec<String>,
+}
+
+/// The one captured chain whose state is not wholly block-derived: the
+/// serve credit `emission-claim`'s claim is priced on was injected
+/// (`regtest_e2e.rs`, step A2). Enumerated, not discovered: a new capture
+/// that injects must be added here **and** in its manifest, and a chain
+/// listed here that stops injecting must leave.
+const CHAINS_WITH_OUT_OF_BAND_WRITES: [&str; 1] = ["emission-claim"];
+
+/// The corpus says which of its rows no block produced, and it is exactly
+/// the one chain the pre-flight found (ARW-1). Both directions: a chain
+/// that injects and does not say so mislabels the corpus; a chain listed as
+/// injecting that does not is a stale claim about the data.
+#[test]
+fn only_the_named_chains_carry_out_of_band_writes() {
+    for (dir, manifest) in captured_chains() {
+        let expected = CHAINS_WITH_OUT_OF_BAND_WRITES.contains(&manifest.shape.as_str());
+        assert_eq!(
+            !manifest.out_of_band_writes.is_empty(),
+            expected,
+            "{}: out_of_band_writes = {:?}; CHAINS_WITH_OUT_OF_BAND_WRITES says {expected}",
+            dir.display(),
+            manifest.out_of_band_writes
+        );
+        for note in &manifest.out_of_band_writes {
+            assert!(
+                note.contains("archival_serve_credit"),
+                "{}: the only out-of-band row kind the corpus admits is the injected serve credit; got {note:?}",
+                dir.display()
+            );
+        }
+    }
 }
 
 /// Every captured chain, in name order. **Fails on an empty set** (rule

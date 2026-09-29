@@ -7,6 +7,9 @@
   "format_version": 2,
   "generator": "e2e_emission_claim_accepted_and_applied",
   "genesis_hash": "16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3",
+  "out_of_band_writes": [
+    "archival_serve_credit row (persona = the chain's one bond, shard 0, epoch 1) injected during epoch 0 at the bond substrate's tip through regtest_inject_archival_serve_credit (blockchain.cpp: db_wtxn_guard + set_archival_serve_credit_bit under the blockchain lock, outside any block's write batch). State no block produced: a block-driven replay cannot reproduce it, and an archival digest over this chain diverges by construction unless the injection is replayed as an event (DRS_E4_ARCHIVAL_WRITER.md ARW-1, ARW-Q5). This capture predates the generator recording the injection height and persona; the next re-capture writes both."
+  ],
   "shape": "emission-claim",
   "spend_txid": null,
   "tip_height": 1025,

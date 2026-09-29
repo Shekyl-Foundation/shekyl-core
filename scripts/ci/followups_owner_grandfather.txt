@@ -19,7 +19,6 @@ Bond admission's shard predicate — RULED, unbuilt; three design questions owed
 `PRINCIPAL_STAKE_LIFECYCLE.md` §4a PR-row table: the dated UPDATE / Corrected chains accrete instead of resolving; PR-P4's row is the extreme case.
 The leaf-era archival data-scope schema (sets A/B/C, "B + C") survives outside its owner after `PDM-Q6` re-keyed `V3_STAKER_ARCHIVAL.md` §*Archival data scope* and its two declared consumers (`PUBLIC_NARRATIVE_FAQ.md`, `FOUNDATION_ARCHIVAL_DISCLOSURE.md`; #797).
 The archiver's serving store needs a retention rule for a dropped shard, and an enforcing site.
-Daemon uniformity: "no archival serving state in the daemon, ever" must be written where DRS-E4 S-ARCH will read it.
 `#[serde(default)]` still lets an omitted daemon field become its zero value.
 `CEN-L8`'s settlement clause has no production caller; census home is already the slash pass.
 `SO-D9` — `ERR_EPOCH_MISMATCH` on the serve-credit admission path is a tautology; RULED (i) 2026-09-13, implementation owed.
