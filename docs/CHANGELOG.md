@@ -57,9 +57,28 @@
   A snapshot whose own leaf count is not the store's is **refused**, never
   repaired: the ring and the leaf tables are written together, so a
   disagreement is corruption and the answer to corruption is resync.
-- **No store schema-version bump.** Adding a table is not a layout change: a
-  store written before this one has no rows, every height falls through to
-  `root_at_count`, and the ring refills forward. The ring is a cache.
+- **Store `SCHEMA_VERSION` 5 → 6.** *Reading* a pre-ring store needs no
+  migration — no rows, every height falls through to `root_at_count`, the ring
+  refills forward, the ring is a cache. That is one direction. The other is a
+  pre-ring **writer**, which cannot see `frontier_snapshots` and so rolls back
+  and replays while leaving rows above the new tip in place; a stale row can
+  carry the leaf count the C3 check expects over the abandoned branch's root.
+  Nothing in-band stops a writer that cannot see the table, so the version cell
+  is the mechanism — and refusing the store is what C8 already prescribes:
+  *recovery is refuse-and-resync, never a migration*.
+- **The frontier's decoded shape is bound to its leaf count.** `leaf_count`
+  alone determines the leaf chunk's width and every partial width, so a width
+  can sit *under* its layer's capacity and still disagree with the count —
+  bytes that pass the C3 count check and compose the wrong root.
+  `Frontier::expected_shape` derives the shape and `decode` refuses anything
+  else (`FrontierError::ShapeDisagreesWithLeafCount`), graded against frontiers
+  `push_leaf` actually built.
+- **A frontier snapshot below `sync_tip` is refused**
+  (`StoreError::SnapshotBelowSyncTip`). `append_block_deltas` tolerates a
+  non-monotonic tip for the freeze clock, but production ingest only moves
+  forward and `rollback_to_fork` lowers the tip and truncates the ring in one
+  transaction, so a stale-tip snapshot is a caller bug rather than a state to
+  accommodate. Evicting around it would have made the bug work silently.
 - **`shekyl-wss-q1b-bench` record `schema_version` 2 → 3.**
   `per_block_advance_worst_case_s` was `replay_median / REPLAY_WINDOW_BLOCKS` —
   a share of the spend replay, which is a pre-build *model* of an advance
@@ -91,7 +110,7 @@
   one that could have sampled a cool board — came in *fastest*, which a
   cool-board bias cannot produce.
 - **RULED: one dense ring over the reorg horizon.** At `s = 3` a sparse tier
-  holds 240 snapshots against a dense ring's 720 — **4.64 MB** bought for a
+  holds 241 snapshots against a dense ring's 721 — **4.25 MB** bought for a
   spacing constant, an eviction policy, a dense/sparse boundary and the reader
   logic across it, on an 8 GB rig. The tier geometry is **deleted**; `s` ceases
   to exist as a quantity the round carries. A rule-21 reopening of `Q1`'s own

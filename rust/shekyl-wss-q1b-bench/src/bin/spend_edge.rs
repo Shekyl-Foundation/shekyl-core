@@ -308,12 +308,13 @@ fn main() -> ExitCode {
     // that had silently done nothing would produce a fast, converged,
     // meaningless median.
     if advance_rig.blocks_advanced() == 0
-        || advance_rig.leaf_count() != advance_rig.blocks_advanced() * leaf_rate.leaves_per_block
+        || advance_rig.timed_leaves_folded()
+            != advance_rig.blocks_advanced() * leaf_rate.leaves_per_block
     {
         eprintln!(
-            "the advance rig folded {} leaves over {} blocks at {} leaves/block; refusing \
+            "the advance rig folded {} timed leaves over {} blocks at {} leaves/block; refusing \
              the record",
-            advance_rig.leaf_count(),
+            advance_rig.timed_leaves_folded(),
             advance_rig.blocks_advanced(),
             leaf_rate.leaves_per_block
         );

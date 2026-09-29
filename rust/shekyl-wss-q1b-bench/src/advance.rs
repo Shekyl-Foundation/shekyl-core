@@ -68,6 +68,9 @@ pub struct AdvanceRig {
     /// Blocks advanced before timing began, so [`Self::blocks_advanced`]
     /// reports the timed series rather than the prefill.
     prefilled: u64,
+    /// Leaves folded before timing began, so [`Self::timed_leaves_folded`]
+    /// covers the same window [`Self::blocks_advanced`] does.
+    prefilled_leaves: u64,
     /// One block's worth of leaves, reused every iteration so the
     /// measurement is the advance and not a leaf generator.
     block_leaves: Vec<[u8; LEAF_BYTES]>,
@@ -122,6 +125,7 @@ impl AdvanceRig {
             frontier: Frontier::new(),
             height: 0,
             prefilled: 0,
+            prefilled_leaves: 0,
             block_leaves,
         }
     }
@@ -168,6 +172,7 @@ impl AdvanceRig {
             self.advance_one_block();
         }
         self.prefilled = self.height;
+        self.prefilled_leaves = self.frontier.leaf_count();
     }
 
     /// Blocks advanced **while timed** — the rig's own subject assertion: a
@@ -178,9 +183,15 @@ impl AdvanceRig {
         self.height - self.prefilled
     }
 
-    /// Leaves the live frontier has folded.
+    /// Leaves folded **while timed**.
+    ///
+    /// The companion to [`Self::blocks_advanced`], so a caller's rule-47
+    /// subject assertion compares two quantities covering the same window.
+    /// The frontier's *whole* count is deliberately not exposed: read against
+    /// `blocks_advanced` it would compare two different windows and refuse
+    /// every prefilled run, which is the defect this pair replaced.
     #[must_use]
-    pub fn leaf_count(&self) -> u64 {
-        self.frontier.leaf_count()
+    pub fn timed_leaves_folded(&self) -> u64 {
+        self.frontier.leaf_count() - self.prefilled_leaves
     }
 }
