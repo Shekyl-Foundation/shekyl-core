@@ -4,8 +4,8 @@
 # BSD-3-Clause
 
 [package]
-name = "shekyl-clearnet"
-description = "Clearnet connector. One runtime, plaintext while the option is off, Noise while it is on. The choice is the declaration's stack plan."
+name = "shekyl-p2p-harness"
+description = "P2P conformance harness. A scripted peer, a seam host, and a transcript comparator. The epee host is a separate C++ binary."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,15 +14,13 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-shekyl-capped-stream = { path = "../shekyl-capped-stream" }
-shekyl-net-address = { path = "../shekyl-net-address" }
-shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
-shekyl-socks = { path = "../shekyl-socks" }
+shekyl-clearnet = { path = "../shekyl-clearnet" }
+shekyl-levin = { path = "../shekyl-levin" }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-runtime = { path = "../shekyl-runtime" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
-tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tokio = { version = "1", default-features = false, features = ["rt", "time"] }
 
 [lints]
 workspace = true

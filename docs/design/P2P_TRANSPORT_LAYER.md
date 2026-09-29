@@ -680,9 +680,9 @@ a floor-sized pool both complete. `above_floor` with one worker
 below the floor returns `BelowFloor` and records no row.
 `inbound_held` counts inbound rows and leaves outbound out. The
 differential harness is
-[`P2P_DIFFERENTIAL_HARNESS.md`](P2P_DIFFERENTIAL_HARNESS.md). Its
-clearnet handshake invoke is in. The epee leg of that exchange, and
-the other in-process legs, are still open. The cross-build run waits
+[`P2P_DIFFERENTIAL_HARNESS.md`](P2P_DIFFERENTIAL_HARNESS.md), crate
+`shekyl-p2p-harness`. Seed 1 is the handshake invoke against the seam
+host. The epee host is still open. The cross-build run waits
 on the zone-binding commit. Cutover waits on the thread budget and the per-connector
 deadlines, measured on this build and written down. The budget is
 at least the floor.
@@ -1515,11 +1515,11 @@ round can reject them.
   after zero bytes, Rust admission, no local/remote timer split, no
   TOS knob, and byte bounds are listed in
   [`P2P_DIFFERENTIAL_HARNESS.md`](P2P_DIFFERENTIAL_HARNESS.md) as
-  expected. The clearnet leg is
-  `option_off_handshake_invoke_establishes_when_the_response_returns`:
-  a handshake invoke, the response, and the session established when
-  that response is back. The epee leg of that exchange is still open.
-  The cross-build run waits on the zone-binding commit, not on this
+  expected. The scripted peer and the seam host are
+  `shekyl-p2p-harness`. Seed 1 is a handshake invoke, the response,
+  and the session established when that response is back. The epee
+  host is the C++ reference and is not linked into that crate. The
+  cross-build run waits on the zone-binding commit, not on this
   harness. A difference on one of them is not a regression. The
   current server stays in the tree as the wire reference until this
   passes. It is not a test host for the option.
