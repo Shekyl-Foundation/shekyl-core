@@ -416,7 +416,7 @@ macro_rules! curve {
             }
 
             fn to_bytes(&self) -> Self::Repr {
-                // If this the identity, set `z = 0`, causing `x = 0, y = 0`
+                // If this is the identity, set `z = 0`, causing `x = 0, y = 0`
                 let z = self.z.invert().unwrap_or($Field::ZERO);
                 let x = self.x * z;
                 let y = self.y * z;

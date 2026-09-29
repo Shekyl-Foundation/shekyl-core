@@ -198,7 +198,9 @@ pub(crate) fn invert(value: &HelioseleneField) -> CtOption<HelioseleneField> {
     b.zeroize();
     u.zeroize();
 
-    CtOption::new(HelioseleneField(red1(v)), !value.is_zero())
+    let reduced = red1(v);
+    v.zeroize();
+    CtOption::new(HelioseleneField(reduced), !value.is_zero())
 }
 
 #[test]

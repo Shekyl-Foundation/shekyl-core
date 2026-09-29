@@ -106,7 +106,7 @@ impl<F: PrimeField> Add<&LinComb<F>> for LinComb<F> {
 
     /// This addition is actually a _concatenation_, where the result will use memory the sum of its
     /// inputs.  Conversion to a canonical representation only happens when building the final
-    /// matrii.
+    /// matrices.
     fn add(mut self, constraint: &Self) -> Self {
         self.reconcile_for_merging(constraint);
 
@@ -130,7 +130,7 @@ impl<F: PrimeField> Sub<&LinComb<F>> for LinComb<F> {
 
     /// This subtraction is actually a _concatenation_ (with the right-hand side negated), where the
     /// result will use memory the sum of its inputs. Conversion to a canonical representation only
-    /// happens when building the final matrii.
+    /// happens when building the final matrices.
     fn sub(mut self, constraint: &Self) -> Self {
         self.reconcile_for_merging(constraint);
 

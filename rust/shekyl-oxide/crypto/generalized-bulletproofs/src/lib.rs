@@ -157,7 +157,9 @@ impl<C: Ciphersuite> Generators<C> {
             Ok(!set.insert(bytes.as_ref().to_vec()))
         };
 
-        assert!(!add_generator(&g)?, "g was prior present in empty set");
+        if add_generator(&g)? {
+            Err(GeneratorsError::DuplicatedGenerator)?;
+        }
         if add_generator(&h)? {
             Err(GeneratorsError::DuplicatedGenerator)?;
         }
