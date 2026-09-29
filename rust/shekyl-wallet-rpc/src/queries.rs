@@ -19,9 +19,8 @@ use shekyl_types::TxHash;
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, parse_required_object, require_empty_object};
 use crate::project::{
-    atomic_units_string, attribution_matches, get_balance_result, outgoing_block_height,
-    outgoing_transfer_state, outgoing_transfer_view, parse_lookup_id, transfer_state,
-    transfer_view, TransferLookupId,
+    attribution_matches, get_balance_result, outgoing_block_height, outgoing_transfer_state,
+    outgoing_transfer_view, parse_lookup_id, transfer_state, transfer_view, TransferLookupId,
 };
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
@@ -287,15 +286,9 @@ pub(crate) async fn get_wallet_info(
         let staking = staking_view.map(|staking_view| StakingInfoResult {
             staking_enabled: staking_view.staking_enabled,
             balance: GetStakedBalanceResult {
-                bonded_principal_confirmed: atomic_units_string(
-                    staking_view.balance.bonded_principal_confirmed,
-                ),
-                bonded_principal_pending: atomic_units_string(
-                    staking_view.balance.bonded_principal_pending,
-                ),
-                rewards_received_unspent: atomic_units_string(
-                    staking_view.balance.rewards_received_unspent,
-                ),
+                bonded_principal_confirmed: staking_view.balance.bonded_principal_confirmed.into(),
+                bonded_principal_pending: staking_view.balance.bonded_principal_pending.into(),
+                rewards_received_unspent: staking_view.balance.rewards_received_unspent.into(),
             },
             staked_output_count: i64::try_from(staking_view.outputs.len()).unwrap_or(i64::MAX),
             pscan_synced_height: staking_view

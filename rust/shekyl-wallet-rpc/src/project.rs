@@ -23,11 +23,6 @@ use crate::types::{
     TransferDirection, TransferState, TransferView,
 };
 
-/// Decimal string for OpenAPI `AtomicUnits`.
-pub fn atomic_units_string(amount: AtomicUnits) -> String {
-    amount.to_raw().to_string()
-}
-
 /// Serialize the engine's one-glance balance ([`BalanceView`]) as the
 /// contract's `get_balance` result. Pure wire shaping: which leg is liquid,
 /// how the bonded legs sum, and what an unreadable staking seal does to the
@@ -36,14 +31,12 @@ pub fn atomic_units_string(amount: AtomicUnits) -> String {
 /// carries the engine's absence onto the wire as absence.
 pub fn get_balance_result(view: &BalanceView) -> GetBalanceResult {
     GetBalanceResult {
-        liquid: atomic_units_string(view.liquid),
-        staked: view.staking.map(|s| atomic_units_string(s.staked)),
-        unlocked: atomic_units_string(view.unlocked),
-        unspendable: atomic_units_string(view.unspendable),
-        claimable_rewards: view
-            .staking
-            .map(|s| atomic_units_string(s.claimable_rewards)),
-        pending: atomic_units_string(view.pending),
+        liquid: view.liquid.into(),
+        staked: view.staking.map(|s| s.staked.into()),
+        unlocked: view.unlocked.into(),
+        unspendable: view.unspendable.into(),
+        claimable_rewards: view.staking.map(|s| s.claimable_rewards.into()),
+        pending: view.pending.into(),
     }
 }
 
@@ -228,8 +221,8 @@ pub fn transfer_view(
         // journal (`outgoing_transfer_view`).
         direction: TransferDirection::Incoming,
         tx_hash: td.tx_hash.to_string(),
-        amount: atomic_units_string(td.amount()),
-        fee: "0".to_owned(),
+        amount: td.amount().into(),
+        fee: AtomicUnits::ZERO.into(),
         // Ledger rows are scanner-observed, so they are always mined.
         block_height: Some(i64::try_from(td.block_height.to_raw()).unwrap_or(i64::MAX)),
         state: transfer_state(td, spend_locks),
@@ -324,8 +317,8 @@ pub fn outgoing_transfer_view(
         id: outgoing_transfer_id(txid),
         direction: TransferDirection::Outgoing,
         tx_hash: txid.to_string(),
-        amount: atomic_units_string(AtomicUnits::from_raw(sent)),
-        fee: atomic_units_string(AtomicUnits::from_raw(row.fee)),
+        amount: AtomicUnits::from_raw(sent).into(),
+        fee: AtomicUnits::from_raw(row.fee).into(),
         // Crate-wide height projection idiom: OpenAPI heights are int64.
         block_height: outgoing_block_height(row).map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
         state: outgoing_transfer_state(row),
@@ -402,7 +395,7 @@ pub fn pending_tx_result(tx: &PendingTx) -> BuildPendingTxResult {
         pending_tx_id: tx.id.raw().to_string(),
         built_at_height: i64::try_from(tx.built_at_height.to_raw()).unwrap_or(i64::MAX),
         built_at_tip_hash: hex::encode(tx.built_at_tip_hash),
-        fee: atomic_units_string(tx.fee_atomic_units),
+        fee: tx.fee_atomic_units.into(),
         content_gen: i64::try_from(tx.content_gen).unwrap_or(i64::MAX),
     }
 }
@@ -664,12 +657,15 @@ mod tests {
             }),
         };
         let r = get_balance_result(&view);
-        assert_eq!(r.liquid, "40");
-        assert_eq!(r.unlocked, "40");
-        assert_eq!(r.pending, "5");
-        assert_eq!(r.unspendable, "7");
-        assert_eq!(r.staked.as_deref(), Some("100000"));
-        assert_eq!(r.claimable_rewards.as_deref(), Some("1234"));
+        assert_eq!(r.liquid.to_string(), "40");
+        assert_eq!(r.unlocked.to_string(), "40");
+        assert_eq!(r.pending.to_string(), "5");
+        assert_eq!(r.unspendable.to_string(), "7");
+        assert_eq!(r.staked.map(|s| s.to_string()).as_deref(), Some("100000"));
+        assert_eq!(
+            r.claimable_rewards.map(|s| s.to_string()).as_deref(),
+            Some("1234")
+        );
 
         // The degrade arm: absence crosses the wire as absence, never "0".
         let degraded = BalanceView {
@@ -679,7 +675,11 @@ mod tests {
         let r = get_balance_result(&degraded);
         assert_eq!(r.staked, None);
         assert_eq!(r.claimable_rewards, None);
-        assert_eq!(r.liquid, "40", "liquid fields stay authoritative");
+        assert_eq!(
+            r.liquid.to_string(),
+            "40",
+            "liquid fields stay authoritative"
+        );
         let json = serde_json::to_value(&r).unwrap();
         assert!(json.get("staked").is_none() && json.get("claimable_rewards").is_none());
     }
@@ -798,8 +798,8 @@ mod tests {
         assert_eq!(view.id, "ab".repeat(32));
         assert_eq!(view.tx_hash, view.id);
         assert_eq!(view.direction, TransferDirection::Outgoing);
-        assert_eq!(view.amount, "3500"); // 1000 + 2500
-        assert_eq!(view.fee, "700");
+        assert_eq!(view.amount.to_string(), "3500"); // 1000 + 2500
+        assert_eq!(view.fee.to_string(), "700");
         assert_eq!(view.block_height, Some(250));
         assert_eq!(view.state, TransferState::Confirmed);
         assert_eq!(view.spent_height, None);

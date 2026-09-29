@@ -16,11 +16,10 @@ use serde::Deserialize;
 use serde_json::Value;
 use shekyl_engine_core::{format_payment_uri, parse_payment_uri, NewPaymentRequest};
 use shekyl_engine_state::{PaymentRequest, PaymentRequestId, PaymentRequestState};
-use shekyl_units::AtomicUnits;
+use shekyl_units::{AtomicUnits, AtomicUnitsString};
 
 use crate::error::WalletRpcError;
-use crate::params::{parse_atomic_units, parse_optional_object, parse_required_object};
-use crate::project::atomic_units_string;
+use crate::params::{parse_optional_object, parse_required_object};
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
     CreatePaymentRequestResult, ListPaymentRequestsResult, MakeUriResult, ParseUriResult,
@@ -31,7 +30,7 @@ use crate::types::{
 #[derive(Debug, Deserialize)]
 struct CreatePaymentRequestParams {
     label: String,
-    amount: String,
+    amount: AtomicUnitsString,
     expiry: Option<i64>,
 }
 
@@ -46,7 +45,7 @@ struct ListPaymentRequestsParams {
 #[derive(Debug, Deserialize)]
 struct MakeUriParams {
     address: Option<String>,
-    amount: Option<String>,
+    amount: Option<AtomicUnitsString>,
     label: Option<String>,
     rid: Option<String>,
     expiry: Option<i64>,
@@ -63,7 +62,7 @@ pub(crate) async fn create_payment_request(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     let p: CreatePaymentRequestParams = parse_required_object(params, "create_payment_request")?;
-    let amount = parse_atomic_units(&p.amount)?;
+    let amount = p.amount.to_atomic_units();
     let expiry = p.expiry.map(parse_unix_timestamp).transpose()?;
 
     let shared = require_open_engine(tenants).await?;
@@ -133,7 +132,7 @@ pub(crate) async fn make_uri(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     let p: MakeUriParams = parse_required_object(params, "make_uri")?;
-    let amount = p.amount.as_deref().map(parse_atomic_units).transpose()?;
+    let amount = p.amount.map(AtomicUnitsString::to_atomic_units);
     let rid = p.rid.as_deref().map(parse_rid).transpose()?;
     let expiry = p
         .expiry
@@ -185,7 +184,9 @@ pub(crate) fn parse_uri(
 
     let result = ParseUriResult {
         address: parsed.address,
-        amount: parsed.amount_atomic.map(|a| a.to_string()),
+        amount: parsed
+            .amount_atomic
+            .map(|a| AtomicUnits::from_raw(a).into()),
         label: parsed.label,
         rid: parsed.rid.map(|r| r.to_string()),
         expiry: parsed.expiry.map(|e| i64::try_from(e).unwrap_or(i64::MAX)),
@@ -199,7 +200,7 @@ fn payment_request_view(r: &PaymentRequest) -> PaymentRequestView {
     PaymentRequestView {
         id: r.id.as_u64().to_string(),
         label: r.label.expose().as_str().to_owned(),
-        amount: atomic_units_string(r.amount_atomic),
+        amount: r.amount_atomic.into(),
         created_at: i64::try_from(r.created_at.to_raw()).unwrap_or(i64::MAX),
         expiry: r
             .expiry
@@ -226,7 +227,7 @@ fn parse_filter(
         Some("PENDING") => Ok(PaymentRequestFilter::Pending),
         Some("MATCHED") => Ok(PaymentRequestFilter::Matched),
         // Stable message; never reflect the client-supplied string (same
-        // no-echo discipline as `parse_atomic_units`).
+        // no-echo discipline as `AtomicUnitsString`'s parse).
         Some(_) => Err(WalletRpcError::InvalidParams(
             "unknown payment-request filter (expected ALL, PENDING, or MATCHED)".into(),
         )),
