@@ -47,6 +47,7 @@
 use shekyl_curve_tree::frontier::Frontier;
 use shekyl_curve_tree::BlockHeight;
 use shekyl_curve_tree::LeafStore;
+use shekyl_curve_tree::SEGMENT_FREEZE_REORG_MARGIN_BLOCKS;
 use shekyl_fcmp::tree::SCALARS_PER_LEAF;
 
 use crate::fixture::Corpus;
@@ -64,6 +65,9 @@ pub struct AdvanceRig {
     store: LeafStore,
     frontier: Frontier,
     height: u64,
+    /// Blocks advanced before timing began, so [`Self::blocks_advanced`]
+    /// reports the timed series rather than the prefill.
+    prefilled: u64,
     /// One block's worth of leaves, reused every iteration so the
     /// measurement is the advance and not a leaf generator.
     block_leaves: Vec<[u8; LEAF_BYTES]>,
@@ -117,6 +121,7 @@ impl AdvanceRig {
             store,
             frontier: Frontier::new(),
             height: 0,
+            prefilled: 0,
             block_leaves,
         }
     }
@@ -145,11 +150,32 @@ impl AdvanceRig {
         self.height += 1;
     }
 
-    /// Blocks advanced so far — the rig's own subject assertion: a series
-    /// that measured nothing leaves this at zero.
+    /// Fill the ring past its retention horizon, untimed.
+    ///
+    /// **Every timed advance must pay a real eviction, and eviction cannot
+    /// fire until the ring is full.** The retained run is `[h - horizon, h]`,
+    /// so the write at `h` first drops a row at `h = horizon + 1`. A series
+    /// started from an empty rig therefore pays *no* eviction for its first
+    /// `horizon + 1` blocks and folds a shallower tree throughout — the
+    /// first graded run converged after 479 blocks and so never evicted once,
+    /// while the module doc above claims the commit is "where the horizon
+    /// eviction ... is paid". This closes that gap rather than restating it.
+    ///
+    /// The prefill is excluded from [`Self::blocks_advanced`] so the rule-47
+    /// subject assertion still speaks for the timed series alone.
+    pub fn prefill_to_steady_state(&mut self) {
+        while self.height < SEGMENT_FREEZE_REORG_MARGIN_BLOCKS + 1 {
+            self.advance_one_block();
+        }
+        self.prefilled = self.height;
+    }
+
+    /// Blocks advanced **while timed** — the rig's own subject assertion: a
+    /// series that measured nothing leaves this at zero, and the prefill
+    /// cannot stand in for it.
     #[must_use]
     pub fn blocks_advanced(&self) -> u64 {
-        self.height
+        self.height - self.prefilled
     }
 
     /// Leaves the live frontier has folded.

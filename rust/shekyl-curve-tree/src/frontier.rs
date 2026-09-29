@@ -38,6 +38,7 @@
 use shekyl_fcmp::tree::{
     chunk_width, hash_grow_selene, layer_count_for_leaves, selene_hash_init,
     try_build_upper_layers, try_promote_to_layer, LEAF_CHUNK_SCALARS, SCALARS_PER_LEAF,
+    SELENE_CHUNK_WIDTH,
 };
 
 use crate::segment::LEAF_BYTES;
@@ -67,9 +68,16 @@ pub enum FrontierError {
     /// A non-empty frontier held no pending children at any layer — a state
     /// the advance cannot produce, so the bytes are corrupt.
     EmptyWithLeaves,
-    /// Encoded bytes ended early, declared a chunk wider than its layer's
-    /// capacity, or carried trailing bytes.
+    /// Encoded bytes ended early or carried trailing bytes.
     Malformed,
+    /// The decoded chunk shape is not the one `leaf_count` determines.
+    ///
+    /// The encoding is redundant — `leaf_count` alone fixes the leaf chunk's
+    /// width and every partial layer's — and unvalidated redundancy is a
+    /// forgery surface: bytes carrying a *believable* count over an arbitrary
+    /// chunk set pass the dispatcher's C3 count check and still compose to
+    /// the wrong root.
+    ShapeDisagreesWithLeafCount,
 }
 
 /// The per-layer partial chunks of an append-only curve tree.
@@ -95,6 +103,39 @@ impl Frontier {
     /// so its capacity is that layer's width — not layer `k`'s.
     fn partial_capacity(k: usize) -> usize {
         chunk_width(u8::try_from(k + 1).expect("frontier layer index fits u8"))
+    }
+
+    /// The chunk shape a frontier holding `leaf_count` leaves must have:
+    /// `(leaf-chunk scalars, one width per partial layer)`.
+    ///
+    /// [`Self::push_leaf`] folds deterministically, so the shape is a pure
+    /// function of the count: the leaf chunk holds the leaves since the last
+    /// fold, and the partial widths are `leaf_count / SELENE_CHUNK_WIDTH`
+    /// written in the mixed radix of the parent widths. The digit count is
+    /// the layer count, because a layer exists exactly once something has
+    /// been carried into it.
+    ///
+    /// Derived here rather than trusted from the bytes, and graded in this
+    /// module's tests against frontiers [`Self::push_leaf`] actually built.
+    fn expected_shape(leaf_count: u64) -> Result<(usize, Vec<usize>), FrontierError> {
+        let selene = u64::try_from(SELENE_CHUNK_WIDTH).expect("Selene chunk width fits u64");
+        let leaf_scalars = usize::try_from(leaf_count % selene)
+            .expect("a remainder below the chunk width fits usize")
+            * SCALARS_PER_LEAF;
+        let mut widths = Vec::new();
+        let mut nodes = leaf_count / selene;
+        while nodes > 0 {
+            if widths.len() == MAX_PARTIAL_LAYERS {
+                return Err(FrontierError::TooDeep);
+            }
+            let capacity = u64::try_from(Self::partial_capacity(widths.len()))
+                .expect("a chunk width fits u64");
+            widths.push(
+                usize::try_from(nodes % capacity).expect("a remainder below a width fits usize"),
+            );
+            nodes /= capacity;
+        }
+        Ok((leaf_scalars, widths))
     }
 
     /// Largest [`Self::encode`] output, in bytes.
@@ -253,34 +294,40 @@ impl Frontier {
 
     /// Parse [`Self::encode`]'s output.
     ///
-    /// Every declared width is checked against the layer's capacity before a
-    /// byte is read for it, so corrupt bytes cannot drive an allocation or
-    /// produce a frontier the advance could not have built.
+    /// The whole chunk shape is checked against [`Self::expected_shape`]
+    /// before a byte is read for it, so corrupt bytes can neither drive an
+    /// allocation nor produce a frontier the advance could not have built.
+    /// Checking each width against its layer's *capacity* would not be
+    /// enough: a width can sit under capacity and still disagree with the
+    /// count, which is the case that survives the C3 check downstream.
     ///
     /// # Errors
     ///
-    /// [`FrontierError::Malformed`] on a short, over-wide or over-long input;
+    /// [`FrontierError::Malformed`] on a short or over-long input;
+    /// [`FrontierError::ShapeDisagreesWithLeafCount`] when the declared
+    /// widths are not the ones `leaf_count` determines;
     /// [`FrontierError::TooDeep`] past [`MAX_PARTIAL_LAYERS`].
     pub fn decode(bytes: &[u8]) -> Result<Self, FrontierError> {
         let mut cursor = Cursor { bytes, at: 0 };
         let leaf_count = u64::from_le_bytes(cursor.take_array::<8>()?);
+        let (want_scalars, want_widths) = Self::expected_shape(leaf_count)?;
         let scalars = usize::from(u16::from_le_bytes(cursor.take_array::<2>()?));
-        if scalars >= LEAF_CHUNK_SCALARS || !scalars.is_multiple_of(SCALARS_PER_LEAF) {
-            return Err(FrontierError::Malformed);
+        if scalars != want_scalars {
+            return Err(FrontierError::ShapeDisagreesWithLeafCount);
         }
         let mut leaf_chunk = Vec::with_capacity(scalars);
         for _ in 0..scalars {
             leaf_chunk.push(cursor.take_array::<32>()?);
         }
         let layer_count = usize::from(cursor.take_array::<1>()?[0]);
-        if layer_count > MAX_PARTIAL_LAYERS {
-            return Err(FrontierError::TooDeep);
+        if layer_count != want_widths.len() {
+            return Err(FrontierError::ShapeDisagreesWithLeafCount);
         }
         let mut partial = Vec::with_capacity(layer_count);
-        for k in 0..layer_count {
+        for want in &want_widths {
             let width = usize::from(cursor.take_array::<1>()?[0]);
-            if width >= Self::partial_capacity(k) {
-                return Err(FrontierError::Malformed);
+            if width != *want {
+                return Err(FrontierError::ShapeDisagreesWithLeafCount);
             }
             let mut layer = Vec::with_capacity(width);
             for _ in 0..width {
@@ -377,6 +424,76 @@ mod tests {
             f.push_leaf(&leaf(i)).expect("advance");
         }
         f
+    }
+
+    /// The derivation in [`Frontier::expected_shape`] is written from the
+    /// fold rule, so it is graded against frontiers the fold actually built
+    /// — never against a second copy of the same reasoning.
+    #[test]
+    fn expected_shape_matches_every_frontier_the_advance_builds() {
+        let selene = u64::try_from(SELENE_CHUNK_WIDTH).expect("width fits u64");
+        let helios = u64::try_from(HELIOS_CHUNK_WIDTH).expect("width fits u64");
+        // Both layer-count discontinuities (`0 -> 1` and the first cascade),
+        // their neighbours, and a dense run that crosses the leaf fold many
+        // times. A flat region alone cannot see a shape error.
+        let mut counts: Vec<u64> = (0..=(selene * 3)).collect();
+        for edge in [selene * helios, selene * helios * selene] {
+            counts.extend([edge - 1, edge, edge + 1]);
+        }
+        for n in counts {
+            let f = frontier_through(n);
+            let (scalars, widths) =
+                Frontier::expected_shape(n).expect("production counts are in range");
+            assert_eq!(
+                scalars,
+                f.leaf_chunk.len(),
+                "leaf-chunk scalars disagree at n = {n}"
+            );
+            assert_eq!(
+                widths,
+                f.partial.iter().map(Vec::len).collect::<Vec<_>>(),
+                "partial widths disagree at n = {n}"
+            );
+        }
+    }
+
+    /// The case a per-layer capacity check cannot see: a width that is under
+    /// its layer's capacity and still wrong for the count. These bytes carry
+    /// a believable `leaf_count`, so the dispatcher's C3 check would pass
+    /// them through to a wrong root.
+    #[test]
+    fn decode_refuses_a_width_that_disagrees_with_the_count() {
+        let selene = u64::try_from(SELENE_CHUNK_WIDTH).expect("width fits u64");
+        let n = selene * 3;
+        let bytes = frontier_through(n).encode();
+        assert_eq!(
+            Frontier::decode(&bytes).expect("the unmutated encoding decodes"),
+            frontier_through(n),
+            "the control must decode before a mutation of it means anything"
+        );
+
+        // The layer-0 width byte sits after the 8-byte count, the 2-byte
+        // scalar count, the leaf chunk, and the 1-byte layer count.
+        let scalars = usize::from(u16::from_le_bytes([bytes[8], bytes[9]]));
+        let width_at = 8 + 2 + scalars * 32 + 1;
+        let real = bytes[width_at];
+        assert!(
+            real > 0,
+            "this count must carry a non-empty layer-0 chunk for the mutation to shrink one"
+        );
+        let mut forged = bytes.clone();
+        forged[width_at] = real - 1;
+        // One node's worth of bytes must go with it, or the refusal could be
+        // the length check rather than the shape check.
+        forged.drain(width_at + 1..width_at + 33);
+        assert!(
+            usize::from(forged[width_at]) < Frontier::partial_capacity(0),
+            "the forged width must stay under capacity, or the old check would have caught it"
+        );
+        assert_eq!(
+            Frontier::decode(&forged),
+            Err(FrontierError::ShapeDisagreesWithLeafCount)
+        );
     }
 
     #[test]
@@ -502,7 +619,13 @@ mod tests {
         let width_at = bytes.len() - 33;
         assert_eq!(usize::from(bytes[width_at]), 1, "fixture chunk is one node");
         bytes[width_at] = u8::try_from(Frontier::partial_capacity(0)).unwrap();
-        assert_eq!(Frontier::decode(&bytes), Err(FrontierError::Malformed));
+        // A width at capacity is one case of a width that is not the one the
+        // count determines, so the shape check owns this refusal — the
+        // capacity comparison it replaced could only see this subset.
+        assert_eq!(
+            Frontier::decode(&bytes),
+            Err(FrontierError::ShapeDisagreesWithLeafCount)
+        );
     }
 
     #[test]
@@ -521,14 +644,18 @@ mod tests {
     fn a_leaf_chunk_at_capacity_is_not_a_decodable_state() {
         // The advance folds at `LEAF_CHUNK_SCALARS`, so a frontier holding a
         // full leaf chunk cannot be produced -- and bytes claiming one are
-        // corrupt rather than merely unusual.
+        // corrupt rather than merely unusual. `expected_shape` never yields a
+        // full chunk, so this refusal now comes from the shape check.
         let mut bytes = frontier_through(1).encode();
         bytes[8..10].copy_from_slice(
             &u16::try_from(LEAF_CHUNK_SCALARS)
                 .expect("leaf chunk width fits u16")
                 .to_le_bytes(),
         );
-        assert_eq!(Frontier::decode(&bytes), Err(FrontierError::Malformed));
+        assert_eq!(
+            Frontier::decode(&bytes),
+            Err(FrontierError::ShapeDisagreesWithLeafCount)
+        );
     }
 }
 
@@ -541,11 +668,20 @@ mod sizing {
     /// §6.3.2 row 4, and the depth `WSS_Q1B_BENCH_SPEC.md` grades at.
     const PRODUCTION_DEPTH: usize = 6;
 
-    /// §6.3.2 row 4's frontier size, in bytes: `38 x 128` leaf chunk,
-    /// `3 x 1216` Selene, `2 x 576` Helios. Quoted as the **bound** this
-    /// implementation must fit inside, never as its size — the size is
-    /// derived from [`chunk_width`], and the two need not agree.
-    const DESIGN_FRONTIER_BYTES: usize = 38 * 128 + 3 * 1216 + 2 * 576;
+    /// §6.3.2 row 4's **path** size, in bytes: a `38 x 128` leaf chunk, then
+    /// one chunk per layer above it — `3 x 576` Helios and `2 x 1216` Selene
+    /// at the production depth, in that proportion because the widths
+    /// alternate `38, 18, ...` upward from the leaf layer.
+    ///
+    /// Quoted as the **bound** this implementation must fit inside, never as
+    /// its size: a frontier is not a path — it holds each partial chunk one
+    /// child short of folding and carries a header — so the two differ, and
+    /// the frontier's own size is derived from [`chunk_width`].
+    ///
+    /// This constant read `3 * 1216 + 2 * 576` until 2026-09-29, which
+    /// inverted the Selene and Helios counts and so permitted regressions up
+    /// to 9 664 B.
+    const DESIGN_FRONTIER_BYTES: usize = 38 * 128 + 3 * 576 + 2 * 1216;
 
     /// Encoded size of a frontier whose every partial chunk is one child
     /// short of folding — the largest a frontier of this depth can be.
@@ -571,14 +707,22 @@ mod sizing {
             "the derived bound {} is below a shape the advance can reach ({measured} B)",
             Frontier::max_encoded_len()
         );
-        // The ring's whole cost is that size times the horizon, and the
-        // horizon is cited rather than restated (C4).
-        let ring = measured
-            * usize::try_from(SEGMENT_FREEZE_REORG_MARGIN_BLOCKS).expect("horizon fits usize");
-        assert!(
-            ring <= DESIGN_FRONTIER_BYTES
-                * usize::try_from(SEGMENT_FREEZE_REORG_MARGIN_BLOCKS).expect("horizon fits usize"),
-            "the ring costs {ring} B over the horizon"
+        // Pinned against a literal, not against `DESIGN_FRONTIER_BYTES`:
+        // a bound derived the same way as the measurement is green by
+        // construction, and this is the figure the round doc quotes.
+        assert_eq!(
+            measured, 8_848,
+            "the frontier's encoded size is quoted in CT6_PROVING_STATE.md §9.4 and §10.1"
+        );
+        // The ring retains `[h - horizon, h]` — a CLOSED interval, so
+        // `horizon + 1` rows. The horizon is cited rather than restated (C4);
+        // the `+ 1` is the fencepost this increment corrected.
+        let rows =
+            usize::try_from(SEGMENT_FREEZE_REORG_MARGIN_BLOCKS).expect("horizon fits usize") + 1;
+        assert_eq!(
+            measured * rows,
+            6_379_408,
+            "the ring's whole cost is quoted in CT6_PROVING_STATE.md §9.4"
         );
     }
 }

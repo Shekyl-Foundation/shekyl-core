@@ -18,6 +18,7 @@
 use std::process::ExitCode;
 
 use clap::Parser;
+use shekyl_curve_tree::SEGMENT_FREEZE_REORG_MARGIN_BLOCKS;
 use shekyl_wss_q1b_bench::advance::AdvanceRig;
 use shekyl_wss_q1b_bench::corpus;
 use shekyl_wss_q1b_bench::corpus::{
@@ -272,6 +273,15 @@ fn main() -> ExitCode {
         leaf_rate.leaves_per_block,
         args.advance_store_dir.as_deref(),
     );
+    // Untimed, and before the series: an advance that has not filled the
+    // ring evicts nothing, so a run started from empty grades a regime the
+    // steady state never occupies. Outside `MAX_WALL_SECONDS` because the
+    // budget guards the measurement, not its setup.
+    eprintln!(
+        "── CT-6 Q4: filling the ring to steady state ({} blocks, untimed) ──",
+        SEGMENT_FREEZE_REORG_MARGIN_BLOCKS + 1
+    );
+    advance_rig.prefill_to_steady_state();
     let advance_series = sustained_within_conditioned(
         args.warmup,
         DEFAULT_TOLERANCE_PCT,
@@ -388,11 +398,14 @@ fn main() -> ExitCode {
     }
 
     let replay_median = replay_series.graded_s();
-    // Blocks the replayed corpus actually covers. `AdvanceRig::new` has
-    // already refused a corpus shorter than one block, so this is at least 1
-    // by the time it is read; a `.max(1)` here would be a guard that cannot
-    // fire.
-    let replayed_blocks = (window_leaves / leaf_rate.leaves_per_block) as f64;
+    // Blocks the replayed corpus actually covers. Divided in floating point:
+    // `--window-leaves` takes arbitrary values, and integer division would
+    // discard a partial final block from the denominator — reporting 1.5
+    // blocks of replay as 1 and inflating the per-block quotient by half.
+    // `AdvanceRig::new` has already refused a corpus shorter than one block,
+    // so this is at least 1.0 by the time it is read; a `.max(1.0)` here
+    // would be a guard that cannot fire.
+    let replayed_blocks = window_leaves as f64 / leaf_rate.leaves_per_block as f64;
     // The retired model beside the measurement, for the same reason and at
     // the same point: the ratio between the two is what travels off this
     // machine, and neither number does on its own.

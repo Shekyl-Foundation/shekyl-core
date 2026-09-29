@@ -277,7 +277,7 @@ DEPENDENCY** (owned elsewhere, not scheduled here), **PENDING AS DERIVATION**
 
 | # | Question | Disposition |
 | --- | --- | --- |
-| **CT-6 Q1** | **Snapshot geometry.** Dense span, sparse spacing `s`, eviction. `s` bounds the worst rewind | **RULED 2026-09-28 — by derivation, and the derivation deletes the geometry it was asked to size.** `s = ⌊budget / rate⌋ = ⌊2.000 / 0.53759⌋ = **3 blocks** (§9). At `s = 3` a sparse tier holds 240 snapshots against a dense ring's 720 — **4.64 MB** bought at the price of a spacing constant, an eviction policy, a dense/sparse boundary and the reader logic across it, on an 8 GB rig. **Ruled: one dense ring over the reorg horizon; the tier geometry, the spacing constant, the eviction policy and the dense/sparse reader logic are deleted from the design.** A rule-21 reopening of this row's own Round-1 shape on its derivation's substrate — the measurement did not fill the constant in, it removed the structure the constant was for. **Scope:** the collapse deletes **`Q1`'s intra-ring geometry only**. `Q2`'s seam and its armed examiner are unaffected — frozen segments remain the landed tier, the ring remains the unfrozen tail's answerer, and the examiner grades exactly as armed at #838 |
+| **CT-6 Q1** | **Snapshot geometry.** Dense span, sparse spacing `s`, eviction. `s` bounds the worst rewind | **RULED 2026-09-28 — by derivation, and the derivation deletes the geometry it was asked to size.** `s = ⌊budget / rate⌋ = ⌊2.000 / 0.53759⌋ = **3 blocks** (§9). At `s = 3` a sparse tier holds 241 snapshots against a dense ring's 721 — **4.25 MB** bought at the price of a spacing constant, an eviction policy, a dense/sparse boundary and the reader logic across it, on an 8 GB rig. **Ruled: one dense ring over the reorg horizon; the tier geometry, the spacing constant, the eviction policy and the dense/sparse reader logic are deleted from the design.** A rule-21 reopening of this row's own Round-1 shape on its derivation's substrate — the measurement did not fill the constant in, it removed the structure the constant was for. **Scope:** the collapse deletes **`Q1`'s intra-ring geometry only**. `Q2`'s seam and its armed examiner are unaffected — frozen segments remain the landed tier, the ring remains the unfrozen tail's answerer, and the examiner grades exactly as armed at #838 |
 | **CT-6 Q2** | **Alignment.** CT-1 segments are leaf-count-aligned and freeze on burial; snapshots are height-keyed. Do they stay two mechanisms, or does the snapshot subsume the unfrozen-segment recompute (F3a)? | **RULED 2026-09-22 — two mechanisms, one reader**, as proposed. Segments keep the frozen tier; snapshots cover the unfrozen tail; `root_at_count` reads whichever covers the height. Subsuming would rewrite a landed consensus-adjacent boundary to fix a cache, and C4 already forbids the second literal. **The invariant is `total, and identical where both answer` — not `total and non-overlapping`.** The freeze boundary is a *burial condition* (`SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`, `segment.rs:69`) that advances as blocks arrive, and it joins two coordinate systems — leaf-count-aligned segments against height-keyed snapshots. **Demanding non-overlap would force eviction (Q1's subject) to track freezing (this row's boundary) in lockstep, re-welding the two mechanisms this ruling separates.** Permitting overlap and requiring agreement keeps them independent, and C1's oracle already supplies the agreement test. Increment 2's red-bite states it in this form |
 | **CT-6 Q3** | **Persistence.** What rides which file, and at which save points | **RULED 2026-09-22, scoped.** Snapshots and the buffer ride the **ledger**; path sets ride the sealed file at existing save points; crash ⇒ rebuild from last save + refetch (C8). **The scope is part of the ruling:** it governs the wallet's **single proving state**, which is what Q5's dissolution establishes there is. **The reason the scope is stated rather than assumed:** C6's `identity-free` is a claim about *bytes*, not *access* (C6 as amended). Public content does not make the file it rides shared, so under a second proving consumer this default would have forced either a read of another identity's sealed file — `WSS-13` relocated, the defect §6.3.3 exists to foreclose — or a duplicate of the public state. Neither was stated, and the default read as though C6 licensed the first. Q5's dissolution removes the second consumer, so the question does not arise; **this row records why the scope is load-bearing rather than incidental** |
 | **CT-6 Q4** | **The advance budget** — the amortized form's own graded quantity: worst-case per-block advance as a fraction of block cadence, on the floor | **PENDING AS DERIVATION — pre-registered at ≤ 10 % of cadence, gated on a re-point.** Pre-registration ahead of the cost is methodologically what §6.3.4 rows 2 and 3 already are, and it carries their rule-21 reopener. **But the field it pre-registers against does not yet measure the quantity it names.** `per_block_advance_worst_case_s` is computed as `replay_median / REPLAY_WINDOW_BLOCKS` (`spend_edge.rs:386`) — a **quotient of the spend replay**, which is a legitimate *pre-build model estimate* (uniform hashing over the window) and an **illegitimate grade afterwards**, because the built advance does work the replay never did: snapshot writes and path capture. **So the pre-registration carries its own condition: increment 4 re-derives the field from the actual advance before anything is graded against this threshold**, rather than inheriting the quotient. A name that matches with a derivation that does not is the defect this catches one increment before it ships. **The re-point is built (increment 4, §10.4):** the field is now the median of a measured series over the built advance — frontier fold, snapshot encode, ring commit — and the retired quotient rides beside it as `per_block_advance_retired_quotient_s` so the two are comparable within one run. Record `schema_version` bumps 2 → 3, because the field changed derivation under an unchanged name, which is this row's own defect class. **Still PENDING:** the threshold is graded on the pinned rig, and increment 4 did not run there. Increment 6 is that seat |
@@ -325,7 +325,7 @@ have re-imported the dependency this round exists outside of.
 | 2026-09-22 | **`Q3` RULED, scoped to the wallet's single proving state** | C6's `identity-free` is a claim about bytes, not access. The unscoped default would have forced a read of another identity's sealed file (`WSS-13` relocated) or a duplicate of the public state |
 | 2026-09-22 | **`Q5` CLOSED by dissolution; the rule-21 reopener attaches to the dissolution, not to a live question** | `P` proves nothing as a distinct actor; the proving state is identity-blind; no second capture side exists, so the question has no subject. Recorded as a dissolution because nothing was weighed |
 | 2026-09-22 | **`Q1` and `Q4` are PENDING AS DERIVATIONS, and the banner says so per row** | `s` is derivable from §6.3.4 row 2's already-ruled budget once the rig supplies two terms; `Q4`'s threshold needs its field re-pointed from the replay quotient to the built advance. A banner reading "ruled" over either would put the map ahead of the territory |
-| 2026-09-28 | **`Q1` RULED by derivation, and the derivation deletes the geometry** — one dense ring over the reorg horizon; tier, spacing, eviction and dense/sparse reader logic removed | §9. `s = ⌊2.000 / 0.53759⌋ = 3`; at `s = 3` the tier buys 4.64 MB and costs four moving parts. Rule-21 reopening of the row's own Round-1 shape on its derivation's substrate. Scope: `Q1`'s intra-ring geometry only — `Q2`'s seam and examiner unaffected |
+| 2026-09-28 | **`Q1` RULED by derivation, and the derivation deletes the geometry** — one dense ring over the reorg horizon; tier, spacing, eviction and dense/sparse reader logic removed | §9. `s = ⌊2.000 / 0.53759⌋ = 3`; at `s = 3` the tier buys 4.64 MB and costs four moving parts (**that figure was corrected to 4.25 MB on 2026-09-29** — §9.4's dated note; the row keeps what the 2026-09-28 derivation computed, and the ruling is unchanged either way). Rule-21 reopening of the row's own Round-1 shape on its derivation's substrate. Scope: `Q1`'s intra-ring geometry only — `Q2`'s seam and examiner unaffected |
 | 2026-09-28 | **Increment 4 built: one dense ring, the examiner unmodified, `Q4`'s field re-derived** | §10. The ring is a store table rather than a RAM structure because Q3 rules snapshots ride the ledger and because a rollback then deletes ring rows in the same transaction that truncates the leaves. The examiner is graded in **two passes** — one where the segment tier answers the whole chain (the pass that can `Disagree`) and one where it answers nothing, which is what this fixture's freeze cursor actually is (the only pass in which a hole reaches `Uncovered`) |
 | 2026-09-23 | **`Q2`'s red-bite is armed at increment 2 against an injected subject, not deferred and not placeholdered** | Both offered shapes were defective: a placeholder is green by construction, and deferring it makes the subject's author write its own examiner. The armed examiner is `examine_tier_readings`. Each tier contributes a `TierReading` (root and depth together — C3) or `TierCoverage::OutsideSpan` where its `HeightSpan` does not cover the height. Agreeing overlap is success; a root mismatch and a depth mismatch are both `Disagree`; a height in neither span is `Uncovered`. A tier that errors does not fit `TierCoverage`, so a failure cannot be recorded as a gap. Increment 4 passes the segment tier and the snapshot tier through this function |
 | 2026-09-22 | **The `Q3`←`Q5` graph inversion is recorded, not merely fixed** | Q3 fed increment 4 while Q5 gated increment 5, yet Q3's answer depended on Q5's. Waiting on Q5 would have re-imported the daemon dependency this round sits outside of |
@@ -393,8 +393,8 @@ At `s = 3` over the reorg horizon, the frontier encoding to **8 848 B**
 
 | | Snapshots | Size |
 | --- | --- | --- |
-| Sparse at `s = 3` | 240 | **2.12 MB** |
-| Dense over the horizon | 720 | **6.37 MB** |
+| Sparse at `s = 3` | 241 | **2.13 MB** |
+| Dense over the horizon | 721 | **6.38 MB** |
 
 The two-tier structure buys **4.25 MB** on an 8 GB rig, and costs a spacing
 constant, an eviction policy, a dense/sparse boundary, and the reader logic that
@@ -406,9 +406,13 @@ chooses across it.
 > chunk — three 1 216 B chunks where the widths give three 576 B — and counted
 > every chunk at capacity. Row 4 is correct as written: **9 024 B for a path**.
 > A frontier is not a path; it holds each partial chunk one child short of
-> folding, so it encodes to **8 848 B** (§10.1). **The ruling does not move** —
-> the correction makes the dense ring cheaper than the figure it was ruled
-> against, so the argument it was ruled on only strengthens.
+> folding, so it encodes to **8 848 B** (§10.1). The row counts moved the same
+> day and for a second reason: the retained run `[h - horizon, h]` is **closed**,
+> so the ring holds `horizon + 1` = 721 rows, not 720 — the fencepost §10.1
+> corrects in the implementation, carried back into the figures it sizes.
+> **The ruling does not move** — the correction makes the dense ring cheaper
+> than the figure it was ruled against, so the argument it was ruled on only
+> strengthens.
 
 **RULED 2026-09-28: one dense ring over the reorg horizon**
 (`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`, cited and never restated — C4). The tier
@@ -446,7 +450,7 @@ the examiner guards lapses here.
   which is increment 6's.**
 - **Reopeners.** A material prover-pin move re-grades the denominator (the
   existing §6.3.4 clause). A change to the leaf-hash path re-measures the rate.
-  The ring's 6.37 MB is bounded by construction and carries no reopener.
+  The ring's 6.38 MB is bounded by construction and carries no reopener.
 
 ### 9.7 Effect
 
@@ -491,8 +495,8 @@ short of folding and carries an 11 B header, so the two differ by 176 B. Row 4's
 one overreach is the sentence that follows its arithmetic, “the frontier is the
 same size”; it is corrected there. The **9 664 B** §9.4 first carried was neither
 figure but a transcription of row 4 that inverted its Selene and Helios counts,
-corrected and dated in place. Over the horizon this is **6.37 MB**. No clause
-moves.
+corrected and dated in place. Over the horizon — a **closed** run, so
+`horizon + 1` rows — this is **6.38 MB**. No clause moves.
 
 ### 10.2 Where it persists (`Q3`)
 
@@ -517,10 +521,23 @@ plus the one they fork from. The wrap test takes its expected span from that
 sentence and not from the delete's own bound, which would have asserted the
 implementation back at itself.
 
-**No store schema-version bump, and the reason is C8.** Adding a table is not a
-layout change: a store written before this one existed simply has no rows,
-every height falls through to `root_at_count`, and the ring refills forward.
-The ring is a cache, so its absence is slow rather than wrong.
+**`SCHEMA_VERSION` 5 → 6, and the reason is C8.** *Reading* a pre-ring store
+needs no migration: it simply has no rows, every height falls through to
+`root_at_count`, and the ring refills forward — the ring is a cache, so its
+absence is slow rather than wrong.
+
+But that covers one direction only, and a binding replaces a check only per
+direction. The other is a pre-ring **writer**: it cannot see
+`frontier_snapshots`, so it can roll back and replay while leaving rows above
+the new tip untouched, and a stale row can carry the leaf count §10.3's C3
+check expects while composing the abandoned branch's root. Nothing in-band
+stops a writer that cannot see the table, so the version cell is the only
+mechanism that closes it — and refusing the store is precisely what C8 already
+prescribes: *recovery is refuse-and-resync, never a migration*.
+
+**Corrected 2026-09-29.** This section read "no store schema-version bump, and
+the reason is C8" until the review round. That inverted C8: a bump costs a
+resync, and a resync is the recovery C8 names.
 
 ### 10.3 Serving and rewinding
 

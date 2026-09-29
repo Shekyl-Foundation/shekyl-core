@@ -56,10 +56,14 @@ const PENDING_TABLE: TableDefinition<GindexKey, &[u8; 320]> = TableDefinition::n
 // `h - horizon` and that is the row a rewind restores from
 // (`write_frontier_snapshot_in_txn`).
 //
-// A store written before this table existed simply has none of these rows.
-// That is not a schema break and takes no version bump: the ring is a cache
-// (C8), a missing row falls through to `root_at_count`, and the ring refills
-// as blocks arrive.
+// A store written before this table existed simply has none of these rows:
+// the ring is a cache (C8), a missing row falls through to `root_at_count`,
+// and the ring refills as blocks arrive. That direction needs no migration
+// — but it is only one direction. `SCHEMA_VERSION` is bumped to 6 for the
+// other one: a pre-ring **writer** cannot see this table, so it can roll
+// back and replay while leaving rows above the new tip in place, and a stale
+// row can hold the expected leaf count over the abandoned branch's root. A
+// binding replaces a check only per direction.
 const FRONTIER_SNAPSHOTS_TABLE: TableDefinition<BlockHeightKey, &[u8]> =
     TableDefinition::new("frontier_snapshots");
 // `META_TABLE` is a heterogeneous `&str`-keyed counter store; its `u64`
@@ -105,7 +109,17 @@ const META_PRUNE_DISABLED: &str = "prune_disabled";
 /// would resume into a baffling root mismatch. Pre-genesis disposition for
 /// any mismatch: delete the store and re-sync (`15-deletion-and-debt.mdc` —
 /// no in-Shekyl migration code).
-const SCHEMA_VERSION: u64 = 5;
+///
+/// **6** adds the CT-6 increment-4 frontier snapshot ring. The bump is not
+/// about *reading* a ≤5 store — the ring is a cache and refills forward —
+/// but about stopping a ≤5 **writer**: a pre-ring binary does not know
+/// [`FRONTIER_SNAPSHOTS_TABLE`], so it can roll back and replay without
+/// truncating it, and a stale row left at a replayed height can carry the
+/// expected leaf count while composing the abandoned branch's root. Nothing
+/// in-band can stop a writer that cannot see the table, so the version cell
+/// is the only mechanism that closes it, and refusing the store is exactly
+/// C8's `refuse-and-resync`.
+const SCHEMA_VERSION: u64 = 6;
 
 /// The CT-3a layout version: same byte layout as [`SCHEMA_VERSION`] 3 but
 /// without the maintained-pending-table contract. Test-only — production
@@ -589,6 +603,26 @@ pub enum StoreError {
         /// Version this build reads and writes.
         expected: u64,
     },
+    /// A frontier snapshot was offered for a height at or below the store's
+    /// `sync_tip`.
+    ///
+    /// `append_block_deltas` tolerates a non-monotonic `tip_height` for the
+    /// freeze clock's sake (`effective_tip` takes the max), but a *snapshot*
+    /// carries no such reading: production ingest only ever moves forward,
+    /// and `rollback_to_fork` lowers `sync_tip` and truncates the ring in one
+    /// transaction, so a rewind is always followed by a strictly higher
+    /// height. A snapshot below the tip is therefore a caller bug, and
+    /// accepting it would insert a row the ring's own bound did not place —
+    /// widening `frontier_snapshot_span` so the dispatcher reports coverage
+    /// it does not have. Refused rather than evicted around: an eviction
+    /// tweak would defend a state production cannot reach while silently
+    /// accepting the bug that produced it.
+    SnapshotBelowSyncTip {
+        /// The height the snapshot was offered for.
+        tip: u64,
+        /// The store's current sync tip.
+        sync_tip: u64,
+    },
 }
 
 impl StoreError {
@@ -1065,11 +1099,22 @@ impl LeafStore {
                 pending.insert(GindexKey::from(entry.gindex), &encode_pending(entry))?;
             }
         }
-        let effective_tip = {
+        let (sync_tip, effective_tip) = {
             let meta = txn.open_table(META_TABLE)?;
             let sync_tip = meta.get(META_SYNC_TIP)?.map(|v| v.value()).unwrap_or(0);
-            tip_height.to_raw().max(sync_tip)
+            (sync_tip, tip_height.to_raw().max(sync_tip))
         };
+        // The ring is keyed by the height it captures, so a snapshot offered
+        // below the tip would land under the retention floor and still widen
+        // the span. Checked before anything is written, so the refusal leaves
+        // the store untouched.
+        if frontier_snapshot.is_some() && tip_height.to_raw() < sync_tip {
+            return Err(StoreError::SnapshotBelowSyncTip {
+                tip: tip_height.to_raw(),
+                sync_tip,
+            });
+        }
+
         {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_LEAF_COUNT, &leaf_count)?;
@@ -2583,6 +2628,50 @@ mod tests {
         assert_eq!(pending_gindexes(&store), vec![4]);
         assert_eq!(store.leaf_count().unwrap(), 1);
         assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(70));
+    }
+
+    #[test]
+    fn a_snapshot_below_the_sync_tip_is_refused_and_leaves_the_ring_alone() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        let snapshot = b"a frontier's bytes".as_slice();
+        store
+            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(100), Some(snapshot))
+            .unwrap();
+        assert_eq!(
+            store.frontier_snapshot_span().unwrap(),
+            Some((BlockHeight::from_raw(100), BlockHeight::from_raw(100))),
+            "the control write must land, or the refusal below proves nothing"
+        );
+
+        // A non-monotonic append is tolerated for the freeze clock, so this
+        // call would otherwise succeed and insert a row at height 90 —
+        // widening the span downward past what the ring's own bound placed.
+        let err = store
+            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(90), Some(snapshot))
+            .expect_err("a snapshot below the sync tip is a caller bug");
+        assert!(
+            matches!(
+                err,
+                StoreError::SnapshotBelowSyncTip {
+                    tip: 90,
+                    sync_tip: 100
+                }
+            ),
+            "expected SnapshotBelowSyncTip(tip=90, sync_tip=100), got: {err:?}"
+        );
+        assert_eq!(
+            store.frontier_snapshot_span().unwrap(),
+            Some((BlockHeight::from_raw(100), BlockHeight::from_raw(100))),
+            "the refusal must leave the ring exactly as it was"
+        );
+
+        // The same stale height WITHOUT a snapshot still works: the freeze
+        // clock's tolerance is untouched, so this refusal is scoped to the
+        // ring rather than narrowing the append contract.
+        store
+            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(90), None)
+            .expect("a snapshot-free stale append is still legal");
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(100));
     }
 
     #[test]
