@@ -8,13 +8,23 @@
 //!
 //! RPC and misbehaviour scoring both write this list, through a duration
 //! added to the monotonic clock. A duration that does not fit a [`Tick`]
-//! is not stored. One list lives in the socket table; this type is that
-//! list.
+//! is not stored. A ban from the operator's ban file has no deadline:
+//! it stays until it is lifted. One list lives in the socket table; this
+//! type is that list.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_timing_engine::Tick;
+
+/// How long a ban still has, read at one tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BanLeft {
+    /// Nanoseconds until the deadline.
+    Remaining { nanos: u64 },
+    /// No deadline. The ban stays until it is lifted.
+    Permanent,
+}
 
 /// One row of the list, with time left from the tick it was read at.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,16 +33,23 @@ pub enum ListedBan {
     Host {
         /// The banned address.
         host: IpAddr,
-        /// Nanoseconds until the deadline.
-        remaining_ns: u64,
+        /// Time left, or none.
+        left: BanLeft,
     },
     /// An IPv4 prefix.
     Subnet {
         /// The prefix.
         subnet: Ipv4Subnet,
-        /// Nanoseconds until the deadline.
-        remaining_ns: u64,
+        /// Time left, or none.
+        left: BanLeft,
     },
+}
+
+/// A stored ban. Permanent has no deadline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Term {
+    Until(Tick),
+    Permanent,
 }
 
 /// `now + duration_ns`, or `None` when the sum does not fit a [`Tick`].
@@ -86,11 +103,39 @@ impl Ipv4Subnet {
     }
 }
 
-/// `until` is stored only when there is no deadline yet, or it is later.
-fn extends(current: Option<Tick>, until: Tick) -> bool {
-    match current {
-        Some(have) => until > have,
-        None => true,
+fn term_live(term: Term, now: Tick) -> bool {
+    match term {
+        Term::Permanent => true,
+        Term::Until(until) => now < until,
+    }
+}
+
+/// A permanent ban is not shortened by a deadline. A deadline replaces
+/// another only when it is later. Permanent replaces a deadline.
+fn term_replaces(current: Option<Term>, next: Term) -> bool {
+    match (current, next) {
+        (Some(Term::Permanent), _) => false,
+        (_, Term::Permanent) | (None, Term::Until(_)) => true,
+        (Some(Term::Until(have)), Term::Until(until)) => until > have,
+    }
+}
+
+fn term_left(term: Term, now: Tick) -> Option<BanLeft> {
+    match term {
+        Term::Permanent => Some(BanLeft::Permanent),
+        Term::Until(until) if now < until => Some(BanLeft::Remaining {
+            nanos: until.get() - now.get(),
+        }),
+        Term::Until(_) => None,
+    }
+}
+
+fn longer(left: BanLeft, right: BanLeft) -> BanLeft {
+    match (left, right) {
+        (BanLeft::Permanent, _) | (_, BanLeft::Permanent) => BanLeft::Permanent,
+        (BanLeft::Remaining { nanos: a }, BanLeft::Remaining { nanos: b }) => {
+            BanLeft::Remaining { nanos: a.max(b) }
+        }
     }
 }
 
@@ -104,8 +149,8 @@ fn mask(addr: Ipv4Addr, prefix_len: u8) -> Ipv4Addr {
 
 #[derive(Clone, Debug, Default)]
 pub struct BanList {
-    hosts: HashMap<IpAddr, Tick>,
-    subnets: Vec<(Ipv4Subnet, Tick)>,
+    hosts: HashMap<IpAddr, Term>,
+    subnets: Vec<(Ipv4Subnet, Term)>,
 }
 
 impl BanList {
@@ -120,10 +165,23 @@ impl BanList {
     /// one already stored does not shorten it: [`Self::lift_host`] is how a
     /// ban ends early. Returns whether this call stored `until`.
     pub fn ban_host(&mut self, host: IpAddr, until: Tick, now: Tick) -> bool {
-        if now >= until || !extends(self.hosts.get(&host).copied(), until) {
+        if now >= until {
             return false;
         }
-        self.hosts.insert(host, until);
+        self.store_host(host, Term::Until(until))
+    }
+
+    /// Ban `host` until it is lifted. A deadline already stored is replaced.
+    /// A ban that is already permanent is left as it is.
+    pub fn ban_host_permanent(&mut self, host: IpAddr) -> bool {
+        self.store_host(host, Term::Permanent)
+    }
+
+    fn store_host(&mut self, host: IpAddr, next: Term) -> bool {
+        if !term_replaces(self.hosts.get(&host).copied(), next) {
+            return false;
+        }
+        self.hosts.insert(host, next);
         true
     }
 
@@ -133,13 +191,25 @@ impl BanList {
         if now >= until {
             return false;
         }
+        self.store_subnet(subnet, Term::Until(until))
+    }
+
+    /// Ban `subnet` until it is lifted. Same replacement rule as
+    /// [`Self::ban_host_permanent`].
+    pub fn ban_subnet_permanent(&mut self, subnet: Ipv4Subnet) -> bool {
+        self.store_subnet(subnet, Term::Permanent)
+    }
+
+    fn store_subnet(&mut self, subnet: Ipv4Subnet, next: Term) -> bool {
         if let Some(entry) = self.subnets.iter_mut().find(|(have, _)| *have == subnet) {
-            if !extends(Some(entry.1), until) {
+            if !term_replaces(Some(entry.1), next) {
                 return false;
             }
-            entry.1 = until;
+            entry.1 = next;
+        } else if term_replaces(None, next) {
+            self.subnets.push((subnet, next));
         } else {
-            self.subnets.push((subnet, until));
+            return false;
         }
         true
     }
@@ -160,7 +230,7 @@ impl BanList {
     /// arrived is removed by this lookup and is not banned.
     pub fn is_banned(&mut self, host: IpAddr, now: Tick) -> bool {
         let host_hit = match self.hosts.get(&host).copied() {
-            Some(until) if now < until => true,
+            Some(term) if term_live(term, now) => true,
             Some(_) => {
                 self.hosts.remove(&host);
                 false
@@ -178,46 +248,53 @@ impl BanList {
     }
 
     /// Host bans still in force at `now`. Expired ones are dropped.
-    pub fn hosts(&mut self, now: Tick) -> Vec<(IpAddr, Tick)> {
-        self.hosts.retain(|_, until| now < *until);
+    fn hosts(&mut self, now: Tick) -> Vec<(IpAddr, Term)> {
+        self.hosts.retain(|_, term| term_live(*term, now));
         let mut out: Vec<_> = self
             .hosts
             .iter()
-            .map(|(host, until)| (*host, *until))
+            .map(|(host, term)| (*host, *term))
             .collect();
         out.sort_by_key(|(host, _)| *host);
         out
     }
 
     /// Subnet bans still in force at `now`. Expired ones are dropped.
-    pub fn subnets(&mut self, now: Tick) -> Vec<(Ipv4Subnet, Tick)> {
+    fn subnets(&mut self, now: Tick) -> Vec<(Ipv4Subnet, Term)> {
         self.expire_subnets(now, None);
         let mut out = self.subnets.clone();
         out.sort_by_key(|(subnet, _)| *subnet);
         out
     }
 
-    /// Nanoseconds left on the longest ban that covers `host`.
+    /// Time left on the longest ban that covers `host`.
     /// `None` when nothing covers it. Expired entries are removed.
-    pub fn remaining_ns(&mut self, host: IpAddr, now: Tick) -> Option<u64> {
+    /// A permanent ban is [`BanLeft::Permanent`], not a number of seconds.
+    pub fn remaining(&mut self, host: IpAddr, now: Tick) -> Option<BanLeft> {
         let host_left = match self.hosts.get(&host).copied() {
-            Some(until) if now < until => Some(until.get() - now.get()),
-            Some(_) => {
-                self.hosts.remove(&host);
-                None
-            }
+            Some(term) => match term_left(term, now) {
+                Some(left) => Some(left),
+                None => {
+                    self.hosts.remove(&host);
+                    None
+                }
+            },
             None => None,
         };
         let subnet_left = match host {
             IpAddr::V4(ip) => {
                 let mut best = None;
-                self.subnets.retain(|(subnet, until)| {
-                    if now >= *until {
+                self.subnets.retain(|(subnet, term)| {
+                    if !term_live(*term, now) {
                         return false;
                     }
                     if subnet.contains(ip) {
-                        let left = until.get() - now.get();
-                        best = Some(best.map_or(left, |have: u64| have.max(left)));
+                        if let Some(left) = term_left(*term, now) {
+                            best = Some(match best {
+                                Some(have) => longer(have, left),
+                                None => left,
+                            });
+                        }
                     }
                     true
                 });
@@ -229,29 +306,27 @@ impl BanList {
             }
         };
         match (host_left, subnet_left) {
-            (Some(host_ns), Some(subnet_ns)) => Some(host_ns.max(subnet_ns)),
-            (Some(host_ns), None) => Some(host_ns),
-            (None, Some(subnet_ns)) => Some(subnet_ns),
+            (Some(host_ban), Some(subnet_ban)) => Some(longer(host_ban, subnet_ban)),
+            (Some(host_ban), None) => Some(host_ban),
+            (None, Some(subnet_ban)) => Some(subnet_ban),
             (None, None) => None,
         }
     }
 
-    /// Every ban still in force, with nanoseconds left from `now`.
+    /// Every ban still in force, with time left from `now`.
     pub fn listed(&mut self, now: Tick) -> Vec<ListedBan> {
         let hosts = self.hosts(now);
         let subnets = self.subnets(now);
         let mut out = Vec::with_capacity(hosts.len() + subnets.len());
-        for (host, until) in hosts {
-            out.push(ListedBan::Host {
-                host,
-                remaining_ns: until.get() - now.get(),
-            });
+        for (host, term) in hosts {
+            if let Some(left) = term_left(term, now) {
+                out.push(ListedBan::Host { host, left });
+            }
         }
-        for (subnet, until) in subnets {
-            out.push(ListedBan::Subnet {
-                subnet,
-                remaining_ns: until.get() - now.get(),
-            });
+        for (subnet, term) in subnets {
+            if let Some(left) = term_left(term, now) {
+                out.push(ListedBan::Subnet { subnet, left });
+            }
         }
         out
     }
@@ -260,8 +335,8 @@ impl BanList {
     /// remaining subnet contains it.
     fn expire_subnets(&mut self, now: Tick, probe: Option<Ipv4Addr>) -> bool {
         let mut hit = false;
-        self.subnets.retain(|(subnet, until)| {
-            if now < *until {
+        self.subnets.retain(|(subnet, term)| {
+            if term_live(*term, now) {
                 if probe.is_some_and(|ip| subnet.contains(ip)) {
                     hit = true;
                 }
@@ -276,7 +351,7 @@ impl BanList {
 
 #[cfg(test)]
 mod tests {
-    use super::{deadline_after, BanList, Ipv4Subnet};
+    use super::{deadline_after, BanLeft, BanList, Ipv4Subnet};
     use shekyl_timing_engine::Tick;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -379,10 +454,39 @@ mod tests {
         let host = v4([1, 2, 3, 4]);
         let now = Tick::new(1_000);
         assert!(bans.ban_host(host, Tick::new(1_000 + 5_000_000_000), now));
-        assert_eq!(bans.remaining_ns(host, now), Some(5_000_000_000));
+        assert_eq!(
+            bans.remaining(host, now),
+            Some(BanLeft::Remaining {
+                nanos: 5_000_000_000
+            })
+        );
         let subnet = Ipv4Subnet::new(Ipv4Addr::new(9, 9, 9, 1), 24).expect("prefix");
         assert!(bans.ban_subnet(subnet, Tick::new(1_000 + 2_000), now));
-        assert_eq!(bans.remaining_ns(v4([9, 9, 9, 8]), now), Some(2_000));
+        assert_eq!(
+            bans.remaining(v4([9, 9, 9, 8]), now),
+            Some(BanLeft::Remaining { nanos: 2_000 })
+        );
+    }
+
+    #[test]
+    fn a_permanent_ban_has_no_deadline_and_is_not_shortened() {
+        let mut bans = BanList::new();
+        let host = v4([1, 2, 3, 4]);
+        assert!(bans.ban_host_permanent(host));
+        assert!(bans.is_banned(host, Tick::new(u64::MAX - 1)));
+        assert!(!bans.ban_host(host, Tick::new(50), Tick::new(1)));
+        assert_eq!(bans.remaining(host, Tick::new(1)), Some(BanLeft::Permanent));
+        let later = v4([8, 8, 8, 8]);
+        assert!(bans.ban_host(later, Tick::new(20), Tick::new(1)));
+        assert!(bans.ban_host_permanent(later));
+        assert_eq!(
+            bans.remaining(later, Tick::new(100)),
+            Some(BanLeft::Permanent)
+        );
+        let subnet = Ipv4Subnet::new(Ipv4Addr::new(10, 0, 0, 1), 8).expect("prefix");
+        assert!(bans.ban_subnet_permanent(subnet));
+        assert!(bans.is_banned(v4([10, 1, 1, 1]), Tick::new(u64::MAX - 1)));
+        assert!(!bans.ban_subnet(subnet, Tick::new(40), Tick::new(1)));
     }
 
     #[test]

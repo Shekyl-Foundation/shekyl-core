@@ -999,32 +999,27 @@ namespace cryptonote
   {
     RPC_TRACKER(get_bans);
 
-    // The map values are seconds remaining, computed from the monotonic
-    // deadline. They are not a wall-clock expiry.
-    std::map<std::string, time_t> blocked_hosts = m_p2p.get_blocked_hosts();
-    for (std::map<std::string, time_t>::const_iterator i = blocked_hosts.begin(); i != blocked_hosts.end(); ++i)
+    for (const auto& row : m_p2p.ban_list())
     {
-      if (i->second > 0) {
-        COMMAND_RPC_GETBANS::ban b;
-        b.host = i->first;
-        b.ip = 0;
-        uint32_t ip;
-        if (epee::string_tools::get_ip_int32_from_string(ip, b.host))
-          b.ip = ip;
-        b.seconds = i->second;
-        res.bans.push_back(b);
+      COMMAND_RPC_GETBANS::ban b;
+      b.host = row.text;
+      b.ip = 0;
+      uint32_t ip;
+      if (epee::string_tools::get_ip_int32_from_string(ip, b.host))
+        b.ip = ip;
+      b.permanent = row.permanent != 0;
+      if (b.permanent)
+        b.seconds = 0;
+      else if (row.remaining_ns == 0)
+        continue;
+      else
+      {
+        const std::uint64_t sec = (row.remaining_ns + 999999999ull) / 1000000000ull;
+        b.seconds = sec > std::numeric_limits<std::uint32_t>::max()
+          ? std::numeric_limits<std::uint32_t>::max()
+          : static_cast<std::uint32_t>(sec);
       }
-    }
-    std::map<epee::net_utils::ipv4_network_subnet, time_t> blocked_subnets = m_p2p.get_blocked_subnets();
-    for (std::map<epee::net_utils::ipv4_network_subnet, time_t>::const_iterator i = blocked_subnets.begin(); i != blocked_subnets.end(); ++i)
-    {
-      if (i->second > 0) {
-        COMMAND_RPC_GETBANS::ban b;
-        b.host = i->first.host_str();
-        b.ip = 0;
-        b.seconds = i->second;
-        res.bans.push_back(b);
-      }
+      res.bans.push_back(std::move(b));
     }
 
     res.status = CORE_RPC_STATUS_OK;
@@ -1048,11 +1043,14 @@ namespace cryptonote
     if (m_p2p.is_host_blocked(na, &seconds))
     {
       res.banned = true;
-      res.seconds = seconds;
+      res.permanent = m_p2p.host_ban_is_permanent(na);
+      res.seconds = res.permanent ? 0 : static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        static_cast<std::uint64_t>(seconds), std::numeric_limits<std::uint32_t>::max()));
     }
     else
     {
       res.banned = false;
+      res.permanent = false;
       res.seconds = 0;
     }
 

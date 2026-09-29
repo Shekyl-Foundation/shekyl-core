@@ -16,15 +16,20 @@
   empty bucket pauses the writer and the reader. It does not close the
   connection. `set_limit` and `get_limit` use the same budget. A
   connection's current speed is the last ten seconds, in ten
-  one-second buckets, newest weighted most. A quiet connection
-  reads zero once that window has passed. The lifetime average
-  stays the separate average.
+  one-second buckets, newest weighted most. The divisor is the
+  time the connection has actually occupied, so a new connection
+  and the current second are not charged for time they did not
+  use. A quiet connection reads zero once that window has passed.
+  The lifetime average stays the separate average.
 - Socket admission reads the transport's inbound count. `setbans` and
   misbehaviour scoring write the Rust ban list as a duration on the
   monotonic clock, and `getbans` returns the seconds left on that
-  deadline. A duration that does not fit is refused. A Tor zone
-  advertises an address only after publication succeeds. `get_info`
-  reports per-connector socket counts beside the session counts.
+  deadline. A duration that does not fit is refused by `setbans`.
+  `--ban-list` entries are permanent, and `getbans` reports them
+  that way. A managed Tor address is advertised only after publication
+  succeeds. An `--anonymous-inbound` onion is advertised from the
+  operator's configuration. `get_info` reports per-connector socket
+  counts beside the session counts.
 
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 

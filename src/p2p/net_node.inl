@@ -227,6 +227,12 @@ namespace nodetool
     const std::string host = address.host_str();
     std::uint64_t left = 0;
     const int rc = shekyl_ban_remaining_ns(host.c_str(), &left);
+    if (rc == 2)
+    {
+      if (t)
+        *t = 0;
+      return false;
+    }
     if (rc != 1)
       return true;
     if (t)
@@ -243,10 +249,7 @@ namespace nodetool
 
     std::uint64_t duration_ns = 0;
     if (!ban_duration_ns(seconds, &duration_ns))
-    {
-      MERROR("Ban duration does not fit the clock.");
       return false;
-    }
     const std::string host_str = addr.host_str();
     // The list closes the sockets it drops. This does not walk the Levin
     // registry. A shorter duration does not shorten a ban already stored.
@@ -288,10 +291,7 @@ namespace nodetool
   {
     std::uint64_t duration_ns = 0;
     if (!ban_duration_ns(seconds, &duration_ns))
-    {
-      MERROR("Ban duration does not fit the clock.");
       return false;
-    }
     const std::string host_str = subnet.host_str();
     if (shekyl_ban_for(host_str.c_str(), 1, duration_ns) != 0)
       return false;
@@ -318,6 +318,78 @@ namespace nodetool
       return false;
     MCLOG_CYAN(el::Level::Info, "global", "Subnet " << host_str << " unblocked.");
     return true;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  bool node_server<t_payload_net_handler>::block_host_permanent(epee::net_utils::network_address addr)
+  {
+    if (!addr.is_blockable())
+      return false;
+    const std::string host_str = addr.host_str();
+    if (shekyl_ban_permanent(host_str.c_str(), 0) != 0)
+      return false;
+    for (auto& zone : m_network_zones)
+    {
+      peerlist_entry pe{};
+      pe.adr = addr;
+      if (addr.port() == 0)
+      {
+        zone.second.m_peerlist.evict_host_from_peerlist(true, pe);
+        zone.second.m_peerlist.evict_host_from_peerlist(false, pe);
+      }
+      else
+      {
+        zone.second.m_peerlist.remove_from_peer_white(pe);
+        zone.second.m_peerlist.remove_from_peer_gray(pe);
+      }
+    }
+    MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " blocked.");
+    return true;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  bool node_server<t_payload_net_handler>::block_subnet_permanent(const epee::net_utils::ipv4_network_subnet &subnet)
+  {
+    const std::string host_str = subnet.host_str();
+    if (shekyl_ban_permanent(host_str.c_str(), 1) != 0)
+      return false;
+    for (auto& zone : m_network_zones)
+    {
+      for (int i = 0; i < 2; ++i)
+        zone.second.m_peerlist.filter(i == 0, [&subnet](const peerlist_entry &pe){
+          if (pe.adr.get_type_id() != epee::net_utils::ipv4_network_address::get_type_id())
+            return false;
+          return subnet.matches(pe.adr.as<const epee::net_utils::ipv4_network_address>());
+        });
+    }
+    MCLOG_CYAN(el::Level::Info, "global", "Subnet " << host_str << " blocked.");
+    return true;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  bool node_server<t_payload_net_handler>::host_ban_is_permanent(const epee::net_utils::network_address &address) const
+  {
+    if (!address.is_blockable())
+      return false;
+    std::uint64_t left = 0;
+    return shekyl_ban_remaining_ns(address.host_str().c_str(), &left) == 2;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  std::vector<shekyl_ban_view> node_server<t_payload_net_handler>::ban_list()
+  {
+    return copy_bans();
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  void node_server<t_payload_net_handler>::apply_managed_onion_publish(network_zone& zone, int publish_rc, const char* service_id, std::uint16_t virtual_port)
+  {
+    if (publish_rc != SHEKYL_DAEMON_TOR_OK || service_id == nullptr || service_id[0] == '\0')
+      return;
+    const auto our_address = net::tor_address::make(std::string{service_id} + ".onion", virtual_port);
+    if (!our_address)
+      return;
+    zone.m_our_address = *our_address;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -512,15 +584,15 @@ namespace nodetool
         auto subnet = net::get_ipv4_subnet_address(line);
         if (subnet)
         {
-          if (!block_subnet(*subnet, std::numeric_limits<time_t>::max()))
-            MERROR("Ban duration does not fit the clock: " << line);
+          if (!block_subnet_permanent(*subnet))
+            MERROR("Could not ban " << line);
           continue;
         }
         const expect<epee::net_utils::network_address> parsed_addr = net::get_network_address(line, 0);
         if (parsed_addr)
         {
-          if (!block_host(*parsed_addr, std::numeric_limits<time_t>::max()))
-            MERROR("Ban duration does not fit the clock: " << line);
+          if (!block_host_permanent(*parsed_addr))
+            MERROR("Could not ban " << line);
           continue;
         }
         MERROR("Invalid IP address or IPv4 subnet: " << line);
@@ -623,10 +695,9 @@ namespace nodetool
 
       zone.m_bind_ip = std::move(inbound.local_ip);
       zone.m_port = std::move(inbound.local_port);
-      // OperatorInbound is a bind, not a publication. The advertised
-      // address is written only when Tor publication returns an onion.
-      // A failed publication leaves this unset, so the zone stays
-      // outbound-only and announces no address.
+      // The operator runs this onion and hands us its address. That is
+      // configuration, not a publish result, and it is what peers are told.
+      zone.m_our_address = std::move(inbound.our_address);
 
       if (!set_max_in_peers(zone, inbound.max_connections))
         return false;
@@ -852,14 +923,14 @@ namespace nodetool
           << "); the tor zone stays outbound-only this boot (no overlay inbound; PWD-E7 ruled degrade)");
       return;
     }
-    const auto our_address = net::tor_address::make(std::string{service_id} + ".onion", virtual_port);
-    if (!our_address)
+    const auto before = zone.m_our_address;
+    apply_managed_onion_publish(zone, publish_rc, service_id, virtual_port);
+    if (zone.m_our_address == before)
     {
       MERROR("Ephemeral tor returned an unparseable service id ('" << service_id
           << "'); the tor zone stays outbound-only this boot");
       return;
     }
-    zone.m_our_address = *our_address;
     m_ephemeral_tor_service_id = service_id;
 
     MLOG_GREEN(el::Level::Info, "Ephemeral overlay inbound published: " << service_id << ".onion:" << virtual_port

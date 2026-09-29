@@ -22,7 +22,7 @@ use std::thread;
 
 use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
 use shekyl_seam::{
-    connector_from_index, deadline_after, direction_from_index, drive_inbound, CloseCause,
+    connector_from_index, deadline_after, direction_from_index, drive_inbound, BanLeft, CloseCause,
     CloseKind, ConnectorId, Direction, Endpoint, Hub, Ipv4Subnet, ListedBan, Post, SocketId,
     TOR_HOST_MAX,
 };
@@ -466,17 +466,22 @@ pub extern "C" fn shekyl_seam_inbound_held() -> u64 {
 }
 
 /// One ban, as `getbans` reads it. `text` is a host or `address/prefix`.
-/// `remaining_ns` is time left on the monotonic deadline.
+/// `permanent` is 1 when the ban has no deadline. `remaining_ns` is
+/// time left on a deadline, and 0 when the ban is permanent.
 #[repr(C)]
 pub struct ShekylBanView {
     /// 1 is a host, 2 is an IPv4 subnet.
     pub kind: u8,
-    pub _pad: [u8; 7],
+    /// 1 when the ban has no deadline.
+    pub permanent: u8,
+    pub _pad: [u8; 6],
     /// NUL-terminated. Unused bytes are zero.
     pub text: [u8; 80],
-    /// Nanoseconds until the deadline.
+    /// Nanoseconds until the deadline. Zero when `permanent` is 1.
     pub remaining_ns: u64,
 }
+
+const _: () = assert!(std::mem::size_of::<ShekylBanView>() == 96);
 
 const BAN_KIND_HOST: u8 = 1;
 const BAN_KIND_SUBNET: u8 = 2;
@@ -548,6 +553,41 @@ pub unsafe extern "C" fn shekyl_ban_for(text: *const c_char, subnet: i32, durati
     0
 }
 
+/// Ban `text` until it is lifted. No deadline is stored.
+///
+/// `subnet` nonzero reads `text` as `address/prefix`. Returns 0 when the
+/// ban is stored or was already permanent, and -2 when `text` is not that
+/// address. A bound hub closes the sockets the new ban drops.
+///
+/// # Safety
+/// `text` is a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_ban_permanent(text: *const c_char, subnet: i32) -> i32 {
+    let Some(text) = c_text(text) else {
+        return -2;
+    };
+    if subnet != 0 {
+        let Some(prefix) = parse_subnet(&text) else {
+            return -2;
+        };
+        if let Some(hub) = hub() {
+            let _closed = hub.ban_subnet_permanent(prefix);
+        } else {
+            let _closed = process_sockets().ban_subnet_permanent(prefix);
+        }
+    } else {
+        let Some(host) = text.parse::<IpAddr>().ok() else {
+            return -2;
+        };
+        if let Some(hub) = hub() {
+            let _closed = hub.ban_host_permanent(host);
+        } else {
+            let _closed = process_sockets().ban_host_permanent(host);
+        }
+    }
+    0
+}
+
 /// Lift a host or subnet ban. Returns 0 when an entry was removed, -1
 /// when there was none, and -2 when `text` is not that address.
 /// Open sockets stay open.
@@ -577,9 +617,9 @@ pub unsafe extern "C" fn shekyl_ban_lift(text: *const c_char, subnet: i32) -> i3
     }
 }
 
-/// Nanoseconds left on the longest ban that covers `host`. Returns 1 and
-/// writes `out` when one does, 0 when the host is not banned, and -2 when
-/// `host` is not an address.
+/// Time left on the longest ban that covers `host`. Returns 1 and writes
+/// `out` for a deadline, 2 for a permanent ban (`out` is left unchanged),
+/// 0 when the host is not banned, and -2 when `host` is not an address.
 ///
 /// # Safety
 /// `host` is a NUL-terminated string. `out` is writable when non-null.
@@ -591,13 +631,14 @@ pub unsafe extern "C" fn shekyl_ban_remaining_ns(host: *const c_char, out: *mut 
     let Some(host) = host.parse::<IpAddr>().ok() else {
         return -2;
     };
-    match process_sockets().remaining_ns(host, ban_now()) {
-        Some(left) => {
+    match process_sockets().remaining(host, ban_now()) {
+        Some(BanLeft::Remaining { nanos }) => {
             if !out.is_null() {
-                unsafe { *out = left };
+                unsafe { *out = nanos };
             }
             1
         }
+        Some(BanLeft::Permanent) => 2,
         None => 0,
     }
 }
@@ -635,20 +676,22 @@ pub unsafe extern "C" fn shekyl_bans_copy(
 }
 
 fn ban_view(row: &ListedBan) -> Option<ShekylBanView> {
-    let (kind, text, remaining_ns) = match row {
-        ListedBan::Host { host, remaining_ns } => (BAN_KIND_HOST, host.to_string(), *remaining_ns),
-        ListedBan::Subnet {
-            subnet,
-            remaining_ns,
-        } => (
+    let (kind, text, left) = match row {
+        ListedBan::Host { host, left } => (BAN_KIND_HOST, host.to_string(), *left),
+        ListedBan::Subnet { subnet, left } => (
             BAN_KIND_SUBNET,
             format!("{}/{}", subnet.network(), subnet.prefix_len()),
-            *remaining_ns,
+            *left,
         ),
+    };
+    let (permanent, remaining_ns) = match left {
+        BanLeft::Permanent => (1, 0),
+        BanLeft::Remaining { nanos } => (0, nanos),
     };
     Some(ShekylBanView {
         kind,
-        _pad: [0; 7],
+        permanent,
+        _pad: [0; 6],
         text: fill_text(&text)?,
         remaining_ns,
     })

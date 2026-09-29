@@ -479,6 +479,26 @@ impl Hub {
         ids
     }
 
+    /// Ban `host` until it is lifted, and post `closed` for each live socket
+    /// the ban drops. A ban that is already permanent drops nothing new.
+    pub fn ban_host_permanent(&self, host: IpAddr) -> Vec<SocketId> {
+        let ids = self.lock().sockets.ban_host_permanent(host);
+        for id in &ids {
+            self.finish(*id, CloseCause::new(CloseKind::LocalClose));
+        }
+        ids
+    }
+
+    /// Ban an IPv4 subnet until it is lifted, the same way as
+    /// [`Self::ban_host_permanent`].
+    pub fn ban_subnet_permanent(&self, subnet: Ipv4Subnet) -> Vec<SocketId> {
+        let ids = self.lock().sockets.ban_subnet_permanent(subnet);
+        for id in &ids {
+            self.finish(*id, CloseCause::new(CloseKind::LocalClose));
+        }
+        ids
+    }
+
     /// Per-connector socket count. Accept does not read this.
     #[must_use]
     pub fn socket_count(&self, connector: ConnectorId, direction: Direction) -> u64 {

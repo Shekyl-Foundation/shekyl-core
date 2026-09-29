@@ -29,6 +29,6 @@ pub use endpoint::{admit, connector_from_index, direction_from_index, Endpoint, 
 pub use hub::{Attached, Hub, Post};
 pub use loopback::Loopback;
 pub use shekyl_transport_layer::{
-    deadline_after, CloseCause, CloseKind, ConnectorId, Direction, Ipv4Subnet, ListedBan, SocketId,
-    Sockets,
+    deadline_after, BanLeft, CloseCause, CloseKind, ConnectorId, Direction, Ipv4Subnet, ListedBan,
+    SocketId, Sockets,
 };

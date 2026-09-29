@@ -4242,11 +4242,13 @@ std::uint64_t shekyl_seam_socket_count(std::uint32_t connector, std::uint32_t di
 std::uint64_t shekyl_seam_inbound_held(void);
 
 /// One ban still in force. `kind` 1 is a host, 2 is an IPv4 subnet.
-/// `text` is NUL-terminated. `remaining_ns` is time left on the
-/// monotonic deadline.
+/// `permanent` 1 means there is no deadline. `text` is NUL-terminated.
+/// `remaining_ns` is time left on the monotonic deadline, and is 0
+/// when the ban is permanent.
 struct shekyl_ban_view {
   std::uint8_t kind;
-  std::uint8_t _pad[7];
+  std::uint8_t permanent;
+  std::uint8_t _pad[6];
   char text[80];
   std::uint64_t remaining_ns;
 };
@@ -4257,12 +4259,16 @@ static_assert(sizeof(shekyl_ban_view) == 96, "ban view");
 /// does not, -2 when `text` is not that address. A later deadline already
 /// stored is still 0. A bound hub closes the sockets the list drops.
 int shekyl_ban_for(const char* text, int subnet, std::uint64_t duration_ns);
+/// Ban `text` until it is lifted. No deadline is stored. `subnet`
+/// nonzero reads `text` as `address/prefix`. 0 when stored or already
+/// permanent, -2 when `text` is not that address.
+int shekyl_ban_permanent(const char* text, int subnet);
 /// Lift a host or subnet ban. 0 when an entry was removed, -1 when there
 /// was none, -2 when `text` is not that address. Open sockets stay open.
 int shekyl_ban_lift(const char* text, int subnet);
-/// Nanoseconds left on the longest ban that covers `host`. 1 and writes
-/// `out` when one does, 0 when the host is not banned, -2 when `host` is
-/// not an address.
+/// Time left on the longest ban that covers `host`. 1 and writes `out`
+/// for a deadline, 2 for a permanent ban, 0 when the host is not banned,
+/// -2 when `host` is not an address.
 int shekyl_ban_remaining_ns(const char* host, std::uint64_t* out);
 /// Copy bans still in force. `*count` is how many there are. When `cap`
 /// is smaller, the buffer receives the first `cap` and the return is -1.

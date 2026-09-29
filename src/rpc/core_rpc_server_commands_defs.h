@@ -1031,11 +1031,13 @@ namespace cryptonote
       std::string host;
       uint32_t ip;
       uint32_t seconds;
+      bool permanent;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(host)
         KV_SERIALIZE(ip)
         KV_SERIALIZE(seconds)
+        KV_SERIALIZE(permanent)
       END_KV_SERIALIZE_MAP()
     };
 
@@ -1113,11 +1115,13 @@ namespace cryptonote
       std::string status;
       bool banned;
       uint32_t seconds;
+      bool permanent;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(status)
         KV_SERIALIZE(banned)
         KV_SERIALIZE(seconds)
+        KV_SERIALIZE(permanent)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

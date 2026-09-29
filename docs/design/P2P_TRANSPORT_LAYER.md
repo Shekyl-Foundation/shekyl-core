@@ -638,7 +638,10 @@ records the new count.
   seconds, and `getbans` returns seconds remaining. At cutover the
   conversion is `now + duration` onto the monotonic clock, and the
   remaining time is computed back from it. No `time_t` crosses the
-  boundary. A duration that does not fit a `Tick` is refused. The
+  boundary. A duration that does not fit a `Tick` is refused by
+  `setbans`. `--ban-list` is a different kind: those entries are
+  permanent, with no deadline, and `getbans` reports them as
+  permanent rather than as a number of seconds. The
   session layer is the second writer, through the same duration: ban
   this host for this long. A transport close does not write the list
   and does not call `add_host_fail`.
@@ -652,8 +655,9 @@ records the new count.
   Outbound sockets stay in the process fd count. Their cap is what
   `reserved` subtracts (D8).
 - A `Published` onion is written to the Tor zone's `m_our_address`.
-  `OutboundOnly` leaves the address unset. `OperatorInbound` is not
-  a publish result and is not written there.
+  `OutboundOnly` leaves the address unset. An onion from
+  `--anonymous-inbound` is written there as well: the operator runs
+  that service, and the address is configuration.
 - `get_info` keeps `incoming_connections_count` and
   `outgoing_connections_count` as the public zone's session counts,
   from the Levin registry. Socket counts are

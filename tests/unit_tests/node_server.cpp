@@ -365,10 +365,29 @@ TEST(ban, limit)
   // starts empty
   ASSERT_TRUE(server.get_blocked_hosts().empty());
   ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,4), std::numeric_limits<time_t>::max() - 1));
-  ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
+  ASSERT_FALSE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,4), std::numeric_limits<time_t>::max() - 1));
+  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
   ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,4), 1));
   ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
+}
+
+TEST(node_server, managed_onion_is_advertised_only_after_publish)
+{
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  Server server(cprotocol);
+  cprotocol.set_p2p_endpoint(&server);
+
+  auto& zone = server.add_zone(epee::net_utils::zone::tor);
+  zone.m_config.m_net_config.max_in_connection_count = 8;
+  const char* service = "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd";
+  server.apply_managed_onion_publish(zone, 1, service, 18080);
+  ASSERT_EQ(server.get_announced_address(epee::net_utils::zone::tor).host_str(),
+    net::tor_address::unknown().host_str());
+
+  server.apply_managed_onion_publish(zone, SHEKYL_DAEMON_TOR_OK, service, 18080);
+  const auto expected = MONERO_UNWRAP(net::tor_address::make(std::string(service) + ".onion:18080"));
+  ASSERT_EQ(server.get_announced_address(epee::net_utils::zone::tor).host_str(), expected.host_str());
 }
 
 namespace
@@ -473,6 +492,51 @@ TEST(ban, subnet)
   ASSERT_TRUE(server.get_blocked_subnets().size() == 1);
   ASSERT_TRUE(server.unblock_subnet(MAKE_IPV4_SUBNET(1,255,0,0,8)));
   ASSERT_TRUE(server.get_blocked_subnets().size() == 0);
+}
+
+TEST(ban, file_entries_are_permanent)
+{
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  Server server(cprotocol);
+
+  const auto node_dir = create_node_dir();
+  ASSERT_TRUE(!node_dir.empty());
+  auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
+      boost::filesystem::remove_all(node_dir);
+    });
+  const auto ban_path = node_dir / "banlist.txt";
+  ASSERT_TRUE(epee::file_io_utils::save_string_to_file(ban_path.string(), "1.2.3.4\n"));
+
+  ASSERT_TRUE(server.init(offline_node_vm(node_dir, {"--ban-list", ban_path.string()})));
+  const auto rows = server.ban_list();
+  ASSERT_EQ(rows.size(), 1u);
+  ASSERT_EQ(rows[0].permanent, 1);
+  ASSERT_EQ(rows[0].remaining_ns, 0u);
+  ASSERT_TRUE(server.host_ban_is_permanent(MAKE_IPV4_ADDRESS(1,2,3,4)));
+}
+
+TEST(node_server, operator_onion_is_advertised)
+{
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  Server server(cprotocol);
+
+  const auto node_dir = create_node_dir();
+  ASSERT_TRUE(!node_dir.empty());
+  auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
+      boost::filesystem::remove_all(node_dir);
+    });
+
+  const std::string onion =
+    "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion";
+  ASSERT_TRUE(server.init(offline_node_vm(node_dir, {
+    "--tx-proxy", "tor,127.0.0.1:9050,8",
+    "--anonymous-inbound", onion + ":18080,127.0.0.1:38123,8",
+  })));
+  const auto announced = server.get_announced_address(epee::net_utils::zone::tor);
+  ASSERT_EQ(announced.host_str(), onion);
+  ASSERT_EQ(announced.as<net::tor_address>().port(), 18080);
 }
 
 TEST(ban, ignores_port)

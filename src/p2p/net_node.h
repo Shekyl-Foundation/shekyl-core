@@ -485,6 +485,13 @@ namespace nodetool
     //! anonymity zone run dialer-only it is the zone's CONSTANT unknown
     //! sentinel: equal for every node, carrying no entropy, linking nothing.
     epee::net_utils::network_address get_announced_address(epee::net_utils::zone zone) const;
+    //! Advertise a managed-tor publish result. A failed publish or an
+    //! unparseable service id leaves `zone.m_our_address` unchanged.
+    void apply_managed_onion_publish(network_zone& zone, int publish_rc, const char* service_id, std::uint16_t virtual_port);
+    //! True when `address` is banned with no deadline.
+    bool host_ban_is_permanent(const epee::net_utils::network_address &address) const;
+    //! Bans still in force. `permanent` is 1 when the row has no deadline.
+    std::vector<shekyl_ban_view> ban_list();
     //! Mint a self-detection nonce for one outbound handshake attempt on
     //! `zone`, RECORDED IN THAT ZONE'S IN-FLIGHT SET BEFORE IT IS RETURNED.
     //!
@@ -533,6 +540,8 @@ namespace nodetool
     virtual bool unblock_host(const epee::net_utils::network_address &address);
     virtual bool block_subnet(const epee::net_utils::ipv4_network_subnet &subnet, time_t seconds = P2P_IP_BLOCKTIME);
     virtual bool unblock_subnet(const epee::net_utils::ipv4_network_subnet &subnet);
+    bool block_host_permanent(epee::net_utils::network_address address);
+    bool block_subnet_permanent(const epee::net_utils::ipv4_network_subnet &subnet);
     virtual bool is_host_blocked(const epee::net_utils::network_address &address, time_t *seconds);
     //! Host to seconds remaining on the monotonic deadline.
     virtual std::map<std::string, time_t> get_blocked_hosts();

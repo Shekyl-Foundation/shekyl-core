@@ -26,13 +26,11 @@ const NANOS_PER_SEC: u128 = 1_000_000_000;
 /// the speed of a connection right now: long enough that one chunk is
 /// not the whole reading, short enough that a connection which stopped
 /// reads as stopped. The newest slot weighs [`SPEED_BUCKETS`], the
-/// oldest weighs one. Display only. It limits nothing.
+/// oldest weighs one. The divisor is that weight times the time the
+/// slot actually covers, not a full window the connection may not have
+/// lived through. Display only. It limits nothing.
 const SPEED_BUCKETS: usize = 10;
 const SPEED_SLOT_NS: u64 = 1_000_000_000;
-const SPEED_WEIGHT_SUM: u128 = {
-    let n = SPEED_BUCKETS as u128;
-    n * (n + 1) / 2
-};
 
 /// Which way the bytes are moving. Up leaves the node. Down arrives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,16 +73,21 @@ struct Flow {
 ///
 /// [`SPEED_BUCKETS`] slots of [`SPEED_SLOT_NS`]. Index 0 is the oldest
 /// and weighs 1; the last index is the newest and weighs
-/// [`SPEED_BUCKETS`]. Speed is the weighted sum of bytes divided by
-/// the weighted window. Slots move forward from the caller's clock on
-/// the next write or report. There is no timer. A quiet connection
-/// reaches zero once every slot that held bytes has left the window.
+/// [`SPEED_BUCKETS`]. The divisor is the weighted time actually
+/// covered: the newest slot only for as much of it as has elapsed, and
+/// nothing from before the connection started. Slots move forward from
+/// the caller's clock on the next write or report. There is no timer.
+/// A quiet connection reaches zero once every slot that held bytes has
+/// left the window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Pace {
     /// Oldest at index 0, newest at the last index.
     buckets: [u64; SPEED_BUCKETS],
     /// Start of the newest slot, on the caller's clock.
     slot_ns: u64,
+    /// The clock reading of the first byte. Slots before this are not
+    /// part of the window.
+    origin_ns: u64,
     started: bool,
     saved: Option<SavedPace>,
 }
@@ -93,6 +96,7 @@ struct Pace {
 struct SavedPace {
     buckets: [u64; SPEED_BUCKETS],
     slot_ns: u64,
+    origin_ns: u64,
     started: bool,
 }
 
@@ -101,6 +105,7 @@ impl Pace {
         self.saved = Some(SavedPace {
             buckets: self.buckets,
             slot_ns: self.slot_ns,
+            origin_ns: self.origin_ns,
             started: self.started,
         });
         self.advance(now);
@@ -112,6 +117,7 @@ impl Pace {
         if let Some(saved) = self.saved.take() {
             self.buckets = saved.buckets;
             self.slot_ns = saved.slot_ns;
+            self.origin_ns = saved.origin_ns;
             self.started = saved.started;
         }
     }
@@ -127,6 +133,7 @@ impl Pace {
     fn advance(&mut self, now: u64) {
         if !self.started {
             self.slot_ns = now;
+            self.origin_ns = now;
             self.started = true;
             return;
         }
@@ -160,23 +167,41 @@ impl Pace {
         if !pace.started {
             return 0;
         }
-        let mut weighted = 0u128;
-        for (i, bytes) in pace.buckets.iter().enumerate() {
+        let mut weighted_bytes = 0u128;
+        let mut weighted_ns = 0u128;
+        for i in 0..SPEED_BUCKETS {
             let Ok(index) = u128::try_from(i) else {
                 continue;
             };
+            let behind = SPEED_BUCKETS - 1 - i;
+            let Some(start) = pace.slot_ns.checked_sub(
+                u64::try_from(behind)
+                    .unwrap_or(0)
+                    .saturating_mul(SPEED_SLOT_NS),
+            ) else {
+                continue;
+            };
+            let end = if i + 1 == SPEED_BUCKETS {
+                now.max(start)
+            } else {
+                start.saturating_add(SPEED_SLOT_NS)
+            };
+            let end = end.min(start.saturating_add(SPEED_SLOT_NS));
+            let covered_start = start.max(pace.origin_ns);
+            if end <= covered_start {
+                continue;
+            }
+            let covered = u128::from(end - covered_start);
             let weight = index + 1;
-            weighted = weighted.saturating_add(u128::from(*bytes).saturating_mul(weight));
+            weighted_ns = weighted_ns.saturating_add(weight.saturating_mul(covered));
+            weighted_bytes =
+                weighted_bytes.saturating_add(weight.saturating_mul(u128::from(pace.buckets[i])));
         }
-        if weighted == 0 {
+        if weighted_ns == 0 || weighted_bytes == 0 {
             return 0;
         }
-        let denom = SPEED_WEIGHT_SUM.saturating_mul(u128::from(SPEED_SLOT_NS));
-        if denom == 0 {
-            return 0;
-        }
-        let numer = weighted.saturating_mul(NANOS_PER_SEC);
-        u64::try_from(numer / denom).unwrap_or(u64::MAX)
+        let numer = weighted_bytes.saturating_mul(NANOS_PER_SEC);
+        u64::try_from(numer / weighted_ns).unwrap_or(u64::MAX)
     }
 }
 
@@ -587,18 +612,49 @@ mod tests {
     }
 
     #[test]
+    fn a_steady_rate_mid_slot_and_on_a_young_connection_reads_back_as_that_rate() {
+        let mut budget = LinkBudget::new();
+        let conn = 9u64;
+        let rate = 1_000u64;
+        assert_eq!(
+            budget.take(LinkDirection::Up, conn, MessageClass::Session, rate / 2, 0),
+            Turn::Granted(rate / 2)
+        );
+        assert_eq!(budget.speed(conn, SEC / 2).0, rate);
+        assert_eq!(
+            budget.take(
+                LinkDirection::Up,
+                conn,
+                MessageClass::Session,
+                rate / 2,
+                SEC / 2
+            ),
+            Turn::Granted(rate / 2)
+        );
+        assert_eq!(
+            budget.take(
+                LinkDirection::Up,
+                conn,
+                MessageClass::Session,
+                rate / 2,
+                SEC + SEC / 2
+            ),
+            Turn::Granted(rate / 2)
+        );
+        assert_eq!(budget.speed(conn, SEC + SEC / 2).0, rate);
+    }
+
+    #[test]
     fn a_burst_lands_in_the_newest_bucket_and_ages_out() {
         let mut budget = LinkBudget::new();
         let conn = 5u64;
-        // Weight sum is 55. 5_500 bytes in the newest slot (weight 10)
-        // reads as 1_000 bytes/sec. One slot later that weight is 9.
         let burst = 5_500u64;
         assert_eq!(
             budget.take(LinkDirection::Up, conn, MessageClass::Session, burst, 0),
             Turn::Granted(burst)
         );
-        assert_eq!(budget.speed(conn, 0).0, 1_000);
-        assert_eq!(budget.speed(conn, SEC).0, 900);
+        assert_eq!(budget.speed(conn, SEC - 1).0, burst);
+        assert_eq!(budget.speed(conn, 5 * SEC).0, 785);
         assert_eq!(budget.speed(conn, 0).1, 0);
     }
 

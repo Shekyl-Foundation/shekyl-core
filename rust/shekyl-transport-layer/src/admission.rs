@@ -18,7 +18,7 @@ use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
 
-use crate::ban::{BanList, Ipv4Subnet, ListedBan};
+use crate::ban::{BanLeft, BanList, Ipv4Subnet, ListedBan};
 use crate::declaration::{declaration, Assessment, BannableInbound, ConnectorId, InboundIdentity};
 use crate::dial::check_dial;
 use crate::{CloseCause, CloseKind};
@@ -372,6 +372,25 @@ impl Sockets {
         close_matching(&mut inner, BanSubject::Subnet(subnet))
     }
 
+    /// Ban `host` until it is lifted, and close live sockets to it.
+    /// A ban that is already permanent closes nothing new.
+    pub fn ban_host_permanent(&self, host: IpAddr) -> Vec<SocketId> {
+        let mut inner = self.lock();
+        if !inner.bans.ban_host_permanent(host) {
+            return Vec::new();
+        }
+        close_matching(&mut inner, BanSubject::Host(host))
+    }
+
+    /// Ban `subnet` until it is lifted, and close live sockets inside it.
+    pub fn ban_subnet_permanent(&self, subnet: Ipv4Subnet) -> Vec<SocketId> {
+        let mut inner = self.lock();
+        if !inner.bans.ban_subnet_permanent(subnet) {
+            return Vec::new();
+        }
+        close_matching(&mut inner, BanSubject::Subnet(subnet))
+    }
+
     /// Remove a host ban. Sockets that are already open stay open.
     pub fn lift_host(&self, host: IpAddr) -> bool {
         self.lock().bans.lift_host(host)
@@ -382,9 +401,9 @@ impl Sockets {
         self.lock().bans.lift_subnet(subnet)
     }
 
-    /// Nanoseconds left on the longest ban that covers `host`.
-    pub fn remaining_ns(&self, host: IpAddr, now: Tick) -> Option<u64> {
-        self.lock().bans.remaining_ns(host, now)
+    /// Time left on the longest ban that covers `host`.
+    pub fn remaining(&self, host: IpAddr, now: Tick) -> Option<BanLeft> {
+        self.lock().bans.remaining(host, now)
     }
 
     /// Bans still in force, with nanoseconds left from `now`.
