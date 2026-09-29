@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-### Crypto — vendored FCMP++ subtree resynced to `dfd0cee2`
+### Crypto — vendored FCMP++ subtree resynced to `a08001f1`
 
 - Helios/Selene `from_bytes` still accepts the canonical identity (`x == 0`
   with the sign bit clear) and rejects the sign-set encoding of that point.
@@ -10,7 +10,7 @@
   Generalized Bulletproofs takes the zkSecurity fixes for findings 03–05
   (upstream `31c26d96`); finding 03 can reject some full-rank matrices.
   Helios/Selene zeroizes sampling, wide reduction, and invert intermediates
-  (upstream `77788c36`). Pin: `chore/oxide-crypto-2026-09` @ `dfd0cee2`.
+  (upstream `77788c36`). Pin: `chore/oxide-crypto-2026-09` @ `a08001f1`.
 
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 
