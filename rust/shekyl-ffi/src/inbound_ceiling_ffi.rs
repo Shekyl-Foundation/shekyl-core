@@ -105,7 +105,7 @@ fn to_abi(snapshot: DescriptorSnapshot, ceiling: InboundCeiling) -> ShekylInboun
     }
 }
 
-fn observe_descriptors() -> DescriptorSnapshot {
+pub(crate) fn observe_descriptors() -> DescriptorSnapshot {
     #[cfg(windows)]
     {
         DescriptorSnapshot {

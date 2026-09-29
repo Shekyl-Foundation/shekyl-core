@@ -13,6 +13,34 @@ use tokio::sync::mpsc;
 
 use crate::queue::{ByteQueue, Overfull, PushError};
 
+/// The sender the connector's reader uses to hand one frame to the session.
+pub type FrameSender = mpsc::Sender<Vec<u8>>;
+
+/// The send half of a session. Dropping it does not close the queue.
+/// [`Session`] and [`QueueHold`] do.
+#[derive(Clone)]
+pub struct SendHalf {
+    queue: ByteQueue,
+    overfull: Arc<Overfull>,
+}
+
+impl SendHalf {
+    /// Queue one whole message. A buffer that does not fit is not stored.
+    ///
+    /// [`CloseKind::SendQueueFull`] trips [`Overfull`] and closes the queue.
+    /// [`CloseKind::IoError`] means the queue is already closed.
+    pub fn try_send(&self, bytes: Vec<u8>) -> Result<(), CloseKind> {
+        match self.queue.try_push(bytes) {
+            Ok(()) => Ok(()),
+            Err(PushError::Full) => {
+                self.overfull.trip();
+                Err(CloseKind::SendQueueFull)
+            }
+            Err(PushError::Closed) => Err(CloseKind::IoError),
+        }
+    }
+}
+
 /// Decoded frames waiting on [`Session::recv`].
 ///
 /// One frame: a slow caller stops the reader, and TCP pushes back on
@@ -52,6 +80,21 @@ impl Session {
         self.inbound.recv().await
     }
 
+    /// [`Self::recv`] for a thread that is not a task.
+    #[must_use]
+    pub fn recv_blocking(&mut self) -> Option<Vec<u8>> {
+        self.inbound.blocking_recv()
+    }
+
+    /// A send handle that does not close the queue when dropped.
+    #[must_use]
+    pub fn send_half(&self) -> SendHalf {
+        SendHalf {
+            queue: self.queue.clone(),
+            overfull: Arc::clone(&self.overfull),
+        }
+    }
+
     /// Queue bytes up to the cap. A buffer that does not fit is not stored.
     ///
     /// [`CloseKind::SendQueueFull`] means the connection is closing.
@@ -59,14 +102,7 @@ impl Session {
     /// the caller's, unmeasured until PWD-T6 names it.
     /// [`CloseKind::IoError`] means the queue is already closed.
     pub fn try_send(&self, bytes: Vec<u8>) -> Result<(), CloseKind> {
-        match self.queue.try_push(bytes) {
-            Ok(()) => Ok(()),
-            Err(PushError::Full) => {
-                self.overfull.trip();
-                Err(CloseKind::SendQueueFull)
-            }
-            Err(PushError::Closed) => Err(CloseKind::IoError),
-        }
+        self.send_half().try_send(bytes)
     }
 }
 

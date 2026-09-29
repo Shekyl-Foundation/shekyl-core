@@ -1,0 +1,23 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-seam"
+description = "The seam between the transport connectors and the Levin handler. One id, one strand post, one cause."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+shekyl-capped-stream = { path = "../shekyl-capped-stream" }
+shekyl-peer-policy = { path = "../shekyl-peer-policy" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+
+[lints]
+workspace = true

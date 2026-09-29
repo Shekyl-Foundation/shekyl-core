@@ -75,6 +75,19 @@ impl SocketId {
     pub const fn get(self) -> u64 {
         self.0
     }
+
+    /// The id that crossed the FFI, rebuilt as a key.
+    ///
+    /// Zero is not an id. This does not reserve a socket: a lookup that
+    /// misses is an unknown id.
+    #[must_use]
+    pub const fn from_ffi(raw: u64) -> Option<Self> {
+        if raw == 0 {
+            None
+        } else {
+            Some(Self(raw))
+        }
+    }
 }
 
 /// Why a socket was not reserved.

@@ -4381,6 +4381,8 @@ dependencies = [
  "shekyl-proofs",
  "shekyl-relay",
  "shekyl-relay-privacy",
+ "shekyl-seam",
+ "shekyl-thread-ledger",
  "shekyl-tor-control-daemon",
  "shekyl-tx-builder",
  "shekyl-types",
@@ -4722,6 +4724,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-seam"
+version = "3.1.0"
+dependencies = [
+ "shekyl-capped-stream",
+ "shekyl-peer-policy",
+ "shekyl-timing-engine",
+ "shekyl-transport-layer",
+]
+
+[[package]]
 name = "shekyl-shard-source"
 version = "3.1.0"
 dependencies = [
@@ -4783,6 +4795,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-economics",
  "shekyl-standoff",
+ "shekyl-types",
 ]
 
 [[package]]

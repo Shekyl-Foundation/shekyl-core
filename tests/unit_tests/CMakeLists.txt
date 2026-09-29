@@ -48,6 +48,7 @@ set(unit_tests_sources
   difficulty.cpp
   epee_boosted_tcp_server.cpp
   epee_levin_protocol_handler_async.cpp
+  seam_endpoint.cpp
   epee_serialization.cpp
   epee_utils.cpp
   expect.cpp

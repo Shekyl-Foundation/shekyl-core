@@ -110,6 +110,10 @@ shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 # blocking facade over DaemonTorControl. The facade owns its tokio runtime,
 # so this crate takes no tokio edge of its own.
 shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
+# The p2p seam. C++ posts onto the connection strand; this crate
+# records the cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
+shekyl-seam = { path = "../shekyl-seam" }
+shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }
 # OsRng for the testnet/fakechain raw-seed generation FFI. The feature set is

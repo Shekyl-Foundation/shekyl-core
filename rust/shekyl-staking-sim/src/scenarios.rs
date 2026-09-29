@@ -13,7 +13,7 @@ use crate::fingerprint::{force_deep_portfolio, Ta1Metrics, Ta1Recorder, SEB_DEFA
 use crate::metrics::{
     churn_rate, coverage, coverage_with_r, size_band_under, CoverageMetrics, TargetParams, N_BANDS,
 };
-use crate::model::{r_target, Actor, CompositionParams, Rng, Shard, World};
+use crate::model::{r_target, Actor, CompositionParams, EraShape, Rng, Shard, World};
 use crate::participation::{
     admit_entrants, bonded_active_count, foundation_floor_aged, process_exits, ParticipationParams,
 };
@@ -71,6 +71,17 @@ pub struct SimConfig {
     /// Key per-shard size on an independent draw instead of age — the confound control
     /// that separates a cost-band effect from an age-band one.
     pub size_decorrelated: bool,
+    /// **Era-mean shape** — how the era term moves with the birth era
+    /// (`PDM-Q-F34`). `Monotone` is L19's; `Plateau` and `Burst` are what let a heavy
+    /// era age into the deep band rather than always sitting at the frontier.
+    pub era_shape: EraShape,
+    /// **Per-transaction shape dispersion** — the CV of per-transaction good, which
+    /// the shard sum suppresses by `√T`. `0.0` = off, and no RNG is drawn.
+    pub cv_tx: f64,
+    /// **Demand matching** (§L19a item 1): rescale the live population's sizes to mean
+    /// 1 every epoch, so total bytes are fixed across every leg. `false` for every
+    /// pre-L19a scenario, byte-identical.
+    pub demand_match: bool,
 
     // L9 duration axis + dynamic world (iteration 2; inert when `!dynamic`).
     /// Dynamic frontier-window: shards age each epoch and recycle at age 1.
@@ -622,6 +633,13 @@ pub struct ScenarioResult {
     /// heavy entry is the one the row is about; the light entry is what over-subscription
     /// looks like.
     pub size_band_under_target: [f64; 3],
+    /// **The graded verdict** (`PDM-Q-F34`): worst `frac_under_target` over the
+    /// pre-registered age × cost grid, and the worst margin to target over it. The
+    /// aggregate `final_metrics.frac_under_target` is reported beside it and **not**
+    /// graded — it certifies a state with a failing band.
+    pub banded: crate::metrics::BandedVerdict,
+    /// Whether the arm's subject is in frame at the graded snapshot (§L19a item 4).
+    pub in_frame: crate::metrics::InFrame,
     /// Actor Gini, windowed mean over the churn window (steady-state spread read).
     pub gini_actor_window: f64,
     /// Max single-actor share, peak over the churn window (conservative spread read).
@@ -642,9 +660,21 @@ impl SimConfig {
     pub fn composition(&self) -> CompositionParams {
         CompositionParams {
             spread: self.size_spread,
+            era_shape: self.era_shape,
+            cv_tx: self.cv_tx,
             decorrelated: self.size_decorrelated,
         }
     }
+}
+
+/// The age a shard born (or last recycled) at epoch `ep` with age `age_now` will have at
+/// the graded snapshot, the final epoch — the key that makes era and age coincide
+/// exactly where the verdict reads. `advance_epoch` runs at epochs `1..epochs`, so a
+/// shard present after epoch `ep`'s advance is aged `epochs − 1 − ep` more times; an
+/// initial shard (`ep = 0`, before any advance) is aged `epochs − 1` times.
+fn eventual_age(cfg: &SimConfig, ep: usize, age_now: f64) -> f64 {
+    let steps = cfg.epochs.saturating_sub(1).saturating_sub(ep) as f64;
+    (age_now + steps * cfg.epoch_aging).min(1.0)
 }
 
 fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
@@ -656,7 +686,7 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
             .map(|_| Shard {
                 age: 0.0,
                 size_seed: 0.0,
-                size: cfg.composition().size_at_birth(0.0),
+                size: cfg.composition().size_at_birth(0.0, 0.0),
             })
             .collect()
     } else {
@@ -676,7 +706,28 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
                 // exactly; under a dynamic window it is what keeps a shard's bytes from
                 // changing as it ages.
                 let comp = cfg.composition();
-                let size = comp.size_at_birth(comp.birth_key(age, size_seed));
+                // Under a dynamic window, key the era on the age this shard will have at
+                // the graded snapshot, not the age it starts at. `epochs` × `epoch_aging`
+                // is 39 × 0.02 = 0.78 by default, so every initial shard younger than
+                // 0.22 NEVER recycles: it ends the run in the deep band, and keyed on its
+                // starting age it would carry a YOUNG era's size there. The static
+                // snapshot is the case where the two coincide.
+                let key_age = if cfg.dynamic {
+                    eventual_age(cfg, 0, age)
+                } else {
+                    age
+                };
+                // The per-transaction shape draw. Consumed ONLY when `cv_tx > 0`, so a
+                // scenario that does not use this axis keeps its RNG stream and stays
+                // byte-identical — the same discipline `size_seed` follows.
+                let z = if comp.draws_shape() {
+                    // Two uniforms folded to a mean-zero, unit-ish spread draw: the
+                    // model needs a symmetric shape term, not a normal specifically.
+                    rng.next_f64() + rng.next_f64() - 1.0
+                } else {
+                    0.0
+                };
+                let size = comp.size_at_birth(comp.birth_key(key_age, size_seed), z);
                 Shard {
                     age,
                     size_seed,
@@ -901,6 +952,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     );
     let mut rng = Rng::new(cfg.seed);
     let mut world = build_world(cfg, &mut rng);
+    if cfg.demand_match {
+        world.renormalize_sizes();
+    }
 
     let mut rp = RewardParams {
         budget: cfg.budget,
@@ -1063,7 +1117,23 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         // Dynamic frontier-window: time passes (age + retire + lock-decrement) before
         // agents react. Skip on the first epoch so the initial distribution settles.
         if cfg.dynamic && ep > 0 {
-            world.advance_epoch(cfg.epoch_aging, &cfg.composition());
+            // The era a recycled slot is born into, chosen so the arm tests what it
+            // claims. A shard born at epoch `ep` will, at the final epoch `E`, have
+            // age `(E − ep) · epoch_aging`. Keying its era on that value makes era
+            // and age COINCIDE in the final snapshot — which is the only snapshot the
+            // verdict reads — so a heavy era genuinely sits at a chosen DEPTH there.
+            //
+            // Two wrong keys were measured before this one, and both produced
+            // confident nonsense. Keying on the shard's age at birth: every recycled
+            // slot is born at age 0, so the window fills with one era and the realized
+            // mean size ran to 2.22 (`S = 4`, Plateau). Keying on run-normalized time:
+            // a shard lives `1 / epoch_aging` = 50 epochs, so the final window spans
+            // only the last third of the run's eras — Plateau's window filled with
+            // newest-era heavies (mean 1.18–1.29, ADDING demand rather than
+            // redistributing it) while Burst's heavy era had aged out of frame
+            // entirely (mean 0.82–0.89), which is why it read "clear".
+            let era_now = eventual_age(cfg, ep, 0.0);
+            world.advance_epoch(cfg.epoch_aging, &cfg.composition(), era_now);
         }
 
         // L12 chain growth: append fresh hot shards until the window reaches its
@@ -1072,8 +1142,15 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         if cfg.bootstrap && ep > 0 && world.shards.len() < cfg.n_shard {
             let room = cfg.n_shard - world.shards.len();
             for _ in 0..cfg.shard_growth_per_epoch.min(room) {
-                world.append_shard(0.0, &cfg.composition());
+                let era_now = eventual_age(cfg, ep, 0.0);
+                world.append_shard(0.0, &cfg.composition(), era_now);
             }
+        }
+
+        // §L19a demand matching: the window has moved, so rescale to mean 1 before any
+        // agent reads a size this epoch.
+        if cfg.demand_match {
+            world.renormalize_sizes();
         }
 
         // L13 fee-era: shrink the base subsidy toward the terminal floor, then (if the
@@ -1875,6 +1952,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // Composition read (PDM-Q-F34): the aggregate and age-banded metrics above cannot see
     // a cost redistribution; this one can.
     let (size_band_under_target, size_mean) = size_band_under(&world, &last_eval.r, &tp);
+    let banded = crate::metrics::banded_verdict(&world, &last_eval.r, &tp);
+    let in_frame = crate::metrics::in_frame(&world, &tp);
 
     ScenarioResult {
         name: cfg.name.clone(),
@@ -1931,6 +2010,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         audit_oldest_cadence,
         size_mean,
         size_band_under_target,
+        banded,
+        in_frame,
         gini_actor_window,
         max_actor_share_window,
         claims: SubClaims {
@@ -1967,7 +2048,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
 /// The high-bond sweep is where capital binds and the empty-window threat (bond high
 /// enough to deter the whale but high enough to price out storage-rich archivers)
 /// surfaces.
-fn baseline() -> SimConfig {
+pub(crate) fn baseline() -> SimConfig {
     SimConfig {
         name: "baseline".into(),
         axis: "baseline".into(),
@@ -1998,6 +2079,9 @@ fn baseline() -> SimConfig {
         deep_shard_size: 1.0, // one unit per shard = iteration-1 behavior
         size_spread: 1.0,     // flat composition = every pre-F34 scenario, byte-identical
         size_decorrelated: false,
+        era_shape: EraShape::Monotone,
+        cv_tx: 0.0, // off: no shape draw, so the RNG stream is untouched
+        demand_match: false,
         // Static iteration-1 world by default; the L9 dynamic/duration scenarios opt in.
         dynamic: false,
         epoch_aging: 0.0,
@@ -4007,6 +4091,76 @@ pub fn build_scenarios() -> Vec<SimConfig> {
             d.axis = "composition_control".into();
             d.size_decorrelated = true;
             out.push(d);
+        }
+    }
+
+    // --- The heavy-era-ages-into-deep arm (`PDM-Q-F34`, FOLLOWUPS item 6). ---
+    //
+    // THE QUESTION, and the one arm that could still force a byte operand into
+    // channel 1 (`PDM-Q6` item 5's `(g)` falsifier): does a heavy era, aged into the
+    // DEEP band with its bytes intact, breach coverage at `r_target_deep` on a
+    // COVERED base?
+    //
+    // Why it needs a dynamic window: with `dynamic: false` age is a fixed snapshot
+    // position, so a size keyed on the birth era always puts the heavy band at the
+    // frontier — the hot end, whose target is `r_target_hot = 3`. That is the
+    // confound L19 could not escape. Here shards age (`epoch_aging > 0`) and size is
+    // fixed at birth, so a heavy era MOVES into the deep band and is graded at
+    // `r_target_deep = 6` with the `g(age)` premium on it.
+    //
+    // PRE-REGISTERED, before any of these ran (the thresholds are the ratified ones,
+    // not new bars):
+    //   * base: `storage_scale` 1.3 — the COVERED point, so a breach is this axis's
+    //     doing and not a pre-existing shortfall;
+    //   * BREACH ⇔ the arm's `banded.worst_frac_under` exceeds the CONTROL's
+    //     (`f34_aged_control`: same config, composition off) — a delta, because the
+    //     ratified 0.05 bar was set for an aggregate and means something else applied
+    //     to a max over nine cells (the flat baseline reads 0.214 against its own
+    //     aggregate of 0.050). CORRECTED after the control was read; the absolute bar
+    //     is reported, not graded;
+    //   * WATCH ⇔ `banded.worst_margin` below the control's while the count matches —
+    //     a shard under target that no threshold count can see;
+    //   * shapes: `Plateau` (usage rises then levels — the realistic steady state) and
+    //     `Burst` (one heavy era mid-depth — a heavy band at a chosen depth);
+    //   * `S` in {4, 10}: the realized per-tx spread and a deliberately harsher one.
+    //     `S = 60` is NOT run here — it is `MAX_TX_SIZE / mean`, a per-transaction
+    //     ceiling, and at the era level it would assert a whole era of maximal
+    //     transactions, which no fee market produces.
+    // THE CONTROL, and it is load-bearing twice over. The dynamic window costs
+    // coverage on its own — shards age, the frontier recycles, and backfill lags — so
+    // an arm compared against a STATIC baseline would credit the era axis with the
+    // window's cost. This is the same config with composition OFF.
+    //
+    // It also re-calibrates the verdict. The pre-registered rule first read "BREACH iff
+    // worst_frac_under >= 0.05", reusing the ratified `covered` bar. That bar was
+    // ratified for an AGGREGATE; applied to a MAX OVER NINE CELLS it is a different
+    // test, and the flat `baseline` scenario trips it (aggregate 0.050, worst band
+    // 0.214) while being the control. A threshold whose job changes when the statistic
+    // changes is not the same threshold. So the verdict is a DELTA against this
+    // control, and the absolute bar is reported, not graded.
+    {
+        let mut c = baseline();
+        c.name = "f34_aged_control".into();
+        c.axis = "f34_heavy_era_aged".into();
+        c.storage_scale = 1.3;
+        c.dynamic = true;
+        c.epoch_aging = 0.02;
+        out.push(c);
+    }
+
+    for (label, shape) in [("plateau", EraShape::Plateau), ("burst", EraShape::Burst)] {
+        for s in [4.0, 10.0] {
+            let mut c = baseline();
+            c.name = format!("f34_aged_{label}_s{s:.0}");
+            c.axis = "f34_heavy_era_aged".into();
+            c.storage_scale = 1.3;
+            c.size_spread = s;
+            c.era_shape = shape;
+            // The dynamic window: shards age and the frontier recycles, which is what
+            // carries a heavy era into the deep band.
+            c.dynamic = true;
+            c.epoch_aging = 0.02;
+            out.push(c);
         }
     }
 
