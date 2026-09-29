@@ -24,6 +24,7 @@ shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tracing = "0.1"
 
 [dev-dependencies]
 shekyl-onion-v3 = { path = "../shekyl-onion-v3" }

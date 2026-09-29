@@ -3914,6 +3914,7 @@ dependencies = [
  "shekyl-timing-engine",
  "shekyl-transport-layer",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4869,6 +4870,7 @@ dependencies = [
  "shekyl-tor-control-daemon",
  "shekyl-transport-layer",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

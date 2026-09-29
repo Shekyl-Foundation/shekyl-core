@@ -14,6 +14,7 @@
 use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use shekyl_capped_stream::{node_gate, read_capped, write_capped, StreamEnds};
 use shekyl_net_address::NetworkAddress;
@@ -28,6 +29,13 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::Session;
+
+/// A measured span, in nanoseconds, for the D9 distributions. One line
+/// per connection at each anchor; nothing here changes what the
+/// connection does.
+fn span_ns(elapsed: Duration) -> u64 {
+    u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
+}
 
 /// A Tor channel handed to the seam. `onion` is the dialed host. Inbound
 /// has none: the zone is the address.
@@ -167,9 +175,11 @@ where
     }
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let connect = async move {
+        let dialed = Instant::now();
         let Ok(mut stream) = TcpStream::connect(proxy).await else {
             return Err(CloseCause::new(CloseKind::DialFailed));
         };
+        let proxy_connect_ns = span_ns(dialed.elapsed());
         match socks_connect(
             &mut stream,
             Isolation::Principal,
@@ -177,7 +187,7 @@ where
         )
         .await
         {
-            Ok(()) => Ok(stream),
+            Ok(()) => Ok((stream, proxy_connect_ns, span_ns(dialed.elapsed()))),
             Err(SocksError::Refused { reply }) => {
                 drop(stream.shutdown().await);
                 Err(CloseCause::proxy_refused(u16::from(reply)))
@@ -209,7 +219,15 @@ where
     };
     ignore(owner.deregister());
     let stream = match stream {
-        Ok(stream) => stream,
+        Ok((stream, proxy_connect_ns, dial_ns)) => {
+            tracing::info!(
+                conn = reserved.id().get(),
+                proxy_connect_ns,
+                dial_ns,
+                "tor dial connected"
+            );
+            stream
+        }
         Err(cause) => {
             settle(reserved, cause, &on_cause);
             return;
@@ -266,6 +284,8 @@ where
     C: Clock + Clone + Send + Sync + 'static,
 {
     let conn = reserved.as_ref().map(|open| open.id().get()).unwrap_or(0);
+    let outbound = onion.is_some();
+    let channel_at = Instant::now();
     let (mut read, mut write) = stream.into_split();
     let Ok(owner) = engine.register(OwnerClass::Transport) else {
         return CloseCause::new(CloseKind::LocalClose);
@@ -342,6 +362,12 @@ where
                 if result.is_err() {
                     return stop(hold.take(), &mut writer, CloseCause::new(CloseKind::LocalClose)).await;
                 }
+                tracing::info!(
+                    conn,
+                    outbound,
+                    gap_ns = span_ns(channel_at.elapsed()),
+                    "tor session established"
+                );
             }
             result = wake.as_mut(), if gap_open => {
                 ignore(owner.deregister());

@@ -12,6 +12,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use shekyl_capped_stream::{node_gate, read_capped, write_capped, ByteQueue, Overfull, StreamEnds};
 use shekyl_net_address::NetworkAddress;
@@ -37,6 +38,20 @@ use crate::{ChannelChoice, HandshakeTally, Session};
 pub(crate) enum Role {
     Responder,
     Initiator,
+}
+
+/// A measured span, in nanoseconds, for the D9 distributions. One line
+/// per connection at each anchor; nothing here changes what the
+/// connection does.
+fn span_ns(elapsed: Duration) -> u64 {
+    u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
+}
+
+/// How long a responder's handshake sat in the blocking queue, and how
+/// long the pool then spent computing it.
+struct PoolSpans {
+    queue_ns: u64,
+    compute_ns: u64,
 }
 
 /// A channel the connector admitted, with the peer it was admitted for.
@@ -180,6 +195,7 @@ where
     };
     let dest = SocketAddr::new(ip, port);
     let target = proxy.unwrap_or(dest);
+    let dialed = Instant::now();
     let Ok(mut stream) = TcpStream::connect(target).await else {
         on_cause(CloseCause::new(CloseKind::DialFailed));
         return;
@@ -217,6 +233,12 @@ where
             return;
         }
     };
+    tracing::info!(
+        conn = reserved.id().get(),
+        connect_ns = span_ns(dialed.elapsed()),
+        proxied = proxy.is_some(),
+        "clearnet dial connected"
+    );
     let cause = if let Some(tx) = handoff {
         serve(
             stream,
@@ -386,7 +408,16 @@ async fn open_channel<C>(
 where
     C: Clock + Clone + Send + 'static,
 {
-    match (kind, role) {
+    let started = Instant::now();
+    let role_name = match role {
+        Role::Responder => "responder",
+        Role::Initiator => "initiator",
+    };
+    let kind_name = match kind {
+        ChannelChoice::Plain => "plain",
+        ChannelChoice::Noise => "noise",
+    };
+    let opened = match (kind, role) {
         (ChannelChoice::Plain, _) => {
             let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
             let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull, conn));
@@ -446,7 +477,17 @@ where
             }
             Ok((writer, recv))
         }
+    };
+    if opened.is_ok() {
+        tracing::info!(
+            conn,
+            role = role_name,
+            kind = kind_name,
+            handshake_ns = span_ns(started.elapsed()),
+            "clearnet channel established"
+        );
     }
+    opened
 }
 
 enum Setup {
@@ -567,11 +608,12 @@ where
         return Err(CloseKind::TransportTimeout);
     }
     tally.queue();
+    let queued = Instant::now();
     let tally_job = Arc::clone(tally);
     let network_id = *network_id;
     let fired_job = Arc::clone(&fired);
     let join = tokio::task::spawn_blocking(move || {
-        handshake_job(&message1, network_id, &fired_job, &tally_job)
+        handshake_job(&message1, network_id, &fired_job, &tally_job, queued)
     });
     tokio::pin!(join);
     let job = loop {
@@ -587,13 +629,19 @@ where
         }
     };
     ignore(owner.deregister());
-    let (send, recv, flight) = match job {
+    let (send, recv, flight, spans) = match job {
         Ok(Ok(done)) if !fired.load(Ordering::Acquire) => done,
         Ok(Ok(_) | Err(SkipOrFail::Skipped)) => return Err(CloseKind::TransportTimeout),
         Ok(Err(SkipOrFail::Failed)) | Err(_) => {
             return Err(CloseKind::TransportHandshakeFailed);
         }
     };
+    tracing::info!(
+        conn,
+        queue_ns = spans.queue_ns,
+        compute_ns = spans.compute_ns,
+        "clearnet responder handshake computed"
+    );
     let Some(setup) = setup.take() else {
         return Err(CloseKind::LocalClose);
     };
@@ -623,12 +671,15 @@ fn handshake_job(
     network_id: NetworkId,
     fired: &AtomicBool,
     tally: &HandshakeTally,
-) -> Result<(SendHalf, SeamRecv, Vec<u8>), SkipOrFail> {
+    queued: Instant,
+) -> Result<(SendHalf, SeamRecv, Vec<u8>, PoolSpans), SkipOrFail> {
+    let queue_ns = span_ns(queued.elapsed());
     if fired.load(Ordering::Acquire) {
         tally.skip();
         tally.dequeue();
         return Err(SkipOrFail::Skipped);
     }
+    let computing = Instant::now();
     let result = (|| {
         let ready = Responder::new(&network_id)
             .read_message1(message1)
@@ -639,6 +690,7 @@ fn handshake_job(
     tally.dequeue();
     let (established, message2) = result?;
     tally.compute();
+    let compute_ns = span_ns(computing.elapsed());
     let (send, recv) = established_halves(established);
     let mut flight = Vec::with_capacity(PREFIX_LEN + message2.len());
     flight.extend_from_slice(&prefix_for(&network_id));
@@ -650,6 +702,10 @@ fn handshake_job(
             pending: Vec::new(),
         },
         flight,
+        PoolSpans {
+            queue_ns,
+            compute_ns,
+        },
     ))
 }
 

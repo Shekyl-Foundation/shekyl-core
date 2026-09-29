@@ -153,6 +153,34 @@ stayed in the epee pool. That walk logged `candidates=0` and
 just re-handshaked. That failure is an empty epee walk, not a seam
 refusal.
 
+## The option on, same day
+
+Two cutover daemons on loopback with `--clearnet-transport-encrypt`
+at both ends never established a channel. Every dial logged
+`TransportHandshakeFailed` within about 70 µs of the TCP connect, at
+both ends, with no `PrefixMismatch`. That is faster than the
+handshake's cryptography, so the refusal came before any byte.
+
+The zone host stored the timing engine's handle and dropped the
+`EngineService` when its constructor returned. The service's `Drop`
+sets the closed flag every handle shares, so each `register` for a
+transport deadline returned `Closed`, which the connectors report as
+`TransportHandshakeFailed`. The plaintext path arms no deadline and
+never saw it; the Tor dial clock and gap timer arm one and would
+have failed the same way. The host now owns the service and stops it
+in `shekyl_zone_shutdown`, engine first, then the pool, then the
+join. `the_engine_outlives_ensure` fails on the old shape.
+
+After the fix the pair established on the first dial. The connectors
+now log each span, in nanoseconds, one line per connection: the
+clearnet TCP connect, the handshake by role and kind, the responder's
+blocking-pool queue wait and compute time, the Tor SOCKS dial, and
+the Tor channel-to-session gap. The clearnet gap is the interval from
+`NEW CONNECTION` to `CONNECTION HANDSHAKED OK` in the C++ log. These
+loopback figures are a smoke of the lines, not a link: initiator
+handshake 1.54 ms, responder queue 106 µs and compute 363 µs, Levin
+gap 43 ms. The deadline pin is the commit that carries the spans.
+
 ## Not this run
 
 Tor dial and Tor relay were not run. The floor-device deadline and
