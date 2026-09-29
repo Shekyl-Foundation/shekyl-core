@@ -21,7 +21,8 @@ by archival length, bound through the txid.** It was posed on 2026-09-28 after F
 together with findings `SHT-10`…`SHT-12`, the input-count proposal recorded as not
 adopted, and `PDM-Q6` item 5's rejection re-read as one of *stored lengths*, not of
 byte-proportional boundaries; the placement of the length (prefix or txid, §8.5) was
-posed on 2026-09-29 and settled by the same ruling. Identifier families **`SHT-`** (findings) and
+posed on 2026-09-29 and settled by the same ruling: **txid-bound** — "bound through
+the txid" is §8.5's right-hand column. Identifier families **`SHT-`** (findings) and
 **`SHT-Q`** (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
 (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a) — 105 prefixes
@@ -727,15 +728,14 @@ observation exists.
   every fetch, sizes round-robin, and 30 s spacing. That is roughly 1,400 soak
   observations, about 470 per size, so each size's p99 rests on about 5 tail
   observations. It is reported with that caveat, and p90 is reported beside it.
-- **Host.** `skl-miner-main`: the ssh alias at 10.10.14.11, which reports its hostname
-  as `skl-test-miner`. It runs Tor Expert Bundle 15.0.17 (the tarball on the host, its
-  signature verified before use) and a build of the harness commit whose highest glibc
-  symbol is `GLIBC_2.39`, the host's own glibc. Nothing else runs a workload on the host
-  during the soak. Another lane's `shekyl-wallet-rpc` is present and idle, and its
-  daemon is not running; this is recorded, not removed. **Amended before the run, the
-  same day:** this line first named `skl-miner-stage`, which turned out to run a
-  testnet mining daemon at full CPU. That would bias the measurement, so the run moved
-  to the quiet host.
+- **Host.** An internal node with no mining or daemon workload during the soak (the
+  role; rule 37 — the host's identity is not recorded here). It runs Tor Expert Bundle
+  15.0.17 (the tarball's signature verified before use) and a build of the harness
+  commit whose highest glibc symbol is `GLIBC_2.39`, the host's own glibc. An idle
+  wallet-RPC process from another lane is present; this is recorded, not removed.
+  **Amended before the run, the same day:** this line first named the testnet miner,
+  which runs a mining daemon at full CPU. That would bias the measurement, so the run
+  moved to the quiet node.
 - **Fit.** Per percentile (p50, p90, p99), over the **soak** arm: least squares of
   `t = t_fixed + bytes / v` over the three sizes. The cold arm is fitted and reported,
   not used to select.
@@ -1148,8 +1148,9 @@ the cutover census's family-1 rows re-keyed; and `SHARD_TX_COUNT` /
 
 §8.4 put the declared length in the **prefix**. The design owner has proposed binding it
 through the **txid** instead. This section answers the three questions that decide
-between them, at source on `dev`, then wargames the txid placement. It poses both;
-**Rick rules.**
+between them, at source on `dev`, then wargames the txid placement. It posed both for
+the ruling; **Rick ruled txid-bound the same day (§8.6)**. The text below is the case
+as it was put.
 
 #### 1. What each signature and proof signs today
 
@@ -1244,7 +1245,8 @@ value and so no equality rule, and survives a variable-length signature scheme a
 transition. The partition built on it is unchanged from §8.4: global multiples of `W`,
 with `max archival length < W` as a static relation between the two constants.
 
-**Not ruled here.**
+**Ruled in §8.6: txid-bound.** The ruling's "bound through the txid" is the right-hand
+column of the table above; the prefix field is not adopted.
 
 ### 8.6 `SHT-Q2` — RULED (Rick, 2026-09-29)
 
@@ -1275,6 +1277,14 @@ mixer measures the finished bytes itself.
    composition bounds drop out.
 5. The cutover census (`ARCHIVAL_SHARD_COUNT_CUTOVER.md`) updated for the new boundary
    function: the same consumers, a new function behind them.
+
+**Item 1 narrowed by the build brief's rulings (Rick, 2026-09-29).** There is **one**
+txid mixer, in Rust. C++ `calculate_transaction_hash` becomes an FFI call into it, with
+its hashing deleted and no length term added in C++ (rule 20). And **row 3 = (b):** the
+C++ LMDB archival path is frozen — no new LMDB tables, cells or archival logic; the
+LMDB/Rust-store partition difference is registered as an intended CSR-3a divergence;
+the engine swap completes before genesis, or this is revisited. The census carries both
+(`ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F).
 
 **Consequences recorded with the ruling:**
 
