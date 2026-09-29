@@ -472,8 +472,9 @@ at the first cascade, and height by height by the `Q2` examiner.
 this design offers, and the subject of its own assertion.
 
 **Size, derived and not restated.** A production-depth frontier whose every
-partial chunk is one child short of folding encodes to **8 848 B**, against
-§6.3.2 row 4's **9 664 B**. The 9 664 is carried as a **bound the
+partial chunk is one child short of folding encodes to
+`11 + (LEAF_CHUNK_SCALARS − 1)·32 + Σ_{k<5} (1 + (chunk_width(k+1) − 1)·32)`
+= **8 848 B**, against §6.3.2 row 4's **9 664 B**. The 9 664 is carried as a **bound the
 implementation must fit inside**, never as its size: the sizing counts three
 Selene chunks and two Helios above the leaf chunk where the widths give two and
 three, and it counts each chunk at capacity where a partial chunk folds on
@@ -488,10 +489,20 @@ per height, keyed by a `BlockHeightKey` whose distinct redb `TypeName` is what
 stops a tree position or a gindex indexing it.
 
 **The bound is the write, not a policy.** `append_block_deltas` inserts the
-height it ingests and, in the same statement, removes everything at or below
-`height − SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` — so the covered run is exactly
-the horizon, and there is no eviction policy for anything to hold
-(`Q1` RULED 2026-09-28).
+height it ingests and, in the same statement, removes everything *below*
+`height − SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` — so there is no eviction policy
+for anything to hold (`Q1` RULED 2026-09-28).
+
+**The run is closed at the bottom, and the fencepost is derived rather than
+chosen.** A reorg of depth `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` *replaces* that
+many blocks, so its **fork** sits at `tip − horizon` — the block the replaced
+ones build on — and §10.3's rewind restores from the row **at** the fork. A
+half-open `(tip − horizon, tip]` would drop exactly that row and send the
+deepest legal rewind down the fold path, which is the one case the bound exists
+for. So the ring holds `[tip − horizon, tip]`: one height per replaceable block
+plus the one they fork from. The wrap test takes its expected span from that
+sentence and not from the delete's own bound, which would have asserted the
+implementation back at itself.
 
 **No store schema-version bump, and the reason is C8.** Adding a table is not a
 layout change: a store written before this one existed simply has no rows,
@@ -552,6 +563,32 @@ scope `537.59 ms` was modelled at, which also counted no table writes.
 rule 76's floor. Increment 4 ran off-rig, so the record carries the figure, the
 ratio and `rig.grading: false`; **increment 6 is the seat for the graded run**,
 and the blocker is the board rather than the code.
+
+**What the off-rig run says, and what it does not.** One converged run
+(x86_64, `--window-leaves 105600`, 1 056 leaves/block at depth 6, 479 blocks
+advanced):
+
+| Term, same run | Value |
+| --- | --- |
+| Measured advance | **124.72 ms/block**, converged |
+| Retired model, same run | **180.63 ms/block** |
+| Measured ÷ model | **0.69×** |
+
+**The direction is the one the harness already predicted.** `replay`'s own
+`proxy_note` says the model is *"net an upper bound, since `build_layers`
+rehashes every upper node where a frontier advance touches one per layer"* —
+and the built advance lands under it. There is no divergence to report in the
+dangerous direction, and **no Pi figure is derived from the ratio**: the
+advance has a `fsync`'d ring commit in it, which does not scale with the A72
+the way the curve hashing does, so `537.59 ms × 0.69` would be an arithmetic
+with one term that does not travel. The pre-build bound stands until the rig
+re-runs it.
+
+**A contamination lesson worth the line.** The first off-rig attempt had the
+depth-5 sparse/dense control diverge **111 %** and refuse the sparse path; a
+second run on a quiet box gave **−1.0 %** on the same arm. The first was taken
+while this worktree was building. A timing harness measures the box it is on,
+including whatever else is on it.
 
 ### 10.5 The examiner
 

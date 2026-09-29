@@ -58,8 +58,8 @@ const LEAF_BYTES: usize = SCALARS_PER_LEAF * 32;
 /// A live frontier, a real ring, and the block population to advance over.
 pub struct AdvanceRig {
     /// Kept so the database file outlives the rig. The rig measures a real
-    /// store on the rig's real storage — the axis `§6.3.4` pins the rig's
-    /// disk for.
+    /// store on the storage the caller names — the axis `§6.3.4` pins the
+    /// rig's disk for.
     _dir: tempfile::TempDir,
     store: LeafStore,
     frontier: Frontier,
@@ -72,13 +72,22 @@ pub struct AdvanceRig {
 impl AdvanceRig {
     /// Build a rig that advances `leaves_per_block` leaves per iteration.
     ///
+    /// `store_dir` is where the ring's database is created. The ring commit
+    /// is an fsync'd disk write, so on the pinned rig this must be the
+    /// attested storage; `None` falls back to the system temporary
+    /// directory, which off-rig is the same device and on-rig is not.
+    ///
     /// # Panics
     ///
     /// If the scratch store cannot be created, or if the corpus holds fewer
     /// leaves than one block needs — a rig that silently advanced a short
     /// block would report a cost for a population it did not have.
     #[must_use]
-    pub fn new(corpus: &Corpus, leaves_per_block: u64) -> Self {
+    pub fn new(
+        corpus: &Corpus,
+        leaves_per_block: u64,
+        store_dir: Option<&std::path::Path>,
+    ) -> Self {
         let wanted = usize::try_from(leaves_per_block).expect("leaves per block fits usize");
         let available = corpus.leaf_scalars.len() / SCALARS_PER_LEAF;
         assert!(
@@ -98,7 +107,10 @@ impl AdvanceRig {
             })
             .collect();
 
-        let dir = tempfile::tempdir().expect("scratch dir for the ring");
+        let dir = match store_dir {
+            Some(parent) => tempfile::tempdir_in(parent).expect("scratch dir for the ring"),
+            None => tempfile::tempdir().expect("scratch dir for the ring"),
+        };
         let store = LeafStore::open(dir.path().join("advance.curvetree")).expect("ring store");
         Self {
             _dir: dir,

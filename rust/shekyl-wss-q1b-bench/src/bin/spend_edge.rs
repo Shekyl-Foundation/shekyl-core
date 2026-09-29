@@ -62,6 +62,16 @@ struct Args {
     #[arg(long = "control-depth", default_values_t = [4u8, 5u8])]
     control_depths: Vec<u8>,
 
+    /// Directory the advance rig's ring store is created in.
+    ///
+    /// The ring commit is an fsync'd disk write, so on the pinned rig this
+    /// has to land on the attested storage rather than wherever `TMPDIR`
+    /// points — which on a Pi is the OS microSD or a tmpfs, neither of which
+    /// is what §6.3.4's storage pin is about. Defaults to the system
+    /// temporary directory, which is correct off-rig and wrong on it.
+    #[arg(long)]
+    advance_store_dir: Option<std::path::PathBuf>,
+
     /// Leaves to replay. Defaults to the worst-case window at `--depth`.
     #[arg(long)]
     window_leaves: Option<u64>,
@@ -257,13 +267,32 @@ fn main() -> ExitCode {
     // same thermal state, so the ratio between the two is a property of the
     // work and not of the machine — which is what lets an off-rig run say
     // anything at all about the pinned rig's figure.
-    let mut advance_rig = AdvanceRig::new(&corpus, leaf_rate.leaves_per_block);
+    let mut advance_rig = AdvanceRig::new(
+        &corpus,
+        leaf_rate.leaves_per_block,
+        args.advance_store_dir.as_deref(),
+    );
     let advance_series = sustained_within_conditioned(
         args.warmup,
         DEFAULT_TOLERANCE_PCT,
         MAX_WALL_SECONDS,
         args.min_conditioning_s,
         || advance_rig.advance_one_block(),
+    );
+    // **Printed here, before anything downstream can refuse.** The refusals
+    // below the advance -- an unlicensed sparse path, a dense fallback at the
+    // wrong depth -- are about the spend-edge BUDGET, whose denominator this
+    // figure does not depend on, and they return before `emit`. A run that
+    // took the advance measurement and then discarded it because the prover
+    // arm could not be graded would lose the one quantity `CT-6 Q4` asks for.
+    eprintln!(
+        "── CT-6 Q4 advance: {:.2} ms/block over {} blocks at {} leaves/block \
+         (converged: {}, {}) ──",
+        advance_series.graded_s() * 1000.0,
+        advance_rig.blocks_advanced(),
+        leaf_rate.leaves_per_block,
+        advance_series.converged,
+        advance_series.stopped_because
     );
     // Rule 47: the series is only evidence if the rig advanced. A closure
     // that had silently done nothing would produce a fast, converged,
@@ -359,10 +388,21 @@ fn main() -> ExitCode {
     }
 
     let replay_median = replay_series.graded_s();
-    // Blocks the replayed corpus actually covers. Rule 47: a zero here would
-    // make the retired quotient infinite rather than absent, so it is refused
-    // above by the same corpus assertion the advance rig makes.
-    let replayed_blocks = (window_leaves / leaf_rate.leaves_per_block).max(1) as f64;
+    // Blocks the replayed corpus actually covers. `AdvanceRig::new` has
+    // already refused a corpus shorter than one block, so this is at least 1
+    // by the time it is read; a `.max(1)` here would be a guard that cannot
+    // fire.
+    let replayed_blocks = (window_leaves / leaf_rate.leaves_per_block) as f64;
+    // The retired model beside the measurement, for the same reason and at
+    // the same point: the ratio between the two is what travels off this
+    // machine, and neither number does on its own.
+    eprintln!(
+        "── CT-6 Q4 retired model: {:.2} ms/block (replay {:.3} s over {replayed_blocks} \
+         blocks) -> measured is {:.2}x ──",
+        replay_median / replayed_blocks * 1000.0,
+        replay_median,
+        advance_series.graded_s() / (replay_median / replayed_blocks)
+    );
     let delta_s = replay_median + path_series.graded_s();
     // §5.2's contract: an unconverged series is REPORTED, never substituted for
     // a converged one. Grading an unconverged median would do exactly the

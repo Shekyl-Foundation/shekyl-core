@@ -39,9 +39,11 @@
   graded at every count through two leaf-chunk folds and the first cascade.
 - **A per-height snapshot ring, total over `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`.**
   `LeafStore` gains a `frontier_snapshots` table. `append_block_deltas`
-  writes the height it ingests and removes the height that has just left the
-  horizon in the *same statement*, so the ring's bound is the write rather
-  than an eviction policy. `CurveTreeClient::root_and_depth_at` answers
+  writes the height it ingests and removes everything below
+  `height − SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` in the *same statement*, so
+  the ring's bound is the write rather than an eviction policy. The run is
+  closed at the bottom because a reorg of that depth has its **fork** at
+  `tip − horizon`, and a rewind restores from the row at the fork. `CurveTreeClient::root_and_depth_at` answers
   in-horizon heights from it and falls through to `root_at_count` elsewhere;
   the frozen segment tier is unchanged. **Why:** `root_at_count` inside the
   unfrozen zone recomputes every complete-but-unfrozen segment on every
@@ -65,7 +67,10 @@
   built advance (fold, capture, ring commit), with the retired quotient
   emitted beside it as `per_block_advance_retired_quotient_s`. The field
   changed derivation under an unchanged name, which is what the version
-  exists to make visible. The retired quotient's denominator is now the
+  exists to make visible. Off-rig, one converged run at the production leaf
+  rate puts the built advance at **124.72 ms/block** against the same run's
+  model at **180.63 ms/block** — 0.69×, the direction `replay`'s own
+  `proxy_note` predicts. The pinned-rig grade is increment 6's. The retired quotient's denominator is now the
   blocks the corpus covers rather than the constant, which under
   `--window-leaves` had divided a shrunken replay by the full window.
 

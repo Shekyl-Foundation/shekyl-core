@@ -979,47 +979,83 @@ fn a_ring_row_over_the_wrong_leaf_count_is_refused_not_served() {
 }
 
 #[test]
-fn the_ring_is_total_over_the_horizon_and_no_wider() {
+fn the_ring_covers_every_legal_reorgs_fork_and_nothing_deeper() {
     // The one test that runs at the real constant. The horizon IS
     // `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`; shrinking it for the test would
     // grade a ring of a different size than the one that ships.
     let horizon = BlockCount::from_raw(SEGMENT_FREEZE_REORG_MARGIN_BLOCKS);
-    let tip = BlockHeight::ZERO + horizon + BlockCount::ONE;
+    // The tip has to clear the horizon by more than the coinbase lock, or
+    // the deepest fork's drain cutoff predates the first maturity and the
+    // rewind half of this test would run over an empty tree — a pass that
+    // asserts nothing about restoring a frontier.
+    let tip = BlockHeight::ZERO + horizon + lock_count() + BlockCount::from_raw(2);
     let mut client = CurveTreeClient::new();
     ingest_through(&mut client, tip, scheduled_outputs);
 
+    // **The expected span comes from what a reorg is, not from the eviction's
+    // own bound.** A reorg of depth `horizon` replaces that many blocks, so
+    // its fork height is `tip - horizon` — the block the replaced ones build
+    // on — and `rollback_to_fork` restores from the row AT the fork. Reading
+    // the expectation off the delete's bound instead would assert the
+    // implementation back at itself and accept the half-open run that drops
+    // exactly the deepest legal rewind.
+    let deepest_fork = tip - horizon;
     let (first, last) = client
         .snapshot_span()
         .expect("span reads")
         .expect("the ring holds rows");
     assert_eq!(last, tip, "the ring does not reach the tip");
     assert_eq!(
-        first,
-        tip - horizon + BlockCount::ONE,
-        "the ring's span is not the horizon"
+        first, deepest_fork,
+        "the ring's lowest height is not the deepest legal reorg's fork"
     );
 
-    let evicted = tip - horizon;
+    let too_deep = deepest_fork - BlockCount::ONE;
     assert!(
         client
-            .snapshot_tier_reading(evicted)
+            .snapshot_tier_reading(too_deep)
             .expect("ring read")
             .is_none(),
-        "height {evicted} is one past the horizon and the ring still answers it"
+        "height {too_deep} is one below the deepest legal fork and the ring still answers it"
     );
     assert!(
         client
-            .snapshot_tier_reading(evicted + BlockCount::ONE)
+            .snapshot_tier_reading(deepest_fork)
             .expect("ring read")
             .is_some(),
-        "the first in-horizon height is not covered"
+        "the deepest legal fork is not covered, so the deepest legal rewind would refold \
+         the whole drained prefix"
     );
 
     // Falling out of the ring changes who answers, never what is answered.
     assert_eq!(
-        client.root_and_depth_at(evicted).expect("dispatcher"),
-        client.segment_tier_reading(evicted).expect("segment tier"),
+        client.root_and_depth_at(too_deep).expect("dispatcher"),
+        client.segment_tier_reading(too_deep).expect("segment tier"),
         "an evicted height's answer moved"
+    );
+
+    // And the deepest legal rewind really does restore from that row: the
+    // same discriminator the in-horizon rollback test uses, at the boundary
+    // the span assertions above are about.
+    let n_at_fork = u64::try_from(client.drained_leaf_count(deepest_fork)).expect("count fits u64");
+    assert!(n_at_fork > 0, "the deepest fork must hold leaves");
+    client
+        .test_set_snapshot(deepest_fork, Some(&foreign_frontier(n_at_fork)))
+        .expect("ring row replaced");
+    client
+        .rollback_to_fork(deepest_fork)
+        .expect("deepest rollback");
+    assert_eq!(
+        client.live_frontier_leaf_count(),
+        n_at_fork,
+        "the restored frontier is over the wrong leaf count"
+    );
+    assert_ne!(
+        client.root_and_depth_at(deepest_fork).expect("dispatcher"),
+        client
+            .segment_tier_reading(deepest_fork)
+            .expect("segment tier"),
+        "the deepest legal rewind did not read the fork height's snapshot"
     );
 }
 
@@ -1143,5 +1179,111 @@ fn the_snapshot_tiers_depth_comes_from_the_snapshots_own_count() {
         "the snapshot tier reported depth {depth} for a snapshot over {stepped} leaves; \
          it took the depth from the client's leaf count, which welds this tier to the \
          segment tier on the one axis C3 pins"
+    );
+}
+
+/// A persistent client over a short coinbase chain, for the resume paths.
+///
+/// Short on purpose: every block is a real redb commit, and what these tests
+/// are about is which limb `rebuild_from_store` takes, not chain length.
+fn persistent_client(path: &std::path::Path) -> (CurveTreeClient, BlockHeight) {
+    let counts = vec![2usize, 1, 3];
+    let tip = tip_when_last_creation_drains(counts.len());
+    let mut client = CurveTreeClient::open(path).expect("store opens");
+    ingest_through(&mut client, tip, outputs_of(&counts));
+    (client, tip)
+}
+
+/// With no ring row at the tip, resume **folds** — and lands on the same
+/// frontier the ring would have supplied.
+///
+/// This is the limb a store written before the ring existed takes, and it is
+/// the one with no other test: the rollback bite proves the ring branch runs,
+/// which says nothing about what happens when there is nothing to read.
+#[test]
+fn resume_folds_the_drained_prefix_when_the_ring_has_no_row_at_the_tip() {
+    let dir = tempfile::tempdir().expect("scratch dir");
+    let path = dir.path().join("resume_fold.curvetree");
+    let (expected_reading, expected_n, tip) = {
+        let (client, tip) = persistent_client(&path);
+        let reading = client.root_and_depth_at(tip).expect("read before resume");
+        let n = client.live_frontier_leaf_count();
+        assert!(n > 0, "the fixture drained no leaves");
+        client
+            .test_set_snapshot(tip, None)
+            .expect("ring row removed");
+        (reading, n, tip)
+    };
+
+    let mut resumed = CurveTreeClient::open(&path).expect("resume");
+    assert_eq!(
+        resumed.live_frontier_leaf_count(),
+        expected_n,
+        "the folded frontier is over the wrong leaf count"
+    );
+    // The row is gone, so this height now answers from the segment tier --
+    // which is exactly the fall-through, and it must answer the same thing.
+    assert_eq!(
+        resumed.root_and_depth_at(tip).expect("read after resume"),
+        expected_reading,
+        "the fall-through answer moved"
+    );
+
+    // The real claim: the NEXT block is built on the folded frontier, so its
+    // captured snapshot has to agree with the composition over the same
+    // leaves. A frontier folded in the wrong order or short by a leaf shows
+    // up here and nowhere earlier.
+    let next = tip + BlockCount::ONE;
+    let txs: Vec<TxLeafInputs<'_>> = Vec::new();
+    resumed
+        .ingest_block(BlockLeaves {
+            height: next,
+            txs: &txs,
+        })
+        .expect("ingest after resume");
+    assert!(
+        resumed
+            .snapshot_tier_reading(next)
+            .expect("ring read")
+            .is_some(),
+        "the block after a folded resume captured no snapshot"
+    );
+    assert_eq!(
+        resumed.root_and_depth_at(next).expect("dispatcher"),
+        resumed.segment_tier_reading(next).expect("segment tier"),
+        "the snapshot captured after a folded resume disagrees with the composition"
+    );
+}
+
+/// A ring row at the tip whose leaf count is not the store's is **refused**
+/// at resume, not quietly re-folded.
+///
+/// The two are written in one transaction from a frontier already checked
+/// against the drain index, so a disagreement is corruption; C8's answer is
+/// refuse-and-resync, and a silent re-fold would repair the symptom and hide
+/// the cause.
+#[test]
+fn resume_refuses_a_ring_row_that_disagrees_with_the_store() {
+    let dir = tempfile::tempdir().expect("scratch dir");
+    let path = dir.path().join("resume_refuse.curvetree");
+    let stored = {
+        let (client, tip) = persistent_client(&path);
+        let n = client.live_frontier_leaf_count();
+        assert!(n > 1, "the fixture needs a smaller valid count below it");
+        client
+            .test_set_snapshot(tip, Some(&foreign_frontier(n - 1)))
+            .expect("ring row replaced");
+        n
+    };
+
+    let err = CurveTreeClient::open(&path).expect_err("resume must refuse");
+    assert!(
+        matches!(
+            err,
+            ClientError::SnapshotLeafCountMismatch {
+                snapshot, expected, ..
+            } if snapshot == stored - 1 && expected == stored
+        ),
+        "expected SnapshotLeafCountMismatch, got {err:?}"
     );
 }

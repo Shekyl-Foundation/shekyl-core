@@ -49,9 +49,12 @@ const PENDING_TABLE: TableDefinition<GindexKey, &[u8; 320]> = TableDefinition::n
 //
 // The ring is TOTAL over `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` and bounded by
 // it: `append_block_deltas` writes the height it ingests and, in the same
-// transaction, removes the height that has just fallen out of the horizon.
-// There is no eviction policy to hold, because the write and the removal are
-// one step (CT-6 Q1, RULED 2026-09-28).
+// transaction, removes what has fallen out of the horizon. There is no
+// eviction policy to hold, because the write and the removal are one step
+// (CT-6 Q1, RULED 2026-09-28). The run it keeps is `[h - horizon, h]` —
+// closed at the bottom, because the deepest legal reorg's FORK sits at
+// `h - horizon` and that is the row a rewind restores from
+// (`write_frontier_snapshot_in_txn`).
 //
 // A store written before this table existed simply has none of these rows.
 // That is not a schema break and takes no version bump: the ring is a cache
@@ -1090,9 +1093,18 @@ impl LeafStore {
     /// The horizon **is** [`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`] — read from
     /// the one JSON authority through the constant, never restated (C4). The
     /// removal is the whole of the ring's bound: after writing `h`, the rows
-    /// present are exactly `(h - horizon, h]`, so the row count is a
+    /// present are exactly `[h - horizon, h]`, so the row count is a
     /// consequence of this pair of statements rather than of a policy
     /// something else has to enforce.
+    ///
+    /// **Why the run is closed at the bottom, and it is not an off-by-one to
+    /// tidy away.** A reorg of depth `horizon` *replaces* that many blocks,
+    /// so its fork height is `h - horizon` — the block the replaced ones
+    /// build on — and `rollback_to_fork` restores the live frontier from the
+    /// row **at** the fork. A half-open `(h - horizon, h]` drops exactly that
+    /// row, and the deepest legal rewind — the one case the bound exists for
+    /// — would take the fold path instead. So the covered run is one height
+    /// per replaceable block *plus* the one they fork from.
     ///
     /// A range delete rather than a single `remove` of `h - horizon`, because
     /// the height that leaves is only `h - horizon` when the ring was already
@@ -1113,10 +1125,10 @@ impl LeafStore {
         else {
             return Ok(());
         };
-        // `first_covered` is `h - horizon`, the highest height NOT covered:
-        // the covered run is `(h - horizon, h]`, which is `horizon` heights.
+        // `first_covered` is `h - horizon`, the deepest legal reorg's fork
+        // height — kept. The delete is strictly below it.
         ring.retain_in(
-            ..=BlockHeightKey::from(BlockHeight::from_raw(first_covered)),
+            ..BlockHeightKey::from(BlockHeight::from_raw(first_covered)),
             |_, _| false,
         )?;
         Ok(())
