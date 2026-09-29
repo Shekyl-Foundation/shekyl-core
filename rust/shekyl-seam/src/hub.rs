@@ -100,6 +100,12 @@ struct Conn {
     /// The connector of the endpoint this row was adopted with. Every post
     /// for the row names it.
     connector: ConnectorId,
+    /// Wakes this row's inbound drive, and only it. A hub-wide wake would
+    /// wake every waiting driver on every strand answer, O(N) per delivery
+    /// on the zone whose N is adversarial. `notify_one` stores a permit when
+    /// no driver is waiting, so a change between the driver dropping the
+    /// table lock and awaiting is not lost.
+    notify: Arc<tokio::sync::Notify>,
     /// How many `Deliver` posts have been queued. The injector waits on this.
     posted_deliveries: u64,
     /// The strand has entered `closed`. A late refusal records nothing.
@@ -122,10 +128,9 @@ enum DeliverStep {
 #[derive(Clone)]
 pub struct Hub {
     inner: Arc<Mutex<Inner>>,
+    /// Wakes the thread waiters: the harness pump and the open path. Task
+    /// waiters have one [`tokio::sync::Notify`] per row.
     ready: Arc<Condvar>,
-    /// The same wake for a task. Every state change notifies both, so an
-    /// inbound drive can await the strand instead of holding a thread.
-    ready_async: Arc<tokio::sync::Notify>,
     post: Arc<dyn Fn(Post) + Send + Sync>,
     clock: Arc<dyn Clock + Send + Sync>,
     dial: Arc<RwLock<Option<Arc<dyn Dial>>>>,
@@ -159,18 +164,20 @@ impl Hub {
                 ceiling,
             })),
             ready: Arc::new(Condvar::new()),
-            ready_async: Arc::new(tokio::sync::Notify::new()),
             post,
             clock,
             dial: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// Wake every waiter, thread or task. Called with the table lock held,
-    /// so a task that registered under that lock cannot miss the change.
+    /// Wake every thread waiter.
     fn wake(&self) {
         self.ready.notify_all();
-        self.ready_async.notify_waiters();
+    }
+
+    /// Wake one row's inbound drive.
+    fn wake_row(conn: &Conn) {
+        conn.notify.notify_one();
     }
 
     /// [`Self::new`] with the monotonic clock.
@@ -274,6 +281,7 @@ impl Hub {
                 cause: None,
                 phase: Phase::Arming,
                 connector: endpoint.connector(),
+                notify: Arc::new(tokio::sync::Notify::new()),
                 posted_deliveries: 0,
                 strand_closed: false,
             },
@@ -310,6 +318,7 @@ impl Hub {
             if conn.cause.is_none() && matches!(conn.phase, Phase::Arming) {
                 conn.phase = Phase::Open;
             }
+            Self::wake_row(conn);
         }
         self.wake();
     }
@@ -400,27 +409,33 @@ impl Hub {
         }
     }
 
-    /// [`Self::deliver`] for a task. The wait is a [`tokio::sync::Notify`]
-    /// registered under the table lock, so the task holds no thread while
-    /// the strand parses. A zone with one blocking lane drove one connection
-    /// at a time when this was a blocking call; every later connection sat
-    /// deaf in the pool's queue until the first one closed.
+    /// [`Self::deliver`] for a task. The wait is the row's own
+    /// [`tokio::sync::Notify`], so the task holds no thread while the strand
+    /// parses and a strand answer wakes one driver, not every driver. A zone
+    /// with one blocking lane drove one connection at a time when this was a
+    /// blocking call; every later connection sat deaf in the pool's queue
+    /// until the first one closed.
     pub async fn deliver_async(&self, id: SocketId, bytes: Vec<u8>) -> bool {
         let mut bytes = Some(bytes);
+        let Some(notify) = self
+            .lock()
+            .conns
+            .get(&id)
+            .map(|conn| Arc::clone(&conn.notify))
+        else {
+            return false;
+        };
         loop {
-            let notified = self.ready_async.notified();
-            tokio::pin!(notified);
             let step = {
                 let mut inner = self.lock();
-                let step = self.deliver_step(&mut inner, id, &mut bytes);
-                if matches!(step, DeliverStep::Wait) {
-                    notified.as_mut().enable();
-                }
-                step
+                self.deliver_step(&mut inner, id, &mut bytes)
             };
             match step {
                 DeliverStep::Done(result) => return result,
-                DeliverStep::Wait => notified.await,
+                // A wake between the lock drop and this await is a stored
+                // permit, so it is not lost; a stale permit costs one more
+                // look under the lock.
+                DeliverStep::Wait => notify.notified().await,
             }
         }
     }
@@ -485,6 +500,7 @@ impl Hub {
             if conn.cause.is_none() && matches!(conn.phase, Phase::Delivering) {
                 conn.phase = Phase::Open;
             }
+            Self::wake_row(conn);
         }
         self.wake();
     }
@@ -572,7 +588,9 @@ impl Hub {
         let dial = self.current_dial();
         {
             let mut inner = self.lock();
-            inner.conns.remove(&id);
+            if let Some(conn) = inner.conns.remove(&id) {
+                Self::wake_row(&conn);
+            }
             self.wake();
         }
         if let Some(dial) = dial {
@@ -666,6 +684,7 @@ impl Hub {
                 connector,
                 cause,
             });
+            Self::wake_row(conn);
             self.wake();
             open
         };
