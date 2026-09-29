@@ -176,6 +176,24 @@
   hidden startup flag. Unbounded disk, no reward. The password is not
   kept after that call.
 
+### Consensus validator — census 4.G's medians and the paid reward (DRS-E6 slice 7, commits 3–5)
+
+- **The Rust validator derives the block-weight medians and the paid
+  reward.** CEN-G6/G6b (`Medians::derive`, `Weights::derive` over the two
+  windows, now one key each in `consensus_constants.json`) and
+  CEN-F14/F14b/F16/G12 (`judge_emission`: a block over twice the effective
+  median is refused; the penalised reward, its miner/staker split and the
+  supply accumulator are the verdict's). `ConnectFacts` carries only
+  `burned`; the store schema is 16. Held to six daemon-built chains at every
+  height on roots, weights and accumulator (2 408 / 2 408), and to the C++
+  daemon live: a Rust-built block at the consensus bound is accepted, one
+  body over refused (`CHAIN_RULES_SLICE_7.md` §3.5, §3.11).
+- **The conformance register's CEN-G6/G6b rows are CHECKED-CONFORMANT.**
+  Both were graded DIVERGENT on 2026-09-11 for the shipped ×50 surge factor;
+  the factor became the ratified 4 on 2026-09-12 and the rows were not
+  re-graded until this PR. Tally 127 CHECKED-CONFORMANT / 1 DIVERGENT
+  (CEN-I4) / 5 UNREVIEWED, derived from the rows.
+
 ### Consensus validator — census 4.I, the transaction against the chain (DRS-E6 slice 6, commits 3–10)
 
 - **Security.** `CEN-L1` — no key image appears twice among one block's

@@ -579,11 +579,16 @@ Three consequences. **(i)** G6 lands at parity: one derivation, one key,
 both languages. **(ii)** Q9's `RuleSet`-knob refusal strengthens — there is
 no C++ value to be compatible *with*, so an entry carrying `50` would
 encode a number that exists nowhere and give it institutional standing.
-**(iii)** Commit 10 re-reviews CEN-G6/G6b in the register at the landing
-tree; if both go CHECKED-CONFORMANT the gate's tally moves **125 / 3 / 5 →
-127 / 1 / 5** and CEN-I4 (`:600`) is the register's only recorded
-divergence — derived from `check_conformance_coverage.py` at that tree, not
-from this arithmetic, and said plainly in the CHANGELOG if it holds.
+**(iii)** ~~Commit 10 re-reviews CEN-G6/G6b in the register~~ **DONE with
+commit 5 (2026-09-28, #889 review):** the grader grades G6 as a landed row
+since commit 4, so a register still saying DIVERGENT turned every agreeing
+replay into `FailedReproducedDefect` — the re-review could not wait for
+commit 10. Both rows PROMOTED at `dev` `9bc062036`, falsifier walked clause
+by clause (S at the clamp site; the clamp pinned at 4; the three bounds
+composing, exercised live by the `limit-full` block; the stale ×50 comment
+gone); `check_conformance_coverage.py` derives **127 / 1 / 5** at this
+tree and CEN-I4 is the register's only recorded divergence; the fixture
+regenerated; the census G6/G6b cells corrected with the era in-line.
 
 **The mechanism, named because it recurs:** the reviewer read Q9's text and
 the census cells it cites, and ruled — without reading `blockchain.cpp`. A
