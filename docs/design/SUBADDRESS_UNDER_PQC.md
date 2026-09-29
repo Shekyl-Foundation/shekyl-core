@@ -3,8 +3,9 @@
 **Status.** **Round 4 closed** (2026-06-09). Subaddress design series complete
 for V3.0 genesis wire; cooperative UX sequencing remains in Phase 2c/4b docs.
 **5-T-substrate adopted** (§6.4, 2026-05-31).
-**Logical tag system** specified (§5.7.11). **V3.0 wallet:** sentinel-only
-at launch; payment-request / meaningful-tag UX behind product flag (later).
+**Logical tag system** specified (§5.7.11). **V3.0 wallet:** sentinel by
+default; real-label population ungated (R2-F8 flag retired 2026-06-15) and
+the payer-side echo landed 2026-09-28 (§5.7.11 Round-3 checklist).
 **FA-1** confirmed (§3.7). **FA-6** spec revised (`FA-6_VIEW_TAG_ML_KEM.md` —
 §3.1 wire inventory, initial-sync gate); **close-out:**
 [`FA-6_CLOSEOUT.md`](../completed/FA-6_CLOSEOUT.md) (§8.7 fail → ship FA-6; §10.1 rejected;
@@ -2083,7 +2084,7 @@ surface emerges (substrate change per `21-reversion-clause-discipline.mdc`).
 | R2-F1 | **Address reuse is on-chain-private** — per-output `ho` + hybrid gating; holds with zero subaddresses. User-facing principle: lead with reusable address, not rotation anxiety. | Product/docs (FA-4); reframes why End-state 5 is simpler than Bitcoin/Monero habits. |
 | R2-F2 | **Payment-request attribution UX** — §5.7.9: confidence tiers 1–4; `shekyl-proofs` dispute floor; gate walkthroughs (a)–(d) + S1–S6. | **CLOSED** (2026-05-31): product sign-off — **no subaddresses at V3.0**; End-state 5 minimal; sign-off §5.7.9 + `R2_F2_WALKTHROUGH.md` §6. |
 | R2-F9 | **Address-knowledge / phishing** — leaked receive address; dust oracle; FCMP++ vs Monero ring class; ranked threats; T6 harvest cross-link (§5.7.12). | **CLOSED** (pin). FA-9 propagation + FA-6 T6 scoping remain. |
-| R2-F8 | Label transport: optional-at-wire fatal (§4.9). **5-T adopted** §6.4; logical tag system §5.7.11; per-output slot; sentinel-only launch. | **Pin + tag spec closed** — RCT/KAT implementation (FA-11) remains. |
+| R2-F8 | Label transport: optional-at-wire fatal (§4.9). **5-T adopted** §6.4; logical tag system §5.7.11; per-output slot; sentinel-only launch — superseded 2026-09-28: the payer-side echo landed, sentinel is the default for a send that answers no request, not the ceiling. | **Pin + tag spec closed** — RCT/KAT implementation (FA-11) remains. |
 | R2-F3 | **End-state 5** drops subaddress machinery; J2→`shekyl:?label=`; J1→accounts if T2; deletes `AuditSubaddressSecret` thread. Supersedes End-state 1 as impl target. | Provisional disposition §6; amend `WALLET_REWRITE_PLAN` (FA-7). |
 | R2-F4 | URI **labels ≠ V3 payment IDs** — advisory; value routing unchanged. Tx proofs for dispute tier. | Round 3: `enc_label` in hybrid payload if **5-T**; never cleartext `tx_extra` payment id. |
 | R2-F5 | **T2 pinned out of mandatory scope** via `00-mission.mdc` pit-of-success reading (§4.6). Counterparty collusion = deliberate, not casual accident. Priority 2 binds unconditional on-chain privacy; not behavior-dependent J1. | End-state 5 minimal unblocked; multi-account → §7.4 P3. |
@@ -2113,6 +2114,7 @@ From `docs/FOLLOWUPS.md`, checked at **design closure** (after Round 4):
   `docs/design/R2_F2_WALKTHROUGH.md` §6 (2026-05-31)
 - [x] (e′) R2-F9: address-knowledge / phishing pin — §5.7.12 (2026-05-31)
 - [x] (f) R2-F8: §6.4 **5-T adopted**; §5.7.11 logical tags; sentinel-only launch
+  (superseded 2026-09-28: payer-side echo landed; sentinel is the default, not the ceiling)
 - [x] (g) FA-11: RCT + HKDF + verifier + KATs for `enc_label`
 - [x] Round 3 adversarial record — §10 (FA-6 close-out, FA-6b wire pin, 5-T + FA-11)
 - [x] Round 4 adversarial record — §10.1 (FA-9/FA-10/FA-4 propagation;

@@ -35,10 +35,10 @@ impl PaymentRequestId {
         rid != 0 && rid <= PAYMENT_REQUEST_RID_U48_MAX
     }
 
-    /// The one door for a `rid` that arrived from outside — a `shekyl:`
-    /// link, an RPC param, a UI field: `None` unless it is non-zero and
-    /// fits the u48 LE wire encoding, so a value the label cannot echo never
-    /// becomes an id.
+    /// The one door for a `rid` that arrived from outside as a number:
+    /// `None` unless it is non-zero and fits the u48 LE wire encoding, so a
+    /// value the label cannot echo never becomes an id. Text goes through
+    /// [`str::parse`] instead, which also enforces the contract's grammar.
     #[must_use]
     pub const fn from_wire_rid(rid: u64) -> Option<Self> {
         if Self::rid_fits_wire(rid) {
@@ -75,6 +75,50 @@ impl PaymentRequestId {
     #[must_use]
     pub const fn as_u64(self) -> u64 {
         self.0
+    }
+}
+
+/// Why a `rid` string was refused. Carries nothing of the input, so it can
+/// ride into an error response or a log line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParsePaymentRequestIdError {
+    /// Not the contract's `^[1-9][0-9]*$`: empty, a sign, a leading zero,
+    /// whitespace or any non-digit. `"0"` lands here too.
+    NotCanonicalDecimal,
+    /// A canonical decimal above the u48 wire encoding.
+    OutOfRange,
+}
+
+impl std::fmt::Display for ParsePaymentRequestIdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotCanonicalDecimal => {
+                "rid must be a canonical decimal string (no sign, no leading zero)"
+            }
+            Self::OutOfRange => "rid must be non-zero and fit the u48 wire encoding",
+        })
+    }
+}
+
+impl std::error::Error for ParsePaymentRequestIdError {}
+
+impl std::str::FromStr for PaymentRequestId {
+    type Err = ParsePaymentRequestIdError;
+
+    /// The contract's `PaymentRequestId` grammar (`^[1-9][0-9]*$`), then
+    /// the wire bound. Rust's integer parser alone would accept `+1` and
+    /// `01`, which conforming clients and validators reject; one grammar
+    /// here keeps wallet-rpc, the desktop wallet and the URI codec agreeing.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let canonical =
+            !s.is_empty() && !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit());
+        if !canonical {
+            return Err(ParsePaymentRequestIdError::NotCanonicalDecimal);
+        }
+        let raw: u64 = s
+            .parse()
+            .map_err(|_| ParsePaymentRequestIdError::OutOfRange)?;
+        Self::from_wire_rid(raw).ok_or(ParsePaymentRequestIdError::OutOfRange)
     }
 }
 
@@ -194,6 +238,37 @@ pub enum ReceiveAttribution {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rid_text_parses_only_the_contracts_canonical_grammar() {
+        use ParsePaymentRequestIdError as E;
+        assert_eq!("1".parse::<PaymentRequestId>(), Ok(PaymentRequestId(1)));
+        assert_eq!(
+            "281474976710655".parse::<PaymentRequestId>(),
+            Ok(PaymentRequestId(PAYMENT_REQUEST_RID_U48_MAX))
+        );
+        for bad in [
+            "", "0", "01", "+1", "-1", " 1", "1 ", "1.0", "1e3", "abc", "0x10",
+        ] {
+            assert_eq!(
+                bad.parse::<PaymentRequestId>(),
+                Err(E::NotCanonicalDecimal),
+                "{bad:?}"
+            );
+        }
+        for big in [
+            "281474976710656",
+            "18446744073709551615",
+            "18446744073709551616",
+        ] {
+            assert_eq!(
+                big.parse::<PaymentRequestId>(),
+                Err(E::OutOfRange),
+                "{big:?}"
+            );
+        }
+        assert!(!E::OutOfRange.to_string().contains("1844"));
+    }
 
     #[test]
     fn payment_request_id_never_zero_from_random() {

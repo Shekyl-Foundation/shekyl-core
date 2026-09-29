@@ -361,10 +361,7 @@ where
         reference: Option<ReferenceBlock>,
         tree_depth: u8,
     ) -> Result<BuildSelected, SendError> {
-        if request.recipients.is_empty() {
-            let err = SendError::InvalidRecipient {
-                reason: "TxRequest must carry at least one recipient",
-            };
+        if let Err(err) = request.check_recipients() {
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
                 PendingTxDiagnostic::BuildFailed {

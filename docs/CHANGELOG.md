@@ -35,22 +35,6 @@
   scan matches them, but no sender echoed one, so every link-paid receive
   arrived unattributed. The desktop wallet (same-named branch) passes a pasted link's `rid` through.
 
-### Units — `AtomicUnitsString` is the one wire newtype for amounts
-
-- `shekyl_units::AtomicUnitsString` wraps an `AtomicUnits` as the
-  contract's `AtomicUnits` schema: serialized as a decimal string, never a
-  JSON number; deserialized from bare digits only (a leading `+`, which the
-  integer parser accepted, is now refused with the other non-digit forms);
-  and its parse error carries nothing of the rejected input. Wallet RPC's
-  results and params both use it — the `type AtomicUnitsString = String`
-  alias, `project::atomic_units_string` and `params::parse_atomic_units`
-  are deleted — and the CLI reads the typed fields it already
-  deserialized. Why: the desktop wallet had grown its own copy of the same
-  newtype at its Tauri edge; one home, shared by both front ends, cannot
-  drift. Client-visible: a malformed amount param is now rejected with the
-  serde path's wording (`<method> params: expected a decimal string of
-  atomic units`) instead of `amount must be a decimal atomic-units string`.
-
 ### Engine — the one-glance balance is projected once, in engine-core
 
 - `shekyl_engine_core::BalanceView` (`engine/balance_view.rs`) is the

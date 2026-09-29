@@ -61,20 +61,16 @@ pub(crate) fn parse_optional_object<T: for<'de> Deserialize<'de> + Default>(
     }
 }
 
-/// Parse a `rid` param (the contract's `PaymentRequestId`): a decimal
-/// string that is non-zero and fits the u48 wire encoding, through the id
-/// type's one door; anything else is rejected rather than silently dropped.
+/// Parse a `rid` param (the contract's `PaymentRequestId`): its canonical
+/// grammar `^[1-9][0-9]*$` and the u48 wire bound, through the id type's
+/// own `FromStr`; anything else is rejected rather than silently dropped.
 ///
 /// One home for the rid-string contract shared by `make_uri` and
 /// `build_pending_tx`. The messages are stable and never reflect the
 /// client-supplied string.
 pub(crate) fn parse_rid(s: &str) -> Result<PaymentRequestId, WalletRpcError> {
-    let raw: u64 = s.parse().map_err(|_| {
-        WalletRpcError::InvalidParams("rid must be a decimal integer string".into())
-    })?;
-    PaymentRequestId::from_wire_rid(raw).ok_or_else(|| {
-        WalletRpcError::InvalidParams("rid must be non-zero and fit the u48 wire encoding".into())
-    })
+    s.parse::<PaymentRequestId>()
+        .map_err(|e| WalletRpcError::InvalidParams(e.to_string()))
 }
 
 /// Parse a contract `Hex32` value (exactly 64 **lowercase** hex chars) into

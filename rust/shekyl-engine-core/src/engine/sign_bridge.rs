@@ -245,6 +245,30 @@ struct PaymentOutput {
     label_plaintext: [u8; 8],
 }
 
+/// The payment outputs of a sign request, each with the label plaintext
+/// `outbound_label` chose for its destination, and their total. `Change`
+/// intents carry nothing here: V3.0 is primary-only, change always returns
+/// to the base spend key, and its amount is the leftover the caller derives.
+fn payment_outputs_of(
+    outputs: &[TxOutputContext],
+) -> Result<(u64, Vec<PaymentOutput>), KeyEngineError> {
+    let mut total = 0u64;
+    let mut payments = Vec::new();
+    for output in outputs {
+        if let TxOutputContext::Payment { dest, amount } = output {
+            total = total
+                .checked_add(*amount)
+                .ok_or(KeyEngineError::InsufficientFunds { shortfall: 0 })?;
+            payments.push(PaymentOutput {
+                address: dest.address.clone(),
+                amount: *amount,
+                label_plaintext: label_plaintext_for_recipient(dest.rid)?,
+            });
+        }
+    }
+    Ok((total, payments))
+}
+
 pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, KeyEngineError> {
     let keys = &local.keys;
     if tx.inputs.is_empty() {
@@ -265,25 +289,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
             .ok_or(KeyEngineError::InsufficientFunds { shortfall: 0 })?;
     }
 
-    let mut payment_total = 0u64;
-    let mut payment_outputs: Vec<PaymentOutput> = Vec::new();
-    for output in &tx.outputs {
-        match output {
-            TxOutputContext::Payment { dest, amount } => {
-                payment_total = payment_total
-                    .checked_add(*amount)
-                    .ok_or(KeyEngineError::InsufficientFunds { shortfall: 0 })?;
-                payment_outputs.push(PaymentOutput {
-                    address: dest.address.clone(),
-                    amount: *amount,
-                    label_plaintext: label_plaintext_for_recipient(dest.rid)?,
-                });
-            }
-            // V3.0 is primary-only: change always returns to the base spend key,
-            // so the requested change index (if any) carries no signing meaning.
-            TxOutputContext::Change { .. } => {}
-        }
-    }
+    let (payment_total, payment_outputs) = payment_outputs_of(&tx.outputs)?;
 
     let leftover =
         input_amounts
@@ -555,6 +561,56 @@ mod tests {
     use shekyl_crypto_pq::label::{classify_label_plaintext, LabelPlaintextKind};
     use shekyl_crypto_pq::output::{construct_output, scan_output_recover};
     use shekyl_engine_state::PaymentRequestId;
+
+    /// The production path from a destination's `rid` to the plaintext the
+    /// sign pass encrypts: `payment_outputs_of` is what `sign_tx` calls, so
+    /// a sentinel substituted for the request echo there fails here.
+    #[test]
+    fn the_sign_pass_chooses_the_request_echo_from_the_destinations_rid() {
+        use super::super::traits::key::OutputDestination;
+        let outputs = vec![
+            TxOutputContext::Payment {
+                dest: OutputDestination {
+                    address: "shekyl1payee".into(),
+                    rid: Some(PaymentRequestId(42)),
+                },
+                amount: 5,
+            },
+            TxOutputContext::Change {
+                subaddress_index: 0,
+            },
+            TxOutputContext::Payment {
+                dest: OutputDestination {
+                    address: "shekyl1other".into(),
+                    rid: None,
+                },
+                amount: 7,
+            },
+        ];
+        let (total, payments) = payment_outputs_of(&outputs).expect("both rids are echoable");
+        assert_eq!(total, 12);
+        assert_eq!(payments.len(), 2, "change is not a payment output");
+        assert_eq!(
+            classify_label_plaintext(&payments[0].label_plaintext),
+            LabelPlaintextKind::Request(42)
+        );
+        assert_eq!(payments[0].amount, 5);
+        assert_eq!(
+            classify_label_plaintext(&payments[1].label_plaintext),
+            LabelPlaintextKind::Sentinel
+        );
+        let unechoable = vec![TxOutputContext::Payment {
+            dest: OutputDestination {
+                address: "shekyl1payee".into(),
+                rid: Some(PaymentRequestId(0)),
+            },
+            amount: 1,
+        }];
+        assert!(matches!(
+            payment_outputs_of(&unechoable),
+            Err(KeyEngineError::RidNotEncodable(_))
+        ));
+    }
 
     /// A payment that answers a `shekyl:` link echoes the request id in its
     /// encrypted label and the recipient reads it back; a payment with no
