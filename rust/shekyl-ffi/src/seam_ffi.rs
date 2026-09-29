@@ -15,16 +15,18 @@
 //! thread is the harness shape until then. The ceiling is the one the
 //! caller already resolved. This module does not resolve another.
 
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void, CStr};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
 use shekyl_seam::{
-    connector_from_index, direction_from_index, drive_inbound, CloseCause, CloseKind, ConnectorId,
-    Direction, Endpoint, Hub, Post, SocketId, TOR_HOST_MAX,
+    connector_from_index, deadline_after, direction_from_index, drive_inbound, CloseCause,
+    CloseKind, ConnectorId, Direction, Endpoint, Hub, Ipv4Subnet, ListedBan, Post, SocketId,
+    TOR_HOST_MAX,
 };
+use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
 
 use crate::inbound_ceiling_ffi::{
     ShekylInboundCeiling, SHEKYL_INBOUND_CEILING_BOUNDED, SHEKYL_INBOUND_CEILING_COUNT_UNREADABLE,
@@ -144,8 +146,19 @@ pub(crate) fn hub() -> Option<Hub> {
 /// again: a `reap` that arrives after the swap names an id the new hub
 /// does not hold.
 pub(crate) fn process_sockets() -> shekyl_seam::Sockets {
-    static TABLE: std::sync::OnceLock<shekyl_seam::Sockets> = std::sync::OnceLock::new();
+    static TABLE: OnceLock<shekyl_seam::Sockets> = OnceLock::new();
     TABLE.get_or_init(shekyl_seam::Sockets::new).clone()
+}
+
+/// The clock ban deadlines and the bound hub share. A ban written before
+/// the seam is bound is still read against this origin after bind.
+fn process_clock() -> Arc<MonotonicClock> {
+    static CLOCK: OnceLock<Arc<MonotonicClock>> = OnceLock::new();
+    Arc::clone(CLOCK.get_or_init(|| Arc::new(MonotonicClock::new())))
+}
+
+fn ban_now() -> Tick {
+    process_clock().now()
 }
 
 /// Close the published hub, join its harness threads, then publish `next`.
@@ -223,10 +236,12 @@ pub unsafe extern "C" fn shekyl_seam_bind(
         ctx: Ctx(ctx),
         post,
     };
-    store(Some(Hub::with_clock(
+    let clock: Arc<dyn Clock + Send + Sync> = process_clock();
+    store(Some(Hub::new(
         process_sockets(),
         ceiling,
         Arc::new(move |item: Post| post_one(&bound, item)),
+        clock,
     )));
     0
 }
@@ -448,6 +463,195 @@ pub extern "C" fn shekyl_seam_socket_count(connector: u32, direction: u32) -> u6
 #[no_mangle]
 pub extern "C" fn shekyl_seam_inbound_held() -> u64 {
     hub().map(|hub| hub.inbound_held()).unwrap_or(0)
+}
+
+/// One ban, as `getbans` reads it. `text` is a host or `address/prefix`.
+/// `remaining_ns` is time left on the monotonic deadline.
+#[repr(C)]
+pub struct ShekylBanView {
+    /// 1 is a host, 2 is an IPv4 subnet.
+    pub kind: u8,
+    pub _pad: [u8; 7],
+    /// NUL-terminated. Unused bytes are zero.
+    pub text: [u8; 80],
+    /// Nanoseconds until the deadline.
+    pub remaining_ns: u64,
+}
+
+const BAN_KIND_HOST: u8 = 1;
+const BAN_KIND_SUBNET: u8 = 2;
+
+fn c_text(text: *const c_char) -> Option<String> {
+    if text.is_null() {
+        return None;
+    }
+    let raw = unsafe { CStr::from_ptr(text) };
+    raw.to_str().ok().map(str::to_owned)
+}
+
+fn parse_subnet(text: &str) -> Option<Ipv4Subnet> {
+    let (addr, prefix) = text.split_once('/')?;
+    let addr: Ipv4Addr = addr.parse().ok()?;
+    let prefix: u8 = prefix.parse().ok()?;
+    Ipv4Subnet::new(addr, prefix)
+}
+
+fn fill_text(text: &str) -> Option<[u8; 80]> {
+    let bytes = text.as_bytes();
+    if bytes.len() >= 80 {
+        return None;
+    }
+    let mut out = [0u8; 80];
+    out[..bytes.len()].copy_from_slice(bytes);
+    Some(out)
+}
+
+/// Ban `text` for `duration_ns` from the process clock.
+///
+/// `subnet` nonzero reads `text` as `address/prefix`. Returns 0 when the
+/// duration fits, -1 when it does not, and -2 when `text` is not that
+/// address. A duration that is already covered by a later deadline is
+/// still 0: the list does not shorten.
+///
+/// When a hub is bound, the ban closes the sockets the list drops.
+///
+/// # Safety
+/// `text` is a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_ban_for(text: *const c_char, subnet: i32, duration_ns: u64) -> i32 {
+    let Some(text) = c_text(text) else {
+        return -2;
+    };
+    let now = ban_now();
+    let Some(until) = deadline_after(now, duration_ns) else {
+        return -1;
+    };
+    if subnet != 0 {
+        let Some(prefix) = parse_subnet(&text) else {
+            return -2;
+        };
+        if let Some(hub) = hub() {
+            let _closed = hub.ban_subnet(prefix, until);
+        } else {
+            let _closed = process_sockets().ban_subnet(prefix, until, now);
+        }
+    } else {
+        let Some(host) = text.parse::<IpAddr>().ok() else {
+            return -2;
+        };
+        if let Some(hub) = hub() {
+            let _closed = hub.ban_host(host, until);
+        } else {
+            let _closed = process_sockets().ban_host(host, until, now);
+        }
+    }
+    0
+}
+
+/// Lift a host or subnet ban. Returns 0 when an entry was removed, -1
+/// when there was none, and -2 when `text` is not that address.
+/// Open sockets stay open.
+///
+/// # Safety
+/// `text` is a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_ban_lift(text: *const c_char, subnet: i32) -> i32 {
+    let Some(text) = c_text(text) else {
+        return -2;
+    };
+    let removed = if subnet != 0 {
+        let Some(prefix) = parse_subnet(&text) else {
+            return -2;
+        };
+        process_sockets().lift_subnet(prefix)
+    } else {
+        let Some(host) = text.parse::<IpAddr>().ok() else {
+            return -2;
+        };
+        process_sockets().lift_host(host)
+    };
+    if removed {
+        0
+    } else {
+        -1
+    }
+}
+
+/// Nanoseconds left on the longest ban that covers `host`. Returns 1 and
+/// writes `out` when one does, 0 when the host is not banned, and -2 when
+/// `host` is not an address.
+///
+/// # Safety
+/// `host` is a NUL-terminated string. `out` is writable when non-null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_ban_remaining_ns(host: *const c_char, out: *mut u64) -> i32 {
+    let Some(host) = c_text(host) else {
+        return -2;
+    };
+    let Some(host) = host.parse::<IpAddr>().ok() else {
+        return -2;
+    };
+    match process_sockets().remaining_ns(host, ban_now()) {
+        Some(left) => {
+            if !out.is_null() {
+                unsafe { *out = left };
+            }
+            1
+        }
+        None => 0,
+    }
+}
+
+/// Copy bans still in force. `*count` is how many there are. When `cap`
+/// is smaller, the buffer receives the first `cap` and the return is -1.
+/// A null `out` with `cap` 0 only writes the count.
+///
+/// # Safety
+/// `out` is writable for `cap` entries when non-null. `count` is writable.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_bans_copy(
+    out: *mut ShekylBanView,
+    cap: usize,
+    count: *mut usize,
+) -> i32 {
+    if count.is_null() {
+        return -1;
+    }
+    let rows = process_sockets().listed(ban_now());
+    let views: Vec<ShekylBanView> = rows.iter().filter_map(ban_view).collect();
+    unsafe { *count = views.len() };
+    if out.is_null() {
+        return if cap == 0 { 0 } else { -1 };
+    }
+    let n = cap.min(views.len());
+    unsafe {
+        std::ptr::copy_nonoverlapping(views.as_ptr(), out, n);
+    }
+    if n == views.len() {
+        0
+    } else {
+        -1
+    }
+}
+
+fn ban_view(row: &ListedBan) -> Option<ShekylBanView> {
+    let (kind, text, remaining_ns) = match row {
+        ListedBan::Host { host, remaining_ns } => (BAN_KIND_HOST, host.to_string(), *remaining_ns),
+        ListedBan::Subnet {
+            subnet,
+            remaining_ns,
+        } => (
+            BAN_KIND_SUBNET,
+            format!("{}/{}", subnet.network(), subnet.prefix_len()),
+            *remaining_ns,
+        ),
+    };
+    Some(ShekylBanView {
+        kind,
+        _pad: [0; 7],
+        text: fill_text(&text)?,
+        remaining_ns,
+    })
 }
 
 fn endpoint_from_c(addr: &ShekylSeamAddress, inbound: bool) -> Option<Endpoint> {

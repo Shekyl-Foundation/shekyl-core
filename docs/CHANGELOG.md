@@ -18,6 +18,12 @@
   connection's current speed is the last gap between chunks, diluted
   by idle time since that chunk. The lifetime average stays the
   separate average.
+- Socket admission reads the transport's inbound count. `setbans` and
+  misbehaviour scoring write the Rust ban list as a duration on the
+  monotonic clock, and `getbans` returns the seconds left on that
+  deadline. A duration that does not fit is refused. A Tor zone
+  advertises an address only after publication succeeds. `get_info`
+  reports per-connector socket counts beside the session counts.
 
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 

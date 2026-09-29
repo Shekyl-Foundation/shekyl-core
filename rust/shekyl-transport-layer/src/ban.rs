@@ -6,14 +6,44 @@
 //! The ban list. IPv4 subnets and host addresses. Expiry is checked when
 //! an entry is looked up, not on a timer.
 //!
-//! The RPC path does not call this yet. That call is the seam, when Rust
-//! owns the sockets. One list lives in the socket table; this type is that
+//! RPC and misbehaviour scoring both write this list, through a duration
+//! added to the monotonic clock. A duration that does not fit a [`Tick`]
+//! is not stored. One list lives in the socket table; this type is that
 //! list.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_timing_engine::Tick;
+
+/// One row of the list, with time left from the tick it was read at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ListedBan {
+    /// A single host.
+    Host {
+        /// The banned address.
+        host: IpAddr,
+        /// Nanoseconds until the deadline.
+        remaining_ns: u64,
+    },
+    /// An IPv4 prefix.
+    Subnet {
+        /// The prefix.
+        subnet: Ipv4Subnet,
+        /// Nanoseconds until the deadline.
+        remaining_ns: u64,
+    },
+}
+
+/// `now + duration_ns`, or `None` when the sum does not fit a [`Tick`].
+/// Zero is not a duration.
+#[must_use]
+pub fn deadline_after(now: Tick, duration_ns: u64) -> Option<Tick> {
+    if duration_ns == 0 {
+        return None;
+    }
+    now.get().checked_add(duration_ns).map(Tick::new)
+}
 
 /// An IPv4 prefix. `prefix_len` is the number of leading bits in network
 /// order, so `/24` is the first three octets. Bits outside the prefix are
@@ -167,6 +197,65 @@ impl BanList {
         out
     }
 
+    /// Nanoseconds left on the longest ban that covers `host`.
+    /// `None` when nothing covers it. Expired entries are removed.
+    pub fn remaining_ns(&mut self, host: IpAddr, now: Tick) -> Option<u64> {
+        let host_left = match self.hosts.get(&host).copied() {
+            Some(until) if now < until => Some(until.get() - now.get()),
+            Some(_) => {
+                self.hosts.remove(&host);
+                None
+            }
+            None => None,
+        };
+        let subnet_left = match host {
+            IpAddr::V4(ip) => {
+                let mut best = None;
+                self.subnets.retain(|(subnet, until)| {
+                    if now >= *until {
+                        return false;
+                    }
+                    if subnet.contains(ip) {
+                        let left = until.get() - now.get();
+                        best = Some(best.map_or(left, |have: u64| have.max(left)));
+                    }
+                    true
+                });
+                best
+            }
+            IpAddr::V6(_) => {
+                self.expire_subnets(now, None);
+                None
+            }
+        };
+        match (host_left, subnet_left) {
+            (Some(host_ns), Some(subnet_ns)) => Some(host_ns.max(subnet_ns)),
+            (Some(host_ns), None) => Some(host_ns),
+            (None, Some(subnet_ns)) => Some(subnet_ns),
+            (None, None) => None,
+        }
+    }
+
+    /// Every ban still in force, with nanoseconds left from `now`.
+    pub fn listed(&mut self, now: Tick) -> Vec<ListedBan> {
+        let hosts = self.hosts(now);
+        let subnets = self.subnets(now);
+        let mut out = Vec::with_capacity(hosts.len() + subnets.len());
+        for (host, until) in hosts {
+            out.push(ListedBan::Host {
+                host,
+                remaining_ns: until.get() - now.get(),
+            });
+        }
+        for (subnet, until) in subnets {
+            out.push(ListedBan::Subnet {
+                subnet,
+                remaining_ns: until.get() - now.get(),
+            });
+        }
+        out
+    }
+
     /// Drop expired subnets. When `probe` is set, report whether any
     /// remaining subnet contains it.
     fn expire_subnets(&mut self, now: Tick, probe: Option<Ipv4Addr>) -> bool {
@@ -187,7 +276,7 @@ impl BanList {
 
 #[cfg(test)]
 mod tests {
-    use super::{BanList, Ipv4Subnet};
+    use super::{deadline_after, BanList, Ipv4Subnet};
     use shekyl_timing_engine::Tick;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -282,5 +371,24 @@ mod tests {
         assert!(bans.ban_subnet(subnet, Tick::new(100), Tick::new(1)));
         assert!(!bans.is_banned(IpAddr::V6(Ipv6Addr::LOCALHOST), Tick::new(2)));
         assert!(bans.is_banned(v4([8, 8, 8, 8]), Tick::new(2)));
+    }
+
+    #[test]
+    fn remaining_time_is_the_deadline_minus_now() {
+        let mut bans = BanList::new();
+        let host = v4([1, 2, 3, 4]);
+        let now = Tick::new(1_000);
+        assert!(bans.ban_host(host, Tick::new(1_000 + 5_000_000_000), now));
+        assert_eq!(bans.remaining_ns(host, now), Some(5_000_000_000));
+        let subnet = Ipv4Subnet::new(Ipv4Addr::new(9, 9, 9, 1), 24).expect("prefix");
+        assert!(bans.ban_subnet(subnet, Tick::new(1_000 + 2_000), now));
+        assert_eq!(bans.remaining_ns(v4([9, 9, 9, 8]), now), Some(2_000));
+    }
+
+    #[test]
+    fn a_duration_that_does_not_fit_is_not_a_deadline() {
+        assert!(deadline_after(Tick::new(u64::MAX - 10), 11).is_none());
+        assert!(deadline_after(Tick::new(1), 0).is_none());
+        assert_eq!(deadline_after(Tick::new(1), 5).expect("fits").get(), 6);
     }
 }

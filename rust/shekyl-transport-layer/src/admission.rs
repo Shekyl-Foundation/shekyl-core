@@ -18,7 +18,7 @@ use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
 
-use crate::ban::{BanList, Ipv4Subnet};
+use crate::ban::{BanList, Ipv4Subnet, ListedBan};
 use crate::declaration::{declaration, Assessment, BannableInbound, ConnectorId, InboundIdentity};
 use crate::dial::check_dial;
 use crate::{CloseCause, CloseKind};
@@ -375,6 +375,21 @@ impl Sockets {
     /// Remove a host ban. Sockets that are already open stay open.
     pub fn lift_host(&self, host: IpAddr) -> bool {
         self.lock().bans.lift_host(host)
+    }
+
+    /// Remove a subnet ban. Sockets that are already open stay open.
+    pub fn lift_subnet(&self, subnet: Ipv4Subnet) -> bool {
+        self.lock().bans.lift_subnet(subnet)
+    }
+
+    /// Nanoseconds left on the longest ban that covers `host`.
+    pub fn remaining_ns(&self, host: IpAddr, now: Tick) -> Option<u64> {
+        self.lock().bans.remaining_ns(host, now)
+    }
+
+    /// Bans still in force, with nanoseconds left from `now`.
+    pub fn listed(&self, now: Tick) -> Vec<ListedBan> {
+        self.lock().bans.listed(now)
     }
 
     /// How many live sockets this connector has in this direction.

@@ -533,9 +533,11 @@ namespace nodetool
     virtual bool unblock_host(const epee::net_utils::network_address &address);
     virtual bool block_subnet(const epee::net_utils::ipv4_network_subnet &subnet, time_t seconds = P2P_IP_BLOCKTIME);
     virtual bool unblock_subnet(const epee::net_utils::ipv4_network_subnet &subnet);
-    virtual bool is_host_blocked(const epee::net_utils::network_address &address, time_t *seconds) { CRITICAL_REGION_LOCAL(m_blocked_hosts_lock); return !is_remote_host_allowed(address, seconds); }
-    virtual std::map<std::string, time_t> get_blocked_hosts() { CRITICAL_REGION_LOCAL(m_blocked_hosts_lock); return m_blocked_hosts; }
-    virtual std::map<epee::net_utils::ipv4_network_subnet, time_t> get_blocked_subnets() { CRITICAL_REGION_LOCAL(m_blocked_hosts_lock); return m_blocked_subnets; }
+    virtual bool is_host_blocked(const epee::net_utils::network_address &address, time_t *seconds);
+    //! Host to seconds remaining on the monotonic deadline.
+    virtual std::map<std::string, time_t> get_blocked_hosts();
+    //! Subnet to seconds remaining on the monotonic deadline.
+    virtual std::map<epee::net_utils::ipv4_network_subnet, time_t> get_blocked_subnets();
 
 
   private:
@@ -647,14 +649,6 @@ namespace nodetool
     //! Outbound caps on every zone, plus explicit inbound caps on zones
     //! other than public, plus `reserved_beyond_p2p`.
     std::uint64_t descriptor_reservations(std::uint64_t reserved_beyond_p2p) const;
-    struct inbound_census
-    {
-      std::size_t zone;
-      std::size_t process;
-    };
-    //! Live inbound counts for `which` and for the whole process. Refreshes
-    //! each zone's cached counter. Admission reads the census, not the cache.
-    inbound_census census_inbound(epee::net_utils::zone which);
     bool set_tos_flag(const boost::program_options::variables_map& vm, int limit);
 
     bool set_rate_up_limit(const boost::program_options::variables_map& vm, int64_t limit);
@@ -749,10 +743,6 @@ namespace nodetool
 
 
     failed_addr_cache m_conn_fails_cache;
-
-    epee::critical_section m_blocked_hosts_lock; // for both hosts and subnets
-    std::map<std::string, time_t> m_blocked_hosts;
-    std::map<epee::net_utils::ipv4_network_subnet, time_t> m_blocked_subnets;
 
     epee::critical_section m_host_fails_score_lock;
     std::map<std::string, uint64_t> m_host_fails_score;

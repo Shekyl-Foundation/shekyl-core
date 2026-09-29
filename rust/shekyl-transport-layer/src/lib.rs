@@ -33,7 +33,7 @@ mod dial;
 pub use admission::{
     CloseResult, Direction, ObservedEndpoint, OpenError, OpenSocket, SocketId, Sockets,
 };
-pub use ban::{BanList, Ipv4Subnet};
+pub use ban::{deadline_after, BanList, Ipv4Subnet, ListedBan};
 pub use budget::{LinkBudget, LinkDirection, MessageClass, Observed, Turn};
 pub use cause::{c_header, CloseCause, CloseKind, Phase};
 pub use declaration::{

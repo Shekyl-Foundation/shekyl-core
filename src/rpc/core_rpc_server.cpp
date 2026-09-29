@@ -215,6 +215,12 @@ namespace cryptonote
     uint64_t total_conn = restricted ? 0 : m_p2p.get_public_connections_count();
     res.outgoing_connections_count = restricted ? 0 : m_p2p.get_public_outgoing_connections_count();
     res.incoming_connections_count = restricted ? 0 : (total_conn - res.outgoing_connections_count);
+    // Socket counts are the transport's, per connector. A restricted caller
+    // receives zero, the same gate as the session counts above.
+    res.public_incoming_socket_count = restricted ? 0 : shekyl_seam_socket_count(0, 0);
+    res.public_outgoing_socket_count = restricted ? 0 : shekyl_seam_socket_count(0, 1);
+    res.tor_incoming_socket_count = restricted ? 0 : shekyl_seam_socket_count(1, 0);
+    res.tor_outgoing_socket_count = restricted ? 0 : shekyl_seam_socket_count(1, 1);
     // Always zero, and the reason is not the restriction. The C++ server has
     // not owned the RPC connections since the Axum cutover, so the accessor
     // this read was a literal `return 0` with two identical arms — a dead
@@ -993,29 +999,30 @@ namespace cryptonote
   {
     RPC_TRACKER(get_bans);
 
-    auto now = time(nullptr);
+    // The map values are seconds remaining, computed from the monotonic
+    // deadline. They are not a wall-clock expiry.
     std::map<std::string, time_t> blocked_hosts = m_p2p.get_blocked_hosts();
     for (std::map<std::string, time_t>::const_iterator i = blocked_hosts.begin(); i != blocked_hosts.end(); ++i)
     {
-      if (i->second > now) {
+      if (i->second > 0) {
         COMMAND_RPC_GETBANS::ban b;
         b.host = i->first;
         b.ip = 0;
         uint32_t ip;
         if (epee::string_tools::get_ip_int32_from_string(ip, b.host))
           b.ip = ip;
-        b.seconds = i->second - now;
+        b.seconds = i->second;
         res.bans.push_back(b);
       }
     }
     std::map<epee::net_utils::ipv4_network_subnet, time_t> blocked_subnets = m_p2p.get_blocked_subnets();
     for (std::map<epee::net_utils::ipv4_network_subnet, time_t>::const_iterator i = blocked_subnets.begin(); i != blocked_subnets.end(); ++i)
     {
-      if (i->second > now) {
+      if (i->second > 0) {
         COMMAND_RPC_GETBANS::ban b;
         b.host = i->first.host_str();
         b.ip = 0;
-        b.seconds = i->second - now;
+        b.seconds = i->second;
         res.bans.push_back(b);
       }
     }
@@ -1068,7 +1075,14 @@ namespace cryptonote
         if (ns_parsed)
         {
           if (i->ban)
-            m_p2p.block_subnet(*ns_parsed, i->seconds);
+          {
+            if (!m_p2p.block_subnet(*ns_parsed, i->seconds))
+            {
+              error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+              error_resp.message = "Ban duration does not fit the clock";
+              return false;
+            }
+          }
           else
             m_p2p.unblock_subnet(*ns_parsed);
           continue;
@@ -1098,7 +1112,14 @@ namespace cryptonote
         na = epee::net_utils::ipv4_network_address{i->ip, 0};
       }
       if (i->ban)
-        m_p2p.block_host(na, i->seconds);
+      {
+        if (!m_p2p.block_host(na, i->seconds))
+        {
+          error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+          error_resp.message = "Ban duration does not fit the clock";
+          return false;
+        }
+      }
       else
         m_p2p.unblock_host(na);
     }

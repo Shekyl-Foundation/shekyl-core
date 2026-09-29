@@ -175,115 +175,86 @@ namespace nodetool
     return false;
   }
   //-----------------------------------------------------------------------------------
+  namespace
+  {
+    bool ban_duration_ns(time_t seconds, std::uint64_t* out)
+    {
+      if (seconds <= 0)
+        return false;
+      const auto whole = static_cast<std::uint64_t>(seconds);
+      if (whole > std::numeric_limits<std::uint64_t>::max() / 1000000000ull)
+        return false;
+      *out = whole * 1000000000ull;
+      return true;
+    }
+
+    time_t remaining_seconds(std::uint64_t ns)
+    {
+      const std::uint64_t sec = (ns + 999999999ull) / 1000000000ull;
+      if (sec > static_cast<std::uint64_t>(std::numeric_limits<time_t>::max()))
+        return std::numeric_limits<time_t>::max();
+      return static_cast<time_t>(sec);
+    }
+
+    std::vector<shekyl_ban_view> copy_bans()
+    {
+      std::vector<shekyl_ban_view> views;
+      for (int attempt = 0; attempt < 3; ++attempt)
+      {
+        std::size_t count = 0;
+        if (shekyl_bans_copy(nullptr, 0, &count) != 0 && count == 0)
+          return {};
+        views.resize(count);
+        if (count == 0)
+          return views;
+        std::size_t again = 0;
+        shekyl_bans_copy(views.data(), views.size(), &again);
+        if (again <= views.size())
+        {
+          views.resize(again);
+          return views;
+        }
+      }
+      return {};
+    }
+  }
+
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::is_remote_host_allowed(const epee::net_utils::network_address &address, time_t *t)
   {
-    CRITICAL_REGION_LOCAL(m_blocked_hosts_lock);
-
-    const time_t now = time(nullptr);
-
-    // look in the hosts list
-    auto it = m_blocked_hosts.find(address.host_str());
-    if (it != m_blocked_hosts.end())
-    {
-      if (now >= it->second)
-      {
-        m_blocked_hosts.erase(it);
-        MCLOG_CYAN(el::Level::Info, "global", "Host " << address.host_str() << " unblocked.");
-        it = m_blocked_hosts.end();
-      }
-      else
-      {
-        if (t)
-          *t = it->second - now;
-        return false;
-      }
-    }
-
-    // manually loop in subnets
-    if (address.get_type_id() == epee::net_utils::address_type::ipv4)
-    {
-      auto ipv4_address = address.template as<epee::net_utils::ipv4_network_address>();
-      std::map<epee::net_utils::ipv4_network_subnet, time_t>::iterator it;
-      for (it = m_blocked_subnets.begin(); it != m_blocked_subnets.end(); )
-      {
-        if (now >= it->second)
-        {
-          it = m_blocked_subnets.erase(it);
-          MCLOG_CYAN(el::Level::Info, "global", "Subnet " << it->first.host_str() << " unblocked.");
-          continue;
-        }
-        if (it->first.matches(ipv4_address))
-        {
-          if (t)
-            *t = it->second - now;
-          return false;
-        }
-        ++it;
-      }
-    }
-
-    // not found in hosts or subnets, allowed
-    return true;
+    if (!address.is_blockable())
+      return true;
+    const std::string host = address.host_str();
+    std::uint64_t left = 0;
+    const int rc = shekyl_ban_remaining_ns(host.c_str(), &left);
+    if (rc != 1)
+      return true;
+    if (t)
+      *t = remaining_seconds(left);
+    return false;
   }
   //-----------------------------------------------------------------------------------
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::block_host(epee::net_utils::network_address addr, time_t seconds, bool add_only)
+  bool node_server<t_payload_net_handler>::block_host(epee::net_utils::network_address addr, time_t seconds, bool /*add_only*/)
   {
     if(!addr.is_blockable())
       return false;
 
-    const time_t now = time(nullptr);
-    bool added = false;
-
-    CRITICAL_REGION_LOCAL(m_blocked_hosts_lock);
-    time_t limit;
-    if (now > std::numeric_limits<time_t>::max() - seconds)
-      limit = std::numeric_limits<time_t>::max();
-    else
-      limit = now + seconds;
-    const std::string host_str = addr.host_str();
-    auto it = m_blocked_hosts.find(host_str);
-    if (it == m_blocked_hosts.end())
+    std::uint64_t duration_ns = 0;
+    if (!ban_duration_ns(seconds, &duration_ns))
     {
-      m_blocked_hosts[host_str] = limit;
-
-      // if the host was already blocked due to being in a blocked subnet, let it be silent
-      bool matches_blocked_subnet = false;
-      if (addr.get_type_id() == epee::net_utils::address_type::ipv4)
-      {
-        auto ipv4_address = addr.template as<epee::net_utils::ipv4_network_address>();
-        for (auto jt = m_blocked_subnets.begin(); jt != m_blocked_subnets.end(); ++jt)
-        {
-          if (jt->first.matches(ipv4_address))
-          {
-            matches_blocked_subnet = true;
-            break;
-          }
-        }
-      }
-      if (!matches_blocked_subnet)
-        added = true;
+      MERROR("Ban duration does not fit the clock.");
+      return false;
     }
-    else if (it->second < limit || !add_only)
-      it->second = limit;
+    const std::string host_str = addr.host_str();
+    // The list closes the sockets it drops. This does not walk the Levin
+    // registry. A shorter duration does not shorten a ban already stored.
+    if (shekyl_ban_for(host_str.c_str(), 0, duration_ns) != 0)
+      return false;
 
-    // drop any connection to that address. This should only have to look into
-    // the zone related to the connection, but really make sure everything is
-    // swept ...
-    std::vector<boost::uuids::uuid> conns;
     for(auto& zone : m_network_zones)
     {
-      zone.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-      {
-        if (cntxt.m_remote_address.is_same_host(addr))
-        {
-          conns.push_back(cntxt.m_connection_id);
-        }
-        return true;
-      });
-
       peerlist_entry pe{};
       pe.adr = addr;
       if (addr.port() == 0)
@@ -295,94 +266,93 @@ namespace nodetool
       {
         zone.second.m_peerlist.remove_from_peer_white(pe);
         zone.second.m_peerlist.remove_from_peer_gray(pe);
-     }
-
-      for (const auto &c: conns)
-        zone.second.m_net_server.get_config_object().close(c);
-
-      conns.clear();
+      }
     }
 
-    if (added)
-      MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " blocked.");
-    else
-      MINFO("Host " << host_str << " block time updated.");
+    MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " blocked.");
     return true;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::unblock_host(const epee::net_utils::network_address &address)
   {
-    CRITICAL_REGION_LOCAL(m_blocked_hosts_lock);
-    auto i = m_blocked_hosts.find(address.host_str());
-    if (i == m_blocked_hosts.end())
+    const std::string host_str = address.host_str();
+    if (shekyl_ban_lift(host_str.c_str(), 0) != 0)
       return false;
-    m_blocked_hosts.erase(i);
-    MCLOG_CYAN(el::Level::Info, "global", "Host " << address.host_str() << " unblocked.");
+    MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " unblocked.");
     return true;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::block_subnet(const epee::net_utils::ipv4_network_subnet &subnet, time_t seconds)
   {
-    const time_t now = time(nullptr);
+    std::uint64_t duration_ns = 0;
+    if (!ban_duration_ns(seconds, &duration_ns))
+    {
+      MERROR("Ban duration does not fit the clock.");
+      return false;
+    }
+    const std::string host_str = subnet.host_str();
+    if (shekyl_ban_for(host_str.c_str(), 1, duration_ns) != 0)
+      return false;
 
-    CRITICAL_REGION_LOCAL(m_blocked_hosts_lock);
-    time_t limit;
-    if (now > std::numeric_limits<time_t>::max() - seconds)
-      limit = std::numeric_limits<time_t>::max();
-    else
-      limit = now + seconds;
-    const bool added = m_blocked_subnets.find(subnet) == m_blocked_subnets.end();
-    m_blocked_subnets[subnet] = limit;
-
-    // drop any connection to that subnet. This should only have to look into
-    // the zone related to the connection, but really make sure everything is
-    // swept ...
-    std::vector<boost::uuids::uuid> conns;
     for(auto& zone : m_network_zones)
     {
-      zone.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-      {
-        if (cntxt.m_remote_address.get_type_id() != epee::net_utils::ipv4_network_address::get_type_id())
-          return true;
-        auto ipv4_address = cntxt.m_remote_address.template as<epee::net_utils::ipv4_network_address>();
-        if (subnet.matches(ipv4_address))
-        {
-          conns.push_back(cntxt.m_connection_id);
-        }
-        return true;
-      });
-      for (const auto &c: conns)
-        zone.second.m_net_server.get_config_object().close(c);
-
       for (int i = 0; i < 2; ++i)
         zone.second.m_peerlist.filter(i == 0, [&subnet](const peerlist_entry &pe){
           if (pe.adr.get_type_id() != epee::net_utils::ipv4_network_address::get_type_id())
             return false;
           return subnet.matches(pe.adr.as<const epee::net_utils::ipv4_network_address>());
         });
-
-      conns.clear();
     }
 
-    if (added)
-      MCLOG_CYAN(el::Level::Info, "global", "Subnet " << subnet.host_str() << " blocked.");
-    else
-      MINFO("Subnet " << subnet.host_str() << " blocked.");
+    MCLOG_CYAN(el::Level::Info, "global", "Subnet " << host_str << " blocked.");
     return true;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::unblock_subnet(const epee::net_utils::ipv4_network_subnet &subnet)
   {
-    CRITICAL_REGION_LOCAL(m_blocked_hosts_lock);
-    auto i = m_blocked_subnets.find(subnet);
-    if (i == m_blocked_subnets.end())
+    const std::string host_str = subnet.host_str();
+    if (shekyl_ban_lift(host_str.c_str(), 1) != 0)
       return false;
-    m_blocked_subnets.erase(i);
-    MCLOG_CYAN(el::Level::Info, "global", "Subnet " << subnet.host_str() << " unblocked.");
+    MCLOG_CYAN(el::Level::Info, "global", "Subnet " << host_str << " unblocked.");
     return true;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  bool node_server<t_payload_net_handler>::is_host_blocked(const epee::net_utils::network_address &address, time_t *seconds)
+  {
+    return !is_remote_host_allowed(address, seconds);
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  std::map<std::string, time_t> node_server<t_payload_net_handler>::get_blocked_hosts()
+  {
+    std::map<std::string, time_t> hosts;
+    for (const auto& row : copy_bans())
+    {
+      if (row.kind != 1)
+        continue;
+      hosts.emplace(row.text, remaining_seconds(row.remaining_ns));
+    }
+    return hosts;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  std::map<epee::net_utils::ipv4_network_subnet, time_t> node_server<t_payload_net_handler>::get_blocked_subnets()
+  {
+    std::map<epee::net_utils::ipv4_network_subnet, time_t> subnets;
+    for (const auto& row : copy_bans())
+    {
+      if (row.kind != 2)
+        continue;
+      const auto parsed = net::get_ipv4_subnet_address(row.text);
+      if (!parsed)
+        continue;
+      subnets.emplace(*parsed, remaining_seconds(row.remaining_ns));
+    }
+    return subnets;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -542,13 +512,15 @@ namespace nodetool
         auto subnet = net::get_ipv4_subnet_address(line);
         if (subnet)
         {
-          block_subnet(*subnet, std::numeric_limits<time_t>::max());
+          if (!block_subnet(*subnet, std::numeric_limits<time_t>::max()))
+            MERROR("Ban duration does not fit the clock: " << line);
           continue;
         }
         const expect<epee::net_utils::network_address> parsed_addr = net::get_network_address(line, 0);
         if (parsed_addr)
         {
-          block_host(*parsed_addr, std::numeric_limits<time_t>::max());
+          if (!block_host(*parsed_addr, std::numeric_limits<time_t>::max()))
+            MERROR("Ban duration does not fit the clock: " << line);
           continue;
         }
         MERROR("Invalid IP address or IPv4 subnet: " << line);
@@ -651,7 +623,10 @@ namespace nodetool
 
       zone.m_bind_ip = std::move(inbound.local_ip);
       zone.m_port = std::move(inbound.local_port);
-      zone.m_our_address = std::move(inbound.our_address);
+      // OperatorInbound is a bind, not a publication. The advertised
+      // address is written only when Tor publication returns an onion.
+      // A failed publication leaves this unset, so the zone stays
+      // outbound-only and announces no address.
 
       if (!set_max_in_peers(zone, inbound.max_connections))
         return false;
@@ -2354,7 +2329,6 @@ namespace nodetool
 
     LOG_DEBUG_CC(context, "REMOTE PEERLIST: remote peerlist size=" << peerlist_.size());
     LOG_TRACE_CC(context, "REMOTE PEERLIST: " << ENDL << print_peerlist_to_string(peerlist_));
-    CRITICAL_REGION_LOCAL(m_blocked_hosts_lock);
     return m_network_zones.at(context.m_remote_address.get_zone()).m_peerlist.merge_peerlist(peerlist_, [this](const peerlist_entry &pe) {
       return !is_addr_recently_failed(pe.adr) && is_remote_host_allowed(pe.adr);
     });
@@ -3112,13 +3086,12 @@ namespace nodetool
     };
     // RESERVE WHAT CANNOT BE COUNTED; COUNT WHAT CAN.
     //
-    // Outbound sockets are promised but not yet open, and `census_inbound`
-    // never sees them, so the only way to keep descriptors for them is to
-    // subtract them here.
+    // Outbound sockets are promised but not yet open, so the only way to
+    // keep descriptors for them is to subtract them here.
     //
     // Inbound on a non-public zone is the opposite case and must NOT be
-    // reserved: `census_inbound` walks every zone, so those connections are
-    // already charged against the ceiling as they are accepted. Reserving
+    // reserved: the Rust admission table already charges every connector's
+    // inbound sockets against the ceiling as they are accepted. Reserving
     // them too would subtract the same descriptors twice -- an
     // `--anonymous-inbound` cap of N would cost the process N descriptors of
     // headroom AND still consume N as the connections arrived, squeezing
@@ -3127,29 +3100,6 @@ namespace nodetool
     for (const auto& entry : m_network_zones)
       add(entry.second.m_config.m_net_config.max_out_connection_count);
     return reserved;
-  }
-
-  template<class t_payload_net_handler>
-  auto node_server<t_payload_net_handler>::census_inbound(epee::net_utils::zone which) -> inbound_census
-  {
-    inbound_census census{};
-    for (auto& entry : m_network_zones)
-    {
-      std::size_t count = 0;
-      entry.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-      {
-        if (cntxt.m_is_income)
-          ++count;
-        return true;
-      });
-      entry.second.m_current_number_of_in_peers = count > std::numeric_limits<unsigned int>::max()
-        ? std::numeric_limits<unsigned int>::max()
-        : static_cast<unsigned int>(count);
-      census.process += count;
-      if (entry.first == which)
-        census.zone = count;
-    }
-    return census;
   }
 
   template<class t_payload_net_handler>
@@ -3177,7 +3127,7 @@ namespace nodetool
     // headroom AND then compare it against the smaller result — the ceiling
     // would fall as the node filled, so a routine outbound change on a busy
     // node could start refusing every new peer.
-    const std::uint64_t inbound_held = census_inbound(epee::net_utils::zone::public_).process;
+    const std::uint64_t inbound_held = shekyl_seam_inbound_held();
     shekyl_inbound_ceiling decision{};
     shekyl_inbound_ceiling_resolve(reserved, inbound_held, &decision);
     const bool announce = decision.kind != m_applied_ceiling_kind

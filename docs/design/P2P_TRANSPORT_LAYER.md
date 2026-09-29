@@ -656,12 +656,11 @@ records the new count.
   a publish result and is not written there.
 - `get_info` keeps `incoming_connections_count` and
   `outgoing_connections_count` as the public zone's session counts,
-  from the Levin registry. Socket counts
-  (`public_incoming_socket_count`, `public_outgoing_socket_count`,
-  `tor_incoming_socket_count`, `tor_outgoing_socket_count`) are not
-  on `get_info` until the daemon binds the seam. A zero while epee
-  still holds the sockets would read as no connections. A restricted
-  caller receives zero for the session counts, as it does today.
+  from the Levin registry. Socket counts are
+  `public_incoming_socket_count`, `public_outgoing_socket_count`,
+  `tor_incoming_socket_count`, and `tor_outgoing_socket_count`, read
+  from the admission table. A restricted caller receives zero for
+  the session counts and for the socket counts.
 
 The seam's tests are the close races and the floor. Recording a
 transport cause, including `PrefixMismatch`, `RecordRejected`,
@@ -1376,11 +1375,10 @@ what socket admission and the descriptor ceiling need.
 per network key and direction. Until LV-3 that count is the Levin
 registry's. It is what the outbound-fill logic is really about.
 
-Today the C++ blurs them. `get_outgoing_connections_count` and
-`census_inbound` both walk the Levin registry and count whatever
-contexts are in it (`net_node.inl:2021-2069`, `:2117-2129`, `:3158`).
-Once pre-channel sockets never appear in the registry, that walk
-cannot serve socket admission.
+Session counts still walk the Levin registry
+(`get_outgoing_connections_count`, the once-a-second monitor).
+Socket admission does not. The ceiling's `inbound_held` is
+`Sockets::inbound_held`, and `census_inbound` is gone.
 
 The check and the increment are one step. Today's ceiling compares a
 snapshot: a live walk, plus a separately maintained atomic rewritten
