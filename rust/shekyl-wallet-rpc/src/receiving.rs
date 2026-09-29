@@ -19,7 +19,7 @@ use shekyl_engine_state::{PaymentRequest, PaymentRequestId, PaymentRequestState}
 use shekyl_units::{AtomicUnits, AtomicUnitsString};
 
 use crate::error::WalletRpcError;
-use crate::params::{parse_optional_object, parse_required_object};
+use crate::params::{parse_optional_object, parse_required_object, parse_rid};
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
     CreatePaymentRequestResult, ListPaymentRequestsResult, MakeUriResult, ParseUriResult,
@@ -133,7 +133,12 @@ pub(crate) async fn make_uri(
 ) -> Result<Value, WalletRpcError> {
     let p: MakeUriParams = parse_required_object(params, "make_uri")?;
     let amount = p.amount.map(AtomicUnitsString::to_atomic_units);
-    let rid = p.rid.as_deref().map(parse_rid).transpose()?;
+    let rid = p
+        .rid
+        .as_deref()
+        .map(parse_rid)
+        .transpose()?
+        .map(PaymentRequestId::as_u64);
     let expiry = p
         .expiry
         .map(parse_unix_timestamp)
@@ -232,20 +237,6 @@ fn parse_filter(
             "unknown payment-request filter (expected ALL, PENDING, or MATCHED)".into(),
         )),
     }
-}
-
-/// Parse a `rid` param: decimal string, non-zero, u48-fitting (the on-wire
-/// encoding); anything else is rejected rather than silently dropped.
-fn parse_rid(s: &str) -> Result<u64, WalletRpcError> {
-    let raw: u64 = s.parse().map_err(|_| {
-        WalletRpcError::InvalidParams("rid must be a decimal integer string".into())
-    })?;
-    if !PaymentRequestId::rid_fits_wire(raw) {
-        return Err(WalletRpcError::InvalidParams(
-            "rid must be non-zero and fit the u48 wire encoding".into(),
-        ));
-    }
-    Ok(raw)
 }
 
 fn parse_unix_timestamp(h: i64) -> Result<shekyl_types::Timestamp, WalletRpcError> {

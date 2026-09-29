@@ -530,12 +530,17 @@ impl std::fmt::Debug for TxToSign {
     }
 }
 
-/// Recipient destination placeholder (2c fills KEM construction).
+/// One payment's destination: the address the sign pass decodes, and the
+/// payment request it answers. `TxOutputContext`'s `Debug` redacts the whole
+/// destination, so neither field reaches a log line.
 #[derive(Debug)]
 #[non_exhaustive]
 pub(crate) struct OutputDestination {
     /// Canonical encoded recipient address from the build request.
     pub address: String,
+    /// `TxRecipient::rid`: echoed in this output's encrypted label; `None`
+    /// writes the sentinel.
+    pub rid: Option<shekyl_engine_state::PaymentRequestId>,
 }
 
 /// Public fee variant directive (§3.9). All fields are network-derived.

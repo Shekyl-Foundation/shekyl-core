@@ -229,6 +229,7 @@ where
             recipients: vec![TxRecipient {
                 address,
                 amount_atomic_units: funded,
+                rid: None,
             }],
             // Funding a persona is a routine wallet-local transfer; standard fee.
             priority: FeePriority::Standard,

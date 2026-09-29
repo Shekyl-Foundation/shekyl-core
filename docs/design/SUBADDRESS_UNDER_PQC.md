@@ -1034,8 +1034,9 @@ flowchart TD
 **Matching precedence (feature build — pin for FA-8).** When a cooperative
 `REQUEST` tag echoes a `rid` that matches exactly one `PaymentRequest`, **rid
 match overrides expiry** for auto-tier purposes: surface *"Matched to expired
-invoice … — confirm"* (not silent Tier 1). Sentinel-only launch never sees rid
-echo; S6 row applies. Re-validate in FA-8 implementation walkthrough.
+invoice … — confirm"* (not silent Tier 1). A payer that composed the send
+without a `rid` writes the sentinel; S6 row applies. Re-validate in FA-8
+implementation walkthrough.
 
 **Δt hint window:** product constant (e.g. 7 days) — not consensus. Hints
 never move funds or auto-close books; they reduce search only.
@@ -1432,6 +1433,12 @@ not "unattributed" — only possible if wire were optional (rejected).
 - [x] V3.0 wallet posture — sentinel default; real-label population ungated
   (R2-F8 flag retired 2026-06-15, see *Gate retirement* above). GUI tooling
   emitting `rid` URIs is the de-facto feature boundary.
+- [x] Payer-side plumbing (2026-09-28): `TxRecipient::rid` →
+  `OutputDestination::rid` → `outbound_label::label_plaintext_for_recipient`
+  → `construct_output_with_label_plaintext`, exposed as the contract's
+  `TxRecipient.rid`; a `rid` the u48 field cannot carry is refused at
+  build, never downgraded. The desktop wallet passes a pasted link's `rid`
+  through, so between two of its wallets the cooperative label is live.
 - [x] `k_label` / `label_tag` HKDF labels in `POST_QUANTUM_CRYPTOGRAPHY.md` + `derivation.rs`.
 - [x] `enc_label` wire field in `CtSigBase` (+ 1-byte `label_tag` parallel to amount).
 - [x] Tx-hash binding via `serialize_ctsig_base`; FCMP++ leaf explicitly excluded.

@@ -10,6 +10,7 @@
 
 use serde::Deserialize;
 use serde_json::Value;
+use shekyl_engine_state::PaymentRequestId;
 
 use crate::error::WalletRpcError;
 
@@ -58,6 +59,22 @@ pub(crate) fn parse_optional_object<T: for<'de> Deserialize<'de> + Default>(
             "{method} params must be an object or omitted"
         ))),
     }
+}
+
+/// Parse a `rid` param (the contract's `PaymentRequestId`): a decimal
+/// string that is non-zero and fits the u48 wire encoding, through the id
+/// type's one door; anything else is rejected rather than silently dropped.
+///
+/// One home for the rid-string contract shared by `make_uri` and
+/// `build_pending_tx`. The messages are stable and never reflect the
+/// client-supplied string.
+pub(crate) fn parse_rid(s: &str) -> Result<PaymentRequestId, WalletRpcError> {
+    let raw: u64 = s.parse().map_err(|_| {
+        WalletRpcError::InvalidParams("rid must be a decimal integer string".into())
+    })?;
+    PaymentRequestId::from_wire_rid(raw).ok_or_else(|| {
+        WalletRpcError::InvalidParams("rid must be non-zero and fit the u48 wire encoding".into())
+    })
 }
 
 /// Parse a contract `Hex32` value (exactly 64 **lowercase** hex chars) into

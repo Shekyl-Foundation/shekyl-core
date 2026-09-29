@@ -35,6 +35,19 @@ impl PaymentRequestId {
         rid != 0 && rid <= PAYMENT_REQUEST_RID_U48_MAX
     }
 
+    /// The one door for a `rid` that arrived from outside — a `shekyl:`
+    /// link, an RPC param, a UI field: `None` unless it is non-zero and
+    /// fits the u48 LE wire encoding, so a value the label cannot echo never
+    /// becomes an id.
+    #[must_use]
+    pub const fn from_wire_rid(rid: u64) -> Option<Self> {
+        if Self::rid_fits_wire(rid) {
+            Some(Self(rid))
+        } else {
+            None
+        }
+    }
+
     /// Generate a new opaque id from the OS CSPRNG.
     ///
     /// Draws six bytes (u48 LE), retrying up to 64 times when the draw is

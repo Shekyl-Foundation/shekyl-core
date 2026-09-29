@@ -102,6 +102,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use shekyl_address::Network;
+use shekyl_engine_state::PaymentRequestId;
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SendJournalBlock};
 use shekyl_units::AtomicUnits;
@@ -292,6 +293,13 @@ pub struct TxRecipient {
     pub address: String,
     /// Amount to send to this address in atomic units (no fee).
     pub amount_atomic_units: AtomicUnits,
+    /// The payment request this send answers, when it was composed from a
+    /// `shekyl:` link that carried a `rid`: echoed in the output's
+    /// encrypted label so the payee's wallet attributes the receive
+    /// (`SUBADDRESS_UNDER_PQC.md` §5.7.11). `None` writes the sentinel.
+    /// Wallet-local bookkeeping on both ends; the wire is uniform either
+    /// way, so an observer learns nothing from its presence.
+    pub rid: Option<PaymentRequestId>,
 }
 
 /// Caller request to [`Engine::build_pending_tx`].
@@ -663,6 +671,16 @@ pub(crate) fn build_pending_tx_in_state(
 
     let mut total_amount = AtomicUnits::ZERO;
     for r in &request.recipients {
+        // A rid the label cannot echo is refused here, at the request, not
+        // downgraded to the sentinel at sign time: the payer asked for
+        // attribution and would silently not get it.
+        if r.rid
+            .is_some_and(|rid| !PaymentRequestId::rid_fits_wire(rid.as_u64()))
+        {
+            return Err(SendError::InvalidRecipient {
+                reason: "recipient rid must be non-zero and fit the u48 wire encoding",
+            });
+        }
         total_amount =
             total_amount
                 .checked_add(r.amount_atomic_units)

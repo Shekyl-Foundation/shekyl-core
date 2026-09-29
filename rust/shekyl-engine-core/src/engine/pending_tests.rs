@@ -82,6 +82,7 @@ fn standard_request(amount: u64) -> TxRequest {
         recipients: vec![TxRecipient {
             address: "test_address".to_string(),
             amount_atomic_units: AtomicUnits::from_raw(amount),
+            rid: None,
         }],
         priority: FeePriority::Standard,
     }
@@ -488,6 +489,7 @@ fn priority_custom_is_accepted_and_preserved() {
         recipients: vec![TxRecipient {
             address: "addr".into(),
             amount_atomic_units: AtomicUnits::from_raw(1_000),
+            rid: None,
         }],
         priority: FeePriority::Custom(NonZeroU64::new(42).unwrap()),
     };

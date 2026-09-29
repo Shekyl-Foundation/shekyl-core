@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+### Send — a payment answers its request: `TxRecipient.rid` rides the label
+
+- `shekyl_engine_core::TxRecipient` carries `rid: Option<PaymentRequestId>`,
+  the payment request a send answers (the `rid` of the payee's `shekyl:`
+  link). Signing assembly copies it onto `OutputDestination`, and the sign
+  pass encrypts the plaintext `outbound_label::label_plaintext_for_recipient`
+  chooses — the §5.7.11 REQUEST echo for a `rid`, the sentinel for `None`
+  and for every change and drain output — through
+  `construct_output_with_label_plaintext`. The callerless URI form
+  `label_plaintext_for_payment_uri` is deleted (the URI→`rid` step is the
+  wallet's `parse_uri`). `build_pending_tx` refuses a `rid` the u48 field
+  cannot carry as `SendError::InvalidRecipient`, never downgrading it to
+  the sentinel the payer did not ask for; `KeyEngineError::RidNotEncodable`
+  keeps the sign pass total. `PaymentRequestId::from_wire_rid` is the one
+  door for an external `rid`. The wire is uniform either way
+  (`enc_label` is fixed-width on every output), so nothing about privacy
+  changes; what changes is that a payment between two wallets that pass
+  the `rid` through now attributes on arrival (`ReceiveAttribution::Matched`).
+- Contract: `TxRecipient.rid` (optional `PaymentRequestId`) on
+  `build_pending_tx`; wallet-rpc parses it through the shared
+  `params::parse_rid` (moved from `receiving.rs`). The send journal's own
+  `rid` column (`WALLET_SEND_RECORD.md` §1, a persisted-block change under
+  rule 42) is still owed in its own round; `SendRecipient` is unchanged.
+- Why now: the desktop wallet's Receive page issues `rid` links and its
+  scan matches them, but no sender echoed one, so every link-paid receive
+  arrived unattributed. GUI #31 passes a pasted link's `rid` through.
+
+### Units — `AtomicUnitsString` is the one wire newtype for amounts
+
+- `shekyl_units::AtomicUnitsString` wraps an `AtomicUnits` as the
+  contract's `AtomicUnits` schema: serialized as a decimal string, never a
+  JSON number; deserialized from bare digits only (a leading `+`, which the
+  integer parser accepted, is now refused with the other non-digit forms);
+  and its parse error carries nothing of the rejected input. Wallet RPC's
+  results and params both use it — the `type AtomicUnitsString = String`
+  alias, `project::atomic_units_string` and `params::parse_atomic_units`
+  are deleted — and the CLI reads the typed fields it already
+  deserialized. Why: the desktop wallet had grown its own copy of the same
+  newtype at its Tauri edge; one home, shared by both front ends, cannot
+  drift. Client-visible: a malformed amount param is now rejected with the
+  serde path's wording (`<method> params: expected a decimal string of
+  atomic units`) instead of `amount must be a decimal atomic-units string`.
+
 ### Engine — the one-glance balance is projected once, in engine-core
 
 - `shekyl_engine_core::BalanceView` (`engine/balance_view.rs`) is the
