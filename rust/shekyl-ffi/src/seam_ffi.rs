@@ -854,27 +854,59 @@ fn post_one(bound: &Bound, item: Post) {
                 );
             }
         }
-        Post::Deliver { id, bytes } => unsafe {
-            (bound.post)(
-                bound.ctx.get(),
-                id.get(),
-                POST_DELIVER,
-                std::ptr::null(),
-                bytes.as_ptr(),
-                bytes.len(),
-                std::ptr::null(),
-            );
-        },
-        Post::Closed { id, cause } => unsafe {
-            (bound.post)(
-                bound.ctx.get(),
-                id.get(),
-                POST_CLOSED,
-                std::ptr::null(),
-                std::ptr::null(),
-                0,
-                &raw const cause,
-            );
-        },
+        // The adapter keeps one binding per connector and routes every post
+        // by `observed->connector`. Deliver and Closed once posted a null
+        // `observed`, so both landed on the clearnet binding and every Tor
+        // delivery was dropped after its `Established`.
+        Post::Deliver {
+            id,
+            connector,
+            bytes,
+        } => {
+            let observed = routing_c(connector);
+            unsafe {
+                (bound.post)(
+                    bound.ctx.get(),
+                    id.get(),
+                    POST_DELIVER,
+                    &raw const observed,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    std::ptr::null(),
+                );
+            }
+        }
+        Post::Closed {
+            id,
+            connector,
+            cause,
+        } => {
+            let observed = routing_c(connector);
+            unsafe {
+                (bound.post)(
+                    bound.ctx.get(),
+                    id.get(),
+                    POST_CLOSED,
+                    &raw const observed,
+                    std::ptr::null(),
+                    0,
+                    &raw const cause,
+                );
+            }
+        }
+    }
+}
+
+/// The connector alone, for posts the adapter only routes. The endpoint
+/// itself travelled on `Established`.
+fn routing_c(connector: ConnectorId) -> ShekylSeamObserved {
+    ShekylSeamObserved {
+        connector: connector as u8,
+        direction: 0,
+        address_type: 0,
+        zone_only: 0,
+        port: 0,
+        len: 0,
+        bytes: [0; TOR_HOST_MAX],
     }
 }

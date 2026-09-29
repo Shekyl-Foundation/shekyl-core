@@ -41,6 +41,10 @@ pub enum Post {
     Deliver {
         /// The admission id.
         id: SocketId,
+        /// The connector this id was established on. The adapter keeps one
+        /// binding per connector and routes by this; a post without it went
+        /// to the clearnet binding, which dropped every Tor delivery.
+        connector: ConnectorId,
         /// One whole message.
         bytes: Vec<u8>,
     },
@@ -48,6 +52,8 @@ pub enum Post {
     Closed {
         /// The admission id.
         id: SocketId,
+        /// The connector this id was established on, as on `Deliver`.
+        connector: ConnectorId,
         /// The cause that won.
         cause: CloseCause,
     },
@@ -91,6 +97,9 @@ struct Conn {
     send: Option<SendHalf>,
     cause: Option<CloseCause>,
     phase: Phase,
+    /// The connector of the endpoint this row was adopted with. Every post
+    /// for the row names it.
+    connector: ConnectorId,
     /// How many `Deliver` posts have been queued. The injector waits on this.
     posted_deliveries: u64,
     /// The strand has entered `closed`. A late refusal records nothing.
@@ -247,6 +256,7 @@ impl Hub {
                 send: Some(send),
                 cause: None,
                 phase: Phase::Arming,
+                connector: endpoint.connector(),
                 posted_deliveries: 0,
                 strand_closed: false,
             },
@@ -354,7 +364,12 @@ impl Hub {
         }
         conn.phase = Phase::Delivering;
         conn.posted_deliveries = conn.posted_deliveries.saturating_add(1);
-        poster(Post::Deliver { id, bytes });
+        let connector = conn.connector;
+        poster(Post::Deliver {
+            id,
+            connector,
+            bytes,
+        });
         self.ready.notify_all();
         loop {
             let Some(conn) = inner.conns.get(&id) else {
@@ -568,7 +583,12 @@ impl Hub {
             conn.cause = Some(cause);
             conn.phase = Phase::Closed;
             let open = conn.open.take();
-            poster(Post::Closed { id, cause });
+            let connector = conn.connector;
+            poster(Post::Closed {
+                id,
+                connector,
+                cause,
+            });
             self.ready.notify_all();
             open
         };
@@ -722,6 +742,44 @@ mod tests {
         service(&rig, true);
         pump.join().expect("pump");
         assert!(rig.hub.cause(id).is_none());
+    }
+
+    /// The adapter routes every post by connector. A Tor row's deliveries
+    /// and close must say Tor, or they land on the clearnet binding and
+    /// vanish after `Established` — which is how an inbound onion
+    /// connection sat silent until its gap timer fired.
+    #[test]
+    fn a_tor_row_posts_deliver_and_closed_with_the_tor_connector() {
+        let rig = rig();
+        let ends = StreamEnds::open(32);
+        let inbound = ends.inbound.clone();
+        let _hold = ends.hold;
+        let endpoint = Endpoint::TorInbound;
+        let ceiling = rig.hub.lock().ceiling;
+        let sockets = rig.hub.lock().sockets.clone();
+        let open = admit(&sockets, &endpoint, rig.clock.now(), ceiling).expect("admit");
+        let attached = rig.hub.adopt(open, ends.session, endpoint).expect("adopt");
+        let id = attached.id;
+        service(&rig, true);
+        let hub = rig.hub.clone();
+        let pump = thread::spawn(move || drive_inbound(&hub, id, attached.session));
+        inbound.blocking_send(b"onion".to_vec()).expect("inject");
+        assert!(rig.hub.wait_delivery_posted(id, 0));
+        rig.hub.close(id);
+        let connectors: Vec<_> = rig
+            .posts
+            .lock()
+            .expect("posts")
+            .iter()
+            .map(|post| match post {
+                Post::Deliver { connector, .. } | Post::Closed { connector, .. } => *connector,
+                Post::Established { .. } => unreachable!("serviced above"),
+            })
+            .collect();
+        assert_eq!(connectors, vec![ConnectorId::Tor, ConnectorId::Tor]);
+        service(&rig, true);
+        service(&rig, true);
+        pump.join().expect("pump");
     }
 
     #[test]
