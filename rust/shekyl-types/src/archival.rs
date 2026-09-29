@@ -76,8 +76,16 @@ scalar_u64! {
     /// An **archival length**: the bytes of archival good a transaction carries —
     /// its prunable region plus its `pqc_auths` segment, exactly the bytes a body
     /// store holds and discards — or the sum of those over a run of transactions
-    /// (`SHT-Q2`, RULED 2026-09-29). Folded into the txid and stored as a
-    /// skeleton row, never declared or signed. A coinbase's is zero.
+    /// (`SHT-Q2`, RULED 2026-09-29). Stored as a skeleton row, never
+    /// declared or signed. A coinbase's is zero.
+    ///
+    /// **The txid binding is pending.** A full body's length is fixed by its
+    /// bytes, which the txid already binds through the prunable hash; a
+    /// pruned form carries that hash but not the bytes, so its length is
+    /// bound by nothing until the txid gains the length term the ruling
+    /// names. That term is held on the ruling for how a pruned form supplies
+    /// the length (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.6, the FOLLOWUPS
+    /// "Build SHT-Q2" row).
     ///
     /// A distinct type because the partition it drives used to be a
     /// transaction count, and a `u64` would let a count, a storage id and a
@@ -110,8 +118,9 @@ impl ArchivalLength {
 /// Sourced from `config/consensus_constants.json`
 /// (`archival_shard_length_bytes`, via this crate's `build.rs`); this is its
 /// one home. The static relation "one transaction's largest archival length
-/// is below `W`", which is what keeps every shard non-empty, is asserted in
-/// `shekyl-wire`, where both constants are visible.
+/// is below `W`", which is what keeps every shard non-empty, is
+/// const-asserted in `shekyl-chain-rules` (`rules/tx.rs`, beside CEN-H3's
+/// `max_tx_weight`), where both constants are visible.
 pub const SHARD_LENGTH: ArchivalLength = ArchivalLength::from_raw(ARCHIVAL_SHARD_LENGTH_BYTES);
 
 /// The shard a transaction belongs to, from the cumulative archival length
@@ -131,6 +140,14 @@ pub const fn shard_start(k: crate::ShardId) -> Option<ArchivalLength> {
         Some(start) => Some(ArchivalLength::from_raw(start)),
         None => None,
     }
+}
+
+/// Where the shard holding offset `at` starts: `⌊at / W⌋·W`, which is
+/// `shard_start(shard_of(at))` without the overflow — it is at most `at`.
+/// The opening a fold that has reached `at` has certainly crossed.
+#[must_use]
+pub const fn shard_floor(at: ArchivalLength) -> ArchivalLength {
+    ArchivalLength::from_raw(at.to_raw() - at.to_raw() % SHARD_LENGTH.to_raw())
 }
 
 include!(concat!(
@@ -516,6 +533,13 @@ mod tests {
             None,
             "k·W overflows"
         );
+        for at in [0, 1, w - 1, w, w + 1, 7 * w - 1, 7 * w, u64::MAX] {
+            let at = ArchivalLength::from_raw(at);
+            let floor = shard_floor(at);
+            assert!(floor <= at, "the floor never passes its offset");
+            assert_eq!(shard_of(floor), shard_of(at), "one shard");
+            assert_eq!(Some(floor), shard_start(shard_of(at)), "k·W");
+        }
         assert_eq!(
             ArchivalLength::from_raw(u64::MAX).checked_add(ArchivalLength::from_raw(1)),
             None

@@ -1019,8 +1019,9 @@ fn a_decrease_smaller_than_the_coinbase_term_still_refuses_the_boundary() {
     cleanup(&path);
 }
 
-/// SI-13 on the archival fold: `D(4)` at 40 samples `C(10)` and `C(30)`,
-/// and a later sample below an earlier one names an inverted range.
+/// SI-13 on the archival fold: `D(4)` at 40 samples `C(10)` and `C(30)` —
+/// rows 9 and 29 — and row 29 zeroed is below row 9. The fault names the
+/// row that decreased, as the listed fold's does.
 #[test]
 fn a_decreasing_archival_total_refuses_the_boundary() {
     let path = tmp("prune-archival-monotone");
@@ -1035,9 +1036,48 @@ fn a_decreasing_archival_total_refuses_the_boundary() {
             at_height: BlockHeight::from_raw(40),
             row: StoreInvariant::FoldNotMonotone {
                 cell: "block_info.cumulative_archival_len",
-                height: 30,
+                height: 29,
             },
         }
+    );
+    cleanup(&path);
+}
+
+/// SI-13 across the whole run the boundary reads, not at its samples
+/// (Copilot, PR #910). Cells 13–16 are raised together by 900 000 with
+/// their length rows untouched: each shifted cell still equals its parent
+/// plus its rows, so SI-19 holds at every block inside the run, and the
+/// fold now reaches `W` twice — at 15 (`2 900 000 → 3 100 000`, a second,
+/// spurious crossing) and at 19. The endpoints `C(0)` and `C(20)` are
+/// true. A search that trusts monotonicity can settle on 15 and place
+/// shard 1's first id inside block 15. The boundary at 30 must halt on the
+/// decrease at 17 (`3 300 000 → 2 600 000`) instead, before any discard.
+#[test]
+fn a_shifted_run_between_two_samples_refuses_the_boundary() {
+    let path = tmp("prune-archival-run");
+    let b = short_chain_to(&path, 29);
+    for height in 13..=16 {
+        plant_info(&path, height, |info| {
+            info.cumulative_archival_len =
+                ArchivalLength::from_raw(info.cumulative_archival_len.to_raw() + 900_000);
+        });
+    }
+    let (store, out) = connect_short(&path, &b, 30);
+    assert!(out.is_err(), "the boundary does not commit over the run");
+    assert_eq!(tip(&store), 29);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(30),
+            row: StoreInvariant::FoldNotMonotone {
+                cell: "block_info.cumulative_archival_len",
+                height: 17,
+            },
+        }
+    );
+    assert!(
+        body_states(&store).iter().all(|&held| held),
+        "no body was discarded"
     );
     cleanup(&path);
 }

@@ -13,8 +13,8 @@
   3,000,000` bytes, PROVISIONAL: `archival_shard_length_bytes` in
   `consensus_constants.json`, generated into `shekyl_types::SHARD_LENGTH`;
   `archival_shard_tx_count` / `SHARD_TX_COUNT` are deleted, and the
-  consensus-constants digest re-pinned. `shard_of` and `shard_start` are
-  the one definition of the boundary; the static relation
+  consensus-constants digest re-pinned. `shard_of`, `shard_start` and
+  `shard_floor` are the one definition of the boundary; the static relation
   `max_tx_weight() < W` is const-asserted beside CEN-H3.
 - Contract: the chain store gains `txs_archival_len` (Rust-only, ordinal
   43; present ⇔ length `> 0` ⇔ the transaction carries archival good, so
@@ -25,13 +25,16 @@
   that a block's length rows sum to its cell before any row is
   discarded; SI-13 covers the new fold.
 - The retention prune names `D(E)` as `⌊C(lo)/W⌋ .. ⌊C(hi)/W⌋` and finds a
-  shard's first storage id by a binary search over the cell plus a walk of
-  one block's length rows — permanent skeleton data, so a pruned node and
-  an archival node place every boundary alike. `h_scarce` reads the same
-  cell. Tested at an exact multiple of `W`, with the largest transaction
-  CEN-H3 admits straddling a boundary, with two shards in one batch, across
-  a reorg that pops back over a boundary, and against a model computed
-  from the lengths the fixture asked for.
+  shard's first storage id by a descent over the cell plus a walk of one
+  block's length rows — permanent skeleton data, so a pruned node and an
+  archival node place every boundary alike. The descent checks SI-13 at
+  every row it passes, not at probes: a discard cannot be undone, and a
+  binary search accepts a run of cells shifted together. `h_scarce` uses
+  the same descent. Tested at an exact multiple of `W`, with the largest
+  transaction CEN-H3 admits straddling a boundary, with two shards in one
+  batch, across a reorg that pops back over a boundary, against a model
+  computed from the lengths the fixture asked for, and against a shifted
+  run of cells.
 - The C++ LMDB archival path is frozen (row 3 = (b)): LMDB keeps its
   segment partition, and CEN-L10 is re-graded DIVERGENT in the CSR-3a
   register as the ruled, intended difference. The staking sim holds the

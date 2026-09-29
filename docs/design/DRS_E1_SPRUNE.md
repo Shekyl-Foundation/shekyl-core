@@ -3,14 +3,18 @@
 **AMENDED 2026-09-29 by the `SHT-Q2` build (layout 16 → 17):** the partition is
 re-keyed from `T`, a transaction count, to `W`, archival bytes
 (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.6, RULED). `D(E)` is now
-`⌊C(lo)/W⌋ .. ⌊C(hi)/W⌋` over `block_info.cumulative_archival_len`, and the
-storage ids a shard opens at are found by a walk over the permanent
+`⌊C(lo)/W⌋ .. ⌊C(hi)/W⌋` over `block_info.cumulative_archival_len`; the
+height a shard opens at is found by a descent over that cell checked row by
+row (SI-13), and its storage id by a walk over the permanent
 `txs_archival_len` rows (SI-19 checks the walk against the cell). The rows below
 that define `T` and the shard boundaries record the design as built on
 2026-09-25 and are marked superseded in place; `store/prune.rs`'s module docs are
 the live statement. The calendar, the undo floor and every refusal are unchanged.
 
 **Status:** LANDED — **implemented 2026-09-25** on the S-PRUNE increment PR
+*(`T` / `SHARD_TX_COUNT` below is the count-era partition, superseded
+2026-09-29 by `W` / `SHARD_LENGTH` — see the amendment above; the rest of
+this status stands)*
 (four commits off `dev` `fc6d87ca5`; layout **13 → 14**): `shekyl_chain_rules::D_MAX`
 (inheriting `archival_reorg_depth_blocks`, `SEB > D_MAX` const-asserted)
 and `journal_horizon`, `shekyl_types::SHARD_TX_COUNT` (`T`); the boundary
@@ -432,7 +436,7 @@ have no Rust writer here); what this surface owes it is the function.
 | `D_max` | 720, **PROVISIONAL** (`PDM-Q11`). Built 2026-09-25 as `shekyl_chain_rules::D_MAX`, **inheriting** `config/consensus_constants.json`'s `archival_reorg_depth_blocks` — a key doing two jobs (the pass-anchor depth it was tuned for, E4's; the reorg cap, consensus's), recorded as inherited per rule 05 until E4 splits it (SPR-6 as corrected; FOLLOWUPS "Split `archival_reorg_depth_blocks`"). `SEB > D_MAX` is const-asserted beside the constant. A session pair with `retention` zero or `≥ SEB` is refused at open (`StoreCannot::RetentionNotInsideEpoch`), on a writer and on `open_read_only` — both take a checked `Horizons`. A shortened epoch names its own retention through `Horizons::new`. `SEB = 2` with retention 720 is not a configuration (rule 71). | PROVISIONAL numeric; constant built (`shekyl_chain_rules::reorg`) |
 | Journal-horizon function | `tip − (CRB + n·SEB + D_max)` (F19) — `CRB`, `SEB`, `FAILURE_WINDOW_N` live in `shekyl-archival-retention`; `D_max` does not | **built** 2026-09-25 as `shekyl_chain_rules::journal_horizon(tip) -> Option<BlockHeight>` beside `D_MAX` (the production pair; `journal_horizon_under(tip, epoch_blocks, reorg_cap)` takes a session's `Horizons` pair, so a shortened schedule's horizon moves with it), consumed by S-ARCH when its journal writers land (`shekyl_archival_failure_window_params` is *not* it — it returns the m-of-n `(m, n, serve_budget)`) |
 | `T` | **200 transactions per shard, PROVISIONAL** — the one consensus constant of the partition, one const-asserted home (the discipline `SHARD_BYTES` carried, the FOLLOWUPS shard-partition row); chosen so a typical shard at ~16.7 KB/tx lands near 3.33 MB | ruled (`PDM-Q6` item 5, 2026-09-23); **built** 2026-09-25 as `shekyl_types::SHARD_TX_COUNT`, sourced from `config/consensus_constants.json`'s `archival_shard_tx_count` through `shekyl-types/build.rs` like the gate's other numerics (SPR-10); numeric on the Round-2 gate with `n`, `D_max`, `w_launch`. **Superseded 2026-09-29 (`SHT-Q2`):** the constant is `W = 3,000,000` archival bytes, PROVISIONAL — `shekyl_types::SHARD_LENGTH`, from `archival_shard_length_bytes` by the same build script; `T` and its key are deleted |
-| Shard boundaries | `k·T` — no table, no rows, no prefix sum; `close_height(k) = height((k+1)·T − 1)` by binary search over the storage-id total | derived, never received (item 5). **Superseded 2026-09-29 (`SHT-Q2`):** offset `k·W` over the archival-length prefix sum `block_info.cumulative_archival_len`; `close_height(k)` is the first height whose sum reaches `(k+1)·W`, by the same binary search over the cell; still no table of boundaries |
+| Shard boundaries | `k·T` — no table, no rows, no prefix sum; `close_height(k) = height((k+1)·T − 1)` by binary search over the storage-id total | derived, never received (item 5). **Superseded 2026-09-29 (`SHT-Q2`):** offset `k·W` over the archival-length prefix sum `block_info.cumulative_archival_len`; `close_height(k)` is the first height whose sum reaches `(k+1)·W`, found by a descent that reads every `block_info` row from `(E−1)·SEB` down to it and checks each against the one above (SI-13 across the run, not at probes — a binary search passes a run of cells shifted together; PR #910 review); still no table of boundaries |
 | `first_tx_id(h)`, `cumulative_tx_count` | `cumulative_tx_count` is the listed-transaction fold. `first_tx_id(0) = 0`; for `h ≥ 1`, `first_tx_id(h) = storage_ids_through(cumulative_tx_count(h−1), h−1)` — listed plus one coinbase per block (`shekyl_types::storage_ids_through`, SPR-1). The primitive under `close_height`, and so under `close_epoch` | landed on #772 as the listed fold — **the coinbase term is SPR-1** |
 | `w_launch` | flat in-window commitment weight through epochs 0–1; superseded by the derived scarce-set median at the first `discard(k)` | **reward leg's** (Q6 item 3 amendment) — on the Round-2 gate with `n`, `D_max`; S-PRUNE's `discard(k)` event defines the scarce set |
 
@@ -471,6 +475,11 @@ reason outlives the engine.
 
 ## 14. As built (2026-09-25) — the increment, and what building it found
 
+*Superseded in part 2026-09-29 (`SHT-Q2`, the amendment at the top):
+`SHARD_TX_COUNT` and the count-era tests below record the build as it
+landed; the partition is now `W` and the tests are the byte-keyed ones in
+`store/prune_tests.rs`.*
+
 Four commits on the S-PRUNE increment PR, off `dev` `fc6d87ca5`: (1) the
 constants — `D_MAX`, `SEB > D_MAX`, `journal_horizon`, `SHARD_TX_COUNT`;
 (2) a dev-red fix carried first — `store::alt_tests` spent to one output
@@ -493,7 +502,10 @@ carries the finding.
 | **SPR-10** | **One sourcing idiom for the Round-2 gate's numerics: the JSON authority.** `D_MAX` derived from `consensus_constants.json` (SPR-6) while `T` was a literal in `shekyl-types` — two idioms for consensus numerics on one re-pin gate, and the FOLLOWUPS shard-partition row's falsifier ("a production `T` in `consensus_constants.json` is red", inherited from `SHARD_BYTES`'s not-a-tune rule) cut against the idiom `D_MAX` used. Ruled JSON (PR #861 review, item 6): `archival_shard_tx_count = 200` joins `settlement_epoch_blocks`, `archival_reorg_depth_blocks` and `challenge_resolution_blocks` in the one authority, read by `rust/shekyl-types/build.rs` (the leaf crate's own build script, as `shekyl-difficulty` does, so it stays `no_std` with no new runtime dependency); `SHARD_TX_COUNT` is the generated value under its documented name. The consensus-constants digest (`shekyl-rpc-types/build.rs`, VC-D12) is re-pinned with the chain question answered on the key: a different `T` names different shards for the same transactions — a split. The falsifier's subject was drift, not location: it now reads "a second home for `T`". **Ground corrected 2026-09-26 (DRS-E3 pre-flight, `DRS_E3_CURVE_WRITER.md` §3.9, CTW-Q7):** the reason of record is not "one idiom for the gate's numerics" but the JSON's discriminator — *a value goes in iff a schedule, a network or an operator could legitimately name it differently.* `T` passes it: an archival policy unit sized against a shard-byte target and archival economics, PROVISIONAL among its neighbours; a proof-system arity (the curve-tree chunk widths) does not, and stays a Shekyl-named const-asserted constant outside the file. The move stands on that ground. The "not-a-tune" falsifier this row re-worded descended from `SHARD_BYTES`, retired as consensus 2026-09-23 — the inheritance had lapsed, not merely the wording. |
 | **SPR-Q1** | **RESOLVED 2026-09-25 by split, not by ruling — "does the pass-anchor depth follow a Fakechain cap?" only exists because two jobs share one setting.** Posed the same day: `pass_anchor.rs` admits a pass anchored in `[h − depth − L, h − depth]` with `depth = ARCHIVAL_REORG_DEPTH_BLOCKS`, and under a levered regtest the rule set's cap is smaller while the depth still reads the key. The first falsifier ("a walk that admits a pass under a shortened cap") was void — it tested whether the two happened to agree, not which owner sets which. Disposition (SPR-6 as corrected): the cap is its own value (`RuleSet::reorg_cap`, its lever moves the cap and nothing else); the anchor depth is E4's own value from E4's requirement (`≥ cap + L`, or what pass admission actually needs) with its own home — it may equal 720, it is not the same number; the relation is **asserted**, `PASS_ANCHOR_DEPTH_BLOCKS ≥ reorg_cap`, on the production pair and at arm on every nettype. That is what a fakechain with a shortened cap needs: not a depth that tracks the cap but a check that the pair it runs is valid. Carried by the FOLLOWUPS row "Split `archival_reorg_depth_blocks`" (owner E4, `ARCHIVAL_SHARD_FETCH.md` SF-D8). Zero S-PRUNE mechanism changes — the prune reads the cap only, the right reader for it. |
 
-**What the tests hold** (`store/prune_tests.rs`, 300-block chains under a
+**What the tests held as landed** *(superseded 2026-09-29: the
+count-era chains below were rebuilt byte-keyed — a ten-block epoch with
+spends sized exactly, every boundary checked against a model of the lengths
+asked for; `store/prune_tests.rs` is the live list)* (`store/prune_tests.rs`, 300-block chains under a
 100-block epoch and a 50-block retention — `T = 200` closes a shard only
 after two hundred transactions, and the shared fixtures pack the height
 into a `u8`, so the module carries its own long-chain header and facts):
