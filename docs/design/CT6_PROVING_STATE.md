@@ -387,17 +387,28 @@ measured:
 
 ### 9.4 What that licenses — the structure, not the constant
 
-At `s = 3` over the reorg horizon, the frontier measuring **9.44 KB**
-(38 × 128 B leaf chunk + 3 × 1 216 B Selene + 2 × 576 B Helios, §6.3.2 row 4):
+At `s = 3` over the reorg horizon, the frontier encoding to **8 848 B**
+(a header plus one partial chunk per layer, each one child short of folding —
+§10.1 derives it):
 
 | | Snapshots | Size |
 | --- | --- | --- |
-| Sparse at `s = 3` | 240 | **2.32 MB** |
-| Dense over the horizon | 720 | **6.96 MB** |
+| Sparse at `s = 3` | 240 | **2.12 MB** |
+| Dense over the horizon | 720 | **6.37 MB** |
 
-The two-tier structure buys **4.64 MB** on an 8 GB rig, and costs a spacing
+The two-tier structure buys **4.25 MB** on an 8 GB rig, and costs a spacing
 constant, an eviction policy, a dense/sparse boundary, and the reader logic that
 chooses across it.
+
+> **Corrected 2026-09-29.** This section was written on 2026-09-28 reading
+> **9.44 KB** / 2.32 MB / 6.96 MB. That per-snapshot figure was a transcription
+> of §6.3.2 row 4 that **inverted its Selene and Helios counts** above the leaf
+> chunk — three 1 216 B chunks where the widths give three 576 B — and counted
+> every chunk at capacity. Row 4 is correct as written: **9 024 B for a path**.
+> A frontier is not a path; it holds each partial chunk one child short of
+> folding, so it encodes to **8 848 B** (§10.1). **The ruling does not move** —
+> the correction makes the dense ring cheaper than the figure it was ruled
+> against, so the argument it was ruled on only strengthens.
 
 **RULED 2026-09-28: one dense ring over the reorg horizon**
 (`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`, cited and never restated — C4). The tier
@@ -435,7 +446,7 @@ the examiner guards lapses here.
   which is increment 6's.**
 - **Reopeners.** A material prover-pin move re-grades the denominator (the
   existing §6.3.4 clause). A change to the leaf-hash path re-measures the rate.
-  The ring's 6.96 MB is bounded by construction and carries no reopener.
+  The ring's 6.37 MB is bounded by construction and carries no reopener.
 
 ### 9.7 Effect
 
@@ -474,12 +485,14 @@ this design offers, and the subject of its own assertion.
 **Size, derived and not restated.** A production-depth frontier whose every
 partial chunk is one child short of folding encodes to
 `11 + (LEAF_CHUNK_SCALARS − 1)·32 + Σ_{k<5} (1 + (chunk_width(k+1) − 1)·32)`
-= **8 848 B**, against §6.3.2 row 4's **9 664 B**. The 9 664 is carried as a **bound the
-implementation must fit inside**, never as its size: the sizing counts three
-Selene chunks and two Helios above the leaf chunk where the widths give two and
-three, and it counts each chunk at capacity where a partial chunk folds on
-reaching it. Over the horizon that is **6.37 MB** against §9.4's 6.96 MB. No
-clause moves — §9.4's figure is conservative in the direction that is safe.
+= **8 848 B**. §6.3.2 row 4 states **9 024 B**, and is correct — but it sizes a
+**path**, and a frontier is not a path: it holds each partial chunk one child
+short of folding and carries an 11 B header, so the two differ by 176 B. Row 4's
+one overreach is the sentence that follows its arithmetic, “the frontier is the
+same size”; it is corrected there. The **9 664 B** §9.4 first carried was neither
+figure but a transcription of row 4 that inverted its Selene and Helios counts,
+corrected and dated in place. Over the horizon this is **6.37 MB**. No clause
+moves.
 
 ### 10.2 Where it persists (`Q3`)
 
