@@ -98,7 +98,7 @@ behind it, and the last three rows are new.
 | the FFI archival shims | `rust/shekyl-ffi/src/archival_ffi/*` (bond, emission, attestation, epoch_close, ct_balance, codes), `archival_admission_ffi.rs` | the C++ boundary for all of the above | consensus | **yes, wherever a shard id crosses** | — |
 | **new (`SHT-Q2`)** the archival-length row | `rust/shekyl-chain-store` schema, beside `txs_prunable_hash` / `txs_pqc_auth_hash` | each in-domain transaction's archival length (prunable + `pqc_auths` bytes, as `write_segments` emits them) | consensus | **new** — written at connect from the body; supplied by storage-pruned and skeleton forms like the prunable hash; a rule-42 schema bump | — |
 | **new (`SHT-Q2`)** the cumulative archival-length cell | `block_info`, beside `cumulative_tx_count` (`rust/shekyl-chain-store/src/codec/chain.rs`) | running total of archival length through each block, `checked_add` under SI-8 | consensus | **new** — the operand of every boundary above; `cumulative_tx_count` stays, because it feeds the fee ladder (CEN-F20) | — |
-| **new (`SHT-Q2`)** the txid mixer | Rust `Transaction::hash_from_components` and `hash_with_supplied_components` (`rust/shekyl-wire/src/transaction/txid.rs`); C++ `calculate_transaction_hash` (`src/cryptonote_basic/cryptonote_format_utils.cpp`) | the transaction id | consensus | **new operand** — the archival length is folded in, so **every txid changes**; the coinbase's 3-part form is unchanged | — |
+| **new (`SHT-Q2`)** the txid mixer | Rust `Transaction::hash_from_components` and `hash_with_supplied_components` (`rust/shekyl-wire/src/transaction/txid.rs`) — **the one mixer**; C++ `calculate_transaction_hash` (`src/cryptonote_basic/cryptonote_format_utils.cpp`) **calls it over FFI**, its body replaced and its hashing deleted (row 3 = (b), RULED 2026-09-29 — the length term is never written in C++) | the transaction id | consensus | **new operand** — the archival length is folded in, so **every txid changes**; the coinbase's 3-part form is unchanged | — |
 
 **`SCC-2` — a correction to the brief's family-1 list.** It named
 archival-retention's `bond_duration`, `failure_window`, `serve_credit_decisions`,
@@ -254,15 +254,28 @@ makes it the larger group.** Everything below lands in the one ratified change,
 because each half would otherwise disagree with the other about which transaction or
 which shard an id names:
 
-- **the txid mixer in both languages** — Rust `hash_from_components` and
-  `hash_with_supplied_components`, and C++ `calculate_transaction_hash`. A daemon and a
-  wallet that mix different operands compute different ids for the same transaction;
+- **the txid mixer, once, in Rust** — `hash_from_components` and
+  `hash_with_supplied_components`. C++ `calculate_transaction_hash`, and any other C++
+  site that computes a txid part, becomes an FFI call into it with its hashing deleted
+  (row 3 = (b), RULED 2026-09-29). A daemon and a wallet cannot then mix different
+  operands for the same transaction, because there is no second mixer to disagree;
 - **the archival-length row** and every pruned or skeleton transport that supplies it;
 - **the cumulative archival-length cell** and the boundary function over it;
 - **the `W` constant**, renamed, with the static relation `max archival length < W`;
 - **the regenerated parity pins and corpora** — `pruned_tx_hash_parity`,
   `serve_credit_tx_parity`, `live_oracle_spend_v1.json` and the captured chains —
   because every txid moves.
+
+**The C++ LMDB archival path does not move (row 3 = (b), RULED 2026-09-29).** No new
+LMDB tables, cells or archival logic: LMDB's shards stay the frozen leaf segments
+(CEN-L10; `src/cryptonote_core/blockchain.cpp:1494-1505`,
+`src/rpc/archival_shard_coverage.cpp:34`), so the C++ consumers in the table above keep
+their segment partition. The difference from the Rust store's length partition is
+ruled an **intended conformance divergence** under CSR-3a, registered against CEN-L10
+in [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md) §5.4.1 with
+the build. **The engine swap must complete before genesis, or this is revisited.** The
+fee-split `n` in `blockchain.cpp` is untouched. The one C++ change is the FFI call
+above.
 
 **Order within the effort:**
 
