@@ -74,6 +74,10 @@ pub const SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE: u8 = 14;
 /// misattributed to the prover.
 pub const SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED: u8 = 15;
 
+/// `SHT-11`: a branch layer of the pruned record's path is empty or ends in a zero
+/// scalar — a non-canonical encoding of the opening.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_NON_CANONICAL_PATH: u8 = 16;
+
 /// PWD-B7: map a serve-credit FFI verify code onto a drop verdict.
 ///
 /// `ZERO_GEOMETRY` and `EPOCH_MISMATCH` are our filled context, not the
@@ -97,6 +101,7 @@ fn archival_verify_drop_verdict(code: u8) -> DropVerdict {
         | SHEKYL_ARCHIVAL_VERIFY_ERR_PATH_TOO_SHALLOW
         | SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_NOT_IN_OPENING
         | SHEKYL_ARCHIVAL_VERIFY_ERR_SUBROOT_MISMATCH
+        | SHEKYL_ARCHIVAL_VERIFY_ERR_NON_CANONICAL_PATH
         | SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_VERIFY
         | SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_DESER => DropVerdict::AttributableForm,
         _ => DropVerdict::Unclassified,
@@ -643,6 +648,9 @@ pub(super) fn map_verify_error(err: &shekyl_archival_retention::VerifyError) -> 
         VerifyError::PathTooShallow => SHEKYL_ARCHIVAL_VERIFY_ERR_PATH_TOO_SHALLOW,
         VerifyError::LeafNotInOpening => SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_NOT_IN_OPENING,
         VerifyError::SubrootMismatch => SHEKYL_ARCHIVAL_VERIFY_ERR_SUBROOT_MISMATCH,
+        VerifyError::NonCanonicalBranchLayer { .. } => {
+            SHEKYL_ARCHIVAL_VERIFY_ERR_NON_CANONICAL_PATH
+        }
     }
 }
 
