@@ -217,11 +217,56 @@ completed, and the gap was 597 ms outbound and 649 ms on the seed.
 Timed syncs followed. One sample, not a distribution.
 
 The floor device runs the pinned aarch64 `16.0a12` Tor beside its
-daemon and publishes a proof-of-work onion through it. Its Tor dial
-and inbound distributions are the next records.
+daemon and publishes a proof-of-work onion through it.
+
+A third defect surfaced when the floor device dialed the seed while
+the x86_64 session was still up: every new inbound connection on the
+seed logged `NEW CONNECTION` and went deaf. `drive_inbound` held a
+blocking thread for the life of a connection and the zone hands its
+runtime one blocking lane, so a daemon read from one connection at a
+time and every later one waited in the pool's queue until the first
+closed. The inbound drive is a task now, awaiting the strand on a
+`Notify`; `two_connections_deliver_on_one_blocking_lane` pins it.
+After that the seed carried the x86_64 session and the floor's dials
+together.
+
+## Tor dial distribution, floor device (2026-09-29)
+
+Raw samples: [`p2p_tor_dial_floor_20260929.tsv`](p2p_tor_dial_floor_20260929.tsv).
+
+Conditions, per D9:
+
+- Dialer: the floor device (Pi 4 Model B, aarch64, 4 cores), daemon
+  `572ed17c3`, the pinned `16.0a12` Tor (`0.4.9.12`) run beside it
+  with a fixed SocksPort and `--tx-proxy`, because a named onion peer
+  cannot yet be dialed under the managed posture (above). The client
+  Tor was restarted between samples, so each dial built its circuits
+  fresh; bootstrap from a cached consensus took 3–5 s and is not in
+  any span. The RandomX miner was off. Nothing else ran on the device.
+- Service: an off-site Foundation seed host (x86_64, 4 cores), daemon
+  `a764f5a76`, managed ephemeral onion published through the pinned
+  `15.0.19` Tor (`0.4.9.11`) with proof-of-work on. One other Tor
+  session was live on it throughout.
+- Link: the Tor network, from a LAN client to a host in South America.
+  Clearnet RTT between the two sites is about 170 ms; the Tor path is
+  whatever the circuits were.
+- n = 100, no timeouts. Samples 1–19 and 20–100 were one run.
+
+| span | p50 | p90 | p99 | max | 2 × p99 |
+| --- | --- | --- | --- | --- | --- |
+| Tor dial (`dial_ns`: SOCKS exchange, circuit, rendezvous) | 1.84 s | 3.40 s | 4.54 s | 4.76 s | **9.1 s** |
+| loopback connect to the SOCKS port (`proxy_connect_ns`) | 0.4 ms | 0.5 ms | 0.5 ms | 0.5 ms | — |
+| channel to session (`gap_ns`, outbound side) | 626 ms | 827 ms | 1.26 s | 1.32 s | **2.5 s** |
+
+The placeholder both clocks run on today is the Levin invoke timeout,
+5 s. This run's slowest dial cleared it by 240 ms. A deadline written
+from this distribution is 9.1 s for the Tor dial and 2.5 s for the Tor
+gap; neither is wired yet, and the clearnet distributions are owed
+before the deadline commit.
 
 ## Not this run
 
-Tor relay was not run. The floor-device deadline and thread-budget
-distributions are not in this record. The off-site clearnet leg waits
-on a firewall rule for the seed-side daemon's private port.
+Tor relay and the floor device's inbound Tor distribution were not
+run. The clearnet distributions and the thread-budget legs are not in
+this record. The off-site clearnet leg waits on a firewall rule for
+the seed-side daemon's private port.
