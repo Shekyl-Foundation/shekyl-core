@@ -35,7 +35,7 @@ pub use engine::{
     SuppressedClass, TracingDiagnosticSink, TxError, TxHash, TxRecipient, TxRecipientSummary,
     TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial,
 };
-pub use outbound_label::label_plaintext_for_payment_uri;
+pub use outbound_label::{label_plaintext_for_recipient, RidNotEncodable};
 // The exclusive upper bound of `stake_in`'s system-drawn cover
 // (`Engine::stake_in` sends `amount + cover`, `cover ~ U[1, bound)`).
 // Re-exported so the RPC/CLI disclosure copy renders the bound from the

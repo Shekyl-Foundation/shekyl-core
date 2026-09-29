@@ -14,6 +14,10 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **Name the saturation classes, who assigns one, and their order.** The cutover writer takes a class on each send and serves connections in turn under the operator's bucket while one class exists (`P2P_TRANSPORT_LAYER.md`, "Rate limit is four jobs"). What remains is the class list, the assigner, and the order, including that relay-lane conformance holds under saturation. Falsify by: that section names the three and the writer schedules them. Reopen if adding a class means replacing the bucket.
+  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
+  - Target: pre-genesis
+
 - **Move daemon RPC and Tor control onto `shekyl-runtime::runtime`, then print the thread ledger once at startup.** Both still build their own (`shekyl-daemon-rpc` `ffi_exports.rs:162`, `shekyl-tor-control-daemon` `blocking.rs:120`). A startup total taken before that move omits those pools. After both call `runtime`, `shekyld` prints `shekyl_thread_ledger::report` once before the p2p loop. Falsify by: those two builders call `runtime`, and `daemon.cpp` logs the report before the p2p loop. Reopen if another `Builder::new_multi_thread` appears outside `shekyl-runtime`.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis

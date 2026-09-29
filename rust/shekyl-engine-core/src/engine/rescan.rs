@@ -413,6 +413,7 @@ mod tests {
                 recipients: vec![SendRecipient {
                     address: "shekyl1example".to_owned(),
                     amount: 7_000,
+                    rid: None,
                 }],
                 change_amount: 22_300,
                 inputs: vec![SendInputRef {

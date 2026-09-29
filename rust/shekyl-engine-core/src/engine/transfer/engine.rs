@@ -361,10 +361,7 @@ where
         reference: Option<ReferenceBlock>,
         tree_depth: u8,
     ) -> Result<BuildSelected, SendError> {
-        if request.recipients.is_empty() {
-            let err = SendError::InvalidRecipient {
-                reason: "TxRequest must carry at least one recipient",
-            };
+        if let Err(err) = request.check_recipients() {
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
                 PendingTxDiagnostic::BuildFailed {
@@ -1533,6 +1530,7 @@ where
                     .map(|r| shekyl_engine_state::SendRecipient {
                         address: r.address.clone(),
                         amount: r.amount_atomic_units.to_raw(),
+                        rid: r.rid,
                     })
                     .collect();
                 wallet.record_dispatched_send(

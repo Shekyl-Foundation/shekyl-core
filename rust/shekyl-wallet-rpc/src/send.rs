@@ -15,17 +15,22 @@ use serde::Deserialize;
 use serde_json::Value;
 use shekyl_engine_core::{FeePriority, ReservationId, TxHash, TxRecipient, TxRequest};
 
+use shekyl_units::AtomicUnitsString;
+
 use crate::error::WalletRpcError;
-use crate::params::{parse_atomic_units, parse_hex32, parse_required_object};
+use crate::params::{parse_hex32, parse_required_object, parse_rid};
 use crate::project::{pending_tx_result, submit_pending_tx_result};
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{AbandonTxResult, DiscardPendingTxResult, TransferState};
 
-/// One recipient in `build_pending_tx` params.
+/// One recipient in `build_pending_tx` params. `rid` is the contract's
+/// `TxRecipient.rid`: the payment request this send answers, echoed in the
+/// output's encrypted label.
 #[derive(Debug, Deserialize)]
 struct TxRecipientParams {
     address: String,
-    amount: String,
+    amount: AtomicUnitsString,
+    rid: Option<String>,
 }
 
 /// Fee priority: named tier string or `{ "custom": "<feerate>" }`.
@@ -79,7 +84,8 @@ pub(crate) async fn build_pending_tx(
             .map(|r| {
                 Ok(TxRecipient {
                     address: r.address,
-                    amount_atomic_units: parse_atomic_units(&r.amount)?,
+                    amount_atomic_units: r.amount.to_atomic_units(),
+                    rid: r.rid.as_deref().map(parse_rid).transpose()?,
                 })
             })
             .collect::<Result<Vec<_>, WalletRpcError>>()?,

@@ -111,6 +111,61 @@ add_test(
   NAME    hash-target
   COMMAND hash-target-tests)
 
+# The epee reference for the differential harness. Not a unit test: it
+# writes one transcript and exits. The Rust peer drives it.
+monero_add_minimal_executable(epee-host p2p_harness/epee_host.cpp)
+target_link_libraries(epee-host PRIVATE epee net ${EXTRA_LIBRARIES})
+# The Rust archive on epee's link line is an imported location. Ninja does
+# not order the cargo build ahead of this binary unless the edge is named.
+if(TARGET shekyl_rust)
+  add_dependencies(epee-host shekyl_rust)
+endif()
+set_property(TARGET epee-host PROPERTY FOLDER "${folder}")
+
+# The test job unpacks `build/` and has no cargo. The bins have to be
+# inside that tree, next to epee-host, or the differential never runs.
+# `run-seeds` is the gate. `peer`, `seam-host`, and `compare` stay for
+# replay of a kept `p2p-harness-fail/` directory.
+if(UNIX)
+  if(CARGO_EXECUTABLE)
+    set(_harness_peer "${CMAKE_CURRENT_BINARY_DIR}/peer${CMAKE_EXECUTABLE_SUFFIX}")
+    set(_harness_seam "${CMAKE_CURRENT_BINARY_DIR}/seam-host${CMAKE_EXECUTABLE_SUFFIX}")
+    set(_harness_compare "${CMAKE_CURRENT_BINARY_DIR}/compare${CMAKE_EXECUTABLE_SUFFIX}")
+    set(_harness_run_seeds "${CMAKE_CURRENT_BINARY_DIR}/run-seeds${CMAKE_EXECUTABLE_SUFFIX}")
+    add_custom_command(
+      OUTPUT "${_harness_peer}" "${_harness_seam}" "${_harness_compare}" "${_harness_run_seeds}"
+      COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
+        ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
+        -p shekyl-p2p-harness --bins
+      COMMAND ${CMAKE_COMMAND} -E copy
+        "${RUST_BUILD_DIR}/peer${CMAKE_EXECUTABLE_SUFFIX}" "${_harness_peer}"
+      COMMAND ${CMAKE_COMMAND} -E copy
+        "${RUST_BUILD_DIR}/seam-host${CMAKE_EXECUTABLE_SUFFIX}" "${_harness_seam}"
+      COMMAND ${CMAKE_COMMAND} -E copy
+        "${RUST_BUILD_DIR}/compare${CMAKE_EXECUTABLE_SUFFIX}" "${_harness_compare}"
+      COMMAND ${CMAKE_COMMAND} -E copy
+        "${RUST_BUILD_DIR}/run-seeds${CMAKE_EXECUTABLE_SUFFIX}" "${_harness_run_seeds}"
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+      DEPENDS ${_shekyl_rust_deps}
+      COMMENT "p2p harness bins"
+      VERBATIM
+    )
+    add_custom_target(p2p_harness_bins DEPENDS
+      "${_harness_peer}" "${_harness_seam}" "${_harness_compare}" "${_harness_run_seeds}")
+    add_dependencies(epee-host p2p_harness_bins)
+    add_test(
+      NAME p2p-harness-seeds
+      COMMAND "${_harness_run_seeds}" $<TARGET_FILE:epee-host>
+    )
+    set_tests_properties(p2p-harness-seeds PROPERTIES TIMEOUT 600)
+  else()
+    add_test(
+      NAME p2p-harness-seeds
+      COMMAND sh -c "echo 'p2p-harness-seeds: cargo was not found; the Rust bins were not staged' >&2; exit 1"
+    )
+  endif()
+endif()
+
 # Regression guard for `--log-file` writing no file. Its own executable, and
 # one ctest invocation per mode, because subscriber installation is
 # process-global and first-caller-wins: sharing a binary with other tests would

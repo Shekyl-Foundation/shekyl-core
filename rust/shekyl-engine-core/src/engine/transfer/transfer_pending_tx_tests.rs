@@ -349,6 +349,7 @@ fn standard_request(amount: u64) -> TxRequest {
         recipients: vec![TxRecipient {
             address: test_payment_address(),
             amount_atomic_units: AtomicUnits::from_raw(amount),
+            rid: None,
         }],
         priority: FeePriority::Standard,
     }

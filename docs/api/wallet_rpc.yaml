@@ -371,7 +371,12 @@ info:
   # asked of an unsynchronized daemon refuses instead of returning a
   # verdict. A tx read gathered below that check's witness is -29201,
   # not this code. Generation is not gated. api_version stays 1.
-  version: 0.7.0
+  # 0.8.0: build_pending_tx.recipients[].rid — the payment request a send
+  # answers, echoed in the output's encrypted label (SUBADDRESS_UNDER_PQC
+  # §5.7.11); refused at build when the u48 field cannot carry it. The rid
+  # grammar is the PaymentRequestId schema's (^[1-9][0-9]*$), shared with
+  # make_uri and parse_uri. api_version stays 1.
+  version: 0.8.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -1573,13 +1578,26 @@ components:
           description: Canonical Shekyl address; parsed and network-checked at build.
         amount:
           $ref: "#/components/schemas/AtomicUnits"
+        rid:
+          $ref: "#/components/schemas/PaymentRequestId"
+          description: >
+            The payment request this send answers — the `rid` from the
+            payee's `shekyl:` link (`parse_uri`). Echoed in the output's
+            encrypted label (`SUBADDRESS_UNDER_PQC.md` §5.7.11) so the
+            payee's wallet attributes the receive (`get_transfers`
+            attribution `MATCHED`); omitted, the output carries the
+            sentinel. A value that is zero or above u48 is refused at
+            build, never downgraded to the sentinel. Not a payment_id: it
+            rides inside the uniform `enc_label` slot every output carries,
+            never in tx_extra, and no observer can tell it from a sentinel.
 
     BuildPendingTxParams:
       type: object
       required: [recipients, priority]
       description: >
         Mirrors `shekyl_engine_core::TxRequest`. No payment_id, no extra
-        escape hatch (Phase 1 decision).
+        escape hatch (Phase 1 decision). A recipient's `rid` is neither: it
+        is the §5.7.11 label echo inside the fixed-width `enc_label` slot.
       properties:
         recipients:
           type: array

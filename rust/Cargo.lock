@@ -4535,6 +4535,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-p2p-harness"
+version = "3.1.0"
+dependencies = [
+ "shekyl-clearnet",
+ "shekyl-levin",
+ "shekyl-peer-policy",
+ "shekyl-runtime",
+ "shekyl-timing-engine",
+ "shekyl-transport-layer",
+ "tokio",
+]
+
+[[package]]
 name = "shekyl-p2p-transport"
 version = "3.1.0"
 dependencies = [

@@ -82,6 +82,7 @@ fn standard_request(amount: u64) -> TxRequest {
         recipients: vec![TxRecipient {
             address: "test_address".to_string(),
             amount_atomic_units: AtomicUnits::from_raw(amount),
+            rid: None,
         }],
         priority: FeePriority::Standard,
     }
@@ -488,6 +489,7 @@ fn priority_custom_is_accepted_and_preserved() {
         recipients: vec![TxRecipient {
             address: "addr".into(),
             amount_atomic_units: AtomicUnits::from_raw(1_000),
+            rid: None,
         }],
         priority: FeePriority::Custom(NonZeroU64::new(42).unwrap()),
     };
@@ -495,4 +497,33 @@ fn priority_custom_is_accepted_and_preserved() {
         build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &req).unwrap();
     let r = reservations.get(&pending.id).unwrap();
     assert!(matches!(r.priority, FeePriority::Custom(_)));
+}
+
+/// The request's own refusals hold on every build path: the production
+/// `LocalPendingTx::build` and `build_select_sync` call
+/// `TxRequest::check_recipients` before any selection or proving, as the
+/// free helper does.
+#[test]
+fn a_rid_the_label_cannot_echo_is_refused_at_the_request() {
+    use shekyl_engine_state::payment_request::PAYMENT_REQUEST_RID_U48_MAX;
+    use shekyl_engine_state::PaymentRequestId;
+    let mut req = standard_request(1_000);
+    assert!(req.check_recipients().is_ok());
+    req.recipients[0].rid = Some(PaymentRequestId(PAYMENT_REQUEST_RID_U48_MAX));
+    assert!(req.check_recipients().is_ok(), "the largest echoable rid");
+    for raw in [0, PAYMENT_REQUEST_RID_U48_MAX + 1, u64::MAX] {
+        req.recipients[0].rid = Some(PaymentRequestId(raw));
+        assert!(
+            matches!(
+                req.check_recipients(),
+                Err(SendError::InvalidRecipient { .. })
+            ),
+            "rid {raw} must be refused"
+        );
+    }
+    req.recipients.clear();
+    assert!(matches!(
+        req.check_recipients(),
+        Err(SendError::InvalidRecipient { .. })
+    ));
 }

@@ -29,9 +29,11 @@ use shekyl_engine_core::{
     CollectOutcome, DrainBalanceReadError, DrainOutcome, StakeFacade, UnstakeOutcome,
 };
 
+use shekyl_units::AtomicUnitsString;
+
 use crate::error::WalletRpcError;
-use crate::params::{parse_atomic_units, parse_optional_object, parse_required_object};
-use crate::project::{atomic_units_string, pending_tx_result};
+use crate::params::{parse_optional_object, parse_required_object};
+use crate::project::pending_tx_result;
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
     CollectUnstakedResult, DrainResult, DrainVerdictView, GetDrainBalanceResult, UnstakeResult,
@@ -45,7 +47,7 @@ use crate::types::{
 struct StakeInParams {
     /// Decimal atomic-units string — the stake amount, before the
     /// system-drawn cover.
-    amount: String,
+    amount: AtomicUnitsString,
 }
 
 /// Params for `drain`: `{ amount }` only — **no `fee`, no `destination`, no
@@ -59,7 +61,7 @@ struct StakeInParams {
 struct DrainParams {
     /// Decimal atomic-units string — the payment (user intent, F-D2: never
     /// pre-filled from a reward vector).
-    amount: String,
+    amount: AtomicUnitsString,
 }
 
 /// Params for `get_drain_balance`: none. Deserialized through serde (rather
@@ -79,7 +81,7 @@ pub(crate) async fn stake_in(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     let p: StakeInParams = parse_required_object(params, "stake_in")?;
-    let amount = parse_atomic_units(&p.amount)?;
+    let amount = p.amount.to_atomic_units();
 
     let shared = require_open_engine(tenants).await?;
     // Read guard, exactly like `build_pending_tx`'s W-B step-1 build (which
@@ -132,7 +134,7 @@ fn drain_balance_result(
 ) -> Result<GetDrainBalanceResult, WalletRpcError> {
     match outcome {
         Ok(spendable) => Ok(GetDrainBalanceResult::Ready {
-            spendable: atomic_units_string(spendable),
+            spendable: spendable.into(),
         }),
         Err(DrainBalanceReadError::Unanchorable { detail }) => Ok(GetDrainBalanceResult::Syncing {
             detail: detail.to_owned(),
@@ -156,15 +158,14 @@ pub(crate) async fn drain(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     let p: DrainParams = parse_required_object(params, "drain")?;
-    let payment = parse_atomic_units(&p.amount)?;
+    let payment = p.amount.to_atomic_units();
     // A zero drain is a malformed request, refused at the params boundary
     // (`-32602`) before the wallet gate or any engine/daemon work. Folding
     // it into `-29101` would hand out an unsatisfiable remedy ("lower the
     // payment" has no answer at zero — rule 82); the engine façade carries
     // its own `EmptyRequest` arm for direct embedder callers. `stake_in`
     // deliberately has NO such check: a zero stake is designed-valid (DQ1,
-    // no floor), and the shared `parse_atomic_units` must keep accepting
-    // `"0"` for it.
+    // no floor), and `AtomicUnitsString` accepts `"0"` for it.
     if payment.is_zero() {
         return Err(WalletRpcError::InvalidParams(
             "the drain amount must be greater than zero".into(),
@@ -266,8 +267,8 @@ pub(crate) async fn collect_unstaked(
             another_pool_remains,
         } => CollectUnstakedResult::Swept {
             tx_hash: tx_hash.to_string(),
-            swept: atomic_units_string(swept),
-            remainder: atomic_units_string(remainder),
+            swept: swept.into(),
+            remainder: remainder.into(),
             another_pool_remains,
         },
         CollectOutcome::NothingLeft => CollectUnstakedResult::NothingLeft,
@@ -350,7 +351,7 @@ mod tests {
     #[test]
     fn drain_balance_result_arms_match_the_contract_shapes() {
         let ready = serde_json::to_value(GetDrainBalanceResult::Ready {
-            spendable: "12345".into(),
+            spendable: "12345".parse().unwrap(),
         })
         .expect("serialize");
         assert_eq!(ready, json!({ "status": "ready", "spendable": "12345" }));
@@ -395,8 +396,8 @@ mod tests {
     fn collect_unstaked_result_arms_match_the_contract_shapes() {
         let swept = serde_json::to_value(CollectUnstakedResult::Swept {
             tx_hash: "ab".repeat(32),
-            swept: "100".into(),
-            remainder: "0".into(),
+            swept: "100".parse().unwrap(),
+            remainder: "0".parse().unwrap(),
             another_pool_remains: true,
         })
         .expect("serialize");
@@ -445,7 +446,7 @@ mod tests {
         let ready = drain_balance_result(Ok(AtomicUnits::from_raw(42_000))).expect("ready");
         assert!(matches!(
             &ready,
-            GetDrainBalanceResult::Ready { spendable } if spendable == "42000"
+            GetDrainBalanceResult::Ready { spendable } if spendable.to_string() == "42000"
         ));
 
         let syncing = drain_balance_result(Err(DrainBalanceReadError::Unanchorable {

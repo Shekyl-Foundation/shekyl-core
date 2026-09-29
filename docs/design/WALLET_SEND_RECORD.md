@@ -171,11 +171,13 @@ what the decided full row stores, so the decision is self-consistent
 with its own recoverability story. (2) PR-SJ-1 ruled that the journal stores the
 echoed rid **directly at dispatch** so surfacing "paid request #N" never
 requires the trial re-derivation. The plaintext helper is
-`outbound_label::label_plaintext_for_payment_uri`
-(`encode_request_plaintext`); it has no production caller — the live send
-uses `construct_output`, which encrypts the sentinel label. The derivation
-chain is the *replay* story, not the read path, once a dispatch writer
-exists.
+`outbound_label::label_plaintext_for_recipient`
+(`encode_request_plaintext`); since 2026-09-28 the sign pass calls it for a
+`TxRecipient` that carries a `rid` (the contract's `TxRecipient.rid`), and
+every other output encrypts the sentinel. The dispatch writer exists the
+same day: `SendRecipient::rid` (send-journal block version 4) stores the
+echoed `rid` per recipient, so the derivation chain is the *replay* story
+only, never the read path.
 
 ## 2. Binding constraints (inputs to the round, not open questions)
 

@@ -15,9 +15,10 @@ use serde::Deserialize;
 use serde_json::Value;
 use shekyl_engine_core::{InputCount, OutputCount};
 
+use shekyl_units::AtomicUnitsString;
+
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, parse_required_object};
-use crate::project::atomic_units_string;
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{EstimateTxSizeAndWeightResult, GetDefaultFeePriorityResult};
 
@@ -28,7 +29,7 @@ struct EstimateTxSizeAndWeightParams {
     n_outputs: i64,
     /// Expected fee in atomic units (feeds the weight's own `varint(fee)`
     /// term). Omitted → `0`, a floor estimate within 9 bytes of exact.
-    fee: Option<String>,
+    fee: Option<AtomicUnitsString>,
 }
 
 /// Params for `get_default_fee_priority`. The shape defaults to the
@@ -47,12 +48,7 @@ pub(crate) async fn estimate_tx_size_and_weight(
         parse_required_object(params, "estimate_tx_size_and_weight")?;
     let n_in = parse_input_count(p.n_inputs)?;
     let n_out = parse_output_count(p.n_outputs)?;
-    let fee = match p.fee.as_deref() {
-        None => 0,
-        Some(s) => s.parse::<u64>().map_err(|_| {
-            WalletRpcError::InvalidParams("fee must be a decimal atomic-units string".into())
-        })?,
-    };
+    let fee = p.fee.map_or(0, |fee| fee.to_atomic_units().to_raw());
 
     let shared = require_open_engine(tenants).await?;
     let engine = shared.read().await;
@@ -88,9 +84,9 @@ pub(crate) async fn get_default_fee_priority(
 
     let result = GetDefaultFeePriorityResult {
         default_priority: "STANDARD".to_owned(),
-        economy_fee: atomic_units_string(quote.economy_fee),
-        standard_fee: atomic_units_string(quote.standard_fee),
-        priority_fee: atomic_units_string(quote.priority_fee),
+        economy_fee: quote.economy_fee.into(),
+        standard_fee: quote.standard_fee.into(),
+        priority_fee: quote.priority_fee.into(),
         tree_depth: i64::from(quote.tree_depth),
     };
     serde_json::to_value(result).map_err(|e| {
