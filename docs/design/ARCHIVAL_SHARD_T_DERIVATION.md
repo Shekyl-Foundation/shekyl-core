@@ -727,9 +727,15 @@ observation exists.
   every fetch, sizes round-robin, and 30 s spacing. That is roughly 1,400 soak
   observations, about 470 per size, so each size's p99 rests on about 5 tail
   observations. It is reported with that caveat, and p90 is reported beside it.
-- **Host.** `skl-miner-stage`, running Tor Expert Bundle 15.0.17 (the tarball on the
-  host, its signature verified before use) and a static build of the harness commit.
-  Nothing else runs on the host during the soak.
+- **Host.** `skl-miner-main`: the ssh alias at 10.10.14.11, which reports its hostname
+  as `skl-test-miner`. It runs Tor Expert Bundle 15.0.17 (the tarball on the host, its
+  signature verified before use) and a build of the harness commit whose highest glibc
+  symbol is `GLIBC_2.39`, the host's own glibc. Nothing else runs a workload on the host
+  during the soak. Another lane's `shekyl-wallet-rpc` is present and idle, and its
+  daemon is not running; this is recorded, not removed. **Amended before the run, the
+  same day:** this line first named `skl-miner-stage`, which turned out to run a
+  testnet mining daemon at full CPU. That would bias the measurement, so the run moved
+  to the quiet host.
 - **Fit.** Per percentile (p50, p90, p99), over the **soak** arm: least squares of
   `t = t_fixed + bytes / v` over the three sizes. The cold arm is fitted and reported,
   not used to select.
