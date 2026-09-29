@@ -539,6 +539,22 @@ prescribes: *recovery is refuse-and-resync, never a migration*.
 the reason is C8" until the review round. That inverted C8: a bump costs a
 resync, and a resync is the recovery C8 names.
 
+**The horizon is inherited, not owned — and the inheritance should be recorded
+as one.** `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` is
+`ARCHIVAL_REORG_DEPTH_BLOCKS` (`segment.rs`), which makes the ring the third
+reader of that config key. But the ring's retention is justified here as *"the
+deepest legal reorg"*, and that is the **reorg cap's** job — which #861 moved
+onto `RuleSet::reorg_cap`. The two are equal today at 720, so the ring is
+correct; they are equal by inheritance rather than by identity, and
+`SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` is an armed FAKECHAIN override, so a
+network that moves its cap through the rule set would not move the ring's
+horizon with it.
+
+**Nothing changes here.** Re-homing this reader belongs to #861's split, not to
+an increment whose subject is the ring — the named blocker is that the split
+has not landed its re-homing pass. Recorded so the ring appears on the list of
+readers when it does, rather than being found by the first divergence.
+
 ### 10.3 Serving and rewinding
 
 `root_and_depth_at` reads the ring first. A hit checks the snapshot's **own**
@@ -600,15 +616,44 @@ rule 76's floor. Increment 4 ran off-rig, so the record carries the figure, the
 ratio and `rig.grading: false`; **increment 6 is the seat for the graded run**,
 and the blocker is the board rather than the code.
 
-**What the off-rig run says, and what it does not.** One converged run
-(x86_64, `--window-leaves 105600`, 1 056 leaves/block at depth 6, 479 blocks
-advanced):
+**What the off-rig run says, and what it does not.** One run on an otherwise
+idle x86_64 box (`--window-leaves 105600`, 1 056 leaves/block at depth 6, 563
+timed blocks after a 721-block untimed prefill —
+`docs/benchmarks/wss-q1b/spend_edge_20260929T131635Z.json`):
 
 | Term, same run | Value |
 | --- | --- |
-| Measured advance | **124.72 ms/block**, converged |
-| Retired model, same run | **180.63 ms/block** |
-| Measured ÷ model | **0.69×** |
+| Measured advance | **105.11 ms/block** median (p95 117.50) |
+| Retired model, same run | **110.95 ms/block** |
+| Measured ÷ model | **0.95×** |
+
+**The series did not converge**, and the reason is spread rather than sample
+count: 561 samples at a 5 % tolerance, stopped on "limits met, unconverged",
+with occasional outliers to 175 ms against a 105 ms median. The median itself
+reproduces to **0.17 %** across two independent runs (105.29 / 105.11), which
+is the stronger evidence — a figure that repeats across runs while exceeding a
+within-run tolerance is describing a noisy machine, not an unstable quantity.
+It is recorded as unconverged rather than promoted, because the grade is
+increment 6's and this is not it.
+
+> **Supersedes a 2026-09-28 record, on two grounds.** That run reported
+> **124.72 ms measured / 180.63 ms model / 0.69×** and is kept here as what was
+> measured, not deleted. It is superseded because (1) `AdvanceRig` began from
+> an empty frontier and ring, so no timed advance paid an eviction — the first
+> row cannot fall out until block 721 and that run converged at 479 — and (2)
+> its *model* term was 63 % slower than this one's for identical work, which
+> points at a loaded box rather than at anything the code did.
+>
+> **That second ground is the more uncomfortable one**, because §10.4 claimed
+> the ratio travels: "same run, same board, same thermal state, so the ratio
+> between the two is a property of the work and not of the machine." The ratio
+> moved **0.69× → 0.95×**. Contamination did not cancel between the two terms,
+> which is what that claim assumed it would — the replay is memory-bandwidth
+> heavy and the advance is `fsync`-bound, so load does not price them alike.
+> The prefill and the quieter box changed together here, so **this run cannot
+> separate their contributions**, and no attribution is offered. The standing
+> lesson is narrower than the old text: the ratio is only a property of the
+> work on a **quiet** board, and a run must say which it was.
 
 **The direction is the one the harness already predicted.** `replay`'s own
 `proxy_note` says the model is *"net an upper bound, since `build_layers`

@@ -86,10 +86,16 @@
   built advance (fold, capture, ring commit), with the retired quotient
   emitted beside it as `per_block_advance_retired_quotient_s`. The field
   changed derivation under an unchanged name, which is what the version
-  exists to make visible. Off-rig, one converged run at the production leaf
-  rate puts the built advance at **124.72 ms/block** against the same run's
-  model at **180.63 ms/block** — 0.69×, the direction `replay`'s own
-  `proxy_note` predicts. The pinned-rig grade is increment 6's. The retired quotient's denominator is now the
+  exists to make visible. The rig now **prefills past the retention
+  horizon untimed** before the series starts: eviction cannot fire until block
+  721, so a run from an empty ring grades a regime the steady state never
+  occupies. Off-rig on an idle box, the built advance is **105.11 ms/block**
+  (median, unconverged at 5 % over 561 samples; reproduces to 0.17 % across two
+  runs) against the same run's model at **110.95 ms/block** — 0.95×, the
+  direction `replay`'s own `proxy_note` predicts. This supersedes an earlier
+  124.72 / 180.63 / 0.69× record whose ring was never full *and* whose model
+  term was 63 % slower for identical work; the ratio is a property of the work
+  only on a quiet board. The pinned-rig grade is increment 6's. The retired quotient's denominator is now the
   blocks the corpus covers rather than the constant, which under
   `--window-leaves` had divided a shrunken replay by the full window.
 
