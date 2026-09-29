@@ -42,6 +42,12 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(1);
 struct Host {
     pool: Mutex<Option<shekyl_runtime::Pool>>,
     handle: tokio::runtime::Handle,
+    /// The engine thread. Every handle shares its closed flag, and its
+    /// `Drop` sets that flag, so the service lives here for as long as the
+    /// host does and is stopped in [`shekyl_zone_shutdown`]. Holding only
+    /// the handle closed the engine when `ensure` returned, and every
+    /// transport deadline after that was `Closed`.
+    engine_service: Mutex<Option<EngineService<MonotonicClock>>>,
     engine: Handle<MonotonicClock>,
     sockets: shekyl_seam::Sockets,
     ceiling: Arc<Mutex<InboundCeiling>>,
@@ -247,6 +253,7 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
     let budget_clock = clock.clone();
     node_gate().install_clock(Arc::new(move || budget_clock.now().get()));
     let engine = EngineService::start(clock);
+    let engine_handle = engine.handle();
     let (clearnet_tx, clearnet_rx) = mpsc::unbounded_channel();
     let (tor_tx, tor_rx) = mpsc::unbounded_channel();
     let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|cause| {
@@ -259,7 +266,8 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
     let host = Arc::new(Host {
         pool: Mutex::new(Some(pool)),
         handle: handle.clone(),
-        engine: engine.handle(),
+        engine_service: Mutex::new(Some(engine)),
+        engine: engine_handle,
         sockets: process_sockets(),
         ceiling: Arc::new(Mutex::new(ceiling)),
         clearnet: Mutex::new(None),
@@ -745,14 +753,99 @@ pub extern "C" fn shekyl_link_connection(id: u64, bytes_up: *mut u64, bytes_down
 }
 
 /// Stop the transport runtime. Called from outside one of its tasks.
+///
+/// D6's order: the engine takes no new deadline, the transport's tasks
+/// are cancelled, then the engine thread is joined.
 #[no_mangle]
 pub extern "C" fn shekyl_zone_shutdown() {
     let host = HOST.lock().expect("zone host").take();
     let Some(host) = host else {
         return;
     };
+    let engine = host.engine_service.lock().expect("engine").take();
+    if let Some(engine) = engine.as_ref() {
+        engine.close();
+    }
     let pool = host.pool.lock().expect("pool").take();
     if let Some(pool) = pool {
         pool.shutdown(host.shutdown_timeout);
+    }
+    drop(engine);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::c_void;
+
+    use shekyl_peer_policy::UnboundedReason;
+    use shekyl_timing_engine::OwnerClass;
+
+    use super::*;
+    use crate::inbound_ceiling_ffi::SHEKYL_INBOUND_CEILING_UNLIMITED;
+    use crate::seam_ffi::{shekyl_seam_bind, ShekylSeamObserved};
+
+    unsafe extern "C" fn discard(
+        _ctx: *mut c_void,
+        _id: u64,
+        _kind: u32,
+        _observed: *const ShekylSeamObserved,
+        _bytes: *const u8,
+        _len: usize,
+        _cause: *const CloseCause,
+    ) {
+    }
+
+    /// The connectors arm every transport deadline on the host's engine
+    /// handle. `ensure` once stored the handle and dropped the service, so
+    /// the engine closed the moment `ensure` returned and every NNhfs and
+    /// Tor connection failed with `TransportHandshakeFailed`. The option-off
+    /// path arms nothing and never saw it.
+    #[test]
+    fn the_engine_outlives_ensure() {
+        let mut executor = 0u8;
+        let ceiling = ShekylInboundCeiling {
+            kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+            ceiling: 0,
+            soft_limit: 0,
+            held: 0,
+        };
+        let bound = unsafe {
+            shekyl_seam_bind(
+                std::ptr::addr_of_mut!(executor).cast::<c_void>(),
+                Some(discard),
+                &raw const ceiling,
+            )
+        };
+        assert_eq!(bound, 0);
+        let network_id = [7u8; 16];
+        let params = ShekylZoneParams {
+            network_id: network_id.as_ptr(),
+            handshake_within_ns: 1_000_000_000,
+            send_queue_bytes: 65_536,
+            shutdown_timeout_ns: 1_000_000_000,
+            workers: 1,
+            blocking: 1,
+        };
+        let host = ensure(
+            &params,
+            InboundCeiling::Unbounded(UnboundedReason::Unlimited),
+        )
+        .expect("zone host");
+
+        let owner = host.engine.register(OwnerClass::Transport);
+        assert!(
+            owner.is_ok(),
+            "a transport deadline must be armable after ensure returns"
+        );
+        drop(owner);
+
+        shekyl_zone_shutdown();
+        assert!(
+            host.engine.register(OwnerClass::Transport).is_err(),
+            "shutdown closes the engine"
+        );
+        unsafe {
+            shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
+        }
     }
 }
