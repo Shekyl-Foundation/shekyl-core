@@ -6,10 +6,15 @@
 //! How the effective block-weight median `M` is built.
 //!
 //! This is the ArticMine weight governor, not the fee-lane transaction-count
-//! SMA. Long-term median `Mlw` over 100 000 blocks, short-term median over
-//! 100, effective median clamped to `[Mlw, S·Mlw]`. The fee ladder *prices
-//! against* `M`; it never ruled on how `M` is assembled. `S` is consensus
-//! (C2-R2 Q3).
+//! SMA. Long-term median `Mlw` over
+//! [`BLOCK_WEIGHT_LONG_TERM_WINDOW`](crate::params::BLOCK_WEIGHT_LONG_TERM_WINDOW)
+//! blocks, short-term median over [`BLOCK_WEIGHT_SHORT_TERM_WINDOW`],
+//! effective median clamped to `[Mlw, S·Mlw]`. The fee ladder *prices
+//! against* `M`; it never ruled on how `M` is assembled. `S` and both
+//! windows are consensus (C2-R2 Q2/Q3; `config/consensus_constants.json`).
+//! The medians themselves are built by the validator
+//! (`shekyl_chain_rules::rules::block_weight`, CEN-G6); this module holds
+//! the clamps they feed.
 //!
 //! Changing `S` does not move a fee number: the fee estimate reads the
 //! long-term effective median, and the surge clamp applies to the short-term
@@ -17,7 +22,7 @@
 //! median, so during a surge the two paths differ by up to `S` — recorded in
 //! `FOLLOWUPS.md`.
 
-use crate::params::GENERATED_BLOCK_WEIGHT_SURGE_FACTOR;
+use crate::params::{BLOCK_WEIGHT_SHORT_TERM_WINDOW, GENERATED_BLOCK_WEIGHT_SURGE_FACTOR};
 
 /// Short-term surge factor `S` — ceiling of the fast governor.
 ///
@@ -54,15 +59,15 @@ pub fn long_term_weight(long_term_effective: u64, block_weight: u64) -> u64 {
 /// Blocks a maximal flood needs to lift the effective median from the
 /// long-term effective median to the surge ceiling `S · LTEM`.
 ///
-/// The short-term window is 100 blocks; its median moves once more than
-/// half the window carries the new level, so each doubling costs 51
-/// blocks (C2-R2 Q3's 51-block doubling envelope). Reaching a ceiling
-/// `S ×` above the starting median takes `ceil(log2(S))` crossings.
-/// At `S = 50` this returns 306; at `S = 4` it returns 102.
+/// The short-term window is [`BLOCK_WEIGHT_SHORT_TERM_WINDOW`] blocks; its
+/// median moves once more than half the window carries the new level, so
+/// each doubling costs `window / 2 + 1` blocks — 51 at the ratified 100
+/// (C2-R2 Q3's 51-block doubling envelope). Reaching a ceiling `S ×` above
+/// the starting median takes `ceil(log2(S))` crossings. At `S = 50` this
+/// returns 306; at `S = 4` it returns 102.
 #[must_use]
 pub const fn blocks_to_surge_saturation(surge_factor: u64) -> u64 {
-    const SHORT_TERM_WINDOW: u64 = 100;
-    const BLOCKS_PER_CROSSING: u64 = SHORT_TERM_WINDOW / 2 + 1;
+    const BLOCKS_PER_CROSSING: u64 = BLOCK_WEIGHT_SHORT_TERM_WINDOW / 2 + 1;
 
     let mut crossings = 0u64;
     let mut reached = 1u64;
@@ -89,6 +94,18 @@ mod tests {
     #[test]
     fn the_live_factor_is_the_ratified_value() {
         assert_eq!(BLOCK_WEIGHT_SURGE_FACTOR, RATIFIED);
+    }
+
+    /// The two windows as C2-R2 Q2 ratified them and as the C++ header
+    /// carried them before they were generated
+    /// (`CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` 100 000,
+    /// `CRYPTONOTE_REWARD_BLOCKS_WINDOW` 100). A retune fails here first,
+    /// so the JSON edit is made knowing which readers move.
+    #[test]
+    fn the_live_windows_are_the_ratified_values() {
+        use crate::params::{BLOCK_WEIGHT_LONG_TERM_WINDOW, BLOCK_WEIGHT_SHORT_TERM_WINDOW};
+        assert_eq!(BLOCK_WEIGHT_LONG_TERM_WINDOW, 100_000);
+        assert_eq!(BLOCK_WEIGHT_SHORT_TERM_WINDOW, 100);
     }
 
     #[test]

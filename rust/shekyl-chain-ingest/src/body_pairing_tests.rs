@@ -39,11 +39,7 @@ use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::Candidate;
 use shekyl_chain_store::store::{AtIndex, ChainStore, Horizons};
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_economics::FULL_REWARD_ZONE;
-use shekyl_types::{
-    BlockHash, BlockHeight, BlockWeight, GlobalOutputIndex, LongTermWeight, Timestamp, TxHash,
-};
-use shekyl_units::AtomicUnits;
+use shekyl_types::{BlockHash, BlockHeight, GlobalOutputIndex, Timestamp, TxHash};
 use shekyl_wire::{Block, Transaction};
 
 use crate::metrics::Metrics;
@@ -102,23 +98,18 @@ impl Driven {
                 "height {height}: the replayed header is the block the driver mined"
             );
         }
-        let mut coins = AtomicUnits::ZERO;
+        // The trace's accumulator is the tree's derivation (slice 7 commit
+        // 5), not a fold over the driver's priced rewards: the replay then
+        // holds the validator's paid reward to the ratified composition,
+        // and `Priced` no longer carries a reward to fold.
         trace_with(
             chain,
             |height| {
                 let mined = &self.mined[usize::try_from(height).expect("a fixture height fits")];
-                coins = AtomicUnits::from_raw(shekyl_economics::advance_already_generated(
-                    coins.to_raw(),
-                    mined.template.block_reward.to_raw(),
-                ));
                 // Regtest difficulty is 1, so the accumulator after this
                 // block is `height + 1`.
                 TraceEconomics {
-                    weight: BlockWeight::from_raw(mined.template.block_weight),
-                    long_term_weight: LongTermWeight::from_raw(FULL_REWARD_ZONE),
-                    coins_generated: coins,
                     burned: mined.template.fees_burned,
-                    long_term_effective_median: LongTermWeight::from_raw(FULL_REWARD_ZONE),
                     cumulative_difficulty: CumulativeDifficulty::from_raw(u128::from(height) + 1),
                 }
             },

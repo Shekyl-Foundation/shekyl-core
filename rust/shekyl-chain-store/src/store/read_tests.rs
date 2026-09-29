@@ -14,7 +14,7 @@
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{AtHeight, RuleSet};
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, LongTermWeight};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
@@ -75,7 +75,7 @@ fn tip_carries_a_genesis_halt_with_nothing_recorded() {
     let g = candidate(0, BlockHash::NULL, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, g)?, facts(0, 0), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, g)?, facts(0), RuleSet::GENESIS)?)
     });
     assert!(out.is_err(), "SI-4 refuses the genesis connect");
     let snap = store.begin_read().expect("read");
@@ -202,6 +202,33 @@ fn a_hole_below_the_tip_is_si7_and_does_not_halt_the_writer() {
     assert!(is_si7_absent(
         rows[1].as_ref().expect_err("the hole"),
         "block_info"
+    ));
+    assert_eq!(store.connect_state(), ConnectState::Live);
+    // The weights window (slice 7, CEN-G6's read) over the same hole: a
+    // window that spans it is SI-7 as a whole — never a vector two rows
+    // long that a median would silently be taken over — while a window
+    // that stops short of the hole is intact, and one that starts past the
+    // recordable is `AboveTip`. The mock cannot reach this arm (its vector
+    // is dense by construction), so it is the store's alone to hold.
+    let e = snap
+        .weights_window(h(3), BlockCount::from_raw(3))
+        .expect_err("a hole inside the window is SI-7");
+    assert!(is_si7_absent(&e, "block_info"), "{e}");
+    let e = snap
+        .weights_window(h(2), BlockCount::from_raw(1))
+        .expect_err("the hole is the one row asked for");
+    assert!(is_si7_absent(&e, "block_info"), "{e}");
+    match snap
+        .weights_window(h(1), BlockCount::from_raw(5))
+        .expect("below the hole")
+    {
+        AtHeight::Recorded(rows) => assert_eq!(rows.len(), 1, "only block 0 lies below the hole"),
+        AtHeight::AboveTip => panic!("end 1 is recordable"),
+    }
+    assert!(matches!(
+        snap.weights_window(h(4), BlockCount::from_raw(1))
+            .expect("above"),
+        AtHeight::AboveTip
     ));
     assert_eq!(store.connect_state(), ConnectState::Live);
     cleanup(&path);
@@ -416,11 +443,7 @@ fn connect_burning(store: &ChainStore, burns: &[u64]) {
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         for (h, cand) in cands.into_iter().enumerate() {
-            batch.connect(
-                judge(&view, cand)?,
-                facts(h as u64, burns[h]),
-                RuleSet::GENESIS,
-            )?;
+            batch.connect(judge(&view, cand)?, facts(burns[h]), RuleSet::GENESIS)?;
         }
         Ok(())
     });
@@ -510,10 +533,13 @@ fn the_fold_reads_return_exactly_what_connect_wrote() {
             snap.cumulative_tx_count(h(height)).expect("read"),
             AtHeight::Recorded(cum)
         );
+        // The median in force FOR `height`, at `height` (SCR-19) — the
+        // validator's derivation over the weights below it (CEN-G6), which
+        // on a light fixture chain is the zone's floor arm.
         assert_eq!(
             snap.long_term_effective_median(h(height)).expect("read"),
-            AtHeight::Recorded(facts(height, 0).long_term_effective_median.value),
-            "the median handed FOR {height}, at {height}"
+            AtHeight::Recorded(LongTermWeight::from_raw(shekyl_economics::FULL_REWARD_ZONE)),
+            "the median derived FOR {height}, at {height}"
         );
     }
     assert_eq!(
@@ -599,7 +625,7 @@ fn the_digest_moves_when_any_family_moves() {
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let cand = candidate(next, tip.hash, vec![spend_at(&hashes, next, 11, 2)]);
-        batch.connect(judge(&view, cand)?, facts(next, 0), RuleSet::GENESIS)?;
+        batch.connect(judge(&view, cand)?, facts(0), RuleSet::GENESIS)?;
         Ok(())
     });
     out.expect("connects");

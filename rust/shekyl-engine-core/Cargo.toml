@@ -259,6 +259,14 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # (no silently-skipped `required-features` lane).
 shekyl-engine-core = { path = ".", features = ["test-helpers"] }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
+# Slice 7 commit 5's live-lane parity test (`engine::regtest_e2e`): the
+# Rust producer builds a block at exactly the consensus weight bound and
+# the C++ daemon judges it (CEN-F14), so the producer crate and the rules
+# crate's public definitions (`EMISSION_SPLIT_EPOCH`, the rule set's
+# unlock window) are read here, not restated. Test-only; both are already
+# normal dependencies of shekyl-chain-ingest (rule 17).
+shekyl-block-template = { path = "../shekyl-block-template" }
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # PR 7 C4 `EconomicsEngine` differential
 # (`engine::economics_differential`): deserialize the sim-recorded
 # `RecordedChainFixture` (`docs/test_vectors/economics/*.json`, §5.4) and

@@ -41,7 +41,7 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
             Ok(Ok(valid)) => valid,
             other => panic!("view stage: {other:?}"),
         };
-        Ok(batch.connect(valid, facts(0, 0), seven)?)
+        Ok(batch.connect(valid, facts(0), seven)?)
     });
     out.expect("a Fakechain verdict connects under the Fakechain set");
     // The CEN-B3 belt recorded the id — which is GENESIS's, and is not the
@@ -86,7 +86,7 @@ fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
             Ok(Ok(valid)) => valid,
             other => panic!("view stage: {other:?}"),
         };
-        Ok(batch.connect(valid, facts(0, 0), RuleSet::GENESIS)?)
+        Ok(batch.connect(valid, facts(0), RuleSet::GENESIS)?)
     });
     let want = StoreCannot::RuleSetNotInForce {
         height: 0,

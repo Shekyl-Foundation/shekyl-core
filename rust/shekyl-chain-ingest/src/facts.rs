@@ -50,33 +50,31 @@
 //!
 //! | field | composed from | why passed through | flips when |
 //! | --- | --- | --- | --- |
-//! | `weight` | the coinbase's `Transaction::weight` plus the bodies' — the wire's weight, read off the verdict | composed | CEN-G6/G6b (slice 7) |
-//! | `long_term_weight` | `shekyl_economics::long_term_weight(median, weight)` | composed (over a median that has no source yet) | CEN-G6/G6b |
-//! | `coins_generated` | the parent's record advanced by the producer's priced reward through `shekyl_economics::advance_already_generated` | composed — **one source, one owner, one addition**: the reward is the template's, which is `shekyl-economics`'; the only ingest-local logic is the `+` | CEN-F13/F14/F14b: the verdict carries the priced reward |
-//! | `burned` | the producer's priced burn (`shekyl-economics` in the template) | composed by the producer | CEN-F17/G11 |
-//! | `long_term_effective_median` | the caller's | no source yet — G6 is slice 7 | CEN-G6/G6b |
+//! | `burned` | the producer's priced burn (`shekyl-economics` in the template) | composed by the producer | CEN-F17/G11 (slice 7 wave B) |
 //!
-//! `root_after` sat in this table as *no source yet* until DRS-E3
-//! (2026-09-26): `validate` now derives the drain and the root over the
-//! view and `connect` records the verdict's, so the field left
-//! `ConnectFacts` altogether rather than flipping to `Derived` here.
+//! One row left of seven. Each of the others left `ConnectFacts`
+//! altogether rather than flipping to `Derived` here, because the verdict
+//! carries the value itself: `cumulative_difficulty` (E6 slice 2, CEN-D4),
+//! `root_after` (DRS-E3, 2026-09-26: `validate` derives the drain and the
+//! root), and on 2026-09-28 (E6 slice 7 commits 4–5) `weight` and
+//! `long_term_weight` (CEN-G6b, `ValidatedBlock::weights`),
+//! `long_term_effective_median` (CEN-G6, the same) and `coins_generated`
+//! (CEN-F14b / G12, `ValidatedBlock::emission` — the parent's accumulator
+//! advanced by the *paid* reward, which the validator prices and no
+//! producer is asked for any more).
 //!
-//! The caller's priced figures ([`Priced`]) come from whoever built the
+//! The caller's priced figure ([`Priced`]) comes from whoever built the
 //! block: the scenario driver hands over what `shekyl-block-template`
-//! priced the coinbase at; live ingest (E3) will read them off the verdict
-//! once F14b lands and this table's first three rows delete their
-//! pass-through. **`Composed` does not re-derive the emission** — F13, F15
-//! and F20 are landed definitions in `shekyl-chain-rules` whose value
-//! stays off the verdict until F14b by ruling (`CHAIN_RULES_SLICE_4.md`
-//! §4); a second copy of those definitions here is the duplication the
-//! seam exists to prevent.
+//! priced the burn at; live ingest reads it off the verdict once F17/G11
+//! land and this table's last row deletes its pass-through. **`Composed`
+//! derives nothing** — every definition it once composed over is on the
+//! verdict, and a second copy of one here is the duplication the seam
+//! exists to prevent.
 
-use shekyl_chain_rules::{recorded, ChainValid, ChainView, Corrupt, ViewRead};
+use shekyl_chain_rules::{ChainValid, ChainView, Corrupt, ViewRead};
 use shekyl_chain_store::store::{ConnectFacts, Fact};
-use shekyl_economics::{advance_already_generated, long_term_weight};
-use shekyl_types::{BlockHeight, BlockWeight, LongTermWeight};
+use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
-use shekyl_wire::Transaction;
 
 use crate::trace::Trace;
 
@@ -138,19 +136,16 @@ impl FactsFor for Trace {
     }
 }
 
-/// The figures the block's producer priced it at — what [`Composed`]
-/// passes through until the census rows that derive them land on the
-/// verdict (module docs). The scenario driver reads these off
-/// `shekyl_block_template::Template`.
+/// The figure the block's producer priced it at — what [`Composed`] passes
+/// through until the census rows that derive it land on the verdict
+/// (module docs). The scenario driver reads it off
+/// `shekyl_block_template::Template`. The paid reward and the median were
+/// fields here until E6 slice 7 derived them (`ValidatedBlock::{emission,
+/// weights}`); a producer is asked for neither now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Priced {
-    /// The paid (penalised) block reward — what advances the parent's
-    /// `coins_generated` (CEN-F13's accumulator).
-    pub block_reward: AtomicUnits,
     /// This block's destroyed amount (CEN-F17's `actually_destroyed`).
     pub burned: AtomicUnits,
-    /// The long-term median in force for this block (CEN-G6's operand).
-    pub long_term_effective_median: LongTermWeight,
 }
 
 /// Who knows what a height was priced at. The driver answers from the
@@ -180,67 +175,24 @@ impl<P> Composed<P> {
     }
 }
 
-/// One transaction's weight as `u64`. A validated transaction has already
-/// passed CEN-H1 (`MAX_TX_SIZE`), so the `usize` fits.
-fn weight_u64(tx: &Transaction) -> u64 {
-    u64::try_from(tx.weight()).expect("a validated transaction's weight fits u64")
-}
-
-/// The wire weight of a validated block: the coinbase plus every listed
-/// body (`blockchain.cpp:5445`'s `coinbase_weight + Σ td.weight`, the
-/// CEN-F14 operand). Checked, not saturated: a sum that does not fit is a
-/// block the size bound already made unrepresentable.
-#[must_use]
-pub fn block_weight<'id, V: ChainView<'id>>(valid: &ChainValid<'id, V>) -> BlockWeight {
-    let block = valid.block();
-    let coinbase = weight_u64(block.miner_tx().1);
-    let total = block.transactions().iter().fold(coinbase, |acc, (_, tx)| {
-        acc.checked_add(weight_u64(tx))
-            .expect("a validated block's weight fits u64")
-    });
-    BlockWeight::from_raw(total)
-}
-
 impl<P: PricedAt> FactsFor for Composed<P> {
     fn facts_for<'id, V: ChainView<'id>>(
         &self,
         height: BlockHeight,
-        valid: &ChainValid<'id, V>,
-        view: &V,
+        _valid: &ChainValid<'id, V>,
+        _view: &V,
     ) -> Result<ConnectFacts, FactsFault<V::Fault>> {
         let priced = self
             .priced
             .priced_at(height)
             .ok_or(FactsFault::None { height })?;
-
-        // CEN-F13's accumulator: the parent's gross emission, advanced by
-        // this block's paid reward. Genesis starts the fold at zero. The
-        // parent read is the rules' own (`recorded`): a hole is
-        // `Corrupt::HoleBelowTip`, not a second fault.
-        let parent_coins = match height.to_raw().checked_sub(1) {
-            None => AtomicUnits::ZERO,
-            Some(parent) => recorded(view, BlockHeight::from_raw(parent))?.coins_generated,
-        };
-        let coins_generated = AtomicUnits::from_raw(advance_already_generated(
-            parent_coins.to_raw(),
-            priced.block_reward.to_raw(),
-        ));
-
-        let weight = block_weight(valid);
-        let long_term = LongTermWeight::from_raw(long_term_weight(
-            priced.long_term_effective_median.to_raw(),
-            weight.to_raw(),
-        ));
-
-        // Every origin `PassedThrough` — the owners computed these on the
-        // producer's operands; no landed row has derived them on the
-        // verdict (module docs). The flip is one line per field, here.
+        // `PassedThrough` — the producer computed it on its own operands;
+        // no landed row has derived it on the verdict (module docs). The
+        // flip is one line, here. Nothing is read from the view any more:
+        // the parent-side read this function made for `coins_generated`
+        // left with the field (the validator makes it, once, under F13).
         Ok(ConnectFacts {
-            weight: Fact::passed_through(weight),
-            long_term_weight: Fact::passed_through(long_term),
-            coins_generated: Fact::passed_through(coins_generated),
             burned: Fact::passed_through(priced.burned),
-            long_term_effective_median: Fact::passed_through(priced.long_term_effective_median),
         })
     }
 }

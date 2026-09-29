@@ -43,22 +43,19 @@ use super::{Canonical, CodecError};
 /// The `ConnectFacts` fields, in declaration order — the bit assignment of
 /// [`PassedThroughFacts`] and the names it encodes. `ConnectFacts::DELETED_BY`
 /// is held to this list by a test in `store::connect`.
-pub const FACT_FIELDS: [&str; 5] = [
-    "weight",
-    "long_term_weight",
-    // `cumulative_difficulty` sat here until E6 slice 2 derived it
-    // (2026-09-19, CEN-D4). The cell encodes NAMES, not positions, so the
-    // in-memory bits below renumber freely; what changes on disk is the
-    // accepted vocabulary — a file naming the deleted field is refused —
-    // and that rides SCHEMA_VERSION 7 (rule 42; rebuild, never migrate).
-    "coins_generated",
+pub const FACT_FIELDS: [&str; 1] = [
+    // `weight`, `long_term_weight` and `long_term_effective_median` sat
+    // here until E6 slice 7 derived them (2026-09-28, CEN-G6/G6b: the
+    // validator builds the medians and the block's weights and the verdict
+    // carries them), and `coins_generated` until the same slice's CEN-F14b
+    // / G12 (the paid reward advances the accumulator on the verdict). The
+    // cell encodes NAMES, not positions, so the in-memory bits renumber
+    // freely; what changes on disk is the accepted vocabulary — a file
+    // naming a deleted field is refused — and that rides SCHEMA_VERSION 16
+    // (rule 42; rebuild, never migrate). Earlier shrinks by the same
+    // mechanism: `cumulative_difficulty` (E6 slice 2, CEN-D4, SCHEMA_VERSION
+    // 7) and `root_after` (DRS-E3, `CTW-Q1`, SCHEMA_VERSION 15).
     "burned",
-    // `root_after` sat here until DRS-E3 derived it (2026-09-26, `CTW-Q1`:
-    // `validate` grows the tree and `connect` records the verdict's root).
-    // Same mechanism as `cumulative_difficulty`: the vocabulary shrinks
-    // 6 → 5 under SCHEMA_VERSION 15.
-    // Appended, not inserted (S-CHAIN-R §3.6; SCHEMA_VERSION 4).
-    "long_term_effective_median",
 ];
 
 /// Census rows some committed `connect` was handed a verdict for without
@@ -403,8 +400,10 @@ mod tests {
                 reason: "rows are not in census order (repeated or out of order)",
             })
         );
+        // One name in the vocabulary since SCHEMA_VERSION 16, so the only
+        // non-canonical spelling left is a repeat.
         let mut fields = Vec::new();
-        encode_names(&mut fields, ["burned", "weight"].into_iter());
+        encode_names(&mut fields, ["burned", "burned"].into_iter());
         assert_eq!(
             PassedThroughFacts::decode(&fields),
             Err(CodecError::Invalid {
@@ -412,32 +411,38 @@ mod tests {
                 reason: "fields are not in declaration order (repeated or out of order)",
             })
         );
-        // The canonical order round-trips, and is what `encode` emits.
-        let set = PassedThroughFacts::of_positions([3, 1]);
-        let mut canonical = Vec::new();
-        encode_names(
-            &mut canonical,
-            ["weight", "long_term_weight", "burned"].into_iter(),
+        // A name the vocabulary held until 16 is refused as unknown, not
+        // reordered: a pre-16 file naming it is met by the seal first
+        // (module docs), and by this if it is met at all.
+        let mut deleted = Vec::new();
+        encode_names(&mut deleted, ["weight", "burned"].into_iter());
+        assert_eq!(
+            PassedThroughFacts::decode(&deleted),
+            Err(CodecError::Invalid {
+                codec: "passed_through_facts",
+                reason: "names a ConnectFacts field this binary does not have",
+            })
         );
+        // The canonical spelling round-trips, and is what `encode` emits.
+        let set = PassedThroughFacts::of_positions([0]);
+        let mut canonical = Vec::new();
+        encode_names(&mut canonical, ["burned"].into_iter());
         assert_eq!(
             PassedThroughFacts::decode(&canonical).map(|s| s.iter().count()),
-            Ok(3)
+            Ok(1)
         );
         assert_eq!(PassedThroughFacts::decode(&set.encode()), Ok(set));
     }
 
     #[test]
     fn passed_through_facts_round_trip_and_refuse_unknowns() {
-        let set = PassedThroughFacts::of_positions([3, 1]);
-        assert_eq!(
-            set.iter().collect::<Vec<_>>(),
-            ["long_term_weight", "burned"]
-        );
+        let set = PassedThroughFacts::of_positions([0]);
+        assert_eq!(set.iter().collect::<Vec<_>>(), ["burned"]);
         assert_eq!(PassedThroughFacts::decode(&set.encode()), Ok(set));
-        assert_eq!(set.to_string(), "long_term_weight,burned");
+        assert_eq!(set.to_string(), "burned");
         assert!(PassedThroughFacts::NONE.is_empty() && !set.is_empty());
         let mut unknown = Vec::new();
-        encode_names(&mut unknown, ["weightt"].into_iter());
+        encode_names(&mut unknown, ["burnedd"].into_iter());
         assert!(PassedThroughFacts::decode(&unknown).is_err());
     }
 

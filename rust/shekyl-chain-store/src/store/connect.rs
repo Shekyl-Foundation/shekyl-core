@@ -75,10 +75,7 @@
 //! is SI-9, never a verdict.
 
 use shekyl_chain_rules::{ChainValid, RuleSet, TxIdentity};
-use shekyl_types::{
-    BlockHash, BlockHeight, BlockWeight, CommitmentBytes, LongTermWeight, OneTimePubkey,
-    OutputIndexInTx,
-};
+use shekyl_types::{BlockHash, BlockHeight, CommitmentBytes, OneTimePubkey, OutputIndexInTx};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
 
@@ -166,80 +163,44 @@ pub struct DeletedBy {
 /// minus E4's `archival_budget_accrual`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConnectFacts {
-    /// `block_weight`.
-    pub weight: Fact<BlockWeight>,
-    /// `long_term_block_weight`.
-    pub long_term_weight: Fact<LongTermWeight>,
-    // `cumulative_difficulty` left this struct 2026-09-19 (E6 slice 2,
-    // CEN-D4): the validator derives it and the verdict carries it
-    // (`ValidatedBlock::cumulative_difficulty`), so `connect` reads it there
-    // — the first passed-through fact to be deleted by the row that derives
-    // it, which is what `DELETED_BY` always said would happen.
-    /// Coins generated through this block (`already_generated_coins`).
-    pub coins_generated: Fact<AtomicUnits>,
+    // `weight`, `long_term_weight` and `long_term_effective_median` left
+    // this struct 2026-09-28 (E6 slice 7 commit 5, CEN-G6/G6b): `validate`
+    // derives the medians and the block's weights and the verdict carries
+    // them (`ValidatedBlock::weights`), so `connect` reads them there.
+    // `coins_generated` left with them (CEN-F14b / G12: the paid reward
+    // and the advanced accumulator ride on `ValidatedBlock::emission`).
+    // `cumulative_difficulty` had gone first, 2026-09-19 (E6 slice 2,
+    // CEN-D4), then `root_after` (DRS-E3, `CTW-Q1`) — each the row or the
+    // writer that derives it deleting the pass-through, which is what
+    // `DELETED_BY` always said would happen.
     /// This block's destroyed amount. `0` (and genesis, whatever its amount)
     /// writes no `block_burn` row and no `total_burned` fold — LMDB's
     /// absent-reads-as-0 convention and the `blockchain.cpp:6148` guard,
     /// kept so the digest domain and the undo row match.
     pub burned: Fact<AtomicUnits>,
-    /// The long-term weight median **in force for** this block — the value
-    /// it was validated and fee-floored against, the ring's `rm` at its
-    /// iteration (`relay_floor_ring.cpp:196`–`:200`), **not** the recompute
-    /// after its own weight enters the window (that is the next block's;
-    /// SCR-19, `DRS_E1_SCHAIN_R.md` §3.6). Recorded at `block_info[h]` for
-    /// the O(1) read FL-R3-STORE owes; a consensus computation, so passed
-    /// through exactly like `long_term_weight` until CEN-G6 derives it.
-    pub long_term_effective_median: Fact<LongTermWeight>,
 }
 
 impl ConnectFacts {
     /// The fields, each with the rows that will derive it, in declaration
-    /// order. The table `DRS_E1_SCHAIN_W.md` §3.2 carries, as data.
-    pub const DELETED_BY: [DeletedBy; 5] = [
-        DeletedBy {
-            field: "weight",
-            rows: &["CEN-G6", "CEN-G6b"],
-            slice: "7 (4.G, over the CEN-H3 / CEN-F14 weight function)",
-        },
-        DeletedBy {
-            field: "long_term_weight",
-            rows: &["CEN-G6", "CEN-G6b"],
-            slice: "7 (4.G)",
-        },
-        // `cumulative_difficulty` — deleted by CEN-D4, slice 2 (4.D, body in
-        // shekyl-difficulty), 2026-09-19. The entry named D5 as well; D5 is
-        // subsumed by D4 over an alt view and the Rust store has no
-        // alt-admission path, so D4 alone deleted the field (slice 2 F6).
-        DeletedBy {
-            field: "coins_generated",
-            rows: &["CEN-F13", "CEN-F14", "CEN-F14b"],
-            slice: "4 (4.F, body in shekyl-economics)",
-        },
+    /// order. The table `DRS_E1_SCHAIN_W.md` §3.2 carries, as data — one
+    /// row left of seven.
+    pub const DELETED_BY: [DeletedBy; 1] = [
+        // `weight`, `long_term_weight`, `long_term_effective_median` —
+        // deleted by CEN-G6/G6b, slice 7 commit 4–5 (2026-09-28).
+        // `coins_generated` — deleted by CEN-F14b / G12 the same commit;
+        // the entry named CEN-F13/F14/F14b, and the accumulator's advance
+        // is G12's definition over F14b's paid reward.
+        // `cumulative_difficulty` — deleted by CEN-D4, slice 2, 2026-09-19.
+        // `root_after` — deleted by DRS-E3 (`CTW-Q1`), 2026-09-26.
         DeletedBy {
             field: "burned",
             rows: &["CEN-F17", "CEN-G11"],
-            slice: "4 (4.F)",
-        },
-        // `root_after` — deleted by DRS-E3 (`CTW-Q1`), 2026-09-26: `validate`
-        // derives the drain and the root over the view; `connect` records
-        // `ValidatedBlock::root_after`. The entry named CEN-B5 / CEN-I12 as
-        // the deleting rows; those rules *read* the root, and the field went
-        // when the writer that produces it landed, not when a rule did.
-        DeletedBy {
-            field: "long_term_effective_median",
-            rows: &["CEN-G6", "CEN-G6b"],
-            slice: "7 (4.G), beside long_term_weight",
+            slice: "7 wave B (4.F / 4.G)",
         },
     ];
 
-    const fn origins(&self) -> [Origin; 5] {
-        [
-            self.weight.origin,
-            self.long_term_weight.origin,
-            self.coins_generated.origin,
-            self.burned.origin,
-            self.long_term_effective_median.origin,
-        ]
+    const fn origins(&self) -> [Origin; 1] {
+        [self.burned.origin]
     }
 
     /// The fields still passed through, each with the rows that will
@@ -252,8 +213,9 @@ impl ConnectFacts {
     /// landed — `DRS_E1_SCHAIN_R.md` §3.6) and shrinks as the rows or the
     /// writers that derive them land (E6 slice 2 deleted
     /// `cumulative_difficulty`, seven back to six; DRS-E3 deleted
-    /// `root_after`, six to five). An increase is not a regression; the
-    /// items are the critical path.
+    /// `root_after`, six to five; E6 slice 7 deleted the two weights, the
+    /// median and `coins_generated`, five to one). An increase is not a
+    /// regression; the items are the critical path.
     pub fn passed_through(&self) -> impl Iterator<Item = DeletedBy> + '_ {
         Self::DELETED_BY
             .into_iter()
@@ -425,21 +387,27 @@ impl<'id> WriteBatch<'_, 'id> {
                 LmdbHashKey::from(hash),
                 BlockHeight::from_raw(height).encoded().as_encoded(),
             )?;
+        // The weights (CEN-G6/G6b) and the paid emission (CEN-F14b, G12)
+        // are the verdict's, derived by `validate` over this batch's view
+        // and carried on it (slice 7 Q5); the store records what the rules
+        // computed and computes nothing consensus-visible (C2-R8 Q4).
+        let weights = block.weights();
         let info = BlockInfo {
             timestamp: shekyl_types::Timestamp::from_raw(block.header().timestamp),
-            coins_generated: facts.coins_generated.value,
-            weight: facts.weight.value,
+            // G12: the parent's accumulator advanced by F14b's paid reward.
+            coins_generated: block.emission().coins_generated,
+            weight: weights.weight,
             // Derived by the validator (CEN-D4: the parent's work plus this
             // block's target, `checked_add` there) and carried on the
-            // verdict; the store records what the rules computed and computes
-            // nothing consensus-visible (C2-R8 Q4; E6 slice 2 Q5).
+            // verdict (E6 slice 2 Q5).
             cumulative_difficulty: block.cumulative_difficulty(),
             hash,
             // Per-block, not accumulated: LMDB's `bi_cum_rct` is this block's
             // count and the accumulation arm is dead (CEN-L15) — see
             // `BlockInfo::rct_outputs`.
             rct_outputs,
-            long_term_weight: facts.long_term_weight.value,
+            // G6b: the block's weight clamped under the median in force.
+            long_term_weight: weights.long_term_weight,
             // Store-derived running total (§3.6): the parent's plus this
             // block's listed transactions, under SI-8 like `total_burned`.
             cumulative_tx_count: parent_tx_count
@@ -448,10 +416,12 @@ impl<'id> WriteBatch<'_, 'id> {
                     cell: "block_info.cumulative_tx_count",
                 })
                 .map_err(|row| self.poison().arm(row))?,
-            // Passed through, and stored at **this** height: the median in
-            // force for `h`, not the recompute that belongs to `h + 1`
-            // (SCR-19).
-            long_term_effective_median: facts.long_term_effective_median.value,
+            // G6: the median in force **for** `h` — derived at `connecting =
+            // h` over the weights below it — stored at `h`, not the
+            // recompute that belongs to `h + 1` (SCR-19). The verdict can
+            // carry no other: `Medians::derive` reads the window that ends
+            // at the connecting height.
+            long_term_effective_median: weights.medians.long_term_effective_median,
         };
         self.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?
             .insert(height, info.encoded().as_encoded())?;

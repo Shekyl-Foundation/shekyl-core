@@ -210,7 +210,7 @@ fn a_poisoned_connect_halts_the_writer_but_a_probe_violation_does_not() {
         hashes[at(FIRST_SPEND_HEIGHT)],
         vec![spend_at(&hashes, next, 10, 2)],
     );
-    let out = connect_with_image_planted_under_the_token(&store, double, next);
+    let out = connect_with_image_planted_under_the_token(&store, double);
     assert!(matches!(out, Err(TestErr::Store(ref m)) if m.starts_with("SI-1 violated")));
     assert_eq!(
         store.connect_state(),

@@ -44,9 +44,9 @@
 use shekyl_chain_rules::harness::{fixture, MockChain, MockSubstrate};
 use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, CenRow, ChainView, Corrupt, Fault, FormAttempt, Locus,
-    RecordedBlock, RuleSet, Stale, Substrate, Trust, TxSlot, Verdict,
+    RecordedBlock, RecordedWeights, RuleSet, Stale, Substrate, Trust, TxSlot, Verdict,
 };
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp, TxHash};
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{
@@ -198,24 +198,39 @@ fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Cand
             let derived = (
                 valid.block().cumulative_difficulty(),
                 valid.block().root_after(),
+                *valid.block().weights(),
+                valid.block().emission().coins_generated,
             );
-            batch.connect(valid, facts(h, 0), RuleSet::GENESIS)?;
+            batch.connect(valid, facts(0), RuleSet::GENESIS)?;
             Ok(derived)
         });
-        let (work, root_after) = derived.expect("connects");
-        mock = mock.push(
-            RecordedBlock {
-                hash: cand.block.hash(),
-                header: cand.block.header.clone(),
-                cumulative_difficulty: work,
-                // What the store records for this chain: the passed-through
-                // emission fact, and a tx count that stays zero because no
-                // fixture block lists a transaction.
-                coins_generated: facts(h, 0).coins_generated.value,
-                cumulative_tx_count: 0,
-            },
-            root_after,
-        );
+        let (work, root_after, weights, coins_generated) = derived.expect("connects");
+        mock = mock
+            .push_weighing(
+                RecordedBlock {
+                    hash: cand.block.hash(),
+                    header: cand.block.header.clone(),
+                    cumulative_difficulty: work,
+                    // What the store records for this chain: the verdict's
+                    // accumulator (G12; slice 7 commit 5), and a tx count
+                    // that stays zero because no fixture block lists a
+                    // transaction.
+                    coins_generated,
+                    cumulative_tx_count: 0,
+                },
+                root_after,
+                // The two weights the store recorded for `h` — the
+                // verdict's (G6b; `weights_window` is held to the store's
+                // below).
+                RecordedWeights {
+                    weight: weights.weight,
+                    long_term_weight: weights.long_term_weight,
+                },
+            )
+            // The store records the miner transaction under its identity
+            // like a listed one; the mock is told, so `has_transaction` can
+            // be held to the store's.
+            .with_transaction(cand.block.miner_transaction.hash());
     }
     (store, path, mock, blocks)
 }
@@ -373,11 +388,12 @@ fn a_drifted_mock_is_caught_by_the_comparison() {
     let mut drifted = MockChain::default();
     for (h, b) in blocks.iter().enumerate() {
         let h = h as u64;
-        let work = mock.with_view(|view| match view.block_at(BlockHeight::from_raw(h)) {
-            Ok(AtHeight::Recorded(r)) => r.cumulative_difficulty,
-            Ok(AtHeight::AboveTip) => unreachable!("built above"),
-            Err(never) => match never {},
-        });
+        let (work, coins_generated) =
+            mock.with_view(|view| match view.block_at(BlockHeight::from_raw(h)) {
+                Ok(AtHeight::Recorded(r)) => (r.cumulative_difficulty, r.coins_generated),
+                Ok(AtHeight::AboveTip) => unreachable!("built above"),
+                Err(never) => match never {},
+            });
         // A root the store never recorded, pushed as h's `root_after`.
         let late_root = CurveTreeRoot::from_bytes([0xd0 + u8::try_from(h).expect("small"); 32]);
         drifted = drifted.push(
@@ -385,7 +401,7 @@ fn a_drifted_mock_is_caught_by_the_comparison() {
                 hash: b.block.hash(),
                 header: b.block.header.clone(),
                 cumulative_difficulty: work,
-                coins_generated: facts(h, 0).coins_generated.value,
+                coins_generated,
                 cumulative_tx_count: 0,
             },
             late_root,
@@ -531,6 +547,97 @@ fn the_mock_view_and_the_batch_view_answer_the_same_reads() {
 
     let real_tip: Result<_, TestErr> = store.write(|batch| Ok(batch.chain_view().tip()?));
     assert_eq!(real_tip.expect("tip"), mock.tip());
+
+    // The weights window (CEN-G6 / G6b, slice 7 commit 3): every `end` from
+    // the empty chain through one past the recordable, at four widths — the
+    // window that is shorter than the chain, one that is exactly it, one
+    // wider (clamped to what exists), and zero — held to the store's, and
+    // the shape held to the contract: `end ≤ tip + 1` is `Recorded` with
+    // exactly `min(at_most, end)` rows in height order, `end > tip + 1` is
+    // `AboveTip`. Five blocks are recorded, so `end = 5` is the candidate's
+    // connecting height and `end = 6` asks about a block the chain lacks.
+    let asks: Vec<(u64, u64)> = (0..=6u64)
+        .flat_map(|end| [0u64, 1, 3, 5, 100].into_iter().map(move |n| (end, n)))
+        .collect();
+    let real_windows: Result<Vec<AtHeight<Vec<RecordedWeights>>>, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let mut out = Vec::new();
+        for (end, n) in &asks {
+            out.push(view.weights_window(BlockHeight::from_raw(*end), BlockCount::from_raw(*n))?);
+        }
+        Ok(out)
+    });
+    let real_windows = real_windows.expect("reads");
+    let mocked_windows: Vec<AtHeight<Vec<RecordedWeights>>> = mock.with_view(|view| {
+        asks.iter()
+            .map(|(end, n)| {
+                match view.weights_window(BlockHeight::from_raw(*end), BlockCount::from_raw(*n)) {
+                    Ok(at) => at,
+                    Err(never) => match never {},
+                }
+            })
+            .collect()
+    });
+    assert_eq!(real_windows, mocked_windows);
+    for ((end, n), window) in asks.iter().zip(&real_windows) {
+        match window {
+            AtHeight::Recorded(rows) => {
+                assert!(*end <= 5, "end {end} is past tip + 1 and was Recorded");
+                let span = (*end).min(*n);
+                assert_eq!(rows.len() as u64, span, "end {end}, at_most {n}");
+                for (i, row) in rows.iter().enumerate() {
+                    let h = end - span + i as u64;
+                    // The verdict's (G6b): the coinbase-only block's wire
+                    // weight, and that weight clamped under the zone — the
+                    // median every height of a light chain reads.
+                    let block = &blocks[usize::try_from(h).expect("small")].block;
+                    assert_eq!(
+                        row.weight.to_raw(),
+                        u64::try_from(block.miner_transaction.weight()).expect("fits"),
+                        "height {h}"
+                    );
+                    assert_eq!(
+                        row.long_term_weight.to_raw(),
+                        shekyl_economics::long_term_weight(
+                            shekyl_economics::FULL_REWARD_ZONE,
+                            row.weight.to_raw()
+                        ),
+                        "height {h}"
+                    );
+                }
+            }
+            AtHeight::AboveTip => assert_eq!(*end, 6, "only end = tip + 2 is AboveTip"),
+        }
+    }
+
+    // Transaction membership (CEN-G1, slice 7 commit 3): every recorded
+    // miner transaction answers `true` on both views, an identity no chain
+    // holds answers `false` on both.
+    let asked_txs: Vec<TxHash> = blocks
+        .iter()
+        .map(|b| b.block.miner_transaction.hash())
+        .chain(core::iter::once(TxHash::from_bytes([0xee; 32])))
+        .collect();
+    let real_present: Result<Vec<bool>, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let mut out = Vec::new();
+        for hash in &asked_txs {
+            out.push(view.has_transaction(hash)?);
+        }
+        Ok(out)
+    });
+    let real_present = real_present.expect("reads");
+    let mocked_present: Vec<bool> = mock.with_view(|view| {
+        asked_txs
+            .iter()
+            .map(|hash| match view.has_transaction(hash) {
+                Ok(present) => present,
+                Err(never) => match never {},
+            })
+            .collect()
+    });
+    assert_eq!(real_present, mocked_present);
+    assert_eq!(real_present, vec![true, true, true, true, true, false]);
     drop(store);
     cleanup(&path);
 }

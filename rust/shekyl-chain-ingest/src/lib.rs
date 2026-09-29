@@ -115,7 +115,7 @@ pub use connector::{
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "pipeline")]
-pub use facts::{block_weight, Composed, FactsFault, FactsFor, Priced, PricedAt};
+pub use facts::{Composed, FactsFault, FactsFor, Priced, PricedAt};
 #[cfg(feature = "fetch")]
 pub use fetch::{fetch_corpus, FetchFault};
 #[cfg(feature = "pipeline")]

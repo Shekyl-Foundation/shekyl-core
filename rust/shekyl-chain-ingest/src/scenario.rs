@@ -62,10 +62,8 @@ use shekyl_chain_rules::{
     EMISSION_SPLIT_EPOCH,
 };
 use shekyl_crypto_pq::kem::{HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation};
-use shekyl_economics::{EconomicParams, FrozenSegmentCount, FULL_REWARD_ZONE};
-use shekyl_types::{
-    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, LongTermWeight, PowHash, Timestamp,
-};
+use shekyl_economics::{EconomicParams, FrozenSegmentCount};
+use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::Transaction;
 use zeroize::Zeroizing;
 
@@ -294,12 +292,11 @@ where
         // `Composed` answers `connect` from this ledger.
         self.ledger.priced().0.lock().expect("ledger lock").insert(
             height.to_raw(),
+            // The one figure the producer still hands `connect` (F17/G11
+            // are wave B's); the reward it priced is judged by F14b/F18
+            // and recorded from the verdict, never handed.
             Priced {
-                block_reward: template.block_reward,
                 burned: template.fees_burned,
-                // G6 (slice 7): until the median is derived it is the
-                // zone, the value the C++ floors a short chain's median to.
-                long_term_effective_median: LongTermWeight::from_raw(FULL_REWARD_ZONE),
             },
         );
 
@@ -407,8 +404,9 @@ where
             emission: EmissionOperands {
                 already_generated_coins: facts.parent_coins_generated,
                 total_burned: facts.total_burned,
-                // G6 (slice 7): the effective median is the zone until derived.
-                median_weight: FULL_REWARD_ZONE,
+                // CEN-G6b: the effective median the validator will judge
+                // this block's weight against, read on the same view.
+                median_weight: facts.medians.effective_median.to_raw(),
                 tx_volume: facts.tx_volume,
                 // E4: no frozen segments are recorded on a scenario chain.
                 frozen_segments: FrozenSegmentCount::ZERO,

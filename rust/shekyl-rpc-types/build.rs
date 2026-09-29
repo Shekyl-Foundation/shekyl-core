@@ -90,6 +90,20 @@ use std::path::PathBuf;
 /// `archival_reorg_depth_blocks`, `challenge_resolution_blocks`) — one
 /// authority, read by `rust/shekyl-types/build.rs`. No behaviour changes;
 /// the digest moves because the binding grew.
+///
+/// **Re-pinned 2026-09-27 (E6 slice 7 commit 4, `CHAIN_RULES_SLICE_7.md` Q6):
+/// two keys were ADDED — `block_weight_long_term_window_blocks = 100000` and
+/// `block_weight_short_term_window_blocks = 100` in
+/// `consensus_constants.json`.** The chain question, answered for each: a
+/// different window is a different median, a different block-weight limit
+/// and a different set of valid blocks (CEN-G6/G6b), so both belong here.
+/// The values are the ones every node already ran — the hand-written C++
+/// `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` and
+/// `CRYPTONOTE_REWARD_BLOCKS_WINDOW`, with no Rust home until the Rust
+/// validator built the medians; the move gives each one authority and two
+/// generated readers (`shekyl_economics::params`, the C++ macros). No
+/// behaviour changes; the digest moves because the binding grew.
+///
 /// **Re-pinned 2026-09-27 (`SCC-4`, the shard-count cutover census): a key was
 /// ADDED — `archival_max_holdings_shards = 4096` in
 /// `consensus_constants.json`.** The chain question, answered: the cap is what a
@@ -112,7 +126,13 @@ use std::path::PathBuf;
 /// `kMaxHoldings` are now defined). **No behaviour changes** — the value is the
 /// 4096 every definition already carried; the digest moves because the binding
 /// grew.
-const PINNED_DIGEST: &str = "6e5e80842d003971adce0ba28dc58f27f8dd1f6f781b258a3fcd02b6791e3f46";
+///
+/// **Re-pinned 2026-09-28 (merge of `dev` into #889):** the two re-pins above
+/// landed on separate branches the same day — Q6's two window keys on slice 7,
+/// `SCC-4`'s cap on `dev` — and each pinned a digest over a file without the
+/// other's keys. This value digests the merged file, all three keys present;
+/// no value moved on either side.
+const PINNED_DIGEST: &str = "b5530d56b1310f69fe99c5a4959486134a59b8739daea36bc2b13b826a84bb34";
 
 fn main() {
     let manifest_dir =

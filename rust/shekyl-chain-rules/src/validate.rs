@@ -43,16 +43,18 @@
 use shekyl_types::BlockHash;
 use shekyl_wire::Transaction;
 
-use crate::block::{Candidate, StructurallyValid, ValidatedBlock};
+use crate::block::{Candidate, Derived, StructurallyValid, ValidatedBlock};
 use crate::coverage::RuleCoverage;
 use crate::drain;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::anchors::E1;
+use crate::rules::block_weight::{Medians, Weights};
 use crate::rules::difficulty::D4;
 use crate::rules::header::{B1, B2, B5, B6, B7};
 use crate::rules::miner::{Emission, F1, F10, F3, F4, F5, F6, F7, F9};
 use crate::rules::pow::{D1b, D1, D2, D3};
+use crate::rules::reward;
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
@@ -179,7 +181,7 @@ pub fn form<S: Substrate>(
 /// use core::convert::Infallible;
 /// use core::marker::PhantomData;
 /// use shekyl_chain_rules::*;
-/// use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+/// use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, TxHash};
 ///
 /// struct View<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
 /// impl<'id> ChainView<'id> for View<'id> {
@@ -207,6 +209,16 @@ pub fn form<S: Substrate>(
 ///     }
 ///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
+///     }
+///     fn weights_window(
+///         &self,
+///         _: BlockHeight,
+///         _: BlockCount,
+///     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
+///         Ok(false)
 ///     }
 /// }
 /// // Each call brands a fresh view, as the store's `write` does.
@@ -242,7 +254,7 @@ pub fn form<S: Substrate>(
 /// use core::convert::Infallible;
 /// use core::marker::PhantomData;
 /// use shekyl_chain_rules::*;
-/// use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+/// use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, TxHash};
 ///
 /// struct View<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
 /// impl<'id> ChainView<'id> for View<'id> {
@@ -269,6 +281,16 @@ pub fn form<S: Substrate>(
 ///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
 ///     }
+///     fn weights_window(
+///         &self,
+///         _: BlockHeight,
+///         _: BlockCount,
+///     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
+///         Ok(false)
+///     }
 /// }
 /// struct Evil;
 /// impl<'id> ChainView<'id> for Evil {
@@ -294,6 +316,16 @@ pub fn form<S: Substrate>(
 ///     }
 ///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
+///     }
+///     fn weights_window(
+///         &self,
+///         _: BlockHeight,
+///         _: BlockCount,
+///     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
+///         Ok(false)
 ///     }
 /// }
 /// fn connect<'id>(_: &View<'id>, _: ChainValid<'id, View<'id>>) {}
@@ -352,12 +384,15 @@ pub fn validate<'id, V: ChainView<'id>>(
     let cx = BlockContext::new(&formed, tip, mtp_window, target, trust);
     judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, E1, F4, F5, F6);
 
-    // The 4.F definitions (F11, F13, F15, F20). Recording them is what
-    // `covers_landed` holds this stage to. F14b reads the priced value
-    // here when the median exists; `connect` persists that row's paid
-    // reward, so the value does not ride on the verdict yet. Nothing here
-    // refuses; a fault is the view's.
-    Emission::derive(view, connecting, &mut coverage)?;
+    // The 4.F definitions (F11, F13, F15, F20): the emission this height is
+    // priced at, F14b's operand once the block's weight is known (below).
+    // Nothing here refuses; a fault is the view's.
+    let emission = Emission::derive(view, connecting, &mut coverage)?;
+    // CEN-G6: the two medians in force for this height, one window read
+    // (slice 7 Q2 (b)). Before the slot loop with the other definitions —
+    // it reads only the view; the block's own weight joins it after the
+    // loop (G6b), once every transaction has been judged.
+    let medians = Medians::derive(view, connecting, &mut coverage)?;
 
     let candidate = cx.candidate();
     let miner = (TxSlot::Miner, &candidate.block.miner_transaction);
@@ -383,6 +418,28 @@ pub fn validate<'id, V: ChainView<'id>>(
         return Ok(Err(refused));
     }
 
+    // CEN-G6b: the block's weight and the long-term weight `connect`
+    // records for it, under the medians derived above. After the loop so
+    // every body's weight is a judged body's (H1 bounded it); the
+    // definition the 4.F consumers (F14, F14b — commit 5) read next.
+    let weights = Weights::derive(medians, cx.candidate(), &mut coverage);
+
+    // The reward chain (slice 7 commit 5): F14 refuses a block over twice
+    // the median, F14b prices the penalised reward, F16 splits it, G12
+    // advances the supply — one sequence after the medians, in the C++'s
+    // order (`validate_miner_transaction` runs after every body is
+    // judged). The verdict carries what it yields.
+    let paid = match reward::judge_emission(
+        connecting,
+        &emission,
+        &weights,
+        &cx.candidate().block.miner_transaction,
+        &mut coverage,
+    ) {
+        Ok(paid) => paid,
+        Err(refused) => return Ok(Err(refused)),
+    };
+
     // The drain (DRS-E3 §3.2): what matured at this height and the root
     // the tree has once it is appended. Not a rule — the last rule has
     // passed — but the derivation the verdict carries because the root
@@ -395,10 +452,14 @@ pub fn validate<'id, V: ChainView<'id>>(
     let block = ValidatedBlock::derive(
         candidate,
         hash,
-        target,
-        cumulative_difficulty,
-        root_after,
-        drained,
+        Derived {
+            target,
+            cumulative_difficulty,
+            root_after,
+            drain: drained,
+            weights,
+            emission: paid,
+        },
     );
     Ok(Ok(ChainValid::mint(block, rule_set, coverage)))
 }

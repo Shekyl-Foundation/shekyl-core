@@ -50,9 +50,14 @@ use std::sync::Arc;
 
 use kameo::actor::PreparedActor;
 use kameo::error::SendError;
-use shekyl_chain_rules::{form, FormAttempt, InvalidBlock, StructurallyValid, Substrate, Verdict};
+use shekyl_chain_rules::{
+    form, FormAttempt, InvalidBlock, PaidEmission, StructurallyValid, Substrate, Verdict, Weights,
+};
 use shekyl_chain_store::store::{ChainStore, StoreError};
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
+use shekyl_types::{
+    BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight,
+};
+use shekyl_units::AtomicUnits;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
@@ -131,6 +136,22 @@ pub struct RunReport {
     /// a run that connected nothing, which the connected count already
     /// says; a gate over this field asserts the count first (rule 47).
     pub roots: RootComparisons,
+    /// The derived-vs-trace **weights** comparison (CEN-G6/G6b, slice 7
+    /// commit 4), the same shape and the same canonical-heights-only
+    /// discipline as `roots`: at every connected height the trace has
+    /// facts for, the verdict's `weight`, `long_term_weight` and
+    /// `long_term_effective_median` against the C++'s two `block_info`
+    /// columns and the exporter's re-derived median. The parity pin for
+    /// the two medians over every captured chain, taken while the LMDB
+    /// trace exists; a divergence is recorded, never patched.
+    pub weights: WeightComparisons,
+    /// The derived-vs-trace **emission** comparison (CEN-F14b / G12, slice
+    /// 7 commit 5), the same shape: at every connected height the trace
+    /// has facts for, the verdict's `coins_generated` against the C++'s
+    /// `block_info.bi_coins`. Consecutive rows differ by the paid reward,
+    /// so this is the penalty's parity oracle wherever a captured block is
+    /// over the median (`median-full`'s block 211 is the one on record).
+    pub emission: EmissionComparisons,
     /// The RandomX measurement (RD-F11), as of the run's end.
     pub metrics: MetricsArtifact,
     /// One entry per committed `Rewind`: the digest **after the pop**, at
@@ -197,6 +218,139 @@ pub struct RootDivergence {
     pub theirs: CurveTreeRoot,
 }
 
+/// The per-height weights oracle's results (`RunReport::weights`), keyed
+/// by height for the same reason [`RootComparisons`] is: a rewind retracts
+/// the abandoned branch's results and a re-extension replaces them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WeightComparisons {
+    results: BTreeMap<BlockHeight, Option<WeightDivergence>>,
+}
+
+impl WeightComparisons {
+    /// Connected canonical heights whose trace facts carried weights to
+    /// compare.
+    #[must_use]
+    pub fn compared(&self) -> u64 {
+        u64::try_from(self.results.len()).expect("a height count fits u64")
+    }
+
+    /// Every canonical height where a derived weight value was not the
+    /// recorded one, ascending.
+    pub fn diverged(&self) -> impl Iterator<Item = &WeightDivergence> + '_ {
+        self.results.values().flatten()
+    }
+
+    /// Whether any compared height diverged.
+    #[must_use]
+    pub fn any_diverged(&self) -> bool {
+        self.diverged().next().is_some()
+    }
+
+    /// Record one height's comparison — the three values the trace holds
+    /// and the verdict derives — replacing an earlier result at the same
+    /// height.
+    fn record(&mut self, at: BlockHeight, ours: Weights, theirs: RecordedWeightFacts) {
+        let same = ours.weight == theirs.weight
+            && ours.long_term_weight == theirs.long_term_weight
+            && ours.medians.long_term_effective_median == theirs.long_term_effective_median;
+        let result = (!same).then_some(WeightDivergence { at, ours, theirs });
+        self.results.insert(at, result);
+    }
+
+    fn retract_above(&mut self, to: BlockHeight) {
+        self.results.retain(|height, _| *height <= to);
+    }
+}
+
+/// The trace's three weight facts for one height — what the C++ recorded
+/// (`block_info.bi_weight`, `bi_long_term_block_weight`) and what the
+/// exporter re-derived with the daemon's own rolling median.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordedWeightFacts {
+    /// `block_info.bi_weight`.
+    pub weight: BlockWeight,
+    /// `block_info.bi_long_term_block_weight`.
+    pub long_term_weight: LongTermWeight,
+    /// The long-term effective median in force for the block.
+    pub long_term_effective_median: LongTermWeight,
+}
+
+impl From<&crate::trace::Facts> for RecordedWeightFacts {
+    fn from(facts: &crate::trace::Facts) -> Self {
+        Self {
+            weight: facts.weight,
+            long_term_weight: facts.long_term_weight,
+            long_term_effective_median: facts.long_term_effective_median,
+        }
+    }
+}
+
+/// One height where a derived weight value differed from the trace's.
+/// Carries all three on each side: which one moved is the finding, and
+/// the other two are its context (a wrong median moves the long-term
+/// weight with it; a wrong weight alone does not).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WeightDivergence {
+    /// The connected height.
+    pub at: BlockHeight,
+    /// The verdict's derivation.
+    pub ours: Weights,
+    /// The trace's record.
+    pub theirs: RecordedWeightFacts,
+}
+
+/// The per-height emission oracle's results (`RunReport::emission`), keyed
+/// by height for the same reason the other two are.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EmissionComparisons {
+    results: BTreeMap<BlockHeight, Option<EmissionDivergence>>,
+}
+
+impl EmissionComparisons {
+    /// Connected canonical heights whose trace facts carried an
+    /// accumulator to compare.
+    #[must_use]
+    pub fn compared(&self) -> u64 {
+        u64::try_from(self.results.len()).expect("a height count fits u64")
+    }
+
+    /// Every canonical height where the derived accumulator was not the
+    /// recorded one, ascending.
+    pub fn diverged(&self) -> impl Iterator<Item = &EmissionDivergence> + '_ {
+        self.results.values().flatten()
+    }
+
+    /// Whether any compared height diverged.
+    #[must_use]
+    pub fn any_diverged(&self) -> bool {
+        self.diverged().next().is_some()
+    }
+
+    fn record(&mut self, at: BlockHeight, ours: PaidEmission, theirs: AtomicUnits) {
+        let result =
+            (ours.coins_generated != theirs).then_some(EmissionDivergence { at, ours, theirs });
+        self.results.insert(at, result);
+    }
+
+    fn retract_above(&mut self, to: BlockHeight) {
+        self.results.retain(|height, _| *height <= to);
+    }
+}
+
+/// One height where the derived accumulator differed from the trace's.
+/// Carries the whole `PaidEmission`: the paid reward and its split are the
+/// context that says whether the penalty, the emission curve or the fold
+/// moved it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EmissionDivergence {
+    /// The connected height.
+    pub at: BlockHeight,
+    /// The verdict's derivation.
+    pub ours: PaidEmission,
+    /// The trace's `coins_generated` — the C++'s `block_info.bi_coins`.
+    pub theirs: AtomicUnits,
+}
+
 /// The covered-tip checkpoint, compared.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Checkpoint {
@@ -253,6 +407,20 @@ pub enum Disagreement {
         /// The connected height.
         at: BlockHeight,
     },
+    /// A derived weight value — the block's weight, its long-term weight
+    /// or the long-term effective median it was judged under — differed
+    /// from what the trace recorded for that height (CEN-G6/G6b). The
+    /// same discipline as `RootDiverged`: adjudicated, never patched.
+    WeightsDiverged {
+        /// The connected height.
+        at: BlockHeight,
+    },
+    /// The derived accumulator — the parent's plus the paid reward
+    /// (CEN-F14b / G12) — differed from the trace's `coins_generated`.
+    EmissionDiverged {
+        /// The connected height.
+        at: BlockHeight,
+    },
 }
 
 impl RunReport {
@@ -292,6 +460,14 @@ impl RunReport {
             .roots
             .diverged()
             .map(|d| Disagreement::RootDiverged { at: d.at });
+        let weights = self
+            .weights
+            .diverged()
+            .map(|d| Disagreement::WeightsDiverged { at: d.at });
+        let emission = self
+            .emission
+            .diverged()
+            .map(|d| Disagreement::EmissionDiverged { at: d.at });
         let diverged = self
             .checkpoint
             .as_ref()
@@ -304,7 +480,11 @@ impl RunReport {
                 height: *height,
                 verdict: *verdict,
             });
-        roots.chain(diverged).chain(refused)
+        roots
+            .chain(weights)
+            .chain(emission)
+            .chain(diverged)
+            .chain(refused)
     }
 }
 
@@ -684,6 +864,23 @@ where
                     .record(*at, *ours, facts.value().root_after);
             }
         }
+        // CEN-G6/G6b: the verdict's weights against the trace's three
+        // recorded values, the same way.
+        for (at, ours) in &applied.weights {
+            if let Some(facts) = self.trace.borrow(*at) {
+                self.report
+                    .weights
+                    .record(*at, *ours, RecordedWeightFacts::from(facts.value()));
+            }
+        }
+        // CEN-F14b / G12: the verdict's accumulator against the trace's.
+        for (at, ours) in &applied.emission {
+            if let Some(facts) = self.trace.borrow(*at) {
+                self.report
+                    .emission
+                    .record(*at, *ours, facts.value().coins_generated);
+            }
+        }
         if let Some(at) = self.checkpoint_at {
             if applied.connected.iter().any(|(h, _)| *h == at) {
                 let ours = self.connector.ask(Digest).await.map_err(collapse)?;
@@ -725,6 +922,8 @@ where
         // rows for a branch the chain has now left; the re-extension will
         // compare the canonical blocks at those heights.
         self.report.roots.retract_above(to);
+        self.report.weights.retract_above(to);
+        self.report.emission.retract_above(to);
         self.ledger.rewind_to(to);
         self.form_at = next_height(Some(to));
         Ok(())

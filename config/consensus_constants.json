@@ -16,6 +16,10 @@
   "block_weight_short_term_surge_factor": 4,
   "block_weight_full_reward_zone_bytes": 300000,
 
+  "_comment_block_weight_windows": "The two medians' windows (CEN-G6; CHAIN_RULES_SLICE_7.md Q6, ruled 2026-09-26). block_weight_long_term_window_blocks: the long-term effective median is the median of long_term_weight over the min(window, height) recorded blocks below the connecting one, floored at the zone (C2-R2 Q2, ratified 100000 ≈ 139 days at 120 s; below that height the window IS the chain, which is why S above is the only early-chain protection). block_weight_short_term_window_blocks: the short-term median is over the last min(window, height) blocks' weights and is clamped to [LTEM, S·LTEM]; the block-weight limit is twice the result. THREE READERS of the short window, one key (rule 05 — the value is derived once, not shared): the median (shekyl_chain_rules::rules::block_weight, Blockchain::update_next_cumulative_weight_limit), the fee estimator's grace_blocks assertion, and the RPC grace_blocks ceiling — the ceiling is the median's horizon by derivation, so a retune moves it because it should. Both keys pass the two tests: a different window is a different median, a different limit, a different set of valid blocks (1); a network with another block time would name them differently (2). Rust owner: shekyl-economics::params::{BLOCK_WEIGHT_LONG_TERM_WINDOW, BLOCK_WEIGHT_SHORT_TERM_WINDOW}; the C++ CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE and CRYPTONOTE_REWARD_BLOCKS_WINDOW are defined from the generated macros.",
+  "block_weight_long_term_window_blocks": 100000,
+  "block_weight_short_term_window_blocks": 100,
+
   "_comment_archival": "Per-shard archival retention bond floor (ARCHIVAL_BOND_FLOOR). Calibrated from bond_rate* = 0.75 per docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md §9.3 (1 sim capital unit ≡ 1 SKL). Foundation CompleteTree holders post one nominal bond at this floor.",
   "archival_bond_floor_atomic": 750000000,
 

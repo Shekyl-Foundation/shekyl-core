@@ -383,6 +383,19 @@ fn decode_index(value: crate::codec::Encoded<'_, TxIndex>) -> Result<TxIndex, Re
         .map_err(|cause| undecodable("tx_indices", cause))
 }
 
+/// `tx_indices` membership — whether a transaction with identity `hash` is
+/// recorded on the chain, the miner transactions included. The chain half
+/// of CEN-G1, `ChainView::has_transaction`'s body (E6 slice 7), shared with
+/// `ReadSnapshot::has_transaction` so the validator and the pool read one
+/// answer. Membership only, as [`chain_reads::has_key_image`] is: the row is
+/// not decoded, so an undecodable index is the locating reads' SI-7 to
+/// report, not a false `false` here. The C++'s `tx_exists`.
+pub(super) fn has_transaction<T: ReadTables>(txn: &T, hash: &TxHash) -> Result<bool, ReadFault> {
+    let table = txn.table(TX_INDICES)?;
+    let found = table.get(key_of(hash))?.is_some();
+    Ok(found)
+}
+
 /// Read a `TxIndex` row by hash and locate it. A miss is `None`; a present
 /// row whose `tx_id` is at or past the dense count is SI-9, not a location.
 fn location_by_hash<T: ReadTables>(
