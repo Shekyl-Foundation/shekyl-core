@@ -1657,6 +1657,7 @@ async fn overfill_pool(
             recipients: vec![TxRecipient {
                 address: address.to_owned(),
                 amount_atomic_units: AtomicUnits::from_raw(1_000_000),
+                rid: None,
             }],
             priority: FeePriority::Standard,
         };
