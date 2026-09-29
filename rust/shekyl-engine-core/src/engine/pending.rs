@@ -102,6 +102,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use shekyl_address::Network;
+use shekyl_engine_state::PaymentRequestId;
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SendJournalBlock};
 use shekyl_units::AtomicUnits;
@@ -292,6 +293,13 @@ pub struct TxRecipient {
     pub address: String,
     /// Amount to send to this address in atomic units (no fee).
     pub amount_atomic_units: AtomicUnits,
+    /// The payment request this send answers, when it was composed from a
+    /// `shekyl:` link that carried a `rid`: echoed in the output's
+    /// encrypted label so the payee's wallet attributes the receive
+    /// (`SUBADDRESS_UNDER_PQC.md` §5.7.11). `None` writes the sentinel.
+    /// Wallet-local bookkeeping on both ends; the wire is uniform either
+    /// way, so an observer learns nothing from its presence.
+    pub rid: Option<PaymentRequestId>,
 }
 
 /// Caller request to [`Engine::build_pending_tx`].
@@ -303,6 +311,31 @@ pub struct TxRequest {
     /// Fee tier, resolved at build time against the daemon fee
     /// snapshot through the `FeeEstimator` seam.
     pub priority: FeePriority,
+}
+
+impl TxRequest {
+    /// The refusals that need no ledger, no network and no permit, run
+    /// first on every build path: an empty recipient list, and a `rid` the
+    /// label cannot echo. The latter is refused here, at the request, not
+    /// downgraded to the sentinel at sign time — the payer asked for
+    /// attribution and would silently not get it — and not discovered
+    /// after selection and proving as a signer failure.
+    pub fn check_recipients(&self) -> Result<(), SendError> {
+        if self.recipients.is_empty() {
+            return Err(SendError::InvalidRecipient {
+                reason: "TxRequest must carry at least one recipient",
+            });
+        }
+        if self.recipients.iter().any(|r| {
+            r.rid
+                .is_some_and(|rid| !PaymentRequestId::rid_fits_wire(rid.as_u64()))
+        }) {
+            return Err(SendError::InvalidRecipient {
+                reason: "recipient rid must be non-zero and fit the u48 wire encoding",
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Display-friendly recipient summary stored alongside the
@@ -648,11 +681,7 @@ pub(crate) fn build_pending_tx_in_state(
     next_id: &mut u64,
     request: &TxRequest,
 ) -> Result<PendingTx, SendError> {
-    if request.recipients.is_empty() {
-        return Err(SendError::InvalidRecipient {
-            reason: "TxRequest must carry at least one recipient",
-        });
-    }
+    request.check_recipients()?;
 
     let synced = ledger.height();
     let Some(tip_hash) = ledger.block_hash_at(synced).copied() else {

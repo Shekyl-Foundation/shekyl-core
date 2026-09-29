@@ -67,7 +67,8 @@ pub use ledger_indexes::LedgerIndexes;
 pub use local_label::{LocalLabel, SecretStr};
 pub use payment_id::PaymentId;
 pub use payment_request::{
-    DisputeReason, PaymentRequest, PaymentRequestId, PaymentRequestState, ReceiveAttribution,
+    DisputeReason, ParsePaymentRequestIdError, PaymentRequest, PaymentRequestId,
+    PaymentRequestState, ReceiveAttribution,
 };
 pub use pending_post_block::{
     PendingBondPost, PendingDrain, PendingEmissionClaim, PendingPostBlock, PendingPostState,

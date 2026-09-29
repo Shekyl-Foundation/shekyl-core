@@ -255,6 +255,7 @@ mod tests {
             recipients: vec![super::super::pending::TxRecipient {
                 address: "addr".into(),
                 amount_atomic_units: shekyl_units::AtomicUnits::from_raw(1),
+                rid: None,
             }],
             priority: FeePriority::Standard,
         }

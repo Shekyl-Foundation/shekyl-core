@@ -82,6 +82,7 @@ use curve25519_dalek::Scalar;
 use rand_core::{OsRng, RngCore as _};
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+use shekyl_crypto_pq::label::sentinel_plaintext;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, OutputInfo,
@@ -367,6 +368,7 @@ pub(super) async fn assemble_drain_tx(
         spec0.ml_kem_ek,
         spec0.amount,
         0,
+        &sentinel_plaintext(),
     )
     .map_err(|e| DrainAssemblyError::build("drain vout0 construction", e))?;
     let vout1 = build_output(
@@ -376,6 +378,7 @@ pub(super) async fn assemble_drain_tx(
         spec1.ml_kem_ek,
         spec1.amount,
         1,
+        &sentinel_plaintext(),
     )
     .map_err(|e| DrainAssemblyError::build("drain vout1 construction", e))?;
 

@@ -1076,6 +1076,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
         recipients: vec![TxRecipient {
             address: address.clone(),
             amount_atomic_units: AtomicUnits::from_raw(unlocked.to_raw() / 2),
+            rid: None,
         }],
         priority: FeePriority::Standard,
     };
@@ -1237,6 +1238,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
         recipients: vec![TxRecipient {
             address: address.clone(),
             amount_atomic_units: AtomicUnits::from_raw(unlocked.to_raw() / 2),
+            rid: None,
         }],
         priority: FeePriority::Standard,
     };
@@ -1540,6 +1542,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
         recipients: vec![TxRecipient {
             address: address.clone(),
             amount_atomic_units: AtomicUnits::from_raw(spend_amount),
+            rid: None,
         }],
         priority: FeePriority::Standard,
     };
@@ -1654,6 +1657,7 @@ async fn overfill_pool(
             recipients: vec![TxRecipient {
                 address: address.to_owned(),
                 amount_atomic_units: AtomicUnits::from_raw(1_000_000),
+                rid: None,
             }],
             priority: FeePriority::Standard,
         };
@@ -2395,6 +2399,7 @@ async fn transfer_to(
         recipients: vec![TxRecipient {
             address: recipient.to_string(),
             amount_atomic_units: amount,
+            rid: None,
         }],
         priority: FeePriority::Standard,
     };
@@ -3882,6 +3887,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
         recipients: vec![TxRecipient {
             address: principal.clone(),
             amount_atomic_units: AtomicUnits::from_raw(100_000_000),
+            rid: None,
         }],
         priority: FeePriority::Standard,
     };
