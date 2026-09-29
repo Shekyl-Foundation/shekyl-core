@@ -3,12 +3,13 @@
 **Status:** OPEN — increment 1 **implemented 2026-09-15** (branch
 `feat/drs-e6-inc1-chain-rules-scaffold`). Round 1 ruled §11; round 2's three
 questions (§12) **ruled at PR #753 review** (defaults kept; G4 tightened to
-`ChainValid<'id, V>`). §4 reflects what landed — **§4.3 last verified against
-slice 7 commit 6 (`CHAIN_RULES_SLICE_7.md`), 2026-09-29: the E3 and slice-7
-reads and `RecordedBlock`'s five fields, which two prior docs commits had
-left at three; §4.6 and §8.5 last verified against slice 5
-(`CHAIN_RULES_SLICE_5.md`), 2026-09-23 — `judge_emission` and G2 in `form`
-are owed there by slice 7 commit 10.**
+`ChainValid<'id, V>`). §4 reflects what landed — **§4.3, §4.4 and §4.6 last
+verified against slice 7 commit 10 (`CHAIN_RULES_SLICE_7.md`), 2026-09-29:
+the E3 and slice-7 reads (`total_burned` included), `RecordedBlock`'s five
+fields, `ValidatedBlock`'s ten (the increment-1 sketch had stood at four
+through slice 2, E3 and slice 7), `price` / `judge_emission`, G2 in `form`
+and the four `Corrupt` arms; §8.5 last verified against slice 5
+(`CHAIN_RULES_SLICE_5.md`), 2026-09-23.**
 Stays in `docs/design/` while
 increments 2+ are open (it owns their template, §7.5.1). Implements *from*
 [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
@@ -466,6 +467,15 @@ pub trait ChainView<'id> {
     /// By hash, so `bool`, not `AtHeight`: absence has one meaning.
     /// CEN-G1's chain half (slice 7 commit 7).
     fn has_transaction(&self, hash: &TxHash) -> Result<bool, Self::Fault>;
+    /// Atomic units destroyed by the whole chain as this view holds it — the
+    /// `total_burned` fold at parent state (the store's R9 register; `0` for
+    /// a chain that has never burned). A chain-state read: the view *is*
+    /// parent state, so no `AtHeight`. CEN-F17's operand with the parent's
+    /// `coins_generated` — circulating supply is `coins_generated −
+    /// total_burned` (FL-R16c), and `total_burned > coins_generated` is
+    /// `Corrupt::BurnExceedsEmission`, never a clamp. **No default body.**
+    /// Slice 7 commit 9 (wave B).
+    fn total_burned(&self) -> Result<AtomicUnits, Self::Fault>;
 }
 
 /// The last recorded block. `Option`, not a bespoke absence enum: an empty
@@ -478,7 +488,8 @@ Three of the ruling's illustrative four (`output_at` — §3.3) plus `tip()`,
 added by slice 1 with CEN-A2 and CEN-B5 (**Q12-2 discharged**; *records-was:*
 increment 1 shipped without it, "not added here without its row"); `height_of`
 (slice 6, CEN-I10); E3's three tree reads (2026-09-26); slice 7's two 4.G
-reads (2026-09-27), each with its row named above. No
+reads (2026-09-27) and its wave-B register read `total_burned` (2026-09-29),
+each with its row named above. No
 `fork_version()` / `rule_set()` on the view (ruling Q7). The trait has no
 `'id`-carrying method — the brand lives in the implementor's type and in
 `ChainValid<'id, V>`; the trait's parameter is what ties the two in
@@ -507,21 +518,45 @@ impl Candidate { pub fn new(block: shekyl_wire::Block, transactions: Vec<shekyl_
 pub struct ValidatedBlock {
     hash: BlockHash,
     block: shekyl_wire::Block,          // kept whole: what the store persists is what the rules saw
-    miner_tx_hash: TxHash,
-    transactions: Vec<(TxHash, shekyl_wire::Transaction)>,   // ruling Q4/L4: one value per identity
+    miner_tx: TxIdentity,
+    transactions: Vec<(TxIdentity, shekyl_wire::Transaction)>,   // ruling Q4/L4: one value per identity
+    // Everything below is what `validate` DERIVED — values no candidate
+    // declares, on the verdict because the validator had to compute them
+    // and the store persists what it is handed (slice 7 Q5; E3 CTW-Q1).
+    target: Target,                              // CEN-D1 (slice 2)
+    cumulative_difficulty: CumulativeDifficulty, // CEN-D7 (slice 2) — the first fact to leave `ConnectFacts`
+    root_after: CurveTreeRoot,                   // the root AFTER this block's drain (E3, CTW-Q1)
+    drain: Option<Drain>,                        // what matured here and the growth it produced (E3)
+    weights: Weights,                            // weight, long-term weight, the two medians (G6/G6b; slice 7 commit 4)
+    emission: PaidEmission,                      // paid, split, fee_burn, owed, accrual, coins_generated (F14b/F16/F17/G11/G12/G13; slice 7 commits 5 and 9)
 }
 impl ValidatedBlock {
-    pub fn hash(&self) -> BlockHash;
-    pub fn block(&self) -> &shekyl_wire::Block;
-    pub fn header(&self) -> &shekyl_wire::BlockHeader;
-    pub fn miner_tx(&self) -> (TxHash, &shekyl_wire::Transaction);
-    pub fn transactions(&self) -> &[(TxHash, shekyl_wire::Transaction)];
+    pub const fn hash(&self) -> BlockHash;
+    pub const fn block(&self) -> &shekyl_wire::Block;
+    pub const fn header(&self) -> &shekyl_wire::BlockHeader;
+    pub const fn miner_tx(&self) -> (TxIdentity, &shekyl_wire::Transaction);
+    pub fn transactions(&self) -> &[(TxIdentity, shekyl_wire::Transaction)];
+    pub const fn target(&self) -> Target;
+    pub const fn cumulative_difficulty(&self) -> CumulativeDifficulty;
+    pub const fn root_after(&self) -> CurveTreeRoot;
+    pub const fn drain(&self) -> Option<&Drain>;
+    pub const fn weights(&self) -> &Weights;
+    pub const fn emission(&self) -> &PaidEmission;   // `.burned()` = the destroyed fee share
 }
 ```
 
+*(Struct sketch re-verified against `block.rs` at slice 7 commit 10,
+2026-09-29 — the four-field increment-1 sketch had stood while slice 2, E3
+and slice 7 each added their derived values.)* Since slice 7 wave B the
+store's `connect(valid, in_force)` takes **only** this token: every value it
+records that the candidate did not declare is read from here, and the
+pass-through `ConnectFacts` is deleted.
+
 In increment 1, `validate` derives `hash` and every `TxHash` (`Block::hash`,
-`Transaction::hash`) and pairs them. It does **not** check the supplied bodies
-against `block.transaction_hashes` — that is a 4.G rule and lands with slice 7.
+`Transaction::hash`) and pairs them. It did **not** check the supplied bodies
+against `block.transaction_hashes` — CEN-G2 landed in `form` with slice 7
+commit 6 (§4.6), so the pairing below is judged before any body is read *as*
+its declared hash.
 CEN-B6 is the block-identity **definition**: `ValidatedBlock::derive` obtains
 the hash from `B6::identity`, which records the row in coverage there — not a
 `BlockRule` with a check that always passes (B7 is the no-op *policy* that
@@ -696,7 +731,33 @@ pub enum Remedy { RefuseToRun /* at genesis */, PopTo(ChainCount) /* stop at max
 pub enum Fault<V> { View(V), Stale(Stale), Corrupt(Corrupt) }
 pub enum Stale { Seed { claimed, expected, retry: Retry }, RuleSet { formed_under: RuleSet, in_force: RuleSet, retry } }
 pub enum Retry { Again(FormAttempt), Exhausted }          // MAX_FORM_ATTEMPTS = 3
-pub enum Corrupt { CumulativeDifficultyNotMonotone { at }, CumulativeDifficultyOverflow }   // ZeroTarget deleted 2026-09-20 (RD-F17): zero is CEN-D6's verdict
+pub enum Corrupt {
+    CumulativeDifficultyNotMonotone { at }, CumulativeDifficultyOverflow,   // ZeroTarget deleted 2026-09-20 (RD-F17): zero is CEN-D6's verdict
+    TxCountNotMonotone { at },                                             // slice 6
+    BurnExceedsEmission { coins_generated, total_burned },                 // slice 7 wave B: the R9 register above the parent's emission (FL-R16c) — the store halts on the register
+}
+
+/// The reward chain — everything the BLOCK determines about its coinbase,
+/// without reading it: F14 (weight ≤ 2·median, at `Locus::Block`), F14b (the
+/// penalised reward), F16 (the split), F17 (the fee split and its burn, over
+/// `BurnOperands::read` — `total_burned`, `leaf_count_at` → `frozen_segments_at`,
+/// the volume window, `CirculatingSupply::derive`), G11 (accrual and burn),
+/// G13 (the height-0 arm: configured subsidy, no staker leg), G12 (the
+/// accumulator). Overflow arms refuse on their own row. (slice 7 commits 5, 9)
+pub(crate) fn price<'id, V: ChainView<'id>>(
+    connecting: BlockHeight, emission: &Emission, weights: &Weights,
+    listed: &[Transaction], configured: u64, coverage: &mut RuleCoverage,
+) -> Verdict<PaidEmission>;
+/// `price`, then F18 against the miner transaction: Σ outputs == `owed`
+/// (`miner_emission + miner_fee_income`), refused at `Locus::Tx { slot: Miner }`
+/// in both directions; vacuous where the subsidy is configured (genesis).
+pub(crate) fn judge_emission<'id, V: ChainView<'id>>(
+    connecting: BlockHeight, emission: &Emission, weights: &Weights,
+    candidate: &Candidate, coverage: &mut RuleCoverage,
+) -> Verdict<PaidEmission>;
+// `PaidEmission { paid, split, fee_burn: BurnSplit, owed, accrual, coins_generated }` + `burned()`;
+// the producer (`shekyl-block-template`) prices through the same functions and
+// reads `frozen_segments_at`, so a template and the validator cannot disagree.
 
 /// Stateless per-tx rules (4.H). Shared verbatim by connect and pool admission.
 /// The SLOT selects the kind (`TxKind::of(slot)`): a coinbase-shaped body in a
