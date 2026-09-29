@@ -4983,6 +4983,7 @@ dependencies = [
  "postcard-schema",
  "serde",
  "serde_json",
+ "shekyl-units",
  "zeroize",
 ]
 

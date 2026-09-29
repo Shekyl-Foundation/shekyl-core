@@ -54,9 +54,9 @@
 
 use shekyl_crypto_hash::cshake256_32;
 
-use super::reader::{put_bytes, Reader};
 use super::{Canonical, CodecError};
 use crate::schema::TableOrdinal;
+use shekyl_store_codec::reader::{put_bytes, Reader};
 
 /// The cSHAKE256 customization string under which an undo entry's
 /// post-image is digested. Frozen: it is part of the row layout, and

@@ -62,7 +62,6 @@ mod evidence;
 mod pool;
 mod primitives;
 mod property;
-mod reader;
 mod schema_version;
 mod settlement_epoch;
 mod undo;

@@ -300,7 +300,13 @@ because `bonded_total` is an `AtomicUnits` and `shekyl-units` is
 below the crate that owns its amount without adding an edge rule 18 did not
 ask for. Today the store is the record's only reader, so the daemon store's
 codec is the owning crate by the rule's own test. **Reopens** (rule 21) if
-E6 slice 8 needs `BondRecord` on `ChainView` — the record would then be
+E6 slice 8 needs `BondRecord` on `ChainView` — **REOPENED on its own
+trigger and MOVED 2026-09-29 (DRS-E4 `ARW-Q8`, the increment's first
+commits): `shekyl-units` went `no_std` + `alloc`, `shekyl-types` took the
+edge, `BondRecord` / `Holdings` / `HeldShard` / `FirstPayingHeight` /
+`RMarket` / `SigmaWorkMilli` live in `shekyl_types::archival`, their
+`Canonical` impls and the strict cursor in `shekyl-store-codec`, the store
+re-exports; bytes unchanged, snapshots unchanged** — the record would then be
 carried across the validator boundary and the type would have two readers;
 the re-evaluation is slice 8's pre-flight, and the move is mechanical (the
 codec is `Canonical`, not tied to the store). `ServeCreditKey` and
