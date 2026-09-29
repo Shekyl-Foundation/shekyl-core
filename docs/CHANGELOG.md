@@ -252,10 +252,12 @@
   file's `passed_through_facts` provenance cell were built (S-CHAIN-W,
   2026-09-16) to record, per value, whether the store received it from
   the C++ trace or computed it, so that no file fed by a partly ported
-  validator could pass as parity evidence. Every one of the seven members
-  has since flipped to derived — `cumulative_difficulty` (slice 2),
-  `root_after` (E3), the weights, the median and the accumulator (slice 7
-  commits 4–5), `burned` (this entry) — and a mechanism with no subject
+  validator could pass as parity evidence. Every member `ConnectFacts`
+  carried at S-CHAIN-W — seven at that point, six by #785 after
+  `cumulative_difficulty` left — has since flipped to derived:
+  `cumulative_difficulty` (slice 2), `root_after` (E3), the weights, the
+  median and the accumulator (slice 7 commits 4–5), `burned` (this
+  entry). A mechanism with no subject
   deletes rather than staying as a permanently-empty cell that can no
   longer fail. `connect` takes the verdict alone; `Provenance` has two
   components (stubbed applies, coverage gaps), and the NOT-PARITY-EVIDENCE
