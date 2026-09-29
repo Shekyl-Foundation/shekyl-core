@@ -30,8 +30,8 @@ use shekyl_wss_q1b_bench::fixture::{
     synth_sparse_path, ControlExperiment, Path,
 };
 use shekyl_wss_q1b_bench::report::{
-    emit, ProverPin, SpendBudget, SpendCorpus, SpendEdgeRecord, Verdict, BLOCK_TARGET_S,
-    SCHEMA_VERSION,
+    emit, LoadControl, ProverPin, SpendBudget, SpendCorpus, SpendEdgeRecord, Verdict,
+    BLOCK_TARGET_S, SCHEMA_VERSION,
 };
 use shekyl_wss_q1b_bench::rig::{self, Environment, StorageAttestation};
 use shekyl_wss_q1b_bench::timing::{
@@ -210,6 +210,26 @@ fn main() -> ExitCode {
     // ratio -- it is a depth dependence, which is exactly what would make the
     // extrapolation to the grading depth unsafe.
     let sparse_licensed = !controls.is_empty() && controls.iter().all(|c| c.sparse_equals_dense);
+    // The same controls, read for a second question. Both arms do identical
+    // work, so their divergence is the board rather than the workload — and
+    // the advance is load-sensitive in a way this harness learned the
+    // expensive way (a superseded record whose model term was 63 % slower for
+    // the same work). Zero controls is not quiet: a run with no control has
+    // not measured its board.
+    let load_control = LoadControl::over(
+        &controls
+            .iter()
+            .map(|c| (c.divergence_pct, c.converged))
+            .collect::<Vec<_>>(),
+        CONTROL_TOLERANCE_PCT,
+    );
+    if !load_control.quiet {
+        eprintln!(
+            "   [BOARD NOT QUIET — controls diverge up to {:+.1} % against a {:.1} % bound over \
+             {} control(s); the advance figure is load-sensitive and cannot be graded]",
+            load_control.max_divergence_pct, load_control.tolerance_pct, load_control.controls
+        );
+    }
     let deepest_control = controls.iter().map(|c| c.tree_depth).max().unwrap_or(0);
     // Flatness across adjacent rungs licenses THE NEXT ONE, and no further --
     // and *flatness* needs two rungs to exist. A single control shows the
@@ -422,6 +442,19 @@ fn main() -> ExitCode {
     // a converged one. Grading an unconverged median would do exactly the
     // substitution the `stopped_because` field exists to make visible.
     let all_converged = replay_series.converged && path_series.converged && prove_series.converged;
+    // A grade asserts the figure is a property of the work. The controls are
+    // the run's own evidence for or against that, and a busy board biases the
+    // advance rather than merely widening it — so this refuses where the claim
+    // is made, and only there. Armed before its subject exists: the graded run
+    // is increment 6's.
+    if rig_verdict.grading && !load_control.quiet {
+        eprintln!(
+            "refusing to grade: the run's controls diverge up to {:+.1} % against a {:.1} % \
+             bound, so the advance figure cannot be claimed as a property of the work",
+            load_control.max_divergence_pct, load_control.tolerance_pct
+        );
+        return ExitCode::from(3);
+    }
     if rig_verdict.grading && !all_converged {
         eprintln!(
             "not grading: a timing series did not converge (replay: {}, path: {}, proving: {})",
@@ -487,6 +520,7 @@ fn main() -> ExitCode {
             "measured: frontier fold + snapshot encode + ring commit, per worst-case block \
              (CT-6 increment 4). NOT replay_median / REPLAY_WINDOW_BLOCKS, which rides as \
              per_block_advance_retired_quotient_s",
+        per_block_advance_load_control: load_control,
         per_block_advance_cadence_fraction: advance_series.graded_s() / BLOCK_TARGET_S,
         controls: controls.clone(),
         paths_verified: paths_verified && controls.iter().all(|c| c.both_verified),

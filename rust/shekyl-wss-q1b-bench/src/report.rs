@@ -82,7 +82,8 @@ use crate::timing::Series;
 ///   (raise the cap, rather than: the machine has no steady state). The bump
 ///   is what stops a corrected reader from misreading an uncorrected record.
 ///
-/// **v3 (CT-6 increment 4)** re-derives `per_block_advance_worst_case_s`.
+/// **v3 (CT-6 increment 4)** re-derives `per_block_advance_worst_case_s` and
+/// carries `per_block_advance_load_control` beside it.
 ///   In `v1`/`v2` it was `replay_median / REPLAY_WINDOW_BLOCKS` — a share of
 ///   the spend replay, which is a pre-build *model* of an advance that did
 ///   not exist yet. In `v3` it is the median of a measured series over the
@@ -188,6 +189,58 @@ pub struct OpenBudget {
 }
 
 /// A complete spend-edge run.
+/// What the run's own controls say about the board the advance was timed on.
+///
+/// Carried in the record rather than only printed, so a contaminated run
+/// cannot be read later as a clean one. This exists because a 2026-09-28
+/// advance record was superseded on 2026-09-29 partly for having been taken
+/// on a loaded box: its model term was 63 % slower for identical work, and
+/// the ratio between the two terms moved 0.69x -> 0.95x. Load does not cancel
+/// between a memory-bandwidth-bound replay and an `fsync`-bound advance.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct LoadControl {
+    /// Largest absolute dense-vs-sparse divergence across the run's controls,
+    /// in percent. The two arms do identical work, so this is the board
+    /// talking, not the workload.
+    pub max_divergence_pct: f64,
+    /// The bound `max_divergence_pct` is judged against.
+    pub tolerance_pct: f64,
+    /// Whether every control stayed inside the bound **and** converged.
+    ///
+    /// `false` does not invalidate the median on its own — it says the run
+    /// cannot claim its figure is a property of the work rather than of the
+    /// machine, which is precisely the claim a grade would make.
+    pub quiet: bool,
+    /// Controls the verdict was taken over. Zero is not quiet: a run with no
+    /// control has not measured its board, and absence of a signal is first
+    /// evidence the subject is absent (rule 47).
+    pub controls: usize,
+}
+
+impl LoadControl {
+    /// Judge the board from a run's controls, each `(divergence_pct,
+    /// converged)`.
+    ///
+    /// Takes the pairs rather than the experiments so the verdict can be
+    /// tested at its boundary without building a corpus — the bound is the
+    /// thing under test, not the fixture that produces it.
+    #[must_use]
+    pub fn over(controls: &[(f64, bool)], tolerance_pct: f64) -> Self {
+        Self {
+            max_divergence_pct: controls
+                .iter()
+                .map(|(d, _)| d.abs())
+                .fold(0.0_f64, f64::max),
+            tolerance_pct,
+            quiet: !controls.is_empty()
+                && controls
+                    .iter()
+                    .all(|(d, converged)| *converged && d.abs() <= tolerance_pct),
+            controls: controls.len(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct SpendEdgeRecord {
     /// [`SCHEMA_VERSION`].
@@ -242,6 +295,16 @@ pub struct SpendEdgeRecord {
     /// defect `Q4` names; this string is the field saying which one it is,
     /// for a reader who has only the JSON.
     pub per_block_advance_provenance: &'static str,
+    /// Whether the run's own controls say the board was quiet enough for
+    /// `per_block_advance_worst_case_s` to mean anything.
+    ///
+    /// The advance is **load-sensitive**, and a contaminated run does not
+    /// merely widen its spread — it biases it. The controls already measure
+    /// the board (a dense/sparse pair doing identical work), so the signal
+    /// exists in every run; it was simply never read on this side, because
+    /// when the advance was added the controls only licensed the *sparse
+    /// denominator*, which the advance does not depend on.
+    pub per_block_advance_load_control: LoadControl,
     /// `per_block_advance_worst_case_s` as a fraction of [`BLOCK_TARGET_S`].
     /// Reported, never graded here: `Q4`'s threshold is graded on the pinned
     /// rig by increment 6, and a fraction computed anywhere else is a

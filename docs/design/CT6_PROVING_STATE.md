@@ -617,56 +617,73 @@ ratio and `rig.grading: false`; **increment 6 is the seat for the graded run**,
 and the blocker is the board rather than the code.
 
 **What the off-rig run says, and what it does not.** One run on an otherwise
-idle x86_64 box (`--window-leaves 105600`, 1 056 leaves/block at depth 6, 563
+idle x86_64 box (`--window-leaves 105600`, 1 056 leaves/block at depth 6, 586
 timed blocks after a 721-block untimed prefill —
-`docs/benchmarks/wss-q1b/spend_edge_20260929T131635Z.json`):
+`docs/benchmarks/wss-q1b/spend_edge_20260929T133841Z.json`). The board is
+attested by the run's **own** controls rather than by the operator: two
+dense/sparse pairs doing identical work, diverging at most **1.6 %** against a
+10 % bound (`per_block_advance_load_control`).
 
 | Term, same run | Value |
 | --- | --- |
-| Measured advance | **105.11 ms/block** median (p95 117.50) |
-| Retired model, same run | **110.95 ms/block** |
-| Measured ÷ model | **0.95×** |
+| Measured advance | **102.75 ms/block**, converged |
+| Retired model, same run | **102.03 ms/block** |
+| Measured ÷ model | **1.01×** |
 
-**The series did not converge**, and the reason is spread rather than sample
-count: 561 samples at a 5 % tolerance, stopped on "limits met, unconverged",
-with occasional outliers to 175 ms against a 105 ms median. The median itself
-reproduces to **0.17 %** across two independent runs (105.29 / 105.11), which
-is the stronger evidence — a figure that repeats across runs while exceeding a
-within-run tolerance is describing a noisy machine, not an unstable quantity.
-It is recorded as unconverged rather than promoted, because the grade is
-increment 6's and this is not it.
-
-> **Supersedes a 2026-09-28 record, on two grounds.** That run reported
-> **124.72 ms measured / 180.63 ms model / 0.69×** and is kept here as what was
-> measured, not deleted. It is superseded because (1) `AdvanceRig` began from
-> an empty frontier and ring, so no timed advance paid an eviction — the first
-> row cannot fall out until block 721 and that run converged at 479 — and (2)
-> its *model* term was 63 % slower than this one's for identical work, which
-> points at a loaded box rather than at anything the code did.
+> **Two records superseded here, and the second one retires a claim of mine.**
 >
-> **That second ground is the more uncomfortable one**, because §10.4 claimed
-> the ratio travels: "same run, same board, same thermal state, so the ratio
-> between the two is a property of the work and not of the machine." The ratio
-> moved **0.69× → 0.95×**. Contamination did not cancel between the two terms,
-> which is what that claim assumed it would — the replay is memory-bandwidth
-> heavy and the advance is `fsync`-bound, so load does not price them alike.
-> The prefill and the quieter box changed together here, so **this run cannot
-> separate their contributions**, and no attribution is offered. The standing
-> lesson is narrower than the old text: the ratio is only a property of the
-> work on a **quiet** board, and a run must say which it was.
+> The **2026-09-28** record read 124.72 / 180.63 / **0.69×**. Its ring was never
+> full — the first row cannot fall out until block 721 and it converged at 479 —
+> *and* its model term was 63 % slower than this one's for identical work, which
+> is a loaded board. Both grounds, not just the first.
+>
+> A **2026-09-29** replacement read 105.11 / 110.95 / **0.95×** and narrowed
+> §10.4's old claim that the ratio "is a property of the work and not of the
+> machine" to: *the ratio travels from a quiet board.* **That narrowed claim is
+> now refuted too.** Both of those runs were quiet by this section's own test,
+> and their ratios are **6.3 % apart** (0.95 vs 1.01), because the model term
+> kept moving between them — 110.95 → 102.03 — while the advance barely did.
+>
+> **So the ratio is retired as a travelling quantity, not narrowed again.** What
+> reproduces is the *measured advance*: 105.29 / 105.11 / 102.75 across three
+> runs, a **2.5 %** spread, against a model term that moved 77 % across the same
+> three. The advance is `fsync`-bound and stable; the replay is
+> memory-bandwidth-bound and is not, and no mechanism for its residual drift
+> between two quiet runs is offered here because none has been measured. Any
+> future statement of the form "the ratio shows X" needs its own evidence; this
+> section no longer supplies it.
+>
+> The superseded figures are kept above as what was measured. A third
+> narrowing would be the wrong move: the claim has now failed twice, and the
+> quantity that keeps surviving is the one the increment actually built.
 
-**The direction is the one the harness already predicted.** `replay`'s own
-`proxy_note` says the model is *"net an upper bound, since `build_layers`
-rehashes every upper node where a frontier advance touches one per layer"* —
-and the built advance lands under it. There is no divergence to report in the
-dangerous direction, and **no Pi figure is derived from the ratio**: the
-advance has a `fsync`'d ring commit in it, which does not scale with the A72
-the way the curve hashing does, so `537.59 ms × 0.69` would be an arithmetic
-with one term that does not travel. The pre-build bound stands until the rig
-re-runs it.
+**The direction the harness predicted no longer holds, and that is worth
+saying plainly.** `replay`'s own `proxy_note` says the model is *"net an upper
+bound, since `build_layers` rehashes every upper node where a frontier advance
+touches one per layer"*. At **1.01×** the built advance sits *fractionally
+above* it, so the model is **not** an upper bound on this run — the earlier
+0.69× reading that appeared to confirm the note came from the loaded board.
+The gap is 0.7 %, well inside the drift the model term shows between quiet
+runs, so this is **not** a claim that the note is wrong either: it is a claim
+that a 0.7 % ordering across two quantities of differing stability establishes
+nothing in either direction, and the note should be re-tested on the rig rather
+than treated as confirmed.
 
-**A contamination lesson worth the line.** The first off-rig attempt had the
-depth-5 sparse/dense control diverge **111 %** and refuse the sparse path; a
+**No Pi figure is derived**, and now for two reasons rather than one: the
+advance has an `fsync`'d ring commit in it, which does not scale with the A72
+the way curve hashing does, *and* the ratio such an extrapolation would use has
+been retired above. `537.59 ms × <ratio>` was always an arithmetic with one
+term that does not travel; it is now an arithmetic with two. The pre-build
+bound stands until the rig re-runs it.
+
+**A contamination lesson that is now a gate.** Every figure this section has
+had to retire was retired for board state, so the controls are read on this
+side too: `LoadControl` carries the worst dense/sparse divergence into the
+record, and a **graded** run whose board is not quiet is refused rather than
+reported (armed here; increment 6 is the run it grades). A run can no longer be
+read as clean after the fact — the evidence rides with it. The first off-rig
+attempt had the depth-5 sparse/dense control diverge **111 %** and refuse the
+sparse path; a
 second run on a quiet box gave **−1.0 %** on the same arm. The first was taken
 while this worktree was building. A timing harness measures the box it is on,
 including whatever else is on it.

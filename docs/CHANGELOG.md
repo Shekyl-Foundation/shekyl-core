@@ -89,13 +89,22 @@
   exists to make visible. The rig now **prefills past the retention
   horizon untimed** before the series starts: eviction cannot fire until block
   721, so a run from an empty ring grades a regime the steady state never
-  occupies. Off-rig on an idle box, the built advance is **105.11 ms/block**
-  (median, unconverged at 5 % over 561 samples; reproduces to 0.17 % across two
-  runs) against the same run's model at **110.95 ms/block** — 0.95×, the
-  direction `replay`'s own `proxy_note` predicts. This supersedes an earlier
-  124.72 / 180.63 / 0.69× record whose ring was never full *and* whose model
-  term was 63 % slower for identical work; the ratio is a property of the work
-  only on a quiet board. The pinned-rig grade is increment 6's. The retired quotient's denominator is now the
+  occupies. Off-rig on a board the run's own
+  controls attest quiet (max 1.6 % dense-vs-sparse against a 10 % bound), the
+  built advance is **102.75 ms/block**, converged, against the same run's model
+  at **102.03 ms/block**. This supersedes a 124.72 / 180.63 record whose ring
+  was never full *and* whose board was loaded. **The ratio between the two
+  terms is retired as a travelling quantity:** it read 0.69× / 0.95× / 1.01×
+  across three runs and moved 6.3 % between two *quiet* ones, because the
+  model term is memory-bandwidth-bound and drifts where the `fsync`-bound
+  advance does not. What reproduces is the advance itself — 2.5 % across three
+  runs. The pinned-rig grade is increment 6's.
+- **The harness refuses to grade a board its own controls say was busy.**
+  `LoadControl` reads the dense/sparse controls a second time — they do
+  identical work, so their divergence is the machine — and carries the verdict
+  *in the record*, so a contaminated run cannot later be read as a clean one. A
+  graded run whose board is not quiet is refused. Zero controls is not quiet:
+  an unmeasured board is not a still one. The retired quotient's denominator is now the
   blocks the corpus covers rather than the constant, which under
   `--window-leaves` had divided a shrunken replay by the full window.
 
