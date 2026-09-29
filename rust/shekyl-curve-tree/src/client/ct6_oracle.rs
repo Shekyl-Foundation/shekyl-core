@@ -1033,6 +1033,11 @@ fn the_ring_covers_every_legal_reorgs_fork_and_nothing_deeper() {
         client.segment_tier_reading(too_deep).expect("segment tier"),
         "an evicted height's answer moved"
     );
+    // **What is NOT asserted here, and whose it is.** A rollback to
+    // `too_deep` — deeper than any legal reorg — succeeds today, slowly, by
+    // folding the whole drained prefix. C7's refusal is increment 5's, and
+    // building it here would put a consensus-facing refusal in the increment
+    // that only has to answer heights. The seam is: this is where it goes.
 
     // And the deepest legal rewind really does restore from that row: the
     // same discriminator the in-horizon rollback test uses, at the boundary

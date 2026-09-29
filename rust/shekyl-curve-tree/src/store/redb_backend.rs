@@ -1087,8 +1087,8 @@ impl LeafStore {
         Ok(())
     }
 
-    /// Write `height`'s frontier snapshot and drop the height that has just
-    /// left the horizon, inside the caller's transaction.
+    /// Write `height`'s frontier snapshot and drop everything that has
+    /// fallen below the horizon, inside the caller's transaction.
     ///
     /// The horizon **is** [`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`] — read from
     /// the one JSON authority through the constant, never restated (C4). The
@@ -1106,12 +1106,12 @@ impl LeafStore {
     /// — would take the fold path instead. So the covered run is one height
     /// per replaceable block *plus* the one they fork from.
     ///
-    /// A range delete rather than a single `remove` of `h - horizon`, because
-    /// the height that leaves is only `h - horizon` when the ring was already
-    /// full and contiguous. After a rollback the tip re-advances over heights
-    /// whose rows this call overwrites, and after a resume onto a store
-    /// written by a build without the table there is no row at all — in both
-    /// cases a point delete would leave rows the horizon no longer covers.
+    /// A range delete rather than a single `remove` of `h - horizon - 1`,
+    /// because exactly one row leaves only when the ring was already full and
+    /// contiguous. After a rollback the tip re-advances over heights whose
+    /// rows this call overwrites, and after a resume onto a store written by
+    /// a build without the table there is no row at all — in both cases a
+    /// point delete would leave rows the horizon no longer covers.
     fn write_frontier_snapshot_in_txn(
         txn: &redb::WriteTransaction,
         height: BlockHeight,

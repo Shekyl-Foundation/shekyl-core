@@ -527,6 +527,12 @@ count-keyed API, which is the same seam one level lower and one type worse. The
 reader §6 names is `root_and_depth_at`, and `root_at` already delegates to it,
 so both production read paths go through the one dispatcher.
 
+**A reorg deeper than the horizon is not refused here, and that is C7's
+seat, not this increment's.** A `rollback_to_fork` below `tip − horizon`
+succeeds today by folding the whole drained prefix: correct, slow, and loud
+about nothing. Increment 5 owns C7's refusal and its rule-82 copy; what
+increment 4 owes it is the seam, which is the ring's span.
+
 **Rewind.** `truncate_internals` — the shared core under both
 `rollback_to_fork` and `truncate_from_tree_position` — deletes every ring row
 above the new tip **inside the caller's transaction**, so no committed store
