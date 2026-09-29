@@ -86,11 +86,11 @@ The peer's own local height was 85, because it had received those
 blocks from the mining node, and it still recorded the mining node
 at 46, last written by timed sync. Receiving a block does not
 update the sender's recorded height. On a two-node network fluff
-had nobody else to send to anyway. On a larger network the same
-lag leaves fluff with only the peers whose timed sync landed since
-the last block. epee does it too. This branch raises the sender's
-recorded chain length when the block is accepted, and relay
-eligibility is the session's normal state rather than that height.
+had nobody else to send to: fluff skips the source, and the source
+was the only other session. Fluff does not read recorded height.
+This branch raises the sender's recorded chain length when the
+block is accepted, and relay eligibility is the session's normal
+state rather than that height.
 
 The seam-versus-epee run failed earlier than this. That run logged
 `Unable to send transaction(s) via Dandelion++ stem` and the
@@ -100,8 +100,59 @@ the send, not the choice of peer. The failing send now logs the
 connection id, its zone and direction, whether the registry held
 it, and the seam's return and cause.
 
+## Rerun on the current branch, same day
+
+The daemon binary contains the accepted-block height raise, the
+`state_normal` eligibility rule, the accept-time inbound cap, and
+the seam send log. `--version` still prints `v3.1.0-c05ca6808`
+because CMake stamped it at configure time. The epee peer is still
+`d09bf3ef0`, so it still filters stems by recorded height.
+
+Unit tests, built here with `BUILD_TESTS=ON`:
+
+- `relay_peer.an_accepted_block_raises_recorded_height_and_never_lowers_it` passed.
+- The five `node_server.in_peers_*` tests passed, including a cap
+  above the derived ceiling refusing startup and `--in-peers 0`
+  staying 0.
+- `seam_endpoint.a_relay_send_on_the_strand_reaches_the_seam_connection`
+  failed. The payload is five bytes. Levin `send_message` returns
+  false before `do_send` when the buffer is shorter than a header,
+  so the seam was not asked. A nil id in the same test is the miss
+  the assertion also checks, and that path was not the failure.
+
+Daemon admission, private loopback:
+
+- `--in-peers 1000000` exited with `Inbound cap 1000000 for public
+  exceeds the descriptor ceiling 524238; refusing to start.`
+- `--in-peers 1` with two epee dialers kept one inbound session.
+  The second dial logged `seam accept refused cause AdmissionRefused`.
+- A descriptor soft limit of 64 derived a ceiling of 0 (24 held,
+  112 reserved, the second figure after the Tor reservation).
+  The inbound count stayed 0. The dialer's handshake failed with
+  `LEVIN_ERROR_CONNECTION` and the seam logged `AdmissionRefused`.
+
+Stem, seam origin, heights matched near 112:
+
+- The seam logged `Found 1 out connections in normal state` and
+  `Sent 1 transaction(s)` on a stem. No `seam send refused`.
+- The epee peer logged `Including transaction` for that same
+  transaction. Both pools were empty afterward because the miner
+  included it.
+- Fluff on both sides then logged `no available connections`. On
+  two nodes the only other session is the source, which fluff skips.
+- The epee peer's own walk at that moment still had both sessions
+  `normal` and ineligible: recorded height 69 against local height
+  118, last written by timed sync and by chain entry. It stemmed
+  anyway, from a map built earlier, and the seam included the
+  transaction again.
+
+A second submit, originated on the epee peer a few seconds later,
+stayed in the epee pool. That walk logged `candidates=0` and
+`Unable to send transaction(s) via Dandelion++ stem`. The link had
+just re-handshaked. That failure is an empty epee walk, not a seam
+refusal.
+
 ## Not this run
 
-Tor dial and Tor relay were not run. This machine has no `tor`
-binary. The floor-device deadline and thread-budget measurements
-are not in this record.
+Tor dial and Tor relay were not run. The floor-device deadline and
+thread-budget measurements are not in this record.
