@@ -246,12 +246,25 @@
   count; the staker accrual; genesis pays the miner whole); and CEN-F18
   (the miner transaction pays exactly what it is owed, refused at the miner
   slot in both directions). **Nothing reaches `connect` that the validator
-  did not derive:** the pass-through fact type is deleted, `connect` takes
-  the verdict alone, and the file's `Provenance` has two components
-  (stubbed applies, coverage gaps). **Store schema 17 — rebuild the
+  did not derive — and the scaffold that tracked which values it did not
+  derive retired because its purpose completed.** `ConnectFacts`,
+  `Fact<T>`, `Origin::{Derived, PassedThrough}`, `DeletedBy` and the
+  file's `passed_through_facts` provenance cell were built (S-CHAIN-W,
+  2026-09-16) to record, per value, whether the store received it from
+  the C++ trace or computed it, so that no file fed by a partly ported
+  validator could pass as parity evidence. Every one of the seven members
+  has since flipped to derived — `cumulative_difficulty` (slice 2),
+  `root_after` (E3), the weights, the median and the accumulator (slice 7
+  commits 4–5), `burned` (this entry) — and a mechanism with no subject
+  deletes rather than staying as a permanently-empty cell that can no
+  longer fail. `connect` takes the verdict alone; `Provenance` has two
+  components (stubbed applies, coverage gaps), and the NOT-PARITY-EVIDENCE
+  limit stands on coverage gaps only. **Store schema 17 — rebuild the
   datadir.** Held to six daemon-built chains at every height on roots,
-  weights, accumulator and burn (2 408 / 2 408; three of those heights
-  carry a non-zero recorded burn, all matched), every C++ coinbase
+  weights, accumulator and burn (2 408 / 2 408 — a root-and-weight claim
+  with a **3 / 3** burn claim inside it: three heights carry a non-zero
+  recorded burn, all matched; the burn population is a FOLLOWUPS row),
+  every C++ coinbase
   accepted under the Rust F18, and to the C++ daemon live: a Rust-built
   block at the consensus bound is accepted, one body over refused
   (`CHAIN_RULES_SLICE_7.md` §3.5, §3.11). The replay's graded artifact is

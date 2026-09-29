@@ -816,13 +816,20 @@ flipped from pinned to refusing. **The signal:** more than **eighteen**
 commits *excluding wave B* means the substrate was not as finished as this
 table claims — the answerable form, as slice 6 wrote it.
 
-**Outcome (2026-09-29): eighteen commits landed against fifteen expected**
-— the rows' *Landed at* cells sum to 18 (1 + 1 + 1 + 3 + 4 + 1 + 2 + 1 + 3 + 1),
-fifteen excluding wave B's three — so the signal (more than eighteen
-excluding wave B) did **not** fire, and the three over the estimate are each named in
-their rows: row 4's parity capture, row 5's live-lane test and the F21
-finding it surfaced, row 9's fixture cost (every chain builder pricing its
-coinbase). Registry landed at `implemented 93` against the table's 90 —
+**Outcome (2026-09-29): estimate missed, signal held — two facts, not
+one.** The rows' *Landed at* cells sum to 18 (1 + 1 + 1 + 3 + 4 + 1 + 2 +
+1 + 3 + 1) against fifteen expected — twenty percent over the number that
+was written down. The signal (more than eighteen excluding wave B) was set
+twenty percent above that number and did not fire: fifteen excluding wave
+B's three. So the silence says the *ceiling* held, not the estimate; slice
+6's estimate genuinely held (eight against nine-or-ten) and this one did
+not, and the next table calibrates on the written estimate, not on what
+was allowed. The three over are each named in their rows: row 4's parity
+capture, row 5's live-lane test and the F21 finding it surfaced, row 9's
+fixture cost (every chain builder pricing its coinbase) — two of the three
+are the first attempt at something the driver had never done, the cost
+slice 6 §5.3.3 named and this table priced once (row 2) rather than per
+row. Registry landed at `implemented 93` against the table's 90 —
 the same fifteen rows (`81 → 93` from #889's tree: F17, F18, G1, G2, G7,
 G9, G10, G11, G13 as rules, G3/G4/G5 by construction); the table's figure
 left the three by-construction rows out of `implemented`, which the gate's
