@@ -131,6 +131,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::F15,
             CenRow::F16,
             CenRow::F20,
+            // Slice 7 commit 7: G1 before the slot loop
+            // (`CHAIN_RULES_SLICE_7.md` §5 row 7); G7/G9/G10 below, after it.
+            CenRow::G1,
             // Slice 7 commit 6: the body's pairing, a `FormRule`
             // (`CHAIN_RULES_SLICE_7.md` §5 row 6).
             CenRow::G2,
@@ -138,6 +141,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             // (`CHAIN_RULES_SLICE_7.md` §5 row 4).
             CenRow::G6,
             CenRow::G6b,
+            CenRow::G7,
+            CenRow::G9,
+            CenRow::G10,
             CenRow::G12,
             CenRow::H1,
             CenRow::H3,

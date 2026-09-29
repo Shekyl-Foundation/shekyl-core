@@ -9,6 +9,64 @@
 //! own. This file carries the stateless one; the view-bound body rows (G1,
 //! G7, G9, G10) land beside it in slice 7 commit 7.
 //!
+//! # CEN-G1 — no listed transaction is already on the chain (slice 7 commit 7)
+//!
+//! **What the C++ does, read at `blockchain.cpp:5511–5522`:** the hash loop's
+//! first act, before a body is even fetched, is `m_db->tx_exists(tx_id)` —
+//! a listed identity the chain already holds refuses the block
+//! (`reject_block_form`). The Rust read is [`ChainView::has_transaction`]
+//! (slice 7 commit 3; the store's `tx_indices`, miner transactions
+//! included). Two arms, both refused at `Locus::Tx { slot: Listed(n) }` —
+//! the slot whose hash the rule looked up (Q8's first test): **on the
+//! chain** (the C++'s), and **earlier in this block** — the same identity
+//! listed twice, refused at the second occurrence; the C++ has no separate
+//! check for it because the first occurrence is in the batch by the time
+//! the second is looked up, and the Rust judges the whole block against the
+//! chain *before* it, so the intra-block arm is this rule's to carry.
+//!
+//! **Order is the finding (Q8's second test).** G1's chain arm shares its
+//! trigger with CEN-I7 — a re-listed spend's key image is spent — and its
+//! intra-block arm with CEN-L1. Run after the slot loop, G1 would never fire
+//! on a spend: I7 refuses at `Locus::Input` in the loop and L1 catches the
+//! double before G1 sees the hash. So G1 runs **before** the slot loop, the
+//! C++'s own order (`tx_exists` `:5516` before `check_tx_inputs` `:5639`),
+//! and `body_tests` pins it with a re-listed spend that must be refused on
+//! G1 — a flipped order makes I7 the row, and the test asserts the row.
+//!
+//! G1 reads the **declared** hashes, not the bodies': G2 has already
+//! established, in `form`, that the two agree — so the identities are the
+//! ones the header carries and no body is hashed twice.
+//!
+//! # CEN-G7, G9, G10 — cross-transaction uniqueness of the archival keys
+//!
+//! After the slot loop, beside L1 (`blockchain.cpp:5666–5803`, three
+//! passes over every listed body's inputs): no two serve-credit vins with
+//! one `(P, shard, E)` (**G7**, `D-SC-C`), no two emission claims naming one
+//! `(P, E)` — an emission vin claims a *list* of epochs, each a pair
+//! (**G9**), and at most one bond post per `P`, whatever its kind (**G10**).
+//! The decision bodies are `shekyl-archival-retention`'s, the same ones the
+//! C++ calls (`serve_credit_block_unique`, `emission_block_claims_unique`,
+//! `bond_post_block_unique`): one owner, both languages. What this crate
+//! adds is the **locus** — `Locus::Input { slot, input }` at the **second**
+//! occurrence, the vin the colliding key was read from — which the
+//! serve-credit body names by index and the other two do not, so those two
+//! are located by a scan the body's verdict has already licensed. Should the
+//! scan disagree with the body (it cannot; both are set-membership over the
+//! same keys), the refusal falls to `Locus::Block`, never to a panic.
+//!
+//! **A vin that does not parse is not this rule's.** The parse of a
+//! serve-credit vin is CEN-J1's row, of an emission vin the emission rows'
+//! (slice 8, pending); until they land, an unparseable archival vin has no
+//! key to collide on and passes G7/G9 — the gap is theirs and the family
+//! pins it there, not here. The C++ reaches these passes only after
+//! `check_tx_inputs` has parsed every vin, so it treats a failure here as an
+//! internal inconsistency; the Rust order puts the parse rows in the slot
+//! loop, before this one, and they will refuse first when they exist.
+//!
+//! **Deliberately not a rule (ratified 2026-07-12, `blockchain.cpp:5738`):**
+//! a serve-credit response and a Release for the same `P` in one block is
+//! benign under the settled release semantics and is not refused.
+//!
 //! # CEN-G2 — the declared list and the carried bodies agree
 //!
 //! A block declares its listed transactions by hash (`transaction_hashes`)
@@ -47,11 +105,21 @@
 //! ingest's affair before a `Candidate` exists; a candidate that reaches
 //! `form` has as many bodies as it has, and G2 judges what it has.
 
-use shekyl_wire::Transaction;
+use std::collections::BTreeSet;
+use std::io::Cursor;
+
+use shekyl_archival_retention::{
+    bond_post_block_unique, emission_block_claims_unique, p_canonical_id_from_hybrid_pubkey,
+    serve_credit_block_unique, ArchivalRewardEmissionVin, ArchivalServeCreditResponse,
+    BlockUniqueVerdict,
+};
+use shekyl_types::TxHash;
+use shekyl_wire::{Input, Transaction};
 
 use crate::census::CenRow;
-use crate::rules::{FormContext, FormRule, Rule};
+use crate::rules::{BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
+use crate::view::ChainView;
 
 /// CEN-G2: every declared hash is the hash of the body carried at its
 /// index, and there are exactly as many bodies as hashes.
@@ -81,6 +149,183 @@ impl FormRule for G2 {
                 },
             )),
         }
+    }
+}
+
+/// CEN-G1: no listed transaction is already on the chain, nor listed
+/// twice in this block. Runs **before** the slot loop (module docs).
+pub(crate) struct G1;
+
+impl Rule for G1 {
+    const ROW: CenRow = CenRow::G1;
+}
+
+impl BlockRule for G1 {
+    fn check<'id, V: ChainView<'id>>(
+        cx: &BlockContext<'_>,
+        view: &V,
+    ) -> Result<Verdict<()>, V::Fault> {
+        let mut listed_here: BTreeSet<TxHash> = BTreeSet::new();
+        for (n, hash) in cx.candidate().block.transaction_hashes.iter().enumerate() {
+            // The intra-block arm first: it costs no read, and a hash that
+            // is both on the chain and doubled is refused at its second
+            // listing either way.
+            if !listed_here.insert(*hash) || view.has_transaction(hash)? {
+                return Ok(Err(InvalidBlock::new(
+                    Self::ROW,
+                    Locus::Tx {
+                        slot: TxSlot::Listed(n),
+                    },
+                )));
+            }
+        }
+        Ok(Ok(()))
+    }
+}
+
+/// Every listed body's inputs with their loci, in block order — the
+/// iteration the three archival passes and their loci share.
+fn listed_inputs<'a>(cx: &'a BlockContext<'_>) -> impl Iterator<Item = (Locus, &'a Input)> + 'a {
+    cx.candidate()
+        .transactions
+        .iter()
+        .enumerate()
+        .flat_map(|(n, tx)| {
+            tx.prefix
+                .inputs
+                .iter()
+                .enumerate()
+                .map(move |(input, item)| {
+                    (
+                        Locus::Input {
+                            slot: TxSlot::Listed(n),
+                            input,
+                        },
+                        item,
+                    )
+                })
+        })
+}
+
+/// The first key that repeats in `keys`, by position — the locus arm for
+/// the two decision bodies that answer only yes/no.
+fn second_occurrence<K: Ord>(keys: &[(Locus, K)]) -> Option<Locus> {
+    let mut seen = BTreeSet::new();
+    keys.iter()
+        .find(|(_, key)| !seen.insert(key))
+        .map(|(locus, _)| *locus)
+}
+
+/// CEN-G7: no two serve-credit vins in one block carry the same
+/// `(P, shard, E)`.
+pub(crate) struct G7;
+
+impl Rule for G7 {
+    const ROW: CenRow = CenRow::G7;
+}
+
+impl BlockRule for G7 {
+    fn check<'id, V: ChainView<'id>>(
+        cx: &BlockContext<'_>,
+        _view: &V,
+    ) -> Result<Verdict<()>, V::Fault> {
+        let mut loci = Vec::new();
+        let mut triples = Vec::new();
+        for (locus, item) in listed_inputs(cx) {
+            let Input::ServeCredit { canonical_bytes } = item else {
+                continue;
+            };
+            // An unparseable vin is CEN-J1's refusal, not a key (module docs).
+            let Ok(kept) =
+                ArchivalServeCreditResponse::read_exact(&mut Cursor::new(canonical_bytes))
+            else {
+                continue;
+            };
+            loci.push(locus);
+            triples.push((kept.p_canonical_id, kept.shard_id, kept.settlement_epoch));
+        }
+        Ok(match serve_credit_block_unique(&triples) {
+            BlockUniqueVerdict::Unique => Ok(()),
+            BlockUniqueVerdict::DuplicateAt { index } => Err(InvalidBlock::new(
+                Self::ROW,
+                loci.get(index).copied().unwrap_or(Locus::Block),
+            )),
+        })
+    }
+}
+
+/// CEN-G9: no two emission claims in one block name the same `(P, E)`.
+pub(crate) struct G9;
+
+impl Rule for G9 {
+    const ROW: CenRow = CenRow::G9;
+}
+
+impl BlockRule for G9 {
+    fn check<'id, V: ChainView<'id>>(
+        cx: &BlockContext<'_>,
+        _view: &V,
+    ) -> Result<Verdict<()>, V::Fault> {
+        let mut pairs: Vec<(Locus, ([u8; 32], u64))> = Vec::new();
+        for (locus, item) in listed_inputs(cx) {
+            let Input::ArchivalRewardEmission { canonical_bytes } = item else {
+                continue;
+            };
+            // Length-exact, as the FFI extractor parses it; an unparseable
+            // vin is the emission rows' refusal, not a key (module docs).
+            let mut cursor = canonical_bytes.as_slice();
+            let Ok(vin) = ArchivalRewardEmissionVin::read(&mut cursor) else {
+                continue;
+            };
+            if !cursor.is_empty() {
+                continue;
+            }
+            let p = *p_canonical_id_from_hybrid_pubkey(&vin.p_pubkey).as_bytes();
+            pairs.extend(
+                vin.settlement_epochs
+                    .iter()
+                    .map(|&epoch| (locus, (p, epoch))),
+            );
+        }
+        let keys: Vec<([u8; 32], u64)> = pairs.iter().map(|(_, key)| *key).collect();
+        Ok(if emission_block_claims_unique(&keys) {
+            Ok(())
+        } else {
+            Err(InvalidBlock::new(
+                Self::ROW,
+                second_occurrence(&pairs).unwrap_or(Locus::Block),
+            ))
+        })
+    }
+}
+
+/// CEN-G10: at most one bond post per `P` in one block, whatever its kind.
+pub(crate) struct G10;
+
+impl Rule for G10 {
+    const ROW: CenRow = CenRow::G10;
+}
+
+impl BlockRule for G10 {
+    fn check<'id, V: ChainView<'id>>(
+        cx: &BlockContext<'_>,
+        _view: &V,
+    ) -> Result<Verdict<()>, V::Fault> {
+        let ids: Vec<(Locus, [u8; 32])> = listed_inputs(cx)
+            .filter_map(|(locus, item)| match item {
+                Input::BondPost(post) => Some((locus, *post.p_canonical_id.as_bytes())),
+                _ => None,
+            })
+            .collect();
+        let keys: Vec<[u8; 32]> = ids.iter().map(|(_, id)| *id).collect();
+        Ok(if bond_post_block_unique(&keys) {
+            Ok(())
+        } else {
+            Err(InvalidBlock::new(
+                Self::ROW,
+                second_occurrence(&ids).unwrap_or(Locus::Block),
+            ))
+        })
     }
 }
 

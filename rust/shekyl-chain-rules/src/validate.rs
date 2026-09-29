@@ -50,7 +50,7 @@ use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::anchors::E1;
 use crate::rules::block_weight::{Medians, Weights};
-use crate::rules::body::G2;
+use crate::rules::body::{G1, G10, G2, G7, G9};
 use crate::rules::difficulty::D4;
 use crate::rules::header::{B1, B2, B5, B6, B7};
 use crate::rules::miner::{Emission, F1, F10, F3, F4, F5, F6, F7, F9};
@@ -383,9 +383,13 @@ pub fn validate<'id, V: ChainView<'id>>(
     let cumulative_difficulty = D4::cumulative_after(view, connecting, target)?;
     D1b::record(&mut coverage);
 
-    // View-bound block-level predicates (4.A–4.G), in census order.
+    // View-bound block-level predicates (4.A–4.G), in census order. G1
+    // (no listed transaction already on the chain, or twice in this block)
+    // is here, **before** the slot loop — the C++'s order, and the only one
+    // under which it has a witness on a spend: after the loop I7 and L1
+    // refuse the same shapes first (slice 7 Q8; `body_tests` pins it).
     let cx = BlockContext::new(&formed, tip, mtp_window, target, trust);
-    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, E1, F4, F5, F6);
+    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, E1, F4, F5, F6, G1);
 
     // The 4.F definitions (F11, F13, F15, F20): the emission this height is
     // priced at, F14b's operand once the block's weight is known (below).
@@ -416,10 +420,11 @@ pub fn validate<'id, V: ChainView<'id>>(
     // CEN-L1 spans the slots — a key image twice among the block's inputs —
     // and runs once every slot has passed: each slot's view is the chain
     // before the block, so this is the only place the repeat is visible to
-    // the validator. Last, as the C++'s `add_spent_key` refusal is.
-    if let Err(refused) = rules::run::<L1, _>(&cx, view, &mut coverage).map_err(Fault::View)? {
-        return Ok(Err(refused));
-    }
+    // the validator. Last, as the C++'s `add_spent_key` refusal is. Beside
+    // it, the three archival cross-transaction passes (G7, G9, G10; slice
+    // 7): the same shape — a key twice among the block's inputs — over the
+    // serve-credit, emission and bond-post keys.
+    judge_block!(cx, view, coverage; L1, G7, G9, G10);
 
     // CEN-G6b: the block's weight and the long-term weight `connect`
     // records for it, under the medians derived above. After the loop so

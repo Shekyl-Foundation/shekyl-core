@@ -6,7 +6,7 @@
 //! The driver's own contract: a scripted chain is a chain the validator
 //! admitted, whose record is what the owners priced.
 
-use shekyl_chain_rules::CenRow;
+use shekyl_chain_rules::{CenRow, Locus, TxSlot};
 use shekyl_types::{BlockHeight, CurveTreeRoot};
 
 use super::{Scenario, RULES};
@@ -261,11 +261,22 @@ async fn a_real_spend_against_the_grown_tree_is_admitted_and_the_two_trees_agree
     assert_eq!(block.template.transactions[0].hash(), spend.hash());
     assert_eq!(block.template.total_fees.to_raw(), fee);
 
-    // Its key image is recorded: listing the same spend again is CEN-I7's
-    // refusal, not a second admission.
+    // Listing the *same* spend again is CEN-G1's refusal since slice 7
+    // commit 7 — the transaction is on the chain, and G1 runs before the
+    // slot loop, so I7 (its key image is spent) never sees it (Q8's
+    // ordering pin, on a real spend against a real store). Until then this
+    // line read I7, which was the row that *could* fire: G1 was pending.
     match scenario.mine_listing(vec![spend]).await {
-        Err(StepOutcome::Refused(refused)) => assert_eq!(refused.rule, CenRow::I7),
-        other => panic!("a double spend is refused by I7, got {other:?}"),
+        Err(StepOutcome::Refused(refused)) => {
+            assert_eq!(refused.rule, CenRow::G1);
+            assert_eq!(
+                refused.locus,
+                Locus::Tx {
+                    slot: TxSlot::Listed(0)
+                }
+            );
+        }
+        other => panic!("a re-listed spend is refused by G1, got {other:?}"),
     }
 
     // Oracle 1 again, with a listed transaction in the tree's history: the
