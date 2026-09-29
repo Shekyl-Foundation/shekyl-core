@@ -4795,6 +4795,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-economics",
  "shekyl-standoff",
+ "shekyl-types",
 ]
 
 [[package]]

@@ -3406,7 +3406,7 @@ worked byte sweep at the pinned cadence (`SETTLEMENT_EPOCH_BLOCKS = 10_000`,
 | L15 | **Retrieval / correlated-failure realism** (gate 4–5) | Coverage (replicas exist) ≠ retrieval (fetch within latency at target availability); the L4 survival arithmetic assumes *independent* holder failure. Modeled per-holder uptime `u` + a coarse failure-domain bucketing (`a % n_domains`); availability `= 1 − (1−u)^d` where `d` is the count of *distinct domains* among a shard's serving holders (`src/retrieval.rs`; gated, legacy byte-identical). | **RESOLVED (shape derived) — iteration 3.** Two results, both on a **fully-covered** deep set (`deep_und=0`, `R≈6`): (1) **coverage ≠ retrieval** — under independent failure (`l15_indep`) the covered set meets a three-nines SLA (`rUDp=0`), but as holders cluster into fewer domains (`l15_corr_d{6,3,2,1}`) realized availability falls `0.9997/0.997/0.988/0.900` and the under-SLA deep fraction climbs `0.007/0.20/1.0/1.0` **with `R` unchanged** — so **diversity (≥3 domains), not replica count, is the binding retrieval constraint**; (2) **`R_target` is derivable, not stipulated** — `⌈ln(1−A*)/ln(1−u)⌉` gives `rTgtA` 2/3/5/10 at `u` 0.95/0.90/0.80/0.50 (`l15_uptime_*`), so the stipulated `r_target_deep=6` silently assumes `u ≳ 0.85`; below that the covered set is under-redundant for the SLA *even under independence* (`u50`: `rUDp=1.0`). **Disposition:** gate-4/5 must (a) state the retrieval SLA `(u, A*)` and *derive* `R_target` from it, and (b) add a **co-located-with-coverage diversity floor** (≥`d*` distinct domains per deep shard) — a covered-but-clustered set is a latent availability failure. **Reinforces P3** (the oldest band, thinnest, is first under the diversity floor) and **L16** (the onion path depresses `u`, raising the derived `R_target`). **Residue:** live `u`, the SLA `A*`, and the real domain-correlation structure are post-testnet empirics; the privacy tension (diversity must be measured in coarse buckets, never per-holder geolocation — mission priority 2) is the gate-4 design constraint. See §*L15 — retrieval availability*. **Substrate for L14** (the challenge cadence rides on this serving/diversity state). |
 | L16 | **Transport selection / latency-regime coupling** (gate 6 / networking; the L10 latency axis seen from the transport side) | The firewalled-pseudonym requirement forces the **heavy archival fetch onto onion-service↔Tor-client rendezvous** (slowest Tor config; `P`'s location must not link to the principal, so no clearnet fallback). This makes the L10 `L2–L6` sweep the **operating regime by construction**, and `fetch_latency_per_unit` the onion-rendezvous latency — the post-testnet "real fetch latency" unknown is just *where on the band* the live transport sits. L16 couples that band to L15 via `u_eff = u_base/(1+k·L)` (`src/transport.rs`; gated, legacy byte-identical). TCP-sync and Tor reinforce (Tor is TCP-only; the inherited Levin/TCP stack drops in); the commitment is coupled (UDP/QUIC sync would reopen it). Tor is primary on maturity + TCP + persistent-reachable-service + longevity; I2P is a defensible secondary; Lokinet (Oxen-tied, UDP) and Nym (mixnet, latency-disqualifying for heavy fetch) are out. The **Arti in-process onion-service** option (Rust-canonical) is claimed viable on the 2.x LTS line — *to verify per `17-dependency-discipline.mdc`*. Full analysis: [`../ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Transport for the staker-archival path*. | **RESOLVED (shape derived) — iteration 3.** On a fully covered deep set (`deep_und=0`, `R≈6`), transport depression alone breaks the retrieval SLA from `L≥1` (`l16_regime_*`: `trU` 0.900→0.634, derived `rTgtA` 3→7, `rUDp` 0→1.0 across `L0..L6`); duration backstop does not repair depressed `u` (`l16_L6_s0`≡`s4`); replica floor adds `R` not `u` (`l16_L6_floor`≡`L6` — reinforces P4); transport+diversity compose worse than either (`l16_L4_d3`: `rUDp=1.0` vs `l15_corr_d3` `0.202`). **Disposition:** treat rendezvous latency as an input to the retrieval SLA `(u,A*)`, derive `R_target` from depressed `u_eff`, size against transport **and** diversity. **Residue:** post-testnet `L`, `k`, band position, and any non-linking bandwidth relaxation. Transport PR forks unchanged (Arti embed, I2P door, rendezvous threat pass). See §*L16 — transport-regime coupling* and §*Soundness pass*. |
 | L17 | **Black-swan / acute-shock resilience** (gates 5/7; due-diligence close) | L13/P2 stressed *gradual* declines; historical crises are steps (March-2020 gap-down, FTX custody collapse, LUNA compound, 2008 flight-to-liquidity, **Filecoin's fiat-opex provider exodus** — SPs 4 100 → ~1 900 as FIL fell). Gated `shock_*` knobs fire one-epoch discontinuities at the settled pinned-economics attractor; reads `shkP`/`shkRec`/`shkBA` (§*L17*). **swan-2** (W1–W3): extinction accounting (`shkExt` — backfill is *sourceless*), domain-correlated exit, aftershock re-fire, shock-at-knee, cascade × ρ. **swan-3** (W12–W15): per-band extinction read (`extB`), floored extinction read + floor-on closure arms (`shkExF`), holder-class-correlated exit (`shock_exit_top_deep`). **swan-4** (retention correction): foundation-as-sole-source re-read; bandwidth-bound re-seed arms (`reseed_rate`, `ssSE`/`ssMxW`/`ssOpn`). | **RESOLVED (measured, re-anchored on the retention guarantee) — 2026-06-11, swan-2/-3/-4 same day.** **swan-4 correction:** genesis foundation seeds retain complete trees permanently (`V3_STAKER_ARCHIVAL.md` authority pin), so market wipe-outs are **foundation-as-sole-source transitions, not data loss** — no shock in the grid loses data; the grid measures availability. Population shocks **absorbed with zero market wipe-outs**: 30 % exit (stride or index-bucketed, attractor or knee), ρ×3 panic, permanent ρ×2 (conditioned on Finding-0). Correlation drives the tail: at 50 %, stride 0 / index-bucketed-domain 1 / **class-correlated 28** wipe-outs — and class-correlated **30 %** costs 4 (outranks every independent 50 %). Aftershock pair 4, **within the independence-to-no-reseat envelope [1.9, 21]** (W14). Price legs, bare-lean: V-crash 37 to sole-source, recovered servo-400 99, permanent-gap 144–649 (market collapse onto the backstop); **band read (W12): mid-deep modal, NOT oldest-concentrated** (vshape 20/17 b4/b5; servo-400 5/64/30). **Re-seed bottleneck sized (swan-4):** at `reseed_rate = 3` (~1 flow/seat) the V-trough costs **429 sole-source shard-epochs, worst window 10**, servo-400 **403/9** (5 windows open at the run boundary); 4× provisioning halves exposure (429→204) and cuts wipe-outs 40→10 — foundation seeding bandwidth = **availability-SLO sizing input, provisioned at the crisis multiple (~4× steady-state; not gameable — foundation's own action)**, with the `N_active` domain-diversity condition folded into the gate-5 ops requirement. Serving-floor arms (`shkExF = 0`) cover every window incl. the 114-epoch servo-400 crossing. swan-2 domain rows ran with **no placement diversity floor (W15 pinned)** — benign results were bucketing luck. **Exports: retention guarantee + single-org threat model documented with authority** (swan-2 "new requirement" → existing-guarantee documentation); **treasury diversification = named ops requirement** (W4). W12/W13 completeness questions **parked against the no-sunset pin** (reversion (d)). Honest-holding = named residue; trigger observables pinned (W17): challenge-latency shift (weak) + **source-load spikes on true holders at challenge anchors** (confirmatory); detection open, not solved. Reversion re-keyed on **class- or domain-concentrated exit ≥ ~0.3** and on reopening the no-sunset pin. §*L17*. |
-| L19 | **Composition variance / per-shard cost heterogeneity** (gate 4–5; `PDM-Q-F34`) | Channel 1 (`(1/R_market)·g(age)`, [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §4.1) takes **no byte operand**, while a fixed-cardinality shard (`T = 200` ids) varies in bytes with the usage density of its era. Every prior arm holds a shard's storage cost at one unit (`deep_shard_size`, class-keyed), so a *redistribution* of cost at constant total is invisible to it by construction. Modeled as `size(age) = 1 + (S−1)(1−age)` normalized mean-preserving (`src/model.rs` `CompositionParams`; gated at `S = 1`, legacy byte-identical), scaling the storage budget, the carry cost and the L10 fetch lag; read out as `frac_under_target` per **size tercile** (`size_band_under`). | **RESOLVED (shape derived) — 2026-09-26.** Three results. (1) **The aggregate bar cannot see this axis, and moves the wrong way:** on the marginal base the aggregate `frac_under` *improves* `0.050 → 0.021 → 0.037` across `S = 1/4/60` while the heavy band degrades `— / 0.050 / 0.113` — light shards are over-subscribed, heavy ones thin, and at `S = 60` the ratified `frac_under_target < 0.05` gate PASSES on a state with **11 % of heavy shards under target**. (2) **Slack absorbs it entirely:** on the covered base (`storage_scale` 1.3) every band is `0.000` at every `S` through 60 — the exposure is a function of provisioning headroom, not of `S` alone. (3) **Under monotone growth the cost lands where the replication requirement is lowest, and redundancy shifts onto the deep tail:** `deep_mean_r` rises `6.69/7.45/8.38/10.29` at `S = 1/2/4/60` (the light end *is* the old end, so the irreplaceable tail gets more copies as composition spreads), against `7.83` for the decorrelated control at `S = 60`, whose heavy band also breaches (`0.013/0.013/0.025` at `S = 4/10/60`) where the correlated arm reads `0.000`. **Two caveats, both load-bearing:** the arms grade their heavy bands against *different bars* (at `deep_threshold = 0.5` the correlated heavy tercile is entirely hot, `r_target_hot = 3`), so `szHi = 0.000` says byte cost parks where the target is lowest — **not** that channel 1 prices it; and the per-shard carry cost and the per-shard capacity draw push the same way and are not separated here (capacity dominates at `storage_unit_cost = 0.03` against a value term of order `0.2–0.5`). Cheap early history reads as the bootstrap subsidy (`DESIGN_CONCEPTS.md` Component 4) from the storage side, not as a hole. **Structural limits of these runs:** every composition scenario is `dynamic: false`, so the heavy end is **always** the hot end and a heavy *deep* shard is unrepresentable here; and the light end is **coinbase dilution**, i.e. the zero-good floor of the *storage-id* domain — under a spend-ordinal domain the mechanism disappears and the size model becomes per-spend shape. Size is stored **at birth** so the dynamic-window arm (a heavy era ageing into the deep band with its bytes intact, against `r_target_deep` with the premium) is representable but unrun — that is the configuration that could still force a byte operand, owed **after** the domain ruling. **Disposition:** no mechanism owed; `T` is not implicated (the partition is right, `PDM-Q6` item 5) — and this arm **could not** have implicated it: sizes are mean-normalized, so a change in `T` rescales every shard by the same factor and cancels. Gate 4/5 owes **the band read, not a new bar** — a coverage verdict stated per cost band, since the aggregate certifies a failing band. **Residue / falsifier:** the shape is *linear and mean-preserving*, so the heavy END sits near 2× the mean at any `S` (`S` is a ratio between bands, not a multiple of the mean); a **bursty** composition (few very heavy shards) puts more mass at high cost and is the untested arm. Falsifier: a heavy-tailed size shape, or a realized composition once a chain exists, whose heavy band breaches the bar on a *covered* base. No corpus exists pre-genesis (`tests/data` is Monero-lineage), so `S` is swept, not measured — §7.7's bounding use. |
+| L19 | **Composition variance / per-shard cost heterogeneity** (gate 4–5; `PDM-Q-F34`) | Channel 1 (`(1/R_market)·g(age)`, [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §4.1) takes **no byte operand**, while a fixed-cardinality shard (`T = 200` ids) varies in bytes with the usage density of its era. Every prior arm holds a shard's storage cost at one unit (`deep_shard_size`, class-keyed), so a *redistribution* of cost at constant total is invisible to it by construction. Modeled as `size(age) = 1 + (S−1)(1−age)` normalized mean-preserving (`src/model.rs` `CompositionParams`; gated at `S = 1`, legacy byte-identical), scaling the storage budget, the carry cost and the L10 fetch lag; read out as `frac_under_target` per **size tercile** (`size_band_under`). | **REOPENED — 2026-09-28** (§L19a–§L19g). Under the ruled domain, a heavy era aged into the deep band breaches on the covered base (§L19b). The carry signal, not capacity, carries that breach (§L19f). `PDM-Q-F34` is read **all-seeds** (RULED 2026-09-28, §L19g §4). Under that reading `S = 4` clears on headroom at 2.00 only, and `S = 10` clears on no lever point, which is §L19c row 3. The next arm is §L19h, a calibrated `storage_unit_cost`; the `PDM-Q-F34` draft is held. The 2026-09-26 resolution follows as recorded; §L19's dated amendment says which parts it superseded. **RESOLVED (shape derived) — 2026-09-26.** Three results. (1) **The aggregate bar cannot see this axis, and moves the wrong way:** on the marginal base the aggregate `frac_under` *improves* `0.050 → 0.021 → 0.037` across `S = 1/4/60` while the heavy band degrades `— / 0.050 / 0.113` — light shards are over-subscribed, heavy ones thin, and at `S = 60` the ratified `frac_under_target < 0.05` gate PASSES on a state with **11 % of heavy shards under target**. (2) **Slack absorbs it entirely:** on the covered base (`storage_scale` 1.3) every band is `0.000` at every `S` through 60 — the exposure is a function of provisioning headroom, not of `S` alone. (3) **Under monotone growth the cost lands where the replication requirement is lowest, and redundancy shifts onto the deep tail:** `deep_mean_r` rises `6.69/7.45/8.38/10.29` at `S = 1/2/4/60` (the light end *is* the old end, so the irreplaceable tail gets more copies as composition spreads), against `7.83` for the decorrelated control at `S = 60`, whose heavy band also breaches (`0.013/0.013/0.025` at `S = 4/10/60`) where the correlated arm reads `0.000`. **Two caveats, both load-bearing:** the arms grade their heavy bands against *different bars* (at `deep_threshold = 0.5` the correlated heavy tercile is entirely hot, `r_target_hot = 3`), so `szHi = 0.000` says byte cost parks where the target is lowest — **not** that channel 1 prices it; and the per-shard carry cost and the per-shard capacity draw push the same way and are not separated here (capacity dominates at `storage_unit_cost = 0.03` against a value term of order `0.2–0.5`). Cheap early history reads as the bootstrap subsidy (`DESIGN_CONCEPTS.md` Component 4) from the storage side, not as a hole. **Structural limits of these runs:** every composition scenario is `dynamic: false`, so the heavy end is **always** the hot end and a heavy *deep* shard is unrepresentable here; and the light end is **coinbase dilution**, i.e. the zero-good floor of the *storage-id* domain — under a spend-ordinal domain the mechanism disappears and the size model becomes per-spend shape. Size is stored **at birth** so the dynamic-window arm (a heavy era ageing into the deep band with its bytes intact, against `r_target_deep` with the premium) is representable but unrun — that is the configuration that could still force a byte operand, owed **after** the domain ruling. **Disposition:** no mechanism owed; `T` is not implicated (the partition is right, `PDM-Q6` item 5) — and this arm **could not** have implicated it: sizes are mean-normalized, so a change in `T` rescales every shard by the same factor and cancels. Gate 4/5 owes **the band read, not a new bar** — a coverage verdict stated per cost band, since the aggregate certifies a failing band. **Residue / falsifier:** the shape is *linear and mean-preserving*, so the heavy END sits near 2× the mean at any `S` (`S` is a ratio between bands, not a multiple of the mean); a **bursty** composition (few very heavy shards) puts more mass at high cost and is the untested arm. Falsifier: a heavy-tailed size shape, or a realized composition once a chain exists, whose heavy band breaches the bar on a *covered* base. No corpus exists pre-genesis (`tests/data` is Monero-lineage), so `S` is swept, not measured — §7.7's bounding use. |
 | T-A1 | **F1 re-linkage instrument** (PHASE_2B §7.7; gate-3 + rotation) | **CLOSED.** Instrument + qual firewall wargame complete. Scarcity-spread → unique portfolios; primary firewall holds lifetime `T_obs` under wallet defaults. | **Conditionally finally accepted — regime-bounded (swan-2/W7).** Form-C reopen not triggered. The acceptance premise (lean-eq cohort ~79–100) is temporarily invalidated in L17 swan troughs (9–25 bonded — intersection surface maximally cheap); holds at the attractor, not in a crisis trough. [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §7 regime bound + §9; gate-6 sync-exit wargame (W8) is the mitigation question. |
 | G7 | **Locked-supply re-pricing / admission principal** (gate 7; PHASE_2B §2.4 close-condition (iii)) | Iteration-5 run (2026-06-11; §*Gate 7 iteration-5 — results*): derived archival lock collapses to `bond_floor × R × shards(t)` — 117 → 3 546 coins over 30 yr, `lock/circ ≤ 8.5×10⁻⁷` (10⁻⁵ even at 10× denser shard geometry; 1.4×10⁻⁴ at arm-B `MIN = 10 000×` floor). All three macro gauges (burn servo, release factor, net inflation) **insensitive to both arms at every `N_P`** — burn identical to the cent; both arms clamp identically at the 90 % cap under load. Δ vs. the asserted comparator: legacy schedules overstated burn −22.3 % via the now-inert `(1 + stake_ratio)` factor (FOLLOWUPS item). | **RESOLVED — bonds-only** per the pre-named indeterminate criterion (admission lock does no measurable macro work; smaller consensus surface wins). Cross-doc spec edits **landed 2026-06-11** (emission §10.2 branch deletion, PHASE_2B §2.4 (iii) + admission row, gate-6 §2.5, V3_STAKER_ARCHIVAL). **Reversion:** reopen iff bond floor / shard geometry re-pin ≥ 3 OOM upward combined, or a new archival lock class lands; re-run `--gate7`, re-apply criteria. |
 | AGG | **Per-reward proof aggregate** (PHASE_2B §2.4 close-condition (ii); emission §10.1) | Worked byte sweep (2026-06-11; §*Close-condition (ii)*) — no feedback dynamics, every term pinned or banked. Typical emission tx ≈ 17–19 kB, dominated by constant-size hybrid crypto (ML-DSA-65 sig 3.3 kB ×2, hybrid pk 2 kB, FCMP++ ~2.5 kB), not the work claim (≤ 780 B/epoch at year-30 lean portfolio ≈ 60 shards). Aggregate at 20 kB margin: thin/lean/thick = 80/160/310 B per block amortized = **0.027/0.053/0.103 %** of the 300 kB penalty-free zone. Single-tx max (15-epoch batch) ≈ 29 kB; boundary burst drains in ≈ 11 blocks at thick with zero spreading; only `work_claim` grows with chain age (2.6 kB/epoch at year 100 — still < 15 kB constant term). | **RESOLVED — (ii) closes; wire confirmed as pinned.** ≤ 0.11 % amortized across the envelope (≤ 0.21 % at uniform 2× size error). `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` + `SETTLEMENT_EPOCH_BLOCKS = 10_000` confirmed. Caveat: `FcmpMembershipOnly` size assumed at 1-input `FcmpPlusPlus` order (proves strictly less). **Reversion:** reopen iff built proof > 3× estimate, `N_P` envelope re-pins above ~1 500, epoch re-pins below 1 000 blocks, or **the envelope extends below `N_P` ≈ 25–30** (thin direction, W9 — L13 servo floor 17 / swan troughs ~9; per-archiver claim scales as `1/N_P` and a 15-epoch batch ≈ 70 kB at `N_P`=17 year-30; the guard is a per-emission claim cap forcing batch splitting); re-evaluation = re-run sweep with measured sizes. |
@@ -4306,3 +4306,552 @@ not reach — what the challenge draw does with a closed shard whose good is zer
 (`Σ(prunable_len + pqc_auths_len) = 0`, reachable on any run of `T` coinbase ids), and what
 `serve_credit_bit` is when the read has nothing to return. That is a rule question, not a sim
 arm.
+
+**Amendment, 2026-09-28 — what §L19a–§L19g changed here.** Additive. The text above
+stands as recorded on 2026-09-26.
+
+1. **The size mechanism did not survive `SHT-Q1`.** Coinbase dilution exists only in the
+   storage-id domain. §L19a rebuilt the axis as an era-level shift in per-transaction
+   shape — a consolidation wave, whose transactions each sweep many inputs — plus the
+   `√T`-suppressed `cv_tx`. Busyness is not a mechanism under a count partition: a busy
+   era closes its shards sooner, not heavier.
+2. **"At baseline parameters the capacity leg is dominant" was an estimate, not a
+   measurement.** It was read off operand magnitudes. It is **refuted on the one subject
+   it has been measured on** — covered base, dynamic window, Burst, `S = 4` and `10`
+   (§L19f). With `storage_unit_cost = 0` no shard is under-held in any cell on any seed,
+   so the whole breach is the carry signal. Results 1–3 above (static, `dynamic: false`)
+   were **not** rerun at `storage_unit_cost = 0`. For them the leg attribution is
+   unmeasured, not refuted.
+3. **The falsifier above fired.** A heavy-tailed (Burst) era breaches on the covered base
+   on 8 / 8 seeds at both `S` (§L19b). "No mechanism owed" is superseded. The lever
+   dispositions are §L19d's, read with §L19g, and which reading governs is pending Rick.
+4. **The zero-good residue dissolves under the ruled domain.** Coinbases are outside the
+   domain, so every shard is `T` transactions that each carry good. A run of `T`
+   coinbase ids no longer makes a shard.
+
+---
+
+## L19a — the heavy-era arm under the ruled domain: pre-registration (2026-09-28)
+
+**Committed before the demand-matched run.** `SHT-Q1` (2026-09-27) put the
+partition over transactions carrying archival good, so L19's era-density shape —
+coinbase dilution — does not survive it. The model is rebuilt on two axes
+(`cv_tx`, suppressed by `√T`, and an era-mean shape), and this section fixes the
+arm's method **before** the run that decides it, because the first three passes at
+this arm each produced a confident number that meant nothing (§L19b).
+
+### What is being asked
+
+Does a **heavy era, aged into the deep band with its bytes intact**, breach
+coverage at `r_target_deep` when **total bytes are held fixed**? This is the one
+arm that could force a byte operand into channel 1 — `PDM-Q6` item 5's **(g)**
+falsifier. It fires only if the breach survives every non-byte lever.
+
+### 1. Demand matching, and what it normalizes
+
+**Sizes, not the storage budget.** Each live shard's size is divided by the live
+population's realized mean at the graded snapshot, so **every leg** — the capacity
+draw, the per-shard carry cost, and the L10 fetch lag — sees the same total bytes
+as the control. Normalizing `storage_scale` instead would fix the capacity leg and
+leave carry and fetch scaled, which is the confound this exists to remove.
+
+**Assertion:** the realized mean (`szMn`) reads **1.000** on every demand-matched
+run. A run that does not is not evidence.
+
+**The `storage_scale`-scaled variant is run beside it.** If the two disagree, that
+is itself a finding about **which leg carries the breach** — capacity versus
+carry/fetch — and is reported as one rather than averaged away.
+
+### 2. Seeds and the bar, both fixed here
+
+- **`N = 8` seeds** per arm and per control. Eight because the verdict is a
+  worst-of-nine-cells statistic, whose across-seed spread is what the bar must
+  clear; eight distinguishes a shifted distribution from a tail draw without
+  making the run cost dominate.
+- **BREACH ⇔ the *minimum* across-seed worst-band delta versus the dynamic,
+  demand-matched control exceeds `X = 0.05`.** The *minimum*, not the mean: one
+  seed's excursion is not a breach, and requiring every seed to clear the bar is
+  what makes the claim about the distribution rather than about a draw.
+- The absolute `frac_under_target` bar is **reported, not graded** — it was
+  ratified for an aggregate and means something else applied to a max over cells
+  (§L19b item 3).
+
+**Amendment to §2, 2026-09-28 — committed after `cd1f87651` and before the
+implementation commit.** §2 as first written left two things undefined, and either
+could have been chosen after seeing a result, which is what this ordering exists to
+prevent:
+
+- **Pairing.** Each arm and its dynamic, demand-matched control run on the **same
+  `N = 8` seeds** (common random numbers). The delta is formed **per seed**:
+  `delta_i` compares arm seed `i` with control seed `i`, never a rule across two
+  independent sets of eight. Pairing removes the seed-to-seed variance the arm and
+  its control share, so the bar tests the axis rather than the draw.
+- **Which worst-band delta.** Per seed, it is the **worst of the differences** —
+  `max over the nine cells of (arm − control)`, taken **cell by cell** — not the
+  difference of the two worsts (`max(arm) − max(control)`). The two disagree when
+  the arm's and the control's worst cells differ; the cell-wise form attributes a
+  breach to a specific band, and it cannot pass merely because the control happens
+  to be bad somewhere else.
+- **BREACH ⇔ `min over i` of that per-seed worst-band delta `> X = 0.05`.**
+- The `storage_scale`-scaled variant is **diagnostic and ungraded**, with the same
+  pairing.
+
+### 3. Both bases, with the dispositions written in advance
+
+Run on the **marginal** base (`storage_scale` 1.0) and the **covered** base
+(`storage_scale` 1.3).
+
+| outcome | disposition, fixed before the run |
+|---|---|
+| **breach on marginal only** | Coverage needs **headroom**. The response is the per-band gate read plus a headroom input to gate 4/5 — **item 5's (g) is not implicated**, because a lever that is not a byte operand removes the breach. |
+| **breach on covered too** | **Report to the design owner before drafting `PDM-Q-F34`.** (g) fires **only** if no non-byte lever — headroom, `r_target` — removes it. A breach that survives headroom is not yet proof that the price needs bytes; it is proof that the question belongs to steering. |
+| **no breach on either** | The era axis does not threaten coverage at fixed bytes under the ruled domain, and the residue is `cv_tx`'s `√T`-suppressed floor alone. |
+
+### 4. The subject must be in frame
+
+Before the verdict is read, the fixture asserts that **at the graded snapshot**:
+
+- the **burst** era sits in the **deep** band (age ≥ 2/3), and
+- the **plateau** shape carries **deep heavies** — its heavy cost tercile is not
+  confined to the hot band.
+
+This is not ceremony. The arm's second failed pass read "clear" for burst purely
+because the heavy era had aged out of the window before the snapshot: the verdict
+read the subject's *absence* and reported it as a pass. A run that cannot show its
+subject in frame is void, not passing.
+
+---
+
+## L19b — the heavy-era arm: the passes that failed, and the run under L19a (2026-09-28)
+
+### The passes that failed, and why none of them is a result
+
+Each produced a confident number that meant nothing, and each was found by running
+the arm, not by reading it:
+
+1. **The era key collapsed under a dynamic window.** Recycled slots are re-born at
+   age 0 and the era was keyed on age-at-birth, so every shard came to carry the
+   newest era's size: realized mean size **2.22** (Plateau, `S = 4`) and **0.57**
+   (Burst). "Coverage collapsed" meant "every shard got 2.2× bigger".
+2. **Run-normalized time put the subject out of frame.** A shard lives 50 epochs,
+   so the graded snapshot spans only the last third of the run's eras; Burst's heavy
+   era had **aged out entirely**, which is the sole reason it read "clear".
+3. **The first pre-registered bar was the wrong test.** "BREACH iff
+   `worst_frac_under ≥ 0.05`" reused the ratified `covered` bar, which was set for an
+   aggregate; on a max over nine cells the flat control trips it (0.050 → 0.214).
+4. **Meeting L19a's in-frame requirement exposed three fixture defects**, fixed
+   before any graded run: Burst centred in the *mid* band; Plateau shaped as "still
+   growing", confining every heavy to the hot and mid bands; and
+   `epochs × epoch_aging` = 0.78, so initial shards younger than 0.22 never recycled
+   and ended in the deep band carrying a *young* era's size.
+
+### The run under L19a — valid
+
+`--f34-heavy-era` at `edd92550b`, implementing L19a as committed and amended. **0 void
+runs, 0 runs with realized mean off 1.000**, subject in frame on every seed (Burst
+55/55 heavies deep; Plateau 30/76 and 32/61).
+
+| base | shape | `S` | min Δ | median Δ | max Δ | verdict |
+|---|---|---|---|---|---|---|
+| marginal | Plateau | 4 | +0.000 | +0.337 | +0.710 | clear |
+| marginal | Plateau | 10 | **+0.500** | +0.658 | +0.811 | **BREACH** |
+| marginal | Burst | 4 | **+0.652** | +0.745 | +0.859 | **BREACH** |
+| marginal | Burst | 10 | **+0.725** | +0.745 | +0.859 | **BREACH** |
+| covered | Plateau | 4 | +0.000 | +0.000 | +0.000 | clear |
+| covered | Plateau | 10 | +0.000 | +0.112 | +0.394 | clear |
+| covered | Burst | 4 | **+0.213** | +0.417 | +0.636 | **BREACH** |
+| covered | Burst | 10 | **+0.652** | +0.697 | +0.797 | **BREACH** |
+
+Δ is the per-seed cell-wise worst-band delta against the paired dynamic,
+demand-matched control; the verdict is `min Δ > 0.05`.
+
+**Attribution.** On every breaching seed the worst cell is **(deep, heavy)** — the
+subject cell, not a cell the control happened to lose. The margin agrees: the arm's
+worst margin is −1 to −3 where the control's is −1 to +1.
+
+**Disposition, as pre-registered: breach on the covered base ⇒ report to the design
+owner before any `PDM-Q-F34` draft.** A concentrated heavy era aged into the deep band
+is under-held at fixed total bytes even with 30 % storage headroom. **(g) has not
+fired:** it fires only if no non-byte lever — headroom, `r_target` — removes the
+breach, and that has not been tested. Plateau breaches on the marginal base only at
+`S = 10`, which is the headroom-only disposition.
+
+### The diagnostic disagrees, and the disagreement is not a clean leg attribution
+
+The `storage_scale`-scaled variant (ungraded) disagrees with the graded run in a
+direction that **flips with the shape**: lower for Plateau (covered `S = 10` median
++0.000 against graded +0.112), higher for Burst (covered `S = 10` median +0.958
+against +0.697). The flip tracks the sign of each shape's **unmatched** realized mean —
+Plateau 0.99–1.03, Burst 0.88–1.01 — because the variant scales `storage_scale` by
+that mean, and actor storage is an **integer rounded from it**
+(`scale = round(s × storage_scale)`). So where the mean exceeds 1 the variant hands
+storage-rich actors an extra slot, and where it is below 1 it takes one away.
+
+What the variant therefore measures is a **quantized capacity perturbation**, not the
+carry and fetch legs in isolation, and it is not reported as a leg finding. What it
+does show is that the verdict is **sensitive to capacity changes of a few percent** —
+which is evidence about the headroom lever the (g) question now turns on, and a reason
+to test that lever directly rather than infer it.
+
+---
+
+## L19c — the lever test on covered Burst: pre-registration (2026-09-28)
+
+**Committed before any of its code.** L19b found a concentrated heavy era aged into the
+deep band under-held on the covered base at fixed total bytes. Item 5's **(g)** fires
+only if **no non-byte lever** removes that breach. This section fixes which levers, at
+which values, and what each outcome means, before the first run.
+
+**Subject:** covered base (`storage_scale` 1.3), `EraShape::Burst`, `S ∈ {4, 10}` —
+the two arms that breached there.
+
+### 1. `r_target` is the bar, not a lever — excluded
+
+`r_target_hot` and `r_target_deep` stay at the ratified 3 and 6. They define what
+"under-held" means; sweeping them moves the bar rather than the system. Verified at the
+pin: `model::r_target` is called from `metrics.rs` (the coverage reads),
+`scenarios.rs:1395`, `:1533`, `:1733` (the serving under-count, the floored bootstrap
+gap and the +1-margin gate — all measurement) and two `main.rs` tests; **`agent.rs`,
+`participation.rs` and `reward.rs` never read it.** An actor's decision is
+`value = price · (1/R) · g_age(age, age_weight)` against a size-scaled carry cost
+(`agent.rs:201-203`). *(The relayed premise said "called only in `metrics.rs`"; the
+conclusion holds, the call-site claim does not, and this records the accurate one.)*
+
+### 2. The levers, one at a time from the covered baseline
+
+**Headroom — `storage_scale`:** `1.30` (baseline), `1.36`, `1.40`, `1.45`, `1.50`,
+`1.60`, `1.75`, `2.00`.
+
+Actor storage is **an integer rounded from `storage_scale`** (`round(22 · s)` for the
+storage-rich, `round(10 · s)` for the capital-rich), so the effective slack moves in
+whole slots:
+
+| `storage_scale` | rich | poor | slots per pair | vs 1.30 |
+|---|---|---|---|---|
+| 1.30 | 29 | 13 | 42 | — |
+| 1.36 | 30 | 14 | 44 | +4.8 % |
+| 1.40 | 31 | 14 | 45 | +7.1 % |
+| 1.45 | 32 | 14 | 46 | +9.5 % |
+| 1.50 | 33 | 15 | 48 | +14.3 % |
+| 1.60 | 35 | 16 | 51 | +21.4 % |
+| 1.75 | 38 | 18 | 56 | +33.3 % |
+| 2.00 | 44 | 20 | 64 | +52.4 % |
+
+`1.32` and `1.34` round to **exactly** 1.30's capacities, so they would be duplicate
+runs, not small steps, and are omitted. **+4.8 % is the finest headroom step these
+capacities admit**, which is the resolution of "sensitive at a few percent".
+
+**Deep-history premium — `age_weight`:** `0`, `1`, `2` (baseline), `3`, `4`, `6`, `8`.
+
+**One 2-D corner:** `storage_scale 2.00` × `age_weight 8`.
+
+### 3. Method — L19a and its amendment, unchanged
+
+Demand-matched sizes with the realized mean asserted at 1.000; `N = 8` paired seeds;
+each lever point graded against **its own** dynamic, demand-matched control (the same
+lever values, composition off) — so a lever that also moves the flat control is
+credited only with what it does to the heavy era; cell-wise worst-band delta;
+**BREACH ⇔ `min over seeds > 0.05`**; the heavy era asserted in the deep band.
+
+### 4. Outputs
+
+For headroom, the **lowest clearing `storage_scale`** and its effective slack. For
+`age_weight`, the lowest clearing value, or **"none in ladder"**. At every point, where
+the worst cell sits.
+
+### 5. Dispositions, fixed before running
+
+| outcome | disposition |
+|---|---|
+| **headroom clears at `X`** | (g) **not fired**. `PDM-Q-F34` becomes a **headroom requirement**, with `X` and its effective slack as the evidence. |
+| **only `age_weight` clears** | (g) **not fired**. The clearing slope is an **input to gate 4/5**. |
+| **neither clears in the ladders** | Report to the design owner; **(g)'s question goes to Rick**; no `PDM-Q-F34` draft. |
+
+If both clear, both are reported; the headroom row governs `PDM-Q-F34` because it is the
+lever the network does not have to ratify a new curve to use.
+
+---
+
+## L19d — the lever test: results (2026-09-28)
+
+`--f34-levers` at `ad782b6db`, implementing §L19c as committed at `2915b6877`. **No point
+is void**: every realized mean read 1.000 and the heavy era was in the deep band on
+every seed.
+
+**Correction to §L19c's slack table, dated to its writing.** It was computed with
+Python's `round`, which rounds half to even; the sim uses Rust's `f64::round`, which
+rounds half away from zero. Two rows were wrong: `1.45` is **32 / 15** (47 slots per
+pair, **+11.9 %**), not 32 / 14; `1.75` is **39 / 18** (57, **+35.7 %**), not 38 / 18. The
+ladder, the method and the dispositions are unaffected; the slots reported below are
+the ones the run used. The omission of `1.32` and `1.34` still holds under either rule.
+
+### Results
+
+| lever | `S` | lowest clearing value | effective slack | min Δ there |
+|---|---|---|---|---|
+| headroom | 4 | **`storage_scale` 1.45** | 32 / 15, **+11.9 %** | +0.042 |
+| headroom | 10 | **none in ladder** | — (even 2.00, +52.4 %, reads +0.412) | — |
+| `age_weight` | 4 | **4.0** | — | +0.000 |
+| `age_weight` | 10 | **8.0** — the top of the ladder | — | **+0.042** |
+| corner (2.00 × 8) | 4 and 10 | clears | — | +0.000 |
+
+At every breaching point the worst cell is **(deep, heavy)** on all eight seeds. Where
+the arm clears at high headroom or premium, the worst cell moves to **(hot, light)** —
+the breach does not migrate to another band, it goes away.
+
+### Dispositions, applied as pre-registered
+
+- **`S = 4` — headroom clears at 1.45 (+11.9 %), and so does `age_weight` at 4.0.**
+  Both clear; per §L19c the **headroom row governs**: (g) **not fired**, and
+  `PDM-Q-F34` becomes a headroom requirement with `storage_scale` 1.45 and +11.9 %
+  whole-slot slack as its evidence.
+- **`S = 10` — headroom does not clear anywhere in the ladder; only `age_weight`
+  does, at 8.0.** (g) **not fired**; the clearing slope is an input to gate 4/5.
+
+So **(g) does not fire at either `S`.** A non-byte lever removes the breach in both
+cases, which is the condition §L19a set for it.
+
+### What the split means, and what the pre-registration did not anticipate
+
+The dispositions were written per outcome, not per `S`, and the two spreads land in
+**different rows**. At the realized-scale spread (`S = 4`) ordinary headroom is enough.
+At the deliberately harsh spread (`S = 10`) headroom alone is not — +52 % slack still
+leaves a +0.41 breach — and only the deep-history premium clears it, **at the top of the
+ladder and by a margin of 0.008** (`min Δ` +0.042 against a bar of 0.05). That is a
+clearing value, but not a robust one: the ladder ends where the clearance begins.
+Which row governs `PDM-Q-F34` when the two spreads disagree is **not** something the
+pre-registration decided, and it is not decided here.
+
+### An observation, not graded
+
+`age_weight` is **not monotone** in its effect: `0` reads +0.152, `1` reads +0.652 and
+`2` reads +0.213 at `S = 4` (similarly at `S = 10`). Each point is graded against its own
+control, and `age_weight` moves the flat control too, so this is the premium's effect on
+the heavy era *relative to* its effect on a flat population. It is recorded because a
+gate-4/5 slope read off this ladder should not assume the curve is monotone below the
+baseline.
+
+---
+
+## L19e — item 7, separating the cost signal from the capacity leg: pre-registration (2026-09-28)
+
+**Committed before its code.** L19 recorded that its arm moved the per-shard **carry
+cost** and the per-shard **capacity draw** together, and that at baseline parameters
+capacity dominates (`storage_unit_cost = 0.03` against a value term of order 0.2–0.5).
+This sweep separates them.
+
+**Subject:** covered base (`storage_scale` 1.3), `EraShape::Burst`, `S ∈ {4, 10}`,
+baseline `age_weight` — the L19d subject, unchanged.
+
+**The lever:** `storage_unit_cost ∈ {0.0, 0.01, 0.03 (baseline), 0.06, 0.10, 0.20}`, one
+at a time.
+
+**What `0.0` isolates, stated precisely.** It removes the size-scaled carry term from
+every actor's decision. It does **not** remove the size-scaled **L10 fetch lag**, which
+does not read `storage_unit_cost`. So the `0.0` point is **capacity + fetch**, not
+capacity alone; the fetch leg is inert at baseline (`fetch_latency_per_unit = 0`), which
+is why the two coincide here, and the report says so rather than assuming it.
+
+**Method:** L19a's, unchanged — demand-matched sizes (mean 1.000 asserted), `N = 8`
+paired seeds, each point against its own control at the same `storage_unit_cost`,
+cell-wise worst-band delta, `min over seeds`, in-frame check.
+
+**Readings, fixed before the run:**
+
+| outcome | reading |
+|---|---|
+| `min Δ` at `0.0` ≈ `min Δ` at `0.03` | the **capacity leg carries the breach**; the carry signal is not doing the work |
+| `min Δ` rises with `storage_unit_cost` | the **carry signal contributes**, and its share is the rise from `0.0` |
+| `min Δ` falls with `storage_unit_cost` | the carry signal **relieves** the breach — heavier shards priced out of lighter holders' portfolios — and is reported as such |
+
+"≈" means within the across-seed spread at `0.03` (L19d's range at that point), so the
+comparison does not turn on a single seed. This sweep is **diagnostic**: it does not
+reopen (g), which L19c/L19d settled at the non-byte levers.
+
+---
+
+## L19f — item 7: results (2026-09-28)
+
+`--f34-unit-cost` at `1b81baf14`, implementing §L19e as committed at `14f786587`. **No
+point is void**: every realized mean read 1.000 and the heavy era sat in the deep band on
+every seed. `1b81baf14` adds report columns only (the arm's and control's absolute worst
+cell, the max delta, the seeds over `X`); the registered verdict code is unchanged from
+`83dad5cfa`, and every delta reproduces.
+
+| `S` | `storage_unit_cost` | min Δ | median Δ | max Δ | seeds > X | arm / ctl worst (median) | registered verdict |
+|---|---|---|---|---|---|---|---|
+| 4 | 0.00 | +0.000 | +0.000 | +0.000 | 0 | 0.000 / 0.000 | clear |
+| 4 | 0.01 | +0.000 | +0.000 | +0.000 | 0 | 0.000 / 0.000 | clear |
+| 4 | 0.03 | +0.213 | +0.429 | +0.636 | 8 | 0.429 / 0.000 | BREACH |
+| 4 | 0.06 | +0.725 | +0.750 | +0.859 | 8 | 0.750 / 0.000 | BREACH |
+| 4 | 0.10 | −0.262 | −0.203 | −0.025 | 0 | 0.750 / **1.000** | clear *(not a clearance — below)* |
+| 4 | 0.20 | +0.000 | +0.000 | +0.000 | 0 | **1.000 / 1.000** | clear *(not a clearance — below)* |
+| 10 | 0.00 | +0.000 | +0.000 | +0.000 | 0 | 0.000 / 0.000 | clear |
+| 10 | 0.01 | +0.000 | +0.000 | +0.000 | 0 | 0.000 / 0.000 | clear |
+| 10 | 0.03 | +0.652 | +0.707 | +0.797 | 8 | 0.707 / 0.000 | BREACH |
+| 10 | 0.06 | +0.725 | +0.750 | +0.859 | 8 | 0.750 / 0.000 | BREACH |
+| 10 | 0.10 | −0.262 | −0.203 | −0.025 | 0 | 0.750 / **1.000** | clear *(not a clearance — below)* |
+| 10 | 0.20 | −0.275 | −0.250 | −0.141 | 0 | 0.750 / **1.000** | clear *(not a clearance — below)* |
+
+"Median" here and in §L19g is the upper of the two middle values of eight (`Grade`'s);
+§L19b's table used their midpoint. They differ in the third decimal, and no verdict reads
+either.
+
+### Against the readings fixed in §L19e
+
+- **Row 1 (`0.0` ≈ `0.03`: the capacity leg carries the breach) — rejected.** At `0.0`
+  every seed reads `+0.000`; at `0.03` the seeds span `[+0.213, +0.636]` (`S = 4`) and
+  `[+0.652, +0.797]` (`S = 10`). Zero is outside both.
+- **Row 2 (Δ rises: the carry signal contributes) — applies from `0.0` to `0.06`, and the
+  share is the whole breach.** At `0.0` and `0.01` the arm's *absolute* worst cell is
+  `0.000` on every seed, at both `S`: with the size-scaled carry term removed, capacity
+  (with the fetch leg, inert at baseline as §L19e stated) under-holds **nothing** on the
+  covered base. The breach §L19b recorded is the carry signal's.
+- **Row 3 (Δ falls: the carry signal relieves the breach) — does not apply, although the
+  registered rule prints "clear" at `0.10` and `0.20`.** At those points the **control's**
+  worst cell reads `1.000`: every flat shard in it is under-held. `frac_under` is bounded
+  at 1, so a delta against a saturated control is capped and stops reading the arm. The
+  arm's own absolute state never falls — `0.000, 0.000, 0.429, 0.750, 0.750, 1.000` at
+  `S = 4`. A negative Δ there says the flat population fails harder than the heavy-era
+  population at that cost, not that cost relieves the heavy era. These points are
+  outside the instrument's range.
+
+### Why `S = 4` and `S = 10` read identically from `0.06` up
+
+On every seed at `storage_unit_cost ≥ 0.06` (and at `0.20` for `S = 10`), the arm's worst
+cell is (deep, heavy) and its under-held shards are **exactly the heavy-era shards**:
+`arm_worst × cell population = deep_heavy = heavy` — e.g. seed `0x5eed1234`, 55 of 69,
+all 55 heavies. The cell has hit a structural ceiling: every heavy shard dropped, every
+other shard held. Which shards are heavy is fixed by the paired composition draw, not by
+`S`, so the ceiling is the same at both spreads. At `S = 4`, `0.20`, the non-heavy shards
+(heavier at `S = 4` than at `S = 10`) go as well, and the arm's worst cell moves to
+(hot, light) at `1.000`.
+
+### What the pre-registration did not anticipate — post-hoc, not applied here
+
+§L19a's method has no **control-validity clause**. A registration that grades a delta
+should state one — at minimum, a point whose control worst cell reads `1.000` is void for
+the delta, not "clear". It is recorded as a proposal for the next registration; it is not
+applied retroactively to any verdict above.
+
+---
+
+## L19g — §L19b and §L19d read with the seed count and the absolute state (2026-09-28)
+
+**What prompted this.** §L19f's saturated control showed that a delta can print "clear"
+for a reason unrelated to the arm. That sent the lever test back through the same
+columns, and two more things surfaced. Neither changes a registered verdict. Both change
+what a verdict can be taken to mean.
+
+### 1. The registered rule's complement is one-seed permissive
+
+`BREACH ⇔ min over seeds > X`. §L19a chose the minimum so that a breach needs **every**
+seed — "requiring every seed to clear the bar is what makes the claim about the
+distribution rather than about a draw." The complement, "clear", is then satisfied by
+**one** seed at or under `X`. §L19c used "clear" as the lever's clearing criterion, and
+§L19d applied it as written; neither printed how many seeds a clear rested on.
+
+**§L19d's clearing points, with that count:**
+
+| `S` | point | registered | seeds > X | median Δ | the seed at or under `X` |
+|---|---|---|---|---|---|
+| 4 | headroom 1.45 | clear | **7 / 8** | +0.232 | `0x5eed1238` (+0.042) |
+| 4 | headroom 1.50 | clear | 7 / 8 | +0.217 | `0x5eed1238` (+0.042) |
+| 4 | headroom 1.60 | clear | 5 / 8 | +0.116 | three |
+| 4 | headroom 1.75 | clear | 1 / 8 | +0.000 | seven (`0x5eed1234` +0.072 is over) |
+| 4 | headroom 2.00 | clear | 0 / 8 | +0.000 | all |
+| 4 | `age_weight` 4 | clear | 6 / 8 | +0.116 | `0x5eed1238`, `0x5eed1236` |
+| 4 | `age_weight` 6 | clear | 1 / 8 | +0.000 | seven |
+| 4 | `age_weight` 8 | clear | 0 / 8 | +0.000 | all |
+| 10 | headroom, every rung | BREACH | 8 / 8 | ≥ +0.493 | none |
+| 10 | `age_weight` 8 | clear | **7 / 8** | +0.348 | `0x5eed1238` (+0.042) |
+| 10 | corner (2.00 × 8) | clear | 3 / 8 | +0.026 | five |
+
+One seed, `0x5eed1238`, carries **every marginal clearance** in §L19d: headroom 1.45 and
+1.50 and `age_weight` 4 at `S = 4`, and `age_weight` 8 at `S = 10`.
+
+**The same count on §L19b's clears:**
+
+| base | shape | `S` | registered | seeds > X | the seed at or under `X` |
+|---|---|---|---|---|---|
+| marginal | Plateau | 4 | clear | **7 / 8** | `0x5eed123a` (+0.000) |
+| covered | Plateau | 4 | clear | 0 / 8 | all |
+| covered | Plateau | 10 | clear | **7 / 8** | `0x5eed123a` (+0.000) |
+
+So §L19b's "Plateau breaches on the marginal base only at `S = 10`" also rests on one
+seed. Only covered Plateau at `S = 4` clears on all eight seeds.
+
+**An all-seeds reading, *unregistered*, for comparison.** Clear ⇔ every seed ≤ `X`:
+
+| `S` | headroom | `age_weight` | corner |
+|---|---|---|---|
+| 4 | **2.00** (+52.4 %) | 8 (with §2's caveat) | clears |
+| 10 | **none in ladder** | **none in ladder** | **does not clear** (3 / 8) |
+
+Under that reading `S = 4`'s headroom evidence moves from 1.45 (+11.9 %) to 2.00
+(+52.4 %). `S = 10` lands in §L19c's third row, corner included: "neither clears in the
+ladders ⇒ report to the design owner; (g)'s question goes to Rick."
+
+### 2. `age_weight` moves the control, and at both ends it degrades it
+
+The lever test grades each point against its own control, so a lever that also moves the
+flat population is netted out by construction. At three `age_weight` values it moves the
+control a long way:
+
+- **`age_weight` 0.** The control's **deep** band collapses (worst cell in age band 2,
+  `0.458–0.727` across seeds). The Δ of +0.152 is the arm at `0.750` against that.
+- **`age_weight` 6 and 8.** The control's **hot** band degrades (age band 0, up to
+  `0.229` and `0.267`): the premium pulls holders off young shards. At `S = 4`,
+  `age_weight` 8, the **arm's** worst cell is also hot (median `0.062`, up to `0.188`). The
+  heavy-era breach is gone, but the hot band now fails in both populations by the
+  absolute measure.
+
+The absolute `0.05` bar is **reported, not graded**, as §L19a §2 fixed for a max-over-cells
+statistic. The consequence is still plain: where `age_weight` clears the delta, it does so
+by moving coverage from the hot band to the deep band, not by adding coverage.
+
+**Correction to §L19d, dated to its writing.** Its "`age_weight` is not monotone in its
+effect" read the delta. The arm's absolute worst cell *is* monotone in `age_weight`:
+`0.750, 0.729, 0.429, 0.348, 0.116, 0.000` at `S = 4` over `0 … 6`, and
+`0.750, 0.750, 0.707, 0.688, 0.623, 0.429, 0.348` at `S = 10` over `0 … 8`. At `S = 4`,
+`age_weight` 8, the reading rises to `0.062`, and that `0.062` is the hot band.
+The non-monotonicity is the control collapsing at `0`. It is withdrawn as a statement
+about the heavy era.
+
+### 3. What this leaves for the design owner
+
+The registered verdicts stand exactly as §L19d applied them: (g) not fired at either `S`;
+`S = 4` gives a headroom requirement at 1.45; `S = 10` gives `age_weight` 8 as a
+gate-4/5 input. **Which reading governs `PDM-Q-F34` — the registered one, or the all-seeds
+one under which `S = 10` falls to row 3 — is Rick's.** The `PDM-Q-F34` draft stays held.
+
+**Recommendation.** The all-seeds reading is the one that applies §L19a's own stated
+rationale in both directions. For the next registration, use a three-valued verdict:
+**BREACH** (every seed over `X`), **CLEAR** (every seed at or under), and **SPLIT**
+(otherwise), plus §L19f's control-validity clause. A SPLIT is a finding about the seed
+distribution and needs more seeds, not a disposition.
+
+
+### 4. The governing reading — RULED (Rick, 2026-09-28)
+
+- **`PDM-Q-F34` is read all-seeds.** A point clears only if every seed is at or under
+  `X`.
+- **For every future pre-registration, the verdict has three values** — BREACH (every
+  seed over `X`), CLEAR (every seed at or under), SPLIT (otherwise) — and **a point is
+  void when its control has collapsed** (worst cell `1.000`).
+- **§L19a–§L19d's registered verdicts stand as registered, and do not govern.** They
+  are the record of what those rules returned, not the reading `PDM-Q-F34` takes.
+- **The `PDM-Q-F34` draft stays held.**
+
+**What the governing reading returns on the lever test** (§1's table):
+
+| `S` | headroom | `age_weight` | corner | §L19c row |
+|---|---|---|---|---|
+| 4 | clears at **2.00** only (+52.4 % slack) | clears at 8 | clears | headroom governs — at 2.00, not 1.45 |
+| 10 | none in ladder | none in ladder | does **not** clear (3 / 8 over) | **row 3**: neither clears |
+
+At `S = 4`, `age_weight` 8 clears with the control's hot band at `0.214` absolute, which
+§2 records and does not grade. `S = 10` lands in §L19c's third row, whose disposition
+sends (g)'s question to Rick. The route he set is §L19h: calibrate `storage_unit_cost`
+against real-world holding cost before the breach is read as a pricing case, since
+§L19f showed that the carry signal carries the whole breach.
