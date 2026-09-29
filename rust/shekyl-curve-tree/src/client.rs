@@ -45,8 +45,10 @@
 //!
 //! Membership-path assembly is CT-4 ([`crate::assemble`]); the cached
 //! frozen-`R_k` hot path and persistence are CT-1 ([`crate::store`]). The
-//! CT-2 replay oracle ([`recon::root_from_scalars`]) remains the KAT baseline;
-//! production root queries use the store hot path only.
+//! CT-2 replay oracle ([`recon::root_from_scalars`]) remains the KAT baseline.
+//! Production root queries go through [`CurveTreeClient::root_and_depth_at`]:
+//! an in-horizon height answers from its frontier snapshot, and a miss falls
+//! through to the store's count-keyed hot path.
 //!
 //! See `docs/design/CURVE_TREE_CLIENT.md` §3 and
 //! `docs/design/CT2_DRAIN_ORDER.md` §7 (data flow).
@@ -841,8 +843,8 @@ impl CurveTreeClient {
     ///
     /// **Store-write-before-commit (B5).** The block's full delta — newly
     /// drained bucket, newly created pending leaves, drained pending
-    /// removals, tip advance — lands in one ACID
-    /// [`LeafStore::append_block_deltas`] transaction *before* any
+    /// removals, tip advance, and the frontier snapshot — lands in one ACID
+    /// [`LeafStore::append_block_with_snapshot`] transaction *before* any
     /// in-memory state changes. On `Err` the client is unchanged on both
     /// sides and the same block can be re-ingested; on `Ok` the in-memory
     /// commit is infallible. The store can therefore never lag memory; the
@@ -955,12 +957,12 @@ impl CurveTreeClient {
         // is ever driven by). An all-empty delta still advances the tip, and
         // still captures: a block that drains nothing has a frontier, and a
         // ring that skipped it would have a hole at that height.
-        self.store.append_block_deltas(
+        self.store.append_block_with_snapshot(
             &drained,
             &new_leaves,
             &removed,
             block.height,
-            Some(&snapshot),
+            &snapshot,
         )?;
 
         // Store committed — the in-memory commit below is infallible.
@@ -1122,22 +1124,26 @@ impl CurveTreeClient {
     pub fn root_at(&self, reference_height: BlockHeight) -> Result<CurveTreeRoot, ClientError> {
         // Single-source the reconstruction: defer to `root_and_depth_at` and
         // drop the depth (CT-5c Q1). Both the root-only read (this method, the
-        // §3.3 verify hot path) and the root+depth read go through the one
-        // `root_at_count(n)` call, so they cannot describe different tree
-        // states. The discarded depth is `layer_count_for_leaves`, a handful of
-        // integer divisions — negligible on the verify path.
+        // §3.3 verify hot path) and the root+depth read go through that one
+        // dispatcher — the snapshot ring when it covers the height, otherwise
+        // the count-keyed store path — so they cannot describe different tree
+        // states. The discarded depth is a handful of integer divisions.
         self.root_and_depth_at(reference_height)
             .map(|(root, _)| root)
     }
 
     /// Reconstruct the curve-tree root **and** its depth at `reference_height`,
-    /// both pinned to the same drained leaf count `n` (CT-5c Q1).
+    /// both pinned to the same drained leaf count `n` (CT-5c Q1, CT-6 C3).
     ///
-    /// The root is the [`LeafStore::root_at_count`] hot path; the depth is
-    /// [`shekyl_fcmp::tree::layer_count_for_leaves`] over the same `n` (depth is
-    /// a pure function of the leaf count, so it needs no tree build). The two
-    /// reads share `n`, so the returned `(root, depth)` always describe the same
-    /// tree state — there is no cross-await window in which they could diverge.
+    /// When the snapshot ring covers the height, the root is [`Frontier::root`]
+    /// and the depth is [`Frontier::depth`], after checking the snapshot's own
+    /// leaf count against this height's `n`. A mismatch is
+    /// [`ClientError::SnapshotLeafCountMismatch`]: the row names a different
+    /// tree than the drain index, and serving around it would hide the capture.
+    /// A miss falls through to [`LeafStore::root_at_count`] for the root and
+    /// [`shekyl_fcmp::tree::layer_count_for_leaves`] for the depth, over that
+    /// same `n`. The two halves of a reading share one count, so they describe
+    /// the same tree.
     ///
     /// The CT-5c send path needs both before assembling: the depth sizes the
     /// FCMP++ proof weight for fee estimation (which runs *before* path
@@ -1369,9 +1375,10 @@ impl From<StoreError> for ClientError {
     }
 }
 
-// CT-6 increment 2. The oracle fixture and the Q2 examiner live here so
-// this file does not absorb them. Increment 4's tests grade the real
-// segment tier and snapshot tier through `examine_tier_readings`.
+// CT-6 increment 2. The oracle fixture and the Q2 examiner live in
+// `ct6_oracle` so this file does not absorb them. Increment 4's real-tier
+// passes live in `ct6_oracle::ring` and grade both tiers through
+// `examine_tier_readings`.
 #[cfg(test)]
 mod ct6_oracle;
 
@@ -2292,7 +2299,7 @@ mod tests {
         {
             let store = LeafStore::open(&path).unwrap();
             store
-                .append_block_deltas(&drained, &pending, &[], BlockHeight::from_raw(70), None)
+                .append_block_deltas(&drained, &pending, &[], BlockHeight::from_raw(70))
                 .unwrap();
         }
 
@@ -2334,7 +2341,6 @@ mod tests {
                 &[store_entry(0, 200, 0)],
                 &[],
                 BlockHeight::from_raw(70),
-                None,
             )
             .unwrap();
         let err = CurveTreeClient::resume(Arc::new(store)).unwrap_err();

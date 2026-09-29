@@ -143,12 +143,12 @@ impl AdvanceRig {
         }
         let snapshot = self.frontier.encode();
         self.store
-            .append_block_deltas(
+            .append_block_with_snapshot(
                 &[],
                 &[],
                 &[],
                 BlockHeight::from_raw(self.height),
-                Some(&snapshot),
+                &snapshot,
             )
             .expect("ring commit");
         self.height += 1;

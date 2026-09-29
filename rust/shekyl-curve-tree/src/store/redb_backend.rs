@@ -48,8 +48,8 @@ const PENDING_TABLE: TableDefinition<GindexKey, &[u8; 320]> = TableDefinition::n
 // `Frontier::max_encoded_len` is the bound rather than the size.
 //
 // The ring is TOTAL over `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` and bounded by
-// it: `append_block_deltas` writes the height it ingests and, in the same
-// transaction, removes what has fallen out of the horizon. There is no
+// it: `append_block_with_snapshot` writes the height it ingests and, in the
+// same transaction, removes what has fallen out of the horizon. There is no
 // eviction policy to hold, because the write and the removal are one step
 // (CT-6 Q1, RULED 2026-09-28). The run it keeps is `[h - horizon, h]` —
 // closed at the bottom, because the deepest legal reorg's FORK sits at
@@ -603,20 +603,17 @@ pub enum StoreError {
         /// Version this build reads and writes.
         expected: u64,
     },
-    /// A frontier snapshot was offered for a height at or below the store's
+    /// A frontier snapshot was offered for a height strictly below the store's
     /// `sync_tip`.
     ///
-    /// `append_block_deltas` tolerates a non-monotonic `tip_height` for the
-    /// freeze clock's sake (`effective_tip` takes the max), but a *snapshot*
-    /// carries no such reading: production ingest only ever moves forward,
-    /// and `rollback_to_fork` lowers `sync_tip` and truncates the ring in one
-    /// transaction, so a rewind is always followed by a strictly higher
-    /// height. A snapshot below the tip is therefore a caller bug, and
-    /// accepting it would insert a row the ring's own bound did not place —
-    /// widening `frontier_snapshot_span` so the dispatcher reports coverage
-    /// it does not have. Refused rather than evicted around: an eviction
-    /// tweak would defend a state production cannot reach while silently
-    /// accepting the bug that produced it.
+    /// [`LeafStore::append_block_deltas`] tolerates a non-monotonic
+    /// `tip_height` for the freeze clock (`effective_tip` takes the max).
+    /// A snapshot does not: [`LeafStore::append_block_with_snapshot`] refuses
+    /// `tip_height < sync_tip`. Equality stays legal because the cell is
+    /// born at `0`, and block 0 is a real first capture — `<=` would refuse
+    /// genesis. A height below the tip would land under the retention floor
+    /// and still widen `frontier_snapshot_span`. Refused rather than evicted
+    /// around: eviction would hide the caller bug that produced the row.
     SnapshotBelowSyncTip {
         /// The height the snapshot was offered for.
         tip: u64,
@@ -1023,7 +1020,7 @@ impl LeafStore {
         entries: &[LeafEntry],
         tip_height: BlockHeight,
     ) -> Result<(), StoreError> {
-        self.append_block_deltas(entries, &[], &[], tip_height, None)
+        self.append_block_deltas(entries, &[], &[], tip_height)
     }
 
     /// Apply one ingested block's store deltas in a single ACID write txn:
@@ -1049,7 +1046,59 @@ impl LeafStore {
     ///
     /// All-empty deltas still advance the tip and freeze clock, exactly
     /// like the empty [`Self::append_drained`] of CT-1/CT-2.
+    ///
+    /// This write does not touch the snapshot ring. Production ingest, which
+    /// captures a frontier at every height, uses
+    /// [`Self::append_block_with_snapshot`]. A caller that passed an optional
+    /// snapshot here could omit it and leave a hole the ring's totality
+    /// depends on not existing.
     pub fn append_block_deltas(
+        &self,
+        drained: &[LeafEntry],
+        pending_added: &[LeafEntry],
+        pending_removed: &[Gindex],
+        tip_height: BlockHeight,
+    ) -> Result<(), StoreError> {
+        self.write_block_deltas(drained, pending_added, pending_removed, tip_height, None)
+    }
+
+    /// [`Self::append_block_deltas`] plus one frontier snapshot, in the same
+    /// transaction.
+    ///
+    /// `frontier_snapshot` is required. The height this method commits is a
+    /// height the ring covers. Callers that populate only the segment tier
+    /// — the verify-edge baseline, the segment-freeze tests — stay on
+    /// [`Self::append_block_deltas`], which cannot write a ring row.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::SnapshotBelowSyncTip`] when `tip_height` is strictly
+    /// below the store's sync tip, plus every error of
+    /// [`Self::append_block_deltas`]. The refusal happens before any write.
+    pub fn append_block_with_snapshot(
+        &self,
+        drained: &[LeafEntry],
+        pending_added: &[LeafEntry],
+        pending_removed: &[Gindex],
+        tip_height: BlockHeight,
+        frontier_snapshot: &[u8],
+    ) -> Result<(), StoreError> {
+        self.write_block_deltas(
+            drained,
+            pending_added,
+            pending_removed,
+            tip_height,
+            Some(frontier_snapshot),
+        )
+    }
+
+    /// Shared body of [`Self::append_block_deltas`] and
+    /// [`Self::append_block_with_snapshot`].
+    ///
+    /// `frontier_snapshot` is `Some` only on the snapshot method, whose
+    /// argument is required. The leaf and pending writes are one
+    /// implementation so the two doors cannot drift.
+    fn write_block_deltas(
         &self,
         drained: &[LeafEntry],
         pending_added: &[LeafEntry],
@@ -2611,19 +2660,13 @@ mod tests {
         let a = sample_entry(3, 70);
         let b = sample_entry(4, 71);
         store
-            .append_block_deltas(&[], &[a, b], &[], BlockHeight::from_raw(10), None)
+            .append_block_deltas(&[], &[a, b], &[], BlockHeight::from_raw(10))
             .unwrap();
         assert_eq!(pending_gindexes(&store), vec![3, 4]);
         assert_eq!(store.leaf_count().unwrap(), 0);
 
         store
-            .append_block_deltas(
-                &[a],
-                &[],
-                &[Gindex::from_raw(3)],
-                BlockHeight::from_raw(70),
-                None,
-            )
+            .append_block_deltas(&[a], &[], &[Gindex::from_raw(3)], BlockHeight::from_raw(70))
             .unwrap();
         assert_eq!(pending_gindexes(&store), vec![4]);
         assert_eq!(store.leaf_count().unwrap(), 1);
@@ -2635,7 +2678,7 @@ mod tests {
         let store = LeafStore::open_ephemeral().unwrap();
         let snapshot = b"a frontier's bytes".as_slice();
         store
-            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(100), Some(snapshot))
+            .append_block_with_snapshot(&[], &[], &[], BlockHeight::from_raw(100), snapshot)
             .unwrap();
         assert_eq!(
             store.frontier_snapshot_span().unwrap(),
@@ -2647,7 +2690,7 @@ mod tests {
         // call would otherwise succeed and insert a row at height 90 —
         // widening the span downward past what the ring's own bound placed.
         let err = store
-            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(90), Some(snapshot))
+            .append_block_with_snapshot(&[], &[], &[], BlockHeight::from_raw(90), snapshot)
             .expect_err("a snapshot below the sync tip is a caller bug");
         assert!(
             matches!(
@@ -2669,7 +2712,7 @@ mod tests {
         // clock's tolerance is untouched, so this refusal is scoped to the
         // ring rather than narrowing the append contract.
         store
-            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(90), None)
+            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(90))
             .expect("a snapshot-free stale append is still legal");
         assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(100));
     }
@@ -2678,13 +2721,7 @@ mod tests {
     fn block_deltas_reject_pending_gindex_collision_and_abort() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(
-                &[],
-                &[sample_entry(5, 70)],
-                &[],
-                BlockHeight::from_raw(10),
-                None,
-            )
+            .append_block_deltas(&[], &[sample_entry(5, 70)], &[], BlockHeight::from_raw(10))
             .unwrap();
         // Colliding insert rides with a drained append: the whole txn must
         // abort — the drained leaf cannot land either.
@@ -2694,7 +2731,6 @@ mod tests {
                 &[sample_entry(5, 99)],
                 &[],
                 BlockHeight::from_raw(11),
-                None,
             )
             .unwrap_err();
         assert!(matches!(
@@ -2709,22 +2745,10 @@ mod tests {
     fn block_deltas_reject_missing_pending_removal_and_abort() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(
-                &[],
-                &[sample_entry(7, 70)],
-                &[],
-                BlockHeight::from_raw(10),
-                None,
-            )
+            .append_block_deltas(&[], &[sample_entry(7, 70)], &[], BlockHeight::from_raw(10))
             .unwrap();
         let err = store
-            .append_block_deltas(
-                &[],
-                &[],
-                &[Gindex::from_raw(8)],
-                BlockHeight::from_raw(11),
-                None,
-            )
+            .append_block_deltas(&[], &[], &[Gindex::from_raw(8)], BlockHeight::from_raw(11))
             .unwrap_err();
         assert!(matches!(err, StoreError::PendingRowMissing { gindex: 8 }));
         assert_eq!(
@@ -2745,7 +2769,6 @@ mod tests {
                 &[bad],
                 &[],
                 BlockHeight::from_raw(10),
-                None,
             )
             .unwrap_err();
         // batch_index counts drained first, then pending_added.
@@ -2760,7 +2783,7 @@ mod tests {
     fn block_deltas_all_empty_advance_tip_and_freeze_clock() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(42), None)
+            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(42))
             .unwrap();
         assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(42));
         assert_eq!(store.leaf_count().unwrap(), 0);
@@ -2771,13 +2794,7 @@ mod tests {
     fn clear_empties_pending_table() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(
-                &[],
-                &[sample_entry(9, 70)],
-                &[],
-                BlockHeight::from_raw(10),
-                None,
-            )
+            .append_block_deltas(&[], &[sample_entry(9, 70)], &[], BlockHeight::from_raw(10))
             .unwrap();
         assert_eq!(pending_gindexes(&store), vec![9]);
         store.clear().unwrap();
@@ -2795,7 +2812,7 @@ mod tests {
         let drained = [sample_entry(0, 60), sample_entry(1, 61)];
         let pending = [sample_entry(5, 90), sample_entry(3, 80)];
         store
-            .append_block_deltas(&drained, &pending, &[], BlockHeight::from_raw(61), None)
+            .append_block_deltas(&drained, &pending, &[], BlockHeight::from_raw(61))
             .unwrap();
 
         assert_eq!(store.read_drained_entries().unwrap(), drained.to_vec());
@@ -2879,7 +2896,6 @@ mod tests {
                 &[entry_created_at(3, 150, 90), entry_created_at(4, 162, 102)],
                 &[],
                 BlockHeight::from_raw(161),
-                None,
             )
             .unwrap();
 
@@ -2905,7 +2921,6 @@ mod tests {
                 &[entry_created_at(1, 150, 60)],
                 &[],
                 BlockHeight::from_raw(70),
-                None,
             )
             .unwrap();
         store.rollback_to_fork(BlockHeight::from_raw(70)).unwrap();
@@ -2977,7 +2992,6 @@ mod tests {
                 &[],
                 &[],
                 BlockHeight::from_raw(120),
-                None,
             )
             .unwrap();
         store.rollback_to_fork(BlockHeight::from_raw(100)).unwrap();
@@ -3010,7 +3024,6 @@ mod tests {
                 &[],
                 &[],
                 BlockHeight::from_raw(65),
-                None,
             )
             .unwrap();
         store.rollback_to_fork(BlockHeight::from_raw(0)).unwrap();
@@ -3050,7 +3063,6 @@ mod tests {
                 &[entry_created_at(1, 140, 80), entry_created_at(2, 130, 20)],
                 &[],
                 BlockHeight::from_raw(100),
-                None,
             )
             .unwrap();
         store.rollback_to_fork(BlockHeight::from_raw(70)).unwrap();
@@ -3206,7 +3218,6 @@ mod tests {
                 &[entry_created_at(5, 140, 80)],
                 &[],
                 BlockHeight::from_raw(90),
-                None,
             )
             .unwrap();
         let before = logical_snapshot(&store);
@@ -3219,7 +3230,6 @@ mod tests {
                 &[bad],
                 &[Gindex::from_raw(5)],
                 BlockHeight::from_raw(95),
-                None,
             )
             .unwrap_err();
         assert!(matches!(
@@ -3321,7 +3331,6 @@ mod tests {
                         &b.added,
                         &b.removed,
                         BlockHeight::from_raw(b.height),
-                        None,
                     )
                     .unwrap();
             }
@@ -3377,13 +3386,7 @@ mod tests {
                 .collect();
             let removed: Vec<Gindex> = drained.iter().map(|e| e.gindex).collect();
             store
-                .append_block_deltas(
-                    &drained,
-                    &added,
-                    &removed,
-                    BlockHeight::from_raw(height),
-                    None,
-                )
+                .append_block_deltas(&drained, &added, &removed, BlockHeight::from_raw(height))
                 .unwrap();
             blocks.push(SimBlock {
                 height,

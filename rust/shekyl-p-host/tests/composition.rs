@@ -380,7 +380,7 @@ async fn a_pruned_member_refuses_the_whole_serve_set_and_names_every_one() {
     }
     both.extend(second);
     store
-        .append_block_deltas(&both, &[], &[], BlockHeight::from_raw(10_000), None)
+        .append_block_deltas(&both, &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segments 0 and 1");
     store.prune_frozen(&[]).expect("prune without pinning");
 
@@ -413,13 +413,7 @@ async fn unfrozen_members_are_pinned_and_recorded_as_not_yet_servable() {
     // not the same thing as a fault.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
 
     let pinned = PinnedServeSet::acquire(&StorePinner::new(
@@ -511,13 +505,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     // repeatedly. It is the guard against someone adding the rebind later.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
 
     let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(10_000));
@@ -699,13 +687,7 @@ async fn overlapping_refreshes_cannot_install_an_older_witness_last() {
     // it on every tick.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
 
     let pinner = SlowSecondCallPinner {
@@ -759,13 +741,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     // that window discards bytes no re-pin can restore.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
 
     let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(1));
@@ -797,7 +773,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
         e.gindex = Gindex::from_raw(leaves_per_segment() as u64 + i as u64);
     }
     store
-        .append_block_deltas(&second, &[], &[], BlockHeight::from_raw(20_000), None)
+        .append_block_deltas(&second, &[], &[], BlockHeight::from_raw(20_000))
         .expect("freeze segment 1");
     // The daemon the persona reads has moved with the chain — what the tip
     // refresher does on its cadence in production.
@@ -836,13 +812,7 @@ async fn staleness_reads_one_clock_twice_with_independent_drivers() {
 
     // Ingest advances the tip; nothing refreshes the serve-set.
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("ingest");
     let stale = pinned.staleness(bound).expect("read staleness");
     assert!(stale.is_stale(), "10_000 blocks of ingest, no refresh");
@@ -885,13 +855,7 @@ async fn staleness_measures_local_ingest_not_the_distance_to_the_daemon() {
 
     // The wallet catches up. The serve-set is not re-derived.
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("ingest");
 
     assert_eq!(
@@ -917,13 +881,7 @@ async fn a_store_rollback_beneath_the_pins_is_its_own_reading() {
     // affirmative all-clear on the one store event that can unpin a member.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
     let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(10_000));
     let pinned = PinnedServeSet::acquire(&pinner).await.expect("pin");
@@ -982,13 +940,7 @@ async fn re_ingest_past_the_baseline_does_not_clear_a_dropped_pin() {
     // shards nothing retains.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
     let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(10_000));
     let pinned = PinnedServeSet::acquire(&pinner).await.expect("pin");
@@ -1015,7 +967,7 @@ async fn re_ingest_past_the_baseline_does_not_clear_a_dropped_pin() {
         // reading lands on `Current` rather than merely on the wrong arm.
         // That is the finding's actual hazard: not a bad number, an
         // affirmative all-clear.
-        .append_block_deltas(&replayed, &[], &[], BlockHeight::from_raw(10_050), None)
+        .append_block_deltas(&replayed, &[], &[], BlockHeight::from_raw(10_050))
         .expect("re-ingest past the baseline");
     assert!(
         store.sync_tip_height().expect("tip") > BlockHeight::from_raw(10_000),
@@ -1059,13 +1011,7 @@ async fn one_terminally_pruned_member_does_not_wedge_every_later_refresh() {
 
     // Segment 0 freezes and is pruned before this persona ever bonded it.
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
     store.prune_frozen(&[]).expect("prune unpinned");
 
@@ -1090,7 +1036,7 @@ async fn one_terminally_pruned_member_does_not_wedge_every_later_refresh() {
         e.gindex = Gindex::from_raw(leaves_per_segment() as u64 + i as u64);
     }
     store
-        .append_block_deltas(&second, &[], &[], BlockHeight::from_raw(20_000), None)
+        .append_block_deltas(&second, &[], &[], BlockHeight::from_raw(20_000))
         .expect("freeze segment 1");
     store.prune_frozen(&[]).expect("prune");
     assert!(
@@ -1115,13 +1061,7 @@ async fn a_pruned_member_still_refuses_the_start() {
     // paid before the persona advertises itself.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
     store.prune_frozen(&[]).expect("prune unpinned");
 
@@ -1211,13 +1151,7 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
     // only one of those is recoverable.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
     let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(1));
 
@@ -1289,13 +1223,7 @@ async fn a_refresh_that_pins_a_different_store_keeps_the_previous_witness() {
     // previous pins stay; the mismatch is an implementor defect.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("freeze segment 0");
     let pinned = PinnedServeSet::acquire(&StorePinner::new(
         Arc::clone(&store),
@@ -1360,13 +1288,7 @@ async fn host_staleness_uses_the_live_witness() {
     );
 
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("ingest");
     let stale = host.staleness(bound).expect("read host staleness");
     assert!(
@@ -1444,13 +1366,7 @@ impl ServeSetPinner for UndeclaredPrefixPinner {
 async fn prefix_acquire_requires_the_declared_posture_and_bounds_membership() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
 
     let err = PinnedServeSet::acquire(&UndeclaredPrefixPinner {
@@ -1506,13 +1422,7 @@ async fn prefix_acquire_requires_the_declared_posture_and_bounds_membership() {
 async fn prefix_refresh_admits_a_segment_that_froze_since_the_last_one() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
     let pinner = PrefixPinner {
         store: Arc::clone(&store),
@@ -1527,7 +1437,7 @@ async fn prefix_refresh_admits_a_segment_that_froze_since_the_last_one() {
         e.gindex = Gindex::from_raw(leaves_per_segment() as u64 + i as u64);
     }
     store
-        .append_block_deltas(&second, &[], &[], BlockHeight::from_raw(20_000), None)
+        .append_block_deltas(&second, &[], &[], BlockHeight::from_raw(20_000))
         .expect("append and freeze segment 1");
 
     let refreshed = pinned.refreshed(&pinner).await.expect("refresh");
@@ -1576,13 +1486,7 @@ async fn prefix_over_an_unfrozen_store_is_empty_and_still_acquires() {
 async fn prefix_overstating_the_cursor_refuses_and_understating_it_does_not() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
     store.set_prune_disabled().expect("declare the posture");
 
@@ -1638,13 +1542,7 @@ async fn prefix_overstating_the_cursor_refuses_and_understating_it_does_not() {
 async fn prefix_posture_loss_is_posture_lost_not_pins_dropped() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
     let pinner = PrefixPinner {
         store: Arc::clone(&store),
@@ -1681,13 +1579,7 @@ async fn prefix_posture_loss_is_posture_lost_not_pins_dropped() {
 async fn prefix_refresh_repairs_a_lost_posture_and_verifies_the_corpus() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
     let pinner = PrefixPinner {
         store: Arc::clone(&store),
@@ -1722,13 +1614,7 @@ async fn prefix_refresh_repairs_a_lost_posture_and_verifies_the_corpus() {
 async fn prefix_loss_window_prune_is_surfaced_persisted_and_refuses_a_restart() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(
-            &segment_entries(),
-            &[],
-            &[],
-            BlockHeight::from_raw(10_000),
-            None,
-        )
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
     let pinner = PrefixPinner {
         store: Arc::clone(&store),
@@ -1806,7 +1692,6 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
             &[],
             &[],
             BlockHeight::from_raw(SCAN_TIP),
-            None,
         )
         .expect("freeze segment 0");
     let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(SCAN_TIP));

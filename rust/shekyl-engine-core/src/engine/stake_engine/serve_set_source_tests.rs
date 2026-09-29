@@ -168,7 +168,7 @@ fn handle_with_frozen_segment() -> (tempfile::TempDir, CurveTreeHandle) {
             .collect();
         // Buried far past the freeze gate, so segment 0 froze on append.
         store
-            .append_block_deltas(&entries, &[], &[], BlockHeight::from_raw(30_000), None)
+            .append_block_deltas(&entries, &[], &[], BlockHeight::from_raw(30_000))
             .expect("append a full frozen segment");
     }
     let client = CurveTreeClient::open(path).expect("resume over the frozen store");
