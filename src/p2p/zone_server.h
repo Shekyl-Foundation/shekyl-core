@@ -26,6 +26,7 @@
 #include <boost/asio.hpp>
 #include <boost/thread/thread.hpp>
 
+#include "misc_log_ex.h"
 #include "net/levin_protocol_handler_async.h"
 #include "net/net_utils_base.h"
 #include "net/tor_address.h"
@@ -58,9 +59,39 @@ namespace detail
     return slots;
   }
 
-  inline void zone_post(void*, std::uint64_t id, std::uint32_t kind, const shekyl_seam_observed* observed,
-      const std::uint8_t* bytes, std::size_t len, const shekyl_close_cause*)
+  inline const char* close_kind_name(std::uint8_t kind)
   {
+    switch (kind)
+    {
+      case SHEKYL_CLOSE_PREFIX_MISMATCH: return "PrefixMismatch";
+      case SHEKYL_CLOSE_TRANSPORT_HANDSHAKE_FAILED: return "TransportHandshakeFailed";
+      case SHEKYL_CLOSE_TRANSPORT_TIMEOUT: return "TransportTimeout";
+      case SHEKYL_CLOSE_ADMISSION_REFUSED: return "AdmissionRefused";
+      case SHEKYL_CLOSE_DIAL_FAILED: return "DialFailed";
+      case SHEKYL_CLOSE_PROXY_REFUSED: return "ProxyRefused";
+      case SHEKYL_CLOSE_LEVIN_HANDSHAKE_TIMEOUT: return "LevinHandshakeTimeout";
+      case SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED: return "LevinHandshakeRejected";
+      case SHEKYL_CLOSE_PEER_CLOSED: return "PeerClosed";
+      case SHEKYL_CLOSE_RECORD_REJECTED: return "RecordRejected";
+      case SHEKYL_CLOSE_SESSION_REFUSED: return "SessionRefused";
+      case SHEKYL_CLOSE_IO_ERROR: return "IoError";
+      case SHEKYL_CLOSE_SEND_QUEUE_FULL: return "SendQueueFull";
+      case SHEKYL_CLOSE_LOCAL_CLOSE: return "LocalClose";
+      default: return "unknown";
+    }
+  }
+
+  inline void zone_post(void*, std::uint64_t id, std::uint32_t kind, const shekyl_seam_observed* observed,
+      const std::uint8_t* bytes, std::size_t len, const shekyl_close_cause* cause)
+  {
+    if (kind == SHEKYL_SEAM_CLOSED)
+    {
+      if (cause != nullptr)
+        MINFO("seam close id " << id << " cause " << close_kind_name(cause->kind)
+            << " reply " << cause->reply_code);
+      else
+        MINFO("seam close id " << id << " cause missing");
+    }
     zone_binding* target = nullptr;
     {
       std::lock_guard<std::mutex> lock(slots().mu);
@@ -323,7 +354,11 @@ public:
       return false;
     const shekyl_seam_open_result result = shekyl_seam_open(&ffi, 0);
     if (result.id == 0)
+    {
+      MINFO("seam open refused cause " << detail::close_kind_name(result.cause_kind)
+          << " reply " << result.reply_code);
       return false;
+    }
     std::lock_guard<std::mutex> lock(m_mu);
     const auto found = m_links.find(result.id);
     if (found == m_links.end())
