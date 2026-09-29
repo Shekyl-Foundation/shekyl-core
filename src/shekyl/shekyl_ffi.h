@@ -4237,6 +4237,10 @@ void shekyl_seam_delivery_finished(std::uint64_t id, int accepted);
 void shekyl_seam_handler_gone(std::uint64_t id);
 void shekyl_seam_reap(std::uint64_t id);
 int shekyl_seam_send(std::uint64_t id, const std::uint8_t* bytes, std::size_t len);
+/// Same send. `*found` is 1 when the registry held `id`. `*cause_kind`
+/// is the close code, or 0 when there is none. Returns 1 when accepted.
+int shekyl_seam_send_report(std::uint64_t id, const std::uint8_t* bytes, std::size_t len,
+    int* found, std::uint8_t* cause_kind);
 void shekyl_seam_close(std::uint64_t id);
 std::uint64_t shekyl_seam_socket_count(std::uint32_t connector, std::uint32_t direction);
 std::uint64_t shekyl_seam_inbound_held(void);

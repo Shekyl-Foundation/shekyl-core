@@ -113,6 +113,13 @@ pub struct Hub {
     dial: Arc<RwLock<Option<Arc<dyn Dial>>>>,
 }
 
+/// What one `send` did. `found` is whether the registry held the id.
+pub struct SendReport {
+    pub accepted: bool,
+    pub found: bool,
+    pub cause: Option<CloseKind>,
+}
+
 impl Hub {
     /// `sockets` is the process-wide admission table. Connectors receive
     /// the same table from the caller; this hub does not mint one.
@@ -395,26 +402,55 @@ impl Hub {
     /// [`CloseKind::SendQueueFull`] is recorded before this returns.
     #[must_use]
     pub fn send(&self, id: SocketId, bytes: Vec<u8>) -> bool {
+        self.send_report(id, bytes).accepted
+    }
+
+    /// The same send, with whether the registry held `id` and any cause.
+    pub fn send_report(&self, id: SocketId, bytes: Vec<u8>) -> SendReport {
         let outcome = {
             let inner = self.lock();
             let Some(conn) = inner.conns.get(&id) else {
-                return false;
+                return SendReport {
+                    accepted: false,
+                    found: false,
+                    cause: None,
+                };
             };
-            if conn.cause.is_some() {
-                return false;
+            if let Some(cause) = conn.cause {
+                return SendReport {
+                    accepted: false,
+                    found: true,
+                    cause: Some(cause.kind()),
+                };
             }
             let Some(send) = conn.send.as_ref() else {
-                return false;
+                return SendReport {
+                    accepted: false,
+                    found: true,
+                    cause: None,
+                };
             };
             send.try_send(bytes)
         };
         match outcome {
-            Ok(()) => true,
+            Ok(()) => SendReport {
+                accepted: true,
+                found: true,
+                cause: None,
+            },
             Err(CloseKind::SendQueueFull) => {
                 self.finish(id, CloseCause::new(CloseKind::SendQueueFull));
-                false
+                SendReport {
+                    accepted: false,
+                    found: true,
+                    cause: Some(CloseKind::SendQueueFull),
+                }
             }
-            Err(_) => false,
+            Err(kind) => SendReport {
+                accepted: false,
+                found: true,
+                cause: Some(kind),
+            },
         }
     }
 
@@ -750,6 +786,20 @@ mod tests {
             1
         );
         assert_eq!(rig.hub.inbound_held(), 0);
+    }
+
+    #[test]
+    fn a_relay_send_reaches_the_seam_connection() {
+        let rig = rig();
+        let opened = adopt(&rig, Direction::Outbound, 64);
+        let report = rig.hub.send_report(opened.id, b"relay-send".to_vec());
+        assert!(report.found);
+        assert!(report.accepted);
+        assert!(report.cause.is_none());
+        let missing = shekyl_transport_layer::SocketId::from_ffi(9).expect("id");
+        let absent = rig.hub.send_report(missing, b"relay-send".to_vec());
+        assert!(!absent.found);
+        assert!(!absent.accepted);
     }
 
     #[test]

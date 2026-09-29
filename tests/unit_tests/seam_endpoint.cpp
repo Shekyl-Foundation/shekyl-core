@@ -12,6 +12,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <boost/asio.hpp>
@@ -305,6 +306,52 @@ TEST(seam_endpoint, two_connections_keep_distinct_registry_keys)
 
   shekyl_seam_close(first);
   shekyl_seam_close(second);
+  wait_until_links_close(ex);
+  ex.io.stop();
+  runner.join();
+  shekyl_seam_bind(nullptr, nullptr, nullptr);
+}
+
+TEST(seam_endpoint, a_relay_send_on_the_strand_reaches_the_seam_connection)
+{
+  commands cmds;
+  pool ex;
+  ex.config.set_handler(&cmds, nullptr);
+  bind_harness(ex);
+
+  boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work(ex.io.get_executor());
+  boost::thread runner([&ex] { ex.io.run(); });
+
+  const std::uint64_t id = open_clearnet(0);
+  ASSERT_NE(id, 0u);
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    if (ex.config.get_connections_count() == 1)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_EQ(ex.config.get_connections_count(), 1u);
+
+  std::promise<std::pair<int, int>> done;
+  auto waited = done.get_future();
+  const auto conn = shekyl::seam_connection_id(id);
+  auto strand = ex.strand_for(id);
+  boost::asio::post(*strand, [&ex, &done, conn] {
+    std::vector<std::uint8_t> payload{'r', 'e', 'l', 'a', 'y'};
+    const int hit = ex.config.send(epee::byte_slice(std::move(payload)), conn);
+    std::vector<std::uint8_t> other{'x'};
+    const int miss = ex.config.send(epee::byte_slice(std::move(other)), boost::uuids::nil_uuid());
+    done.set_value(std::make_pair(hit, miss));
+  });
+
+  ASSERT_EQ(waited.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+  const auto result = waited.get();
+  EXPECT_GT(result.first, 0);
+  EXPECT_EQ(result.second, 0);
+
+  shekyl_seam_close(id);
   wait_until_links_close(ex);
   ex.io.stop();
   runner.join();

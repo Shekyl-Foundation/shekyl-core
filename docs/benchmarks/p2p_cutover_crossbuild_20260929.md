@@ -95,7 +95,9 @@ The seam-versus-epee run failed earlier than this. That run logged
 `Unable to send transaction(s) via Dandelion++ stem` and the
 transaction stayed in the origin pool. Two epee nodes, with the
 filter in the same empty state, still stemmed. The stem failure is
-the send, not the choice of peer.
+the send, not the choice of peer. The failing send now logs the
+connection id, its zone and direction, whether the registry held
+it, and the seam's return and cause.
 
 ## Not this run
 

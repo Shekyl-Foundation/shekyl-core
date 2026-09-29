@@ -469,6 +469,16 @@ namespace levin
          then waited on a silence that peer was never given a chance to break.
          Found sweeping the carrier's own conversion; fixed here rather than
          left as the next instance of it. */
+      bool in_registry = false;
+      p2p.for_connection(destination, [&in_registry](detail::p2p_context&) {
+        in_registry = true;
+        return true;
+      });
+      if (!in_registry)
+      {
+        MINFO("seam send refused conn " << destination << " registry no");
+        return false;
+      }
       const int res = p2p.send(std::move(blob), destination);
       return res > 0;
     }

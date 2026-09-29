@@ -432,6 +432,46 @@ pub unsafe extern "C" fn shekyl_seam_send(id: u64, bytes: *const u8, len: usize)
     }
 }
 
+/// The same send, with the registry and the cause.
+///
+/// `found` is 1 when the registry held `id`. `cause_kind` is the close
+/// code when one was recorded, and 0 when there is none.
+///
+/// # Safety
+/// `bytes` is readable for `len` when `len` is nonzero. `found` and
+/// `cause_kind` are writable.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_seam_send_report(
+    id: u64,
+    bytes: *const u8,
+    len: usize,
+    found: *mut i32,
+    cause_kind: *mut u8,
+) -> i32 {
+    if found.is_null() || cause_kind.is_null() {
+        return 0;
+    }
+    unsafe {
+        *found = 0;
+        *cause_kind = 0;
+    }
+    let Some(frame) = (unsafe { slice_from_ptr(bytes, len) }) else {
+        return 0;
+    };
+    let Some(hub) = hub() else {
+        return 0;
+    };
+    let Some(id) = SocketId::from_ffi(id) else {
+        return 0;
+    };
+    let report = hub.send_report(id, frame.to_vec());
+    unsafe {
+        *found = i32::from(report.found);
+        *cause_kind = report.cause.map(CloseKind::code).unwrap_or(0);
+    }
+    i32::from(report.accepted)
+}
+
 /// Record local close when no cause is recorded yet, and post `closed`.
 #[no_mangle]
 pub extern "C" fn shekyl_seam_close(id: u64) {
