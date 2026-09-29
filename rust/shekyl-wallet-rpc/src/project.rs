@@ -693,10 +693,12 @@ mod tests {
                 SendRecipient {
                     address: "shekyl1a".to_owned(),
                     amount: 1_000,
+                    rid: None,
                 },
                 SendRecipient {
                     address: "shekyl1b".to_owned(),
                     amount: 2_500,
+                    rid: None,
                 },
             ],
             change_amount: 100,

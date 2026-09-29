@@ -459,6 +459,7 @@ mod tests {
                     recipients: vec![SendRecipient {
                         address: "shekyl1a".to_owned(),
                         amount: 3_500,
+                        rid: None,
                     }],
                     change_amount: 100,
                     inputs: vec![],
@@ -678,10 +679,12 @@ mod tests {
             SendRecipient {
                 address: "shekyl1a".to_owned(),
                 amount: u64::MAX,
+                rid: None,
             },
             SendRecipient {
                 address: "shekyl1b".to_owned(),
                 amount: 1,
+                rid: None,
             },
         ];
 

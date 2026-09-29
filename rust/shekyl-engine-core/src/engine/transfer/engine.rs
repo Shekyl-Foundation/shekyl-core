@@ -1533,6 +1533,7 @@ where
                     .map(|r| shekyl_engine_state::SendRecipient {
                         address: r.address.clone(),
                         amount: r.amount_atomic_units.to_raw(),
+                        rid: r.rid,
                     })
                     .collect();
                 wallet.record_dispatched_send(

@@ -3199,6 +3199,23 @@
                                             "name": "u64",
                                             "ty": "U64"
                                           }
+                                        },
+                                        {
+                                          "name": "rid",
+                                          "ty": {
+                                            "name": "Option<T>",
+                                            "ty": {
+                                              "Option": {
+                                                "name": "PaymentRequestId",
+                                                "ty": {
+                                                  "NewtypeStruct": {
+                                                    "name": "u64",
+                                                    "ty": "U64"
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
                                         }
                                       ]
                                     }

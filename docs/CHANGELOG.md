@@ -26,9 +26,11 @@
   test yet crosses payer to payee.
 - Contract: `TxRecipient.rid` (optional `PaymentRequestId`) on
   `build_pending_tx`; wallet-rpc parses it through the shared
-  `params::parse_rid` (moved from `receiving.rs`). The send journal's own
-  `rid` column (`WALLET_SEND_RECORD.md` §1, a persisted-block change under
-  rule 42) is still owed in its own round; `SendRecipient` is unchanged.
+  `params::parse_rid` (moved from `receiving.rs`). The send journal stores
+  the echoed `rid` per recipient at dispatch, as PR-SJ-1 ruled
+  (`SendRecipient::rid`; send-journal block version 3 → 4, snapshot
+  regenerated; pre-genesis, strict-equality gating, no migration), so the
+  payer's own "paid request #N" never needs the trial re-derivation.
 - Why now: the desktop wallet's Receive page issues `rid` links and its
   scan matches them, but no sender echoed one, so every link-paid receive
   arrived unattributed. The desktop wallet (same-named branch) passes a pasted link's `rid` through.

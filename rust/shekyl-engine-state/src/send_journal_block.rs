@@ -51,7 +51,12 @@ use shekyl_types::BlockHeight;
 /// `SendState::Confirmed::height` are [`BlockHeight`]. Postcard bytes of
 /// the transparent `u64` stay identical; the schema type-name change
 /// still bumps.
-pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 3;
+/// Version `4` (2026-09-28): [`SendRecipient::rid`] — the payment request
+/// a recipient's output answered, stored at dispatch as PR-SJ-1 ruled
+/// (`WALLET_SEND_RECORD.md` §1), so "paid request #N" never needs the
+/// trial re-derivation. A new field in a positional postcard struct;
+/// strict-equality gating, pre-genesis, no migration.
+pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 4;
 
 /// The wallet's own outputs that must not be spent again yet, keyed by
 /// `global_output_index`: for each, a transaction spending it is already
@@ -143,6 +148,11 @@ pub struct SendRecipient {
     pub address: String,
     /// Amount sent to this recipient, in atomic units.
     pub amount: u64,
+    /// The payment request this output answered — the `rid` echoed in its
+    /// encrypted label (`TxRecipient::rid`) — or `None` for a sentinel
+    /// label. Dispatch-authored like the rest of the row: the chain holds
+    /// it only as ciphertext the payee can open.
+    pub rid: Option<crate::PaymentRequestId>,
 }
 
 /// One carried input of a recorded send — the wipe-stable identifier the
@@ -545,6 +555,7 @@ mod tests {
             recipients: vec![SendRecipient {
                 address: "shekyl1example".to_owned(),
                 amount: 7_000,
+                rid: None,
             }],
             change_amount: 22_300,
             inputs: vec![SendInputRef {
@@ -675,6 +686,7 @@ mod tests {
             vec![SendRecipient {
                 address: "shekyl1example".to_owned(),
                 amount: 7_000,
+                rid: None,
             }],
             vec![SendInputRef {
                 gindex: 11,

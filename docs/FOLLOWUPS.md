@@ -14,9 +14,6 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
-- **Store the echoed `rid` on the send journal's `SendRecipient` at dispatch.** `WALLET_SEND_RECORD.md` §1 ruled it (PR-SJ-1), and the payer side now writes the label (`TxRecipient::rid` → `outbound_label::label_plaintext_for_recipient`, 2026-09-28), but the journal row still carries only `{address, amount}`, so "paid request #N" on the payer's own history would need the trial re-derivation. Blocker: `SendRecipient` is a persisted-block type (`postcard_schema::Schema`), so the field is a rule-42 wire change with a version-constant bump — its own round, not a rider on the send-path change. Falsify by a `rid` field on `SendRecipient` landing with the persisted-schema snapshot updated.
-  - Owner: [`WALLET_SEND_RECORD.md`](design/WALLET_SEND_RECORD.md)
-  - Target: pre-genesis
 - **Move daemon RPC and Tor control onto `shekyl-runtime::runtime`, then print the thread ledger once at startup.** Both still build their own (`shekyl-daemon-rpc` `ffi_exports.rs:162`, `shekyl-tor-control-daemon` `blocking.rs:120`). A startup total taken before that move omits those pools. After both call `runtime`, `shekyld` prints `shekyl_thread_ledger::report` once before the p2p loop. Falsify by: those two builders call `runtime`, and `daemon.cpp` logs the report before the p2p loop. Reopen if another `Builder::new_multi_thread` appears outside `shekyl-runtime`.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis

@@ -136,7 +136,10 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 20;
+///
+/// `21` (2026-09-28): `SendRecipient::rid` — the nested send-journal block
+/// went to version 4.
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 21;
 
 /// The `.wallet`-side ledger bundle: the six typed blocks + a
 /// bundle-level `format_version`.
@@ -1450,6 +1453,7 @@ mod tests {
             vec![SendRecipient {
                 address: "shekyl1example".to_owned(),
                 amount: 1,
+                rid: None,
             }],
             vec![SendInputRef {
                 gindex: 300,
