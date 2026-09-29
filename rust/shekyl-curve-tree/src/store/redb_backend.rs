@@ -41,9 +41,6 @@ const PINNED_SEGMENTS_TABLE: TableDefinition<SegmentId, u32> =
 // re-encoding. Rows enter on block ingest, leave on drain
 // (`append_block_deltas`) or on the rollback creation-height filter.
 const PENDING_TABLE: TableDefinition<GindexKey, &[u8; 320]> = TableDefinition::new("pending");
-// `META_TABLE` is a heterogeneous `&str`-keyed counter store; its `u64`
-// values convert to `BlockHeight`/counts at the API boundary. This is the
-// one legitimate raw-`u64` value site in the store.
 // CT-6 increment 4's snapshot ring: the curve-tree frontier as it stood
 // after each ingested block, keyed by that block's height. Variable-width —
 // a frontier is its partial chunks, which are shorter than their capacities
@@ -62,6 +59,9 @@ const PENDING_TABLE: TableDefinition<GindexKey, &[u8; 320]> = TableDefinition::n
 // as blocks arrive.
 const FRONTIER_SNAPSHOTS_TABLE: TableDefinition<BlockHeightKey, &[u8]> =
     TableDefinition::new("frontier_snapshots");
+// `META_TABLE` is a heterogeneous `&str`-keyed counter store; its `u64`
+// values convert to `BlockHeight`/counts at the API boundary. This is the
+// one legitimate raw-`u64` value site in the store.
 const META_TABLE: TableDefinition<&str, u64> = TableDefinition::new("meta");
 
 const META_LEAF_COUNT: &str = "leaf_count";

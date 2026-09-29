@@ -923,10 +923,6 @@ impl CurveTreeClient {
         let drained = self.newly_drained_from_index(through);
         let removed: Vec<Gindex> = drained.iter().map(|entry| entry.gindex).collect();
 
-        // One ACID transaction for the whole block delta; the freeze clock
-        // (`META_SYNC_TIP`) advances to the ingested tip — the only height
-        // the freeze gate is ever driven by. An all-empty delta still
-        // advances the tip.
         // The frontier advances on a CLONE, before the transaction opens.
         // A fold is fallible, and B5 puts every fallible step ahead of the
         // commit: a leaf whose bytes will not hash refuses the block with
@@ -953,6 +949,12 @@ impl CurveTreeClient {
         }
         let snapshot = advanced.encode();
 
+        // One ACID transaction for the whole block delta — leaves, pending
+        // rows, the snapshot, and the freeze clock (`META_SYNC_TIP`, which
+        // advances to the ingested tip and is the only height the freeze gate
+        // is ever driven by). An all-empty delta still advances the tip, and
+        // still captures: a block that drains nothing has a frontier, and a
+        // ring that skipped it would have a hole at that height.
         self.store.append_block_deltas(
             &drained,
             &new_leaves,
