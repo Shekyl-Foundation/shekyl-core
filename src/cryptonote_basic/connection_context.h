@@ -46,10 +46,20 @@ namespace cryptonote
 {
   struct cryptonote_connection_context: public epee::net_utils::connection_context_base
   {
-    cryptonote_connection_context(): m_state(state_before_handshake), m_remote_blockchain_height(0), m_last_response_height(0),
+    cryptonote_connection_context()
+      : cryptonote_connection_context(boost::uuids::uuid(), epee::net_utils::network_address(), false)
+    {}
+
+    // SSL is refused. The base is handed a constant false; the seam has
+    // no SSL state to pass.
+    cryptonote_connection_context(boost::uuids::uuid connection_id,
+        const epee::net_utils::network_address& remote_address, bool is_income)
+      : epee::net_utils::connection_context_base(connection_id, remote_address, is_income, false),
+        m_state(state_before_handshake), m_remote_blockchain_height(0), m_last_response_height(0),
         m_expected_heights_start(0), m_last_request_time(boost::date_time::not_a_date_time), m_callback_request_count(0),
         m_last_known_hash(crypto::null_hash), m_score(0),
-        m_expect_response(0), m_expect_height(0), m_num_requested(0) {}
+        m_expect_response(0), m_expect_height(0), m_num_requested(0)
+    {}
 
     enum state
     {

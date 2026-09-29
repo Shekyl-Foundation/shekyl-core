@@ -220,7 +220,7 @@ namespace shekyl
       : m_io(io),
         m_strand(strand),
         m_context(seam_connection_id(id), seam_network_address(observed),
-            observed.direction == SHEKYL_DIRECTION_INBOUND, false),
+            observed.direction == SHEKYL_DIRECTION_INBOUND),
         m_id(id),
         m_retire(std::move(retire))
     {

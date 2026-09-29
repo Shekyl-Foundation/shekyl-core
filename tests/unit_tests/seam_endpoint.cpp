@@ -30,6 +30,9 @@ namespace
   struct context : public epee::net_utils::connection_context_base
   {
     using connection_context_base::connection_context_base;
+    context(boost::uuids::uuid connection_id, const epee::net_utils::network_address& remote_address, bool is_income)
+      : connection_context_base(connection_id, remote_address, is_income, false)
+    {}
     static constexpr int handshake_command() noexcept { return 1001; }
     static constexpr bool session_established() noexcept { return false; }
     std::optional<std::size_t> get_max_bytes(std::uint32_t, std::uint32_t, std::int32_t* = nullptr) const

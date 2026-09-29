@@ -291,16 +291,11 @@ namespace nodetool
         m_in_timedsync(false)
     {}
 
-    // The base address fields are const. This is the same reconstruction
-    // `connection_context_base::set_details` uses, so a seam link can name
-    // the connection without an epee `connection` friend.
-    p2p_connection_context_t(boost::uuids::uuid connection_id, const epee::net_utils::network_address& remote_address, bool is_income, bool ssl)
-      : p2p_connection_context_t()
-    {
-      auto* base = static_cast<epee::net_utils::connection_context_base*>(this);
-      base->~connection_context_base();
-      new (base) epee::net_utils::connection_context_base(connection_id, remote_address, is_income, ssl);
-    }
+    p2p_connection_context_t(boost::uuids::uuid connection_id, const epee::net_utils::network_address& remote_address, bool is_income)
+      : base_type(connection_id, remote_address, is_income),
+        support_flags(0),
+        m_in_timedsync(false)
+    {}
 
     uint32_t support_flags;
     bool m_in_timedsync;
