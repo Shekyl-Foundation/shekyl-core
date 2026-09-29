@@ -781,8 +781,6 @@ namespace nodetool
     epee::net_utils::ssl_support_t m_ssl_support;
   };
 
-    const int64_t default_limit_up = P2P_DEFAULT_LIMIT_RATE_UP;      // kB/s
-    const int64_t default_limit_down = P2P_DEFAULT_LIMIT_RATE_DOWN;  // kB/s
     extern const command_line::arg_descriptor<std::string> arg_p2p_bind_ip;
     extern const command_line::arg_descriptor<std::string> arg_p2p_bind_ipv6_address;
     extern const command_line::arg_descriptor<std::string, false, true, 2> arg_p2p_bind_port;

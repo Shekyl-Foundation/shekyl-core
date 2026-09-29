@@ -10,7 +10,13 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
+use shekyl_transport_layer::MessageClass;
 use tokio::sync::Notify;
+
+struct Item {
+    class: MessageClass,
+    bytes: Vec<u8>,
+}
 
 /// Outbound bytes. The cap is the only storage limit. A send that does
 /// not fit is not stored.
@@ -26,7 +32,7 @@ struct ByteQueueInner {
     limit: usize,
     used: usize,
     closed: bool,
-    items: VecDeque<Vec<u8>>,
+    items: VecDeque<Item>,
 }
 
 /// [`ByteQueue::try_push`] could not store the buffer.
@@ -73,7 +79,10 @@ impl ByteQueue {
             return self.overflow(inner);
         }
         inner.used = next;
-        inner.items.push_back(bytes);
+        inner.items.push_back(Item {
+            class: MessageClass::Session,
+            bytes,
+        });
         drop(inner);
         self.data.notify_one();
         self.parked.notify_all();
@@ -103,16 +112,16 @@ impl ByteQueue {
         self.wake();
     }
 
-    /// The next buffer. `None` means the queue is closed and empty.
-    /// The byte count stays until [`Self::release`].
-    pub(crate) async fn pop(&self) -> Option<Vec<u8>> {
+    /// The next buffer and the class the sender named. `None` means the
+    /// queue is closed and empty. The byte count stays until [`Self::release`].
+    pub(crate) async fn pop(&self) -> Option<(MessageClass, Vec<u8>)> {
         loop {
             let mut notified = std::pin::pin!(self.data.notified());
             notified.as_mut().enable();
             {
                 let mut inner = self.inner.lock().expect("outbound");
-                if let Some(bytes) = inner.items.pop_front() {
-                    return Some(bytes);
+                if let Some(item) = inner.items.pop_front() {
+                    return Some((item.class, item.bytes));
                 }
                 if inner.closed {
                     return None;
@@ -127,7 +136,12 @@ impl ByteQueue {
     /// after it finishes them.
     #[must_use]
     pub fn try_pop(&self) -> Option<Vec<u8>> {
-        self.inner.lock().expect("outbound").items.pop_front()
+        self.inner
+            .lock()
+            .expect("outbound")
+            .items
+            .pop_front()
+            .map(|item| item.bytes)
     }
 
     /// The next buffer. Blocks the calling thread. `None` means the queue
@@ -140,8 +154,8 @@ impl ByteQueue {
     pub fn pop_blocking(&self) -> Option<Vec<u8>> {
         let mut inner = self.inner.lock().expect("outbound");
         loop {
-            if let Some(bytes) = inner.items.pop_front() {
-                return Some(bytes);
+            if let Some(item) = inner.items.pop_front() {
+                return Some(item.bytes);
             }
             if inner.closed {
                 return None;

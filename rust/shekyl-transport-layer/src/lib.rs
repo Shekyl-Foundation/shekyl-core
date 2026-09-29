@@ -25,6 +25,7 @@ const _: () = assert!(shekyl_p2p_transport::RESPONDER_FLIGHT_LEN == 1_160);
 
 mod admission;
 mod ban;
+mod budget;
 mod cause;
 mod declaration;
 mod dial;
@@ -33,6 +34,7 @@ pub use admission::{
     CloseResult, Direction, ObservedEndpoint, OpenError, OpenSocket, SocketId, Sockets,
 };
 pub use ban::{BanList, Ipv4Subnet};
+pub use budget::{LinkBudget, LinkDirection, MessageClass, Observed, Turn};
 pub use cause::{c_header, CloseCause, CloseKind, Phase};
 pub use declaration::{
     addressing_of, connector_for, declaration, stack_plan, AddedLayer, Addressing, Assessment,

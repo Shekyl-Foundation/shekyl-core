@@ -4275,6 +4275,20 @@ int shekyl_zone_set_ceiling(const shekyl_inbound_ceiling* ceiling);
 void shekyl_zone_session_established(std::uint64_t id);
 void shekyl_zone_shutdown(void);
 
+/// The operator's link budget, in KiB/s. A negative value removes that
+/// direction's bucket. Zero or positive installs one. The default is
+/// unlimited, which is the absence of a bucket.
+void shekyl_link_set_up(std::int64_t kbps);
+void shekyl_link_set_down(std::int64_t kbps);
+/// The rate in KiB/s, or -1 when that direction is unlimited.
+std::int64_t shekyl_link_get_up(void);
+std::int64_t shekyl_link_get_down(void);
+/// Bytes and packets the budget has moved. A null pointer is skipped.
+void shekyl_link_totals(std::uint64_t* bytes_down, std::uint64_t* packets_down,
+    std::uint64_t* bytes_up, std::uint64_t* packets_up);
+/// Bytes this connection has moved. A null pointer is skipped.
+void shekyl_link_connection(std::uint64_t id, std::uint64_t* bytes_up, std::uint64_t* bytes_down);
+
 } // extern "C"
 
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h

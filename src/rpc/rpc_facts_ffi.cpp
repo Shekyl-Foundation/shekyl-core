@@ -1187,16 +1187,8 @@ int shekyl_rpc_net_stats(core_rpc_handle* h, shekyl_rpc_net_stats_facts* out)
   {
     std::memset(out, 0, sizeof(*out));
     out->start_time = static_cast<uint64_t>(h->rpc->get_core().get_start_time());
-    {
-      CRITICAL_REGION_LOCAL(epee::net_utils::network_throttle_manager::m_lock_get_global_throttle_in);
-      epee::net_utils::network_throttle_manager::get_global_throttle_in()
-        .get_stats(out->total_packets_in, out->total_bytes_in);
-    }
-    {
-      CRITICAL_REGION_LOCAL(epee::net_utils::network_throttle_manager::m_lock_get_global_throttle_out);
-      epee::net_utils::network_throttle_manager::get_global_throttle_out()
-        .get_stats(out->total_packets_out, out->total_bytes_out);
-    }
+    shekyl_link_totals(&out->total_bytes_in, &out->total_packets_in,
+      &out->total_bytes_out, &out->total_packets_out);
     return SHEKYL_RPC_FACTS_OK;
   }
   catch (const std::exception& e)
@@ -1255,6 +1247,26 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
       e.send_count = ctx.m_send_cnt;
       e.current_speed_down = ctx.m_current_speed_down;
       e.current_speed_up = ctx.m_current_speed_up;
+      {
+        // The budget counted the wire bytes. The speed is that count
+        // over the connection's age. It is not a second limit.
+        std::uint64_t socket_id = 0;
+        std::memcpy(&socket_id, ctx.m_connection_id.data + 8, sizeof(socket_id));
+        if (socket_id != 0)
+        {
+          std::uint64_t up = 0;
+          std::uint64_t down = 0;
+          shekyl_link_connection(socket_id, &up, &down);
+          e.send_count = up;
+          e.recv_count = down;
+          if (now > e.started && e.started != 0)
+          {
+            const double span = static_cast<double>(now - e.started);
+            e.current_speed_up = static_cast<double>(up) / span;
+            e.current_speed_down = static_cast<double>(down) / span;
+          }
+        }
+      }
       e.height = ctx.m_remote_blockchain_height;
       e.support_flags = support_flags;
       e.port = ctx.m_remote_address.port();

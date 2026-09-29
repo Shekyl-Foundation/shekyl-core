@@ -3365,54 +3365,38 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::set_rate_up_limit(const boost::program_options::variables_map& vm, int64_t limit)
   {
-    this->islimitup=(limit != -1) && (limit != default_limit_up);
-
-    if (limit==-1) {
-      limit=default_limit_up;
-    }
-
-    epee::net_utils::connection<epee::levin::async_protocol_handler<p2p_connection_context> >::set_rate_up_limit( limit );
-    MINFO("Set limit-up to " << limit << " kB/s");
+    // A negative value is unlimited: no bucket. Zero and above are KiB/s.
+    // P2P_DEFAULT_LIMIT_RATE_UP is an inherited number, not this default.
+    this->islimitup = limit >= 0;
+    shekyl_link_set_up(limit);
+    if (limit < 0)
+      MINFO("Set limit-up to unlimited");
+    else
+      MINFO("Set limit-up to " << limit << " KiB/s");
     return true;
   }
 
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::set_rate_down_limit(const boost::program_options::variables_map& vm, int64_t limit)
   {
-    this->islimitdown=(limit != -1) && (limit != default_limit_down);
-    if(limit==-1) {
-      limit=default_limit_down;
-    }
-    epee::net_utils::connection<epee::levin::async_protocol_handler<p2p_connection_context> >::set_rate_down_limit( limit );
-    MINFO("Set limit-down to " << limit << " kB/s");
+    this->islimitdown = limit >= 0;
+    shekyl_link_set_down(limit);
+    if (limit < 0)
+      MINFO("Set limit-down to unlimited");
+    else
+      MINFO("Set limit-down to " << limit << " KiB/s");
     return true;
   }
 
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::set_rate_limit(const boost::program_options::variables_map& vm, int64_t limit)
   {
-    int64_t limit_up = 0;
-    int64_t limit_down = 0;
-
-    if(limit == -1)
-    {
-      limit_up = default_limit_up;
-      limit_down = default_limit_down;
-    }
-    else
-    {
-      limit_up = limit;
-      limit_down = limit;
-    }
-    if(!this->islimitup) {
-      epee::net_utils::connection<epee::levin::async_protocol_handler<p2p_connection_context> >::set_rate_up_limit(limit_up);
-      MINFO("Set limit-up to " << limit_up << " kB/s");
-    }
-    if(!this->islimitdown) {
-      epee::net_utils::connection<epee::levin::async_protocol_handler<p2p_connection_context> >::set_rate_down_limit(limit_down);
-      MINFO("Set limit-down to " << limit_down << " kB/s");
-    }
-
+    // Applies only to a direction the operator did not set on its own.
+    // Negative is unlimited, the same as leaving the flag off.
+    if(!this->islimitup)
+      set_rate_up_limit(vm, limit);
+    if(!this->islimitdown)
+      set_rate_down_limit(vm, limit);
     return true;
   }
 

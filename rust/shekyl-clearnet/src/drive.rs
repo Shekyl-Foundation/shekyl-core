@@ -13,7 +13,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use shekyl_capped_stream::{read_capped, write_capped, ByteQueue, Overfull, StreamEnds};
+use shekyl_capped_stream::{node_gate, read_capped, write_capped, ByteQueue, Overfull, StreamEnds};
 use shekyl_net_address::NetworkAddress;
 use shekyl_p2p_transport::{
     prefix_for, Established, Initiator, NetworkId, Responder, SendHalf, MESSAGE1_LEN, MESSAGE2_LEN,
@@ -23,7 +23,8 @@ use shekyl_peer_policy::InboundCeiling;
 use shekyl_socks::{connect as socks_connect, Destination, Isolation, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick, WakeWait};
 use shekyl_transport_layer::{
-    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, OpenSocket, Sockets,
+    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, LinkDirection, MessageClass,
+    OpenError, OpenSocket, Sockets,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -291,6 +292,7 @@ async fn serve<C>(
 where
     C: Clock + Clone + Send + 'static,
 {
+    let conn = reserved.as_ref().map(|open| open.id().get()).unwrap_or(0);
     let (mut read, write) = stream.into_split();
     let StreamEnds {
         session,
@@ -310,6 +312,7 @@ where
         &tally,
         writer_queue,
         Arc::clone(&overfull),
+        conn,
     )
     .await;
     let (mut writer, recv) = match opened {
@@ -347,7 +350,7 @@ where
         drop(writer.await);
         return CloseCause::new(CloseKind::LocalClose);
     }
-    let read_fut = read_half(read, recv, inbound, Arc::clone(&overfull));
+    let read_fut = read_half(read, recv, inbound, Arc::clone(&overfull), conn);
     tokio::pin!(read_fut);
     tokio::select! {
         read_cause = &mut read_fut => {
@@ -378,6 +381,7 @@ async fn open_channel<C>(
     tally: &Arc<HandshakeTally>,
     outbound: ByteQueue,
     overfull: Arc<Overfull>,
+    conn: u64,
 ) -> Result<(tokio::task::JoinHandle<Option<CloseCause>>, SeamRecv), CloseKind>
 where
     C: Clock + Clone + Send + 'static,
@@ -385,13 +389,19 @@ where
     match (kind, role) {
         (ChannelChoice::Plain, _) => {
             let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
-            let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull));
+            let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull, conn));
             drop(setup_tx.send(Setup::Plain));
             Ok((writer, SeamRecv::Plain))
         }
         (ChannelChoice::Noise, Role::Responder) => {
             let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
-            let writer = tokio::spawn(write_half(write, setup_rx, outbound, Arc::clone(&overfull)));
+            let writer = tokio::spawn(write_half(
+                write,
+                setup_rx,
+                outbound,
+                Arc::clone(&overfull),
+                conn,
+            ));
             let mut setup_tx = Some(setup_tx);
             match noise_handshake(
                 read,
@@ -400,6 +410,7 @@ where
                 handshake_within,
                 tally,
                 &mut setup_tx,
+                conn,
             )
             .await
             {
@@ -412,11 +423,18 @@ where
             }
         }
         (ChannelChoice::Noise, Role::Initiator) => {
-            let (write, send, recv) =
-                initiator_handshake(read, write, engine, network_id, handshake_within, tally)
-                    .await?;
+            let (write, send, recv) = initiator_handshake(
+                read,
+                write,
+                engine,
+                network_id,
+                handshake_within,
+                tally,
+                conn,
+            )
+            .await?;
             let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
-            let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull));
+            let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull, conn));
             if setup_tx
                 .send(Setup::Noise {
                     flight: Vec::new(),
@@ -441,24 +459,55 @@ async fn write_half(
     setup: tokio::sync::oneshot::Receiver<Setup>,
     outbound: ByteQueue,
     overfull: Arc<Overfull>,
+    conn: u64,
 ) -> Option<CloseCause> {
     let setup = setup.await.ok()?;
     let mut seam = match setup {
         Setup::Plain => SeamSend::Plain,
         Setup::Noise { flight, send } => {
-            if write.write_all(&flight).await.is_err() {
+            if !write_budgeted(&mut write, conn, &flight).await {
                 return Some(CloseCause::new(CloseKind::IoError));
             }
             SeamSend::Noise(send)
         }
     };
-    let cause = write_capped(&mut write, &outbound, &overfull, |plain| {
-        seam.encode(plain)
-            .map(Cow::Owned)
-            .map_err(|_| CloseKind::RecordRejected)
-    })
+    let cause = write_capped(
+        &mut write,
+        &outbound,
+        &overfull,
+        &node_gate(),
+        conn,
+        |plain| {
+            seam.encode(plain)
+                .map(Cow::Owned)
+                .map_err(|_| CloseKind::RecordRejected)
+        },
+    )
     .await;
     Some(cause)
+}
+
+/// Write `bytes` under the up bucket, one grant at a time.
+async fn write_budgeted(write: &mut OwnedWriteHalf, conn: u64, bytes: &[u8]) -> bool {
+    let gate = node_gate();
+    let mut off = 0usize;
+    while off < bytes.len() {
+        let room = bytes.len() - off;
+        let grant = gate
+            .acquire(LinkDirection::Up, conn, MessageClass::Session, room as u64)
+            .await;
+        let grant = usize::try_from(grant).unwrap_or(room).min(room);
+        if grant == 0 {
+            continue;
+        }
+        let end = off + grant;
+        if write.write_all(&bytes[off..end]).await.is_err() {
+            gate.refund(LinkDirection::Up, conn, grant as u64, true);
+            return false;
+        }
+        off = end;
+    }
+    true
 }
 
 async fn read_half(
@@ -466,8 +515,9 @@ async fn read_half(
     mut seam: SeamRecv,
     inbound: mpsc::Sender<Vec<u8>>,
     overfull: Arc<Overfull>,
+    conn: u64,
 ) -> CloseCause {
-    read_capped(&mut read, inbound, &overfull, |chunk| {
+    read_capped(&mut read, inbound, &overfull, &node_gate(), conn, |chunk| {
         seam.push(chunk).map_err(|_| CloseKind::RecordRejected)
     })
     .await
@@ -480,6 +530,7 @@ async fn noise_handshake<C>(
     handshake_within: Tick,
     tally: &Arc<HandshakeTally>,
     setup: &mut Option<tokio::sync::oneshot::Sender<Setup>>,
+    conn: u64,
 ) -> Result<SeamRecv, CloseKind>
 where
     C: Clock + Clone + Send + 'static,
@@ -495,7 +546,7 @@ where
     let fired = Arc::new(AtomicBool::new(false));
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let mut prefix = [0u8; PREFIX_LEN];
-    if let Err(kind) = read_or_wake(read, &mut prefix, &mut wake, &fired).await {
+    if let Err(kind) = read_or_wake(read, &mut prefix, &mut wake, &fired, conn).await {
         note_skip(tally, kind);
         ignore(owner.deregister());
         return Err(kind);
@@ -505,7 +556,7 @@ where
         return Err(CloseKind::PrefixMismatch);
     }
     let mut message1 = vec![0u8; MESSAGE1_LEN];
-    if let Err(kind) = read_or_wake(read, &mut message1, &mut wake, &fired).await {
+    if let Err(kind) = read_or_wake(read, &mut message1, &mut wake, &fired, conn).await {
         note_skip(tally, kind);
         ignore(owner.deregister());
         return Err(kind);
@@ -615,6 +666,7 @@ async fn initiator_handshake<C>(
     network_id: &NetworkId,
     handshake_within: Tick,
     tally: &Arc<HandshakeTally>,
+    conn: u64,
 ) -> Result<(OwnedWriteHalf, SendHalf, SeamRecv), CloseKind>
 where
     C: Clock + Clone + Send + 'static,
@@ -658,12 +710,29 @@ where
     let mut flight = Vec::with_capacity(PREFIX_LEN + message1.len());
     flight.extend_from_slice(&prefix_for(&network_id));
     flight.extend_from_slice(&message1);
-    if write.write_all(&flight).await.is_err() {
+    let wrote = tokio::select! {
+        biased;
+        result = wake.as_mut() => {
+            fired.store(true, Ordering::Release);
+            match result {
+                Ok(_) | Err(_) => {}
+            }
+            node_gate().leave(LinkDirection::Up, conn);
+            false
+        }
+        result = write_budgeted(&mut write, conn, &flight) => result,
+    };
+    if !wrote {
         ignore(owner.deregister());
-        return Err(CloseKind::TransportHandshakeFailed);
+        drop(write.shutdown().await);
+        return Err(if fired.load(Ordering::Acquire) {
+            CloseKind::TransportTimeout
+        } else {
+            CloseKind::TransportHandshakeFailed
+        });
     }
     let mut prefix = [0u8; PREFIX_LEN];
-    if let Err(kind) = read_or_wake(read, &mut prefix, &mut wake, &fired).await {
+    if let Err(kind) = read_or_wake(read, &mut prefix, &mut wake, &fired, conn).await {
         note_skip(tally, kind);
         ignore(owner.deregister());
         drop(write.shutdown().await);
@@ -675,7 +744,7 @@ where
         return Err(CloseKind::PrefixMismatch);
     }
     let mut message2 = vec![0u8; MESSAGE2_LEN];
-    if let Err(kind) = read_or_wake(read, &mut message2, &mut wake, &fired).await {
+    if let Err(kind) = read_or_wake(read, &mut message2, &mut wake, &fired, conn).await {
         note_skip(tally, kind);
         ignore(owner.deregister());
         drop(write.shutdown().await);
@@ -783,7 +852,9 @@ async fn read_or_wake<C: Clock>(
     buf: &mut [u8],
     wake: &mut Pin<&mut WakeWait<'_, C>>,
     fired: &AtomicBool,
+    conn: u64,
 ) -> Result<(), CloseKind> {
+    let gate = node_gate();
     tokio::select! {
         biased;
         result = wake.as_mut() => {
@@ -791,14 +862,50 @@ async fn read_or_wake<C: Clock>(
             match result {
                 Ok(_) | Err(_) => {}
             }
+            gate.leave(LinkDirection::Down, conn);
             Err(CloseKind::TransportTimeout)
         }
-        result = read.read_exact(buf) => {
+        result = read_budgeted(read, buf, conn) => {
             result
-                .map(|_| ())
-                .map_err(|_| CloseKind::TransportHandshakeFailed)
         }
     }
+}
+
+/// Read `buf` under the down bucket. A short socket read is a failure
+/// here: the handshake asked for the whole buffer.
+async fn read_budgeted(
+    read: &mut OwnedReadHalf,
+    buf: &mut [u8],
+    conn: u64,
+) -> Result<(), CloseKind> {
+    let gate = node_gate();
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        let room = buf.len() - filled;
+        let grant = gate
+            .acquire(
+                LinkDirection::Down,
+                conn,
+                MessageClass::Session,
+                room as u64,
+            )
+            .await;
+        let grant = usize::try_from(grant).unwrap_or(room).min(room);
+        if grant == 0 {
+            continue;
+        }
+        let end = filled + grant.min(buf.len() - filled);
+        if read.read_exact(&mut buf[filled..end]).await.is_err() {
+            gate.refund(LinkDirection::Down, conn, grant as u64, true);
+            return Err(CloseKind::TransportHandshakeFailed);
+        }
+        let got = end - filled;
+        if got < grant {
+            gate.refund(LinkDirection::Down, conn, (grant - got) as u64, false);
+        }
+        filled = end;
+    }
+    Ok(())
 }
 
 impl HandshakeTally {

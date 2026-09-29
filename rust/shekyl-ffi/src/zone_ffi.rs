@@ -16,7 +16,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use shekyl_capped_stream::accept_error_is_transient;
+use shekyl_capped_stream::{accept_error_is_transient, node_gate};
 use shekyl_clearnet::{
     accept_one as accept_clearnet, channel_choice, dial_one as dial_clearnet, zero_tally,
     Admitted as ClearnetAdmitted, ClearnetOption, Dial as ClearnetDial,
@@ -27,7 +27,7 @@ use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 use shekyl_seam::{
     drive_inbound, Channel, CloseCause, CloseKind, ConnectorId, Dial, Direction, Endpoint, Hub,
 };
-use shekyl_timing_engine::{EngineService, Handle, MonotonicClock, Tick};
+use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock, Tick};
 use shekyl_tor::{accept_one as accept_tor, dial_one as dial_tor, Admitted as TorAdmitted};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
@@ -243,7 +243,10 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
     let name = ThreadName::new("p2p-transport").map_err(|_| ())?;
     let pool = runtime(RuntimeBudget { workers, blocking }, &name).map_err(|_| ())?;
     let handle = pool.handle().clone();
-    let engine = EngineService::start(MonotonicClock::new());
+    let clock = MonotonicClock::new();
+    let budget_clock = clock.clone();
+    node_gate().install_clock(Arc::new(move || budget_clock.now().get()));
+    let engine = EngineService::start(clock);
     let (clearnet_tx, clearnet_rx) = mpsc::unbounded_channel();
     let (tor_tx, tor_rx) = mpsc::unbounded_channel();
     let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|cause| {
@@ -615,6 +618,87 @@ pub extern "C" fn shekyl_zone_session_established(id: u64) {
     if let Some(gap) = GAPS.lock().expect("gaps").remove(&id) {
         match gap.send(()) {
             Ok(()) | Err(()) => {}
+        }
+    }
+}
+
+const KIB: u64 = 1024;
+
+fn store_rate(kbps: i64, set: impl Fn(Option<u64>)) {
+    if kbps < 0 {
+        set(None);
+    } else {
+        let kbps = u64::try_from(kbps).unwrap_or(0);
+        set(Some(kbps.saturating_mul(KIB)));
+    }
+}
+
+fn load_rate(rate: Option<u64>) -> i64 {
+    match rate {
+        None => -1,
+        Some(bytes) => i64::try_from(bytes / KIB).unwrap_or(i64::MAX),
+    }
+}
+
+/// `kbps` negative removes the up bucket. Zero or positive is KiB/s.
+#[no_mangle]
+pub extern "C" fn shekyl_link_set_up(kbps: i64) {
+    store_rate(kbps, |rate| node_gate().set_up(rate));
+}
+
+/// `kbps` negative removes the down bucket. Zero or positive is KiB/s.
+#[no_mangle]
+pub extern "C" fn shekyl_link_set_down(kbps: i64) {
+    store_rate(kbps, |rate| node_gate().set_down(rate));
+}
+
+/// The up rate in KiB/s, or -1 when that direction is unlimited.
+#[no_mangle]
+pub extern "C" fn shekyl_link_get_up() -> i64 {
+    load_rate(node_gate().rate_up())
+}
+
+/// The down rate in KiB/s, or -1 when that direction is unlimited.
+#[no_mangle]
+pub extern "C" fn shekyl_link_get_down() -> i64 {
+    load_rate(node_gate().rate_down())
+}
+
+/// Bytes and packets the budget has moved. Null pointers are skipped.
+#[no_mangle]
+pub extern "C" fn shekyl_link_totals(
+    bytes_down: *mut u64,
+    packets_down: *mut u64,
+    bytes_up: *mut u64,
+    packets_up: *mut u64,
+) {
+    let observed = node_gate().totals();
+    unsafe {
+        if !bytes_down.is_null() {
+            *bytes_down = observed.bytes_down;
+        }
+        if !packets_down.is_null() {
+            *packets_down = observed.packets_down;
+        }
+        if !bytes_up.is_null() {
+            *bytes_up = observed.bytes_up;
+        }
+        if !packets_up.is_null() {
+            *packets_up = observed.packets_up;
+        }
+    }
+}
+
+/// Bytes this connection has moved. Null pointers are skipped.
+#[no_mangle]
+pub extern "C" fn shekyl_link_connection(id: u64, bytes_up: *mut u64, bytes_down: *mut u64) {
+    let observed = node_gate().connection(id);
+    unsafe {
+        if !bytes_up.is_null() {
+            *bytes_up = observed.bytes_up;
+        }
+        if !bytes_down.is_null() {
+            *bytes_down = observed.bytes_down;
         }
     }
 }

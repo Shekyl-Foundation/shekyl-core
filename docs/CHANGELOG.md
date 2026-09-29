@@ -9,6 +9,12 @@
   is unchanged. `--clearnet-transport-encrypt` stays, off by default,
   as the clearnet connector's channel option. The pipe that used to
   implement it is gone. The flip deletes the option.
+- `--limit-rate-up`, `--limit-rate-down`, and `--limit-rate` reach one
+  token bucket per direction for the whole node. The default is
+  unlimited. A set rate counts wire bytes, including Noise overhead
+  when the clearnet option is on. An empty bucket pauses the writer
+  and the reader. It does not close the connection. `set_limit` and
+  `get_limit` use the same budget.
 
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 

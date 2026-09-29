@@ -15,7 +15,7 @@ use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use shekyl_capped_stream::{read_capped, write_capped, StreamEnds};
+use shekyl_capped_stream::{node_gate, read_capped, write_capped, StreamEnds};
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_socks::{connect as socks_connect, Destination, Isolation, SocksError};
@@ -265,6 +265,7 @@ async fn run<C>(
 where
     C: Clock + Clone + Send + Sync + 'static,
 {
+    let conn = reserved.as_ref().map(|open| open.id().get()).unwrap_or(0);
     let (mut read, mut write) = stream.into_split();
     let Ok(owner) = engine.register(OwnerClass::Transport) else {
         return CloseCause::new(CloseKind::LocalClose);
@@ -312,13 +313,20 @@ where
     }
 
     let overfull_write = Arc::clone(&overfull);
+    let gate = node_gate();
     let mut writer = tokio::spawn(async move {
-        write_capped(&mut write, &writer_queue, &overfull_write, |plain| {
-            Ok(Cow::Borrowed(plain))
-        })
+        write_capped(
+            &mut write,
+            &writer_queue,
+            &overfull_write,
+            &gate,
+            conn,
+            |plain| Ok(Cow::Borrowed(plain)),
+        )
         .await
     });
-    let read_fut = read_capped(&mut read, inbound, &overfull, |chunk| {
+    let gate = node_gate();
+    let read_fut = read_capped(&mut read, inbound, &overfull, &gate, conn, |chunk| {
         Ok(vec![chunk.to_vec()])
     });
     tokio::pin!(read_fut);

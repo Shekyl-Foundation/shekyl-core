@@ -1215,8 +1215,8 @@ namespace cryptonote
   {
     RPC_TRACKER(get_limit);
 
-    res.limit_down = epee::net_utils::connection_basic::get_rate_down_limit();
-    res.limit_up = epee::net_utils::connection_basic::get_rate_up_limit();
+    res.limit_down = shekyl_link_get_down();
+    res.limit_up = shekyl_link_get_up();
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -1224,12 +1224,12 @@ namespace cryptonote
   bool core_rpc_server::on_set_limit(const COMMAND_RPC_SET_LIMIT::request& req, COMMAND_RPC_SET_LIMIT::response& res, const connection_context *ctx)
   {
     RPC_TRACKER(set_limit);
-    // -1 = reset to default
+    // -1 = unlimited
     //  0 = do not modify
 
     if (req.limit_down > 0)
     {
-      epee::net_utils::connection_basic::set_rate_down_limit(req.limit_down);
+      shekyl_link_set_down(req.limit_down);
     }
     else if (req.limit_down < 0)
     {
@@ -1238,12 +1238,12 @@ namespace cryptonote
         res.status = "Invalid parameter";
         return true;
       }
-      epee::net_utils::connection_basic::set_rate_down_limit(nodetool::default_limit_down);
+      shekyl_link_set_down(-1);
     }
 
     if (req.limit_up > 0)
     {
-      epee::net_utils::connection_basic::set_rate_up_limit(req.limit_up);
+      shekyl_link_set_up(req.limit_up);
     }
     else if (req.limit_up < 0)
     {
@@ -1252,11 +1252,11 @@ namespace cryptonote
         res.status = "Invalid parameter";
         return true;
       }
-      epee::net_utils::connection_basic::set_rate_up_limit(nodetool::default_limit_up);
+      shekyl_link_set_up(-1);
     }
 
-    res.limit_down = epee::net_utils::connection_basic::get_rate_down_limit();
-    res.limit_up = epee::net_utils::connection_basic::get_rate_up_limit();
+    res.limit_down = shekyl_link_get_down();
+    res.limit_up = shekyl_link_get_up();
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
