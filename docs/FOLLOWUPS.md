@@ -14,7 +14,7 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
-- **Design saturation scheduling before the transport writer freezes as arrival order.** When the link is full, message class decides what is sent first, and one connection's bulk does not hold relay to the others. The session layer names the class; the transport writer schedules it. Relay-lane conformance has to hold under saturation. The classes, who assigns them, and the schedule are the open part of "Rate limit is four jobs". Falsify by: that section names the classes, the assigner, and the schedule, and the writer applies them. Reopen if a writer ships that sends in arrival order under saturation.
+- **Name the saturation classes, who assigns one, and their order.** The cutover writer takes a class on each send and serves connections in turn under the operator's bucket while one class exists (`P2P_TRANSPORT_LAYER.md`, "Rate limit is four jobs"). What remains is the class list, the assigner, and the order, including that relay-lane conformance holds under saturation. Falsify by: that section names the three and the writer schedules them. Reopen if adding a class means replacing the bucket.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 

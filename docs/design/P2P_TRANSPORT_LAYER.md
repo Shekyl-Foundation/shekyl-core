@@ -929,16 +929,16 @@ and the mechanism does not. "Refuse" means it does not survive.
 ## Rate limit is four jobs (RULED 2026-09-28)
 
 One name has been covering four jobs. Each has its own threat, its own
-unit, and its own owner. The cutover carries the first. The fourth is
-the open design, so the writer is not built as arrival order and later
-rebuilt.
+unit, and its own owner. The cutover carries the operator's budget.
+Class priority is an argument on that writer; the class list is the
+open design.
 
 | Job | Threat or need | What is counted | Owner | Mechanism |
 | --- | --- | --- | --- | --- |
 | Operator link budget | The operator's link is metered, shared, or small | Wire bytes, per direction, for the whole node, across every connector. Once the flip lands, the count includes Noise overhead | Transport layer | Backpressure against a budget refilled from the engine's clock. Connections share it. Unlimited unless the operator sets one |
-| What a peer can make us do | A peer inside a session | Work: the cost of answering a command, per peer. A small request can be expensive | Session layer | Per-peer, per-command budgets costed by what answering takes (PWD-B1, PWD-B3). A request whose reply would exceed the budget is refused |
+| What a peer can make us do | A peer inside a session | Work, per connection, charged on every dispatch before the payload is decoded | Session layer | PWD-B1. Its refill, capacity, initial fill, per-command cost, and exhaustion action stay owed in that section. This row does not settle them. PWD-B3 is the per-command size cap, which is a different bound |
 | Who can reach us | Anyone who can open a TCP connection or a Tor rendezvous | Connections, and the cryptographic work before a session exists | Transport layer | The accept-rate bound before cryptography, the admission ceiling, pre-channel deadlines, and Tor proof-of-work (D4, D10). Already built |
-| What goes first when the link is full | Saturation, under a budget or at the link's own limit | Message class | The session layer names the class. The transport writer schedules it | New blocks and relay go ahead of bulk such as historical sync replies. One connection's sync does not hold relay to the others. Relay-lane conformance holds under saturation. The classes, who assigns them, and the schedule are not designed yet |
+| What goes first when the link is full | Saturation, under a budget or at the link's own limit | Message class | The session layer names the class. The transport writer schedules it | The writer takes a class on each send. New blocks and relay go ahead of bulk such as historical sync replies, and relay-lane conformance holds under saturation. The class list, who assigns a class, and the order among classes are the open design |
 
 **The operator's budget is the carried duty.** `--limit-rate-up`,
 `--limit-rate-down`, and `--limit-rate` (`net_node.cpp:184-186`) keep
@@ -947,36 +947,51 @@ and `P2P_DEFAULT_LIMIT_RATE_DOWN` (32768) are inherited numbers, not
 the policy. An operator sets a budget when the link needs one. The
 budget is the operator's bandwidth preference. It has no security role.
 
-A token bucket per direction. The refill is computed from the engine's
-clock when the bucket is used, so the bucket has no timer. Hitting the
-budget stops that direction until the bucket refills. It does not close
-the connection, and it does not drop the bytes. `SendQueueFull` remains
-the close for a queue that cannot hold another message.
+A token bucket per direction, for the whole node. The refill is the
+operator's rate, computed from the engine's clock when the bucket is
+used, so the bucket has no timer. Capacity is one second of that rate,
+and the bucket starts full: the operator can use the link at once, then
+stays at the rate. Unlimited means there is no bucket. When more than
+one connection wants the direction, the writer serves them in turn, one
+queued chunk each, so one connection cannot empty the bucket while
+another is waiting. An empty bucket stops that connection until a
+refill. It does not close the connection, and it does not drop the
+bytes. `SendQueueFull` remains the close for a queue that cannot hold
+another message.
+
+Each send names a class. Until the class list exists there is one
+class, and the turn above is the schedule. Naming further classes fills
+that argument. It does not replace the bucket.
 
 `core_rpc_server.cpp`'s `get_rate_*` / `set_rate_*`,
 `rpc_facts_ffi.cpp`'s read of the throttle, and
 `cryptonote_protocol_handler-base.cpp`'s accounting reach this limiter
 (D13). Per-connection speed stats are observed facts reported upward.
 
-The test runs in virtual time. Under a configured rate, bytes in and
-bytes out stay within the bound, and nothing is dropped or closed.
+The test runs in virtual time. With rate R and capacity C equal to R
+over one second, starting full, bytes through one direction over an
+interval T are at most C + R × T. A connection is not closed, and bytes
+are not dropped.
 
 The differential harness raises epee's P2P throttle, whose unset target
 is 16 KiB/s, so that run compares Levin bytes. It does not test this
 budget. A seam host without a limiter in that run is not a divergence.
 
-**A peer is bounded in the session layer, as work.** A byte budget
-treats a cheap large message and an expensive small request as the same
-thing, and one shared budget is a lever against every other peer. The
-session layer is where a command's cost is known.
+**A peer is bounded by PWD-B1.** That bucket is per connection, charged
+on every invoke and every notify before the payload is decoded,
+including a malformed payload. Its exhaustion action is still unruled
+there, and this section does not rule it. A byte budget is a different
+job: it prices a cheap large message like an expensive small request,
+and one shared budget is a lever against every other peer.
 
 **Reachability is already built** (D4, D10).
 
-**Saturation scheduling is the open design.** It needs the classes, who
-assigns them, and how the writer chooses among them. That row is in
-`docs/FOLLOWUPS.md`, owned by this section. The cutover writer enforces
-the operator's budget and shares it across connections. Arrival order
-is not the policy for a full link.
+**Saturation scheduling is the open design.** The cutover writer takes
+a class on each send and, while one class exists, serves connections in
+turn under the bucket. What remains is the class list, who assigns a
+class, and the order among classes. That row is in `docs/FOLLOWUPS.md`,
+owned by this section. The cutover does not wait for the list. Adding
+a class fills the argument the writer already takes.
 
 **Cutover order, after the harness merges.** One branch, one merge,
 when the run records are in: the zone binding, this budget, the call
