@@ -33,7 +33,9 @@
   The clearnet cross-build record is
   `docs/benchmarks/p2p_cutover_crossbuild_20260929.md`: sync, block
   relay, and both dial directions passed against the pre-cutover
-  peer; transaction stem and fluff did not cross.
+  peer; transaction stem and fluff did not cross. The same record's
+  epee-to-epee control crossed the stem with the relay filter empty;
+  fluff found nobody.
 
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 

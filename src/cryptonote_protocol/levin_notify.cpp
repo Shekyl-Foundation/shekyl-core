@@ -220,7 +220,9 @@ namespace levin
     }
 
     //! \return Outgoing connections supporting fragments in `connections` filtered by blockchain height.
-    std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, uint64_t blockchain_height)
+    //! `local_height` is this node's chain height, logged beside each candidate
+    //! when the filter keeps nobody, so a failed send records what the filter saw.
+    std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, uint64_t blockchain_height, uint64_t local_height)
     {
       std::vector<boost::uuids::uuid> outs;
       outs.reserve(connection_id_reserve_size);
@@ -235,13 +237,34 @@ namespace levin
         return true;
       });
 
-      MDEBUG("Found " << outs.size() << " out connections having height >= " << blockchain_height);
+      if (!outs.empty())
+      {
+        MDEBUG("Found " << outs.size() << " out connections having height >= " << blockchain_height);
+        return outs;
+      }
+
+      MINFO("relay filter local_height=" << local_height << " threshold=" << blockchain_height << " eligible=0");
+      std::size_t candidates = 0;
+      p2p.foreach_connection([&] (detail::p2p_context& context) {
+        ++candidates;
+        const bool eligible = !context.m_is_income && context.m_remote_blockchain_height >= blockchain_height;
+        MINFO("relay candidate direction=" << (context.m_is_income ? "in" : "out")
+            << " state=" << get_protocol_state_string(context.m_state)
+            << " recorded_height=" << context.m_remote_blockchain_height
+            << " local_height=" << local_height
+            << " eligible=" << (eligible ? "yes" : "no")
+            << " height_from=" << remote_height_source_name(context.m_remote_height_source));
+        return true;
+      });
+      if (candidates == 0)
+        MINFO("relay filter candidates=0");
       return outs;
     }
 
     std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, const i_core_events* core)
     {
-      return get_out_connections(p2p, get_blockchain_height(p2p, core));
+      const uint64_t local_height = core->get_current_blockchain_height();
+      return get_out_connections(p2p, get_blockchain_height(p2p, core), local_height);
     }
 
     //! How wide a zone's stem set is and how long its epoch runs.

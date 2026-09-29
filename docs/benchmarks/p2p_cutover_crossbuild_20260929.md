@@ -63,6 +63,33 @@ not the peer.
 | Timed ban of the peer | `LocalClose` on each socket, then `AdmissionRefused` on the next dials |
 | Ban file loaded, including after a restart | `AdmissionRefused` on dials |
 
+## Epee-to-epee control
+
+Same private testnet, same exclusive pair, same fixed difficulty,
+one node mining, then a spend. Both processes were the epee pin
+`d09bf3ef0` with one addition: an empty relay walk logs every
+candidate's direction, state, recorded height, the local height,
+and which message last wrote the recorded height.
+
+At the send the origin's local height was 85 and the filter
+threshold was 85. It had two candidates, one inbound and one
+outbound, both `normal`. Each recorded height was 45, last written
+by timed sync, so neither was eligible. The peer's walk was the
+same shape, recorded height 46 against local height 85, also last
+written by timed sync.
+
+The stem send still completed. The peer added the transaction to
+its pool. Fluff on both nodes then logged `no available
+connections`.
+
+The seam-versus-epee run failed earlier than this. That run logged
+`Unable to send transaction(s) via Dandelion++ stem` and the
+transaction stayed in the origin pool. Two epee nodes, with the
+filter in the same empty state, still stemmed. The stale recorded
+height is what left fluff with nobody, and that height is refreshed
+by the chain-state backstop. It is not what stopped the stem here.
+The stem failure in the cross-build remains the seam's.
+
 ## Not this run
 
 Tor dial and Tor relay were not run. This machine has no `tor`

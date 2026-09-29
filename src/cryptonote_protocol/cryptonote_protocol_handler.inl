@@ -414,7 +414,9 @@ namespace cryptonote
       MINFO(context << "Claims " << hshd.current_height << ", claimed " << context.m_remote_blockchain_height << " before");
       hit_score(context, 1);
     }
-    context.m_remote_blockchain_height = hshd.current_height;
+    note_remote_height(context, hshd.current_height, is_inital
+        ? cryptonote_connection_context::remote_height_source::handshake
+        : cryptonote_connection_context::remote_height_source::timed_sync);
 
     uint64_t target = m_core.get_target_blockchain_height();
     if (target == 0)
@@ -1056,7 +1058,8 @@ namespace cryptonote
       MINFO(context << "Claims " << arg.current_blockchain_height << ", claimed " << context.m_remote_blockchain_height << " before");
       hit_score(context, 1);
     }
-    context.m_remote_blockchain_height = arg.current_blockchain_height;
+    note_remote_height(context, arg.current_blockchain_height,
+        cryptonote_connection_context::remote_height_source::get_objects);
     if (context.m_remote_blockchain_height > m_core.get_target_blockchain_height())
       m_core.set_target_blockchain_height(context.m_remote_blockchain_height);
 
@@ -2393,7 +2396,8 @@ skip:
       MINFO(context << "Claims " << arg.total_height << ", claimed " << context.m_remote_blockchain_height << " before");
       hit_score(context, 1);
     }
-    context.m_remote_blockchain_height = arg.total_height;
+    note_remote_height(context, arg.total_height,
+        cryptonote_connection_context::remote_height_source::chain_entry);
     context.m_last_response_height = arg.start_height + arg.m_block_ids.size()-1;
     if(context.m_last_response_height > context.m_remote_blockchain_height)
     {
