@@ -19,8 +19,11 @@
 //! negative fixtures live with their rows and are labelled by the row they
 //! refuse on.
 
+use super::price;
 use super::*;
 use crate::verdict::TxSlot;
+
+pub use price::{priced, priced_at, repriced};
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
@@ -284,10 +287,10 @@ pub fn coinbase_extra(n_outputs: usize) -> Vec<u8> {
 /// `height`: one `Input::Gen(height)` (F1, F5), `Ct::Null` (F3), one
 /// output (F4) paying `0` with key `G` (F9) and mask `2·G` (F10),
 /// `unlock_time = height + mined_money_unlock_window` (F6), and the
-/// grammar's `extra` for one output (I19, I20). Amounts are
-/// not this fixture's concern — the exact-payout row (F18) is not
-/// landed — so a chain of these pays nothing and reads the tail subsidy
-/// at every height.
+/// grammar's `extra` for one output (I19, I20). The amount written here
+/// is `0`. [`priced_at`] replaces the first output with what CEN-F18
+/// requires, except at genesis, where the configured amount stands (F11):
+/// a zero coinbase stays zero, and an endowed one is kept.
 ///
 /// The F6 claim holds at every height a chain can reach. Within the
 /// window of `u64::MAX` no coinbase satisfies F6 — the rule's own sum
@@ -380,6 +383,33 @@ pub fn spend(key_image: [u8; 32], outputs: usize) -> Transaction {
 /// call sites mean by "a listed transaction".
 pub fn listed(key_image: [u8; 32]) -> Transaction {
     spend(key_image, 2)
+}
+
+/// `tx` — a [`spend`] — paying `fee`: the fee field set and the one
+/// pseudo-out re-formed as `Σ masks + fee·H` ([`mask_committing`] over the
+/// same mask scalars), so CEN-H18's cleartext balance still holds. What a
+/// test needs when the block must **burn**: CEN-F17 splits the listed fees,
+/// and a chain of zero-fee bodies destroys nothing whatever else it does.
+/// (The burn is also a function of the supply ratio, which rounds to zero
+/// on a young chain — a fixture that must see a non-zero burn gives its
+/// genesis a configured amount large enough for the ratio to register.)
+///
+/// # Panics
+///
+/// On a body with no prunable region (a serve credit; nothing to balance).
+pub fn paying_fee(mut tx: Transaction, fee: u64) -> Transaction {
+    let outputs = tx.prefix.outputs.len();
+    let Ct::Fcmp {
+        fee: f,
+        prunable: Some(p),
+        ..
+    } = &mut tx.ct
+    else {
+        panic!("paying_fee: a spend with a prunable region");
+    };
+    *f = fee;
+    p.pseudo_outs = vec![mask_committing(mask_scalar_sum(outputs), fee)];
+    tx
 }
 
 /// The reference block no chain holds — what [`spend`] carries until a
@@ -688,6 +718,75 @@ pub fn bp_plus_layout_for(outputs: usize) -> BpPlus {
     }
 }
 
+/// `k·G + amount·H`, compressed: a mask that commits to `amount` under the
+/// crate's own `H` (`shekyl_ct_balance::amount_commitment`) with `k·G` as
+/// its blinding — what a balanced archival fixture needs and what the
+/// production rules only ever *verify*. Test-only curve arithmetic.
+#[must_use]
+pub fn mask_committing(k: u64, amount: u64) -> [u8; 32] {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+    use curve25519_dalek::scalar::Scalar;
+    let blinding = ED25519_BASEPOINT_POINT * Scalar::from(k);
+    let value = shekyl_ct_balance::amount_commitment(shekyl_units::AtomicUnits::from_raw(amount));
+    (blinding + value).compress().to_bytes()
+}
+
+/// A **balanced bond post** (CEN-H21's shape): one funding spend of
+/// `key_image`, the two outputs CEN-I1 requires (masks `2·G` and `3·G`),
+/// zero fee, one auth per input, a non-empty proof, and a pseudo-out of
+/// `5·G + credit·H` — so `Σ pseudoOuts + debit·H = Σ masks + fee·H +
+/// credit·H` holds with `(credit, debit) = (post.bond_credit, 0)`. `post`
+/// is the caller's: the shape rows read its kind and key length, the
+/// block-level G10 its `p_canonical_id`. Unanchored and with filler auths;
+/// [`anchored_on`] / [`signed`] make it a body `tx_against` admits.
+pub fn balanced_bond_post(key_image: [u8; 32], post: BondPost) -> Transaction {
+    let credit = post.bond_credit;
+    let mut tx = listed(key_image);
+    tx.prefix.inputs.push(Input::BondPost(Box::new(post)));
+    if let Ct::Fcmp {
+        pqc_auths,
+        prunable: Some(p),
+        ..
+    } = &mut tx.ct
+    {
+        pqc_auths.push(pqc_auth_filler());
+        p.pseudo_outs = vec![mask_committing(5, credit)];
+    }
+    tx
+}
+
+/// A **balanced emission** (CEN-H22's shape) with one fee spend of
+/// `key_image` and the emission vin `canonical_bytes` (the type's minimum
+/// for the shape rows, which read the variant; a parseable vin for the
+/// block-level G9, which reads the claims): the loud vouts sum to `reward`
+/// (the first carries it, the second is a loud zero — I1 wants two); the
+/// mint rides the debit slot, so `Σ pseudoOuts + reward·H = Σ masks +
+/// fee·H` — a pseudo-out of `5·G` against masks of `2·G + reward·H` and
+/// `3·G`, zero fee. Unanchored and with filler auths, as above.
+pub fn balanced_emission(
+    key_image: [u8; 32],
+    canonical_bytes: Vec<u8>,
+    reward: u64,
+) -> Transaction {
+    let mut tx = listed(key_image);
+    tx.prefix
+        .inputs
+        .push(Input::ArchivalRewardEmission { canonical_bytes });
+    tx.prefix.outputs[0].amount = reward;
+    if let Ct::Fcmp {
+        pqc_auths,
+        base,
+        prunable: Some(p),
+        ..
+    } = &mut tx.ct
+    {
+        pqc_auths.push(pqc_auth_filler());
+        base.commitments = vec![mask_committing(2, reward), multiple_of_g(3)];
+        p.pseudo_outs = vec![multiple_of_g(5)];
+    }
+    tx
+}
+
 /// A **serve-credit-only** transaction (CEN-H20's shape: serve-credit
 /// inputs and nothing else, no outputs, zero fee, no spend material),
 /// carrying `record` as its one pass record. The one legal non-coinbase
@@ -738,7 +837,9 @@ pub fn header() -> BlockHeader {
 /// hash (the null hash on an empty chain — CEN-A2) and `curve_tree_root`
 /// is the tree state at the connecting height (`root_at(tip + 1)`; the
 /// empty tree at genesis — CEN-B5); the header lists exactly the bodies
-/// it carries. Mutate one field to build a negative fixture.
+/// it carries. Mutate one field to build a negative fixture. A corrupt
+/// parent read leaves the coinbase as [`coinbase`] built it, so
+/// `validate` is the function that reports the fault.
 pub fn candidate_on(chain: &MockChain, listed: Vec<Transaction>) -> Candidate {
     let tip = chain.tip();
     let connecting = Tip::connecting_height(tip.as_ref());
@@ -755,7 +856,7 @@ pub fn candidate_on(chain: &MockChain, listed: Vec<Transaction>) -> Candidate {
         miner_transaction: coinbase(connecting.to_raw()),
         transaction_hashes: listed.iter().map(Transaction::hash).collect(),
     };
-    Candidate::new(block, listed)
+    price::for_candidate(chain, connecting, Candidate::new(block, listed))
 }
 
 /// A well-formed **genesis** candidate: [`candidate_on`] an empty chain.

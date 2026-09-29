@@ -50,6 +50,7 @@ use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::anchors::E1;
 use crate::rules::block_weight::{Medians, Weights};
+use crate::rules::body::{G1, G10, G2, G7, G9};
 use crate::rules::difficulty::D4;
 use crate::rules::header::{B1, B2, B5, B6, B7};
 use crate::rules::miner::{Emission, F1, F10, F3, F4, F5, F6, F7, F9};
@@ -126,10 +127,12 @@ pub fn form<S: Substrate>(
     let mut coverage = RuleCoverage::EMPTY;
 
     // Stateless block-level predicates, in census order: the header rows,
+    // then the body's pairing (4.G — G2: the declared list is the carried
+    // list, judged before anything reads a body *as* its declared hash),
     // then the coinbase's shape (4.F — one field of the block, judged here
     // because the coinbase never passes the per-transaction path).
     let cx = FormContext::new(&candidate, rule_set);
-    judge_form!(cx, coverage; B1, B2, B7, F1, F3, F7, F9, F10);
+    judge_form!(cx, coverage; B1, B2, B7, G2, F1, F3, F7, F9, F10);
 
     // Two definitions, after the cheap refusals and outside any
     // transaction. The identity first (B6: one keccak over the hashing
@@ -220,6 +223,9 @@ pub fn form<S: Substrate>(
 ///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
 ///         Ok(false)
 ///     }
+///     fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
+///         Ok(shekyl_units::AtomicUnits::ZERO)
+///     }
 /// }
 /// // Each call brands a fresh view, as the store's `write` does.
 /// fn with_view<R>(f: impl for<'id> FnOnce(View<'id>) -> R) -> R {
@@ -291,6 +297,9 @@ pub fn form<S: Substrate>(
 ///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
 ///         Ok(false)
 ///     }
+///     fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
+///         Ok(shekyl_units::AtomicUnits::ZERO)
+///     }
 /// }
 /// struct Evil;
 /// impl<'id> ChainView<'id> for Evil {
@@ -326,6 +335,9 @@ pub fn form<S: Substrate>(
 ///     }
 ///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
 ///         Ok(false)
+///     }
+///     fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
+///         Ok(shekyl_units::AtomicUnits::ZERO)
 ///     }
 /// }
 /// fn connect<'id>(_: &View<'id>, _: ChainValid<'id, View<'id>>) {}
@@ -380,9 +392,13 @@ pub fn validate<'id, V: ChainView<'id>>(
     let cumulative_difficulty = D4::cumulative_after(view, connecting, target)?;
     D1b::record(&mut coverage);
 
-    // View-bound block-level predicates (4.A–4.G), in census order.
+    // View-bound block-level predicates (4.A–4.G), in census order. G1
+    // (no listed transaction already on the chain, or twice in this block)
+    // is here, **before** the slot loop — the C++'s order, and the only one
+    // under which it has a witness on a spend: after the loop I7 and L1
+    // refuse the same shapes first (slice 7 Q8; `body_tests` pins it).
     let cx = BlockContext::new(&formed, tip, mtp_window, target, trust);
-    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, E1, F4, F5, F6);
+    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, E1, F4, F5, F6, G1);
 
     // The 4.F definitions (F11, F13, F15, F20): the emission this height is
     // priced at, F14b's operand once the block's weight is known (below).
@@ -413,10 +429,11 @@ pub fn validate<'id, V: ChainView<'id>>(
     // CEN-L1 spans the slots — a key image twice among the block's inputs —
     // and runs once every slot has passed: each slot's view is the chain
     // before the block, so this is the only place the repeat is visible to
-    // the validator. Last, as the C++'s `add_spent_key` refusal is.
-    if let Err(refused) = rules::run::<L1, _>(&cx, view, &mut coverage).map_err(Fault::View)? {
-        return Ok(Err(refused));
-    }
+    // the validator. Last, as the C++'s `add_spent_key` refusal is. Beside
+    // it, the three archival cross-transaction passes (G7, G9, G10; slice
+    // 7): the same shape — a key twice among the block's inputs — over the
+    // serve-credit, emission and bond-post keys.
+    judge_block!(cx, view, coverage; L1, G7, G9, G10);
 
     // CEN-G6b: the block's weight and the long-term weight `connect`
     // records for it, under the medians derived above. After the loop so
@@ -424,16 +441,18 @@ pub fn validate<'id, V: ChainView<'id>>(
     // definition the 4.F consumers (F14, F14b — commit 5) read next.
     let weights = Weights::derive(medians, cx.candidate(), &mut coverage);
 
-    // The reward chain (slice 7 commit 5): F14 refuses a block over twice
-    // the median, F14b prices the penalised reward, F16 splits it, G12
-    // advances the supply — one sequence after the medians, in the C++'s
-    // order (`validate_miner_transaction` runs after every body is
-    // judged). The verdict carries what it yields.
+    // The reward chain (slice 7 commits 5 and 9): F14 refuses a block over
+    // twice the median, F14b prices the penalised reward, F16 splits it,
+    // F17 splits the listed fees, G11/G13 state the accrual and the burn,
+    // F18 holds the coinbase to the two miner legs, G12 advances the
+    // supply — one sequence after the medians, in the C++'s order
+    // (`validate_miner_transaction` runs after every body is judged). The
+    // verdict carries what it yields.
     let paid = match reward::judge_emission(
         connecting,
         &emission,
         &weights,
-        &cx.candidate().block.miner_transaction,
+        cx.candidate(),
         &mut coverage,
     ) {
         Ok(paid) => paid,

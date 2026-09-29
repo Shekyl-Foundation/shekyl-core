@@ -73,7 +73,7 @@
 use crate::block::Candidate;
 use crate::census::{CenRow, PolicyRow, RowStatus};
 use crate::fault::FormAttempt;
-use crate::harness::fixture::{candidate_on, recorded, root};
+use crate::harness::fixture::{candidate_on, recorded, repriced, root};
 use crate::harness::{assert_refused, expected_seed, judged, Faulted, MockChain, MockSubstrate};
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
@@ -792,6 +792,7 @@ fn run(site: &Site) {
             let chain = one_block();
             let mut candidate = candidate_on(&chain, Vec::new());
             candidate.block.miner_transaction = coinbase_ok(1);
+            candidate = repriced(&chain, candidate);
             mutate(&mut candidate.block.miner_transaction);
             twin_refuses_on(site, &candidate.block.miner_transaction);
             let (Arm::Rule(row), Expect::FromRegistry) = (site.arm, expect) else {
@@ -913,6 +914,7 @@ fn the_baseline_passes_the_twin_and_the_crate() {
     let chain = one_block();
     let mut candidate = candidate_on(&chain, Vec::new());
     candidate.block.miner_transaction = coinbase_ok(1);
+    candidate = repriced(&chain, candidate);
     candidate
         .block
         .miner_transaction

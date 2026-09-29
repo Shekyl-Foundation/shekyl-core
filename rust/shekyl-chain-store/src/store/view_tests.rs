@@ -15,12 +15,14 @@ use shekyl_chain_rules::{validate, AtHeight, Candidate, ChainView, Fault, RuleSe
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
-use super::connect_fixtures::formed;
+use super::connect_fixtures::{formed, priced};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE_ROW};
 use super::*;
-use crate::codec::{forged, BlockBody, BlockInfo, Canonical, CodecError, Present, Raw};
+use crate::codec::{forged, BlockBody, BlockInfo, Canonical, CodecError, LeafCount, Present, Raw};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{BLOCKS, BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG};
+use crate::schema::{
+    BLOCKS, BLOCK_INFO, CURVE_TREE_LEAF_COUNTS, CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG,
+};
 
 /// The store's fault is the only outer arm these tests expect; the
 /// validation crate's own arms are fixture bugs here, named as such.
@@ -94,6 +96,15 @@ fn record_root(batch: &WriteBatch<'_, '_>, key: u64, byte: u8) -> Result<(), Sto
             key,
             CurveTreeRoot::from_bytes([byte; 32]).encoded().as_encoded(),
         )
+}
+
+/// Write the leaf-count row `leaf_count_at` reads at `key` — the empty
+/// tree's — as a connect will (CEN-F17 reads it at the connecting height
+/// since E6 slice 7 wave B, so a hand-recorded chain carries it too).
+fn record_leaf_count(batch: &WriteBatch<'_, '_>, key: u64) -> Result<(), StoreError> {
+    batch
+        .open_insert_table(CURVE_TREE_LEAF_COUNTS, PROBE_ROW)?
+        .insert(key, LeafCount::from_raw(0).encoded().as_encoded())
 }
 
 #[test]
@@ -366,6 +377,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
     let out: Result<(), TestErr> = store.write(|batch| {
         record_block(batch, 0, &genesis)?;
         record_root(batch, 1, 0xaa)?;
+        record_leaf_count(batch, 1)?;
         let view = batch.chain_view();
         // A verdict minted against this batch's view, over a view that
         // already contains block 0. Since E6 slice 1 the rules READ the view:
@@ -373,11 +385,14 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         // root to be `root_at(1)` — the row recorded above — so block 1
         // passes only if the projection shows it block 0 and the root block
         // 0 left. The title's claim is now the verdict, not just the type.
+        // Since wave B the coinbase must also pay what the block owes
+        // (CEN-F18), priced against the same view.
         let mut b1 = block(1, 1_060);
         b1.header.previous = genesis.hash();
         b1.header.curve_tree_root = CurveTreeRoot::from_bytes([0xaa; 32]);
+        let b1 = priced(&view, Candidate::new(b1, Vec::new()))?;
         let valid = validate(
-            formed(&view, Candidate::new(b1, Vec::new()))?,
+            formed(&view, b1)?,
             &view,
             &RuleSet::GENESIS,
             &Trust::UNANCHORED,

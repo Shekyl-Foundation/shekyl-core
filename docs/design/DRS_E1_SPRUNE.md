@@ -1,6 +1,6 @@
 # DRS-E1 S-PRUNE — the retention prune: plan and as-built record (`PDM-Q-F31`)
 
-**AMENDED 2026-09-29 by the `SHT-Q2` build (layout 16 → 17):** the partition is
+**AMENDED 2026-09-29 by the `SHT-Q2` build (layout 17 → 18):** the partition is
 re-keyed from `T`, a transaction count, to `W`, archival bytes
 (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.6, RULED). `D(E)` is now
 `⌊C(lo)/W⌋ .. ⌊C(hi)/W⌋` over `block_info.cumulative_archival_len`; the

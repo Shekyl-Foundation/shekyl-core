@@ -24,8 +24,8 @@ use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHeight, LongTermWeight};
 
 use super::connect_fixtures::{
-    candidate, connect_chain, connect_chain_anchored, facts, judge, spend, spend_at,
-    spendable_prefix, FIRST_SPEND_HEIGHT,
+    candidate, connect_chain, connect_chain_anchored, judge, spend, spend_at, spendable_prefix,
+    FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
@@ -89,7 +89,7 @@ fn cumulative_tx_count_is_the_running_total_through_pop_and_reconnect() {
     );
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b2)?, facts(0), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, b2)?, RuleSet::GENESIS)?)
     });
     out.expect("reconnect");
     assert_eq!(cum(second) - cum(first), 3);
@@ -132,7 +132,7 @@ fn long_term_effective_median_is_stored_at_the_height_it_is_in_force_for() {
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let b2 = candidate(2, b1_hash, Vec::new());
-        Ok(batch.connect(judge(&view, b2)?, facts(0), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, b2)?, RuleSet::GENESIS)?)
     });
     out.expect("reconnect");
     assert_eq!(
@@ -341,7 +341,7 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     // off the spend **as connected**: anchoring signs every auth slot, and
     // the third component is over the auths.
     let (_, connected) =
-        connect_chain_anchored(&store, &spendable_prefix(&[vec![four_part, three_part]]), 0);
+        connect_chain_anchored(&store, &spendable_prefix(&[vec![four_part, three_part]]));
     let expected = connected
         .last()
         .and_then(|block| block.first())
@@ -412,7 +412,7 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     // `alt_blocks` (layout 13, `schema::FOLDED_INTO`), 44 until DRS-E3 did
     // not port four tree-side tables (layout 15, `schema::NOT_PORTED`) and
     // added `curve_tree_leaf_counts`; 44 since `SHT-Q2` added
-    // `txs_archival_len` (layout 17).
+    // `txs_archival_len` (layout 18).
     assert_eq!(catalogue_len, 44);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(

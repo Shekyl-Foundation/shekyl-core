@@ -16,11 +16,13 @@ ordinal domain is **withdrawn** (dev already does the lookup it was charged
 for), and `SHT-7` is added. `SHT-Q1` (the partition domain) was posed by this round
 and **RULED on 2026-09-27** (§2) — it came before the bounds because it decides
 which constraints exist, and it now has. Findings `SHT-1`…`SHT-9` are at-pin
-findings of this round; **`SHT-10`…`SHT-12` and `SHT-Q2` (a byte-proportional partition —
-computed weight, or a txid-bound declared length, the design owner's recommendation —
-OPEN for Rick) were added 2026-09-28 after F34 (§8)**, with the input-count proposal
-recorded as not adopted and `PDM-Q6` item 5's rejection re-read as one of *stored
-lengths*, not of byte-proportional boundaries. Identifier families **`SHT-`** (findings) and
+findings of this round. **`SHT-Q2` is RULED (Rick, 2026-09-29, §8.6): shards are cut
+by archival length, bound through the txid.** It was posed on 2026-09-28 after F34 (§8),
+together with findings `SHT-10`…`SHT-12`, the input-count proposal recorded as not
+adopted, and `PDM-Q6` item 5's rejection re-read as one of *stored lengths*, not of
+byte-proportional boundaries; the placement of the length (prefix or txid, §8.5) was
+posed on 2026-09-29 and settled by the same ruling: **txid-bound** — "bound through
+the txid" is §8.5's right-hand column. Identifier families **`SHT-`** (findings) and
 **`SHT-Q`** (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
 (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a) — 105 prefixes
@@ -156,6 +158,11 @@ and does not say so.** It is not merely stale; it presumes the answer to
 >
 > **Stability:** closed shards never change membership. Any post-genesis change
 > to what counts as archival good activates by height and applies only past it.
+>
+> **AMENDED by `SHT-Q2` (RULED 2026-09-29, §8.6):** "Shard `k` is the domain's
+> transactions `[k·T, (k+1)·T)`" becomes **shard membership `⌊cum_before / W⌋` over
+> the cumulative archival length**, bound through the txid. The domain itself is
+> unchanged.
 >
 > **The predicate reads the two digests as recorded at ingest, never recomputed
 > from a possibly-pruned body.** `Transaction::prunable_hash`'s own contract says
@@ -335,6 +342,10 @@ zero floor by another name.
 ---
 
 ## 3. Constraints on `T`
+
+> **Re-based in bytes by §9 (2026-09-29), after `SHT-Q2`.** `L1` and `U1a`'s heavy-end
+> multiplier are retired there; the partition constant is now an archival length `W`.
+> The rows below are the count-era record.
 
 Each row: the operand, its source, the bound as a function of `T`, a value or a
 labelled sweep, the domain it applies under, hard/soft with the reason, and a
@@ -569,6 +580,9 @@ arm in which the per-band verdict at fixed headroom degrades monotonically in
 
 ## 4. The feasible interval, and a proposed selection rule
 
+> **Superseded by §9.5 (2026-09-29):** the interval is now in bytes, and `W = 3,000,000 B`
+> is provisional inside it. The selection rule's direction, argued below, carries over.
+
 **Under (A) and under (B) alike**, the only hard bound with numbers is `U1a`,
 and on measured data its heavy-end ceiling is **~[140, 490]** — a band that
 **contains 200**. `L1` sits in the low hundreds on sim-sourced parameters;
@@ -693,6 +707,56 @@ track the measurement upward".
 5. **What it also re-grounds.** `L`'s fetch span, stated **per byte** instead of
    per 3.33 MB object (`SHT-7`), which is what stops `T` and `L` from resting on
    the same retired number.
+
+### 4.1a Amendment for the run, in `W` — committed before it starts (2026-09-29)
+
+`SHT-Q2` turned `T` into an archival length `W` (§9), so this measurement now decides
+`W`'s `U1a` ceiling. The items above stand. This fixes what they left open, before any
+observation exists.
+
+- **Objects.** 1×, ½× and ¼× of the extracted real shard: 3,326,976, 1,663,488 and
+  831,744 B, a 4× span, each a whole number of leaves, every byte the shard's. The shard
+  tops the ladder because it is the **largest servable object**: the production frame
+  (`ServedFrameHeader::for_segment`) refuses a leaf count past one segment. So the fit
+  **interpolates** at the provisional `W = 3,000,000 B` and extrapolates only above
+  3.33 MB. A Tor transit of opaque, uncompressed bytes does not depend on their
+  values, so size is the one variable.
+- **Harness.** `sp-t3`'s `pd-f2-measure` with `SHEKYL_SPIKE_SIZE_LADDER=1` (the size
+  ladder, its own PR), one persona. The cold arm fetches 200 of each size, rotating
+  sizes, with `NEWNYM` before every fetch. The warm arm and the concurrency sweep are
+  not run: they are not inputs to this fit. The soak runs 24 h, with `NEWNYM` before
+  every fetch, sizes round-robin, and 30 s spacing. That is roughly 1,400 soak
+  observations, about 470 per size, so each size's p99 rests on about 5 tail
+  observations. It is reported with that caveat, and p90 is reported beside it.
+- **Host.** An internal node with no mining or daemon workload during the soak (the
+  role; rule 37 — the host's identity is not recorded here). It runs Tor Expert Bundle
+  15.0.17 (the tarball's signature verified before use) and a build of the harness
+  commit whose highest glibc symbol is `GLIBC_2.39`, the host's own glibc. An idle
+  wallet-RPC process from another lane is present; this is recorded, not removed.
+  **Amended before the run, the same day:** this line first named the testnet miner,
+  which runs a mining daemon at full CPU. That would bias the measurement, so the run
+  moved to the quiet node.
+- **Fit.** Per percentile (p50, p90, p99), over the **soak** arm: least squares of
+  `t = t_fixed + bytes / v` over the three sizes. The cold arm is fitted and reported,
+  not used to select.
+- **Model rejection, thresholds fixed now.** The model is rejected, and no ceiling is
+  derived from it, if:
+  - the fitted `t_fixed < 0` or `v ≤ 0`; or
+  - linearity fails: the ½× point's percentile lies more than **15 %** of its own value
+    off the line through the ¼× and 1× points.
+
+  A rejection is itself the result: the transport does not decompose this way, and the
+  ceiling needs a different model.
+- **The target witness-miss rate (item 3) is owed by the design owner before the fit.**
+  The observations are collected, but no fit is computed until that rate is recorded
+  here.
+- **Decision thresholds, restated in `W`** (item 4). The ceiling is
+  `W_max = v · (120 s − t_fixed) − 149,400 B`, at the governing percentile (the soak
+  p99, until the miss rate replaces it).
+  - `W_max ≥ 3,000,000 B`: the provisional `W` stands, and `U1a` does not bind.
+  - `W_max < 3,000,000 B`: `U1a` binds. `W` must come down to `W_max` or below, which
+    takes the overshoot past 5 %, so the tolerance goes back to Rick.
+- **`L` (item 5)** is restated per byte from the same fit.
 
 ## 5. Re-pin plan
 
@@ -853,7 +917,7 @@ This is a correction to item 5's reasoning, not a reversal of its principle. The
 principle — a boundary never reads a value the skeleton cannot bind — is what `SHT-Q2`
 below states as its invariant.
 
-### 8.3 `SHT-Q2` — a byte-proportional partition — for Rick's ruling
+### 8.3 `SHT-Q2` — a byte-proportional partition — ruled in §8.6
 
 **The question.** Should shard `k` close on cumulative **archival bytes** instead of
 transaction count, and if so, measured how: by a **computed weight** — options (a) and (b)
@@ -1010,7 +1074,7 @@ and to 45 scalars by appending zeros, verifies `Ok(())`. Both probes were run as
 uncommitted edits and reverted. The library verifiers probed are the ones the consensus
 FFI calls; neither was replayed through a full block connect.
 
-### 8.4 Option (c), wargamed — posed, not ruled
+### 8.4 Option (c), wargamed — ruled in §8.6
 
 **The claim.** A transaction's archival byte length, carried as a prefix varint, is
 skeleton data. The txid binds the prefix, so item 5's objection — a length nothing the
@@ -1079,3 +1143,283 @@ the cutover census's family-1 rows re-keyed; and `SHARD_TX_COUNT` /
 `SHT-11` or I13.
 
 **Not ruled here.**
+
+### 8.5 Where the declared length lives — prefix or txid — ruled in §8.6 (2026-09-29)
+
+§8.4 put the declared length in the **prefix**. The design owner has proposed binding it
+through the **txid** instead. This section answers the three questions that decide
+between them, at source on `dev`, then wargames the txid placement. It posed both for
+the ruling; **Rick ruled txid-bound the same day (§8.6)**. The text below is the case
+as it was put.
+
+#### 1. What each signature and proof signs today
+
+| signer | what it signs | source |
+|---|---|---|
+| **PQC authorization**, per input — single and multisig, every class that carries one | `payload(i) = pruned ‖ prunable_hash ‖ header(i) ‖ key_hashes`. `pruned` is version, prefix, CT type, fee, reference block and committed base. `prunable_hash` is the digest of the whole prunable region. `header(i)` is `auth_version ‖ scheme_id ‖ flags ‖ varint(pk_len) ‖ pk`, which carries the **key**, not the signature. `key_hashes` hashes every input's key | `shekyl-wire/src/transaction/signing_preimage.rs` |
+| **FCMP++ proof**, on the spend and bond-post paths | the prefix hash (`tx_prefix_hash`, the prefix only), with the pseudo-outs in the transcript | `blockchain.cpp:3371` and the two verify sites |
+| **FCMP++ proof**, on an emission's fee inputs | the full prefix hash, which includes the emission input and its two hybrid signatures | `blockchain.cpp:4099` |
+| **Membership-only backing proof** (emission) | the prefix hash **with the emission input removed** (F-C1c), because the input cannot be covered by a hash its own proof signs | `blockchain.cpp`, emission arm |
+| **Emission input's `auth_backing` / `auth_claim`** | the input's claim fields, which are in the prefix. These are two fixed-length hybrid signatures, and they are skeleton, not good | `REWARD_EMISSION_LEG.md` §5.3.1 |
+| **Serve-credit countersignature** (Ed25519 leg on the input, ML-DSA leg in the pruned record) | the **pass record only**: `p_canonical_id ‖ shard ‖ epoch ‖ R_k ‖ leaf_index ‖ leaf_bytes ‖ encode(path)`. No prefix, and nothing at transaction level | `shekyl-archival-retention/src/wire.rs` `signature_preimage` |
+
+**Does any signed message today include data whose length depends on the signatures
+themselves? No.** The PQC preimage covers keys and the prunable digest, never the
+signature bytes or their lengths. The prunable region holds no PQC signatures. Its one
+signature, the serve-credit ML-DSA leg, is in a form that has no PQC authorizations to
+sign over it. The emission fee-input proof binds the emission input's two signatures,
+but those are produced earlier and have fixed length.
+
+**Two consequences for the placements.**
+
+- **Prefix placement introduces the dependency that is absent today.** `archival_len`
+  counts `|pqc_auths|`, and the PQC signatures sign the prefix, so every signer must know
+  the final length of every signature, its own included, before signing.
+- **A serve-credit transaction is signed by nothing at transaction level.** So in the
+  prefix, its declared length would be bound only by the txid anyway. For that class,
+  prefix placement buys no signature.
+
+#### 2. Is every component's length fixed before signing, once `SHT-10`/`SHT-11` are fixed?
+
+**Yes, for every current scheme.**
+
+| component | length before signing | what fixes it |
+|---|---|---|
+| single-sig authorization | 5,389 B | `PQC_HYBRID_SINGLE_{KEY,SIG}_LEN`; the key length is exact under CEN-I16 |
+| multisig authorization | `expected_blob_len(n_total)` + `expected_sig_len(m)` | the signature count **must equal** the key container's `m_required` (`shekyl-crypto-pq/src/multisig.rs`: `sig_container.sig_count != key_container.m_required` refuses), so `m` is fixed by the key, not by which signers answer |
+| FCMP++ and membership-only proofs | `proof_size(n, depth + 1)` | exact once `SHT-10` refuses trailing bytes (#899). The depth is the one at `ref_height`, known to the builder |
+| BP+ | a function of the output count | `nbp == 1`, and `|L| = |R|` pinned by the generator count |
+| pseudo-outs | `32 · n_spend` | CEN-I9 |
+| serve-credit pruned record | 3,309 + `|encode(path)|` + varints | the path is the frozen segment's chunks as built, and `SHT-11` refuses trailing-zero padding (#899). The ML-DSA leg signs the path, so the path exists first |
+
+**The caveat is the future, not the present.** Under the V4 lattice-only transition (rule
+00's third horizon), a scheme with **variable-length signatures** — Falcon's compressed
+encoding is the standing example — cannot be sized before signing. The prefix placement
+would force such a scheme into a padded encoding, or into a two-pass sign.
+
+#### 3. The design owner's refinement: bind the length through the txid
+
+**The proposal.** The body carries **no** length field. `archival_len` is computed from
+the body's own bytes: `|segments.prunable| + |segments.pqc_auths|`, the stored segments
+(§8.4's "which bytes" row). It is folded into the txid's mixer, and a skeleton node keeps
+it as a row beside `txs_prunable_hash` and `txs_pqc_auth_hash`.
+
+**The change surface** is one mixer per language:
+- Rust `Transaction::hash_from_components` (`transaction/txid.rs`);
+- C++ `calculate_transaction_hash` (`cryptonote_format_utils.cpp`);
+- the supplied-components path (`hash_with_supplied_components`), which gains the length
+  as a third supplied operand, exactly as the pruned form already supplies the prunable
+  digest.
+
+| wargame | outcome |
+|---|---|
+| **Malleability** | None new. The length is not a field the author chooses: a full body determines it, so there is exactly one valid value. A supplied length that disagrees with the bytes yields a different txid, and the block's transaction list refuses it. On a full body the txid computation **is** the ingest check, so no separate equality rule is needed |
+| **Skeleton-sync trust path** | The same path as the two hash rows: the supplied components rebuild the txid, the txid rebuilds the block's transaction root, then proof of work and the checkpoint. A peer that lies about a length breaks the txid. Below the checkpoint the length is **bound, not re-verified** — the property item 5 found missing from stored lengths, now present |
+| **Coinbase** | Unchanged. A `Null` CT keeps its 3-part form and has no length row; it is outside the domain. A `Fcmp` transaction folds the length in whether it is 3-part (serve-credit, no auth component) or 4-part. `archival_len > 0 ⇔ carries_archival_good` becomes a pinned invariant beside `SHT-Q1`'s equivalence test |
+| **The storage-pruned form** (`get_transactions prune:true`) | It carries the length as a supplied component, like the prunable digest it already carries. Nothing re-derives the length from a form that lacks the bytes |
+| **Variable-length signature schemes** | No constraint. The length is computed after every byte exists, so no signer needs to know it in advance. This is the property the prefix placement lacks |
+| **Relay** | A full-body relay carries nothing new: the receiver computes the length. Only pruned and skeleton transports carry it |
+
+**The cost is the same in kind as the prefix placement's.** Both change every txid, so
+both regenerate the cross-language parity pins (`pruned_tx_hash_parity`,
+`serve_credit_tx_parity`), the live-oracle pin (`live_oracle_spend_v1.json`) and the
+captured corpora. Both need the skeleton row and the cumulative cell. The prefix
+placement adds a wire field and an explicit ingest equality rule; the txid placement adds
+a mixer operand and a supplied component, and needs no equality rule.
+
+#### 4. Both placements, for the ruling
+
+| | **prefix field** (§8.4) | **txid-bound** (design owner's refinement) |
+|---|---|---|
+| bound by | txid; also signed wherever a PQC signature exists (not serve-credit) | txid |
+| author-chosen? | yes, so an ingest equality rule is needed | no, derived from the bytes; the txid is the check |
+| lengths needed before signing | **yes**: every signature's final length | **no** |
+| variable-length signature schemes (V4) | forced into padding or a two-pass sign | unaffected |
+| skeleton row and cumulative cell | needed | needed |
+| wire change | a prefix field | a txid-mixer operand, plus a supplied component on pruned transports |
+| every txid changes | yes | yes |
+
+**Recommendation (design owner): txid-bound.** It gets the same binding, removes the
+only signing-order dependency the prefix placement would introduce, needs no author-chosen
+value and so no equality rule, and survives a variable-length signature scheme at the V4
+transition. The partition built on it is unchanged from §8.4: global multiples of `W`,
+with `max archival length < W` as a static relation between the two constants.
+
+**Ruled in §8.6: txid-bound.** The ruling's "bound through the txid" is the right-hand
+column of the table above; the prefix field is not adopted.
+
+### 8.6 `SHT-Q2` — RULED (Rick, 2026-09-29)
+
+> **SHT-Q2 RULED (Rick, 2026-09-29): shards are cut by archival length, bound through the txid.** Each in-domain transaction's archival length (prunable + `pqc_auths` bytes) is folded into its txid and stored as a skeleton row. It is never declared or signed, and it is supplied by storage-pruned forms like the prunable hash. Shard membership is ⌊cum_before / W⌋ over the cumulative archival length: global multiples of W, no table. Static constraint: maximum archival length of one transaction < W. The domain (SHT-Q1) is unchanged. Its text changes from "T transactions" to "archival length W". F34's composition question closes by dissolution once this is built; the funding finding stands separately.
+
+**What the ruling settles, as the design owner stated it.** Nothing is declared: the txid
+mixer measures the finished bytes itself.
+
+- **On the wire:** no new field and no added bytes. A full node computes the length from
+  the bytes it holds while computing the txid, so there is no ingest check to write, and a
+  wrong length cannot exist.
+- **In the skeleton:** one row per transaction, beside the two digest rows. A
+  storage-pruned transaction supplies its length exactly as it supplies its prunable hash.
+  A wrong one produces a wrong txid and fails the Merkle check.
+- **In code:** one mixer function per language.
+
+**Ruled work:**
+
+1. The txid mixer in both languages (`Transaction::hash_from_components`; C++
+   `calculate_transaction_hash`), the stored archival-length row, and the cumulative
+   archival-length cell beside `cumulative_tx_count`. The count cell stays, because it
+   feeds the fee ladder (CEN-F20).
+2. The boundary function `⌊cum_before / W⌋`, and the `W` constant with its static
+   relation `max archival length of one transaction < W`.
+3. The regenerated parity pins (`pruned_tx_hash_parity`, `serve_credit_tx_parity`,
+   `live_oracle_spend_v1.json`) and the captured corpora.
+4. `T`'s derivation re-based in bytes. `U1a`'s ceiling was already in bytes, and the
+   composition bounds drop out.
+5. The cutover census (`ARCHIVAL_SHARD_COUNT_CUTOVER.md`) updated for the new boundary
+   function: the same consumers, a new function behind them.
+
+**Item 1 narrowed by the build brief's rulings (Rick, 2026-09-29).** There is **one**
+txid mixer, in Rust. C++ `calculate_transaction_hash` becomes an FFI call into it, with
+its hashing deleted and no length term added in C++ (rule 20). And **row 3 = (b):** the
+C++ LMDB archival path is frozen — no new LMDB tables, cells or archival logic; the
+LMDB/Rust-store partition difference is registered as an intended CSR-3a divergence;
+the engine swap completes before genesis, or this is revisited. The census carries both
+(`ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F).
+
+**Build status, 2026-09-29 (PR #910).** Items 2, 4 and 5 are done, and item 1's row and
+cell are built. Item 1's mixer term and item 3's pins and corpora are held on one
+blocker, how a pruned form supplies the length (FOLLOWUPS "Build `SHT-Q2`", where the
+four resolutions and the recommendation are recorded).
+
+**Consequences recorded with the ruling:**
+
+- **The overshoot bound carries over.** A shard's archival length lies in
+  `(W − max, W + max)`. Under CEN-H3 a transaction's good is below `TX_WEIGHT_LIMIT` =
+  149,400 B (§8.3). The static relation `max < W` means no transaction spans a whole
+  multiple of `W`, so no shard is empty.
+- **The equivalence invariant changes subject.** §2's "the domain equals the non-coinbase
+  transactions, read from `cumulative_tx_count`" still holds for **membership**. Boundaries
+  now read the archival-length cell. `archival_len > 0 ⇔ carries_archival_good` joins the
+  pinned invariants.
+- **The heavy-end composition quantile is no longer owed.** Its FOLLOWUPS row asked for a
+  shard-level quantile to replace L19's shape-cap multiplier in `U1a`. Equal-length shards
+  have no composition spread, so `U1a` is re-based in bytes (item 4) without it. The row
+  is retired in this change.
+- **F34:** composition closes by dissolution **once this is built**. The funding finding
+  from `STAKER_ARCHIVAL_SIM.md` §L19i–§L19j stands separately, as a gate 4/5 budget-sizing
+  input: paid whole-shard challenge egress at a low SKL price outruns the archival budget
+  (φ 2.9–29 in the breaching calibrated cells).
+
+---
+
+## 9. `W` — the partition constant re-based in bytes (`SHT-Q2` item 4, 2026-09-29)
+
+`SHT-Q2` replaces the count `T` with an archival length `W`: shard `k` holds the
+transactions whose cumulative archival length before them falls in `[k·W, (k+1)·W)`.
+§3's constraints were written for a count. Re-based in bytes, some disappear, one
+appears, and the rest restate.
+
+### 9.1 What the ruling removes
+
+- **`L1` — composition dispersion (`CV_tx / √T`) — retired.** It bounded how much
+  per-transaction variation could reach a shard's cost. Under equal-length shards a
+  shard's archival length is `W` ± one transaction by construction, so per-transaction
+  composition no longer reaches shard cost at any `W`.
+- **`U1a`'s heavy-end multiplier — retired.** §3's ceiling band (~[140, 490]) rested on a
+  heavy shard at "~2× the mean", which qualification (i) traced to L19's shape cap rather
+  than any measured shard. There is no heavy end left to estimate: the heaviest shard is
+  `W + max`, where `max` is the largest archival length of one transaction.
+- **`U1a`'s qualification (ii), the stacked worst cases, mostly dissolves.** The shard
+  side of the joint event is now deterministic and bounded. What is left is the circuit's
+  own tail against a known shard length. The target witness-miss rate is still a choice,
+  but it is a choice over one distribution, not two.
+
+### 9.2 The lower bounds, new in bytes
+
+**Hard: `W > max`.** `max < TX_WEIGHT_LIMIT` = 149,400 B, because CEN-H3 caps a legal
+transaction's weight, and its good is part of its serialized size. The ruling's static
+relation `max < W` means no transaction spans a whole multiple of `W`, so no shard is
+empty. In the build this is a compile-time assertion between the two constants.
+
+**Soft: the shard-to-shard overshoot.** Under global multiples, a shard's archival
+length lies in `(W − max, W + max)`, so its relative deviation is at most `max / W`:
+
+| `W` | 1 MB | 1.5 MB | 2 MB | **3 MB** | 3.33 MB | 5 MB |
+|---|---|---|---|---|---|---|
+| `149.4 KB / W` | 14.9 % | 10.0 % | 7.5 % | **5.0 %** | 4.5 % | 3.0 % |
+
+How much deviation to accept is a **choice**: the overshoot tolerance `τ`, which sets the
+floor `W ≥ 149.4 KB / τ`. The design owner recommends `τ ≤ 5 %`, which gives
+`W ≥ 2.99 MB`.
+
+### 9.3 The upper bound, `U1a`, in bytes
+
+A whole-shard read must complete in one attempt within one block (120 s), the criterion
+the W₂ measurement was graded against. The measurement is on a ~3.33 MB object: cold
+p99 48.27 s, soak p99 86.06 s (`ARCHIVAL_SHARD_FETCH.md`:1091-1095). With
+`t(bytes) = t_fixed + bytes / v`, one size is still one equation in two unknowns. At the
+heaviest shard, `W + 149.4 KB`, the ceiling on `W` is:
+
+| calibration | `t_fixed` | implied `v` | ceiling on `W` |
+|---|---|---|---|
+| soak p99 | 0 s (all transfer — pessimistic) | 38.7 KB/s | **≈ 4.49 MB** |
+| soak p99 | 60 s | 127.8 KB/s | ≈ 7.52 MB |
+| cold p99 | 0 s | 69.0 KB/s | ≈ 8.13 MB |
+| cold p99 | 30 s | 182.3 KB/s | ≈ 16.2 MB |
+
+`U1b`, an honest server's sustained egress on the floor device, still has no value
+(`SHT-5`). It may lower this ceiling, and it cannot raise it.
+
+### 9.4 Soft upward pressure: bookkeeping
+
+Per-shard consensus state (`archival_r_market` rows, serve-credit rows per
+`(P, shard, E)`, settlement work) and `L3`'s challenge work scale as shards ∝
+`chain bytes / W`, so a larger `W` means fewer rows. The holdings list covers
+`4096 × W` bytes per record, which is 12.3 GB at 3 MB. Under `L2`'s ruling that is a
+list budget, not an operator bound. Both pull mildly upward and bound nothing.
+
+The rows §3 keeps restate directly:
+- `U2` (one shard, `W` = 3 MB, against the floor device) is non-binding.
+- `U3` is unchanged in kind: a frontier shard closes after `W` bytes of domain good, so a
+  quiet chain still holds it open.
+- `U4` is shaping only.
+
+### 9.5 The feasible range, the selection rule, and what each measurement pins
+
+> **`W ∈ [ max(149.4 KB, 149.4 KB / τ),  U1a ceiling ]`**, with the ceiling between
+> ≈ 4.49 MB (pessimistic) and ≈ 16 MB (optimistic) until the multi-size W₂ run pins it.
+
+| `τ` | floor | against the pessimistic ceiling (4.49 MB) |
+|---|---|---|
+| 10 % | 1.49 MB | feasible |
+| **5 %** | **2.99 MB** | **feasible** |
+| 3 % | 4.98 MB | **infeasible**, unless the W₂ run shows setup cost dominates |
+
+**Selection rule (unchanged in direction from §4):** the smallest `W` within the
+tolerance, provided `U1a` clears at the heavy end. The asymmetry is the same: too
+large puts unpriced witness misses on operators; too small costs bookkeeping.
+
+**`W = 3,000,000 B` — PROVISIONAL (Rick, 2026-09-29).** The selection rule's own
+output: the smallest `W` with overshoot within the recommended `τ ≤ 5 %` is
+149.4 KB ÷ 0.05 ≈ 2.99 MB, rounded up.
+- overshoot 4.98 %, inside `τ ≤ 5 %`;
+- heaviest shard 3,149,400 B, which the pessimistic soak calibration reads in about
+  81 s against the 120 s criterion;
+- no tie left to the leaf segment's size.
+
+**Correction, dated to its writing (2026-09-29):** this section first recorded
+`W = 3.33 MB` as the provisional value. That was **not the rule's output**. It survived
+only because 3.33 MB was the old number, the same way `T = 200` did. It still lay
+inside the range, but the rule picks 3 MB, and 3 MB also improves `U1a`'s margin
+(≈ 81 s against ≈ 90 s).
+
+It is re-pinned at the Round-2 gate, like `T` was, by:
+- **the overshoot tolerance `τ`**, Rick's input. It sets the floor;
+- **the multi-size W₂ run** (§4.1, pre-registered). It separates `t_fixed` from `v`
+  and turns the ceiling into one number;
+- **the `U1b` server-egress measurement** (`SHT-5`). It may lower the ceiling.
+
+**Constant rename, owed in the build, not here.** `archival_shard_tx_count` (the JSON
+key), `shekyl_types::SHARD_TX_COUNT` and its generated C++ name become an
+archival-length constant in bytes. The unit is in the name, so the rename is part of the
+cutover (the FOLLOWUPS build row).

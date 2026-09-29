@@ -444,7 +444,8 @@ E3). Coverage over a well-formed candidate: 29 rows.
   replay with outputs; the row lands with E3, not with a read of zero.
 - 4.H fee validity (slice 5); 4.G aggregation (slice 7).
 - The `coins_generated` / `burned` `ConnectFacts` deletions (owed to the
-  landings of F14b and F17).
+  landings of F14b and F17) — **landed in slice 7 (2026-09-28/29), the type
+  deleted with its last member.**
 
 ---
 

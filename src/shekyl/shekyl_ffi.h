@@ -4028,9 +4028,10 @@ struct ShekylE2TraceWriter;
 /// header. NULL on failure (reason logged).
 struct ShekylE2TraceWriter* shekyl_e2_trace_open(const uint8_t* path, size_t path_len);
 
-/// Facts at `height` (the next consecutive height): the six passed-through
-/// facts in ConnectFacts order, `root_after` 32 bytes, cumulative
-/// difficulty as (lo, hi) u64 halves.
+/// Facts at `height` (the next consecutive height): the six recorded
+/// facts in the trace's `Facts` order (oracle comparison inputs, never
+/// handed to `connect`), `root_after` 32 bytes, cumulative difficulty as
+/// (lo, hi) u64 halves.
 int32_t shekyl_e2_trace_push_facts(
     struct ShekylE2TraceWriter* writer,
     uint64_t height,
