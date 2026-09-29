@@ -1248,8 +1248,9 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
       e.current_speed_down = ctx.m_current_speed_down;
       e.current_speed_up = ctx.m_current_speed_up;
       {
-        // The budget counted the wire bytes. The speed is that count
-        // over the connection's age. It is not a second limit.
+        // Totals feed the lifetime average. Current speed is the last
+        // gap between chunks, diluted by idle time, from the engine's
+        // clock. It is not a second limit.
         std::uint64_t socket_id = 0;
         std::memcpy(&socket_id, ctx.m_connection_id.data + 8, sizeof(socket_id));
         if (socket_id != 0)
@@ -1259,12 +1260,11 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
           shekyl_link_connection(socket_id, &up, &down);
           e.send_count = up;
           e.recv_count = down;
-          if (now > e.started && e.started != 0)
-          {
-            const double span = static_cast<double>(now - e.started);
-            e.current_speed_up = static_cast<double>(up) / span;
-            e.current_speed_down = static_cast<double>(down) / span;
-          }
+          std::uint64_t speed_up = 0;
+          std::uint64_t speed_down = 0;
+          shekyl_link_speed(socket_id, &speed_up, &speed_down);
+          e.current_speed_up = static_cast<double>(speed_up);
+          e.current_speed_down = static_cast<double>(speed_down);
         }
       }
       e.height = ctx.m_remote_blockchain_height;

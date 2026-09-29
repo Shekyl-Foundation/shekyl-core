@@ -145,9 +145,9 @@ namespace nodetool
     const command_line::arg_descriptor<int64_t>     arg_in_peers = {"in-peers", "set max number of in peers", -1};
     const command_line::arg_descriptor<int> arg_tos_flag = {"tos-flag", "set TOS flag", -1};
 
-    const command_line::arg_descriptor<int64_t> arg_limit_rate_up = {"limit-rate-up", "set limit-rate-up [KiB/s]. -1, the default, is unlimited", -1};
-    const command_line::arg_descriptor<int64_t> arg_limit_rate_down = {"limit-rate-down", "set limit-rate-down [KiB/s]. -1, the default, is unlimited", -1};
-    const command_line::arg_descriptor<int64_t> arg_limit_rate = {"limit-rate", "set limit-rate [KiB/s]. -1, the default, is unlimited", -1};
+    const command_line::arg_descriptor<int64_t> arg_limit_rate_up = {"limit-rate-up", "set limit-rate-up [KiB/s]. -1, the default, is unlimited. 0 is refused", -1};
+    const command_line::arg_descriptor<int64_t> arg_limit_rate_down = {"limit-rate-down", "set limit-rate-down [KiB/s]. -1, the default, is unlimited. 0 is refused", -1};
+    const command_line::arg_descriptor<int64_t> arg_limit_rate = {"limit-rate", "set limit-rate [KiB/s]. -1, the default, is unlimited. 0 is refused", -1};
 
     const command_line::arg_descriptor<bool> arg_pad_transactions = {
       "pad-transactions", "Pad relayed transactions to help defend against traffic volume analysis", false

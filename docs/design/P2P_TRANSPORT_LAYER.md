@@ -946,9 +946,9 @@ open design.
 
 **The operator's budget is the carried duty.** `--limit-rate-up`,
 `--limit-rate-down`, and `--limit-rate` (`net_node.cpp:184-186`) keep
-working. The default is unlimited. `P2P_DEFAULT_LIMIT_RATE_UP` (8192)
-and `P2P_DEFAULT_LIMIT_RATE_DOWN` (32768) are inherited numbers, not
-the policy. An operator sets a budget when the link needs one. The
+working. The default is unlimited. 8192 and 32768 KiB/s were the
+inherited defaults; they are not the policy. An operator sets a budget
+when the link needs one. The
 budget is the operator's bandwidth preference. It has no security role.
 
 A token bucket per direction, for the whole node. The refill is the

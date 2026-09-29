@@ -4288,6 +4288,10 @@ void shekyl_link_totals(std::uint64_t* bytes_down, std::uint64_t* packets_down,
     std::uint64_t* bytes_up, std::uint64_t* packets_up);
 /// Bytes this connection has moved. A null pointer is skipped.
 void shekyl_link_connection(std::uint64_t id, std::uint64_t* bytes_up, std::uint64_t* bytes_down);
+/// Bytes per second right now. The last gap between chunks, diluted by
+/// idle time since that chunk, read from the engine's clock. A null
+/// pointer is skipped.
+void shekyl_link_speed(std::uint64_t id, std::uint64_t* bytes_per_sec_up, std::uint64_t* bytes_per_sec_down);
 
 } // extern "C"
 

@@ -3365,8 +3365,11 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::set_rate_up_limit(const boost::program_options::variables_map& vm, int64_t limit)
   {
-    // A negative value is unlimited: no bucket. Zero and above are KiB/s.
-    // P2P_DEFAULT_LIMIT_RATE_UP is an inherited number, not this default.
+    if (limit == 0 || limit < -1)
+    {
+      MERROR("--limit-rate-up " << limit << " is not a rate. Use -1 for unlimited.");
+      return false;
+    }
     this->islimitup = limit >= 0;
     shekyl_link_set_up(limit);
     if (limit < 0)
@@ -3379,6 +3382,11 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::set_rate_down_limit(const boost::program_options::variables_map& vm, int64_t limit)
   {
+    if (limit == 0 || limit < -1)
+    {
+      MERROR("--limit-rate-down " << limit << " is not a rate. Use -1 for unlimited.");
+      return false;
+    }
     this->islimitdown = limit >= 0;
     shekyl_link_set_down(limit);
     if (limit < 0)
@@ -3392,7 +3400,12 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::set_rate_limit(const boost::program_options::variables_map& vm, int64_t limit)
   {
     // Applies only to a direction the operator did not set on its own.
-    // Negative is unlimited, the same as leaving the flag off.
+    // -1 is unlimited. Zero is not a rate.
+    if (limit == 0 || limit < -1)
+    {
+      MERROR("--limit-rate " << limit << " is not a rate. Use -1 for unlimited.");
+      return false;
+    }
     if(!this->islimitup)
       set_rate_up_limit(vm, limit);
     if(!this->islimitdown)

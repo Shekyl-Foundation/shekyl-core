@@ -689,6 +689,26 @@ pub extern "C" fn shekyl_link_totals(
     }
 }
 
+/// Bytes per second on this connection, from the engine's clock.
+/// The last gap between chunks, diluted by idle time since. Null
+/// pointers are skipped.
+#[no_mangle]
+pub extern "C" fn shekyl_link_speed(
+    id: u64,
+    bytes_per_sec_up: *mut u64,
+    bytes_per_sec_down: *mut u64,
+) {
+    let (up, down) = node_gate().speed(id);
+    unsafe {
+        if !bytes_per_sec_up.is_null() {
+            *bytes_per_sec_up = up;
+        }
+        if !bytes_per_sec_down.is_null() {
+            *bytes_per_sec_down = down;
+        }
+    }
+}
+
 /// Bytes this connection has moved. Null pointers are skipped.
 #[no_mangle]
 pub extern "C" fn shekyl_link_connection(id: u64, bytes_up: *mut u64, bytes_down: *mut u64) {

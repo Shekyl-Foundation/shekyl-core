@@ -11,10 +11,13 @@
   implement it is gone. The flip deletes the option.
 - `--limit-rate-up`, `--limit-rate-down`, and `--limit-rate` reach one
   token bucket per direction for the whole node. The default is
-  unlimited. A set rate counts wire bytes, including Noise overhead
-  when the clearnet option is on. An empty bucket pauses the writer
-  and the reader. It does not close the connection. `set_limit` and
-  `get_limit` use the same budget.
+  unlimited (`-1`). `0` is refused at startup. A set rate counts wire
+  bytes, including Noise overhead when the clearnet option is on. An
+  empty bucket pauses the writer and the reader. It does not close the
+  connection. `set_limit` and `get_limit` use the same budget. A
+  connection's current speed is the last gap between chunks, diluted
+  by idle time since that chunk. The lifetime average stays the
+  separate average.
 
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 

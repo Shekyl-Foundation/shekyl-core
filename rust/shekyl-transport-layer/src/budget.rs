@@ -54,6 +54,80 @@ pub enum Turn {
 struct Flow {
     bytes: u64,
     packets: u64,
+    pace: Pace,
+}
+
+/// The recent rate of one direction on one connection.
+///
+/// The sample is the last gap between chunks: those bytes over that
+/// gap. Idle time after the chunk dilutes the same bytes, so a quiet
+/// connection falls toward zero when the speed is read. There is no
+/// timer and no separate window. One chunk has no gap yet, so its
+/// rate is zero until the next one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Pace {
+    bytes: u64,
+    span_ns: u64,
+    at_ns: u64,
+    started: bool,
+    saved: Option<SavedPace>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SavedPace {
+    bytes: u64,
+    span_ns: u64,
+    at_ns: u64,
+    started: bool,
+}
+
+impl Pace {
+    fn observe(&mut self, n: u64, now: u64) {
+        self.saved = Some(SavedPace {
+            bytes: self.bytes,
+            span_ns: self.span_ns,
+            at_ns: self.at_ns,
+            started: self.started,
+        });
+        if self.started && now > self.at_ns {
+            self.span_ns = now - self.at_ns;
+            self.bytes = n;
+            self.at_ns = now;
+        } else if self.started {
+            self.bytes = self.bytes.saturating_add(n);
+        } else {
+            self.bytes = n;
+            self.span_ns = 0;
+            self.at_ns = now;
+            self.started = true;
+        }
+    }
+
+    fn undo(&mut self) {
+        if let Some(saved) = self.saved.take() {
+            self.bytes = saved.bytes;
+            self.span_ns = saved.span_ns;
+            self.at_ns = saved.at_ns;
+            self.started = saved.started;
+        }
+    }
+
+    fn shrink(&mut self, n: u64) {
+        self.bytes = self.bytes.saturating_sub(n);
+    }
+
+    fn bytes_per_sec(self, now: u64) -> u64 {
+        if !self.started || self.span_ns == 0 {
+            return 0;
+        }
+        let denom =
+            u128::from(self.span_ns).saturating_add(u128::from(now.saturating_sub(self.at_ns)));
+        if denom == 0 {
+            return 0;
+        }
+        let numer = u128::from(self.bytes).saturating_mul(1_000_000_000);
+        u64::try_from(numer / denom).unwrap_or(u64::MAX)
+    }
 }
 
 struct Bucket {
@@ -150,7 +224,7 @@ impl Lane {
         self.queue.retain(|id| *id != conn);
     }
 
-    fn note(&mut self, conn: u64, n: u64) {
+    fn note(&mut self, conn: u64, n: u64, now: u64) {
         if n == 0 {
             return;
         }
@@ -159,6 +233,7 @@ impl Lane {
         let flow = self.per.entry(conn).or_default();
         flow.bytes = flow.bytes.saturating_add(n);
         flow.packets = flow.packets.saturating_add(1);
+        flow.pace.observe(n, now);
     }
 
     fn refund(&mut self, conn: u64, n: u64, whole_grant: bool) {
@@ -174,6 +249,9 @@ impl Lane {
             flow.bytes = flow.bytes.saturating_sub(n);
             if whole_grant {
                 flow.packets = flow.packets.saturating_sub(1);
+                flow.pace.undo();
+            } else {
+                flow.pace.shrink(n);
             }
         }
         if whole_grant {
@@ -192,7 +270,7 @@ impl Lane {
         }
         let Some(bucket) = self.bucket.as_mut() else {
             self.queue.pop_front();
-            self.note(conn, want);
+            self.note(conn, want, now);
             return Turn::Granted(want);
         };
         bucket.refill(now);
@@ -208,7 +286,7 @@ impl Lane {
         let n = want.min(bucket.tokens);
         bucket.tokens -= n;
         self.queue.pop_front();
-        self.note(conn, n);
+        self.note(conn, n, now);
         Turn::Granted(n)
     }
 }
@@ -309,6 +387,27 @@ impl LinkBudget {
             bytes_down: self.down.total.bytes,
             packets_down: self.down.total.packets,
         }
+    }
+
+    /// Bytes per second on this connection, as of `now`.
+    ///
+    /// The last gap between chunks, diluted by any idle time since.
+    /// A connection with one chunk so far is zero: there is no gap yet.
+    #[must_use]
+    pub fn speed(&self, conn: u64, now: u64) -> (u64, u64) {
+        let up = self
+            .up
+            .per
+            .get(&conn)
+            .map(|flow| flow.pace.bytes_per_sec(now))
+            .unwrap_or(0);
+        let down = self
+            .down
+            .per
+            .get(&conn)
+            .map(|flow| flow.pace.bytes_per_sec(now))
+            .unwrap_or(0);
+        (up, down)
     }
 
     /// What this connection has moved. Absent means nothing yet.
@@ -413,6 +512,23 @@ mod tests {
             Turn::Granted(4)
         );
         assert_eq!(budget.connection(3).bytes_up, 8);
+    }
+
+    #[test]
+    fn current_speed_is_the_last_gap_and_idle_time_dilutes_it() {
+        let mut budget = LinkBudget::new();
+        let conn = 4u64;
+        assert_eq!(
+            budget.take(LinkDirection::Up, conn, MessageClass::Session, 1_000, 0),
+            Turn::Granted(1_000)
+        );
+        assert_eq!(budget.speed(conn, 0).0, 0);
+        assert_eq!(
+            budget.take(LinkDirection::Up, conn, MessageClass::Session, 1_000, SEC),
+            Turn::Granted(1_000)
+        );
+        assert_eq!(budget.speed(conn, SEC).0, 1_000);
+        assert_eq!(budget.speed(conn, 2 * SEC).0, 500);
     }
 
     #[test]
