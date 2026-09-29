@@ -606,6 +606,43 @@ fn spawn_tor(host: &Host, listener: TcpListener) {
     });
 }
 
+/// The SOCKS proxy the Tor connector dials through, for a tor zone with no
+/// inbound listener. [`shekyl_zone_listen_tor`] installs it for zones that
+/// listen; an outbound-only `--tx-proxy tor` zone never called that, so the
+/// host had no proxy and every Tor dial was `DialFailed` before the
+/// network. Returns 0, or -1 when the host cannot be built or `socks_host`
+/// does not parse.
+///
+/// # Safety
+/// `socks_host`, `params`, and `ceiling` are readable.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_zone_set_tor_proxy(
+    socks_host: *const c_char,
+    socks_port: u16,
+    params: *const ShekylZoneParams,
+    ceiling: *const ShekylInboundCeiling,
+) -> i32 {
+    if params.is_null() || ceiling.is_null() {
+        return -1;
+    }
+    let params = unsafe { &*params };
+    let ceiling = match ceiling_from_abi(unsafe { *ceiling }) {
+        Some(ceiling) => ceiling,
+        None => return -1,
+    };
+    let Ok(host) = ensure(params, ceiling) else {
+        return -1;
+    };
+    let Some(socks_host) = c_str(socks_host) else {
+        return -1;
+    };
+    let Ok(socks_ip) = socks_host.parse::<IpAddr>() else {
+        return -1;
+    };
+    *host.tor_proxy.lock().expect("tor proxy") = Some(SocketAddr::new(socks_ip, socks_port));
+    0
+}
+
 /// Replace the ceiling later accepts use.
 #[no_mangle]
 pub extern "C" fn shekyl_zone_set_ceiling(ceiling: *const ShekylInboundCeiling) -> i32 {
@@ -838,6 +875,19 @@ mod tests {
             "a transport deadline must be armable after ensure returns"
         );
         drop(owner);
+
+        // An outbound-only tor zone installs its proxy without listening.
+        assert!(host.tor_proxy.lock().expect("tor proxy").is_none());
+        let socks = std::ffi::CString::new("127.0.0.1").expect("socks host");
+        let rc = unsafe {
+            shekyl_zone_set_tor_proxy(socks.as_ptr(), 9050, &raw const params, &raw const ceiling)
+        };
+        assert_eq!(rc, 0);
+        assert_eq!(
+            *host.tor_proxy.lock().expect("tor proxy"),
+            Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050)),
+            "dial_tor reads this; None is DialFailed before the network"
+        );
 
         shekyl_zone_shutdown();
         assert!(

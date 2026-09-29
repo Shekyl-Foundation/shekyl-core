@@ -347,6 +347,23 @@ public:
     return true;
   }
 
+  /// An outbound-only tor zone (`--tx-proxy tor,...` with no
+  /// `--anonymous-inbound`). It listens on nothing, but its dialed
+  /// connections still post to a tor binding, and its dials need the SOCKS
+  /// address in the host. Without this call both were missing and every
+  /// Tor dial was `DialFailed` before the network.
+  bool dial_through_tor(const boost::asio::ip::tcp::endpoint& socks, const std::uint8_t* network_id,
+      const shekyl_inbound_ceiling& ceiling, const shekyl_zone_params& spans)
+  {
+    if (!detail::ensure_seam(ceiling))
+      return false;
+    detail::register_binding(SHEKYL_CONNECTOR_TOR, this);
+    shekyl_zone_params params = spans;
+    params.network_id = network_id;
+    const std::string socks_host = socks.address().to_string();
+    return shekyl_zone_set_tor_proxy(socks_host.c_str(), socks.port(), &params, &ceiling) == 0;
+  }
+
   bool open(const epee::net_utils::network_address& address, connection_context& out)
   {
     shekyl_seam_address ffi{};

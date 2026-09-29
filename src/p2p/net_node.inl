@@ -1077,6 +1077,16 @@ namespace nodetool
         }
         CHECK_AND_ASSERT_MES(res, false, "Failed to bind server");
       }
+      else if (zone.first == epee::net_utils::zone::tor && zone.second.m_proxy_address.address.port() != 0)
+      {
+        // `--tx-proxy tor,...` without `--anonymous-inbound`: no listener,
+        // and the dials still go through the seam, which needs the SOCKS
+        // address and a tor binding for the connections it establishes.
+        MINFO("Tor zone dials through " << zone.second.m_proxy_address.address << " with no inbound");
+        res = zone.second.m_net_server.dial_through_tor(zone.second.m_proxy_address.address,
+            reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling(), transport_spans());
+        CHECK_AND_ASSERT_MES(res, false, "Failed to install the tor proxy");
+      }
     }
 
     m_listening_port = public_zone.m_net_server.get_binded_port();

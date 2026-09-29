@@ -4309,6 +4309,13 @@ int shekyl_zone_listen_tor(
     const char* extra, std::uint16_t extra_port,
     const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling,
     int* out_port);
+/// The SOCKS proxy the Tor connector dials through, for a tor zone with no
+/// inbound listener. `shekyl_zone_listen_tor` installs it for zones that
+/// listen. Returns 0, or -1 when the host cannot be built or the address
+/// does not parse.
+int shekyl_zone_set_tor_proxy(
+    const char* socks_host, std::uint16_t socks_port,
+    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling);
 int shekyl_zone_set_ceiling(const shekyl_inbound_ceiling* ceiling);
 /// Operator inbound cap for one connector. Accept enforces it there and
 /// does not also apply the process ceiling. Returns 0, or -1 for an
