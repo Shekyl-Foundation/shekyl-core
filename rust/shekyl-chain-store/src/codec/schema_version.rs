@@ -162,7 +162,18 @@ use super::{Canonical, CodecError};
 ///   — `validate` derives it, `connect` records the verdict's — so
 ///   `FACT_FIELDS` loses its name and the `passed_through_facts` vocabulary
 ///   shrinks 6 → 5 under this one bump (the `7` mechanism, second instance).
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(15);
+/// - `16` — E6 slice 7 commit 5 (`CHAIN_RULES_SLICE_7.md` §5 row 5):
+///   **four passed-through facts become the verdict's.** `validate` derives
+///   the two block-weight medians (CEN-G6/G6b), the block's weight and
+///   long-term weight, the paid reward and the advanced accumulator
+///   (CEN-F14b, G12); `connect` records `ValidatedBlock::{weights,
+///   emission}`. `weight`, `long_term_weight`, `long_term_effective_median`
+///   and `coins_generated` leave `ConnectFacts` and `FACT_FIELDS`, so the
+///   `passed_through_facts` vocabulary shrinks 5 → 1 (`burned` remains for
+///   wave B) — the `7` mechanism, third instance. No table moves; no digest
+///   family moves: the cells hold the same columns, now written from the
+///   verdict.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(16);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -219,10 +230,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(15));
-        assert_eq!(SCHEMA_VERSION.encode(), [15, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(16));
+        assert_eq!(SCHEMA_VERSION.encode(), [16, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[15, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[16, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

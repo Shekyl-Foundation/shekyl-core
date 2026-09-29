@@ -287,16 +287,14 @@ impl<T> Borrowed<T> {
 
 impl From<Borrowed<Facts>> for ConnectFacts {
     /// The one way a borrowed fact reaches `connect`: every origin is
-    /// `PassedThrough`. `cumulative_difficulty` is not a connect fact (the
-    /// verdict carries it since #785) and stays behind.
+    /// `PassedThrough`. Only the burn is a connect fact now — the verdict
+    /// carries `cumulative_difficulty` (since #785), `root_after` (DRS-E3),
+    /// the two weights and the median (CEN-G6/G6b) and `coins_generated`
+    /// (CEN-F14b / G12); the trace keeps recording each as the oracle's
+    /// comparison input, and this door mints no fact from them.
     fn from(b: Borrowed<Facts>) -> Self {
-        let f = b.0;
         Self {
-            weight: Fact::passed_through(f.weight),
-            long_term_weight: Fact::passed_through(f.long_term_weight),
-            coins_generated: Fact::passed_through(f.coins_generated),
-            burned: Fact::passed_through(f.burned),
-            long_term_effective_median: Fact::passed_through(f.long_term_effective_median),
+            burned: Fact::passed_through(b.0.burned),
         }
     }
 }

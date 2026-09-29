@@ -243,7 +243,7 @@ fn a_leaf_count_row_that_does_not_chain_to_the_summary_halts_the_next_connect() 
                 Vec::new(),
             ),
         )?;
-        Ok(batch.connect(valid, facts(TIP + 1, 0), RuleSet::GENESIS)?)
+        Ok(batch.connect(valid, facts(0), RuleSet::GENESIS)?)
     });
     assert_eq!(
         out,

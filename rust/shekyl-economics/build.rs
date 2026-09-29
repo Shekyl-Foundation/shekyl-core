@@ -48,6 +48,18 @@ fn main() {
     // call (CHAIN_RULES_SLICE_4.md §3.1 S8).
     let block_weight_full_reward_zone =
         get_u64(&consensus_map, "block_weight_full_reward_zone_bytes");
+    // The two medians' windows (CEN-G6, CHAIN_RULES_SLICE_7.md Q6): the
+    // long-term median's horizon and the short-term median's. Both were
+    // C++-only `#define`s until slice 7; the C++ header is generated from
+    // the same keys.
+    let block_weight_long_term_window =
+        get_u64(&consensus_map, "block_weight_long_term_window_blocks");
+    let block_weight_short_term_window =
+        get_u64(&consensus_map, "block_weight_short_term_window_blocks");
+    assert!(
+        block_weight_short_term_window > 0 && block_weight_long_term_window > 0,
+        "consensus_constants.json: a block-weight median window must be at least one block"
+    );
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
     let out_file = out_dir.join("params_generated.rs");
@@ -55,6 +67,8 @@ fn main() {
     let output = format!(
         "pub const GENERATED_BLOCK_WEIGHT_SURGE_FACTOR: u64 = {block_weight_surge_factor};\n\
          pub const GENERATED_BLOCK_WEIGHT_FULL_REWARD_ZONE: u64 = {block_weight_full_reward_zone};\n\
+         pub const GENERATED_BLOCK_WEIGHT_LONG_TERM_WINDOW: u64 = {block_weight_long_term_window};\n\
+         pub const GENERATED_BLOCK_WEIGHT_SHORT_TERM_WINDOW: u64 = {block_weight_short_term_window};\n\
          pub const GENERATED_SCALE: u64 = {scale};\n\
          pub const GENERATED_RELEASE_MIN: u64 = {release_min};\n\
          pub const GENERATED_RELEASE_MAX: u64 = {release_max};\n\

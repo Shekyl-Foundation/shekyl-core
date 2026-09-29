@@ -53,9 +53,33 @@ async fn a_mined_chain_is_admitted_block_by_block_and_the_record_is_the_owners()
     let facts = scenario.facts().await.expect("facts");
     assert_eq!(facts.connecting, BlockHeight::from_raw(6));
     assert_eq!(facts.previous, mined[5].hash);
-    // CEN-F13's accumulator is the fold of what each template priced.
-    let priced: u64 = mined.iter().map(|m| m.template.block_reward.to_raw()).sum();
-    assert_eq!(facts.parent_coins_generated.to_raw(), priced);
+    // CEN-G12's accumulator is the validator's (slice 7 commit 5): at every
+    // height past genesis it advances by the paid reward F14b prices, which
+    // is what the template priced (`paid_block_reward`, one owner) — so the
+    // fold agrees with the templates from height 1 on. At genesis the
+    // validator takes the coinbase's configured total (F11, the C++'s
+    // `base_reward = money_in_use`), and a template-built genesis pays only
+    // the miner leg of its priced reward — so height 0 contributes what the
+    // coinbase paid, not `block_reward`. Two owners, one number each.
+    let genesis_paid: u64 = mined[0]
+        .template
+        .block
+        .miner_transaction
+        .prefix
+        .outputs
+        .iter()
+        .map(|o| o.amount)
+        .sum();
+    let priced: u64 = mined[1..]
+        .iter()
+        .map(|m| m.template.block_reward.to_raw())
+        .sum();
+    assert_eq!(facts.parent_coins_generated.to_raw(), genesis_paid + priced);
+    assert!(
+        genesis_paid < mined[0].template.block_reward.to_raw(),
+        "the template's genesis coinbase pays the miner leg of a split reward; the validator \
+         records what it paid"
+    );
     // Empty blocks: the volume window counts none, over min(h, W) blocks.
     assert_eq!(facts.tx_volume, shekyl_economics::TxVolume::window(0, 6));
     // The next header will carry the root the store recorded after block
@@ -99,12 +123,27 @@ async fn a_rewind_pops_to_the_target_and_mining_resumes_on_the_new_tip() {
     assert_eq!(fork[0].template.block.header.previous, first[2].hash);
     assert_ne!(fork[0].hash, first[3].hash);
     let facts = scenario.facts().await.expect("facts");
-    let expected: u64 = first[..3]
+    // Genesis contributes what its coinbase paid (F11); every later block
+    // the paid reward its template priced (F14b) — the same two owners as
+    // the admission test above.
+    let genesis_paid: u64 = first[0]
+        .template
+        .block
+        .miner_transaction
+        .prefix
+        .outputs
+        .iter()
+        .map(|o| o.amount)
+        .sum();
+    let expected: u64 = first[1..3]
         .iter()
         .chain(fork.iter())
         .map(|m| m.template.block_reward.to_raw())
         .sum();
-    assert_eq!(facts.parent_coins_generated.to_raw(), expected);
+    assert_eq!(
+        facts.parent_coins_generated.to_raw(),
+        genesis_paid + expected
+    );
     assert_eq!(
         scenario
             .connector()

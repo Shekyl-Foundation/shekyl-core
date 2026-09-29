@@ -41,10 +41,7 @@ use shekyl_chain_rules::{
     form, seed_height, validate, AtHeight, Candidate, ChainValid, ChainView, Fault, FormAttempt,
     RuleSet, Substrate, Trust,
 };
-use shekyl_types::{
-    AttestationRoot, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight, PowHash,
-    Timestamp,
-};
+use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader};
 
@@ -116,16 +113,16 @@ fn judge<'b, 'id>(
     }
 }
 
-fn facts(height: u64) -> ConnectFacts {
+/// The one fact `connect` is still handed (E6 slice 7). *Records-was:* until
+/// commit 5 this handed weights spread per height (`300_000 + (h · 7919)
+/// mod 200 000`) so the medians were "of something"; the weights are the
+/// verdict's now — a coinbase-only bench block's, uniform — which changes
+/// nothing the bench measures: the subject is the **read** of `N` rows,
+/// (a) per height against (b) one cursor, and a median's selection is
+/// `O(n)` whatever the values.
+fn facts(_height: u64) -> ConnectFacts {
     ConnectFacts {
-        // Distinct per height so the medians are of something.
-        weight: Fact::passed_through(BlockWeight::from_raw(300_000 + (height * 7919) % 200_000)),
-        long_term_weight: Fact::passed_through(LongTermWeight::from_raw(
-            300_000 + (height * 104_729) % 150_000,
-        )),
-        coins_generated: Fact::passed_through(AtomicUnits::from_raw((height + 1) * 1_000_000)),
         burned: Fact::passed_through(AtomicUnits::ZERO),
-        long_term_effective_median: Fact::passed_through(LongTermWeight::from_raw(300_000)),
     }
 }
 

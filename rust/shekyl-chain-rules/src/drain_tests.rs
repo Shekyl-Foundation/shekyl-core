@@ -7,13 +7,17 @@
 
 use core::convert::Infallible;
 
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage};
+use shekyl_types::{
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, TxHash,
+};
 
 use super::{drain, sources, DrainSources};
 use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::tree_growth::TreeFrontier;
-use crate::view::{AtHeight, BlockOutputs, ChainView, LeafSource, RecordedBlock, Tip};
+use crate::view::{
+    AtHeight, BlockOutputs, ChainView, LeafSource, RecordedBlock, RecordedWeights, Tip,
+};
 
 fn h(height: u64) -> BlockHeight {
     BlockHeight::from_raw(height)
@@ -63,6 +67,16 @@ impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> ChainView<'id> for Outpu
     }
     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
         Ok(AtHeight::AboveTip)
+    }
+    fn weights_window(
+        &self,
+        _: BlockHeight,
+        _: BlockCount,
+    ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+        Ok(AtHeight::AboveTip)
+    }
+    fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
+        Ok(false)
     }
     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
         Ok(None)

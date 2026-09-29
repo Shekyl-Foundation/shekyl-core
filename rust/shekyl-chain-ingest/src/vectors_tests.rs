@@ -129,9 +129,11 @@ fn captured_chains() -> Vec<(PathBuf, Manifest)> {
 /// The shapes `regtest_e2e.rs` captures, by the names its `maybe_capture_chain_vector`
 /// calls write into `manifest.json` (§5.2). Adding a capture there adds a
 /// name here; the corpus is enumerated, not discovered.
-const CAPTURED_SHAPES: [&str; 4] = [
+const CAPTURED_SHAPES: [&str; 6] = [
     "bond-post",
     "emission-claim",
+    "limit-full",
+    "median-full",
     "spend-1in-2out",
     "spend-depth3",
 ];
@@ -212,6 +214,59 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
         "{} ({}): the derived curve-tree root differs from the daemon's at {} height(s), first at \
          {:?} — a FINDING, adjudicated against the spec (E2 §0), never a fixture problem: the \
          chain is one the C++ accepted and the root is the validator's derivation",
+        manifest.shape,
+        manifest.generator,
+        diverged.len(),
+        diverged.first()
+    );
+    // CEN-G6/G6b (slice 7 commit 4): the verdict's weight, long-term
+    // weight and long-term effective median are held to the C++'s two
+    // recorded columns and the exporter's re-derived median at **every**
+    // connected height — the medians' parity pin over a chain the C++
+    // built, taken while the LMDB trace exists. Same discipline as the
+    // root: count first, then no divergence, and a divergence is a
+    // finding about the derivation, never a fixture to patch.
+    assert_eq!(
+        report.weights.compared(),
+        manifest.block_count,
+        "{}: {} of {} heights had recorded weights to compare against",
+        manifest.shape,
+        report.weights.compared(),
+        manifest.block_count
+    );
+    let diverged: Vec<_> = report.weights.diverged().collect();
+    assert!(
+        diverged.is_empty(),
+        "{} ({}): a derived weight value differs from the daemon's at {} height(s), first at \
+         {:?} — a FINDING about CEN-G6/G6b's derivation, adjudicated against the spec, never a \
+         fixture problem",
+        manifest.shape,
+        manifest.generator,
+        diverged.len(),
+        diverged.first()
+    );
+    // CEN-F14b / G12 (slice 7 commit 5): the verdict's accumulator against
+    // the C++'s `block_info.bi_coins` at every connected height — the paid
+    // reward at each height by difference, so the penalty curve is held
+    // wherever a captured block is over the median (`median-full`, 211).
+    // The expected value is Shekyl's ratified composition (FL-R12′: the
+    // release-modulated, tail-floored emission under C2-R2 Q4's penalty,
+    // `paid_block_reward`), which the C++ marshals; the C++ is the oracle
+    // only insofar as it agrees with that.
+    assert_eq!(
+        report.emission.compared(),
+        manifest.block_count,
+        "{}: {} of {} heights had a recorded accumulator to compare against",
+        manifest.shape,
+        report.emission.compared(),
+        manifest.block_count
+    );
+    let diverged: Vec<_> = report.emission.diverged().collect();
+    assert!(
+        diverged.is_empty(),
+        "{} ({}): the derived accumulator differs from the daemon's at {} height(s), first at \
+         {:?} — a FINDING about CEN-F14b / G12's derivation, adjudicated against the ratified \
+         composition, never a fixture problem",
         manifest.shape,
         manifest.generator,
         diverged.len(),
@@ -326,12 +381,14 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
         let report = replay(&dir, &manifest, Arc::clone(&substrate)).await;
         hold(&dir, &manifest, &report);
         eprintln!(
-            "{}: {} blocks connected, digest MATCH at {}, roots MATCH at all {} heights, rows \
-             exercised: {}",
+            "{}: {} blocks connected, digest MATCH at {}, roots MATCH at all {} heights, weights \
+             MATCH at all {} heights, accumulator MATCH at all {} heights, rows exercised: {}",
             manifest.shape,
             report.connected.len(),
             manifest.tip_height,
             report.roots.compared(),
+            report.weights.compared(),
+            report.emission.compared(),
             report.exercised.len()
         );
     }
@@ -499,29 +556,22 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
         .zip(everywhere_unmutable)
         .filter_map(|(m, causes)| causes.map(|c| (m, c)))
         .collect();
-    // Two entries, and the census says which is whose. `PowUnderWrongSeed`
-    // is the environment's: this census carries no PoW leg. `ReorderedBodies`
-    // is the corpus's: every captured block lists at most one body (slice 6
-    // §5 row 8 measured it; slice 7 §3.7 names the class), so the one
-    // mutation that needs two is unreachable on all four chains — and it is
-    // the only one. Commit 2 (a) built the two-body block through the driver
-    // instead (`body_pairing_tests`). A change here is a change in the
-    // corpus's shape or in the family, and §3.7 moves with it.
+    // One entry, and the census says whose. `PowUnderWrongSeed` is the
+    // environment's: this census carries no PoW leg. `ReorderedBodies` was
+    // the corpus's until 2026-09-28 — every captured block listed at most
+    // one body (slice 6 §5 row 8 measured it; slice 7 §3.7 names the class)
+    // — and is reachable since the `median-full` capture (slice 7 commit
+    // 4 (c)): its block 211 lists 23 bodies, so the one mutation that needs
+    // two has a corpus witness there, first at 211, and `DoubleSpend` a
+    // witness at 212 on a chain whose spends are its subject. A change here
+    // is a change in the corpus's shape or in the family, and §3.7 moves
+    // with it.
     assert_eq!(
         unreachable,
-        vec![
-            (
-                Mutation::PowUnderWrongSeed,
-                vec![Unmutable::NoPowEnvironment]
-            ),
-            (
-                Mutation::ReorderedBodies,
-                vec![
-                    Unmutable::TooFewBodies { listed: 0 },
-                    Unmutable::TooFewBodies { listed: 1 },
-                ],
-            ),
-        ],
+        vec![(
+            Mutation::PowUnderWrongSeed,
+            vec![Unmutable::NoPowEnvironment]
+        )],
         "the mutations no captured chain can carry, with why"
     );
 }

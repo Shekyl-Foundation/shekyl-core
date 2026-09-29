@@ -72,11 +72,13 @@
 //! (`view.rs`, "Three answers, three positions").
 
 pub(crate) mod anchors;
+pub(crate) mod block_weight;
 pub(crate) mod difficulty;
 pub(crate) mod header;
 pub(crate) mod miner;
 pub(crate) mod pow;
 pub use pow::seed_height;
+pub(crate) mod reward;
 pub(crate) mod timestamps;
 pub(crate) mod topology;
 pub(crate) mod tx;

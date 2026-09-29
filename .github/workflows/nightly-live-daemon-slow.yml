@@ -1,10 +1,12 @@
 name: nightly/live-daemon-slow-gates
 
-# The GATE_LANE=slow half of scripts/ci/run_live_daemon_gates.sh: the two
+# The GATE_LANE=slow half of scripts/ci/run_live_daemon_gates.sh: the
 # consensus e2e gates too heavy for the per-PR lane in build.yml (depth-3
 # FCMP++ spend ~13 min + emission claim ~19 min, measured 2026-09-08 local
-# Release). They are armed gates, not optional smoke — a red here is a
-# consensus regression and blocks release the same as a per-PR red.
+# Release; the two slice-7 pool-overfill gates ~5 min each, debug,
+# 2026-09-28 — the ARMED_SLOW list in the script is the roster). They are
+# armed gates, not optional smoke — a red here is a consensus regression
+# and blocks release the same as a per-PR red.
 #
 # Build recipe mirrors build.yml's ubuntu:24.04 job (the one that runs the
 # per-PR lane): same container, same apt set, same BUILD_DEFAULT_LINUX, so
@@ -14,7 +16,7 @@ name: nightly/live-daemon-slow-gates
 # step opens (or comments on) a tracking issue. That route is the named
 # criterion under which PR #660's rejection of a cost tier reverts — a
 # nightly tier without it "joins a silence" (run_live_daemon_gates.sh header).
-# Removing the notification step voids the split; the slow pair then moves
+# Removing the notification step voids the split; the slow gates then move
 # back to the per-PR ARMED list.
 
 on:

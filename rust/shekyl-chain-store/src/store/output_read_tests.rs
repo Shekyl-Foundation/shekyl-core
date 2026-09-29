@@ -169,7 +169,7 @@ fn a_snapshot_sees_one_committed_state_across_a_concurrent_connect() {
     );
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        batch.connect(judge(&view, cand)?, facts(next, 0), RuleSet::GENESIS)?;
+        batch.connect(judge(&view, cand)?, facts(0), RuleSet::GENESIS)?;
         Ok(())
     });
     out.expect("connect");

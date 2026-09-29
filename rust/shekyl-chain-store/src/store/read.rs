@@ -39,7 +39,7 @@
 
 use core::ops::{Range, RangeInclusive};
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
-use shekyl_chain_rules::{AtHeight, Tip};
+use shekyl_chain_rules::{AtHeight, RecordedWeights, Tip};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight,
     PCanonicalId, SettlementEpoch, ShardId, TreeLeaf, TreePosition, TxHash,
@@ -261,6 +261,42 @@ impl<'store> ReadSnapshot<'store> {
     /// SI-7 if the row does not decode; engine errors pass through.
     pub fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, StoreError> {
         chain_reads::height_of(&self.txn, hash).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// The recorded weights of the up-to-`at_most` blocks strictly below
+    /// `end`, in height order — the operand of CEN-G6's two medians, as one
+    /// range cursor over `block_info` (E6 slice 7 Q2). One body with the
+    /// validator's `BatchView::weights_window`
+    /// ([`chain_reads::weights_below`]); this is the committed-snapshot
+    /// face, for the block template's producer-side median (slice 7 Q4).
+    /// `end` above `tip + 1` is [`AtHeight::AboveTip`].
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a hole or an undecodable row inside the window; engine
+    /// errors pass through.
+    pub fn weights_window(
+        &self,
+        end: BlockHeight,
+        at_most: BlockCount,
+    ) -> Result<AtHeight<Vec<RecordedWeights>>, StoreError> {
+        let tip = self.tip_row()?;
+        chain_reads::weights_below(&self.txn, tip.as_ref(), end, at_most)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// Whether a transaction with identity `hash` is recorded on the
+    /// committed chain — `tx_indices` membership, the C++'s `tx_exists`.
+    /// One body with the validator's `BatchView::has_transaction`
+    /// ([`tx_reads::has_transaction`]): CEN-G1's chain half for the
+    /// validator, and the pool's "already on chain" for admission.
+    ///
+    /// # Errors
+    ///
+    /// Engine errors pass through; a membership read has no decode and no
+    /// invariant arm.
+    pub fn has_transaction(&self, hash: &TxHash) -> Result<bool, StoreError> {
+        tx_reads::has_transaction(&self.txn, hash).map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **R3.** The per-height record at `height` — timestamp, weight,
