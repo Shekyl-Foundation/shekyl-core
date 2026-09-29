@@ -8,7 +8,7 @@
 //! error, never a warning** — because that is the property the consolidation
 //! exists to hold and the one a fourth copy would drift away from.
 
-use super::emit;
+use super::{emit, LoadControl};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -75,4 +75,39 @@ fn the_stdout_arm_reports_success_rather_than_assuming_it() {
     // this pins is that the arm returns a `Result` reflecting the write, which
     // is what makes that failure reportable instead of fatal.
     emit(&record(), None).expect("writing the record to stdout must report success");
+}
+
+/// The bound must be able to reject, and the run that motivated it must be
+/// the one it rejects. `+45.2 %` is not a hypothetical: it is a real
+/// 2026-09-29 depth-4 control taken while a workspace test suite shared the
+/// board, on a run that would otherwise have produced a record.
+#[test]
+fn a_busy_board_is_not_quiet_and_a_still_one_is() {
+    let tol = 10.0;
+
+    let busy = LoadControl::over([(45.2, true), (0.4, true)], tol);
+    assert!(!busy.quiet, "a 45.2 % control split is not a quiet board");
+    assert!((busy.max_divergence_pct - 45.2).abs() < 1e-9);
+
+    // The control on the unmutated input: the same shape, quiet, or the
+    // assertion above would pass for a reason other than the divergence.
+    let still = LoadControl::over([(-0.8, true), (0.4, true)], tol);
+    assert!(still.quiet, "the clean run's own controls must pass");
+    assert!((still.max_divergence_pct - 0.8).abs() < 1e-9);
+
+    // Sign must not decide it: the divergence is a magnitude.
+    assert!(!LoadControl::over([(-45.2, true)], tol).quiet);
+
+    // Both sides of the bound, so the threshold is shown to be the thing
+    // being tested rather than a value nothing lands near.
+    assert!(LoadControl::over([(9.99, true)], tol).quiet);
+    assert!(!LoadControl::over([(10.01, true)], tol).quiet);
+
+    // An unconverged control licenses nothing, whatever its divergence.
+    assert!(!LoadControl::over([(0.1, false)], tol).quiet);
+
+    // Rule 47: no control is not a quiet board, it is an unmeasured one.
+    let unmeasured: [(f64, bool); 0] = [];
+    assert!(!LoadControl::over(unmeasured, tol).quiet);
+    assert_eq!(LoadControl::over(unmeasured, tol).controls, 0);
 }

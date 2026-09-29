@@ -55,6 +55,7 @@
 
 pub mod assemble;
 pub mod client;
+pub mod frontier;
 pub mod recon;
 pub mod reference;
 pub mod segment;

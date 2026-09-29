@@ -522,7 +522,7 @@ throttle happen instead of taking the converged figure on trust.
 
 ### 5.3 The run record
 
-JSON, `schema_version` 2, plus a human summary on stderr. The `FOLLOWUPS`
+JSON, `schema_version` 3, plus a human summary on stderr. The `FOLLOWUPS`
 discharge will cite runs by this schema, so it is versioned: a record whose
 shape moves silently cannot be compared across the prover-pin re-grades §6.3.4
 requires.
@@ -537,6 +537,29 @@ settled**. Read with `v2` semantics it points at the opposite remedy (raise the
 cap, rather than: the machine has no steady state), which is why the version
 moved for a value-domain change with no field added or removed. `v2` names that
 exit `"limits met, unconverged"` and `"iteration cap"` is no longer a value.
+
+**`schema_version` 3 re-derives `per_block_advance_worst_case_s`, and the
+field name did not move.** Through `v2` it was
+`replay_median / REPLAY_WINDOW_BLOCKS` — a share of the spend replay, which is
+a legitimate pre-build *model* of an advance that did not exist yet and an
+illegitimate grade once it does, because the built advance folds a frontier
+instead of rebuilding a tree and writes a snapshot the replay has no
+counterpart for (`CT6_PROVING_STATE.md` §5 `Q4`). In `v3` it is the median of
+a **measured** series over `CT-6`'s built advance — frontier fold, snapshot
+encode, ring commit — carried with its own `Series` in
+`per_block_advance`, while the retired quotient rides beside it as
+`per_block_advance_retired_quotient_s` and `per_block_advance_provenance` says
+in the record which derivation the figure is. **The records under
+`docs/benchmarks/wss-q1b/` are `v2`**, so their
+`per_block_advance_worst_case_s` (`0.5363 s`) is the retired model, not a
+measurement of the ring.
+
+`v3` also fixes the retired quotient's **denominator**: it divided by the
+`REPLAY_WINDOW_BLOCKS` constant while the corpus size is a `--window-leaves`
+flag, so an overridden window divided a shrunken replay by the full window and
+emitted the result under a worst-case name. It is now `replayed_blocks`, the
+blocks the corpus covers (`window_leaves / leaves_per_block`), which at the
+default window is the same number by construction.
 
 Every record carries: the environment; `enforced` vs `attested`; the **prover
 pin** (crate, version, revision — §6.3.4 re-grades on a material prover-pin
@@ -745,6 +768,11 @@ round-trip term alone reached 5 s.
 | 2026-09-20 | **Review pass: the harness graded things it should have refused, and claimed a check it never ran.** Seventeen findings, all valid on inspection. The two that mattered most: `proof::verify` appeared **nowhere** in either binary while `paths_verified: true` was emitted from `prove`'s `Ok` and §3.6 asserted the round trip — now run once per graded path and per control arm, outside every timer; and the build script watched `../../.git/HEAD`, which in a **worktree** is not a directory at all (`.git` is a file), so the re-grade pin's staleness guard was inert in the setup every lane uses — now resolved through `git rev-parse --git-path`, watching HEAD, the branch ref and `packed-refs`. The rest became refusals (§5.1.1): a corpus override under `--grade`, unconverged series, prover failure, unlicensed extrapolation, a dense fallback at the wrong depth, malformed control sets, a remote daemon under `--grade`, and an unwritable artifact. The device pin moved from captured-but-unchecked to **enforced**. The dependency gate moved from a key regex to TOML with resolved package names, closing renamed and workspace-inherited edges (red-bitten live). |
 | 2026-09-20 | **The open edge grades at a stated nominal density (the full-reward zone), not at the adversarial ceiling** (§4.4). 790 blocks at the ceiling is ≈ 1.9 GB decoded, so grading there writes the companion-file miss response before measuring it. The zone is the density at which the measurement can still surprise you. The asymmetry with the spend edge is deliberate: that edge decides an architecture and is paid per spend, this one decides a local mitigation and is paid once per launch. Enforced by a corpus-density gate that withholds the verdict rather than by a sentence |
 | 2026-09-20 | **`per_block_advance_worst_case_s` added to the record**: the replay term over the blocks it covers. It is what decides whether a spend-edge miss kills the design or moves the work, and a reader should not need a calculator to see it |
+| 2026-09-28 | **That field is re-derived from the BUILT advance, and `schema_version` bumps 2 → 3** (`CT-6 Q4`, `CT6_PROVING_STATE.md` §10.4). A quotient of the spend replay is a model of the advance, not the advance: the built one folds a frontier rather than rebuilding a tree, and writes a snapshot the replay has no counterpart for. The measured series is `crate::advance::AdvanceRig` — one iteration is one worst-case block — and the retired quotient is emitted beside it so the two are comparable *within one run*. The measured advance is what a later run may compare; the quotient is an observation of that run and is not an extrapolation input. The version moves because the derivation changed under an unchanged name, which is the defect `Q4` was left open to catch |
+| 2026-09-28 | **The retired quotient's denominator was the constant, not the corpus.** `replay_median / REPLAY_WINDOW_BLOCKS` is right only at the default window; under `--window-leaves` it divided a shrunken replay by the full window and published the result under a worst-case name. Found while re-pointing the field, not by a test — the override path had no assertion on the figure it produced |
+| 2026-09-28 | **The `CT-6 Q4` figures print to stderr as soon as they are measured, ahead of every downstream refusal.** The refusals between the advance and `emit` — an unlicensed sparse path, a dense fallback at the wrong depth — are about the spend-edge *budget*, whose denominator the advance does not depend on, and they `return` before the record is written. A run that measured the advance and then discarded it because the prover arm could not be graded lost the one quantity `Q4` asks for; observed on the first off-rig run, where the depth-5 control diverged 111 % and refused the sparse path |
+| 2026-09-28 | **First run of the re-pointed field, off-rig and reported as such.** x86_64, `--window-leaves 105600`, 1 056 leaves/block at depth 6: measured advance **124.72 ms/block** (converged, 479 blocks) against the same run's retired model at **180.63 ms/block** — **0.69×**, the direction `replay`'s `proxy_note` already states. **No pinned-rig figure is derived from that ratio**: the advance includes an `fsync`'d ring commit, which does not scale with the A72 the way the curve work does. A *first* attempt had the depth-5 control diverge 111 % and refuse the sparse path; it was taken while the same worktree was compiling, and a quiet re-run gave −1.0 % on the same arm — recorded because the refusal looked like a finding about the sparse path and was a finding about the box |
+| 2026-09-28 | **`AdvanceRig` takes `--advance-store-dir`.** The ring commit is an fsync'd disk write, so a scratch store under `TMPDIR` measures whatever device that resolves to — on a Pi the OS microSD or a tmpfs, neither of which is the storage §6.3.4's pin is about. Increment 6 inherits this instrument, so the path is a flag rather than a default |
 | 2026-09-21 | **`stopped_because` could not separate the two states it named, and the record published the wrong one.** Found when a concurrent workspace run on a loaded box (load 10.40) failed `a_fast_series_is_not_truncated_by_the_iteration_cap_before_conditioning` — the test asserted `converged`, which asserts the box is quiet, not anything about the loop. Chasing it surfaced the real defect: the `"iteration cap"` break was the exact negation of the loop guard, so only the initialiser ever produced that string, on the **normal** exit. An unconverged graded record therefore announced itself as truncated by a cap when it had met both limits and never settled — opposite remedies, and the distinction the field exists to draw. The unreachable break is deleted, the normal exit is named `"limits met, unconverged"`, and `schema_version` bumps 1 → 2 because a value domain changed meaning. An existing test asserting `== "iteration cap"` had been **passing because of** the defect; it now asserts the new value and is its reachability witness |
 | 2026-09-20 | **A wall-clock stop added beside the iteration cap**, found by running the harness rather than by reading it: the first worst-case run made plain that 60 unconverged iterations of a multi-minute replay is hours on the rig. The count bounds a fast noisy workload; only the clock bounds a slow one |
 
@@ -1052,9 +1080,11 @@ one complete segment, or there is no recompute to measure. The freeze control
 then asserts it froze **every** complete segment, since a partial freeze would
 understate the very cost it is removing.
 
-**Ingest goes through `append_block_deltas`, the production path.**
-`append_drained` is a `#[cfg(test)]` wrapper; a baseline taken through a
-test-only door would not describe what refresh does.
+**The population is written with `append_block_deltas`.** The timed call is
+`root_at_count`, which does not read the snapshot ring, so the builder writes
+no ring row. Production ingest is `append_block_with_snapshot`.
+`append_drained` is a `#[cfg(test)]` wrapper, so the baseline is not taken
+through a test-only door either.
 
 ### 8.3 No threshold, and why that is the correct output
 
