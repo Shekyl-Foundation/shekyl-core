@@ -27,7 +27,7 @@ Upstream tracking reference (the single source of truth for "where fixes go"):
 Vendored snapshot metadata + integrity:
 
 - `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT` — pinned commit
-  (`a878d967dcbb3d548342c6917a79cc4fe6c498eb`, synced 2026-09-29).
+  (`4de2b780f8f143cb15b63db5a7f0fd7e4b695547`, synced 2026-09-29).
 - `rust/shekyl-oxide/CRYPTO_CONTENT_MANIFEST.sha256` — the A1 content gate: the
   vendored crypto subtree is verified byte-for-byte against this manifest on
   push/PR (`scripts/ci/check_vendored_crypto_manifest.sh`), so an in-place edit

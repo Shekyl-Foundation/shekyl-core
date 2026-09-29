@@ -154,10 +154,7 @@ where
                     individually_constrained[constraint.WV[0].0] = true;
                 }
             }
-            if individually_constrained
-                .into_iter()
-                .any(|is_constrained| !is_constrained)
-            {
+            if individually_constrained.into_iter().any(|is_constrained| !is_constrained) {
                 Err(AcStatementError::DidNotConstrainCommitment)?;
             }
         }

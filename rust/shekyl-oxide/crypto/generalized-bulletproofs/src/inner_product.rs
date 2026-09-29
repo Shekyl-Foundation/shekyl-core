@@ -43,19 +43,19 @@ impl<C: Ciphersuite> IpWitness<C> {
     /// Construct a new witness for an Inner-Product statement.
     ///
     /// This functions return `None` if `a.len() != b.len()` or if the lengths are not a power of
-    /// two.
+    /// two. An empty witness is padded to length one first, and one is a power of two.
     pub(crate) fn new(mut a: ScalarVector<C::F>, mut b: ScalarVector<C::F>) -> Option<Self> {
         if a.len() != b.len() {
             None?;
         }
-        if !a.len().is_power_of_two() {
-            None?;
-        }
-
-        // If no IPA rows were used, pad to have a length of one
+        // If no IPA rows were used, pad to have a length of one. Zero is not a
+        // power of two, so this has to happen before that check.
         if a.is_empty() {
             a.0.push(C::F::ZERO);
             b.0.push(C::F::ZERO);
+        }
+        if !a.len().is_power_of_two() {
+            None?;
         }
         Some(Self { a, b })
     }

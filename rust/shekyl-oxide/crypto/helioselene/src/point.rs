@@ -513,6 +513,18 @@ mod helios {
     fn zero_x_is_invalid() {
         assert!(Option::<Field25519>::from(recover_y(Field25519::ZERO)).is_none());
     }
+
+    #[test]
+    fn identity_encoding_round_trips_and_rejects_the_sign_bit() {
+        use group::{Group as _, GroupEncoding as _};
+        let identity = HeliosPoint::identity();
+        let bytes = identity.to_bytes();
+        let decoded = HeliosPoint::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.to_bytes(), bytes);
+        let mut signed = bytes;
+        signed[31] |= 1 << 7;
+        assert!(Option::<HeliosPoint>::from(HeliosPoint::from_bytes(&signed)).is_none());
+    }
 }
 pub use helios::HeliosPoint;
 
@@ -550,6 +562,18 @@ mod selene {
     #[test]
     fn zero_x_is_invalid() {
         assert!(Option::<HelioseleneField>::from(recover_y(HelioseleneField::ZERO)).is_none());
+    }
+
+    #[test]
+    fn identity_encoding_round_trips_and_rejects_the_sign_bit() {
+        use group::{Group as _, GroupEncoding as _};
+        let identity = SelenePoint::identity();
+        let bytes = identity.to_bytes();
+        let decoded = SelenePoint::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.to_bytes(), bytes);
+        let mut signed = bytes;
+        signed[31] |= 1 << 7;
+        assert!(Option::<SelenePoint>::from(SelenePoint::from_bytes(&signed)).is_none());
     }
 }
 pub use selene::SelenePoint;
