@@ -40,19 +40,68 @@ Two hosts, each with a recording handler:
   clearnet `listen` with the option off. The session bytes are what
   the seam delivers to the Levin handler. It does not use the
   connector's tests, and it does not open a second admission table.
-- the epee host, a small C++ binary that has not been written yet. It
-  is the only C++ in the harness, and it exists only as the reference.
-  It writes the same transcript. The next commit is that binary; the
-  peer and the comparator do not change for it.
+- `epee-host`, the C++ binary. It hosts `boosted_tcp_server`, serves
+  one connection, and writes this transcript. It is the only C++ in
+  the harness, and it is not linked into the Rust crate.
+
+`seam-host SEED TRANSCRIPT` and `epee-host SEED TRANSCRIPT` each print
+`host:port` on stdout, serve one connection, and write the host
+transcript. `peer ADDR SEED TRANSCRIPT` dials that address.
 
 `compare` diffs the two transcripts. A difference in a parity field
 (`peer-sent`, `peer-recv`, `peer-end`, `host-delivered`, `host-sent`,
 `host-session`) is a finding. A difference on the expected-divergences
-list is not.
+list is not. An unknown version line is a parse failure, not a
+mismatch.
 
 Seed 1 is the handshake invoke. The dialer sends it and waits. The
 session is established when the response is back. `the_same_seed_replays_against_the_seam_host`
 runs that seed twice against the seam host.
+
+## Transcript
+
+Version 1 is the current format. Both writers emit it. `compare`
+rejects any other version line, so a drift between them is a parse
+failure.
+
+The file is UTF-8. One field per line, LF endings, and a trailing LF
+after the last line. There is no timestamp. A writer emits exactly
+these lines, in this order:
+
+```text
+shekyl-p2p-transcript 1
+seed <u64 decimal>
+role <peer|host>
+sent <hex>
+recv <hex>
+end <established|closed|refused>
+```
+
+`seed` is the script. `role` is `peer` or `host`. For a peer, `sent`
+is the bytes it wrote and `recv` is the bytes it read. For a host,
+`recv` is the bytes delivered to the Levin handler and `sent` is the
+bytes that handler sent. Those are the bytes on the connection, the
+header included.
+
+Byte fields are lowercase hexadecimal, two digits per byte, no
+separators. An empty field is the key, one space, and nothing else.
+A digit outside `0-9` and `a-f`, or an odd number of digits, does not
+parse.
+
+`end` is `established`, `closed`, or `refused`. `established` means
+the handshake response came back. `closed` means the peer closed
+before that response. `refused` means the invoke was not a handshake.
+It is not a transport cause.
+
+An extra line, a missing field, or a version line other than
+`shekyl-p2p-transcript 1` does not parse.
+
+Version 2 is not this format. The backpressure leg needs the order of
+events: what was written and read, when the connection stalled and
+resumed, and how it ended, still with no timestamps. That lands as
+`shekyl-p2p-transcript 2` when that seed is written, rather than being
+squeezed into these fields. A golden's first line is the version, so
+the format it uses is on the golden.
 
 ## Ordering
 
@@ -92,8 +141,13 @@ Rust Levin layer. The peer stays; the epee host does not.
 ## In-process legs
 
 `COMMAND_HANDSHAKE` (1001) is an invoke. A notify for 1001 is not this
-exchange. Seed 1 is that invoke and its response. The legs after it
-are further seeds, not new hosts:
+exchange. Seed 1 is that invoke and its response. The request carries
+network id sixteen bytes of `0x11`, IPv4 `0.0.0.0:18080`, support
+flags 0, height 1, cumulative difficulty 2, difficulty top64 0, top id
+thirty-two bytes of `0xab`, top version 0, and a 32-byte nonce whose
+first eight bytes are the seed little-endian. The response is the same
+node and sync data with an empty peer list. The invoke is one write.
+The legs after it are further seeds, not new hosts:
 
 1. **Byte splits.** The same message sequence, at every read boundary
    a peer can produce. A property test draws random Levin sequences and
@@ -108,4 +162,6 @@ are further seeds, not new hosts:
    delivery, a send does not fit. For each, compare the session
    outcome and the recorded cause.
 5. **Backpressure.** A slow handler stops reading on the seam's side.
-   It does not close. The peer sees TCP push back, not a reset.
+   It does not close. The peer sees TCP push back, not a reset. The
+   order of that stall is version 2 of the transcript, not these
+   totals.

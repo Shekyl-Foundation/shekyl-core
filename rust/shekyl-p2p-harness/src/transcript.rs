@@ -5,7 +5,9 @@
 
 //! One run, written so a later run of the same seed can be diffed.
 //!
-//! The text is the golden form. A golden changes only when a ruling
+//! The text is version 1 of the transcript in
+//! `docs/design/P2P_DIFFERENTIAL_HARNESS.md`. That section is the
+//! format both writers emit. A golden changes only when a ruling
 //! changes the wire, in the same pull request as that ruling.
 
 use std::fs;

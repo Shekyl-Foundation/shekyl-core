@@ -681,8 +681,8 @@ below the floor returns `BelowFloor` and records no row.
 `inbound_held` counts inbound rows and leaves outbound out. The
 differential harness is
 [`P2P_DIFFERENTIAL_HARNESS.md`](P2P_DIFFERENTIAL_HARNESS.md), crate
-`shekyl-p2p-harness`. Seed 1 is the handshake invoke against the seam
-host. The epee host is still open. The cross-build run waits
+`shekyl-p2p-harness`. Seed 1 is the handshake invoke. `epee-host`
+writes the same transcript as the seam host. The cross-build run waits
 on the zone-binding commit. Cutover waits on the thread budget and the per-connector
 deadlines, measured on this build and written down. The budget is
 at least the floor.
@@ -1517,10 +1517,12 @@ round can reject them.
   [`P2P_DIFFERENTIAL_HARNESS.md`](P2P_DIFFERENTIAL_HARNESS.md) as
   expected. The scripted peer and the seam host are
   `shekyl-p2p-harness`. Seed 1 is a handshake invoke, the response,
-  and the session established when that response is back. The epee
-  host is the C++ reference and is not linked into that crate. The
+  and the session established when that response is back. `epee-host`
+  is the C++ reference and is not linked into that crate. The transcript
+  format is version 1 in the harness document; version 2 is the
+  backpressure event log and is not written yet. The
   cross-build run waits on the zone-binding commit, not on this
-  harness. A difference on one of them is not a regression. The
+  harness. A difference on an expected divergence is not a regression. The
   current server stays in the tree as the wire reference until this
   passes. It is not a test host for the option.
 - **Cross-build interop.** A connector node and an epee node, option

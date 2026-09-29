@@ -111,6 +111,17 @@ add_test(
   NAME    hash-target
   COMMAND hash-target-tests)
 
+# The epee reference for the differential harness. Not a unit test: it
+# writes one transcript and exits. The Rust peer drives it.
+monero_add_minimal_executable(epee-host p2p_harness/epee_host.cpp)
+target_link_libraries(epee-host PRIVATE epee net ${EXTRA_LIBRARIES})
+# The Rust archive on epee's link line is an imported location. Ninja does
+# not order the cargo build ahead of this binary unless the edge is named.
+if(TARGET shekyl_rust)
+  add_dependencies(epee-host shekyl_rust)
+endif()
+set_property(TARGET epee-host PROPERTY FOLDER "${folder}")
+
 # Regression guard for `--log-file` writing no file. Its own executable, and
 # one ctest invocation per mode, because subscriber installation is
 # process-global and first-caller-wins: sharing a binary with other tests would
