@@ -24,7 +24,7 @@ mod hub;
 mod loopback;
 
 pub use dial::{Channel, Dial};
-pub use drive::drive_inbound;
+pub use drive::{drive_inbound, drive_inbound_async};
 pub use endpoint::{admit, connector_from_index, direction_from_index, Endpoint, TOR_HOST_MAX};
 pub use hub::{Attached, Hub, Post};
 pub use loopback::Loopback;

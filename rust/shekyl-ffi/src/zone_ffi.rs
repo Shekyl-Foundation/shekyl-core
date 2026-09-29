@@ -25,7 +25,8 @@ use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 use shekyl_seam::{
-    drive_inbound, Channel, CloseCause, CloseKind, ConnectorId, Dial, Direction, Endpoint, Hub,
+    drive_inbound_async, Channel, CloseCause, CloseKind, ConnectorId, Dial, Direction, Endpoint,
+    Hub,
 };
 use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock, Tick};
 use shekyl_tor::{accept_one as accept_tor, dial_one as dial_tor, Admitted as TorAdmitted};
@@ -319,8 +320,10 @@ fn adopt_clearnet(hub: &Hub, admitted: ClearnetAdmitted) {
         return;
     };
     let hub = hub.clone();
-    tokio::runtime::Handle::current()
-        .spawn_blocking(move || drive_inbound(&hub, id, attached.session));
+    // One task per connection, not one blocking thread: the pool has the
+    // caller's cap, and a thread held for the life of a connection made
+    // every connection past that cap deaf.
+    tokio::spawn(async move { drive_inbound_async(&hub, id, attached.session).await });
 }
 
 fn adopt_tor(hub: &Hub, admitted: TorAdmitted) {
@@ -336,8 +339,7 @@ fn adopt_tor(hub: &Hub, admitted: TorAdmitted) {
         return;
     };
     let hub = hub.clone();
-    tokio::runtime::Handle::current()
-        .spawn_blocking(move || drive_inbound(&hub, id, attached.session));
+    tokio::spawn(async move { drive_inbound_async(&hub, id, attached.session).await });
 }
 
 fn read_id(ptr: *const u8) -> Option<[u8; 16]> {

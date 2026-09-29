@@ -112,11 +112,20 @@ struct Inner {
     ceiling: InboundCeiling,
 }
 
+/// What one locked look at a row told [`Hub::deliver_async`].
+enum DeliverStep {
+    Done(bool),
+    Wait,
+}
+
 /// One seam. Clones share the table.
 #[derive(Clone)]
 pub struct Hub {
     inner: Arc<Mutex<Inner>>,
     ready: Arc<Condvar>,
+    /// The same wake for a task. Every state change notifies both, so an
+    /// inbound drive can await the strand instead of holding a thread.
+    ready_async: Arc<tokio::sync::Notify>,
     post: Arc<dyn Fn(Post) + Send + Sync>,
     clock: Arc<dyn Clock + Send + Sync>,
     dial: Arc<RwLock<Option<Arc<dyn Dial>>>>,
@@ -150,10 +159,18 @@ impl Hub {
                 ceiling,
             })),
             ready: Arc::new(Condvar::new()),
+            ready_async: Arc::new(tokio::sync::Notify::new()),
             post,
             clock,
             dial: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Wake every waiter, thread or task. Called with the table lock held,
+    /// so a task that registered under that lock cannot miss the change.
+    fn wake(&self) {
+        self.ready.notify_all();
+        self.ready_async.notify_waiters();
     }
 
     /// [`Self::new`] with the monotonic clock.
@@ -205,7 +222,7 @@ impl Hub {
         };
         drop(previous);
         self.lock().conns.clear();
-        self.ready.notify_all();
+        self.wake();
     }
 
     fn now(&self) -> Tick {
@@ -294,7 +311,7 @@ impl Hub {
                 conn.phase = Phase::Open;
             }
         }
-        self.ready.notify_all();
+        self.wake();
     }
 
     /// How many `Deliver` posts have been queued for `id`.
@@ -370,7 +387,7 @@ impl Hub {
             connector,
             bytes,
         });
-        self.ready.notify_all();
+        self.wake();
         loop {
             let Some(conn) = inner.conns.get(&id) else {
                 return false;
@@ -380,6 +397,66 @@ impl Hub {
                 Phase::Closed => return false,
                 Phase::Delivering | Phase::Arming => inner = self.wait(inner),
             }
+        }
+    }
+
+    /// [`Self::deliver`] for a task. The wait is a [`tokio::sync::Notify`]
+    /// registered under the table lock, so the task holds no thread while
+    /// the strand parses. A zone with one blocking lane drove one connection
+    /// at a time when this was a blocking call; every later connection sat
+    /// deaf in the pool's queue until the first one closed.
+    pub async fn deliver_async(&self, id: SocketId, bytes: Vec<u8>) -> bool {
+        let mut bytes = Some(bytes);
+        loop {
+            let notified = self.ready_async.notified();
+            tokio::pin!(notified);
+            let step = {
+                let mut inner = self.lock();
+                let step = self.deliver_step(&mut inner, id, &mut bytes);
+                if matches!(step, DeliverStep::Wait) {
+                    notified.as_mut().enable();
+                }
+                step
+            };
+            match step {
+                DeliverStep::Done(result) => return result,
+                DeliverStep::Wait => notified.await,
+            }
+        }
+    }
+
+    /// One look at the row under the lock. Posts the frame when the row is
+    /// open and the frame is still in hand; reports the outcome once the
+    /// frame is out and the row is open again.
+    fn deliver_step(
+        &self,
+        inner: &mut Inner,
+        id: SocketId,
+        bytes: &mut Option<Vec<u8>>,
+    ) -> DeliverStep {
+        let Some(conn) = inner.conns.get_mut(&id) else {
+            return DeliverStep::Done(false);
+        };
+        match (conn.phase, bytes.is_some()) {
+            (Phase::Closed, _) => DeliverStep::Done(false),
+            (Phase::Open, false) => DeliverStep::Done(true),
+            (Phase::Open, true) => {
+                if conn.cause.is_some() {
+                    return DeliverStep::Done(false);
+                }
+                conn.phase = Phase::Delivering;
+                conn.posted_deliveries = conn.posted_deliveries.saturating_add(1);
+                let connector = conn.connector;
+                let frame = bytes.take().expect("checked above");
+                (self.post)(Post::Deliver {
+                    id,
+                    connector,
+                    bytes: frame,
+                });
+                self.wake();
+                DeliverStep::Wait
+            }
+            (Phase::Arming | Phase::Delivering, _) => DeliverStep::Wait,
         }
     }
 
@@ -399,7 +476,7 @@ impl Hub {
             if record_refusal {
                 self.finish(id, CloseCause::new(CloseKind::SessionRefused));
             } else {
-                self.ready.notify_all();
+                self.wake();
             }
             return;
         }
@@ -409,7 +486,7 @@ impl Hub {
                 conn.phase = Phase::Open;
             }
         }
-        self.ready.notify_all();
+        self.wake();
     }
 
     /// One whole message. A buffer that does not fit is not stored.
@@ -496,7 +573,7 @@ impl Hub {
         {
             let mut inner = self.lock();
             inner.conns.remove(&id);
-            self.ready.notify_all();
+            self.wake();
         }
         if let Some(dial) = dial {
             dial.retired(id);
@@ -589,7 +666,7 @@ impl Hub {
                 connector,
                 cause,
             });
-            self.ready.notify_all();
+            self.wake();
             open
         };
         if let Some(open) = open {
@@ -780,6 +857,68 @@ mod tests {
         service(&rig, true);
         service(&rig, true);
         pump.join().expect("pump");
+    }
+
+    /// The zone hands its runtime one blocking lane. A blocking drive per
+    /// connection filled that lane with the first connection and left the
+    /// second deaf until the first closed; the async drive holds no thread,
+    /// so both deliver on a runtime with one worker and one blocking lane.
+    #[test]
+    fn two_connections_deliver_on_one_blocking_lane() {
+        let rig = rig();
+        let first = adopt(&rig, Direction::Inbound, 32);
+        let second = adopt(&rig, Direction::Outbound, 32);
+        service(&rig, true);
+        service(&rig, true);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(1)
+            .build()
+            .expect("runtime");
+        let mut drivers = Vec::new();
+        let mut first = first;
+        let mut second = second;
+        for (id, session) in [
+            (first.id, first.session.take().expect("first session")),
+            (second.id, second.session.take().expect("second session")),
+        ] {
+            let hub = rig.hub.clone();
+            drivers.push(runtime.spawn(async move {
+                crate::drive_inbound_async(&hub, id, session).await;
+            }));
+        }
+        first
+            .inbound
+            .blocking_send(b"one".to_vec())
+            .expect("inject first");
+        second
+            .inbound
+            .blocking_send(b"two".to_vec())
+            .expect("inject second");
+        // Both Deliver posts must be queued while neither strand has answered:
+        // the first driver is waiting on its strand, and the second still ran.
+        assert!(rig.hub.wait_delivery_posted(first.id, 0));
+        assert!(rig.hub.wait_delivery_posted(second.id, 0));
+        let posted: Vec<_> = rig
+            .posts
+            .lock()
+            .expect("posts")
+            .iter()
+            .filter_map(|post| match post {
+                Post::Deliver { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(posted.len(), 2);
+        assert!(posted.contains(&first.id) && posted.contains(&second.id));
+        rig.hub.close(first.id);
+        rig.hub.close(second.id);
+        while rig.posts.lock().expect("posts").front().is_some() {
+            service(&rig, true);
+        }
+        for driver in drivers {
+            runtime.block_on(driver).expect("driver");
+        }
     }
 
     #[test]
