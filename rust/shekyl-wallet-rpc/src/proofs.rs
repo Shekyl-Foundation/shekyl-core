@@ -33,14 +33,11 @@ use shekyl_engine_core::engine::proofs::{self, CheckedReserveProof, CheckedTxPro
 use shekyl_engine_core::Network;
 use shekyl_types::TxHash;
 
-use shekyl_units::AtomicUnits;
+use shekyl_units::{AtomicUnits, AtomicUnitsString};
 
 use crate::error::WalletRpcError;
 use crate::lifecycle::make_daemon;
-use crate::params::{
-    parse_atomic_units, parse_hex32, parse_optional_object, parse_required_object,
-};
-use crate::project::atomic_units_string;
+use crate::params::{parse_hex32, parse_optional_object, parse_required_object};
 use crate::tenant::{require_open_engine, DaemonEndpoint, TenantState};
 use crate::types::{
     CheckReserveProofResult, CheckTxProofResult, GetReserveProofResult, GetTxProofResult,
@@ -72,7 +69,7 @@ struct CheckTxProofParams {
 /// `amount` = prove the full eligible balance).
 #[derive(Debug, Default, Deserialize)]
 struct GetReserveProofParams {
-    amount: Option<String>,
+    amount: Option<AtomicUnitsString>,
     #[serde(default)]
     message: String,
 }
@@ -117,7 +114,7 @@ pub(crate) async fn get_reserve_proof(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     let p: GetReserveProofParams = parse_optional_object(params, "get_reserve_proof")?;
-    let amount = p.amount.as_deref().map(parse_atomic_units).transpose()?;
+    let amount = p.amount.map(AtomicUnitsString::to_atomic_units);
     // `amount = "0"` is a caller error, not a reserve question: a zero
     // bound selects no outputs and proves nothing (omit `amount` to
     // prove the full balance). Refused at the params surface with a
@@ -139,7 +136,7 @@ pub(crate) async fn get_reserve_proof(
 
     let result = GetReserveProofResult {
         proof: generated.proof,
-        total: atomic_units_string(generated.total),
+        total: generated.total.into(),
         output_count: generated.output_count as u64,
     };
     serde_json::to_value(result)
@@ -180,13 +177,13 @@ pub(crate) async fn check_tx_proof(
         } => CheckTxProofResult {
             valid: true,
             direction: Some(direction.as_contract_str().to_owned()),
-            received: Some(atomic_units_string(received)),
+            received: Some(received.into()),
             outputs: Some(
                 outputs
                     .iter()
                     .map(|o| TxProofOutputView {
                         output_index: o.output_index,
-                        amount: atomic_units_string(o.amount),
+                        amount: o.amount.into(),
                     })
                     .collect(),
             ),
@@ -225,8 +222,8 @@ pub(crate) async fn check_reserve_proof(
             output_count,
         } => CheckReserveProofResult {
             valid: true,
-            total: Some(atomic_units_string(total)),
-            spent: Some(atomic_units_string(spent)),
+            total: Some(total.into()),
+            spent: Some(spent.into()),
             output_count: Some(output_count as u64),
         },
     };

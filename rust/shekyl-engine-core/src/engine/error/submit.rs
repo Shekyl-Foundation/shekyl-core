@@ -388,6 +388,11 @@ impl From<KeyEngineError> for SignerError {
             KeyEngineError::SourceCiphertextDecapsulationFailed(_) => Self::RemoteFailure {
                 reason: "source ciphertext re-decapsulation failed",
             },
+            // Unreachable for a request `build_pending_tx` admitted (it
+            // refuses a rid the label cannot carry), kept total.
+            KeyEngineError::RidNotEncodable(_) => Self::RemoteFailure {
+                reason: "recipient payment request id cannot be echoed on the wire",
+            },
             // Unreachable on the signing path (proofs never route through
             // `Signer`), but the conversion must stay total.
             KeyEngineError::Proof(_) => Self::RemoteFailure {

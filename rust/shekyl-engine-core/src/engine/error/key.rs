@@ -133,6 +133,11 @@ pub(crate) enum KeyEngineError {
     #[error("insufficient funds for fee variant: shortfall {shortfall} atomic units")]
     InsufficientFunds { shortfall: u64 },
 
+    /// A recipient `rid` the label cannot echo reached the sign pass; the
+    /// build refuses these at the request, so this arm is defence in depth.
+    #[error(transparent)]
+    RidNotEncodable(#[from] crate::outbound_label::RidNotEncodable),
+
     /// Spendable input lacks a canonical key image at assembly time (C7 PF8).
     #[error("missing key image for spend input at output index {output_index}")]
     MissingKeyImage { output_index: u64 },

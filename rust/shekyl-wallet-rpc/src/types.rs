@@ -227,8 +227,9 @@ pub struct WalletHandle {
     pub restore_height_hint: Option<i64>,
 }
 
-/// Atomic-units amount as a decimal string (OpenAPI `AtomicUnits`).
-pub type AtomicUnitsString = String;
+/// Atomic-units amount as a decimal string (OpenAPI `AtomicUnits`): the
+/// one wire newtype, shared with the desktop wallet's Tauri edge.
+pub use shekyl_units::AtomicUnitsString;
 
 /// `get_balance` result.
 ///

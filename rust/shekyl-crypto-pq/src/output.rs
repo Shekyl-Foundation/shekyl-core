@@ -271,8 +271,9 @@ pub fn construct_output(
 
 /// Like [`construct_output`] but encrypts the supplied 8-byte label plaintext.
 ///
-/// Cooperative sends use [`crate::label::encode_request_plaintext`] when the
-/// payment-request product flag is enabled; launch default passes sentinel.
+/// A payment answering a `shekyl:` link's `rid` passes
+/// [`crate::label::encode_request_plaintext`] (engine-core's
+/// `outbound_label` chooses it); every other output passes the sentinel.
 pub fn construct_output_with_label_plaintext(
     tx_key_secret: &[u8; 32],
     x25519_pk: &[u8; 32],

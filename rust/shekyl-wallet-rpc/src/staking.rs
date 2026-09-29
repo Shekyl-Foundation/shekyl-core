@@ -27,7 +27,6 @@ use shekyl_engine_core::{Engine, ServingPosture, SoloSigner, StakedOutput, Staki
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, require_empty_object};
-use crate::project::atomic_units_string;
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
     GetStakedBalanceResult, GetStakedOutputsResult, StakedOutputView, StakingInfoResult,
@@ -184,16 +183,16 @@ pub(crate) fn posture_str(posture: Option<ServingPosture>) -> Option<String> {
 
 fn balance_result(view: &StakingReadView) -> GetStakedBalanceResult {
     GetStakedBalanceResult {
-        bonded_principal_confirmed: atomic_units_string(view.balance.bonded_principal_confirmed),
-        bonded_principal_pending: atomic_units_string(view.balance.bonded_principal_pending),
-        rewards_received_unspent: atomic_units_string(view.balance.rewards_received_unspent),
+        bonded_principal_confirmed: view.balance.bonded_principal_confirmed.into(),
+        bonded_principal_pending: view.balance.bonded_principal_pending.into(),
+        rewards_received_unspent: view.balance.rewards_received_unspent.into(),
     }
 }
 
 fn staked_output_view(o: &StakedOutput) -> StakedOutputView {
     StakedOutputView {
         gindex: o.gindex.to_raw().to_string(),
-        amount: atomic_units_string(o.amount),
+        amount: o.amount.into(),
         p_slot: i64::from(o.p_slot.to_raw()),
         unlock_height: i64::try_from(o.unlock_height.to_raw()).unwrap_or(i64::MAX),
         confirmed: o.confirmed,

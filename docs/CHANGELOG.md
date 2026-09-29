@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+### Send — a payment answers its request: `TxRecipient.rid` rides the label
+
+- `shekyl_engine_core::TxRecipient` carries `rid: Option<PaymentRequestId>`,
+  the payment request a send answers (the `rid` of the payee's `shekyl:`
+  link). Signing assembly copies it onto `OutputDestination`, and the sign
+  pass encrypts the plaintext `outbound_label::label_plaintext_for_recipient`
+  chooses — the §5.7.11 REQUEST echo for a `rid`, the sentinel for `None`
+  and for every change and drain output — through
+  `construct_output_with_label_plaintext`. The callerless URI form
+  `label_plaintext_for_payment_uri` is deleted (the URI→`rid` step is the
+  wallet's `parse_uri`). `build_pending_tx` refuses a `rid` the u48 field
+  cannot carry as `SendError::InvalidRecipient`, never downgrading it to
+  the sentinel the payer did not ask for; `KeyEngineError::RidNotEncodable`
+  keeps the sign pass total. `PaymentRequestId::from_wire_rid` is the one
+  door for an external `rid`. The wire is uniform either way
+  (`enc_label` is fixed-width on every output), so nothing about privacy
+  changes; what changes is that a payment between two wallets that pass
+  the `rid` through can attribute on arrival (`ReceiveAttribution::Matched`).
+  Proven as two halves that meet at the 8-byte plaintext: the sign-bridge
+  test recovers the written label as `Request(rid)`, and the attribution
+  tests match a recovered `Request(rid)` to a stored request; no single
+  test yet crosses payer to payee.
+- Contract: `TxRecipient.rid` (optional `PaymentRequestId`) on
+  `build_pending_tx`; wallet-rpc parses it through the shared
+  `params::parse_rid` (moved from `receiving.rs`). The send journal stores
+  the echoed `rid` per recipient at dispatch, as PR-SJ-1 ruled
+  (`SendRecipient::rid`; send-journal block version 3 → 4, snapshot
+  regenerated; pre-genesis, strict-equality gating, no migration), so the
+  payer's own "paid request #N" never needs the trial re-derivation.
+- Why now: the desktop wallet's Receive page issues `rid` links and its
+  scan matches them, but no sender echoed one, so every link-paid receive
+  arrived unattributed. The desktop wallet (same-named branch) passes a pasted link's `rid` through.
+
 ### Engine — the one-glance balance is projected once, in engine-core
 
 - `shekyl_engine_core::BalanceView` (`engine/balance_view.rs`) is the

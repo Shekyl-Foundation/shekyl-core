@@ -451,9 +451,9 @@ pub fn cmd_collect_unstaked(rpc: &RpcSession, yes: bool) -> CommandResult {
                     println!(
                         "Collection sent: {} ({} SKL on the way to this wallet).",
                         tx_hash,
-                        format_amount_str(&swept),
+                        swept.to_atomic_units().to_skl_string(),
                     );
-                    if remainder == "0" && another_pool_remains {
+                    if remainder.to_atomic_units().is_zero() && another_pool_remains {
                         // The swept persona is done, but the exit lane is
                         // not: another exited persona still holds funds (the
                         // flag encodes no ordering between the exits).
@@ -464,7 +464,7 @@ pub fn cmd_collect_unstaked(rpc: &RpcSession, yes: bool) -> CommandResult {
                              another exit still remain."
                         );
                         println!("Run \"stake collect\" again once this pass confirms.");
-                    } else if remainder == "0" {
+                    } else if remainder.to_atomic_units().is_zero() {
                         println!(
                             "Nothing further remains: once this confirms, the \
                              collection is complete."
@@ -473,7 +473,7 @@ pub fn cmd_collect_unstaked(rpc: &RpcSession, yes: bool) -> CommandResult {
                         println!(
                             "{} SKL still remains in the staking balance (not yet \
                              spendable, or beyond this pass's size).",
-                            format_amount_str(&remainder)
+                            remainder.to_atomic_units().to_skl_string()
                         );
                         println!("Run \"stake collect\" again once this pass confirms.");
                     }
@@ -491,16 +491,6 @@ pub fn cmd_collect_unstaked(rpc: &RpcSession, yes: bool) -> CommandResult {
         Err(e) => return Err(rpc.report("Failed to collect", &e)),
     };
     Ok(())
-}
-
-/// Render a decimal atomic-units string through the shared display format;
-/// echo the raw string if it does not parse (display metadata only — never
-/// worth failing the command over).
-fn format_amount_str(atomic: &str) -> String {
-    atomic
-        .parse::<u64>()
-        .map(format_amount)
-        .unwrap_or_else(|_| atomic.to_owned())
 }
 
 fn print_serving_posture(val: &Value) {

@@ -122,7 +122,8 @@ where
 {
     async fn build(&self, request: TxRequest) -> Result<PendingTx, SendError> {
         // Refusals that need no network and no permit run first: an
-        // empty recipient list is a malformed request, and a tripped
+        // empty recipient list or an unechoable rid is a malformed
+        // request (`TxRequest::check_recipients`), and a tripped
         // F28/F37 loop breaker exists precisely to refuse *fast*
         // (§2.5 — the alarm was raised at trip time and only operator
         // acknowledgment re-enables building). Queueing either behind a
@@ -130,10 +131,7 @@ where
         // breaker cost a full build's latency per refused attempt, and
         // would make the sync `Engine::build_pending_tx` wrapper report
         // permit contention (`CannotSign`) instead of the real error.
-        if request.recipients.is_empty() {
-            let err = SendError::InvalidRecipient {
-                reason: "TxRequest must carry at least one recipient",
-            };
+        if let Err(err) = request.check_recipients() {
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
                 PendingTxDiagnostic::BuildFailed {

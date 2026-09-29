@@ -35,8 +35,8 @@ use crate::source::{IngestEvent, SequenceNo, Sequenced};
 use crate::test_support::{anchor, at};
 use crate::test_support::{
     block_with_nonce, chain, cleanup, corpus_from, corpus_of, corpus_of_reorg, expected_state, h,
-    key_image, open_store, reorg, reward_for, spend, tmp, trace_of, Family, GrownTree, Scripted,
-    FIRST_SPEND_HEIGHT,
+    key_image, open_store, reorg, reward_for, spend, tmp, trace_of, Family, GrownTree,
+    JoinedConnector, Scripted, FIRST_SPEND_HEIGHT,
 };
 
 /// Regtest without a fixed target: the genesis rules at every height.
@@ -112,22 +112,19 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     // joined so the store is released; the record is broken; a second
     // connector is spawned on the reopened store and meets the hole.
     {
-        let prepared = kameo::actor::PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
-        let first = prepared.actor_ref().clone();
-        let task = prepared.spawn(ConnectorArgs {
+        let first = JoinedConnector::spawn(ConnectorArgs {
             store: open_store(&path),
             rules: GENESIS_RULES,
         });
         let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
         let applied = first
+            .actor
             .ask(Apply(vec![(h0, f0)]))
             .await
             .expect("genesis connects");
         assert_eq!(applied.connected.len(), 1);
         assert!(applied.refused.is_none());
-        first.stop_gracefully().await.expect("stop");
-        first.wait_for_shutdown().await;
-        let _joined = task.await;
+        first.stop_and_join().await;
     }
     // Break the record: curve_tree_roots[1] is what block 1's B5 reads.
     {
@@ -139,10 +136,11 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
         }
         txn.commit().expect("commit");
     }
-    let connector = Connector::spawn(ConnectorArgs {
+    let joined = JoinedConnector::spawn(ConnectorArgs {
         store: open_store(&path),
         rules: GENESIS_RULES,
     });
+    let connector = joined.actor.clone();
 
     let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
     let err = connector
@@ -218,7 +216,8 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     ));
 
     // The halt is not persisted (a restart re-derives it), but block 1
-    // never landed.
+    // never landed. Joined first: shutdown alone does not release the store.
+    joined.join().await;
     let reopened = open_store(&path);
     assert_eq!(reopened.connect_state(), ConnectState::Live);
     drop(reopened);
