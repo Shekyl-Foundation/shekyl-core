@@ -441,12 +441,22 @@ inversion CEN-L16 was minted to name.
   were written unjudged says so); the corpus reader fills it `None` for
   every format-2 capture, which is true of them (§1 item 6). The corpus
   cannot carry a non-empty witness today for a second reason worth
-  recording: `/get_blocks_by_height.bin` returns `block_complete_entry`
-  but the RPC never populates the field — only the p2p handler does
-  (`cryptonote_core.cpp:1289`) — so a capture with a real witness needs a
-  one-line RPC marshal (rule 20's shim) and the corpus format to carry the
-  sidecar; both wait on the producer (FOLLOWUPS `:139`) and are named
-  there, not built here. Phase 5's witness is the scenario's.
+  recording: the sidecar travels on the **sync wire** — the get-objects
+  answer attaches the stored witness (`blockchain.cpp:2562`), and the Rust
+  p2p already models the field (`shekyl-levin/src/payload/block.rs:73`) —
+  but not across the **RPC edge** the corpus fetcher uses:
+  `/get_blocks_by_height.bin` is Rust-served through the facts FFI since
+  RK-4b, and `shekyl_rpc_block_entry` / `shekyl_rpc_types::BlockEntry`
+  carry the block and its transactions and nothing else
+  (`rpc_facts_ffi.h:216–222`, `bin_commands.rs:216–221`). So a capture with
+  a real witness needs the field on both sides of that edge and the corpus
+  format to carry it; all three wait on the producer and have their own
+  FOLLOWUPS row (beneath the producer's, blocked on it), not built here.
+  *(First written as "a one-line RPC marshal in the C++ handler; only the
+  p2p handler at `cryptonote_core.cpp:1289` populates it" — corrected at
+  source on review: that file no longer serves the endpoint, and that line
+  is the core's relay site, empty until the template writer exists.)*
+  Phase 5's witness is the scenario's.
 - **Phase 9**, in the C++'s order (`:689–693`): the accrual (§3.5); then the
   slashes — each a record upsert plus `archival_slash_applied` insert plus a
   `archival_slash_log` append, and `total_burned += slashed` **through the
