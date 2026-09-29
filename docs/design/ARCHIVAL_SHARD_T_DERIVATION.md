@@ -1079,3 +1079,105 @@ the cutover census's family-1 rows re-keyed; and `SHARD_TX_COUNT` /
 `SHT-11` or I13.
 
 **Not ruled here.**
+
+### 8.5 Where the declared length lives — prefix or txid — posed, not ruled (2026-09-29)
+
+§8.4 put the declared length in the **prefix**. The design owner has proposed binding it
+through the **txid** instead. This section answers the three questions that decide
+between them, at source on `dev`, then wargames the txid placement. It poses both;
+**Rick rules.**
+
+#### 1. What each signature and proof signs today
+
+| signer | what it signs | source |
+|---|---|---|
+| **PQC authorization**, per input — single and multisig, every class that carries one | `payload(i) = pruned ‖ prunable_hash ‖ header(i) ‖ key_hashes`. `pruned` is version, prefix, CT type, fee, reference block and committed base. `prunable_hash` is the digest of the whole prunable region. `header(i)` is `auth_version ‖ scheme_id ‖ flags ‖ varint(pk_len) ‖ pk`, which carries the **key**, not the signature. `key_hashes` hashes every input's key | `shekyl-wire/src/transaction/signing_preimage.rs` |
+| **FCMP++ proof**, on the spend and bond-post paths | the prefix hash (`tx_prefix_hash`, the prefix only), with the pseudo-outs in the transcript | `blockchain.cpp:3371` and the two verify sites |
+| **FCMP++ proof**, on an emission's fee inputs | the full prefix hash, which includes the emission input and its two hybrid signatures | `blockchain.cpp:4099` |
+| **Membership-only backing proof** (emission) | the prefix hash **with the emission input removed** (F-C1c), because the input cannot be covered by a hash its own proof signs | `blockchain.cpp`, emission arm |
+| **Emission input's `auth_backing` / `auth_claim`** | the input's claim fields, which are in the prefix. These are two fixed-length hybrid signatures, and they are skeleton, not good | `REWARD_EMISSION_LEG.md` §5.3.1 |
+| **Serve-credit countersignature** (Ed25519 leg on the input, ML-DSA leg in the pruned record) | the **pass record only**: `p_canonical_id ‖ shard ‖ epoch ‖ R_k ‖ leaf_index ‖ leaf_bytes ‖ encode(path)`. No prefix, and nothing at transaction level | `shekyl-archival-retention/src/wire.rs` `signature_preimage` |
+
+**Does any signed message today include data whose length depends on the signatures
+themselves? No.** The PQC preimage covers keys and the prunable digest, never the
+signature bytes or their lengths. The prunable region holds no PQC signatures. Its one
+signature, the serve-credit ML-DSA leg, is in a form that has no PQC authorizations to
+sign over it. The emission fee-input proof binds the emission input's two signatures,
+but those are produced earlier and have fixed length.
+
+**Two consequences for the placements.**
+
+- **Prefix placement introduces the dependency that is absent today.** `archival_len`
+  counts `|pqc_auths|`, and the PQC signatures sign the prefix, so every signer must know
+  the final length of every signature, its own included, before signing.
+- **A serve-credit transaction is signed by nothing at transaction level.** So in the
+  prefix, its declared length would be bound only by the txid anyway. For that class,
+  prefix placement buys no signature.
+
+#### 2. Is every component's length fixed before signing, once `SHT-10`/`SHT-11` are fixed?
+
+**Yes, for every current scheme.**
+
+| component | length before signing | what fixes it |
+|---|---|---|
+| single-sig authorization | 5,389 B | `PQC_HYBRID_SINGLE_{KEY,SIG}_LEN`; the key length is exact under CEN-I16 |
+| multisig authorization | `expected_blob_len(n_total)` + `expected_sig_len(m)` | the signature count **must equal** the key container's `m_required` (`shekyl-crypto-pq/src/multisig.rs`: `sig_container.sig_count != key_container.m_required` refuses), so `m` is fixed by the key, not by which signers answer |
+| FCMP++ and membership-only proofs | `proof_size(n, depth + 1)` | exact once `SHT-10` refuses trailing bytes (#899). The depth is the one at `ref_height`, known to the builder |
+| BP+ | a function of the output count | `nbp == 1`, and `|L| = |R|` pinned by the generator count |
+| pseudo-outs | `32 · n_spend` | CEN-I9 |
+| serve-credit pruned record | 3,309 + `|encode(path)|` + varints | the path is the frozen segment's chunks as built, and `SHT-11` refuses trailing-zero padding (#899). The ML-DSA leg signs the path, so the path exists first |
+
+**The caveat is the future, not the present.** Under the V4 lattice-only transition (rule
+00's third horizon), a scheme with **variable-length signatures** — Falcon's compressed
+encoding is the standing example — cannot be sized before signing. The prefix placement
+would force such a scheme into a padded encoding, or into a two-pass sign.
+
+#### 3. The design owner's refinement: bind the length through the txid
+
+**The proposal.** The body carries **no** length field. `archival_len` is computed from
+the body's own bytes: `|segments.prunable| + |segments.pqc_auths|`, the stored segments
+(§8.4's "which bytes" row). It is folded into the txid's mixer, and a skeleton node keeps
+it as a row beside `txs_prunable_hash` and `txs_pqc_auth_hash`.
+
+**The change surface** is one mixer per language:
+- Rust `Transaction::hash_from_components` (`transaction/txid.rs`);
+- C++ `calculate_transaction_hash` (`cryptonote_format_utils.cpp`);
+- the supplied-components path (`hash_with_supplied_components`), which gains the length
+  as a third supplied operand, exactly as the pruned form already supplies the prunable
+  digest.
+
+| wargame | outcome |
+|---|---|
+| **Malleability** | None new. The length is not a field the author chooses: a full body determines it, so there is exactly one valid value. A supplied length that disagrees with the bytes yields a different txid, and the block's transaction list refuses it. On a full body the txid computation **is** the ingest check, so no separate equality rule is needed |
+| **Skeleton-sync trust path** | The same path as the two hash rows: the supplied components rebuild the txid, the txid rebuilds the block's transaction root, then proof of work and the checkpoint. A peer that lies about a length breaks the txid. Below the checkpoint the length is **bound, not re-verified** — the property item 5 found missing from stored lengths, now present |
+| **Coinbase** | Unchanged. A `Null` CT keeps its 3-part form and has no length row; it is outside the domain. A `Fcmp` transaction folds the length in whether it is 3-part (serve-credit, no auth component) or 4-part. `archival_len > 0 ⇔ carries_archival_good` becomes a pinned invariant beside `SHT-Q1`'s equivalence test |
+| **The storage-pruned form** (`get_transactions prune:true`) | It carries the length as a supplied component, like the prunable digest it already carries. Nothing re-derives the length from a form that lacks the bytes |
+| **Variable-length signature schemes** | No constraint. The length is computed after every byte exists, so no signer needs to know it in advance. This is the property the prefix placement lacks |
+| **Relay** | A full-body relay carries nothing new: the receiver computes the length. Only pruned and skeleton transports carry it |
+
+**The cost is the same in kind as the prefix placement's.** Both change every txid, so
+both regenerate the cross-language parity pins (`pruned_tx_hash_parity`,
+`serve_credit_tx_parity`), the live-oracle pin (`live_oracle_spend_v1.json`) and the
+captured corpora. Both need the skeleton row and the cumulative cell. The prefix
+placement adds a wire field and an explicit ingest equality rule; the txid placement adds
+a mixer operand and a supplied component, and needs no equality rule.
+
+#### 4. Both placements, for the ruling
+
+| | **prefix field** (§8.4) | **txid-bound** (design owner's refinement) |
+|---|---|---|
+| bound by | txid; also signed wherever a PQC signature exists (not serve-credit) | txid |
+| author-chosen? | yes, so an ingest equality rule is needed | no, derived from the bytes; the txid is the check |
+| lengths needed before signing | **yes**: every signature's final length | **no** |
+| variable-length signature schemes (V4) | forced into padding or a two-pass sign | unaffected |
+| skeleton row and cumulative cell | needed | needed |
+| wire change | a prefix field | a txid-mixer operand, plus a supplied component on pruned transports |
+| every txid changes | yes | yes |
+
+**Recommendation (design owner): txid-bound.** It gets the same binding, removes the
+only signing-order dependency the prefix placement would introduce, needs no author-chosen
+value and so no equality rule, and survives a variable-length signature scheme at the V4
+transition. The partition built on it is unchanged from §8.4: global multiples of `W`,
+with `max archival length < W` as a static relation between the two constants.
+
+**Not ruled here.**
