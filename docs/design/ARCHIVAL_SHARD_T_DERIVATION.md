@@ -579,7 +579,7 @@ arm in which the per-band verdict at fixed headroom degrades monotonically in
 
 ## 4. The feasible interval, and a proposed selection rule
 
-> **Superseded by §9.5 (2026-09-29):** the interval is now in bytes, and `W = 3.33 MB`
+> **Superseded by §9.5 (2026-09-29):** the interval is now in bytes, and `W = 3,000,000 B`
 > is provisional inside it. The selection rule's direction, argued below, carries over.
 
 **Under (A) and under (B) alike**, the only hard bound with numbers is `U1a`,
@@ -706,6 +706,51 @@ track the measurement upward".
 5. **What it also re-grounds.** `L`'s fetch span, stated **per byte** instead of
    per 3.33 MB object (`SHT-7`), which is what stops `T` and `L` from resting on
    the same retired number.
+
+### 4.1a Amendment for the run, in `W` — committed before it starts (2026-09-29)
+
+`SHT-Q2` turned `T` into an archival length `W` (§9), so this measurement now decides
+`W`'s `U1a` ceiling. The items above stand. This fixes what they left open, before any
+observation exists.
+
+- **Objects.** 1×, ½× and ¼× of the extracted real shard: 3,326,976, 1,663,488 and
+  831,744 B, a 4× span, each a whole number of leaves, every byte the shard's. The shard
+  tops the ladder because it is the **largest servable object**: the production frame
+  (`ServedFrameHeader::for_segment`) refuses a leaf count past one segment. So the fit
+  **interpolates** at the provisional `W = 3,000,000 B` and extrapolates only above
+  3.33 MB. A Tor transit of opaque, uncompressed bytes does not depend on their
+  values, so size is the one variable.
+- **Harness.** `sp-t3`'s `pd-f2-measure` with `SHEKYL_SPIKE_SIZE_LADDER=1` (the size
+  ladder, its own PR), one persona. The cold arm fetches 200 of each size, rotating
+  sizes, with `NEWNYM` before every fetch. The warm arm and the concurrency sweep are
+  not run: they are not inputs to this fit. The soak runs 24 h, with `NEWNYM` before
+  every fetch, sizes round-robin, and 30 s spacing. That is roughly 1,400 soak
+  observations, about 470 per size, so each size's p99 rests on about 5 tail
+  observations. It is reported with that caveat, and p90 is reported beside it.
+- **Host.** `skl-miner-stage`, running Tor Expert Bundle 15.0.17 (the tarball on the
+  host, its signature verified before use) and a static build of the harness commit.
+  Nothing else runs on the host during the soak.
+- **Fit.** Per percentile (p50, p90, p99), over the **soak** arm: least squares of
+  `t = t_fixed + bytes / v` over the three sizes. The cold arm is fitted and reported,
+  not used to select.
+- **Model rejection, thresholds fixed now.** The model is rejected, and no ceiling is
+  derived from it, if:
+  - the fitted `t_fixed < 0` or `v ≤ 0`; or
+  - linearity fails: the ½× point's percentile lies more than **15 %** of its own value
+    off the line through the ¼× and 1× points.
+
+  A rejection is itself the result: the transport does not decompose this way, and the
+  ceiling needs a different model.
+- **The target witness-miss rate (item 3) is owed by the design owner before the fit.**
+  The observations are collected, but no fit is computed until that rate is recorded
+  here.
+- **Decision thresholds, restated in `W`** (item 4). The ceiling is
+  `W_max = v · (120 s − t_fixed) − 149,400 B`, at the governing percentile (the soak
+  p99, until the miss rate replaces it).
+  - `W_max ≥ 3,000,000 B`: the provisional `W` stands, and `U1a` does not bind.
+  - `W_max < 3,000,000 B`: `U1a` binds. `W` must come down to `W_max` or below, which
+    takes the overshoot past 5 %, so the tolerance goes back to Rick.
+- **`L` (item 5)** is restated per byte from the same fit.
 
 ## 5. Re-pin plan
 
@@ -1278,9 +1323,9 @@ empty. In the build this is a compile-time assertion between the two constants.
 **Soft: the shard-to-shard overshoot.** Under global multiples, a shard's archival
 length lies in `(W − max, W + max)`, so its relative deviation is at most `max / W`:
 
-| `W` | 1 MB | 1.5 MB | 2 MB | 3 MB | **3.33 MB** | 5 MB |
+| `W` | 1 MB | 1.5 MB | 2 MB | **3 MB** | 3.33 MB | 5 MB |
 |---|---|---|---|---|---|---|
-| `149.4 KB / W` | 14.9 % | 10.0 % | 7.5 % | 5.0 % | **4.5 %** | 3.0 % |
+| `149.4 KB / W` | 14.9 % | 10.0 % | 7.5 % | **5.0 %** | 4.5 % | 3.0 % |
 
 How much deviation to accept is a **choice**: the overshoot tolerance `τ`, which sets the
 floor `W ≥ 149.4 KB / τ`. The design owner recommends `τ ≤ 5 %`, which gives
@@ -1309,11 +1354,11 @@ heaviest shard, `W + 149.4 KB`, the ceiling on `W` is:
 Per-shard consensus state (`archival_r_market` rows, serve-credit rows per
 `(P, shard, E)`, settlement work) and `L3`'s challenge work scale as shards ∝
 `chain bytes / W`, so a larger `W` means fewer rows. The holdings list covers
-`4096 × W` bytes per record, which is 13.6 GB at 3.33 MB. Under `L2`'s ruling that is a
+`4096 × W` bytes per record, which is 12.3 GB at 3 MB. Under `L2`'s ruling that is a
 list budget, not an operator bound. Both pull mildly upward and bound nothing.
 
 The rows §3 keeps restate directly:
-- `U2` (one shard, `W` ≈ 3.33 MB, against the floor device) is non-binding.
+- `U2` (one shard, `W` = 3 MB, against the floor device) is non-binding.
 - `U3` is unchanged in kind: a frontier shard closes after `W` bytes of domain good, so a
   quiet chain still holds it open.
 - `U4` is shaping only.
@@ -1333,14 +1378,19 @@ The rows §3 keeps restate directly:
 tolerance, provided `U1a` clears at the heavy end. The asymmetry is the same: too
 large puts unpriced witness misses on operators; too small costs bookkeeping.
 
-**`W = 3.33 MB` — PROVISIONAL (Rick, 2026-09-29).** It sits inside the range at every
-calibration:
-- overshoot 4.5 %, within the recommended `τ ≤ 5 %`;
-- heaviest shard 3.48 MB, which the pessimistic soak calibration reads in about 90 s
-  against the 120 s criterion;
-- no longer circular: it is a candidate inside an interval derived in bytes, not a
-  number inherited from the leaf segment, and it is the size the W₂ measurement was
-  taken at.
+**`W = 3,000,000 B` — PROVISIONAL (Rick, 2026-09-29).** The selection rule's own
+output: the smallest `W` with overshoot within the recommended `τ ≤ 5 %` is
+149.4 KB ÷ 0.05 ≈ 2.99 MB, rounded up.
+- overshoot 4.98 %, inside `τ ≤ 5 %`;
+- heaviest shard 3,149,400 B, which the pessimistic soak calibration reads in about
+  81 s against the 120 s criterion;
+- no tie left to the leaf segment's size.
+
+**Correction, dated to its writing (2026-09-29):** this section first recorded
+`W = 3.33 MB` as the provisional value. That was **not the rule's output**. It survived
+only because 3.33 MB was the old number, the same way `T = 200` did. It still lay
+inside the range, but the rule picks 3 MB, and 3 MB also improves `U1a`'s margin
+(≈ 81 s against ≈ 90 s).
 
 It is re-pinned at the Round-2 gate, like `T` was, by:
 - **the overshoot tolerance `τ`**, Rick's input. It sets the floor;
