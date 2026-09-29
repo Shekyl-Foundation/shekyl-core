@@ -181,7 +181,47 @@ loopback figures are a smoke of the lines, not a link: initiator
 handshake 1.54 ms, responder queue 106 µs and compute 363 µs, Levin
 gap 43 ms. The deadline pin is the commit that carries the spans.
 
+## Tor, same day
+
+The first Tor connection on this branch was between an x86_64 daemon
+here and an off-site daemon on a Foundation seed host, both on the
+cutover pin. The seed side published a managed onion with
+proof-of-work through the pinned `15.0.19` Tor. The dialing side ran
+the same pinned Tor itself with a fixed SocksPort and `--tx-proxy`,
+because `--add-exclusive-node <onion>` creates the tor zone at option
+parse and `handle_command_line` refuses it before the managed Tor
+could have supplied its SOCKS address. That is a composition gap in
+the default posture, noted here and not fixed in this run.
+
+Two defects, found in that order:
+
+- **Every Tor dial was `DialFailed` about 100 µs in.** The zone host
+  learned the SOCKS address only through `listen_tor`, which `init`
+  calls for a tor zone that binds. An outbound-only `--tx-proxy tor`
+  zone never bound, so the host had no proxy, and its dialed
+  connections had no tor binding to post to. `init` now installs both
+  for that zone.
+- **Bytes into the seed's Tor forward listener vanished.** The onion
+  connection logged `NEW CONNECTION`, then nothing until
+  `LevinHandshakeTimeout` at +5 s. Raw bytes sent straight into the
+  forward listener on the seed's own loopback did the same, so the Tor
+  network was not the cause. `Deliver` and `Closed` posts carried a
+  null `observed`; the adapter routes by `observed->connector`, so
+  both landed on the clearnet binding and were dropped. Every post
+  now names its row's connector. This is the review's "Tor events
+  lose socket binding after establishment".
+
+After both, the dial connected in 3.93 s (SOCKS exchange, circuit,
+rendezvous; `proxy_connect_ns` 125 µs of that), the Levin handshake
+completed, and the gap was 597 ms outbound and 649 ms on the seed.
+Timed syncs followed. One sample, not a distribution.
+
+The floor device runs the pinned aarch64 `16.0a12` Tor beside its
+daemon and publishes a proof-of-work onion through it. Its Tor dial
+and inbound distributions are the next records.
+
 ## Not this run
 
-Tor dial and Tor relay were not run. The floor-device deadline and
-thread-budget measurements are not in this record.
+Tor relay was not run. The floor-device deadline and thread-budget
+distributions are not in this record. The off-site clearnet leg waits
+on a firewall rule for the seed-side daemon's private port.
