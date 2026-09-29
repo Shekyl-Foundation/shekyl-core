@@ -400,9 +400,18 @@ mod tests {
         let selene = u64::try_from(SELENE_CHUNK_WIDTH).expect("width fits u64");
         let cascade =
             u64::try_from(SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH).expect("boundary fits u64");
+        // Past the first cascade the layer-0 fold has to happen REPEATEDLY
+        // for the root to stay right, and `folded` is the first count at
+        // which a partial chunk sized by the WRONG layer's width stops being
+        // invisible: the closure computes the correct root from an unfolded
+        // chunk, so an over-wide chunk agrees with the oracle until it
+        // finally fills and promotes to more than one node. `selene * selene`
+        // is where a chunk sized by layer 0's own width (38) would fill;
+        // correct code has folded twice by then, at 18 and 36 layer-0 nodes.
+        let folded = selene * selene + 1;
         let dense_through = selene * 2 + 1;
         let graded: Vec<u64> = (0..=dense_through)
-            .chain([cascade - 1, cascade, cascade + 1])
+            .chain([cascade - 1, cascade, cascade + 1, folded])
             .collect();
 
         let mut f = Frontier::new();
@@ -430,6 +439,12 @@ mod tests {
         }
         assert!(folds > 1, "no leaf-chunk fold was graded");
         assert_eq!(cascades, 1, "the layer-1 cascade was not graded");
+        assert!(
+            folded > cascade * 2,
+            "the graded range never reaches a second layer-1 fold, so a partial chunk \
+             sized by the wrong layer's width would agree with the oracle at every \
+             count here — the closure computes the right root from an unfolded chunk"
+        );
         // The two depths in the graded set differ, so a depth taken from the
         // wrong leaf count is visible rather than coincidentally equal.
         assert_ne!(
