@@ -27,7 +27,7 @@
   rule 42) is still owed in its own round; `SendRecipient` is unchanged.
 - Why now: the desktop wallet's Receive page issues `rid` links and its
   scan matches them, but no sender echoed one, so every link-paid receive
-  arrived unattributed. GUI #31 passes a pasted link's `rid` through.
+  arrived unattributed. The desktop wallet (same-named branch) passes a pasted link's `rid` through.
 
 ### Units — `AtomicUnitsString` is the one wire newtype for amounts
 
