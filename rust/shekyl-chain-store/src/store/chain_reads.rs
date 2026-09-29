@@ -383,7 +383,11 @@ pub(super) fn weights_below<T: ReadTables>(
     }
     let span = end.min(at_most.to_raw());
     let start = end - span;
-    let mut out = Vec::with_capacity(usize::try_from(span).expect("a window fits memory"));
+    // `span` is bounded by `end ≤ tip + 1`, so it never exceeds the rows
+    // the table holds; the pre-allocation is a hint, and on a target where
+    // the count does not fit `usize` it is simply not taken — a store read
+    // has no panic arm.
+    let mut out = Vec::with_capacity(usize::try_from(span).unwrap_or(0));
     let table = txn.table(BLOCK_INFO)?;
     let mut expected = start;
     for row in table.range(start..end)? {

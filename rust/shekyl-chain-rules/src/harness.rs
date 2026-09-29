@@ -247,11 +247,16 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
         end: BlockHeight,
         at_most: BlockCount,
     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
-        let end = usize::try_from(end.to_raw()).expect("a height fits usize");
+        // Classified before any conversion: a height no `usize` can index
+        // is past every recorded block, and a count past `usize` takes the
+        // whole prefix — neither is a panic, both are the contract's arms.
+        let Ok(end) = usize::try_from(end.to_raw()) else {
+            return Ok(AtHeight::AboveTip);
+        };
         if end > self.chain.weights.len() {
             return Ok(AtHeight::AboveTip);
         }
-        let span = end.min(usize::try_from(at_most.to_raw()).expect("a count fits usize"));
+        let span = usize::try_from(at_most.to_raw()).map_or(end, |n| n.min(end));
         Ok(AtHeight::Recorded(
             self.chain.weights[end - span..end].to_vec(),
         ))
