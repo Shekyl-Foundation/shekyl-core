@@ -669,6 +669,7 @@ pub fn boundary_pair<T: Debug, V>(
 }
 
 pub mod fixture;
+mod price;
 
 #[cfg(test)]
 #[path = "harness_probe_tests.rs"]

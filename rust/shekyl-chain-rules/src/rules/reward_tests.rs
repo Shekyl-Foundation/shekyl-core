@@ -14,6 +14,8 @@
 //! `CONSENSUS_C2_R2_WEIGHT_FEES.md` Q1). No test below names `600 000`.
 
 use super::*;
+use shekyl_units::AtomicUnits;
+
 use crate::block::Candidate;
 use crate::census::CenRow;
 use crate::fault::FormAttempt;

@@ -6,8 +6,8 @@
 //! Census 4.G — the block body as a whole (E6 slice 7,
 //! `CHAIN_RULES_SLICE_7.md` §4): the rows that hold *across* a block's listed
 //! transactions after each has passed `tx_form` and `tx_against` on its
-//! own. This file carries the stateless one; the view-bound body rows (G1,
-//! G7, G9, G10) land beside it in slice 7 commit 7.
+//! own. G2 is the stateless row (`form`). G1 runs before the slot loop;
+//! G7, G9 and G10 run beside L1 after it.
 //!
 //! # CEN-G1 — no listed transaction is already on the chain (slice 7 commit 7)
 //!

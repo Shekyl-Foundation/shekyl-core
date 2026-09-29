@@ -13,7 +13,7 @@ use core::convert::Infallible;
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, ChainValid, ChainView, Fault, FormAttempt, PaidEmission,
-    RuleSet, StructurallyValid, Substrate, Trust, Weights,
+    RuleSet, StructurallyValid, Substrate, Trust, ViewRead, Weights,
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_units::AtomicUnits;
@@ -156,13 +156,17 @@ fn expected_seed<'id, V: ChainView<'id>>(view: &V) -> Result<BlockHash, V::Fault
 
 /// `candidate` with its coinbase paying what CEN-F18 owes it on `view` —
 /// the harness's one pricer, at the height the view says the candidate
-/// connects at. The view's own fault is the only error: pricing reads the
-/// store the same way the rules will.
+/// connects at. The view's own fault is the only error: a corrupt parent
+/// read is a fixture bug, not a block the test is asking to refuse.
 pub(super) fn priced<'b, 'id>(
     view: &BatchView<'b, 'id>,
     candidate: Candidate,
 ) -> Result<Candidate, StoreError> {
-    fixture::priced(view, candidate)
+    match fixture::priced(view, candidate) {
+        Ok(candidate) => Ok(candidate),
+        Err(ViewRead::View(fault)) => Err(fault),
+        Err(ViewRead::Corrupt(corrupt)) => panic!("fixture view is corrupt: {corrupt:?}"),
+    }
 }
 
 /// [`priced`] against the **committed** store — for a test that needs a

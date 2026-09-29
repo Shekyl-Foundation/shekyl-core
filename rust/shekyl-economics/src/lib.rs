@@ -24,6 +24,7 @@ pub mod escalation;
 pub mod fee;
 pub mod params;
 pub mod release;
+pub mod reward;
 pub mod supply;
 pub mod volume;
 
@@ -59,5 +60,9 @@ pub use params::{
     EMISSION_CURVE_ASYMPTOTE, FULL_REWARD_ZONE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 pub use release::calc_release_multiplier;
+pub use reward::{
+    configured_emission, price_emission, EmissionInputs, PaidEmission, RewardArithmetic,
+    GENESIS_HEIGHT, REPRICING_PASSES,
+};
 pub use supply::{CirculatingSupply, SupplyInvariantViolation};
 pub use volume::TxVolume;

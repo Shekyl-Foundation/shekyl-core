@@ -7,7 +7,9 @@ questions (§12) **ruled at PR #753 review** (defaults kept; G4 tightened to
 verified against slice 7 commit 10 (`CHAIN_RULES_SLICE_7.md`), 2026-09-29:
 the E3 and slice-7 reads (`total_burned` included), `RecordedBlock`'s five
 fields, `ValidatedBlock`'s ten (the increment-1 sketch had stood at four
-through slice 2, E3 and slice 7), `price` / `judge_emission`, G2 in `form`
+through slice 2, E3 and slice 7), `price` / `judge_emission` (the derived
+arm and the block template both call `shekyl_economics::price_emission`;
+the validator's genesis arm is `configured_emission`), G2 in `form`
 and the four `Corrupt` arms; §8.5 last verified against slice 5
 (`CHAIN_RULES_SLICE_5.md`), 2026-09-23.**
 Stays in `docs/design/` while
@@ -755,9 +757,13 @@ pub(crate) fn judge_emission<'id, V: ChainView<'id>>(
     connecting: BlockHeight, emission: &Emission, weights: &Weights,
     candidate: &Candidate, coverage: &mut RuleCoverage,
 ) -> Verdict<PaidEmission>;
-// `PaidEmission { paid, split, fee_burn: BurnSplit, owed, accrual, coins_generated }` + `burned()`;
-// the producer (`shekyl-block-template`) prices through the same functions and
-// reads `frozen_segments_at`, so a template and the validator cannot disagree.
+// `PaidEmission { paid, split, fee_burn: BurnSplit, owed, accrual, coins_generated }` + `burned()`
+// is defined in `shekyl-economics` and re-exported here. The derived arm and
+// `shekyl-block-template` both call `price_emission` (height 0 there is the
+// producer's whole-to-miner pay). The validator's genesis arm is
+// `configured_emission`: the coinbase sum stands, and `price_emission` is not
+// called. `REPRICING_PASSES` is the one settle budget. The template's caller
+// still reads `frozen_segments_at` when it composes the burn operand.
 
 /// Stateless per-tx rules (4.H). Shared verbatim by connect and pool admission.
 /// The SLOT selects the kind (`TxKind::of(slot)`): a coinbase-shaped body in a

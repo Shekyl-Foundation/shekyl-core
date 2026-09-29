@@ -81,26 +81,30 @@
 //! # The values ride on the verdict
 //!
 //! [`PaidEmission`] is carried on `ValidatedBlock` (slice 7 Q5): every
-//! field is one the validator had to compute. `connect` records
-//! `coins_generated` and the burn from it; the accrual waits on the E4
-//! hook. The ingest's composed lines for `coins_generated` and `burned`
-//! deleted with this (the `root_after` pattern, DRS-E3).
+//! field is one the composition had to compute. The composition lives in
+//! `shekyl-economics` — [`price_emission`] for the derived arm and for the
+//! block template, [`configured_emission`] for this crate's genesis arm,
+//! where the coinbase sum stands and [`price_emission`] is not called.
+//! `connect` records `coins_generated` and the burn from the verdict; the
+//! accrual waits on the E4 hook. The ingest's composed lines for
+//! `coins_generated` and `burned` deleted with this (the `root_after`
+//! pattern, DRS-E3).
 
-use shekyl_economics::{
-    advance_already_generated, compute_emission_split, compute_fee_burn, paid_block_reward,
-    BurnSplit, EmissionError, EmissionSplit,
-};
+use shekyl_economics::{configured_emission, price_emission, EmissionInputs, RewardArithmetic};
 use shekyl_types::BlockHeight;
-use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Transaction};
 
 use crate::block::Candidate;
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::rules::block_weight::Weights;
+use crate::fault::{Fault, ViewRead};
+use crate::rules::block_weight::{Medians, Weights};
 use crate::rules::miner::{economics, Emission, Subsidy, EMISSION_SPLIT_EPOCH};
 use crate::rules::Rule;
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
+use crate::view::ChainView;
+
+pub use shekyl_economics::PaidEmission;
 
 /// CEN-F14: the block's weight is at most twice the effective median.
 pub(crate) struct F14;
@@ -164,42 +168,6 @@ impl Rule for G13 {
     const ROW: CenRow = CenRow::G13;
 }
 
-/// What the reward chain established for a validated block.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PaidEmission {
-    /// The paid (penalised) reward — F14b's value; at genesis the
-    /// configured coinbase total (F11).
-    pub paid: AtomicUnits,
-    /// The miner and staker legs of `paid` (F16). The coinbase pays
-    /// `miner_emission` plus its fee income and nothing else (F18).
-    pub split: EmissionSplit,
-    /// The listed bodies' fees split three ways (F17): what the coinbase
-    /// may take, what the staker pool accrues, what is destroyed. All zero
-    /// at genesis, where nothing is listed.
-    pub fee_burn: BurnSplit,
-    /// What the coinbase was held to (F18): `miner_emission +
-    /// miner_fee_income` — the block's own figure, so a producer pricing
-    /// against the verdict reads it here rather than re-adding the legs.
-    pub owed: AtomicUnits,
-    /// The staker inflow this block accrues (G11): `staker_emission +
-    /// staker_pool_amount`; zero at genesis (G13). Its writer is the
-    /// store's E4 hook.
-    pub accrual: AtomicUnits,
-    /// `already_generated_coins` through this block (G12): the parent's
-    /// plus `paid`, saturating as the one owner saturates.
-    pub coins_generated: AtomicUnits,
-}
-
-impl PaidEmission {
-    /// This block's destroyed amount — F17's `actually_destroyed`, the
-    /// figure `connect` writes as `block_burn` and folds into
-    /// `total_burned` (G11's burn half).
-    #[must_use]
-    pub const fn burned(&self) -> AtomicUnits {
-        AtomicUnits::from_raw(self.fee_burn.actually_destroyed)
-    }
-}
-
 /// The listed bodies' fees, summed — the C++'s `fee_summary`
 /// (`blockchain.cpp:5653`, one `get_tx_fee` per listed body, which is
 /// `ct_signatures.txnFee` for every version this chain has). A body with a
@@ -223,6 +191,25 @@ fn money_in_use(miner_transaction: &Transaction) -> Option<u64> {
         .try_fold(0u64, |sum, output| sum.checked_add(output.amount))
 }
 
+/// Where [`RewardArithmetic`] refuses. Owed overflow is F18 at the miner
+/// slot — the coinbase cannot pay a sum that does not exist — and the
+/// others are block-level: the weight bound (F14), the paid reward's
+/// overflow (F14b), the accrual (G11).
+fn arithmetic_refusal(err: RewardArithmetic) -> InvalidBlock {
+    let (row, locus) = match err {
+        RewardArithmetic::BlockTooBig => (F14::ROW, Locus::Block),
+        RewardArithmetic::RewardOverflow => (F14b::ROW, Locus::Block),
+        RewardArithmetic::OwedOverflow => (
+            F18::ROW,
+            Locus::Tx {
+                slot: TxSlot::Miner,
+            },
+        ),
+        RewardArithmetic::AccrualOverflow => (G11::ROW, Locus::Block),
+    };
+    InvalidBlock::new(row, locus)
+}
+
 /// The reward chain's definitions for a candidate connecting at
 /// `connecting`, given the emission the 4.F definitions priced (and the
 /// parent accumulator and burn operands they read), the weights CEN-G6/G6b
@@ -230,13 +217,20 @@ fn money_in_use(miner_transaction: &Transaction) -> Option<u64> {
 /// split, the fee split, the accrual, the advanced supply — recording F14,
 /// F14b, F16, F17, G11, G13 and G12 as evaluated. Everything the block
 /// determines *about* the coinbase, without reading the coinbase:
-/// [`judge_emission`] adds F18, and a fixture that must pay what F18
-/// requires reads `owed` off this (the harness's `priced_at`).
+/// [`judge_emission`] adds F18's equality check, and a fixture that must
+/// pay what F18 requires reads `owed` off this ([`quote_emission`]).
 ///
-/// `Err(refused)` is F14's refusal (a block over twice the median), F14b's
-/// (a price the arithmetic cannot form), F17's (a fee sum that does not
-/// fit) or G11's (an accrual that does not fit), all at [`Locus::Block`];
-/// nothing here reads the view, so there is no fault position.
+/// The derived arm is [`price_emission`]. Genesis is [`configured_emission`]:
+/// the configured coinbase stands, and the kernel is not called. The fee
+/// sum is this function's (F17) and stays outside the kernel — a `Null`
+/// body contributes nothing here, while the template rejects one outright.
+///
+/// `Err(refused)` is F14 or F14b at [`Locus::Block`], F17's fee-sum
+/// overflow at [`Locus::Block`] (before anything is priced from the fees),
+/// F18's owed overflow at `Locus::Tx { slot: Miner }`, or G11's accrual
+/// overflow at [`Locus::Block`]. Nothing here reads the view, so there is
+/// no fault position. Rows are recorded on the passing path; a refusal
+/// carries the row and [`validate`] drops the coverage.
 pub(crate) fn price(
     connecting: BlockHeight,
     emission: &Emission,
@@ -245,104 +239,49 @@ pub(crate) fn price(
     configured: u64,
     coverage: &mut RuleCoverage,
 ) -> Verdict<PaidEmission> {
-    let parent_coins_generated = emission.parent_coins_generated();
-    let (paid, split, fee_burn) = match emission.subsidy() {
-        // Genesis: the configured emission stands, no weight bound is
-        // evaluated, and nothing is split — the coinbase pays the
-        // configured blob whole and no staker leg exists (module docs;
-        // `compute_emission_split` at height 0 would apply the initial
-        // share, which the C++ never asks it to). Nothing is listed, so
-        // no fee is split (F17 vacuous). F7 refused an overflowing sum
-        // already, so `configured` is the fold's total.
+    let parent = emission.parent_coins_generated().to_raw();
+    let paid = match emission.subsidy() {
+        // Genesis: the configured emission stands. No weight bound is
+        // evaluated, nothing is split, nothing is listed (F17 vacuous).
+        // F7 refused an overflowing sum already, so `configured` is the fold.
         Subsidy::Configured => {
             coverage.insert(F14::ROW);
             coverage.insert(F14b::ROW);
             coverage.insert(F17::ROW);
-            (
-                configured,
-                EmissionSplit {
-                    miner_emission: configured,
-                    staker_emission: 0,
-                },
-                BurnSplit {
-                    miner_fee_income: 0,
-                    staker_pool_amount: 0,
-                    actually_destroyed: 0,
-                },
-            )
+            configured_emission(configured, parent)
         }
         Subsidy::Derived { burn, .. } => {
-            // One call, both answers (the C++'s `shekyl_block_reward`
-            // marshal): the weight bound and the price come from the same
-            // arithmetic, so the refusal cannot disagree with the value.
-            let paid = match paid_block_reward(
-                weights.medians.effective_median.to_raw(),
-                weights.weight.to_raw(),
-                parent_coins_generated.to_raw(),
-                emission.tx_volume(),
-                economics(),
-            ) {
-                Ok(paid) => paid,
-                Err(EmissionError::BlockTooBig) => {
-                    return Err(InvalidBlock::new(F14::ROW, Locus::Block))
-                }
-                Err(EmissionError::Overflow) => {
-                    return Err(InvalidBlock::new(F14b::ROW, Locus::Block))
-                }
-            };
-            coverage.insert(F14::ROW);
-            coverage.insert(F14b::ROW);
-            let split =
-                compute_emission_split(paid, connecting.to_raw(), EMISSION_SPLIT_EPOCH.to_raw());
-            // F17: the fee split over verify's operands — the listed fees,
-            // the volume window, the supply and `n` read at parent state.
             let Some(total_fees) = listed_fees(listed) else {
                 return Err(InvalidBlock::new(F17::ROW, Locus::Block));
             };
-            let fee_burn = compute_fee_burn(
+            let inputs = EmissionInputs {
+                height: connecting.to_raw(),
+                median_weight: weights.medians.effective_median.to_raw(),
+                block_weight: weights.weight.to_raw(),
+                already_generated: parent,
+                tx_volume: emission.tx_volume(),
                 total_fees,
-                emission.tx_volume(),
-                burn.supply,
-                burn.frozen_segments,
-                economics(),
-            );
-            coverage.insert(F17::ROW);
-            (paid, split, fee_burn)
+                supply: burn.supply,
+                frozen_segments: burn.frozen_segments,
+                split_epoch: EMISSION_SPLIT_EPOCH.to_raw(),
+                params: economics(),
+            };
+            match price_emission(&inputs) {
+                Ok(priced) => {
+                    coverage.insert(F14::ROW);
+                    coverage.insert(F14b::ROW);
+                    coverage.insert(F17::ROW);
+                    priced
+                }
+                Err(err) => return Err(arithmetic_refusal(err)),
+            }
         }
     };
     coverage.insert(F16::ROW);
-    // F18's right-hand side — the block's figure, whatever the coinbase
-    // says. Two legs each bounded by the emission and the fees; a sum that
-    // does not fit is refused on F18's row (the coinbase cannot pay it),
-    // never wrapped as the C++'s `+` would.
-    let Some(owed) = split.miner_emission.checked_add(fee_burn.miner_fee_income) else {
-        return Err(InvalidBlock::new(
-            F18::ROW,
-            Locus::Tx {
-                slot: TxSlot::Miner,
-            },
-        ));
-    };
-    // G11 / G13: the staker inflow — zero at genesis by the split above
-    // (G13, the arm); the sum of two legs the block priced otherwise.
-    let Some(accrual) = split
-        .staker_emission
-        .checked_add(fee_burn.staker_pool_amount)
-    else {
-        return Err(InvalidBlock::new(G11::ROW, Locus::Block));
-    };
     coverage.insert(G11::ROW);
     coverage.insert(G13::ROW);
-    let coins_generated = advance_already_generated(parent_coins_generated.to_raw(), paid);
     coverage.insert(G12::ROW);
-    Ok(PaidEmission {
-        paid: AtomicUnits::from_raw(paid),
-        split,
-        fee_burn,
-        owed: AtomicUnits::from_raw(owed),
-        accrual: AtomicUnits::from_raw(accrual),
-        coins_generated: AtomicUnits::from_raw(coins_generated),
-    })
+    Ok(paid)
 }
 
 /// The reward chain for `candidate` connecting at `connecting`: [`price`]
@@ -352,8 +291,9 @@ pub(crate) fn price(
 /// the check, `blockchain.cpp:1516`).
 ///
 /// Runs after the slot loop (the weight is a judged body's) and before
-/// the drain. `Err(refused)` is one of [`price`]'s at [`Locus::Block`], or
-/// F18's at `Locus::Tx { slot: Miner }`.
+/// the drain. `Err(refused)` is one of [`price`]'s — F14, F14b, F17 or G11
+/// at [`Locus::Block`], or F18's owed overflow at the miner slot — or
+/// F18's equality check, also at the miner slot.
 pub(crate) fn judge_emission(
     connecting: BlockHeight,
     emission: &Emission,
@@ -386,6 +326,60 @@ pub(crate) fn judge_emission(
     }
     coverage.insert(F18::ROW);
     Ok(paid)
+}
+
+/// [`Emission::derive`] returns [`Fault`] because F20's window is mapped
+/// through it. The derivation reads parent state and has no stale premise;
+/// [`ViewRead`] is the honest outer error for a caller that is not `validate`.
+fn parent_read<VF>(fault: Fault<VF>) -> ViewRead<VF> {
+    match fault {
+        Fault::View(fault) => ViewRead::View(fault),
+        Fault::Corrupt(corrupt) => ViewRead::Corrupt(corrupt),
+        Fault::Stale(_) => {
+            unreachable!("emission derivation reads parent state and raises no stale premise")
+        }
+    }
+}
+
+/// What the reward chain prices `candidate` at, without rewriting its coinbase.
+///
+/// [`price`] over a scratch coverage record: the 4.F definitions, the
+/// medians, the block's weight, then the composition. The equality half of
+/// F18 stays in [`judge_emission`] — a caller asking what the coinbase
+/// *should* pay needs `owed` while the amount is still wrong. A coinbase
+/// sum that does not fit is F18 at the miner slot, the same refusal
+/// [`judge_emission`] raises before it prices.
+///
+/// # Errors
+///
+/// [`ViewRead::View`] on a view fault; [`ViewRead::Corrupt`] when a parent
+/// read breaks a store invariant (a burned fold above the parent's
+/// emission, a hole, a decreasing transaction-count prefix).
+pub fn quote_emission<'id, V: ChainView<'id>>(
+    view: &V,
+    connecting: BlockHeight,
+    candidate: &Candidate,
+) -> Result<Verdict<PaidEmission>, ViewRead<V::Fault>> {
+    let mut coverage = RuleCoverage::EMPTY;
+    let emission = Emission::derive(view, connecting, &mut coverage).map_err(parent_read)?;
+    let medians = Medians::derive(view, connecting, &mut coverage)?;
+    let weights = Weights::derive(medians, candidate, &mut coverage);
+    let Some(configured) = money_in_use(&candidate.block.miner_transaction) else {
+        return Ok(Err(InvalidBlock::new(
+            F18::ROW,
+            Locus::Tx {
+                slot: TxSlot::Miner,
+            },
+        )));
+    };
+    Ok(price(
+        connecting,
+        &emission,
+        &weights,
+        &candidate.transactions,
+        configured,
+        &mut coverage,
+    ))
 }
 
 #[cfg(test)]

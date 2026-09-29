@@ -48,14 +48,13 @@ use std::collections::{BTreeMap, VecDeque};
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
-    effective_median_at, tree_after, tx_volume_window, AtHeight, BlockOutputs, Candidate,
-    ChainView, LeafSource, RecordedBlock, RecordedWeights, RuleSet, Tip, TreeFrontier,
+    effective_median_at, quote_emission, tree_after, AtHeight, BlockOutputs, Candidate, ChainView,
+    LeafSource, RecordedBlock, RecordedWeights, RuleSet, Tip, TreeFrontier, ViewRead,
 };
 use shekyl_chain_store::codec::SettlementEpochBlocks;
 use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_economics::EconomicParams;
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
     GlobalOutputIndex, KeyImage, LongTermWeight, TxHash,
@@ -133,11 +132,16 @@ pub struct GrownTree {
     medians: Vec<LongTermWeight>,
     /// `blocks[h]` — block `h` as the store would record it: identity,
     /// header, the work through it (a synthetic chain is regtest at
-    /// difficulty one, so `h + 1`), the accumulator this tree derived
-    /// (below) and the listed-transaction prefix sum. What `block_at`
+    /// difficulty one, so `h + 1`), the accumulator [`quote_emission`]
+    /// returned and the listed-transaction prefix sum. What `block_at`
     /// answers, so `tx_volume_window` (CEN-F20) reads this tree the way
     /// the validator reads the store.
     blocks: Vec<RecordedBlock>,
+    /// Burned fees through the blocks already pushed. The next block's
+    /// price reads this fold as the parent's `total_burned` (CEN-F17);
+    /// the push then adds that block's own burn. Genesis burns nothing,
+    /// so the fold starts at zero.
+    total_burned: AtomicUnits,
 }
 
 impl GrownTree {
@@ -220,42 +224,29 @@ impl GrownTree {
             .fold(0u64, u64::saturating_add);
         let long_term =
             shekyl_economics::long_term_weight(medians.long_term_effective_median.to_raw(), weight);
-        // The accumulator, by the ratified composition the validator runs
-        // (CEN-F13/F15 → F14b → G12, `FL-R12′`): the parent's gross
-        // emission advanced by the paid reward — the release-modulated,
-        // tail-floored emission over the F20 volume window, under the
-        // weight penalty at this block's weight against the effective
-        // median in force. At genesis the configured coinbase total stands
-        // (F11). Read through the rules crate's own definitions
-        // (`tx_volume_window`) and `shekyl-economics`' one owner
-        // (`paid_block_reward`), never restated.
-        let parent_coins = height
-            .to_raw()
-            .checked_sub(1)
-            .map_or(0, |parent| self.blocks[at(parent)].coins_generated.to_raw());
-        let paid = if height.is_zero() {
-            block
-                .miner_transaction
-                .prefix
-                .outputs
-                .iter()
-                .fold(0u64, |acc, o| acc.saturating_add(o.amount))
-        } else {
-            let tx_volume = tx_volume_window(self, height)
-                .expect("a fixture chain's records are complete below its tip");
-            shekyl_economics::paid_block_reward(
-                medians.effective_median.to_raw(),
-                weight,
-                parent_coins,
-                tx_volume,
-                &EconomicParams::default(),
-            )
-            .expect("a fixture block is priced: under twice the median, no overflow")
+        // The block as it is, not a settled clone: `reward_for` already
+        // wrote the coinbase, and the recorded emission is what the
+        // validator will compute for these bytes. A refusal means the
+        // builder was asked to extend with a block the reward chain refuses.
+        let emission = match quote_emission(
+            self,
+            height,
+            &Candidate::new(block.clone(), txs.to_vec()),
+        ) {
+            Ok(Ok(emission)) => emission,
+            Ok(Err(refused)) => panic!(
+                "a chain builder was asked to extend with a block the reward chain refuses: {refused}"
+            ),
+            Err(ViewRead::View(never)) => match never {},
+            Err(ViewRead::Corrupt(corrupt)) => {
+                panic!("the fixture chain's parent reads are corrupt: {corrupt:?}")
+            }
         };
-        let coins_generated = AtomicUnits::from_raw(shekyl_economics::advance_already_generated(
-            parent_coins,
-            paid,
-        ));
+        self.total_burned = self
+            .total_burned
+            .checked_add(emission.burned())
+            .expect("a fixture chain's burned fold fits u64");
+        let coins_generated = emission.coins_generated;
         let listed_before = height
             .to_raw()
             .checked_sub(1)
@@ -328,8 +319,8 @@ impl GrownTree {
     }
 }
 
-/// Only what `tree_after` reads is answered from the tree; the block-side
-/// reads are not this view's job (the pipeline's store answers those).
+/// The tree `tree_after` grows, and the block records, weight window and
+/// burned fold the reward chain reads when a block is pushed.
 impl<'id> ChainView<'id> for GrownTree {
     type Fault = Infallible;
 
@@ -377,7 +368,16 @@ impl<'id> ChainView<'id> for GrownTree {
     }
 
     fn tip(&self) -> Result<Option<Tip>, Infallible> {
-        Ok(None)
+        let Some(block) = self.blocks.last() else {
+            return Ok(None);
+        };
+        let height = BlockHeight::from_raw(
+            u64::try_from(self.blocks.len() - 1).expect("a fixture chain fits u64"),
+        );
+        Ok(Some(Tip {
+            height,
+            hash: block.hash,
+        }))
     }
 
     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
@@ -400,11 +400,8 @@ impl<'id> ChainView<'id> for GrownTree {
         Ok(Self::recorded(&self.outputs, height))
     }
 
-    /// Nothing a driver-built chain lists carries a fee, so nothing burns
-    /// (CEN-F17 at zero fees is the split at zero) — the fold the store
-    /// would hold for these chains.
     fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
-        Ok(AtomicUnits::ZERO)
+        Ok(self.total_burned)
     }
 }
 
@@ -459,94 +456,8 @@ pub fn spend(key_image: [u8; 32]) -> Transaction {
     fixture::listed(key_image)
 }
 
-/// A **serve-credit-only** body (CEN-H20's shape, the harness's
-/// `serve_credit_only`) whose one vin **parses** as the kept half of a pass
-/// record for `(p, shard, epoch)` — the key CEN-G7 collides on. No
-/// `pqc_auths`, no signature slot: the mutation family can twin it by
-/// moving its `unlock_time` and the twin is still a valid body under every
-/// landed row (the countersignature is CEN-J10's, pending).
-pub fn serve_credit_body(p: [u8; 32], shard: u64, epoch: u64) -> Transaction {
-    use shekyl_archival_retention::ArchivalServeCreditResponse;
-    let kept = ArchivalServeCreditResponse {
-        p_canonical_id: p,
-        shard_id: shard,
-        settlement_epoch: epoch,
-        ed25519_countersignature: [0x5c; 64],
-    };
-    let mut tx = fixture::serve_credit_only([0; 32]);
-    tx.prefix.inputs = vec![Input::ServeCredit {
-        canonical_bytes: kept.serialize().expect("a kept half serializes"),
-    }];
-    tx
-}
-
-/// A spend of `key_image` that also posts a bond for `p` — the harness's
-/// balanced bond post (CEN-H21's shape), unanchored and unsigned like every
-/// body `chain_listing_with` places: anchoring signs it. Two calls with two
-/// key images and one `p` are the pair CEN-G10 refuses.
-pub fn bond_post_body(key_image: [u8; 32], p: [u8; 32]) -> Transaction {
-    use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
-    use shekyl_wire::{BondPost, BondPostKind, Holdings};
-    fixture::balanced_bond_post(
-        key_image,
-        BondPost {
-            hybrid_public_key: vec![0xb1; PQC_HYBRID_SINGLE_KEY_LEN],
-            p_canonical_id: shekyl_types::PCanonicalId::from_bytes(p),
-            kind: BondPostKind::Other(2),
-            holdings: Holdings::CompleteTree,
-            bonded_total_atomic: 0,
-            bond_credit: 0,
-            bond_debit: 0,
-        },
-    )
-}
-
-/// A spend of `key_image` that also carries an emission claim by the
-/// persona whose hybrid pubkey is `p_pubkey_fill` repeated, for `epochs` —
-/// one `(P, E)` pair per epoch, CEN-G9's keys — the harness's balanced
-/// emission (CEN-H22's shape) paying a reward of one atomic unit. The vin
-/// is the `emission_wire` round-trip shape, one work claim and one amount
-/// per epoch; the emission rows that judge its content are slice 8's.
-pub fn emission_claim_body(key_image: [u8; 32], p_pubkey_fill: u8, epochs: &[u64]) -> Transaction {
-    use shekyl_archival_retention::{
-        ArchivalRewardEmissionVin, HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking,
-        ShardSet, ShardWorkEntry, WorkEpochClaim,
-    };
-    use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
-    let vin = ArchivalRewardEmissionVin {
-        p_pubkey: vec![p_pubkey_fill; SINGLE_KEY_CANONICAL_LEN],
-        holdings: HoldingsDescriptor {
-            kind: HoldingsKind::ShardSetCompact,
-            shard_ids: ShardSet::new(vec![7]).expect("one shard"),
-        },
-        settlement_epochs: epochs.to_vec(),
-        work_claim: epochs
-            .iter()
-            .map(|&epoch| WorkEpochClaim {
-                epoch,
-                shard_entries: vec![ShardWorkEntry {
-                    shard_id: 7,
-                    serve_credit_bit: true,
-                    scarcity_micro: 1_000,
-                }],
-            })
-            .collect(),
-        backing: MembershipOnlyBacking {
-            proof: vec![0xee; 64],
-            pseudo_out: [0x22; 32],
-            backing_pubkey: vec![0xb2; SINGLE_KEY_CANONICAL_LEN],
-            tree_depth: 3,
-        },
-        reward_amount_plain: epochs.iter().map(|_| 1_000_000).collect(),
-        auth_backing: vec![0xc3; SINGLE_SIG_CANONICAL_LEN],
-        auth_claim: vec![0xd4; SINGLE_SIG_CANONICAL_LEN],
-    };
-    fixture::balanced_emission(
-        key_image,
-        vin.serialize().expect("an emission vin serializes"),
-        1,
-    )
-}
+#[cfg(feature = "pipeline")]
+pub use crate::mutation_bodies::{bond_post_body, emission_claim_body, serve_credit_body};
 
 /// The first height at which a block may list a spend (CEN-I11: the
 /// reference is at least `REFERENCE_BLOCK_MIN_AGE` below the connecting
@@ -608,14 +519,13 @@ pub fn block(
     block_with_nonce(root, height, previous, listed, reward, 7)
 }
 
-/// What CEN-F18 owes the coinbase of a block at `height` on `previous`
-/// listing `listed`, over the chain `tree` holds — the rules harness's
-/// one pricer (`priced_at`: the 4.F definitions, the medians, the block's
-/// weight, the paid reward, the split and the fee split, over this tree as
-/// the validator will read the store), so a driver-built block pays what
-/// the validator computes and never a second copy of it. `0` at genesis
-/// (the configured emission stands) and for a block the chain refuses
-/// before F18.
+/// What CEN-F18 owes the coinbase of the next block on `tree`, listing
+/// `listed` — [`fixture::priced`], which settles through the validator's
+/// reward chain. `height` is that next height: a caller that prices a
+/// different one is naming a block this tree is not building.
+///
+/// `0` at genesis (the configured emission of a zero coinbase stands) and
+/// for a block the chain refuses before F18.
 pub fn reward_for(
     tree: &GrownTree,
     root: CurveTreeRoot,
@@ -623,12 +533,19 @@ pub fn reward_for(
     previous: BlockHash,
     listed: &[Transaction],
 ) -> u64 {
-    let provisional = block(root, height, previous, listed, 0);
-    let priced = fixture::priced_at(
-        tree,
-        BlockHeight::from_raw(height),
-        Candidate::new(provisional, listed.to_vec()),
+    assert_eq!(
+        height,
+        tree.built(),
+        "reward_for prices the block this tree connects next"
     );
+    let provisional = block(root, height, previous, listed, 0);
+    let priced = match fixture::priced(tree, Candidate::new(provisional, listed.to_vec())) {
+        Ok(candidate) => candidate,
+        Err(ViewRead::View(never)) => match never {},
+        Err(ViewRead::Corrupt(corrupt)) => {
+            panic!("the fixture chain's parent reads are corrupt: {corrupt:?}")
+        }
+    };
     priced.block.miner_transaction.prefix.outputs[0].amount
 }
 
