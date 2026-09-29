@@ -111,13 +111,15 @@ fn run_one(epee_bin: &Path, seed: u64) -> Result<(), Error> {
                 drop(fs::remove_dir_all(&keep));
                 return Ok(());
             }
-            for finding in &findings {
-                eprintln!("{finding}");
-            }
-            Err(Error::new(format!(
+            let mut message = format!(
                 "seed {seed}: hosts differ; transcripts in {}",
                 keep.display()
-            )))
+            );
+            for finding in &findings {
+                message.push('\n');
+                message.push_str(&finding.to_string());
+            }
+            Err(Error::new(message))
         }
         (Err(seam_err), Err(epee_err)) => Err(Error::new(format!(
             "seed {seed}: seam: {seam_err}; epee: {epee_err}"
