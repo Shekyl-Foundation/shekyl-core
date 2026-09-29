@@ -490,8 +490,32 @@ convenience.)
 Net: three tables typed (`slash_log`, `slash_applied`, the accumulator), six
 deleted (`shard_segment`, the four dead journals, `epoch_close_log`), one
 dissolved (`budget_accrual`), one held; `tables.snap` moves by **−7 + 1**;
-the `NOT_PORTED` register gains six rows and `RUST_ONLY_TABLES` one; layout
+the `NOT_PORTED` register gains seven rows and `RUST_ONLY_TABLES` one; layout
 16 → 17.
+
+**Which bijection direction each deletion is — decided here, not at the
+gate (2026-09-29, on the maintainer's question).** "Dissolved into
+`undo_log`" is **not** S-ALT's fourth direction (`FOLDED_INTO`: *the bytes
+live as a field of the host's record*, `schema.rs:27–38`) and not a sixth —
+it is the **fifth**, `NOT_PORTED` (`schema.rs:47–59`: *the job the table did
+for LMDB is done here by a function, **by the undo journal**, or by a table
+that already holds the facts*), minted by E3 for exactly this relationship
+with `pending_tree_drain` and `block_pending_additions` as its precedent
+rows (CTW-3). The distinction matters because a `FOLDED_INTO` row naming
+`undo_log` as host would **pass the gate mechanically** — `UNDO_LOG` is a
+definition in the file — while making a false claim: `undo_log` holds
+pre-images of the *bond record*, not the `Archival*RevertValue` bytes; the
+requirement (reversibility) is met by a mechanism, and the bytes are not the
+same bytes. So: the four revert logs and `archival_epoch_close_log` →
+`NOT_PORTED` (reason: the undo journal); `archival_budget_accrual` →
+`NOT_PORTED` (reason: `archival_budget_accruing`, a `RUST_ONLY_TABLES` row —
+E3's `pending_tree_leaves` / `curve_tree_leaf_counts` pair is the precedent
+for a re-keyed job); `archival_shard_segment` → `NOT_PORTED` (reason:
+retired, `PDM-Q12`; the register says of itself it is not a deletion
+register and the C++ table lives until cutover). The slash log's marker row
+kind is not a table and enters no register; its retirement is the codec's
+doc (`SlashLogEntry` admits one kind). A sixth direction is not needed, and
+would have been the widening the question warned against.
 
 ### 3.5 The accrual — `ARW-Q3`, default: one row per epoch, not one per height
 
@@ -702,7 +726,7 @@ event kind; those are the two commits most likely to grow.
 
 | # | Commit | Cost | What would make it larger |
 | --- | --- | --- | --- |
-| 1 | **Tables and types.** `archival_slash_log`, `archival_slash_applied` typed; `archival_budget_accruing` added (Rust-only); six tables deleted (`NOT_PORTED` rows); `total_bonded_atomic` not minted; layout 17; snapshots; SI-19…22 minted. `BondRecord` and its vocabulary to `shekyl-types` (`ARW-Q8`). | M | a hidden reader of a deleted table (falsify: `rg` each name outside `schema.rs` and `apply_policy.rs` before cutting) |
+| 1 | **Tables and types.** `archival_slash_log`, `archival_slash_applied` typed; `archival_budget_accruing` added (`RUST_ONLY_TABLES`); seven tables leave as `NOT_PORTED` rows — the fifth direction, not `FOLDED_INTO` (§3.4's last paragraph says why); `total_bonded_atomic` not minted; layout 17; snapshots; SI-19…22 minted. `BondRecord` and its vocabulary to `shekyl-types` (`ARW-Q8`). | M | a hidden reader of a deleted table (falsify: `rg` each name outside `schema.rs` and `apply_policy.rs` before cutting) |
 | 2 | **`ChainView` grows the archival reads** (§2.3) — trait, `BatchView`, `MockView` held to each other by the conformance test; A2 `slash_log_after` and `holds_shard_at` land (the `SAR-Q7` pair), with the LMDB as-of-height cases (`archival_substrate_lmdb.cpp:1674–1893`) as Rust tests. | M | `MockView` needing archival state it cannot construct honestly — the signal that a `Mock*` is being built (§5.2) |
 | 3 | **The shard universe** (§3.7): `closed_shards` on the view; CEN-F17's operand ruled; `segment_leaf_count` out of the JSON; the consensus-side `leaves_per_segment` readers deleted. | S | a wallet-side reader in the consensus closure (falsify: `cargo tree -i shekyl-fcmp -e features` shows the freeze module reached from `shekyl-chain-rules`) |
 | 4 | **The transition on the verdict** (§3.1): `ArchivalDelta` derived in `validate` from the vin arms and the folds; the slash scan and the close as functions of the view; carried on `ChainValid`. Tests: each arm on a driven chain; the KAT B3 pop-and-re-close on the accumulator shape. | **L** | the slash scan's view reads being the wrong shape (a scan over `archival_bond` needs a range read the view does not have — this is where it shows) |
@@ -807,5 +831,5 @@ this document, `SAR-Q7`'s staged row closed; `IMPLEMENTATION_INDEX.md`
 
 | Date | Entry |
 | --- | --- |
-| 2026-09-29 | **Round 1 RULED (maintainer, PR #904) — defaults held on all nine, reasons of record replacing the ones posed (§8).** Q1 on slice 7's Q5 test (the validator computes the folds for 4.J anyway; the delta is free to carry; the third application of E3's arrangement, so a precedent). Q2 on ARW-2's discriminator (a reversal-only journal is a view of the undo log; the marker dissolves with the five). Q3 and Q9 named as one principle with two dispositions, SI-20 making the second safe. Q4 as the absence-as-value class caught mid-contradiction. Q8 as `SAR-Q2`'s clause firing on its own trigger — satisfied, not invoked. **ARW-1 confirmed at `blockchain.cpp:4734–4735`** and its value stated: the misdiagnosis it prevents (a divergence at exactly a writer bug's height, on the one closed-epoch chain). **The corpus now says which rows no block produced:** `out_of_band_writes` in every manifest, written by the generator from the injection it made, `[]` for five chains and the injected serve credit for `emission-claim`; `vectors_tests::only_the_named_chains_carry_out_of_band_writes` holds the list both ways (§3.8, §7). **`IngestEvent::Inject`'s scope stated** so it cannot become a general door (regtest-only, one row kind, the injector its sole producer, in no captured chain but the one). **The E6 boundary ruled as §2.2 drew it** — `PDM-Q6` item 4 row 1 was a crate assignment, not a lane binding. **`LMDB_WRITE_ATOMICITY_AUDIT.md` §10 moves into commit 6** with the digest. CEN-L10 → bucket 3 *at cutover, not here* confirmed as the L1 lesson: a census row tracks the implementation's state, not the plan's intent. Implementation may begin against §6 once this PR lands. |
+| 2026-09-29 | **Round 1 RULED (maintainer, PR #904) — defaults held on all nine, reasons of record replacing the ones posed (§8).** Q1 on slice 7's Q5 test (the validator computes the folds for 4.J anyway; the delta is free to carry; the third application of E3's arrangement, so a precedent). Q2 on ARW-2's discriminator (a reversal-only journal is a view of the undo log; the marker dissolves with the five). Q3 and Q9 named as one principle with two dispositions, SI-20 making the second safe. Q4 as the absence-as-value class caught mid-contradiction. Q8 as `SAR-Q2`'s clause firing on its own trigger — satisfied, not invoked. **ARW-1 confirmed at `blockchain.cpp:4734–4735`** and its value stated: the misdiagnosis it prevents (a divergence at exactly a writer bug's height, on the one closed-epoch chain). **The corpus now says which rows no block produced:** `out_of_band_writes` in every manifest, written by the generator from the injection it made, `[]` for five chains and the injected serve credit for `emission-claim`; `vectors_tests::only_the_named_chains_carry_out_of_band_writes` holds the list both ways (§3.8, §7). **`IngestEvent::Inject`'s scope stated** so it cannot become a general door (regtest-only, one row kind, the injector its sole producer, in no captured chain but the one). **The E6 boundary ruled as §2.2 drew it** — `PDM-Q6` item 4 row 1 was a crate assignment, not a lane binding. **`LMDB_WRITE_ATOMICITY_AUDIT.md` §10 moves into commit 6** with the digest. CEN-L10 → bucket 3 *at cutover, not here* confirmed as the L1 lesson: a census row tracks the implementation's state, not the plan's intent. **Two smaller records from the same round.** (i) The maintainer's ARW-1 pin read `:4735–4736`; the tree shows `:4734–4735` — the symbol pair was right and the range was read off a `sed` window rather than derived from the matched lines, which is how an off-by-one enters a citation that is otherwise correct; cite the lines the match returned. (ii) Commit 1's deletions land in `NOT_PORTED`, the bijection gate's fifth direction, not `FOLDED_INTO` — decided at pre-flight rather than at the gate, because a `FOLDED_INTO` row naming `undo_log` would pass mechanically while claiming the wrong relationship (§3.4). Implementation may begin against §6 once this PR lands. |
 | 2026-09-29 | **Round 0 executed** at `dev@cac2dadbe` in a fresh worktree off `dev` HEAD (#889 merged). Fourteen findings (ARW-1 … ARW-14); nine questions posed with defaults (ARW-Q1 … Q9). The surface's C++ writers map to one verdict-borne delta and eight phase-body writes; five of six journals dissolve into the undo log and one is history; the slash scan's shard enumeration walks a retired table; the accrual and `total_bonded` are views; the corpus's one closed-epoch chain depends on an injected write the replay must model as an event, and no captured chain carries the transaction kinds slice 8's rules will judge — the C++ is an oracle for bonds, accrual, closes and claims only. The §7.1.1 gate is re-read and its discharge is inside the increment (commits 6–8), with the seam at which the PR may split named (§6.1). Families registered at birth. FOLLOWUPS `:176` discharged by writing the constraint into the parent plan (§2.6). No code. |
