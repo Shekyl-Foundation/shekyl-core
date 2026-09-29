@@ -231,6 +231,14 @@ And not a consumer of the mining JIT for validation (§1.3).
   is parity evidence. The pipeline's output file is NOT-PARITY-EVIDENCE for as
   long as any fact is passed through or any enforced row unimplemented — the
   honest state E2 grades against.
+  **UPDATE 2026-09-29 (E6 slice 7 wave B, the two items above):** the six
+  passed-through fields became the verdict's one by one — `root_after` (E3),
+  `weight`/`long_term_weight`/`long_term_effective_median`/`coins_generated`
+  (slice 7 commits 4–5), `burned` (F17) — and the type went with its last
+  member: `connect(ChainValid, RuleSetId)` takes the verdict alone,
+  `Provenance` has two components, the trace's six facts are the oracles'
+  comparison inputs only (`Trace::borrow`), and the grader's `Borrowed`
+  arm is deleted (`shekyl_e2_grade_v2`). Store schema 17.
 - `conformance.rs`: the CSR-3a grader exists as pure logic —
   `ConformanceState::{CheckedConformant, Divergent, Unreviewed}`, `Acceptance`,
   `FailureReason`, `ReviewedDivergence`, `FinalVerdict`, truth-table tested.
@@ -453,12 +461,32 @@ falsifier is the census, not a date (rule 22).
 | `FutureTimestamp` | `timestamp` = `clock + FTL + 1` — **closes §5's FTL row** | **CEN-C1** | `validate` | Implemented | — |
 | `StaleTimestamp` | `timestamp` = `0`, at or below every MTP median | **CEN-C2** | `validate` | Implemented | — |
 | `PowUnderWrongSeed` | nonce re-mined so the longhash **satisfies the target under a wrong seed and fails it under the true seed** (D1b's `check_hash`, both legs); the pipeline claims the true seed (RD-Q5), so D2 hashes under it and D1 refuses. The seed is not in the block — "bad seed" is a block *mined* against the wrong one | **CEN-D1** | `validate` | Implemented | — |
-| `WrongReward` | the coinbase's clear output amount off by one | **CEN-F18** *(re-keyed 2026-09-22 from F13 — E6 slice 4 Q8: F13 is the base-subsidy **definition**, a value pin that refuses nothing; the predicate a wrong amount trips is F18, exact payout. The family's branch is chosen by `CenRow::status`, so with F13 `Implemented` and the key unchanged the test would have expected a refusal F13 cannot produce.)* | `validate` (4.F) | **Pending** (blocked on CEN-G6's median, slice 7) | the block **connects** — Rust has the emission *definitions* (F13, F15, F20) but not the exact-payout check; the family pins the acceptance so the gap is a red test the moment F18 lands, not a surprise in a security review |
-| `ReorderedBodies` | two listed bodies swapped; the header's `tx_hashes` untouched | **CEN-G2** (body ↔ hash agreement) | `validate` (4.G) | **Pending** | the block **connects**. The corpus *writer and reader* refuse this shape as a source fault (RD-F15) — that is artifact hygiene, not the verdict; the in-memory family reaches `validate` with it and shows the rule is absent |
+| `WrongReward` | the coinbase's clear output amount off by one | **CEN-F18** *(re-keyed 2026-09-22 from F13 — E6 slice 4 Q8: F13 is the base-subsidy **definition**, a value pin that refuses nothing; the predicate a wrong amount trips is F18, exact payout. The family's branch is chosen by `CenRow::status`, so with F13 `Implemented` and the key unchanged the test would have expected a refusal F13 cannot produce.)* | `validate` (4.F) | **Implemented** *(slice 7 wave B, 2026-09-29 — the family's last pending row)* | refused at **`Locus::Tx { slot: Miner }`**: the coinbase's total against the figure the block owes it (`miner_emission + miner_fee_income`, F16 and F17's legs), one unit over or under. Until wave B the block **connected** — Rust had the emission *definitions* (F13, F15, F20) but not the exact-payout check, and the family pinned the acceptance (a red test the moment F18 landed, which is how the pin was retired: the census chose the other branch and the pinned-gap arm went with its last member) |
+| `ReorderedBodies` | two listed bodies swapped; the header's `tx_hashes` untouched | **CEN-G2** (body ↔ hash agreement) | `form` (4.G, a `FormRule` — slice 7 Q7: L1's class, not L1's severity) | **Implemented** *(slice 7 commit 6, 2026-09-29; the family's pending row since increment 3)* | until G2 the block **connected**. The corpus *writer and reader* refuse this shape as a source fault (RD-F15) — that is artifact hygiene, not the verdict; the in-memory family reached `validate` with it and showed the rule absent. **Place, named 2026-09-29 from slice 7 Q8 before the rule:** `Locus::Tx { slot: Listed(0) }` — the rule computes the *first mismatching index*, and swapping the first two bodies puts it at 0 |
 | `DoubleSpend` | a listed spend reuses a key image an earlier block spent | **CEN-I7** (+ CEN-L1, the validator's intra-block check; SI-1 is the store's belt beneath both) | `validate` (4.I) | **Implemented** *(E6 slice 6 commit 4, 2026-09-25)* | refused at `Locus::Input { slot: Listed(n), input }`, the place this row named before the rule existed. Until then the pinned shape was: `validate` accepts; `connect` arms **SI-1** `KeyImageNotFresh` and the run ends in a **halt** (`PipelineFault`, the writer `Over`) — C2-R8's taxonomy, *a belt firing is the validator's hole*. The hole is closed; the belt's remaining subject is the spent-keys table moving under a judged token (`connect_fixtures::connect_with_image_planted_under_the_token`) |
 | `UnknownReference` | a listed spend's `referenceBlock` replaced by a hash the chain never held (the harness's `UNRECORDED_REFERENCE`); the header re-lists the changed body so the violation is one | **CEN-I10** | `validate` (4.I) | **Implemented** *(E6 slice 6 commit 5, 2026-09-25 — written before the rule, as this table's rows are)* | refused at `Locus::Tx { slot: Listed(n) }` — the transaction, as the C++ names it (`blockchain.cpp:4113`); no input is singled out because the reference is the transaction's, not an input's |
 | `ReferenceTooRecent` | a listed spend's `referenceBlock` replaced by the candidate's own parent — a block the chain holds, one block old, `MIN_AGE − 1` too young | **CEN-I11** | `validate` (4.I) | **Implemented** *(E6 slice 6 commit 5, 2026-09-25)* | refused at `Locus::Tx { slot: Listed(n) }`. The other edge — `MAX_AGE + 1` too old — needs a chain past 100 blocks, which the fixture family's `root_after` bytes (`0xc0 + h`) cannot build; that boundary is the mock's (`I11::window`, the arithmetic alone) and the driver holds the young edge |
 | `ForgedSignature` | one byte of a listed spend's first `pqc_auths` slot's `hybrid_signature` flipped; the header re-lists the changed body so the violation is one (the auths are the txid's third component) | **CEN-I18** | `validate` (4.I) | **Implemented** *(E6 slice 6 commit 8, 2026-09-25 — written with the rule, the fixture substrate having been signed first)* | refused at `Locus::Input { slot: Listed(n), input: 0 }` — the C++ names the transaction (`reject_form` at `blockchain.cpp:4280`); the Rust names the input whose signature failed, as I7 does. The wrong-message case (a body that changed under a standing signature) is the mock's (`i18_refuses_a_signature_over_a_body_that_has_since_changed`): a driven chain's spends are signed once, by the wallet, and the driver forges the signature rather than the body |
+| `MissingBody` | one listed body dropped; the header still declares its hash (one more hash than bodies) | **CEN-G2** (length arm) | `form` (4.G) | **Implemented** *(slice 7 commit 6, 2026-09-29 — the row written the same day, before the rule)* | until G2 the block **connected** — bodies arrived positionally and nothing counted them against the declared list (slice 7 §3.1; measured by `body_pairing_tests`, whose pins flipped with the rule). Refused at `Locus::Block` — the rule's evidence is two lengths, no slot; shares the locus with F14's `OverweightBlock` and with B5/C1/C2/D1, each separated by trigger (Q8's second test) |
+| `SubstitutedBody` | one listed body replaced by a transaction the header never lists; the count unchanged | **CEN-G2** (index arm) | `form` (4.G) | **Implemented** *(slice 7 commit 6, 2026-09-29)* | until G2 the block **connected** and the unlisted body's outputs were recorded under a block whose identity did not cover them (measured, `body_pairing_tests`, slice 7 commit 2; the same test now asserts the refusal and an empty output table). Refused at `Locus::Tx { slot: Listed(i) }`, *i* the first index whose body's hash is not the declared one — the rule computed exactly *i* |
+| `RelistedTransaction` | a body an earlier block already carries is listed again; the header lists its hash | **CEN-G1** (chain arm: *no listed tx may already exist in the chain*) | `validate` (4.G), **before the slot loop** | **Implemented** *(slice 7 commit 7, 2026-09-29)* | before G1, **CEN-I7 refused it** at `Locus::Input` — the re-listed spend's key image is spent — a refusal by the wrong row for this mutation (`scenario_tests` pinned that reading until commit 7 moved it). G1 lands **before** the slot loop (§4 of slice 7; the C++'s `tx_exists` before `check_tx_inputs`), so the refusal is **G1 at `Locus::Tx { slot: Listed(i) }`**, the slot whose hash the rule looked up. **This is the slice's ordering pin:** a G1 placed after the loop never sees the hash — I7 fires first — and the family asserts the *row*, not that a refusal happened; `ExpectedPlace` is what makes a flipped order red. The rule-level twin is `body_tests::cen_g1_refuses_a_relisted_spend_before_i7_can`, whose control lists a *different* body spending the same image and gets I7 |
+| `DoubledListing` | the same body listed twice in one block; the header lists its hash twice | **CEN-G1** (intra-block arm: *earlier in this block*) | `validate` (4.G), before the slot loop | **Implemented** *(slice 7 commit 7, 2026-09-29)* | before G1, **CEN-L1 refused** the doubled spend at `Locus::Input` (the image appears twice in the block). Now **G1 at `Locus::Tx { slot: Listed(second) }`** — the second occurrence, the first being the one it duplicates. Same ordering dependence as `RelistedTransaction`; a coinbase-only chain cannot carry it (`TooFewBodies`) |
+| `DuplicateServeCredit` | two serve-credit vins in one block carrying the same `(P, shard, E)` — two listed bodies, or two vins of one body | **CEN-G7** | `validate` (4.G), after the slot loop, beside L1 | **Implemented** *(slice 7 commit 7, 2026-09-29)* | before G7 the block **connected** — no cross-transaction pass beyond L1 existed in the Rust validator. Refused at `Locus::Input { slot, input }` at the **second** occurrence, the vin the key was read from; distinguished from L1/I7/I18 on the same locus by the input variant it keys on. The twin is the body itself re-listed under a moved `unlock_time` (a serve credit has no key image, so the second copy is a second txid carrying the same `(P, shard, E)`); `Unmutable` on a chain with no serve-credit body to duplicate (`NoArchivalBodyToDuplicate`, named) — which is every captured chain (slice 7 §3.7) |
+| `DuplicateClaim` | two emission claims in one block naming the same `(P, E)` | **CEN-G9** | `validate` (4.G), after the slot loop | **Implemented** *(slice 7 commit 7, 2026-09-29)* | before G9 the block **connected**. Refused at `Locus::Input { slot, input }` at the second occurrence. **The positive fixture is part of this row:** two claims by one `P` for *different* epochs is the pair G9 **admits**, and `body_tests` carries it as a control so the rule cannot be satisfied by refusing every second claim. The twin is a second body the environment supplies (a claim spends, so its copy needs a fresh key image — `Environment::twins`); `Unmutable` without a claim body to duplicate, or without a twin (`NoTwinSupplied`) |
+| `DuplicateBondPost` | two bond posts for one `P` in one block | **CEN-G10** | `validate` (4.G), after the slot loop | **Implemented** *(slice 7 commit 7, 2026-09-29)* | before G10 the block **connected**. Refused at `Locus::Input { slot, input }` at the second occurrence; a supplied twin as for `DuplicateClaim`. The bodies are the harness's balanced archival shapes (`balanced_bond_post`, `balanced_emission`), promoted from the H21/H22 controls so a twin passes `tx_form` — the first draft's did not, and H22 said so |
+| `OverweightBlock` | bodies listed until the block's weight (coinbase included) exceeds `2 × M`, the effective median in force for the candidate; each body valid on its own | **CEN-F14** (the weight-limit arm; the coinbase's claim is F18's) | `validate` (4.G/4.F), the definition chain `judge_emission` | **Implemented** *(slice 7 commit 5, 2026-09-28)* | refused at **`Locus::Block`** — the evidence is the block's summed weight, no slot. Written after the rule, and said so: F14 landed with commit 5 while this row was owed since commit 2; the row is written from Q8's locus and the census cell, not from `reward.rs`, and the variant's test runs on the refusal branch from its first run. The live-lane twin is `regtest_e2e::e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx` (the C++ refuses one body over, accepts at the bound). The mutation itself landed with commit 7: the environment supplies the spare bodies (`Environment::overweight`, each a valid spend with its own key image) and the variant lists them until the weight passes the bound; `Unmutable` without a supply (`NoBodySupply` — the corpus census's case) or when the supply runs out first (`BodySupplyExhausted { reached, bound }`) |
+
+**Amendment 2026-09-29 (slice 7 commits 6–7, written before their code).**
+Slice 7 §5 row 7 stated these eight rows were "written spec-first at
+commit 2"; commit 2 landed 2026-09-26 and they were not. The plan asserted
+a state and nothing checked it — the same class §3.4 of slice 6 and §3.11
+of slice 7 record for other subjects. They are written now, still before
+the code, from slice 7 Q8's two tests (a locus is derivable from the
+refusal's own evidence; rows sharing a locus and a trigger need a
+distinguishing mutation) — the direction that can catch a mis-keyed row,
+which "derive the rows from what the code does" cannot. What this costs
+against the original sequencing: nothing in the rows; the disclosure is
+the point.
 
 **Environment a mutation needs**, supplied by the caller (`Environment`): the
 clock the substrate will report (C1's bound is computed from it, not
@@ -542,7 +570,7 @@ regtest C++ leg (item 8); tag `0x03`.
 | ~~C1's FTL refusal is not exercised by corpus replay~~ — **CLOSED 2026-09-22** by the mutation family's `FutureTimestamp` case (§3.10): `timestamp = clock + FTL + 1`, refused on CEN-C1 through the real pipeline (`mutation_tests::the_family_lands_on_its_named_rows`) | historical blocks are always below `now + FTL`; a *mutated* one is not | falsify by that test's C1 arm going red |
 | `--fixed-difficulty` on regtest runs (RD-Q7) | the bench needs real RandomX cost at a reachable target | production nets refuse the flag by type (`for_network` cannot yield `Fixed`, pinned) |
 | `drs_bench.py`'s lowered target | benchmark reproducibility on the provisioning floor | the artifact records the target; `drs_artifact.py` refuses cross-condition ratios |
-| The redb file's `Provenance` is NOT-PARITY-EVIDENCE throughout E2 | six facts passed through; enforced rows unimplemented | `passed_through().count() == 0 && coverage_gaps().is_empty()` — the genesis gate |
+| The redb file's `Provenance` is NOT-PARITY-EVIDENCE throughout E2 — **the first ground CLOSED 2026-09-29 (wave B): no fact is passed through and the component is deleted; the second stands** | ~~six facts passed through~~; enforced rows unimplemented | `coverage_gaps().is_empty()` over the two remaining components — the genesis gate |
 | **Pruned corpus source — NOT PERMITTED** | bodies are the validator's input (RD-F8); a pruned source silently yields **fewer bodies than the header lists** (RD-F15) | the corpus writer verifies count / order / hash against `block.tx_hashes` per height and refuses a shortfall naming the height; the reader re-verifies the recorded state. If a pruned-source run is ever allowed, it enters this table as a deviation with its own reopener first. |
 
 ## 6. Findings
@@ -836,17 +864,23 @@ by review size (rule 06), inside one ruled plan; every item keeps its slot.
 ## 8. Expected record at close
 
 The redb file for a replayed chain carries `Provenance` with
-`passed_through = [weight, long_term_weight, coins_generated, burned,
-root_after, long_term_effective_median]` and E6's open coverage gaps —
-NOT-PARITY-EVIDENCE, honestly. **Of the digest's three components, two are
-evidence (block hashes; spent keys — both from real `form` → `validate` →
-`connect`) and one is borrowed (`curve_root`, copied from LMDB through
-`root_after`) and is graded as such** (RD-F7). Register rows grade under RD-Q9's two
-clauses: a rule's **verdict** grades on its own evidence even against a
-borrowed oracle; the digest **component** a borrowed fact feeds grades
-not-evidence; a *producer* of a borrowed value grades not-evidence on both
-until Rust derives it — carried as two typed fields per row, and the artifact
-names them. **The dataset-mode
+~~`passed_through = [weight, long_term_weight, coins_generated, burned,
+root_after, long_term_effective_median]`~~ *(records-was, as written
+2026-09-19; **every one of the six is the verdict's since 2026-09-29 and the
+component is deleted** — E3 for the root, E6 slice 7 for the rest)* and
+E6's open coverage gaps — NOT-PARITY-EVIDENCE, honestly. ~~**Of the
+digest's three components, two are evidence (block hashes; spent keys —
+both from real `form` → `validate` → `connect`) and one is borrowed
+(`curve_root`, copied from LMDB through `root_after`) and is graded as
+such** (RD-F7).~~ *(records-was: all three are evidence since E3.)*
+Register rows grade under RD-Q9's two clauses: a rule's **verdict** grades
+on its own evidence even against a borrowed oracle; the digest
+**component** a borrowed fact feeds grades not-evidence; a *producer* of a
+borrowed value grades not-evidence on both until Rust derives it — carried
+as two typed fields per row, and the artifact names them. *(The clauses
+are the law; their `Borrowed` carrier left the grader with the last
+borrowed fact on 2026-09-29, `shekyl_e2_grade_v2`. A future borrowed
+oracle re-mints it under these clauses, not a new rule.)* **The dataset-mode
 measurement is part of the record** (inventory item 7): light-mode wall-clock
 per hash and per block on the provisioning floor, as an artifact the RandomX
 lane's option (a) decision reads.

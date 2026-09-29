@@ -7,12 +7,12 @@
 //! `tx_tests` stays the classification, the limits, and the rows whose
 //! subject is not a curve.
 
-use super::{emission, refused_listed, refused_lone, spend, with_inputs, KI};
+use super::{emission, refused_listed, refused_lone, with_inputs, KI};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::harness::fixture::{
-    anchored_on, candidate_on, coinbase, listed, multiple_of_g, serve_credit_only, spendable_chain,
-    G, TWO_G,
+    anchored_on, balanced_bond_post, balanced_emission, candidate_on, coinbase, listed,
+    mask_committing, multiple_of_g, point, serve_credit_only, spendable_chain, G, TWO_G,
 };
 use crate::harness::{assert_refused, formed_on, judged};
 use crate::rule_set::RuleSet;
@@ -25,69 +25,31 @@ use shekyl_wire::{Ct, Input, Transaction};
 
 // ---- the adopted crypto rows: H7, H17, H18, H21, H22 --------------------
 
-/// `k·G + amount·H`, compressed: a mask that commits to `amount` under the
-/// crate's own `H` (`shekyl_ct_balance::amount_commitment`) with `k·G` as
-/// its blinding — what a balanced archival fixture needs and what the
-/// production rules only ever *verify*. Test-only curve arithmetic.
-fn mask_committing(k: u64, amount: u64) -> [u8; 32] {
-    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
-    use curve25519_dalek::scalar::Scalar;
-    let blinding = ED25519_BASEPOINT_POINT * Scalar::from(k);
-    let value = shekyl_ct_balance::amount_commitment(shekyl_units::AtomicUnits::from_raw(amount));
-    (blinding + value).compress().to_bytes()
-}
-
-/// A **balanced bond post**: one funding spend, the two outputs CEN-I1
-/// requires (masks `2·G` and `3·G`), zero fee, one auth per input, a
-/// non-empty proof, and a pseudo-out of `5·G + credit·H` — so `Σ
-/// pseudoOuts + debit·H = Σ masks + fee·H + credit·H` holds with `(credit,
-/// debit) = (credit, 0)`. The bond's own bytes are the type's minimum.
+/// A **balanced bond post** with `credit` — the harness's
+/// [`balanced_bond_post`] on `KI`, the bond's own bytes the type's minimum
+/// (slice 7 commit 7 moved the shape into the harness so the ingest's
+/// mutation family can build the pair CEN-G10 refuses).
 fn bond_post_tx(credit: u64) -> Transaction {
     use shekyl_wire::{BondPost, BondPostKind, Holdings};
-    let mut tx = listed(KI);
-    tx.prefix.inputs.push(Input::BondPost(Box::new(BondPost {
-        hybrid_public_key: Vec::new(),
-        p_canonical_id: shekyl_types::PCanonicalId::from_bytes([0xB0; 32]),
-        kind: BondPostKind::Other(2),
-        holdings: Holdings::CompleteTree,
-        bonded_total_atomic: 0,
-        bond_credit: credit,
-        bond_debit: 0,
-    })));
-    // The credit lands on the mask side of the balance, so the pseudo-out
-    // carries it: `5·G + credit·H` against the `2·G + 3·G` masks.
-    if let Ct::Fcmp {
-        pqc_auths,
-        prunable: Some(p),
-        ..
-    } = &mut tx.ct
-    {
-        pqc_auths.push(crate::harness::fixture::pqc_auth_filler());
-        p.pseudo_outs = vec![mask_committing(5, credit)];
-    }
-    tx
+    balanced_bond_post(
+        KI,
+        BondPost {
+            hybrid_public_key: Vec::new(),
+            p_canonical_id: shekyl_types::PCanonicalId::from_bytes([0xB0; 32]),
+            kind: BondPostKind::Other(2),
+            holdings: Holdings::CompleteTree,
+            bonded_total_atomic: 0,
+            bond_credit: credit,
+            bond_debit: 0,
+        },
+    )
 }
 
-/// A **balanced emission** with one fee spend: the loud vouts sum to
-/// `reward` (the first carries it, the second is a loud zero — I1 wants
-/// two); the mint rides the debit slot, so `Σ pseudoOuts + reward·H = Σ
-/// masks + fee·H` — a pseudo-out of `5·G` against masks of `2·G + reward·H`
-/// and `3·G`, zero fee.
+/// A **balanced emission** paying `reward` — the harness's
+/// [`balanced_emission`] with the fee spend at point 13 and the vin the
+/// type's minimum.
 fn emission_tx(reward: u64) -> Transaction {
-    let mut tx = with_inputs(vec![spend(13), emission()]);
-    tx.prefix.outputs[0].amount = reward;
-    if let Ct::Fcmp {
-        pqc_auths,
-        base,
-        prunable: Some(p),
-        ..
-    } = &mut tx.ct
-    {
-        pqc_auths.push(crate::harness::fixture::pqc_auth_filler());
-        base.commitments = vec![mask_committing(2, reward), multiple_of_g(3)];
-        p.pseudo_outs = vec![multiple_of_g(5)];
-    }
-    tx
+    balanced_emission(point(13), Vec::new(), reward)
 }
 
 /// The balanced archival fixtures pass every landed row at both sites —

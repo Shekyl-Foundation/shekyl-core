@@ -350,4 +350,20 @@ pub trait ChainView<'id> {
     /// store has carried this membership since S-CHAIN-W (`tx_indices`);
     /// slice 7 lifts it onto the view.
     fn has_transaction(&self, hash: &TxHash) -> Result<bool, Self::Fault>;
+
+    /// Atomic units destroyed by the whole chain **as this view holds it**
+    /// — the `total_burned` fold at parent state (the store's R9 register;
+    /// `0` for a chain that has never burned). A chain-state read, not a
+    /// per-height one: the view *is* parent state (F19's brand), so there
+    /// is no height to key it by and no `AtHeight`.
+    ///
+    /// CEN-F17's operand, with the parent's `coins_generated`: the
+    /// circulating supply the burn ratio reads is `coins_generated −
+    /// total_burned` (FL-R16c), and `total_burned > coins_generated` is a
+    /// store invariant broken — [`Corrupt::BurnExceedsEmission`], never a
+    /// clamp. The C++'s `m_db->get_total_burned()` at `blockchain.cpp:5819`,
+    /// read once and shared with the accrual (G11). E6 slice 7 wave B.
+    ///
+    /// [`Corrupt::BurnExceedsEmission`]: crate::Corrupt::BurnExceedsEmission
+    fn total_burned(&self) -> Result<AtomicUnits, Self::Fault>;
 }

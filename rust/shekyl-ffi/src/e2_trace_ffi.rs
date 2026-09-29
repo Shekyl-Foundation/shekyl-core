@@ -120,7 +120,8 @@ pub unsafe extern "C" fn shekyl_e2_trace_open(
 }
 
 /// The facts for `height` (must be the next consecutive height): the six
-/// passed-through facts in `ConnectFacts` order and the cumulative
+/// recorded facts in the trace's `Facts` order (comparison inputs for the
+/// replay's oracles, never handed to `connect`) and the cumulative
 /// difficulty as two `u64` halves (`lo`, `hi`). `root_after` is 32 bytes.
 ///
 /// # Safety

@@ -130,12 +130,27 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::F14b,
             CenRow::F15,
             CenRow::F16,
+            // Slice 7 commit 9 (wave B): F17 the fee split, F18 the exact
+            // payout — with G11/G13 below.
+            CenRow::F17,
+            CenRow::F18,
             CenRow::F20,
+            // Slice 7 commit 7: G1 before the slot loop
+            // (`CHAIN_RULES_SLICE_7.md` §5 row 7); G7/G9/G10 below, after it.
+            CenRow::G1,
+            // Slice 7 commit 6: the body's pairing, a `FormRule`
+            // (`CHAIN_RULES_SLICE_7.md` §5 row 6).
+            CenRow::G2,
             // Slice 7 commit 4: the two block-weight definitions
             // (`CHAIN_RULES_SLICE_7.md` §5 row 4).
             CenRow::G6,
             CenRow::G6b,
+            CenRow::G7,
+            CenRow::G9,
+            CenRow::G10,
+            CenRow::G11,
             CenRow::G12,
+            CenRow::G13,
             CenRow::H1,
             CenRow::H3,
             CenRow::H4,
@@ -186,6 +201,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::F8,
             CenRow::F19,
             CenRow::F21,
+            CenRow::G3,
+            CenRow::G4,
+            CenRow::G5,
             CenRow::H2,
             CenRow::H8,
             CenRow::H12,
@@ -197,7 +215,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
         "slice 4 Q4: the wire's version and output tag, the view brand, the epoch parameter; \
          slice 5 Q6: the same version (H2, H13) and tag (H12) for listed transactions, one \
          commitment per output (H8), and a parsed transaction as `tx_form`'s input (H23); \
-         slice 6 Q3: the CT type set plus H15 (I2) and the same version a fourth time (I3)"
+         slice 6 Q3: the CT type set plus H15 (I2) and the same version a fourth time (I3); \
+         slice 7 row 8: every listed body through `tx_form` and `tx_against` with no pool \
+         door and no skip (G3, G4), and the full form the only body a block rule sees (G5)"
     );
     assert!(PolicyRow::ALL
         .iter()

@@ -32,7 +32,9 @@ use crate::validate::{form, validate};
 use crate::verdict::{ChainValid, Locus, TxSlot, Verdict};
 use crate::view::{RecordedBlock, Tip};
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_economics::{base_block_reward, effective_emission, TxVolume};
+use shekyl_economics::{
+    base_block_reward, effective_emission, CirculatingSupply, FrozenSegmentCount, TxVolume,
+};
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Output, Transaction};
@@ -77,7 +79,9 @@ fn one_block() -> MockChain {
     MockChain::default().push(recorded(1_000), crate::harness::fixture::root(1))
 }
 
-/// A candidate on `chain` with its coinbase replaced by `f(coinbase)`.
+/// A candidate on `chain` with its coinbase replaced by `f(coinbase)`. The
+/// coinbase arrives priced (`candidate_on`, F18) and `f` edits it after —
+/// a test that moves the amount is a test of F18's arm.
 fn with_coinbase(chain: &MockChain, f: impl FnOnce(&mut Transaction)) -> Candidate {
     let mut candidate = candidate_on(chain, Vec::new());
     f(&mut candidate.block.miner_transaction);
@@ -339,8 +343,11 @@ fn cen_f10_masks_are_non_trivial_and_one_per_output() {
     });
     assert_refused(judge_on(&chain, g_mask), CenRow::F10, MINER);
     // The fixture's `2·G` on a non-zero amount is an honest mask: it is
-    // not `G + amount·H` for that amount.
-    let honest = with_coinbase(&chain, |tx| tx.prefix.outputs[0].amount = 600_000_000_000);
+    // not `G + amount·H` for that amount. The amount is the one F18 owes
+    // the coinbase above genesis (non-zero: the miner leg of the first
+    // block's emission), which `candidate_on` priced.
+    let honest = with_coinbase(&chain, |_| {});
+    assert_ne!(honest.block.miner_transaction.prefix.outputs[0].amount, 0);
     judge_on(&chain, honest).expect("a non-fingerprint mask passes");
     // Arity: two masks for one output (S25's clause, now a row's).
     let two_masks = with_coinbase(&chain, |tx| {
@@ -424,7 +431,12 @@ fn cen_f13_f15_price_the_parents_accumulator() {
     let emission = emission_on(&chain);
     // Height 1: window is min(1, W) = 1 block, the parent's 40 listed txs.
     assert_eq!(emission.tx_volume, TxVolume::window(40, 1));
-    let Subsidy::Derived { base, effective } = emission.subsidy else {
+    let Subsidy::Derived {
+        base,
+        effective,
+        burn,
+    } = emission.subsidy
+    else {
         panic!("height 1 derives, it does not take the configured amount");
     };
     assert_eq!(
@@ -439,6 +451,61 @@ fn cen_f13_f15_price_the_parents_accumulator() {
     // the curve scaled: at forty per block against the baseline the
     // multiplier is not one, so the two differ.
     assert_ne!(base, effective);
+    // F17's two chain operands, read at the same parent state: the supply
+    // is `coins_generated − total_burned` (FL-R16c; the mock burned
+    // nothing here, so the supply is the accumulator), and `n` is the
+    // frozen-segment count of the leaf count at the connecting height —
+    // the mock's tree is empty, so zero.
+    assert_eq!(
+        burn.supply,
+        CirculatingSupply::derive(AtomicUnits::from_raw(ag), AtomicUnits::ZERO)
+            .expect("nothing burned")
+    );
+    assert_eq!(burn.frozen_segments, FrozenSegmentCount::ZERO);
+}
+
+/// F17's supply operand nets the planted burn off the accumulator — the
+/// definitional half FL-R16c ruled (gross emission was the defect) — and a
+/// fold above the accumulator is the corrupt view the validator halts on,
+/// never a zero supply that would price the burn ratio at its floor.
+#[test]
+fn cen_f17_reads_the_supply_net_of_burn_and_halts_when_the_burn_exceeds_the_emission() {
+    let params = economics();
+    let ag = params.emission_curve_asymptote / 3;
+    let planted = AtomicUnits::from_raw(ag / 5);
+    let chain = MockChain::default()
+        .push(
+            recorded_with_emission(1_000, ag, 40),
+            crate::harness::fixture::root(1),
+        )
+        .with_total_burned(planted);
+    let Subsidy::Derived { burn, .. } = emission_on(&chain).subsidy else {
+        panic!("height 1 derives");
+    };
+    assert_eq!(
+        burn.supply,
+        CirculatingSupply::derive(AtomicUnits::from_raw(ag), planted).expect("net supply")
+    );
+
+    let over = AtomicUnits::from_raw(ag + 1);
+    let chain = MockChain::default()
+        .push(
+            recorded_with_emission(1_000, ag, 40),
+            crate::harness::fixture::root(1),
+        )
+        .with_total_burned(over);
+    let fault = chain.with_view(|view| {
+        let mut unrecorded = RuleCoverage::EMPTY;
+        Emission::derive(&view, BlockHeight::from_raw(1), &mut unrecorded)
+            .expect_err("a burn above the emission is a corrupt view")
+    });
+    assert_eq!(
+        fault,
+        Fault::Corrupt(Corrupt::BurnExceedsEmission {
+            coins_generated: AtomicUnits::from_raw(ag),
+            total_burned: over,
+        })
+    );
 }
 
 /// F13's floor: a past-asymptote accumulator is a legitimate perpetual-tail

@@ -15,17 +15,27 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{
-    at, candidate, connect_chain_with_burn, connect_with_image_planted_under_the_token, spend,
-    spend_at, spendable_prefix, FIRST_SPEND_HEIGHT,
+    at, candidate, connect_chain_burning, connect_with_image_planted_under_the_token, spend,
+    spend_at, spend_paying, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::*;
 use crate::codec::{forged, BlockBody, Canonical, Raw, TotalBurnedCell};
 use crate::schema::{BLOCKS, BLOCK_INFO, SPENT_KEYS, UNDO_LOG};
 
-fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<BlockHash> {
-    connect_chain_with_burn(store, listed, 3)
+/// The pop tests' chain: the burn fold must have a pre-image to restore,
+/// so the chain is built on an endowed genesis and its spend blocks may
+/// pay fees (`connect_chain_burning`; the burn is the verdict's, CEN-F17).
+/// Returns the hashes and each block's derived burn.
+fn connect_chain(
+    store: &ChainStore,
+    listed: &[Vec<Transaction>],
+) -> (Vec<BlockHash>, Vec<AtomicUnits>) {
+    connect_chain_burning(store, listed)
 }
+
+/// A one-coin fee: enough to destroy a visible amount on the endowed chain.
+const FEE: u64 = 1_000_000_000;
 
 fn tip_height(store: &ChainStore) -> Option<u64> {
     let snap = store.begin_read().expect("read");
@@ -37,21 +47,40 @@ fn pop_removes_the_tip_and_pops_a_reorg_depth_in_one_batch() {
     let path = tmp("pop-basic");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     // The spendable prefix, then two spend blocks: the tip is `s + 1`.
+    // The spendable prefix, then three spend blocks: a zero-fee one (the
+    // F20 window needs a listed body behind the first burn), then two
+    // paying a fee; the tip is `s + 2`.
     let s = FIRST_SPEND_HEIGHT;
-    let tip = s + 1;
-    connect_chain(
+    let tip = s + 2;
+    let (_, burns) = connect_chain(
         &store,
-        &spendable_prefix(&[vec![spend(9, 2)], vec![spend(10, 2)]]),
+        &spendable_prefix(&[
+            vec![spend(9, 2)],
+            vec![spend_paying(10, 2, FEE)],
+            vec![spend_paying(11, 2, FEE)],
+        ]),
     );
     assert_eq!(tip_height(&store), Some(tip));
+    // The two fee blocks burned (the verdict's F17 over a fee on an endowed
+    // chain with volume — the test bites only if they did); the blocks
+    // below did not, and genesis records none whatever it burns (the
+    // `h > 0` half of the C++ guard, `blockchain.cpp:6148`).
+    let burned_at = |h: u64| burns[usize::try_from(h).expect("small")];
+    assert!(burned_at(tip - 1) > AtomicUnits::ZERO && burned_at(tip) > AtomicUnits::ZERO);
+    assert!(burns[..usize::try_from(tip - 1).expect("small")]
+        .iter()
+        .all(|b| *b == AtomicUnits::ZERO));
+    let fold_before_tip = burned_at(tip - 1);
     let burned_after_all = {
         let snap = store.begin_read().expect("read");
         snap.get_property::<TotalBurnedCell>().expect("cell")
     };
-    // Every block handed `burned = 3`; genesis records none (the `h > 0`
-    // half of the C++ guard, `blockchain.cpp:6148`), so the fold is `tip`
-    // blocks' worth.
-    assert_eq!(burned_after_all, Some(AtomicUnits::from_raw(3 * tip)));
+    assert_eq!(
+        burned_after_all,
+        Some(AtomicUnits::from_raw(
+            fold_before_tip.to_raw() + burned_at(tip).to_raw()
+        ))
+    );
 
     let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
     let popped = out.expect("pop the tip");
@@ -62,14 +91,14 @@ fn pop_removes_the_tip_and_pops_a_reorg_depth_in_one_batch() {
         let snap = store.begin_read().expect("read");
         assert_eq!(
             snap.get_property::<TotalBurnedCell>().expect("cell"),
-            Some(AtomicUnits::from_raw(3 * (tip - 1))),
+            Some(fold_before_tip),
             "the tip's burn restored to the pre-image its parent left"
         );
         assert!(snap
             .open_table(SPENT_KEYS)
             .expect("t")
             .get(crate::lmdb_order::LmdbHashKey::from_bytes(
-                shekyl_chain_rules::harness::fixture::point(10),
+                shekyl_chain_rules::harness::fixture::point(11),
             ))
             .expect("g")
             .is_none());
@@ -203,7 +232,7 @@ fn a_poisoned_connect_halts_the_writer_but_a_probe_violation_does_not() {
     // slice 6 commit 4 a plain double spend reached this belt, which tested
     // it as the rule; this is the belt tested as a belt, the shape the test
     // should always have had.
-    let hashes = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
+    let (hashes, _) = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
     let next = FIRST_SPEND_HEIGHT + 1;
     let double = candidate(
         next,

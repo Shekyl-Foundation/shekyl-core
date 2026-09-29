@@ -146,11 +146,15 @@ pub struct RunReport {
     /// trace exists; a divergence is recorded, never patched.
     pub weights: WeightComparisons,
     /// The derived-vs-trace **emission** comparison (CEN-F14b / G12, slice
-    /// 7 commit 5), the same shape: at every connected height the trace
-    /// has facts for, the verdict's `coins_generated` against the C++'s
-    /// `block_info.bi_coins`. Consecutive rows differ by the paid reward,
-    /// so this is the penalty's parity oracle wherever a captured block is
-    /// over the median (`median-full`'s block 211 is the one on record).
+    /// 7 commit 5; CEN-F17 / G11, wave B), the same shape: at every
+    /// connected height the trace has facts for, the verdict's
+    /// `coins_generated` against the C++'s `block_info.bi_coins` and the
+    /// verdict's burn against its `block_burn`. Consecutive accumulator
+    /// rows differ by the paid reward, so this is the penalty's parity
+    /// oracle wherever a captured block is over the median (`median-full`'s
+    /// block 211 is the one on record); the burn column is the fee split's
+    /// — the burn ratio over the FL-R16c supply and the escalation operand
+    /// — wherever a captured block carries a fee.
     pub emission: EmissionComparisons,
     /// The RandomX measurement (RD-F11), as of the run's end.
     pub metrics: MetricsArtifact,
@@ -326,9 +330,9 @@ impl EmissionComparisons {
         self.diverged().next().is_some()
     }
 
-    fn record(&mut self, at: BlockHeight, ours: PaidEmission, theirs: AtomicUnits) {
-        let result =
-            (ours.coins_generated != theirs).then_some(EmissionDivergence { at, ours, theirs });
+    fn record(&mut self, at: BlockHeight, ours: PaidEmission, theirs: RecordedEmissionFacts) {
+        let same = ours.coins_generated == theirs.coins_generated && ours.burned() == theirs.burned;
+        let result = (!same).then_some(EmissionDivergence { at, ours, theirs });
         self.results.insert(at, result);
     }
 
@@ -337,18 +341,41 @@ impl EmissionComparisons {
     }
 }
 
-/// One height where the derived accumulator differed from the trace's.
-/// Carries the whole `PaidEmission`: the paid reward and its split are the
-/// context that says whether the penalty, the emission curve or the fold
-/// moved it.
+/// The two emission values the trace records per height, as the oracle
+/// compares them: the C++'s accumulator (`block_info.bi_coins`, CEN-G12)
+/// and its destroyed amount (`block_burn`, CEN-F17 / G11 — the fee split
+/// over the same parent-state operands, so a match here is the burn ratio,
+/// the supply definition and the escalation operand agreeing, not the
+/// accumulator alone).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordedEmissionFacts {
+    /// The trace's `coins_generated`.
+    pub coins_generated: AtomicUnits,
+    /// The trace's `burned`.
+    pub burned: AtomicUnits,
+}
+
+impl From<&crate::trace::Facts> for RecordedEmissionFacts {
+    fn from(facts: &crate::trace::Facts) -> Self {
+        Self {
+            coins_generated: facts.coins_generated,
+            burned: facts.burned,
+        }
+    }
+}
+
+/// One height where the derived accumulator or burn differed from the
+/// trace's. Carries the whole `PaidEmission`: the paid reward, its split
+/// and the fee split are the context that says whether the penalty, the
+/// emission curve, the burn ratio or the fold moved it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EmissionDivergence {
     /// The connected height.
     pub at: BlockHeight,
     /// The verdict's derivation.
     pub ours: PaidEmission,
-    /// The trace's `coins_generated` — the C++'s `block_info.bi_coins`.
-    pub theirs: AtomicUnits,
+    /// The trace's record.
+    pub theirs: RecordedEmissionFacts,
 }
 
 /// The covered-tip checkpoint, compared.
@@ -416,7 +443,8 @@ pub enum Disagreement {
         at: BlockHeight,
     },
     /// The derived accumulator — the parent's plus the paid reward
-    /// (CEN-F14b / G12) — differed from the trace's `coins_generated`.
+    /// (CEN-F14b / G12) — differed from the trace's `coins_generated`, or
+    /// the derived burn (CEN-F17 / G11) from its `burned`.
     EmissionDiverged {
         /// The connected height.
         at: BlockHeight,
@@ -601,13 +629,9 @@ where
     // the actor owns the store, and `run` must not return before the task
     // has dropped it (a caller reopening the file would otherwise race the
     // engine's lock).
-    let prepared = PreparedActor::<Connector<Trace>>::new(kameo::mailbox::unbounded());
+    let prepared = PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
     let connector = prepared.actor_ref().clone();
-    let actor_task = prepared.spawn(ConnectorArgs {
-        store,
-        rules,
-        facts: Arc::clone(&trace),
-    });
+    let actor_task = prepared.spawn(ConnectorArgs { store, rules });
 
     let mut drive = Drive {
         source,
@@ -653,7 +677,7 @@ where
     substrate: Arc<S>,
     metrics: &'a Arc<Metrics>,
     rules: ChainRules,
-    connector: &'a kameo::actor::ActorRef<Connector<Trace>>,
+    connector: &'a kameo::actor::ActorRef<Connector>,
     trace: &'a Arc<Trace>,
     cfg: PipelineConfig,
     ledger: SeedLedger,
@@ -873,12 +897,13 @@ where
                     .record(*at, *ours, RecordedWeightFacts::from(facts.value()));
             }
         }
-        // CEN-F14b / G12: the verdict's accumulator against the trace's.
+        // CEN-F14b / G12 and F17 / G11: the verdict's accumulator and burn
+        // against the trace's.
         for (at, ours) in &applied.emission {
             if let Some(facts) = self.trace.borrow(*at) {
                 self.report
                     .emission
-                    .record(*at, *ours, facts.value().coins_generated);
+                    .record(*at, *ours, RecordedEmissionFacts::from(facts.value()));
             }
         }
         if let Some(at) = self.checkpoint_at {

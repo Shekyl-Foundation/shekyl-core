@@ -274,6 +274,9 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
         ) -> Result<AtHeight<crate::BlockOutputs>, Self::Fault> {
             Ok(AtHeight::AboveTip)
         }
+        fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Self::Fault> {
+            Ok(shekyl_units::AtomicUnits::ZERO)
+        }
     }
     let genesis = formed(candidate(Vec::new()));
     let verdict = infallible(B5::check(

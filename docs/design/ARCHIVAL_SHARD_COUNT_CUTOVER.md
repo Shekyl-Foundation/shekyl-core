@@ -64,7 +64,8 @@ A bare grep for `segment` conflates two unrelated things:
   `leaves_per_segment()`, `SEGMENT_LAYER_J`, `frozen_segment_count`.
 - **transaction body segments** — permanent and unrelated: `write_segments()`,
   `TxPrunedSegment`, `TxPqcAuthsSegment`
-  (`rust/shekyl-chain-store/src/store/connect.rs:556-568`).
+  (`rust/shekyl-chain-store/src/store/connect.rs:403-414`, re-read
+  2026-09-29 after E6 slice 7 wave B shortened the file).
 
 This is not pedantry: it is how a seeded row in this round's own brief acquired a
 false premise (`SCC-2`). Family 2's greps below therefore key on the **specific

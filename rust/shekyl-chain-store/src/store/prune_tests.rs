@@ -18,7 +18,6 @@
 use redb::ReadableTable;
 use shekyl_chain_rules::{Candidate, RuleSet};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, SHARD_TX_COUNT};
-use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{
@@ -59,13 +58,6 @@ fn candidate_on(
     listed: Vec<Transaction>,
 ) -> Candidate {
     candidate_over(root_going_into(store, height), height, previous, listed)
-}
-
-/// The one fact `connect` is still handed (E6 slice 7): no burn.
-fn facts(_height: u64) -> ConnectFacts {
-    ConnectFacts {
-        burned: Fact::passed_through(AtomicUnits::from_raw(0)),
-    }
 }
 
 /// A chain under construction: the hashes so far, and the listed
@@ -114,13 +106,11 @@ impl Builder {
                     .collect();
                 let root = batch_root_going_into(&view, h)?;
                 let cand = candidate_over(root, h, previous, txs.clone());
-                self.hashes.push(cand.block.hash());
+                // The identity is the priced block's (`judge_under`).
+                let judged = judge_under(&view, cand, &self.rules)?;
+                self.hashes.push(judged.block().hash());
                 self.listed.push(txs);
-                out.push(batch.connect(
-                    judge_under(&view, cand, &self.rules)?,
-                    facts(h),
-                    self.rules,
-                )?);
+                out.push(batch.connect(judged, self.rules)?);
             }
             Ok(out)
         });
@@ -392,7 +382,7 @@ fn a_decreasing_storage_id_total_refuses_the_boundary() {
     let cand = candidate_on(&store, 40, previous, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge_under(&view, cand, &SHORT)?, facts(40), SHORT)?)
+        Ok(batch.connect(judge_under(&view, cand, &SHORT)?, SHORT)?)
     });
     assert!(
         out.is_err(),
@@ -436,7 +426,7 @@ fn a_decrease_smaller_than_the_coinbase_term_still_refuses_the_boundary() {
     let cand = candidate_on(&store, 40, previous, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge_under(&view, cand, &SHORT)?, facts(40), SHORT)?)
+        Ok(batch.connect(judge_under(&view, cand, &SHORT)?, SHORT)?)
     });
     assert!(
         out.is_err(),
@@ -598,7 +588,7 @@ fn a_journal_whose_first_row_is_not_the_floor_is_si6_at_pop_and_at_the_boundary(
     let cand = candidate_on(&store, 400, previous, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge_under(&view, cand, &RULES)?, facts(400), RULES)?)
+        Ok(batch.connect(judge_under(&view, cand, &RULES)?, RULES)?)
     });
     assert_eq!(
         out,
@@ -649,7 +639,6 @@ fn a_retention_below_the_in_force_cap_is_refused_at_open_and_at_connect() {
         let cand = candidate(0, BlockHash::NULL, Vec::new());
         Ok(batch.connect(
             judge_under(&view, cand, &RuleSet::GENESIS)?,
-            facts(0),
             RuleSet::GENESIS,
         )?)
     });

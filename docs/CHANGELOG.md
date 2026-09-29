@@ -331,18 +331,51 @@
   hidden startup flag. Unbounded disk, no reward. The password is not
   kept after that call.
 
-### Consensus validator — census 4.G's medians and the paid reward (DRS-E6 slice 7, commits 3–5)
+### Consensus validator — census 4.G, the whole coinbase (DRS-E6 slice 7, commits 3–9)
 
-- **The Rust validator derives the block-weight medians and the paid
-  reward.** CEN-G6/G6b (`Medians::derive`, `Weights::derive` over the two
-  windows, now one key each in `consensus_constants.json`) and
-  CEN-F14/F14b/F16/G12 (`judge_emission`: a block over twice the effective
-  median is refused; the penalised reward, its miner/staker split and the
-  supply accumulator are the verdict's). `ConnectFacts` carries only
-  `burned`; the store schema is 16. Held to six daemon-built chains at every
-  height on roots, weights and accumulator (2 408 / 2 408), and to the C++
-  daemon live: a Rust-built block at the consensus bound is accepted, one
-  body over refused (`CHAIN_RULES_SLICE_7.md` §3.5, §3.11).
+- **The Rust validator derives the block-weight medians and everything the
+  block determines about its coinbase.** CEN-G6/G6b (`Medians::derive`,
+  `Weights::derive` over the two windows, now one key each in
+  `consensus_constants.json`); CEN-F14/F14b/F16/G12 (a block over twice the
+  effective median is refused; the penalised reward, its miner/staker split
+  and the supply accumulator are the verdict's); CEN-F17/G11/G13 (the fee
+  split and its burn from the parent's burned fold and frozen-segment
+  count; the staker accrual; genesis pays the miner whole); and CEN-F18
+  (the miner transaction pays exactly what it is owed, refused at the miner
+  slot in both directions). **Nothing reaches `connect` that the validator
+  did not derive — and the scaffold that tracked which values it did not
+  derive retired because its purpose completed.** `ConnectFacts`,
+  `Fact<T>`, `Origin::{Derived, PassedThrough}`, `DeletedBy` and the
+  file's `passed_through_facts` provenance cell were built (S-CHAIN-W,
+  2026-09-16) to record, per value, whether the store received it from
+  the C++ trace or computed it, so that no file fed by a partly ported
+  validator could pass as parity evidence. Every member `ConnectFacts`
+  carried at S-CHAIN-W — seven at that point, six by #785 after
+  `cumulative_difficulty` left — has since flipped to derived:
+  `cumulative_difficulty` (slice 2), `root_after` (E3), the weights, the
+  median and the accumulator (slice 7 commits 4–5), `burned` (this
+  entry). A mechanism with no subject
+  deletes rather than staying as a permanently-empty cell that can no
+  longer fail. `connect` takes the verdict alone; `Provenance` has two
+  components (stubbed applies, coverage gaps), and the NOT-PARITY-EVIDENCE
+  limit stands on coverage gaps only. **Store schema 17 — rebuild the
+  datadir.** Held to six daemon-built chains at every height on roots,
+  weights, accumulator and burn (2 408 / 2 408 — a root-and-weight claim
+  with a **3 / 3** burn claim inside it: three heights carry a non-zero
+  recorded burn, all matched; the burn population is a FOLLOWUPS row),
+  every C++ coinbase
+  accepted under the Rust F18, and to the C++ daemon live: a Rust-built
+  block at the consensus bound is accepted, one body over refused
+  (`CHAIN_RULES_SLICE_7.md` §3.5, §3.11). The replay's graded artifact is
+  `shekyl_e2_grade_v2`: the `Borrowed` component arm is gone with the last
+  borrowed fact.
+- **The listed body is judged before it is read as its hash.** CEN-G2 in
+  `form` (a declared list whose length or hashes disagree with the bodies
+  is refused at the block, the first mismatching slot named); CEN-G1
+  (a transaction already on the chain is refused at its slot **before** the
+  slot loop, so the row is G1 and not the double-spend's I7); CEN-G7/G9/G10
+  (the archival body pairings) beside L1; CEN-G3/G4/G5 pinned on the slot
+  loop and the wire type.
 - **The conformance register's CEN-G6/G6b rows are CHECKED-CONFORMANT.**
   Both were graded DIVERGENT on 2026-09-11 for the shipped ×50 surge factor;
   the factor became the ratified 4 on 2026-09-12 and the rows were not

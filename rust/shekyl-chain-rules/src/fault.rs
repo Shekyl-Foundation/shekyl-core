@@ -45,6 +45,7 @@ use core::fmt;
 
 use shekyl_fcmp::LeafInput;
 use shekyl_types::{BlockHash, BlockHeight, GlobalOutputIndex};
+use shekyl_units::AtomicUnits;
 
 use crate::rule_set::RuleSet;
 use crate::tree_growth::FrontierFault;
@@ -173,6 +174,20 @@ pub enum Corrupt {
     TxCountNotMonotone {
         /// The upper height of the pair whose prefix sum is below the lower's.
         at: BlockHeight,
+    },
+    /// The recorded `total_burned` exceeds the parent's `coins_generated`
+    /// (CEN-F17's two operands). Burn destroys issued coins, so the fold
+    /// is bounded by the accumulator on every conforming store; a view
+    /// where it is not has a fold that ran ahead of the emission it
+    /// destroys from. FL-R16c ruled this a store-invariant violation and
+    /// never a zero: `shekyl_economics::CirculatingSupply::derive` refuses
+    /// it, and the validator halts rather than pricing a burn ratio over a
+    /// supply the chain does not have (E6 slice 7 wave B).
+    BurnExceedsEmission {
+        /// The parent's gross emission.
+        coins_generated: AtomicUnits,
+        /// The chain's destroyed fold, larger than it.
+        total_burned: AtomicUnits,
     },
     /// A per-height read answered `AboveTip` for a height a rule reads as
     /// **below** the connecting height: the parent, a window member, the
@@ -349,6 +364,13 @@ impl fmt::Display for Corrupt {
             Self::TxCountNotMonotone { at } => write!(
                 f,
                 "cumulative transaction count decreases at height {at:?} (SI-13)"
+            ),
+            Self::BurnExceedsEmission {
+                coins_generated,
+                total_burned,
+            } => write!(
+                f,
+                "total_burned {total_burned:?} exceeds coins_generated {coins_generated:?} (FL-R16c: the burned fold is bounded by the emission)"
             ),
             Self::HoleBelowTip { at, record } => write!(
                 f,
