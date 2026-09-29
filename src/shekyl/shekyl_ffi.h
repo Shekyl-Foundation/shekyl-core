@@ -4244,7 +4244,8 @@ int shekyl_executor_record(const char* name, std::size_t lanes, std::size_t work
 void shekyl_executor_release(std::uint64_t handle);
 
 /// Spans and the transport-runtime budget. The caller supplies every
-/// number. `network_id` is 16 bytes.
+/// number, and each number is unmeasured until a run record names it.
+/// `network_id` is 16 bytes.
 struct shekyl_zone_params {
   const std::uint8_t* network_id;
   std::uint64_t handshake_within_ns;
@@ -4255,11 +4256,12 @@ struct shekyl_zone_params {
 };
 
 /// Bind clearnet. Writes the bound ports. `ipv6` and `proxy_host` may be
-/// null. Returns 0, or -1 when the bind fails.
+/// null. `encrypt` nonzero is the clearnet channel option on; zero is off.
+/// Returns 0, or -1 when the bind fails.
 int shekyl_zone_listen_clearnet(
     const char* ipv4, std::uint16_t port,
     const char* ipv6, std::uint16_t port_v6, int use_ipv6,
-    const char* proxy_host, std::uint16_t proxy_port,
+    const char* proxy_host, std::uint16_t proxy_port, int encrypt,
     const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling,
     int* out_port, int* out_port_v6);
 /// Bind the Tor forward listener. `extra` may be null. Returns 0, or -1

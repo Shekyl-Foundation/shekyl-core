@@ -152,6 +152,11 @@ namespace nodetool
     const command_line::arg_descriptor<bool> arg_pad_transactions = {
       "pad-transactions", "Pad relayed transactions to help defend against traffic volume analysis", false
     };
+    const command_line::arg_descriptor<bool> arg_clearnet_transport_encrypt = {
+      "clearnet-transport-encrypt",
+      "Pre-genesis test gate. Clearnet channel option for the connector: off omits the Noise layer (the cutover parity scope); on follows the declaration's stack plan. Default off. Deleted at the flip, not at cutover. Not a user privacy setting. Both ends of a test pair must set it.",
+      false
+    };
     std::optional<std::vector<proxy>> get_proxies(boost::program_options::variables_map const& vm)
     {
         namespace ip = boost::asio::ip;

@@ -227,7 +227,7 @@ public:
 
   /// The floor is one worker besides the lane `idle_worker` blocks on.
   /// A count below that floor is refused by the ledger and this returns
-  /// false. The measured count is the run record.
+  /// false. The worker count is unmeasured; the run record replaces it.
   bool run(std::size_t workers, const boost::thread::attributes& attrs)
   {
     if (!m_owns_io)
@@ -273,7 +273,7 @@ public:
   }
 
   bool listen_clearnet(const std::string& ip, const std::string& port, const std::string& ipv6, const std::string& port_v6,
-      bool use_ipv6, const boost::asio::ip::tcp::endpoint* proxy, const std::uint8_t* network_id, const shekyl_inbound_ceiling& ceiling,
+      bool use_ipv6, const boost::asio::ip::tcp::endpoint* proxy, bool encrypt, const std::uint8_t* network_id, const shekyl_inbound_ceiling& ceiling,
       const shekyl_zone_params& spans)
   {
     if (!detail::ensure_seam(ceiling))
@@ -288,7 +288,7 @@ public:
         ip.c_str(), detail::port_of(port),
         use_ipv6 ? ipv6.c_str() : nullptr, detail::port_of(port_v6), use_ipv6 ? 1 : 0,
         proxy != nullptr ? proxy_host.c_str() : nullptr, proxy != nullptr ? proxy->port() : 0,
-        &params, &ceiling, &bound, &bound_v6);
+        encrypt ? 1 : 0, &params, &ceiling, &bound, &bound_v6);
     if (rc != 0)
       return false;
     m_port = bound;

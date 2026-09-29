@@ -131,6 +131,7 @@ namespace nodetool
     command_line::add_arg(desc, arg_limit_rate_down);
     command_line::add_arg(desc, arg_limit_rate);
     command_line::add_arg(desc, arg_pad_transactions);
+    command_line::add_arg(desc, arg_clearnet_transport_encrypt);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -993,6 +994,8 @@ namespace nodetool
 
     //try to bind
     m_ssl_support = epee::net_utils::ssl_support_t::e_ssl_support_disabled;
+    // D7 ruling 4. Off through cutover. The flip deletes the option.
+    const bool clearnet_encrypt = command_line::get_arg(vm, arg_clearnet_transport_encrypt);
     for (auto& zone : m_network_zones)
     {
       zone.second.m_net_server.get_config_object().set_handler(this);
@@ -1023,7 +1026,7 @@ namespace nodetool
           }
           const bool have_proxy = zone.second.m_proxy_address.address.port() != 0;
           res = zone.second.m_net_server.listen_clearnet(zone.second.m_bind_ip, zone.second.m_port, ipv6_addr, ipv6_port, m_use_ipv6 && !ipv6_addr.empty(),
-              have_proxy ? &zone.second.m_proxy_address.address : nullptr, network_id, ceiling, spans);
+              have_proxy ? &zone.second.m_proxy_address.address : nullptr, clearnet_encrypt, network_id, ceiling, spans);
         }
         CHECK_AND_ASSERT_MES(res, false, "Failed to bind server");
       }
@@ -1108,8 +1111,8 @@ namespace nodetool
     public_zone.m_net_server.add_idle_handler(boost::bind(&node_server<t_payload_net_handler>::idle_worker, this), std::chrono::seconds{1});
     public_zone.m_net_server.add_idle_handler(boost::bind(&t_payload_net_handler::on_idle, &m_payload_handler), std::chrono::seconds{1});
 
-    // Floor: one worker besides the lane idle_worker blocks on. The
-    // measured count is the run record.
+    // Structural floor: one worker besides the lane idle_worker blocks on.
+    // Unmeasured. The run record replaces this count.
     constexpr std::size_t executor_workers = 2;
     boost::thread::attributes attrs;
     attrs.set_stack_size(THREAD_STACK_SIZE);
@@ -3584,10 +3587,11 @@ namespace nodetool
   template<class t_payload_net_handler>
   shekyl_zone_params node_server<t_payload_net_handler>::transport_spans() const
   {
-    // The handshake span is the inherited invoke timeout, and the queue
-    // holds one admitted packet. Neither is the measured connector
-    // deadline or PWD-T6's session limit. The run record replaces them.
-    // The runtime floor is one worker besides the blocking lane.
+    // Unmeasured, every one of them. The run record replaces the value;
+    // it does not adopt what is written here.
+    // Handshake span: the inherited invoke timeout, not the derived deadline.
+    // Send queue: one admitted packet, room for the largest legitimate message.
+    // Runtime workers: the structural floor, one worker besides the blocking lane.
     const std::uint64_t invoke_ns = static_cast<std::uint64_t>(P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT) * 1000000ull;
     shekyl_zone_params spans{};
     spans.network_id = nullptr;

@@ -66,8 +66,9 @@ static HOST: LazyLock<Mutex<Option<Arc<Host>>>> = LazyLock::new(|| Mutex::new(No
 static GAPS: LazyLock<Mutex<std::collections::HashMap<u64, oneshot::Sender<()>>>> =
     LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
-/// Spans and the runtime budget. The numbers are the caller's. This
-/// module does not pick a thread count or a deadline.
+/// Spans and the runtime budget. The numbers are the caller's, and each
+/// one is unmeasured until a run record names it. This module does not
+/// pick a thread count or a deadline.
 #[repr(C)]
 pub struct ShekylZoneParams {
     pub network_id: *const u8,
@@ -343,8 +344,9 @@ fn c_str(ptr: *const c_char) -> Option<String> {
     Some(text.to_owned())
 }
 
-/// Bind clearnet. `0` and the ports written on success. `-1` on failure,
-/// which leaves this zone unbound.
+/// Bind clearnet. `encrypt` nonzero selects [`ClearnetOption::On`]; zero
+/// is off. `0` and the ports written on success. `-1` on failure, which
+/// leaves this zone unbound.
 ///
 /// # Safety
 /// `params` is readable. `ipv4` is a NUL-terminated address. `ipv6` may be
@@ -358,6 +360,7 @@ pub unsafe extern "C" fn shekyl_zone_listen_clearnet(
     use_ipv6: i32,
     proxy_host: *const c_char,
     proxy_port: u16,
+    encrypt: i32,
     params: *const ShekylZoneParams,
     ceiling: *const ShekylInboundCeiling,
     out_port: *mut i32,
@@ -389,7 +392,12 @@ pub unsafe extern "C" fn shekyl_zone_listen_clearnet(
         }
         None => None,
     };
-    let kind = match channel_choice(ConnectorId::Clearnet.column(), ClearnetOption::Off) {
+    let option = if encrypt != 0 {
+        ClearnetOption::On
+    } else {
+        ClearnetOption::Off
+    };
+    let kind = match channel_choice(ConnectorId::Clearnet.column(), option) {
         Ok(kind) => kind,
         Err(_) => return -1,
     };

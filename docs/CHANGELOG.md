@@ -4,9 +4,11 @@
 
 ### P2P zones listen through the seam
 
-- `--clearnet-transport-encrypt` is removed. Each zone's server is the
-  seam: clearnet and Tor bind there, and a bind failure fails that zone's
-  start. The Levin connection registry is unchanged.
+- Each zone's server is the seam: clearnet and Tor bind there, and a
+  bind failure fails that zone's start. The Levin connection registry
+  is unchanged. `--clearnet-transport-encrypt` stays, off by default,
+  as the clearnet connector's channel option. The pipe that used to
+  implement it is gone. The flip deletes the option.
 
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 
