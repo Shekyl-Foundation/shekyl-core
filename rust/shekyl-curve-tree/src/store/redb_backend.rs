@@ -11,13 +11,17 @@ use std::sync::Arc;
 use redb::backends::InMemoryBackend;
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
-use crate::segment::{leaves_per_segment, segment_freeze_eligible, SegmentId, LEAF_BYTES};
+use crate::segment::{
+    leaves_per_segment, segment_freeze_eligible, SegmentId, LEAF_BYTES,
+    SEGMENT_FREEZE_REORG_MARGIN_BLOCKS,
+};
 use crate::served_frame::ServedFrameHeader;
 use crate::store::ops::{
     full_build_root, mixed_composition_root, recompute_segment_r_k, MixedRootError,
 };
 use crate::types::{
-    BlockHeight, Gindex, GindexKey, LeafEntry, TargetKind, TreePosition, TreePositionKey,
+    BlockHeight, BlockHeightKey, Gindex, GindexKey, LeafEntry, TargetKind, TreePosition,
+    TreePositionKey,
 };
 use shekyl_fcmp::tree::{hash_grow_selene, selene_hash_init, SCALARS_PER_LEAF};
 
@@ -40,6 +44,24 @@ const PENDING_TABLE: TableDefinition<GindexKey, &[u8; 320]> = TableDefinition::n
 // `META_TABLE` is a heterogeneous `&str`-keyed counter store; its `u64`
 // values convert to `BlockHeight`/counts at the API boundary. This is the
 // one legitimate raw-`u64` value site in the store.
+// CT-6 increment 4's snapshot ring: the curve-tree frontier as it stood
+// after each ingested block, keyed by that block's height. Variable-width —
+// a frontier is its partial chunks, which are shorter than their capacities
+// until they fold — so the value is `&[u8]` rather than a fixed array, and
+// `Frontier::max_encoded_len` is the bound rather than the size.
+//
+// The ring is TOTAL over `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` and bounded by
+// it: `append_block_deltas` writes the height it ingests and, in the same
+// transaction, removes the height that has just fallen out of the horizon.
+// There is no eviction policy to hold, because the write and the removal are
+// one step (CT-6 Q1, RULED 2026-09-28).
+//
+// A store written before this table existed simply has none of these rows.
+// That is not a schema break and takes no version bump: the ring is a cache
+// (C8), a missing row falls through to `root_at_count`, and the ring refills
+// as blocks arrive.
+const FRONTIER_SNAPSHOTS_TABLE: TableDefinition<BlockHeightKey, &[u8]> =
+    TableDefinition::new("frontier_snapshots");
 const META_TABLE: TableDefinition<&str, u64> = TableDefinition::new("meta");
 
 const META_LEAF_COUNT: &str = "leaf_count";
@@ -682,6 +704,7 @@ impl LeafStore {
         txn.open_table(OWNED_IDENTITIES_TABLE)?;
         txn.open_table(PINNED_SEGMENTS_TABLE)?;
         txn.open_table(PENDING_TABLE)?;
+        txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
             if meta.get(META_LEAF_COUNT)?.is_none() {
@@ -714,6 +737,9 @@ impl LeafStore {
         // A missed table here leaves stale pending rows that would corrupt
         // a subsequent `from_blocks` rebuild — pinned by the clear test.
         txn.delete_table(PENDING_TABLE)?;
+        // The ring is derived from the leaves being wiped here; a surviving
+        // row would answer a height the rebuilt chain has not reached.
+        txn.delete_table(FRONTIER_SNAPSHOTS_TABLE)?;
         txn.delete_table(META_TABLE)?;
         txn.commit()?;
         self.init_tables()
@@ -960,7 +986,7 @@ impl LeafStore {
         entries: &[LeafEntry],
         tip_height: BlockHeight,
     ) -> Result<(), StoreError> {
-        self.append_block_deltas(entries, &[], &[], tip_height)
+        self.append_block_deltas(entries, &[], &[], tip_height, None)
     }
 
     /// Apply one ingested block's store deltas in a single ACID write txn:
@@ -992,6 +1018,7 @@ impl LeafStore {
         pending_added: &[LeafEntry],
         pending_removed: &[Gindex],
         tip_height: BlockHeight,
+        frontier_snapshot: Option<&[u8]>,
     ) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         let mut leaf_count = {
@@ -1045,6 +1072,9 @@ impl LeafStore {
             meta.insert(META_LEAF_COUNT, &leaf_count)?;
             meta.insert(META_SYNC_TIP, &effective_tip)?;
         }
+        if let Some(bytes) = frontier_snapshot {
+            Self::write_frontier_snapshot_in_txn(&txn, tip_height, bytes)?;
+        }
         let next_freeze_seg = Self::maybe_freeze_segments_in_txn(&txn, effective_tip, leaf_count)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
@@ -1052,6 +1082,112 @@ impl LeafStore {
         }
         txn.commit()?;
         Ok(())
+    }
+
+    /// Write `height`'s frontier snapshot and drop the height that has just
+    /// left the horizon, inside the caller's transaction.
+    ///
+    /// The horizon **is** [`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`] — read from
+    /// the one JSON authority through the constant, never restated (C4). The
+    /// removal is the whole of the ring's bound: after writing `h`, the rows
+    /// present are exactly `(h - horizon, h]`, so the row count is a
+    /// consequence of this pair of statements rather than of a policy
+    /// something else has to enforce.
+    ///
+    /// A range delete rather than a single `remove` of `h - horizon`, because
+    /// the height that leaves is only `h - horizon` when the ring was already
+    /// full and contiguous. After a rollback the tip re-advances over heights
+    /// whose rows this call overwrites, and after a resume onto a store
+    /// written by a build without the table there is no row at all — in both
+    /// cases a point delete would leave rows the horizon no longer covers.
+    fn write_frontier_snapshot_in_txn(
+        txn: &redb::WriteTransaction,
+        height: BlockHeight,
+        bytes: &[u8],
+    ) -> Result<(), StoreError> {
+        let mut ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+        ring.insert(BlockHeightKey::from(height), bytes)?;
+        let Some(first_covered) = height
+            .to_raw()
+            .checked_sub(SEGMENT_FREEZE_REORG_MARGIN_BLOCKS)
+        else {
+            return Ok(());
+        };
+        // `first_covered` is `h - horizon`, the highest height NOT covered:
+        // the covered run is `(h - horizon, h]`, which is `horizon` heights.
+        ring.retain_in(
+            ..=BlockHeightKey::from(BlockHeight::from_raw(first_covered)),
+            |_, _| false,
+        )?;
+        Ok(())
+    }
+
+    /// The frontier snapshot the ring holds for `height`, if the ring covers
+    /// it.
+    ///
+    /// `None` is "outside the ring", never "the tier failed": a store error
+    /// stays an error. The caller decides what an uncovered height falls
+    /// through to; this method does not fall back, because a fallback here
+    /// would make a ring that never captured anything indistinguishable from
+    /// one that is working.
+    pub fn frontier_snapshot_at(&self, height: BlockHeight) -> Result<Option<Vec<u8>>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+        Ok(ring
+            .get(BlockHeightKey::from(height))?
+            .map(|v| v.value().to_vec()))
+    }
+
+    /// Replace one ring row, or remove it when `bytes` is `None`.
+    ///
+    /// The discriminator CT-6 increment 4's consumer tests need: correct
+    /// capture and correct restore produce the same bytes either way, so
+    /// only a row the test *changed* can show which one a reader used.
+    /// Test-only, and not behind a feature: nothing outside this crate's own
+    /// test build can reach it.
+    #[cfg(test)]
+    pub(crate) fn test_set_frontier_snapshot(
+        &self,
+        height: BlockHeight,
+        bytes: Option<&[u8]>,
+    ) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+            match bytes {
+                Some(bytes) => {
+                    ring.insert(BlockHeightKey::from(height), bytes)?;
+                }
+                None => {
+                    ring.remove(BlockHeightKey::from(height))?;
+                }
+            }
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Heights the ring currently covers, as `(lowest, highest)`, or `None`
+    /// when it holds no rows.
+    ///
+    /// The span is read off the rows rather than computed from the tip, so a
+    /// caller that asks whether the ring covers a height is answered by what
+    /// the ring **has**. Deriving the span from `sync_tip - horizon` would
+    /// claim coverage for every height in the window including the ones a
+    /// pre-ring store never wrote.
+    pub fn frontier_snapshot_span(&self) -> Result<Option<(BlockHeight, BlockHeight)>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+        let Some(first) = ring.first()? else {
+            return Ok(None);
+        };
+        let last = ring
+            .last()?
+            .ok_or(StoreError::CorruptMeta("ring has a first row but no last"))?;
+        Ok(Some((
+            BlockHeight::from(first.0.value()),
+            BlockHeight::from(last.0.value()),
+        )))
     }
 
     /// All pending (not yet drained) leaves, in gindex order — the resume
@@ -1271,6 +1407,16 @@ impl LeafStore {
     pub fn truncate_from_tree_position(&self, pos: TreePosition) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         Self::truncate_internals(&txn, pos, BlockHeight::from_raw(0))?;
+        {
+            // This entry point resets the tip to 0 while leaving `pos`
+            // leaves in place, so even the row at height 0 would describe a
+            // leaf count the store no longer has. The ring goes entirely,
+            // rather than down to the new tip: sync is invalidated here, and
+            // a ring that survived it would answer heights this store can no
+            // longer place on a chain.
+            let mut ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+            ring.retain(|_, _| false)?;
+        }
         txn.commit()?;
         Ok(())
     }
@@ -1360,6 +1506,21 @@ impl LeafStore {
                     ))?;
                 }
             }
+        }
+        {
+            // Every snapshot above the new tip describes a tree state this
+            // truncation has just removed. They go in the SAME transaction,
+            // so no committed store ever holds a ring row for a height it
+            // has rolled back past.
+            let mut ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+            let above = BlockHeightKey::from(new_tip);
+            ring.retain_in(
+                (
+                    core::ops::Bound::Excluded(above),
+                    core::ops::Bound::Unbounded,
+                ),
+                |_, _| false,
+            )?;
         }
         let next_freeze_seg = recompute_next_freeze_seg(txn, pos)?;
         {
@@ -2393,13 +2554,19 @@ mod tests {
         let a = sample_entry(3, 70);
         let b = sample_entry(4, 71);
         store
-            .append_block_deltas(&[], &[a, b], &[], BlockHeight::from_raw(10))
+            .append_block_deltas(&[], &[a, b], &[], BlockHeight::from_raw(10), None)
             .unwrap();
         assert_eq!(pending_gindexes(&store), vec![3, 4]);
         assert_eq!(store.leaf_count().unwrap(), 0);
 
         store
-            .append_block_deltas(&[a], &[], &[Gindex::from_raw(3)], BlockHeight::from_raw(70))
+            .append_block_deltas(
+                &[a],
+                &[],
+                &[Gindex::from_raw(3)],
+                BlockHeight::from_raw(70),
+                None,
+            )
             .unwrap();
         assert_eq!(pending_gindexes(&store), vec![4]);
         assert_eq!(store.leaf_count().unwrap(), 1);
@@ -2410,7 +2577,13 @@ mod tests {
     fn block_deltas_reject_pending_gindex_collision_and_abort() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(&[], &[sample_entry(5, 70)], &[], BlockHeight::from_raw(10))
+            .append_block_deltas(
+                &[],
+                &[sample_entry(5, 70)],
+                &[],
+                BlockHeight::from_raw(10),
+                None,
+            )
             .unwrap();
         // Colliding insert rides with a drained append: the whole txn must
         // abort — the drained leaf cannot land either.
@@ -2420,6 +2593,7 @@ mod tests {
                 &[sample_entry(5, 99)],
                 &[],
                 BlockHeight::from_raw(11),
+                None,
             )
             .unwrap_err();
         assert!(matches!(
@@ -2434,10 +2608,22 @@ mod tests {
     fn block_deltas_reject_missing_pending_removal_and_abort() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(&[], &[sample_entry(7, 70)], &[], BlockHeight::from_raw(10))
+            .append_block_deltas(
+                &[],
+                &[sample_entry(7, 70)],
+                &[],
+                BlockHeight::from_raw(10),
+                None,
+            )
             .unwrap();
         let err = store
-            .append_block_deltas(&[], &[], &[Gindex::from_raw(8)], BlockHeight::from_raw(11))
+            .append_block_deltas(
+                &[],
+                &[],
+                &[Gindex::from_raw(8)],
+                BlockHeight::from_raw(11),
+                None,
+            )
             .unwrap_err();
         assert!(matches!(err, StoreError::PendingRowMissing { gindex: 8 }));
         assert_eq!(
@@ -2458,6 +2644,7 @@ mod tests {
                 &[bad],
                 &[],
                 BlockHeight::from_raw(10),
+                None,
             )
             .unwrap_err();
         // batch_index counts drained first, then pending_added.
@@ -2472,7 +2659,7 @@ mod tests {
     fn block_deltas_all_empty_advance_tip_and_freeze_clock() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(42))
+            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(42), None)
             .unwrap();
         assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(42));
         assert_eq!(store.leaf_count().unwrap(), 0);
@@ -2483,7 +2670,13 @@ mod tests {
     fn clear_empties_pending_table() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(&[], &[sample_entry(9, 70)], &[], BlockHeight::from_raw(10))
+            .append_block_deltas(
+                &[],
+                &[sample_entry(9, 70)],
+                &[],
+                BlockHeight::from_raw(10),
+                None,
+            )
             .unwrap();
         assert_eq!(pending_gindexes(&store), vec![9]);
         store.clear().unwrap();
@@ -2501,7 +2694,7 @@ mod tests {
         let drained = [sample_entry(0, 60), sample_entry(1, 61)];
         let pending = [sample_entry(5, 90), sample_entry(3, 80)];
         store
-            .append_block_deltas(&drained, &pending, &[], BlockHeight::from_raw(61))
+            .append_block_deltas(&drained, &pending, &[], BlockHeight::from_raw(61), None)
             .unwrap();
 
         assert_eq!(store.read_drained_entries().unwrap(), drained.to_vec());
@@ -2585,6 +2778,7 @@ mod tests {
                 &[entry_created_at(3, 150, 90), entry_created_at(4, 162, 102)],
                 &[],
                 BlockHeight::from_raw(161),
+                None,
             )
             .unwrap();
 
@@ -2610,6 +2804,7 @@ mod tests {
                 &[entry_created_at(1, 150, 60)],
                 &[],
                 BlockHeight::from_raw(70),
+                None,
             )
             .unwrap();
         store.rollback_to_fork(BlockHeight::from_raw(70)).unwrap();
@@ -2681,6 +2876,7 @@ mod tests {
                 &[],
                 &[],
                 BlockHeight::from_raw(120),
+                None,
             )
             .unwrap();
         store.rollback_to_fork(BlockHeight::from_raw(100)).unwrap();
@@ -2713,6 +2909,7 @@ mod tests {
                 &[],
                 &[],
                 BlockHeight::from_raw(65),
+                None,
             )
             .unwrap();
         store.rollback_to_fork(BlockHeight::from_raw(0)).unwrap();
@@ -2752,6 +2949,7 @@ mod tests {
                 &[entry_created_at(1, 140, 80), entry_created_at(2, 130, 20)],
                 &[],
                 BlockHeight::from_raw(100),
+                None,
             )
             .unwrap();
         store.rollback_to_fork(BlockHeight::from_raw(70)).unwrap();
@@ -2907,6 +3105,7 @@ mod tests {
                 &[entry_created_at(5, 140, 80)],
                 &[],
                 BlockHeight::from_raw(90),
+                None,
             )
             .unwrap();
         let before = logical_snapshot(&store);
@@ -2919,6 +3118,7 @@ mod tests {
                 &[bad],
                 &[Gindex::from_raw(5)],
                 BlockHeight::from_raw(95),
+                None,
             )
             .unwrap_err();
         assert!(matches!(
@@ -3020,6 +3220,7 @@ mod tests {
                         &b.added,
                         &b.removed,
                         BlockHeight::from_raw(b.height),
+                        None,
                     )
                     .unwrap();
             }
@@ -3075,7 +3276,13 @@ mod tests {
                 .collect();
             let removed: Vec<Gindex> = drained.iter().map(|e| e.gindex).collect();
             store
-                .append_block_deltas(&drained, &added, &removed, BlockHeight::from_raw(height))
+                .append_block_deltas(
+                    &drained,
+                    &added,
+                    &removed,
+                    BlockHeight::from_raw(height),
+                    None,
+                )
                 .unwrap();
             blocks.push(SimBlock {
                 height,

@@ -55,6 +55,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::frontier::Frontier;
 use crate::recon::{
     assemble_leaf_stream, collect_block_leaves, extract_leaf_commitments, root_from_scalars,
     TxOutputs,
@@ -252,6 +253,34 @@ pub enum ClientError {
         /// The offending output (by gindex) and the failing point.
         source: crate::recon::LeafPointError,
     },
+    /// The incremental frontier could not advance, close, or be decoded
+    /// from the snapshot ring (CT-6 increment 4).
+    ///
+    /// Every one of those is a refusal rather than a fallback. A frontier
+    /// that will not advance refuses its block, exactly as a bad published
+    /// point does; a snapshot that will not decode refuses its read rather
+    /// than quietly answering from the store, because a ring that silently
+    /// stopped being read is indistinguishable from a ring that works.
+    Frontier {
+        /// Height whose advance or read failed.
+        height: BlockHeight,
+        /// What the frontier refused on.
+        source: crate::frontier::FrontierError,
+    },
+    /// A ring snapshot's own leaf count is not the count the client holds
+    /// for that height — C3's pin, enforced on the production read.
+    ///
+    /// Root and depth are both taken from the snapshot's count, so a
+    /// snapshot built over a different `n` would answer with a root and a
+    /// depth that are self-consistent and wrong. Refused, never served.
+    SnapshotLeafCountMismatch {
+        /// Reference height that was read.
+        height: BlockHeight,
+        /// Leaf count the snapshot carries.
+        snapshot: u64,
+        /// Leaf count the client's drain index gives for that height.
+        expected: u64,
+    },
 }
 
 impl ClientError {
@@ -310,6 +339,17 @@ pub struct CurveTreeClient {
     /// (or [`Self::open`] a path when nothing else holds it). See the
     /// `rollback_to_fork` poison contract.
     poisoned: bool,
+    /// The live curve-tree frontier: the accumulator over exactly the
+    /// leaves the store has drained, which is the snapshot the ring holds
+    /// at [`Self::ingested_tip_height`].
+    ///
+    /// Kept in memory because the advance is the per-block hot path and a
+    /// decode per block would pay for the ring twice. It is not a second
+    /// source of truth: [`Self::ingest_block`] writes this exact value into
+    /// the ring in the block's own transaction, and every path that rebuilds
+    /// in-memory state ([`Self::resume`], [`Self::rollback_to_fork`])
+    /// re-derives it from the store rather than adjusting it.
+    frontier: Frontier,
 }
 
 /// The authority to rebuild the single writer over an already-open store —
@@ -396,6 +436,7 @@ struct RebuiltState {
     next_gindex: u64,
     entries_by_maturity: BTreeMap<BlockHeight, Vec<usize>>,
     ingested_tip_height: Option<BlockHeight>,
+    frontier: Frontier,
 }
 
 impl Default for CurveTreeClient {
@@ -415,6 +456,7 @@ impl CurveTreeClient {
             entries_by_maturity: BTreeMap::new(),
             ingested_tip_height: None,
             poisoned: false,
+            frontier: Frontier::new(),
         })
     }
 
@@ -604,6 +646,7 @@ impl CurveTreeClient {
             entries_by_maturity: rebuilt.entries_by_maturity,
             ingested_tip_height: rebuilt.ingested_tip_height,
             poisoned: false,
+            frontier: rebuilt.frontier,
         })
     }
 
@@ -641,6 +684,45 @@ impl CurveTreeClient {
         }
         let pending = store.read_pending_candidates().map_err(ClientError::from)?;
         let tip = store.sync_tip_height().map_err(ClientError::from)?;
+
+        // The live frontier comes from the ring's row at `tip` when there is
+        // one — an O(depth) decode instead of an O(leaves) fold, which is
+        // what makes an in-horizon rewind cost the fork height's snapshot
+        // plus the replay forward rather than a rebuild of the whole tree.
+        //
+        // A row whose leaf count is not the store's is **refused**, not
+        // quietly re-derived: the ring and the leaf tables are written in one
+        // transaction from a frontier already checked against the drain
+        // index, so a disagreement here is corruption, and C8's answer to
+        // corruption is refuse-and-resync rather than a repair that hides it.
+        //
+        // The fold below is the path for a store the ring does not cover: one
+        // written before the table existed, or one rolled back past the
+        // ring's span. It is correct and slow, which is the right way round.
+        let frontier = match Self::snapshot_at_in(store, tip)? {
+            Some(snapshot) => {
+                if snapshot.leaf_count() != stored {
+                    return Err(ClientError::SnapshotLeafCountMismatch {
+                        height: tip,
+                        snapshot: snapshot.leaf_count(),
+                        expected: stored,
+                    });
+                }
+                snapshot
+            }
+            None => {
+                let mut frontier = Frontier::new();
+                for entry in &drained {
+                    frontier
+                        .push_leaf(&entry.leaf)
+                        .map_err(|source| ClientError::Frontier {
+                            height: tip,
+                            source,
+                        })?;
+                }
+                frontier
+            }
+        };
 
         let mut entries: Vec<LeafEntry> = drained;
         entries.extend(pending);
@@ -682,6 +764,7 @@ impl CurveTreeClient {
             next_gindex,
             entries_by_maturity,
             ingested_tip_height,
+            frontier,
         })
     }
 
@@ -736,6 +819,7 @@ impl CurveTreeClient {
         self.drained_through_counts = Vec::new();
         self.entries_by_maturity = rebuilt.entries_by_maturity;
         self.ingested_tip_height = rebuilt.ingested_tip_height;
+        self.frontier = rebuilt.frontier;
         self.poisoned = false;
         Ok(())
     }
@@ -843,11 +927,41 @@ impl CurveTreeClient {
         // (`META_SYNC_TIP`) advances to the ingested tip — the only height
         // the freeze gate is ever driven by. An all-empty delta still
         // advances the tip.
-        self.store
-            .append_block_deltas(&drained, &new_leaves, &removed, block.height)?;
+        // The frontier advances on a CLONE, before the transaction opens.
+        // A fold is fallible, and B5 puts every fallible step ahead of the
+        // commit: a leaf whose bytes will not hash refuses the block with
+        // both sides untouched, exactly as a bad published point does.
+        let mut advanced = self.frontier.clone();
+        for entry in &drained {
+            advanced
+                .push_leaf(&entry.leaf)
+                .map_err(|source| ClientError::Frontier {
+                    height: block.height,
+                    source,
+                })?;
+        }
+        // C3 in production, not only in a test: the snapshot this block
+        // captures must carry exactly the drain index's count for the
+        // cutoff, because root and depth are both read back off it.
+        let canonical = self.canonical_drained_count_on_ingest(through);
+        if advanced.leaf_count() != canonical {
+            return Err(ClientError::SnapshotLeafCountMismatch {
+                height: block.height,
+                snapshot: advanced.leaf_count(),
+                expected: canonical,
+            });
+        }
+        let snapshot = advanced.encode();
+
+        self.store.append_block_deltas(
+            &drained,
+            &new_leaves,
+            &removed,
+            block.height,
+            Some(&snapshot),
+        )?;
 
         // Store committed — the in-memory commit below is infallible.
-        let canonical = self.canonical_drained_count_on_ingest(through);
         let entry_base = self.entries.len();
         for (offset, entry) in new_leaves.iter().enumerate() {
             self.entries_by_maturity
@@ -858,6 +972,7 @@ impl CurveTreeClient {
         self.entries.extend(new_leaves);
         self.next_gindex = next_gindex;
         self.ingested_tip_height = Some(block.height);
+        self.frontier = advanced;
         self.record_drained_count(through, canonical);
         Ok(())
     }
@@ -1045,10 +1160,114 @@ impl CurveTreeClient {
         }
         let through = Self::drained_through(reference_height);
         let n = self.drained_leaf_count_at(through);
+        if let Some(snapshot) = self.snapshot_at(reference_height)? {
+            // C3: the snapshot answers with its own `n`, so the one thing
+            // that must be checked is that its `n` is this height's. A
+            // disagreement is refused rather than resolved in the store's
+            // favour: a ring row for the wrong height is a defect in the
+            // capture, and serving around it would hide it.
+            if snapshot.leaf_count() != n {
+                return Err(ClientError::SnapshotLeafCountMismatch {
+                    height: reference_height,
+                    snapshot: snapshot.leaf_count(),
+                    expected: n,
+                });
+            }
+            return Self::snapshot_reading(reference_height, &snapshot);
+        }
+        self.segment_tier_reading_at_count(n)
+    }
+
+    /// Root and depth off one snapshot, both taken from **its own** leaf
+    /// count (C3). The single place a `Frontier` becomes a reading, so the
+    /// production read above and the Q2 examiner below cannot be looking at
+    /// two different closures.
+    fn snapshot_reading(
+        height: BlockHeight,
+        snapshot: &Frontier,
+    ) -> Result<(CurveTreeRoot, u8), ClientError> {
+        let root = snapshot
+            .root()
+            .map_err(|source| ClientError::Frontier { height, source })?;
+        Ok((CurveTreeRoot::from_bytes(root), snapshot.depth()))
+    }
+
+    /// The **snapshot tier's** reading at `height`, or `None` where the ring
+    /// does not cover it — CT-6 Q2's second tier, as the increment-2
+    /// examiner consumes it.
+    ///
+    /// Root and depth both come from the snapshot's own leaf count. Taking
+    /// the depth from the client's drain index instead would weld this tier
+    /// to the segment tier on the depth axis, and the two could then never
+    /// disagree there — which is precisely the axis C3 pins.
+    ///
+    /// `None` means "outside the ring". A decode failure or a store error is
+    /// an `Err`: a tier that fails has no way to present itself as a gap.
+    ///
+    /// **Test-visible because only the examiner reads a tier in isolation.**
+    /// Production reads the *dispatcher*, [`Self::root_and_depth_at`]. This
+    /// is a delegation to the same two internals the dispatcher calls, not a
+    /// second read path — grading a path production does not run would grade
+    /// a shim.
+    #[cfg(test)]
+    pub(crate) fn snapshot_tier_reading(
+        &self,
+        height: BlockHeight,
+    ) -> Result<Option<(CurveTreeRoot, u8)>, ClientError> {
+        let Some(snapshot) = self.snapshot_at(height)? else {
+            return Ok(None);
+        };
+        Self::snapshot_reading(height, &snapshot).map(Some)
+    }
+
+    /// The **segment tier's** reading at `height`: the landed CT-1
+    /// composition (frozen `R_k` where the store holds them, recomputed
+    /// where it does not) over the drain index's count for that height.
+    /// Test-visible for the same reason as [`Self::snapshot_tier_reading`].
+    #[cfg(test)]
+    pub(crate) fn segment_tier_reading(
+        &self,
+        height: BlockHeight,
+    ) -> Result<(CurveTreeRoot, u8), ClientError> {
+        let n = self.drained_leaf_count_at(Self::drained_through(height));
+        self.segment_tier_reading_at_count(n)
+    }
+
+    fn segment_tier_reading_at_count(&self, n: u64) -> Result<(CurveTreeRoot, u8), ClientError> {
         let root =
             CurveTreeRoot::from_bytes(self.store.root_at_count(n).map_err(ClientError::from)?);
-        let depth = shekyl_fcmp::tree::layer_count_for_leaves(n);
-        Ok((root, depth))
+        Ok((root, shekyl_fcmp::tree::layer_count_for_leaves(n)))
+    }
+
+    /// Decode the ring's row at `height`, if it has one.
+    fn snapshot_at(&self, height: BlockHeight) -> Result<Option<Frontier>, ClientError> {
+        Self::snapshot_at_in(&self.store, height)
+    }
+
+    /// [`Self::snapshot_at`] against a store this client does not own yet —
+    /// the resume path, which runs before there is a `self`.
+    fn snapshot_at_in(
+        store: &LeafStore,
+        height: BlockHeight,
+    ) -> Result<Option<Frontier>, ClientError> {
+        let Some(bytes) = store
+            .frontier_snapshot_at(height)
+            .map_err(ClientError::from)?
+        else {
+            return Ok(None);
+        };
+        Frontier::decode(&bytes)
+            .map(Some)
+            .map_err(|source| ClientError::Frontier { height, source })
+    }
+
+    /// Heights the snapshot ring currently covers, or `None` when it is
+    /// empty — the snapshot tier's `HeightSpan`, read off the rows it has.
+    #[cfg(test)]
+    pub(crate) fn snapshot_span(&self) -> Result<Option<(BlockHeight, BlockHeight)>, ClientError> {
+        self.store
+            .frontier_snapshot_span()
+            .map_err(ClientError::from)
     }
 
     /// The root a block built on the current tip commits to
@@ -1108,6 +1327,30 @@ impl CurveTreeClient {
                 got,
             })
         }
+    }
+
+    /// Overwrite (or, with `None`, delete) the ring's row at `height`.
+    ///
+    /// Test-only. A correct capture and a correct restore write the same
+    /// bytes, so a test that wants to know **which** of them a reader
+    /// consulted has to change one of those bytes and look.
+    #[cfg(test)]
+    pub(crate) fn test_set_snapshot(
+        &self,
+        height: BlockHeight,
+        frontier: Option<&Frontier>,
+    ) -> Result<(), ClientError> {
+        let encoded = frontier.map(Frontier::encode);
+        self.store
+            .test_set_frontier_snapshot(height, encoded.as_deref())
+            .map_err(ClientError::from)
+    }
+
+    /// The live frontier's leaf count — what the next block's snapshot will
+    /// be captured over. Test-only; production reads the ring.
+    #[cfg(test)]
+    pub(crate) fn live_frontier_leaf_count(&self) -> u64 {
+        self.frontier.leaf_count()
     }
 
     /// Number of leaves drained into the tree at `reference_height`.
@@ -2047,7 +2290,7 @@ mod tests {
         {
             let store = LeafStore::open(&path).unwrap();
             store
-                .append_block_deltas(&drained, &pending, &[], BlockHeight::from_raw(70))
+                .append_block_deltas(&drained, &pending, &[], BlockHeight::from_raw(70), None)
                 .unwrap();
         }
 
@@ -2089,6 +2332,7 @@ mod tests {
                 &[store_entry(0, 200, 0)],
                 &[],
                 BlockHeight::from_raw(70),
+                None,
             )
             .unwrap();
         let err = CurveTreeClient::resume(Arc::new(store)).unwrap_err();

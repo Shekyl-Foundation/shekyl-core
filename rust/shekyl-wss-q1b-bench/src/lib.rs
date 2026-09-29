@@ -55,6 +55,7 @@
 //! [`15-deletion-and-debt`]: ../../../.cursor/rules/15-deletion-and-debt.mdc
 //! [`47-gate-subject-assertion`]: ../../../.cursor/rules/47-gate-subject-assertion.mdc
 
+pub mod advance;
 pub mod corpus;
 pub mod fixture;
 pub mod openedge;

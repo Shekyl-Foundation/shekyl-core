@@ -148,11 +148,16 @@ pub fn build_population(
         //
         // The tip trails the written height, so no segment is ever
         // burial-eligible during the build even if something consulted it.
+        // No frontier snapshot: this builder populates the *segment* tier,
+        // which is what the verify edge measures. A ring row here would let
+        // the read under measurement answer from the tier this baseline
+        // exists to price.
         store.append_block_deltas(
             &batch,
             &[],
             &[],
             BlockHeight::from_raw(end / rate.leaves_per_block),
+            None,
         )?;
         pos = end;
     }

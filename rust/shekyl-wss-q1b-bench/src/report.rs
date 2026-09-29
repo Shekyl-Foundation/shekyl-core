@@ -82,11 +82,23 @@ use crate::timing::Series;
 ///   (raise the cap, rather than: the machine has no steady state). The bump
 ///   is what stops a corrected reader from misreading an uncorrected record.
 ///
+/// **v3 (CT-6 increment 4)** re-derives `per_block_advance_worst_case_s`.
+///   In `v1`/`v2` it was `replay_median / REPLAY_WINDOW_BLOCKS` — a share of
+///   the spend replay, which is a pre-build *model* of an advance that did
+///   not exist yet. In `v3` it is the median of a measured series over the
+///   built advance: frontier fold, snapshot encode, ring commit
+///   ([`crate::advance::AdvanceRig`]). **The field name did not change and
+///   the meaning did**, which is exactly the shape `CT-6 Q4` was left open to
+///   catch, so the bump is what stops a `v2` figure and a `v3` figure being
+///   read off the same axis. A `v2` record's value is not wrong for what it
+///   was — it is a model estimate — but it is not the graded quantity, and
+///   `per_block_advance_provenance` now says which one a record carries.
+///
 /// **No CI arm enforces this constant** — the `schema-snapshot` workflow's
 /// version-bump job covers `shekyl-chain-store`'s persisted schema, not this
 /// record. Bumping it is a reviewer obligation, which is why the history
 /// above is kept here rather than only in the changelog.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The spend-edge budget's absolute floor, in seconds (§6.3.4 row 2).
 pub const SPEND_DELTA_FLOOR_S: f64 = 2.0;
@@ -198,17 +210,43 @@ pub struct SpendEdgeRecord {
     pub proving: Series,
     /// The graded budget.
     pub budget: SpendBudget,
-    /// **The amortized form's refresh-side cost**: worst-case replay seconds
-    /// divided by the blocks replayed.
+    /// **The amortized form's refresh-side cost**, `CT-6 Q4`'s subject: the
+    /// median of [`SpendEdgeRecord::per_block_advance`], a series over the
+    /// **built** advance — frontier fold, snapshot encode, ring commit.
     ///
     /// Derived rather than left to a reader with a calculator, because it is
     /// the number that decides what a miss on the spend edge *means*. A delta
     /// that misses by 48× as a spend-time copy-and-replay is not the same
     /// finding as one whose amortized form costs a fraction of a block
     /// interval — the first kills the design, the second moves the work.
-    /// Compare it against the block cadence: at 120 s, this figure over 1.2 s
-    /// is a 1 % duty cycle.
+    /// Compare it against [`BLOCK_TARGET_S`]; `Q4` pre-registers 10 % of it.
+    ///
+    /// Through schema `v2` this was
+    /// `per_block_advance_retired_quotient_s` under this name. See
+    /// [`SCHEMA_VERSION`].
     pub per_block_advance_worst_case_s: f64,
+    /// The measured advance series behind the figure above — so a reader can
+    /// see whether it converged before treating it as a grade.
+    pub per_block_advance: Series,
+    /// **The retired derivation, kept beside its replacement**:
+    /// `replay_median / REPLAY_WINDOW_BLOCKS`, the pre-build model.
+    ///
+    /// Emitted in the same record as the measured advance so the two can be
+    /// compared *on one machine* — which is the only way an off-rig run says
+    /// anything about the pinned rig's `537.59 ms`. A ratio between two
+    /// numbers from one run travels; either number alone does not.
+    pub per_block_advance_retired_quotient_s: f64,
+    /// Which derivation `per_block_advance_worst_case_s` carries.
+    ///
+    /// A record whose field changed derivation under an unchanged name is the
+    /// defect `Q4` names; this string is the field saying which one it is,
+    /// for a reader who has only the JSON.
+    pub per_block_advance_provenance: &'static str,
+    /// `per_block_advance_worst_case_s` as a fraction of [`BLOCK_TARGET_S`].
+    /// Reported, never graded here: `Q4`'s threshold is graded on the pinned
+    /// rig by increment 6, and a fraction computed anywhere else is a
+    /// property of the machine that computed it.
+    pub per_block_advance_cadence_fraction: f64,
     /// The sparse-versus-dense control, one arm per depth. The record carries
     /// these because the denominator's path provenance depends on them: a
     /// reader who does not see the control cannot tell whether the sparse path

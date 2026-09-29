@@ -27,6 +27,48 @@
   drifts; this is its single home, so the GUI's `get_balance` can adopt the
   contract's shape by consuming it (its own increment, in its own repo).
 
+### `CT-6` increment 4 — the dense snapshot ring
+
+- **`shekyl_curve_tree::frontier::Frontier`** is the wallet's incremental
+  curve-tree accumulator: the leaf scalars not yet hashed into a layer-0
+  node, and at each layer the nodes not yet hashed into their parent, with
+  an intrinsic leaf count. Every fold calls the canonical composition
+  primitives (`hash_grow_selene`, `try_promote_to_layer`,
+  `try_build_upper_layers`), so the stateful and batch halves cannot drift
+  into two transcriptions of one rule; agreement with `build_layers` is
+  graded at every count through two leaf-chunk folds and the first cascade.
+- **A per-height snapshot ring, total over `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`.**
+  `LeafStore` gains a `frontier_snapshots` table. `append_block_deltas`
+  writes the height it ingests and removes the height that has just left the
+  horizon in the *same statement*, so the ring's bound is the write rather
+  than an eviction policy. `CurveTreeClient::root_and_depth_at` answers
+  in-horizon heights from it and falls through to `root_at_count` elsewhere;
+  the frozen segment tier is unchanged. **Why:** `root_at_count` inside the
+  unfrozen zone recomputes every complete-but-unfrozen segment on every
+  call — measured at 53.667 s nominal and 393.944 s worst case per call on
+  the pinned Pi 4 (`WSS_Q1B_BENCH_SPEC.md` §7.3.3). The ring replaces that
+  with an `O(depth)` close.
+- **Reorg.** The store's shared truncation core deletes every ring row above
+  the new tip inside the caller's transaction, and the live frontier is
+  restored from the fork height's snapshot — so an in-horizon rewind is that
+  snapshot plus the replay forward, not a fold over the whole drained prefix.
+  A snapshot whose own leaf count is not the store's is **refused**, never
+  repaired: the ring and the leaf tables are written together, so a
+  disagreement is corruption and the answer to corruption is resync.
+- **No store schema-version bump.** Adding a table is not a layout change: a
+  store written before this one has no rows, every height falls through to
+  `root_at_count`, and the ring refills forward. The ring is a cache.
+- **`shekyl-wss-q1b-bench` record `schema_version` 2 → 3.**
+  `per_block_advance_worst_case_s` was `replay_median / REPLAY_WINDOW_BLOCKS` —
+  a share of the spend replay, which is a pre-build *model* of an advance
+  that did not exist. It is now the median of a measured series over the
+  built advance (fold, capture, ring commit), with the retired quotient
+  emitted beside it as `per_block_advance_retired_quotient_s`. The field
+  changed derivation under an unchanged name, which is what the version
+  exists to make visible. The retired quotient's denominator is now the
+  blocks the corpus covers rather than the constant, which under
+  `--window-leaves` had divided a shrunken replay by the full window.
+
 ### `CT-6 Q1` ruled by derivation — and the derivation deletes the geometry
 
 - **`s = ⌊2.000 / 0.53759⌋ = 3 blocks.`** Budget from a ruled product judgment

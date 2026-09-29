@@ -18,6 +18,7 @@
 use std::process::ExitCode;
 
 use clap::Parser;
+use shekyl_wss_q1b_bench::advance::AdvanceRig;
 use shekyl_wss_q1b_bench::corpus;
 use shekyl_wss_q1b_bench::corpus::{
     worst_case_leaves_per_block, CANONICAL_INPUTS, CANONICAL_OUTPUTS, HELD_BUFFER_BLOCKS,
@@ -28,7 +29,8 @@ use shekyl_wss_q1b_bench::fixture::{
     synth_sparse_path, ControlExperiment, Path,
 };
 use shekyl_wss_q1b_bench::report::{
-    emit, ProverPin, SpendBudget, SpendCorpus, SpendEdgeRecord, Verdict, SCHEMA_VERSION,
+    emit, ProverPin, SpendBudget, SpendCorpus, SpendEdgeRecord, Verdict, BLOCK_TARGET_S,
+    SCHEMA_VERSION,
 };
 use shekyl_wss_q1b_bench::rig::{self, Environment, StorageAttestation};
 use shekyl_wss_q1b_bench::timing::{
@@ -249,6 +251,36 @@ fn main() -> ExitCode {
         },
     );
 
+    // ── CT-6 Q4: the ADVANCE, measured rather than modelled ─────────────
+    // One iteration is one worst-case block through the built advance. The
+    // series sits beside the replay series on purpose: same run, same board,
+    // same thermal state, so the ratio between the two is a property of the
+    // work and not of the machine — which is what lets an off-rig run say
+    // anything at all about the pinned rig's figure.
+    let mut advance_rig = AdvanceRig::new(&corpus, leaf_rate.leaves_per_block);
+    let advance_series = sustained_within_conditioned(
+        args.warmup,
+        DEFAULT_TOLERANCE_PCT,
+        MAX_WALL_SECONDS,
+        args.min_conditioning_s,
+        || advance_rig.advance_one_block(),
+    );
+    // Rule 47: the series is only evidence if the rig advanced. A closure
+    // that had silently done nothing would produce a fast, converged,
+    // meaningless median.
+    if advance_rig.blocks_advanced() == 0
+        || advance_rig.leaf_count() != advance_rig.blocks_advanced() * leaf_rate.leaves_per_block
+    {
+        eprintln!(
+            "the advance rig folded {} leaves over {} blocks at {} leaves/block; refusing \
+             the record",
+            advance_rig.leaf_count(),
+            advance_rig.blocks_advanced(),
+            leaf_rate.leaves_per_block
+        );
+        return ExitCode::from(3);
+    }
+
     // ── delta, part 2: path read-off and `Path` construction ────────────
     let layers = replay(&corpus);
     let path_series = sustained_within_conditioned(
@@ -327,6 +359,10 @@ fn main() -> ExitCode {
     }
 
     let replay_median = replay_series.graded_s();
+    // Blocks the replayed corpus actually covers. Rule 47: a zero here would
+    // make the retired quotient infinite rather than absent, so it is refused
+    // above by the same corpus assertion the advance rig makes.
+    let replayed_blocks = (window_leaves / leaf_rate.leaves_per_block).max(1) as f64;
     let delta_s = replay_median + path_series.graded_s();
     // §5.2's contract: an unconverged series is REPORTED, never substituted for
     // a converged one. Grading an unconverged median would do exactly the
@@ -381,9 +417,23 @@ fn main() -> ExitCode {
         path_construction: path_series,
         proving: prove_series,
         budget,
-        // The replay term alone over the window it covers -- path construction
-        // is not per-block work and would inflate it.
-        per_block_advance_worst_case_s: replay_median / REPLAY_WINDOW_BLOCKS as f64,
+        // CT-6 Q4: the MEASURED advance, not a share of the replay. The
+        // retired quotient rides beside it so the two are comparable on this
+        // machine; see `SCHEMA_VERSION`'s v3 note.
+        per_block_advance_worst_case_s: advance_series.graded_s(),
+        per_block_advance: advance_series.clone(),
+        // The denominator is the blocks THIS corpus covers, not the constant.
+        // At the default window the two are the same number by construction
+        // (`worst_case_window_leaves` is `leaves_per_block * REPLAY_WINDOW_BLOCKS`).
+        // They part company under `--window-leaves`, and the constant form
+        // then divided a shrunken replay by the full window — a quotient
+        // smaller than the corpus supports, emitted under a worst-case name.
+        per_block_advance_retired_quotient_s: replay_median / replayed_blocks,
+        per_block_advance_provenance:
+            "measured: frontier fold + snapshot encode + ring commit, per worst-case block \
+             (CT-6 increment 4). NOT replay_median / REPLAY_WINDOW_BLOCKS, which rides as \
+             per_block_advance_retired_quotient_s",
+        per_block_advance_cadence_fraction: advance_series.graded_s() / BLOCK_TARGET_S,
         controls: controls.clone(),
         paths_verified: paths_verified && controls.iter().all(|c| c.both_verified),
         proxy_note: "replay proxy: leaf-layer hashing exact (dominant ~38x); \
@@ -507,8 +557,21 @@ fn summarize(record: &SpendEdgeRecord, controls: &[ControlExperiment]) {
     );
     eprintln!("  DELTA          {:.3} s", b.delta_s);
     eprintln!(
-        "  per block      {:.0} ms  (amortized frontier advance, worst case)",
-        record.per_block_advance_worst_case_s * 1000.0
+        "  per block      {:.1} ms  (MEASURED advance: fold + capture + ring commit; \
+         converged: {})",
+        record.per_block_advance_worst_case_s * 1000.0,
+        record.per_block_advance.converged
+    );
+    eprintln!(
+        "                 {:.1} ms  (retired model: replay / window) -> measured is \
+         {:.2}x the model",
+        record.per_block_advance_retired_quotient_s * 1000.0,
+        record.per_block_advance_worst_case_s / record.per_block_advance_retired_quotient_s
+    );
+    eprintln!(
+        "                 {:.2} % of a {:.0} s block",
+        record.per_block_advance_cadence_fraction * 100.0,
+        BLOCK_TARGET_S
     );
     eprintln!(
         "  proving        {:.3} s (converged: {})",

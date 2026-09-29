@@ -210,6 +210,37 @@ impl From<TreePositionKey> for TreePosition {
 
 redb_delegated_key!(TreePositionKey, u64, "shekyl_curve_tree::TreePosition");
 
+/// redb table key for a [`BlockHeight`]. Same orphan-rule reason as
+/// [`TreePositionKey`]: the vocabulary type lives in `shekyl-types`, so the
+/// `redb::Key` impl has to be on a store-local wrapper. The distinct
+/// `TypeName` is what stops the snapshot ring being opened with a tree
+/// position or a gindex as its key — the two numbers that index this
+/// crate's other tables and would otherwise be silently interchangeable.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub(crate) struct BlockHeightKey(u64);
+
+impl BlockHeightKey {
+    /// The raw height. An edge accessor for a range scan.
+    #[must_use]
+    pub(crate) const fn to_raw(self) -> u64 {
+        self.0
+    }
+}
+
+impl From<BlockHeight> for BlockHeightKey {
+    fn from(h: BlockHeight) -> Self {
+        Self(h.to_raw())
+    }
+}
+
+impl From<BlockHeightKey> for BlockHeight {
+    fn from(k: BlockHeightKey) -> Self {
+        BlockHeight::from_raw(k.to_raw())
+    }
+}
+
+redb_delegated_key!(BlockHeightKey, u64, "shekyl_curve_tree::BlockHeight");
+
 /// A drained tree leaf: its global output index, its maturity height, the
 /// 128-byte curve-tree leaf (`{O.x, I.x, C.x, CM.x}`), and the public
 /// output identity it was built from. Tree position is determined by drain
