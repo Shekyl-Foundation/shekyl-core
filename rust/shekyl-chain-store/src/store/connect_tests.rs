@@ -308,13 +308,14 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     assert_eq!(c0.height, BlockHeight::from_raw(s - 1));
     assert_eq!(c1.height, BlockHeight::from_raw(s));
     // the spend block: miner tx 7 (tx_indices, txs_pruned, txs_prunable,
-    // txs_prunable_hash, output_txs, member, tx_outputs) + spend 12 (1 key
+    // txs_prunable_hash, output_txs, member, tx_outputs) + spend 13 (1 key
     // image + the same 4 tx rows + the 4-part txid's txs_pqc_auths segment
-    // and txs_pqc_auth_hash row + 2 outputs × (output_txs + member) +
-    // tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 + block_burn 1 +
-    // total_burned 1 = 27. Nothing has matured at this height, so the tree
-    // tables write no row.
-    assert_eq!(c1.journaled, 27);
+    // and txs_pqc_auth_hash row + its txs_archival_len row (`SHT-Q2`; the
+    // coinbase carries no length and writes none) + 2 outputs ×
+    // (output_txs + member) + tx_outputs) + leaf count 1 + root 1 + block 3
+    // + hf 1 + block_burn 1 + total_burned 1 = 28. Nothing has matured at
+    // this height, so the tree tables write no row.
+    assert_eq!(c1.journaled, 28);
     // Dense store ids: one coinbase per block through the spend block
     // (tx_ids `0..=s`, output_ids likewise), then the spend (tx_id `s + 1`,
     // output_ids `s + 1`, `s + 2`); amount_index under 0 equals output_id.

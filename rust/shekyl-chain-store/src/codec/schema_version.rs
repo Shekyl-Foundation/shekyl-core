@@ -243,7 +243,7 @@ mod tests {
         assert_eq!(SCHEMA_VERSION, SchemaVersion::new(17));
         assert_eq!(SCHEMA_VERSION.encode(), [17, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[16, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[17, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }
