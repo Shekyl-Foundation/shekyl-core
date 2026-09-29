@@ -1440,8 +1440,16 @@ Pi-4 C5 run, 2026-09-26, the floor device (aarch64, 4 cores), about 90 seconds:
 Initiator 928 µs, responder 685 µs, one rekey 5.06 µs, seal/open of
 65,535 bytes 889 µs. The responder figure is the per-connection cost
 D10.3's clearnet accept-rate bound is derived from. The bound waits on
-a stated CPU budget. No rate is written here. Deadlines are not written
-here either.
+a stated CPU budget. No rate is written here. Deadline milliseconds
+are not written here either.
+
+UPDATE 2026-09-29: each deadline is the p99 of honest completions on
+the floor device, over real links, for that connector, times two.
+p99 is about one honest attempt in a hundred timing out; the node
+tries another peer. The factor of two is the margin for honest links
+this measurement does not include (mobile, satellite, a congested
+overlay). It is one policy for every deadline. The distributions
+produce the p99; they do not produce the factor.
 
 One rekey is 5.06 µs against 889 µs to seal and open a 65,535-byte
 record, under one percent at that size. Fixed windows are smaller than
