@@ -115,10 +115,11 @@ Unit tests, built here with `BUILD_TESTS=ON`:
   above the derived ceiling refusing startup and `--in-peers 0`
   staying 0.
 - `seam_endpoint.a_relay_send_on_the_strand_reaches_the_seam_connection`
-  failed. The payload is five bytes. Levin `send_message` returns
-  false before `do_send` when the buffer is shorter than a header,
-  so the seam was not asked. A nil id in the same test is the miss
-  the assertion also checks, and that path was not the failure.
+  failed on this run. Both payloads were shorter than a Levin
+  header, so the hit returned before `do_send`. The nil-uuid miss
+  returned 0 from the Levin connection map and never asked the seam.
+  The test now sends a real `bucket_head2`, and the miss is an id
+  the hub does not hold, asserted with the seam's `found` flag.
 
 Daemon admission, private loopback:
 

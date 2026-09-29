@@ -334,22 +334,37 @@ TEST(seam_endpoint, a_relay_send_on_the_strand_reaches_the_seam_connection)
   }
   ASSERT_EQ(ex.config.get_connections_count(), 1u);
 
-  std::promise<std::pair<int, int>> done;
+  // `send_message` returns before `do_send` when the buffer is shorter
+  // than `bucket_head2`. A nil uuid returns 0 from
+  // `find_and_lock_connection` and never reaches that function, so a
+  // header on it still does not ask the seam. The miss is an id the
+  // hub does not hold, sent through the same report `do_send` uses,
+  // and `found` is what makes that check able to fail.
+  struct outcome { int hit; int miss; int found; std::size_t bytes; };
+  std::promise<outcome> done;
   auto waited = done.get_future();
   const auto conn = shekyl::seam_connection_id(id);
   auto strand = ex.strand_for(id);
   boost::asio::post(*strand, [&ex, &done, conn] {
-    std::vector<std::uint8_t> payload{'r', 'e', 'l', 'a', 'y'};
-    const int hit = ex.config.send(epee::byte_slice(std::move(payload)), conn);
-    std::vector<std::uint8_t> other{'x'};
-    const int miss = ex.config.send(epee::byte_slice(std::move(other)), boost::uuids::nil_uuid());
-    done.set_value(std::make_pair(hit, miss));
+    auto framed = [] {
+      epee::levin::message_writer writer(64);
+      return writer.finalize_notify(1);
+    };
+    const int hit = ex.config.send(framed(), conn);
+    auto miss_frame = framed();
+    int found = 1;
+    std::uint8_t cause = 0;
+    const int miss = shekyl_seam_send_report(
+        0x00ffffffffffffffull, miss_frame.data(), miss_frame.size(), &found, &cause);
+    done.set_value(outcome{hit, miss, found, miss_frame.size()});
   });
 
   ASSERT_EQ(waited.wait_for(std::chrono::seconds(2)), std::future_status::ready);
   const auto result = waited.get();
-  EXPECT_GT(result.first, 0);
-  EXPECT_EQ(result.second, 0);
+  EXPECT_GE(result.bytes, sizeof(epee::levin::bucket_head2));
+  EXPECT_GT(result.hit, 0);
+  EXPECT_EQ(result.miss, 0);
+  EXPECT_EQ(result.found, 0);
 
   shekyl_seam_close(id);
   wait_until_links_close(ex);
