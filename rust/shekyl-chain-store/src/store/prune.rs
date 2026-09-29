@@ -34,25 +34,38 @@
 //! > `D(E) = { k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3 }`
 //!
 //! — the shards whose `close_height` falls in `[max(E−3, 0)·SEB, (E−1)·SEB)`.
-//! A shard's last transaction is storage id `(k+1)·T − 1`. A storage id is
-//! not `cumulative_tx_count`: that field counts listed transactions, and
-//! each block also records one miner transaction.
-//! [`shekyl_types::storage_ids_through`] is that sum, so a height interval
-//! is the storage-id interval it names and `D(E)` is a contiguous `k` range
-//! read off **two `block_info` rows**. The division `⌊id / T⌋` places every
-//! boundary. No table of boundaries, no length rows, no read of what is
-//! present — a presence read that *selected* what to discard would be a
-//! second, node-local source (§8), and the whole point is that every node
-//! computes the same `D(E)` whether it discarded last epoch, skeleton-synced
-//! or just booted. Every epoch comparison is a branch or an addition, never
-//! `E − 2` on a `u64` (§4, Bugbot 2026-09-23).
+//! Shards are cut by **archival length** (`SHT-Q2` RULED, Rick 2026-09-29):
+//! a transaction starting at archival offset `c` — the lengths of every
+//! transaction recorded before it — belongs to shard `⌊c / W⌋`
+//! ([`shekyl_types::shard_of`]), global multiples of `W`, no table. Shard
+//! `k` closes at the first height whose cumulative length reaches
+//! `(k+1)·W`: no later transaction can start below it. With `C(h)` the
+//! cumulative length **before** `h` (the parent's
+//! `block_info.cumulative_archival_len`, `0` at genesis), a close height in
+//! `[lo, hi)` is `C(lo) < (k+1)·W ≤ C(hi)`, so `D(E)` is the contiguous
+//! range `⌊C(lo)/W⌋ .. ⌊C(hi)/W⌋`, read off **two `block_info` rows**.
+//!
+//! The rows to delete are storage ids, and the offset `k·W` names one: the
+//! first transaction starting at or past it. [`first_id_at_offset`] finds
+//! the height by binary search over the cumulative cell, then walks that
+//! block's ids reading `txs_archival_len` (absent ⇔ `0`) — permanent
+//! skeleton rows no prune deletes. No table of boundaries and no read of
+//! what is present — a presence read that *selected* what to discard would
+//! be a second, node-local source (§8), and the whole point is that every
+//! node computes the same `D(E)` whether it discarded last epoch,
+//! skeleton-synced or just booted: the cell and the length rows are what a
+//! pruned node and an archival node both hold. Every epoch comparison is a
+//! branch or an addition, never `E − 2` on a `u64` (§4, Bugbot 2026-09-23).
 //!
 //! Running inside the boundary block's own transaction makes "connected
 //! past `E·SEB` with `D(E)` un-run" unrepresentable: a batch that dies
 //! takes its connect with it. The hook can fire twice for one `E` only
 //! through a reorg across the boundary block; both halves are idempotent
 //! (the ranges are already empty; the floor is monotone), and §8 makes that
-//! a test.
+//! a test. The second run names the same ranges: every row it reads —
+//! `C(lo)`, `C(hi)`, and the blocks the offset walk visits — sits below
+//! `(E−1)·SEB`, under the pop floor `E·SEB − retention` because
+//! `retention < SEB`, so no pop can have moved it.
 //!
 //! # Not journaled, by design (§4, §7)
 //!
@@ -88,10 +101,14 @@ use core::ops::Range;
 
 use redb::{ReadableTable, WriteTransaction};
 use shekyl_chain_rules::RuleSet;
-use shekyl_types::{storage_ids_through, BlockCount, BlockHeight, SHARD_TX_COUNT};
+use shekyl_types::{
+    shard_of, shard_start, storage_ids_through, ArchivalLength, BlockCount, BlockHeight, ShardId,
+};
 
 use crate::codec::{BlockInfo, SettlementEpochBlocks, UndoLogFloorCell};
-use crate::schema::{BLOCK_INFO, PROPERTIES, TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG};
+use crate::schema::{
+    BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG,
+};
 
 use super::chain_reads::{self, ReadFault, ReadTables};
 use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant, UndoFault};
@@ -103,6 +120,13 @@ const BLOCK_INFO_CELL: &str = "block_info";
 
 /// The listed-transaction fold inside that cell. SI-8 and SI-13 name it.
 const TX_COUNT_CELL: &str = "block_info.cumulative_tx_count";
+
+/// The archival-length fold inside that cell (`SHT-Q2`). SI-8, SI-13 and
+/// SI-19 name it.
+const ARCHIVAL_LEN_CELL: &str = "block_info.cumulative_archival_len";
+
+/// The per-transaction length rows, as a decode fault names them.
+const ARCHIVAL_LEN_ROW: &str = "txs_archival_len";
 
 /// The pop floor before anything has been retired: genesis is never
 /// poppable, so the lowest poppable height is `1`.
@@ -231,8 +255,9 @@ impl Horizons {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pruned {
     /// The first shard `k` whose `txs_prunable` and `txs_pqc_auths` rows
-    /// were discarded (`[k·T, (k+1)·T)`); equal to `shard_end` when the
-    /// window held no closed shard.
+    /// were discarded — the transactions starting at archival offsets in
+    /// `[k·W, (k+1)·W)`; equal to `shard_end` when the window held no
+    /// closed shard.
     pub shard_start: u64,
     /// One past the last discarded shard.
     pub shard_end: u64,
@@ -264,7 +289,8 @@ impl WriteBatch<'_, '_> {
         let e = horizons.epoch_of(height);
         let shards = self.discard_set(e)?;
         if !shards.is_empty() {
-            let ids = shards.start * SHARD_TX_COUNT..shards.end * SHARD_TX_COUNT;
+            let ids = shard_ids(self.txn(), shards.clone(), height)
+                .map_err(|f| self.arm_read_fault(f))?;
             discard_range(self.txn(), TXS_PRUNABLE, ids.clone())?;
             discard_range(self.txn(), TXS_PQC_AUTHS, ids)?;
         }
@@ -382,9 +408,9 @@ impl WriteBatch<'_, '_> {
     }
 }
 
-/// `D(E)` as a shard range: the shards whose last transaction has an id in
-/// `[first_tx_id(lo), first_tx_id(hi))` for the heights `lo = max(E−3, 0)·SEB`,
-/// `hi = (E−1)·SEB` (module docs). `e ≥ 2`.
+/// `D(E)` as a shard range: the shards whose close height lies in
+/// `[lo, hi)` for `lo = max(E−3, 0)·SEB`, `hi = (E−1)·SEB` —
+/// `⌊C(lo)/W⌋ .. ⌊C(hi)/W⌋` (module docs). `e ≥ 2`.
 fn discard_set<T: ReadTables>(
     txn: &T,
     horizons: Horizons,
@@ -397,24 +423,145 @@ fn discard_set<T: ReadTables>(
         0
     };
     let hi_height = horizons.first_height_of(e - 1);
-    // SI-13 is a property of the **listed** fold, so it is checked on the
-    // two raw samples before the coinbase term is added: `listed 100 → 99`
-    // between heights 10 and 30 derives to ids `110 → 129`, and a check on
-    // the derived sums would commit the boundary over a decreasing fold
-    // (Copilot, PR #861). An empty window is `start == end`; an inversion
+    // SI-13 on the two raw samples: a decreasing fold would name an
+    // inverted range, and an empty window is `start == end`. An inversion
     // poisons and rolls the boundary connect back.
-    let lo_listed = listed_before(txn, lo_height)?;
-    let hi_listed = listed_before(txn, hi_height)?;
-    if hi_listed < lo_listed {
-        return Err(fold_not_monotone(hi_height));
+    let lo = archival_before(txn, lo_height)?;
+    let hi = archival_before(txn, hi_height)?;
+    if hi < lo {
+        return Err(archival_not_monotone(hi_height));
     }
-    let lo_id = first_tx_id(lo_height, lo_listed)?;
-    let hi_id = first_tx_id(hi_height, hi_listed)?;
-    // The last id of shard `k` is `(k+1)·T − 1`. It is `≥ lo_id` iff
-    // `k ≥ ⌊lo_id / T⌋`, and `< hi_id` iff `k < ⌊hi_id / T⌋`.
-    let start = lo_id / SHARD_TX_COUNT;
-    let end = hi_id / SHARD_TX_COUNT;
-    Ok(start..end)
+    Ok(shard_of(lo).to_raw()..shard_of(hi).to_raw())
+}
+
+/// The storage ids of the transactions in `shards`: from the first
+/// transaction starting at or past `start·W` to the first starting at or
+/// past `end·W`. `tip` bounds the search; both offsets are at most
+/// `C((E−1)·SEB)`, which the tip's row covers.
+fn shard_ids<T: ReadTables>(
+    txn: &T,
+    shards: Range<u64>,
+    tip: u64,
+) -> Result<Range<u64>, ReadFault> {
+    let first = first_id_at_offset(txn, offset_of(shards.start)?, tip)?;
+    let end = first_id_at_offset(txn, offset_of(shards.end)?, tip)?;
+    Ok(first..end)
+}
+
+/// `k·W` — the archival offset shard `k` opens at.
+fn offset_of(k: u64) -> Result<ArchivalLength, ReadFault> {
+    shard_start(ShardId::from_raw(k)).ok_or(ReadFault::Invariant(StoreInvariant::FoldOverflow {
+        cell: ARCHIVAL_LEN_CELL,
+    }))
+}
+
+/// Archival length recorded **before** height `h`: `C(h)`, the parent's
+/// `cumulative_archival_len`, and `0` at genesis.
+fn archival_before<T: ReadTables>(txn: &T, height: u64) -> Result<ArchivalLength, ReadFault> {
+    let Some(parent) = height.checked_sub(1) else {
+        return Ok(ArchivalLength::ZERO);
+    };
+    Ok(block_info_at(txn, parent)?.cumulative_archival_len)
+}
+
+/// Archival length recorded **through** height `h` inclusive.
+fn archival_through<T: ReadTables>(txn: &T, height: u64) -> Result<ArchivalLength, ReadFault> {
+    Ok(block_info_at(txn, height)?.cumulative_archival_len)
+}
+
+/// SI-13 on the archival fold. `height` is the later sample.
+fn archival_not_monotone(height: u64) -> ReadFault {
+    ReadFault::Invariant(StoreInvariant::FoldNotMonotone {
+        cell: ARCHIVAL_LEN_CELL,
+        height,
+    })
+}
+
+/// The smallest `h ≤ tip` whose cumulative archival length reaches
+/// `offset`, by binary search over the cell (dense, monotone). Every caller
+/// asks for an offset the tip's row covers, so a search that ends on a
+/// height below `offset`, or on one whose parent already reached it, is a
+/// fold the rows do not support (SI-13) — never a height to act on.
+fn first_height_reaching<T: ReadTables>(
+    txn: &T,
+    offset: ArchivalLength,
+    tip: u64,
+) -> Result<u64, ReadFault> {
+    let (mut lo, mut hi) = (0u64, tip);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if archival_through(txn, mid)? >= offset {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    if archival_through(txn, lo)? < offset {
+        return Err(archival_not_monotone(lo));
+    }
+    if lo > 0 && archival_through(txn, lo - 1)? >= offset {
+        return Err(archival_not_monotone(lo));
+    }
+    Ok(lo)
+}
+
+/// The storage id of the first transaction whose archival offset is at or
+/// past `offset` — the id shard `offset / W` opens at when `offset` is a
+/// multiple of `W` (module docs). The height is [`first_height_reaching`];
+/// no earlier height holds such a transaction. Its ids are walked in
+/// issue order from `C(h)`, adding each `txs_archival_len` row (absent ⇔
+/// `0`); when every transaction of `h` starts below `offset`, the answer is
+/// the next height's first id. The whole block is walked either way, and
+/// the sum must land on the block's own cumulative cell: a disagreement is
+/// SI-19, a length row and the fold that was built from it no longer
+/// agreeing.
+fn first_id_at_offset<T: ReadTables>(
+    txn: &T,
+    offset: ArchivalLength,
+    tip: u64,
+) -> Result<u64, ReadFault> {
+    let height = first_height_reaching(txn, offset, tip)?;
+    let info = block_info_at(txn, height)?;
+    // SI-13 on the raw listed samples, before the coinbase term is added:
+    // a decrease of one derives to an empty id range, not an inverted one,
+    // and would read as a block with no transactions (Copilot, PR #861).
+    let listed_before = listed_before(txn, height)?;
+    if info.cumulative_tx_count < listed_before {
+        return Err(fold_not_monotone(height));
+    }
+    let first = first_tx_id(height, listed_before)?;
+    let end = ids_from(info.cumulative_tx_count, height)?;
+    let through = info.cumulative_archival_len;
+    let lens = txn.table(TXS_ARCHIVAL_LEN)?;
+    let mut at = archival_before(txn, height)?;
+    let mut found = None;
+    for id in first..end {
+        if found.is_none() && at >= offset {
+            found = Some(id);
+        }
+        let len = match lens.get(id)? {
+            Some(guard) => guard
+                .value()
+                .decode()
+                .map_err(|cause| chain_reads::undecodable(ARCHIVAL_LEN_ROW, cause))?,
+            None => ArchivalLength::ZERO,
+        };
+        at = at
+            .checked_add(len)
+            .ok_or(ReadFault::Invariant(StoreInvariant::FoldOverflow {
+                cell: ARCHIVAL_LEN_CELL,
+            }))?;
+    }
+    if at != through {
+        return Err(ReadFault::Invariant(
+            StoreInvariant::ArchivalLengthsDisagree {
+                height,
+                rows: at.to_raw(),
+                cell: through.to_raw(),
+            },
+        ));
+    }
+    Ok(found.unwrap_or(end))
 }
 
 /// Listed (non-coinbase) transactions recorded **before** height `h`: the
@@ -448,12 +595,6 @@ fn ids_from(listed: u64, height: u64) -> Result<u64, ReadFault> {
     })
 }
 
-/// Storage ids issued through height `h` inclusive, read from the row.
-fn ids_through<T: ReadTables>(txn: &T, height: u64) -> Result<u64, ReadFault> {
-    let listed = block_info_at(txn, height)?.cumulative_tx_count;
-    ids_from(listed, height)
-}
-
 /// SI-13: the listed-transaction fold decreased. `height` is the later sample.
 fn fold_not_monotone(height: u64) -> ReadFault {
     ReadFault::Invariant(StoreInvariant::FoldNotMonotone {
@@ -483,41 +624,14 @@ pub(super) fn h_scarce<T: ReadTables>(
     if e < FIRST_PRUNING_EPOCH {
         return Ok(None);
     }
-    // Every shard whose last id is below `first_tx_id((E−1)·SEB)` has
-    // `close_epoch + 2 ≤ E`; the last of them is `⌊hi_id / T⌋ − 1`.
-    let hi_height = horizons.first_height_of(e - 1);
-    let hi_id = first_tx_id(hi_height, listed_before(txn, hi_height)?)?;
-    let Some(last_closed) = (hi_id / SHARD_TX_COUNT).checked_sub(1) else {
+    // Every shard below `⌊C((E−1)·SEB) / W⌋` has `close_epoch + 2 ≤ E`; the
+    // last of them, `k`, closes at the first height reaching `(k+1)·W`.
+    let hi = archival_before(txn, horizons.first_height_of(e - 1))?;
+    let reached = shard_of(hi).to_raw();
+    if reached == 0 {
         return Ok(None);
-    };
-    let last_tx_id = (last_closed + 1) * SHARD_TX_COUNT - 1;
-    height_of_tx_id(txn, last_tx_id, tip).map(Some)
-}
-
-/// The height that recorded transaction id `id`: the smallest `h ≤ tip`
-/// with [`ids_through`]`(h) > id`, by binary search over the running total
-/// (dense, monotone — SI-2, SI-9).
-fn height_of_tx_id<T: ReadTables>(txn: &T, id: u64, tip: u64) -> Result<u64, ReadFault> {
-    let (mut lo, mut hi) = (0u64, tip);
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        if ids_through(txn, mid)? > id {
-            hi = mid;
-        } else {
-            lo = mid + 1;
-        }
     }
-    // The cut is the first height whose issued ids pass `id`. A decrease
-    // lets the search land off that cut; refuse it rather than name a
-    // close height the rows do not support (SI-13).
-    let through = ids_through(txn, lo)?;
-    if through <= id {
-        return Err(fold_not_monotone(lo));
-    }
-    if lo > 0 && ids_through(txn, lo - 1)? > id {
-        return Err(fold_not_monotone(lo));
-    }
-    Ok(lo)
+    first_height_reaching(txn, offset_of(reached)?, tip).map(Some)
 }
 
 /// Delete every row of a `u64`-keyed table in `ids` — the discard's one
@@ -552,6 +666,17 @@ impl super::read::ReadSnapshot<'_> {
         h_scarce(self.txn(), self.horizons(), tip)
             .map(|height| height.map(BlockHeight::from_raw))
             .map_err(ReadFault::into_plain)
+    }
+
+    /// The storage ids of `shards` on the recorded chain — the range the
+    /// boundary batch would discard for them. Test-only: it lets a test put
+    /// the same question to a store before and after a prune.
+    #[cfg(test)]
+    pub(super) fn shard_storage_ids(&self, shards: Range<u64>) -> Result<Range<u64>, StoreError> {
+        let Some((tip, _)) = chain_reads::tip_of(self.txn()).map_err(ReadFault::into_plain)? else {
+            return Ok(0..0);
+        };
+        shard_ids(self.txn(), shards, tip).map_err(ReadFault::into_plain)
     }
 }
 

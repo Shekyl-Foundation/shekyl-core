@@ -107,6 +107,8 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             cumulative_tx_count: 0,
             // The median in force **for** height 0, at height 0 (SCR-19).
             long_term_effective_median: weights.medians.long_term_effective_median,
+            // The coinbase carries no archival good, so no length (SHT-Q2).
+            cumulative_archival_len: shekyl_types::ArchivalLength::ZERO,
         }
     );
     assert_eq!(emission.coins_generated, AtomicUnits::ZERO);

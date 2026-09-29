@@ -126,9 +126,9 @@ use crate::schema::TableOrdinal;
 use shekyl_chain_rules::{CenRow, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
-    BadInterval, BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot,
-    GlobalOutputIndex, LongTermWeight, OneTimePubkey, OutputIndexInTx, PqcAuthHash, PrunableHash,
-    SettlementEpoch, ShardId, Timestamp, TreeLeaf, TreePosition, TxHash,
+    ArchivalLength, BadInterval, BlockHash, BlockHeight, BlockWeight, CommitmentBytes,
+    CurveTreeRoot, GlobalOutputIndex, LongTermWeight, OneTimePubkey, OutputIndexInTx, PqcAuthHash,
+    PrunableHash, SettlementEpoch, ShardId, Timestamp, TreeLeaf, TreePosition, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -683,6 +683,14 @@ impl Fixtures for ShardId {
         ]
     }
 }
+impl Fixtures for ArchivalLength {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", ArchivalLength::ZERO),
+            ("distinct", ArchivalLength::from_raw(0x0102_0304_0506_0708)),
+        ]
+    }
+}
 impl Fixtures for CurveTreeRoot {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![
@@ -712,6 +720,7 @@ impl Fixtures for BlockInfo {
                     long_term_weight: LongTermWeight::from_raw(0),
                     cumulative_tx_count: 0,
                     long_term_effective_median: LongTermWeight::from_raw(0),
+                    cumulative_archival_len: ArchivalLength::ZERO,
                 },
             ),
             // Every field distinct, difficulty straddling the lo/hi split so
@@ -728,6 +737,7 @@ impl Fixtures for BlockInfo {
                     long_term_weight: LongTermWeight::from_raw(7),
                     cumulative_tx_count: 8,
                     long_term_effective_median: LongTermWeight::from_raw(9),
+                    cumulative_archival_len: ArchivalLength::from_raw(10),
                 },
             ),
         ]
@@ -1244,6 +1254,7 @@ snapshotted_codecs! {
     SigmaWorkMilli => codec_snapshot_sigma_work_milli,
     SettlementEpoch => codec_snapshot_settlement_epoch,
     ShardId => codec_snapshot_shard_id,
+    ArchivalLength => codec_snapshot_archival_length,
     PoolRecord => codec_snapshot_pool_record,
     AltBlock => codec_snapshot_alt_block,
 }

@@ -76,6 +76,7 @@ fn record_block(batch: &WriteBatch<'_, '_>, height: u64, blk: &Block) -> Result<
         long_term_weight: shekyl_types::LongTermWeight::ZERO,
         cumulative_tx_count: 0,
         long_term_effective_median: shekyl_types::LongTermWeight::ZERO,
+        cumulative_archival_len: shekyl_types::ArchivalLength::ZERO,
     };
     batch
         .open_insert_table(BLOCK_INFO, PROBE_ROW)?
@@ -311,6 +312,7 @@ fn a_block_blob_that_does_not_hash_to_block_info_is_si7() {
             long_term_weight: shekyl_types::LongTermWeight::ZERO,
             cumulative_tx_count: 0,
             long_term_effective_median: shekyl_types::LongTermWeight::ZERO,
+            cumulative_archival_len: shekyl_types::ArchivalLength::ZERO,
         };
         batch
             .open_insert_table(BLOCK_INFO, PROBE_ROW)?
@@ -494,6 +496,7 @@ fn a_block_info_row_with_no_blocks_row_is_si7() {
             long_term_weight: shekyl_types::LongTermWeight::ZERO,
             cumulative_tx_count: 0,
             long_term_effective_median: shekyl_types::LongTermWeight::ZERO,
+            cumulative_archival_len: shekyl_types::ArchivalLength::ZERO,
         };
         batch
             .open_insert_table(BLOCK_INFO, PROBE_ROW)?

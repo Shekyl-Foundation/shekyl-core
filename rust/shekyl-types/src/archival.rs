@@ -72,33 +72,76 @@ use core::fmt;
 /// refused before any allocation is sized from the count.
 pub const MAX_HOLDINGS_SHARDS: usize = ARCHIVAL_MAX_HOLDINGS_SHARDS;
 
-/// `T` — transactions per archival shard: shard `k` is the storage ids
-/// `[k·T, (k+1)·T)`, `k = ⌊tx_id / T⌋` (`PDM-Q6` item 5, RULED
-/// 2026-09-23; `DRS_E1_SPRUNE.md` §2). The one consensus constant of the
-/// partition: no boundary table, no length rows, no byte lengths.
+scalar_u64! {
+    /// An **archival length**: the bytes of archival good a transaction carries —
+    /// its prunable region plus its `pqc_auths` segment, exactly the bytes a body
+    /// store holds and discards — or the sum of those over a run of transactions
+    /// (`SHT-Q2`, RULED 2026-09-29). Folded into the txid and stored as a
+    /// skeleton row, never declared or signed. A coinbase's is zero.
+    ///
+    /// A distinct type because the partition it drives used to be a
+    /// transaction count, and a `u64` would let a count, a storage id and a
+    /// length stand in for one another without a word of complaint.
+    ArchivalLength
+}
+
+impl ArchivalLength {
+    /// `self + other`, or `None` on overflow — the fold's only arithmetic.
+    #[must_use]
+    pub const fn checked_add(self, other: Self) -> Option<Self> {
+        match self.0.checked_add(other.0) {
+            Some(sum) => Some(Self(sum)),
+            None => None,
+        }
+    }
+}
+
+/// `W`: the archival length of a shard (`SHT-Q2`, RULED 2026-09-29;
+/// `ARCHIVAL_SHARD_T_DERIVATION.md` §8.6, §9). Shard `k` holds the
+/// transactions whose cumulative archival length **before** them lies in
+/// `[k·W, (k+1)·W)` — [`shard_of`]. Global multiples: no boundary table,
+/// and membership depends on nothing but the cumulative length, which every
+/// node derives from the rows it keeps.
 ///
-/// A storage id is not `cumulative_tx_count`. That field counts listed
-/// transactions. [`storage_ids_through`] adds one coinbase per block;
-/// `first_tx_id(h)` for `h ≥ 1` is that total at height `h − 1`, and
-/// `first_tx_id(0)` is `0`. Every node derives the same shard set from
-/// that total and `T`.
-///
-/// **PROVISIONAL numeric** (Round-2 gate with `n`, `D_max`, `w_launch`):
-/// chosen so a typical shard at ~16.7 KB/tx lands near 3.33 MB. Sourced
-/// from `config/consensus_constants.json` (`archival_shard_tx_count`, via
-/// this crate's `build.rs`) like the gate's other numerics, and exposed
-/// here, the shard vocabulary's home, so the store's discard (`⌊id / T⌋`)
-/// and the archiver's holdings name one `T`. A second home for `T` — a
-/// literal in a shipped crate, or a shard boundary derived from anything
-/// but `cumulative_tx_count` and this — is the FOLLOWUPS row's falsifier.
-pub const SHARD_TX_COUNT: u64 = ARCHIVAL_SHARD_TX_COUNT;
+/// **PROVISIONAL numeric**, `3,000,000` bytes: the §9 selection rule's
+/// output (the smallest `W` whose overshoot — one transaction's largest
+/// archival length over `W` — is at most 5 %), re-pinned before genesis by
+/// the overshoot tolerance and the multi-size W₂ and `U1b` measurements.
+/// Sourced from `config/consensus_constants.json`
+/// (`archival_shard_length_bytes`, via this crate's `build.rs`); this is its
+/// one home. The static relation "one transaction's largest archival length
+/// is below `W`", which is what keeps every shard non-empty, is asserted in
+/// `shekyl-wire`, where both constants are visible.
+pub const SHARD_LENGTH: ArchivalLength = ArchivalLength::from_raw(ARCHIVAL_SHARD_LENGTH_BYTES);
+
+/// The shard a transaction belongs to, from the cumulative archival length
+/// of every transaction before it: `⌊cum_before / W⌋`. The partition's one
+/// boundary function; nothing else places a boundary.
+#[must_use]
+pub const fn shard_of(cum_before: ArchivalLength) -> crate::ShardId {
+    crate::ShardId::from_raw(cum_before.to_raw() / SHARD_LENGTH.to_raw())
+}
+
+/// Where shard `k` starts: the cumulative archival length `k·W`, or `None`
+/// when it overflows. A transaction is in shard `k` or later iff its
+/// cumulative-before is at least this.
+#[must_use]
+pub const fn shard_start(k: crate::ShardId) -> Option<ArchivalLength> {
+    match k.to_raw().checked_mul(SHARD_LENGTH.to_raw()) {
+        Some(start) => Some(ArchivalLength::from_raw(start)),
+        None => None,
+    }
+}
 
 include!(concat!(
     env!("OUT_DIR"),
     "/consensus_constants_generated.rs"
 ));
 
-const _: () = assert!(SHARD_TX_COUNT > 0, "a shard holds at least one transaction");
+const _: () = assert!(
+    SHARD_LENGTH.to_raw() > 0,
+    "a shard has a positive archival length"
+);
 
 // The cap bounds a `Vec` length, so `build.rs` emits it as `usize` rather than
 // `u64` like its neighbour: there is no cast to lint, and a value exceeding
@@ -449,6 +492,34 @@ mod tests {
             })
         );
         assert!(ShardSet::empty().is_empty());
+    }
+
+    /// `SHT-Q2`'s boundary function: a transaction whose cumulative-before is
+    /// exactly `k·W` opens shard `k`; one byte less is still shard `k − 1`.
+    #[test]
+    fn a_transaction_starting_exactly_at_k_w_opens_shard_k() {
+        let w = SHARD_LENGTH.to_raw();
+        assert_eq!(shard_of(ArchivalLength::ZERO), crate::ShardId::ZERO);
+        for k in [1u64, 2, 7, 1_000] {
+            let start = shard_start(crate::ShardId::from_raw(k)).expect("fits");
+            assert_eq!(start.to_raw(), k * w);
+            assert_eq!(shard_of(start).to_raw(), k, "k·W opens shard {k}");
+            assert_eq!(
+                shard_of(ArchivalLength::from_raw(start.to_raw() - 1)).to_raw(),
+                k - 1,
+                "one byte before k·W is still shard {}",
+                k - 1
+            );
+        }
+        assert_eq!(
+            shard_start(crate::ShardId::from_raw(u64::MAX)),
+            None,
+            "k·W overflows"
+        );
+        assert_eq!(
+            ArchivalLength::from_raw(u64::MAX).checked_add(ArchivalLength::from_raw(1)),
+            None
+        );
     }
 
     #[test]

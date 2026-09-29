@@ -91,8 +91,10 @@ pub enum StoreInvariant {
         cell: &'static str,
     },
     /// **SI-13** — a recorded fold never *decreases*: a prefix sum the
-    /// store only ever adds to (`block_info.cumulative_tx_count`, S-CHAIN-R)
-    /// is never smaller at a later height than at an earlier one. SI-8
+    /// store only ever adds to (`block_info.cumulative_tx_count`, S-CHAIN-R;
+    /// `block_info.cumulative_archival_len`, `SHT-Q2`, armed by the
+    /// retention prune's reads) is never smaller at a later height than at
+    /// an earlier one. SI-8
     /// guards the write (no wrap); this is the read-side form. Like
     /// [`WorkNotIncreasing`](Self::WorkNotIncreasing) it is not armed by a
     /// write site but by a rule reading the store: CEN-F20's volume window is the
@@ -215,6 +217,23 @@ pub enum StoreInvariant {
         /// Which break the writer observed.
         observed: LeafCountFault,
     },
+    /// **SI-19** — the archival fold is the sum of its rows:
+    /// `block_info[h].cumulative_archival_len` equals the parent's value
+    /// plus the `txs_archival_len` rows (absent ⇔ `0`) of the storage ids
+    /// `h` issued (`SHT-Q2`). `connect` writes both from one measurement of
+    /// the segments, so they cannot disagree at the write; a disagreement
+    /// is a row or a cell changed under the store. Armed by the prune's
+    /// offset walk (`prune.rs` `first_id_at_offset`), which sums a block's
+    /// rows to place a shard boundary inside it and would otherwise place
+    /// it by numbers the fold does not support.
+    ArchivalLengthsDisagree {
+        /// The height whose rows were summed.
+        height: u64,
+        /// What the parent's cell plus the block's rows sum to.
+        rows: u64,
+        /// What the block's own cell records.
+        cell: u64,
+    },
 }
 
 /// What an SI-18 write observed (payload of
@@ -276,6 +295,7 @@ impl StoreInvariant {
             Self::PoolEntryUnpaired { .. } => 16,
             Self::PositionMapsNotBijective => 17,
             Self::LeafCountNotAdvanced { .. } => 18,
+            Self::ArchivalLengthsDisagree { .. } => 19,
         }
     }
 }
@@ -377,6 +397,12 @@ impl core::fmt::Display for StoreInvariant {
                      tree, rebuild from the block corpus"
                 ),
             },
+            Self::ArchivalLengthsDisagree { height, rows, cell } => write!(
+                f,
+                "block {height}'s txs_archival_len rows sum to {rows} from its parent's \
+                 cumulative_archival_len, but its own cell records {cell}; the shard boundaries \
+                 cannot be placed, rebuild from the block corpus"
+            ),
             Self::CellCorrupt { key, fault } => write!(
                 f,
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
@@ -411,6 +437,7 @@ impl core::error::Error for StoreInvariant {
             | Self::PoolEntryUnpaired { .. }
             | Self::PositionMapsNotBijective
             | Self::LeafCountNotAdvanced { .. }
+            | Self::ArchivalLengthsDisagree { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

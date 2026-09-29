@@ -167,6 +167,16 @@ pub const fn point(k: usize) -> [u8; 32] {
     POINTS[k - 1]
 }
 
+/// CEN-H3's weight bound — the largest weight a non-coinbase transaction
+/// may have (`rules::tx::max_tx_weight`, derived from the full-reward
+/// zone). Re-exported, not restated, for fixtures that build the largest
+/// transaction a block admits: `SHT-Q2`'s boundary tests straddle a shard
+/// boundary with one.
+#[must_use]
+pub const fn max_tx_weight() -> usize {
+    crate::rules::tx::max_tx_weight()
+}
+
 /// `k·G`, compressed, for any `k ≥ 1` — the **computed** form of
 /// [`POINTS`], for fixtures whose need is unbounded: the ingest's
 /// seed-epoch chains spend a fresh key image per block for two thousand

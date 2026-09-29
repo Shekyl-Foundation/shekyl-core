@@ -75,7 +75,9 @@
 //! is SI-9, never a verdict.
 
 use shekyl_chain_rules::{ChainValid, RuleSet, TxIdentity};
-use shekyl_types::{BlockHash, BlockHeight, CommitmentBytes, OneTimePubkey, OutputIndexInTx};
+use shekyl_types::{
+    ArchivalLength, BlockHash, BlockHeight, CommitmentBytes, OneTimePubkey, OutputIndexInTx,
+};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
 
@@ -88,8 +90,8 @@ use crate::ids::{AmountIndex, OutputSlot, OutputStorageId, TxStorageId};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
     BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
-    OUTPUT_TXS, SPENT_KEYS, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE, TXS_PRUNABLE_HASH,
-    TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
+    OUTPUT_TXS, SPENT_KEYS, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE,
+    TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
 };
 
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
@@ -291,14 +293,16 @@ impl<'id> WriteBatch<'_, 'id> {
         // noted **before** any belt can fire: a violation here must halt
         // the writer at this height (§3.6.2), and the halt reads the noted
         // height — a belt that poisoned first would leave the writer live.
-        // The parent's `cumulative_tx_count` rides out of the same decoded
-        // tip row (§3.6): genesis has no parent and starts the count at 0.
-        let (height, parent_tx_count) = {
+        // The parent's `cumulative_tx_count` and `cumulative_archival_len`
+        // ride out of the same decoded tip row (§3.6): genesis has no parent
+        // and starts both at 0.
+        let (height, parent_tx_count, parent_archival_len) = {
             let tip = self.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?;
             let last = tip.last()?;
             let height = last.as_ref().map_or(0, |(h, _)| h.value() + 1);
             self.journal().note_height(height);
             let mut parent_tx_count = 0;
+            let mut parent_archival_len = ArchivalLength::ZERO;
             if let Some((_, info)) = last {
                 let info = info.value().decode().map_err(|cause| {
                     self.poison().arm(StoreInvariant::CellCorrupt {
@@ -310,8 +314,9 @@ impl<'id> WriteBatch<'_, 'id> {
                     return Err(self.poison().arm(StoreInvariant::TipMismatch));
                 }
                 parent_tx_count = info.cumulative_tx_count;
+                parent_archival_len = info.cumulative_archival_len;
             }
-            (height, parent_tx_count)
+            (height, parent_tx_count, parent_archival_len)
         };
         // Compared by **value** (d6ba4d98f; RD-Q10): Fakechain `Fixed`
         // reuses `RuleSetId::GENESIS`, so an id-only check would accept
@@ -359,11 +364,23 @@ impl<'id> WriteBatch<'_, 'id> {
         let recording = self.record_undo(height);
 
         // ---- 2. transactions -------------------------------------------
+        // Each transaction's archival length folds onto the parent's in
+        // recording order — the order storage ids are issued — so the running
+        // value before a transaction is the offset it starts from (SHT-Q2).
         let (miner_identity, miner_tx) = block.miner_tx();
-        let mut rct_outputs = self.record_tx(height, miner_identity, miner_tx, true)?;
+        let miner = self.record_tx(height, miner_identity, miner_tx, true)?;
+        let mut rct_outputs = miner.rct;
+        let mut archival_len = parent_archival_len.checked_add(miner.archival_len);
         for (identity, tx) in block.transactions() {
-            rct_outputs += self.record_tx(height, *identity, tx, false)?;
+            let recorded = self.record_tx(height, *identity, tx, false)?;
+            rct_outputs += recorded.rct;
+            archival_len = archival_len.and_then(|len| len.checked_add(recorded.archival_len));
         }
+        let cumulative_archival_len = archival_len
+            .ok_or(StoreInvariant::FoldOverflow {
+                cell: "block_info.cumulative_archival_len",
+            })
+            .map_err(|row| self.poison().arm(row))?;
 
         // ---- 3. tree (DRS-E3; `grow.rs`) --------------------------------
         self.record_drain(height, &valid)?;
@@ -422,6 +439,8 @@ impl<'id> WriteBatch<'_, 'id> {
             // carry no other: `Medians::derive` reads the window that ends
             // at the connecting height.
             long_term_effective_median: weights.medians.long_term_effective_median,
+            // Store-derived running total (SHT-Q2), folded above under SI-8.
+            cumulative_archival_len,
         };
         self.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?
             .insert(height, info.encoded().as_encoded())?;
@@ -474,15 +493,16 @@ impl<'id> WriteBatch<'_, 'id> {
     }
 
     /// One transaction's rows (`add_transaction` / `add_transaction_data` /
-    /// `add_output` / `add_tx_amount_output_indices`). Returns how many of
-    /// its outputs count toward `block_info.rct_outputs`.
+    /// `add_output` / `add_tx_amount_output_indices`), plus its archival
+    /// length row. Returns what the block row folds: how many of its outputs
+    /// count toward `block_info.rct_outputs`, and its archival length.
     fn record_tx(
         &self,
         height: u64,
         identity: TxIdentity,
         tx: &Transaction,
         miner: bool,
-    ) -> Result<u64, StoreError> {
+    ) -> Result<RecordedTx, StoreError> {
         let tx_hash = identity.hash;
         let emission = tx
             .prefix
@@ -559,6 +579,16 @@ impl<'id> WriteBatch<'_, 'id> {
             self.open_insert_table(TXS_PQC_AUTH_HASH, StoreInvariant::IdNotFresh)?
                 .insert(tx_id.to_raw(), pqc_auth_hash.encoded().as_encoded())?;
         }
+        // The archival length (SHT-Q2): measured on the two segments just
+        // written, so the row and the bytes a prune discards are one
+        // serialization. Sparse — present ⇔ `> 0` ⇔ the transaction carries
+        // archival good (pinned class by class in `shekyl-chain-rules`'
+        // `tx_domain_tests`) — and permanent: a prune never deletes it.
+        let archival_len = segments.archival_len();
+        if archival_len > ArchivalLength::ZERO {
+            self.open_insert_table(TXS_ARCHIVAL_LEN, StoreInvariant::IdNotFresh)?
+                .insert(tx_id.to_raw(), archival_len.encoded().as_encoded())?;
+        }
 
         // Outputs: `output_txs` by global id, `output_amounts` under
         // `(amount, amount_index)` with the amount zeroed for miner /
@@ -623,8 +653,16 @@ impl<'id> WriteBatch<'_, 'id> {
                 tx_id.to_raw(),
                 TxOutputIndices(indices).encoded().as_encoded(),
             )?;
-        Ok(rct)
+        Ok(RecordedTx { rct, archival_len })
     }
+}
+
+/// What one transaction's rows contribute to its block's `block_info` row.
+struct RecordedTx {
+    /// Outputs counted toward `block_info.rct_outputs`.
+    rct: u64,
+    /// Its archival length, folded into `block_info.cumulative_archival_len`.
+    archival_len: ArchivalLength,
 }
 
 /// Next store-derived id for a unique-key primary. Dense iff the table is
