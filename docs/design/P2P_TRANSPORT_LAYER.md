@@ -1727,12 +1727,13 @@ round can reject them.
   off, peering on testnet through sync, relay, and both dial
   directions. The loopback harness is one build. The claim that
   cutover is not a flag day is about two builds talking to each
-  other. UPDATE 2026-09-29: the clearnet pair is recorded in
+  other. UPDATE 2026-09-30: the clearnet pair, the Tor dial and inbound
+  distributions, the three clearnet deadlines and the Tor gap timer,
+  and one Tor stem hop are in
   [`p2p_cutover_crossbuild_20260929.md`](../benchmarks/p2p_cutover_crossbuild_20260929.md).
-  Sync, block relay, and both dial directions passed. Transaction
-  stem and fluff did not cross, in either direction. Tor was not
-  run. The deadline and thread-budget measurements are not in that
-  record.
+  The epee-to-epee stem still did not cross in the first cross-build.
+  The thread-budget legs are not in it; they wait on the ledger row.
+  Deadline wiring and D13 are not done.
 - **One descriptor per connection.** Count `readlink` results equal to
   that socket's `socket:[inode]`. Assert one. Do not count
   `/proc/self/fd` for the whole process.

@@ -666,13 +666,27 @@ left up.
 | floor: `Transaction added to pool` | 11:26:56.400 |
 
 The hop, stem-send to the receiver's first log of the transaction, is
-**658 ms**. The receiver then validated it into its pool 1.36 s later.
-It tried to stem onward, logged `Unable to send transaction(s) via
-Dandelion++ stem` (a two-node stem has no further outbound), and queued
-the transaction for fluff. One hop, accepted. n = 1; it is the
-existence of the hop over Tor, not a distribution, and it does not
-replace the 350 ms placeholder in D-5 — a distribution of hops is a
-later run on this same shape.
+**658 ms**. The receiver then took **1.36 s** from that line to
+`Transaction added to pool`. It tried to stem onward, logged `Unable to
+send transaction(s) via Dandelion++ stem` (a two-node stem has no
+further outbound), and queued the transaction for fluff.
+
+`hop` is transit plus the receiver's verification plus its scheduling
+(`params.rs`). The anonymity class assumes 1 625 ms of transit and a
+modal Pi 4 verification of 124.5 ms (`verify_cost.rs`, the pre-`PL-D3`
+cell; the floor re-measurement is the comment on that cell). This hop
+measured transit 658 ms, under that assumption, and a node-local
+interval of 1.36 s, about eleven times the cell. The sum is about
+2.02 s against an adopted anonymity hop of about 1.75 s. Under-estimating
+the hop is the privacy-losing direction: the embargo fires early and
+the stem fluffs short (`DAEMON_RELAY_PRIVACY.md` D-5). n = 1 does not
+move the derivation. The interval is also not yet the derivation's
+term: pool admission writes LMDB and checks key images beyond
+`shekyl_fcmp_verify`, and this transaction's input count and tree depth
+were not recorded, so it is not pinned to the modal cell. The
+distribution that splits verify from pool admission, and that records
+the shape, is the follow-on. This hop does not replace the 350 ms
+placeholder.
 
 ## Not this run
 

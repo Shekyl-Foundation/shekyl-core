@@ -46,6 +46,18 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
+- **Measure the anonymity hop on the floor, and split the node-local term.** One Tor stem (`bd4392985`) took 658 ms in transit, under the 1 625 ms assumption, and 1.36 s from `Including transaction` to pool add, about eleven times the modal Pi 4 verification cell (124.5 ms, `verify_cost.rs`, still the pre-`PL-D3` millis). Under-estimating the hop fluffs stems early (D-5). The distribution is that same shape. Each sample records input count, tree depth and bytes, so it maps to a `SPEC_VERIFY_COST` cell, and splits the node-local interval into verify and pool admission. If verify alone is near 1.3 s for the modal shape, the owed floor re-measurement is the input that re-derives the anonymity embargo. If the time is the pool write, the embargo inputs stay and aarch64 admission latency is the finding. Not #909. Falsify by the owner doc naming which of the two the distribution showed.
+  - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md) D-5
+  - Target: pre-genesis
+
+- **A peer syncs on the network it is connected to.** The protocol still switches on zone: no chain sync on a non-public address (`cryptonote_protocol_handler.inl:433`), new blocks relayed only to public-zone connections (`:2525`), support flags requested only from public-zone peers (`net_node.inl:2825`), overlay zones outbound-fluff-only (`levin_notify.cpp:321`). Delete the four. A privacy property that is real comes back as named policy on the session's network; only the fluff-only flag has that claim (D7). In the same change, rename Rust `Zone` (`shekyl-relay` `zone/mod.rs`, the `zone_ffi` exports, `ZoneRouteDecision`): once the enum is gone the word has no origin. After #909. Falsify by those four sites gone and no `struct Zone` under `shekyl-relay`.
+  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
+  - Target: pre-genesis
+
+- **Run the D5 thread-budget legs once the ledger prints.** The conditions are pinned (D5, 2026-09-30): the smallest worker count, blocking cap and executor count that meet each leg's duty, summed against four cores on the floor device with the miner off. A total taken before daemon RPC and Tor control construct through `shekyl-runtime::runtime` omits two of the pools the sum exists to count, so this waits on that row. Falsify by one record per leg, each naming its count and the ledger line it was read from.
+  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D5
+  - Target: pre-genesis
+
 - **A stalled in-flight write after a local close holds the fd.** #909's `Hub::record` discards the queued tail on a caused close, so a banned or refused peer no longer holds our connection task through *queued* frames. It does not bound the frame the writer already popped: `write_all` on that frame blocks the task (and the fd) for as long as the peer refuses to read, and `overfull` trips only on queue growth, not on a stalled tail (`capped-stream/src/copy.rs`). The bound is the shape ruled out of #909 in favour of discard (this box, 2026-09-29): an `AfterChannel` stall deadline (the variant exists in `cause.rs`, nothing arms one) derived like the other transport deadlines. Blocked on the transport-deadline commit (the derived deadlines are owed there; this one derives with them). Falsify by a test in which a peer stops reading after a local close and the connection task and its fd are released within a bound rather than held.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
