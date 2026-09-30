@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! Tests for the archival reads (`store/archival_reads.rs`, DRS-E1 S-ARCH
-//! A1, A3–A10). No writer exists yet for these tables (E4's), so every
+//! A1–A10). No writer exists yet for these tables (E4's), so every
 //! planted state is written raw through the schema's own table handles and
 //! asserted on a fresh snapshot — the reads' contract is with the bytes a
 //! writer will leave, not with any writer.
@@ -22,12 +22,12 @@ use super::store_tests::{cleanup, tmp, EPOCH};
 use super::*;
 use crate::codec::{
     ArchivalLastSlashEpochCell, AttestationWitnessBytes, BondRecord, Canonical, Holdings,
-    PropertyCell, RMarket, Raw, SigmaWorkMilli,
+    PropertyCell, RMarket, Raw, SigmaWorkMilli, SlashLogEntry, SlashedHolding,
 };
-use crate::ids::ServeCreditKey;
+use crate::ids::{ServeCreditKey, SlashLogKey};
 use crate::schema::{
     ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_R_MARKET,
-    ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SIGMA_WORK,
+    ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_LOG,
 };
 
 fn persona(fill: u8) -> PCanonicalId {
@@ -131,6 +131,113 @@ fn a1_absent_is_none_present_decodes_and_a_bad_row_is_si7() {
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let err = store.begin_read().unwrap().bond_record(&p).unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_bond"), "{err}");
+    cleanup(&path);
+}
+
+// ---------------------------------------------------------------------------
+// A2 — the slash log strictly above a height
+// ---------------------------------------------------------------------------
+
+fn slash_entry(p: &PCanonicalId, s: u64, e: u64, add: u64) -> SlashLogEntry {
+    SlashLogEntry {
+        persona: *p,
+        shard: shard(s),
+        epoch: epoch(e),
+        holding: SlashedHolding::Shard {
+            add_epoch: epoch(add),
+        },
+    }
+}
+
+fn plant_slash(txn: &redb::WriteTransaction, h: u64, seq: u32, entry: &SlashLogEntry) {
+    let mut t = txn.open_table(ARCHIVAL_SLASH_LOG).expect("t");
+    t.insert(
+        SlashLogKey::new(BlockHeight::from_raw(h), seq).key(),
+        entry.encoded().as_encoded(),
+    )
+    .expect("insert");
+}
+
+#[test]
+fn a2_is_the_personas_rows_strictly_above_the_height_in_log_order() {
+    let path = tmp("arch-a2");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let p = persona(0xa2);
+    let other = persona(0xb2);
+    assert!(store
+        .begin_read()
+        .unwrap()
+        .slash_log_after(&p, BlockHeight::ZERO)
+        .unwrap()
+        .is_empty());
+    drop(store);
+
+    // Two of `p`'s slashes at 100 (seq 0 and 1), another persona's between
+    // them, one of `p`'s at 250 and one at 400.
+    let at_100_a = slash_entry(&p, 7, 1, 0);
+    let at_100_b = slash_entry(&p, 9, 1, 0);
+    let at_250 = slash_entry(&p, 11, 2, 1);
+    let at_400 = SlashLogEntry {
+        holding: SlashedHolding::CompleteTree,
+        ..slash_entry(&p, 13, 4, 0)
+    };
+    plant(&path, |txn| {
+        plant_slash(txn, 100, 0, &at_100_a);
+        plant_slash(txn, 100, 1, &slash_entry(&other, 7, 1, 0));
+        plant_slash(txn, 100, 2, &at_100_b);
+        plant_slash(txn, 250, 0, &at_250);
+        plant_slash(txn, 250, 1, &slash_entry(&other, 11, 2, 0));
+        plant_slash(txn, 400, 0, &at_400);
+    });
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().unwrap();
+    let after = |h: u64| snap.slash_log_after(&p, BlockHeight::from_raw(h)).unwrap();
+
+    // Strictly above: rows *at* `h` are excluded (a slash at `h` is
+    // already-removed state at `h`); the other persona's rows never appear.
+    assert_eq!(after(0), vec![at_100_a, at_100_b, at_250, at_400]);
+    assert_eq!(after(99), vec![at_100_a, at_100_b, at_250, at_400]);
+    assert_eq!(after(100), vec![at_250, at_400]);
+    assert_eq!(after(249), vec![at_250, at_400]);
+    assert_eq!(after(250), vec![at_400]);
+    assert_eq!(after(399), vec![at_400]);
+    assert_eq!(after(400), vec![]);
+    // The last height: nothing is strictly above it. The C++ special-cased
+    // this to keep `h + 1` from wrapping and scanning the whole log; here
+    // the key's `above` saturates to an empty range, with rows present.
+    assert_eq!(after(u64::MAX - 1), vec![]);
+    assert_eq!(after(u64::MAX), vec![]);
+    // A stranger has no rows at any height.
+    assert!(snap
+        .slash_log_after(&persona(0xc2), BlockHeight::ZERO)
+        .unwrap()
+        .is_empty());
+    drop(snap);
+    drop(store);
+
+    // A row that is not one encoding of an entry is SI-7, even when it is
+    // another persona's: the read decodes before it filters, because a
+    // corrupt log is a corrupt log whoever it names.
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_SLASH_LOG).expect("t");
+        t.insert(
+            SlashLogKey::new(BlockHeight::from_raw(300), 0).key(),
+            <Coded<SlashLogEntry> as Value>::from_bytes(&[0xff, 1, 2]),
+        )
+        .expect("insert");
+    });
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().unwrap();
+    let err = snap
+        .slash_log_after(&p, BlockHeight::from_raw(250))
+        .unwrap_err();
+    assert!(is_si7_undecodable(&err, "archival_slash_log"), "{err}");
+    // Below the bad row the read is unaffected — it never reaches it.
+    assert_eq!(
+        snap.slash_log_after(&p, BlockHeight::from_raw(300))
+            .unwrap(),
+        vec![at_400]
+    );
     cleanup(&path);
 }
 

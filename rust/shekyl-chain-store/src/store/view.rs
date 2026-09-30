@@ -88,11 +88,18 @@
 use shekyl_chain_rules::{
     AtHeight, BlockOutputs, ChainView, RecordedBlock, RecordedWeights, Tip, TreeFrontier,
 };
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, TxHash};
+use shekyl_types::archival::{PassCount, ServedShard};
+use shekyl_types::{
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PCanonicalId, SettlementEpoch,
+    ShardId, TxHash,
+};
 use shekyl_units::AtomicUnits;
 
-use crate::codec::BlockInfo;
+use crate::codec::{
+    ArchivalLastSlashEpochCell, BlockInfo, BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry,
+};
 
+use super::archival_reads;
 use super::chain_reads::{self, ReadFault};
 use super::curve_reads;
 use super::error::StoreError;
@@ -256,5 +263,66 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     /// [`WriteBatch::refuse_corrupt`]: super::write::WriteBatch::refuse_corrupt
     fn total_burned(&self) -> Result<AtomicUnits, StoreError> {
         self.batch.total_burned()
+    }
+
+    // The archival reads (DRS-E4 commit 2): the same bodies
+    // `ReadSnapshot` reads the committed chain through (`archival_reads`),
+    // over this batch's transaction, with a fault arming the poison. Every
+    // absence rule is the body's; nothing is classified here.
+
+    fn bond_record(&self, persona: &PCanonicalId) -> Result<Option<BondRecord>, StoreError> {
+        archival_reads::bond_record(self.batch.txn(), persona).map_err(|f| self.arm(f))
+    }
+
+    fn slash_log_after(
+        &self,
+        persona: &PCanonicalId,
+        height: BlockHeight,
+    ) -> Result<Vec<SlashLogEntry>, StoreError> {
+        archival_reads::slash_log_after(self.batch.txn(), persona, height).map_err(|f| self.arm(f))
+    }
+
+    fn last_served_epoch(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+    ) -> Result<Option<SettlementEpoch>, StoreError> {
+        archival_reads::last_served_epoch(self.batch.txn(), persona, shard).map_err(|f| self.arm(f))
+    }
+
+    fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, StoreError> {
+        archival_reads::served_shards(self.batch.txn(), persona).map_err(|f| self.arm(f))
+    }
+
+    fn pass_count(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<PassCount, StoreError> {
+        archival_reads::pass_count(self.batch.txn(), persona, shard, epoch).map_err(|f| self.arm(f))
+    }
+
+    fn r_market(
+        &self,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<RMarket>, StoreError> {
+        archival_reads::r_market(self.batch.txn(), shard, epoch).map_err(|f| self.arm(f))
+    }
+
+    fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, StoreError> {
+        archival_reads::sigma_work(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    }
+
+    fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, StoreError> {
+        archival_reads::budget(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    }
+
+    /// The watermark is a property cell, read through the batch's own
+    /// property read (the same body `ReadSnapshot::last_settled_slash_epoch`
+    /// is), so its faults are already the batch's.
+    fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, StoreError> {
+        self.batch.get_property::<ArchivalLastSlashEpochCell>()
     }
 }

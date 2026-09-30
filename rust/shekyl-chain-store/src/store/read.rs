@@ -49,7 +49,7 @@ use shekyl_wire::Block;
 
 use crate::codec::{
     ArchivalLastSlashEpochCell, BlockInfo, BondRecord, CurveTreeState, OutTx, PropertyCell,
-    RMarket, SigmaWorkMilli, TotalBurnedCell, TxOutputIndices,
+    RMarket, SigmaWorkMilli, SlashLogEntry, TotalBurnedCell, TxOutputIndices,
 };
 use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
@@ -898,6 +898,18 @@ impl ReadSnapshot<'_> {
     /// row is SI-7.
     pub fn bond_record(&self, persona: &PCanonicalId) -> Result<Option<BondRecord>, StoreError> {
         archival_reads::bond_record(&self.txn, persona).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A2.** Every slash logged against `persona` strictly above `height`,
+    /// in log order — the history half of the as-of-height holdings fold
+    /// (`shekyl-archival-retention::holds_shard_at`). Empty when none.
+    pub fn slash_log_after(
+        &self,
+        persona: &PCanonicalId,
+        height: BlockHeight,
+    ) -> Result<Vec<SlashLogEntry>, StoreError> {
+        archival_reads::slash_log_after(&self.txn, persona, height)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A3.** Latest epoch `persona` served `shard`, one reverse seek.

@@ -7,8 +7,12 @@
 
 use core::convert::Infallible;
 
+use shekyl_types::archival::{
+    BondRecord, PassCount, RMarket, ServedShard, SigmaWorkMilli, SlashLogEntry,
+};
 use shekyl_types::{
-    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, TxHash,
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, PCanonicalId,
+    SettlementEpoch, ShardId, TxHash,
 };
 
 use super::{drain, sources, DrainSources};
@@ -98,6 +102,47 @@ impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> ChainView<'id> for Outpu
     }
     fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
         Ok((self.0)(height))
+    }
+    // No bonds: the honest empty archival state (DRS-E4 §5.2).
+    fn bond_record(&self, _: &PCanonicalId) -> Result<Option<BondRecord>, Infallible> {
+        Ok(None)
+    }
+    fn slash_log_after(
+        &self,
+        _: &PCanonicalId,
+        _: BlockHeight,
+    ) -> Result<Vec<SlashLogEntry>, Infallible> {
+        Ok(Vec::new())
+    }
+    fn last_served_epoch(
+        &self,
+        _: &PCanonicalId,
+        _: ShardId,
+    ) -> Result<Option<SettlementEpoch>, Infallible> {
+        Ok(None)
+    }
+    fn served_shards(&self, _: &PCanonicalId) -> Result<Vec<ServedShard>, Infallible> {
+        Ok(Vec::new())
+    }
+    fn pass_count(
+        &self,
+        _: &PCanonicalId,
+        _: ShardId,
+        _: SettlementEpoch,
+    ) -> Result<PassCount, Infallible> {
+        Ok(PassCount::ZERO)
+    }
+    fn r_market(&self, _: ShardId, _: SettlementEpoch) -> Result<Option<RMarket>, Infallible> {
+        Ok(None)
+    }
+    fn sigma_work(&self, _: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Infallible> {
+        Ok(None)
+    }
+    fn budget(&self, _: SettlementEpoch) -> Result<Option<shekyl_units::AtomicUnits>, Infallible> {
+        Ok(None)
+    }
+    fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
+        Ok(None)
     }
 }
 

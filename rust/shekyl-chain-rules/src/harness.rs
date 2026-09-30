@@ -20,9 +20,12 @@ use std::collections::BTreeSet;
 
 use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
 use shekyl_economics::FULL_REWARD_ZONE;
+use shekyl_types::archival::{
+    BondRecord, PassCount, RMarket, ServedShard, SigmaWorkMilli, SlashLogEntry,
+};
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage,
-    LongTermWeight, PowHash, Timestamp, TxHash,
+    LongTermWeight, PCanonicalId, PowHash, SettlementEpoch, ShardId, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
@@ -308,6 +311,63 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
             AtHeight::AboveTip => AtHeight::AboveTip,
         })
     }
+
+    // The archival reads: a mock chain has no bonds, so every answer is the
+    // honest empty state — the one a store with no archival rows gives, and
+    // the same shape as the empty tree above. Nothing here is planted:
+    // archival state is *derived* from connected bond posts and settled
+    // epochs, and a constructed record would test the construction (DRS-E4
+    // §5.2, *No `Mock*` archival state*). The witness for a 4.J rule over a
+    // held shard is a real chain that posted the bond, through `connect`.
+
+    fn bond_record(&self, _: &PCanonicalId) -> Result<Option<BondRecord>, Infallible> {
+        Ok(None)
+    }
+
+    fn slash_log_after(
+        &self,
+        _: &PCanonicalId,
+        _: BlockHeight,
+    ) -> Result<Vec<SlashLogEntry>, Infallible> {
+        Ok(Vec::new())
+    }
+
+    fn last_served_epoch(
+        &self,
+        _: &PCanonicalId,
+        _: ShardId,
+    ) -> Result<Option<SettlementEpoch>, Infallible> {
+        Ok(None)
+    }
+
+    fn served_shards(&self, _: &PCanonicalId) -> Result<Vec<ServedShard>, Infallible> {
+        Ok(Vec::new())
+    }
+
+    fn pass_count(
+        &self,
+        _: &PCanonicalId,
+        _: ShardId,
+        _: SettlementEpoch,
+    ) -> Result<PassCount, Infallible> {
+        Ok(PassCount::ZERO)
+    }
+
+    fn r_market(&self, _: ShardId, _: SettlementEpoch) -> Result<Option<RMarket>, Infallible> {
+        Ok(None)
+    }
+
+    fn sigma_work(&self, _: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Infallible> {
+        Ok(None)
+    }
+
+    fn budget(&self, _: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
+        Ok(None)
+    }
+
+    fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
+        Ok(None)
+    }
 }
 
 /// The fault a [`FaultingView`] raises.
@@ -366,6 +426,55 @@ impl<'id> ChainView<'id> for FaultingView<'id> {
     }
 
     fn tip(&self) -> Result<Option<Tip>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn bond_record(&self, _: &PCanonicalId) -> Result<Option<BondRecord>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn slash_log_after(
+        &self,
+        _: &PCanonicalId,
+        _: BlockHeight,
+    ) -> Result<Vec<SlashLogEntry>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn last_served_epoch(
+        &self,
+        _: &PCanonicalId,
+        _: ShardId,
+    ) -> Result<Option<SettlementEpoch>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn served_shards(&self, _: &PCanonicalId) -> Result<Vec<ServedShard>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn pass_count(
+        &self,
+        _: &PCanonicalId,
+        _: ShardId,
+        _: SettlementEpoch,
+    ) -> Result<PassCount, Faulted> {
+        Err(Faulted)
+    }
+
+    fn r_market(&self, _: ShardId, _: SettlementEpoch) -> Result<Option<RMarket>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn sigma_work(&self, _: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn budget(&self, _: SettlementEpoch) -> Result<Option<AtomicUnits>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Faulted> {
         Err(Faulted)
     }
 }
@@ -474,6 +583,59 @@ impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
 
     fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
         self.inner.outputs_at(height)
+    }
+
+    fn bond_record(&self, persona: &PCanonicalId) -> Result<Option<BondRecord>, Infallible> {
+        self.inner.bond_record(persona)
+    }
+
+    fn slash_log_after(
+        &self,
+        persona: &PCanonicalId,
+        height: BlockHeight,
+    ) -> Result<Vec<SlashLogEntry>, Infallible> {
+        self.inner.slash_log_after(persona, height)
+    }
+
+    fn last_served_epoch(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+    ) -> Result<Option<SettlementEpoch>, Infallible> {
+        self.inner.last_served_epoch(persona, shard)
+    }
+
+    fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, Infallible> {
+        self.inner.served_shards(persona)
+    }
+
+    fn pass_count(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<PassCount, Infallible> {
+        self.inner.pass_count(persona, shard, epoch)
+    }
+
+    fn r_market(
+        &self,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<RMarket>, Infallible> {
+        self.inner.r_market(shard, epoch)
+    }
+
+    fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Infallible> {
+        self.inner.sigma_work(epoch)
+    }
+
+    fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
+        self.inner.budget(epoch)
+    }
+
+    fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
+        self.inner.last_settled_slash_epoch()
     }
 }
 

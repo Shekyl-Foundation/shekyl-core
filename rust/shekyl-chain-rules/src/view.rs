@@ -39,9 +39,12 @@
 
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
+use shekyl_types::archival::{
+    BondRecord, PassCount, RMarket, ServedShard, SigmaWorkMilli, SlashLogEntry,
+};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, GlobalOutputIndex, KeyImage,
-    LongTermWeight, TxHash,
+    LongTermWeight, PCanonicalId, SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::BlockHeader;
@@ -366,4 +369,87 @@ pub trait ChainView<'id> {
     ///
     /// [`Corrupt::BurnExceedsEmission`]: crate::Corrupt::BurnExceedsEmission
     fn total_burned(&self) -> Result<AtomicUnits, Self::Fault>;
+
+    // -----------------------------------------------------------------------
+    // The archival reads (DRS-E4 §2.3; DRS-E1 S-ARCH A1–A9)
+    //
+    // Recorded archival *state*, for the 4.J rows E6 slice 8 lands and the
+    // E4 fold that derives a bond post's transition: a record is state, the
+    // class the view exists to carry (G13 — no recorded body crosses it).
+    // Each is a by-key read, so `Option` / empty and not `AtHeight`:
+    // absence has one meaning per read, spelled on the read. All nine are
+    // parent-state reads (F19's brand) — there is no height to key them by.
+    // -----------------------------------------------------------------------
+
+    /// **A1.** `persona`'s bond record as recorded, or `None` for a persona
+    /// with no bond. CEN-J4's read (the named persona must have a record),
+    /// the operand of every 4.J arm that reads the record (J5, J6, J13–J18)
+    /// and of the as-of-height holdings fold
+    /// (`shekyl-archival-retention::holds_shard_at`).
+    fn bond_record(&self, persona: &PCanonicalId) -> Result<Option<BondRecord>, Self::Fault>;
+
+    /// **A2.** Every slash logged against `persona` at a height **strictly
+    /// above** `height`, in log order; empty when none. The history half of
+    /// the as-of-height holdings question — `holds_shard_at` folds these
+    /// over the record to say whether a shard was held *as of* `height`
+    /// (CEN-J8's operand at the fire height; CEN-L16). Scoped to the persona
+    /// by the read, so the fold need not re-check it.
+    fn slash_log_after(
+        &self,
+        persona: &PCanonicalId,
+        height: BlockHeight,
+    ) -> Result<Vec<SlashLogEntry>, Self::Fault>;
+
+    /// **A3.** The latest settlement epoch `persona` earned a pass bit in
+    /// for `shard`, or `None` for a pair that never served — the release
+    /// cooldown's anchor and its vacuous arm (CEN-J16).
+    fn last_served_epoch(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+    ) -> Result<Option<SettlementEpoch>, Self::Fault>;
+
+    /// **A4.** Every shard `persona` ever earned a pass bit for, each with
+    /// its latest epoch; empty for a persona that never served. The
+    /// last-served marshal in its complete-tree form (such a record stores
+    /// no shard list, so the served set is the only list there is) —
+    /// CEN-J16's cooldown over every shard, CEN-J17's drop-arm grace tail.
+    fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, Self::Fault>;
+
+    /// **A5.** Pass bits recorded for `(persona, shard, epoch)`;
+    /// [`PassCount::ZERO`] when none. CEN-J3's pair-epoch dedup reads
+    /// [`PassCount::any`]; the settlement writer reads the count.
+    fn pass_count(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<PassCount, Self::Fault>;
+
+    /// **A6.** The market's co-holder count for `shard` at `epoch`'s close,
+    /// or `None` for an epoch that never closed for it. A written
+    /// `RMarket(0)` is a closed epoch with no co-holders (SAR-8): the view
+    /// keeps the two apart; what a rule does with `None` is that rule's to
+    /// say (`SAR-Q6`). CEN-J15's admission operand, CEN-J25's work
+    /// arithmetic.
+    fn r_market(
+        &self,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<RMarket>, Self::Fault>;
+
+    /// **A7.** The frozen `Σwork(E)` for `epoch`, in milli-units, or `None`
+    /// for an epoch that never closed (SAR-8). The stored denominator a
+    /// verifier never recomputes — CEN-J25's.
+    fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Self::Fault>;
+
+    /// **A8.** The frozen `budget(E)` for `epoch`, or `None` for an epoch
+    /// that never closed. CEN-J23: every claimed epoch must have one.
+    fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Self::Fault>;
+
+    /// **A9.** The slash watermark — the latest settlement epoch whose
+    /// slashes have been applied — or `None` when no epoch has settled yet
+    /// (the C++'s `u64::MAX` sentinel, gone by the type). CEN-J16's
+    /// "settlement current through the anchor".
+    fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Self::Fault>;
 }
