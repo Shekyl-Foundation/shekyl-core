@@ -14,8 +14,9 @@
 use shekyl_types::BlockHeight;
 
 use super::*;
-use crate::engine::diagnostics::NoopDiagnosticSink;
-use shekyl_rpc_client::DaemonFault;
+use crate::engine::diagnostics::{NoopDiagnosticSink, ProtocolErrorKind};
+use crate::engine::error::{IoError, RefreshError};
+use shekyl_rpc_client::{DaemonFault, RpcError};
 
 /// `LocalRefreshError → RefreshError` mapping is total and
 /// preserves the discriminant classes per the §2.3

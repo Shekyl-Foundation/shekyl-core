@@ -339,11 +339,23 @@ impl WalletFile {
     /// disk; the next open will hit the lost-`.wallet` rescan path
     /// (2i).
     pub fn create(params: &CreateParams<'_>) -> Result<Self, WalletFileError> {
-        if let Some(dir) = params.base_path.parent() {
-            if !dir.as_os_str().is_empty() && !dir.is_dir() {
-                return Err(WalletFileError::DirectoryMissing {
-                    dir: dir.to_path_buf(),
-                });
+        if let Some(dir) = params
+            .base_path
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+        {
+            // Only absence is "missing". Any other failure to read the
+            // directory keeps its own cause, so a permission refusal is not
+            // reported as a directory to create.
+            match std::fs::metadata(dir) {
+                Ok(meta) if meta.is_dir() => {}
+                Ok(_) => return Err(io::Error::from(io::ErrorKind::NotADirectory).into()),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    return Err(WalletFileError::DirectoryMissing {
+                        dir: dir.to_path_buf(),
+                    });
+                }
+                Err(e) => return Err(e.into()),
             }
         }
         let keys_path = keys_path_from(params.base_path);
@@ -1716,6 +1728,57 @@ mod tests {
             other => panic!("expected DirectoryMissing, got {other:?}"),
         }
         assert!(!absent.exists(), "nothing was created");
+    }
+
+    /// A file where the wallet directory should be is not "missing": it is
+    /// there, and nothing can be created inside it.
+    #[test]
+    fn create_under_a_file_is_not_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let occupied = dir.path().join("occupied");
+        std::fs::write(&occupied, b"not a directory").unwrap();
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+        let base = occupied.join("x.wallet");
+        let params = make_params(&fx, &base, b"pw", &ledger, &cap);
+        match WalletFile::create(&params) {
+            Err(WalletFileError::Io(e)) => {
+                assert_eq!(e.kind(), std::io::ErrorKind::NotADirectory);
+            }
+            other => panic!("expected Io(NotADirectory), got {other:?}"),
+        }
+    }
+
+    /// A directory that cannot be read keeps its own cause — the remedy is
+    /// permissions, not creating a directory that exists.
+    #[cfg(unix)]
+    #[test]
+    fn create_under_an_unreadable_directory_keeps_the_permission_cause() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // A superuser reads through any mode bits; the refusal cannot be
+        // staged there, so the test asserts only where it can.
+        let probe = std::fs::metadata(locked.join("inner"));
+        let staged = matches!(&probe, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied);
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+        let base = locked.join("inner").join("x.wallet");
+        let params = make_params(&fx, &base, b"pw", &ledger, &cap);
+        let outcome = WalletFile::create(&params);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if staged {
+            match outcome {
+                Err(WalletFileError::Io(e)) => {
+                    assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+                }
+                other => panic!("expected Io(PermissionDenied), got {other:?}"),
+            }
+        }
     }
 
     #[test]

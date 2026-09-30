@@ -11,12 +11,13 @@
   `WalletFileError` itself, `WalletFile::create` names a missing directory
   before writing anything (`DirectoryMissing`), and the classifier is gone.
   The same create now answers `-29009 WALLET_DIR_MISSING`.
-- 30 codes are allocated in `docs/api/wallet_rpc.yaml`, each for a cause that
+- 31 codes are allocated in `docs/api/wallet_rpc.yaml`, each for a cause that
   previously reached `-32603` or a neighbouring code's text:
-  - wallet storage `-29007..-29015` (network mismatch, locked by another
+  - wallet storage `-29007..-29016` (network mismatch, locked by another
     process, missing directory, access denied, corrupt, unsupported version,
     I/O failure, close blocked by in-flight transactions, curve-tree data
-    unavailable);
+    unavailable, and a curve-tree store that cannot be used — delete and
+    reopen, never "restore from seed": the store holds no keys or balance);
   - build and submit `-29110..-29119` (not synced, membership rebuild,
     output too fresh, chain too short, loop-breaker tripped, submit already
     pending, re-anchor unavailable, reselection required, unreadable fee
@@ -58,7 +59,15 @@
   `-29102 FEE_ESTIMATION_FAILED`.
 - The curve-tree store classifies its own open failures
   (`ClientError::open_fault`: locked elsewhere, corrupt, unsupported, I/O,
-  internal); the wallet carries the class, not a string.
+  internal); the wallet carries the class, not a string. A ring snapshot that
+  will not decode or disagrees with the drain index at open is corruption.
+  A refresh's curve-tree ingest failure is typed (`CurveTreeIngestFault`,
+  whose `recoverable_by_respawn` replaces a separate flag beside a string), so
+  "close and reopen" is answered only where a reopen can help: a root the
+  header does not commit to or an undecodable backfill block is `-29209`, a
+  contract fault is `-32603`.
+- Creating a wallet under a path whose directory cannot be read keeps its own
+  cause (`-29010` for permissions); only absence is `-29009`.
 - `SendError::CannotSign` was split by meaning: `NotSynced`,
   `SignerUnavailable` (answered as `-29006`), `SignerFailed`, and
   `BuildInvariant` for preconditions only a bug breaks. The engine's

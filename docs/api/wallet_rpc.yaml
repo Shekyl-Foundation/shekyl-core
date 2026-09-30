@@ -379,7 +379,14 @@ info:
   # §5.7.11); refused at build when the u48 field cannot carry it. The rid
   # grammar is the PaymentRequestId schema's (^[1-9][0-9]*$), shared with
   # make_uri and parse_uri. api_version stays 1.
-  version: 0.8.0
+  # 0.9.0: specific causes get specific codes instead of -32603 or a
+  # neighbouring code's text — wallet storage -29007..-29016, build and
+  # submit -29110..-29119, -29204 REFRESH_CANCELLED, the daemon
+  # -29205..-29210 (a refused daemon names the identity axis; -29201 is
+  # left to a daemon that did not answer), and a staker's open-time refusals
+  # -29530..-29533. Some existing paths move to the new codes (see each
+  # code's row). api_version stays 1.
+  version: 0.9.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -649,6 +656,7 @@ components:
         - -29013   # WALLET_FILE_IO_FAILED
         - -29014   # WALLET_CLOSE_BLOCKED
         - -29015   # CURVE_TREE_UNAVAILABLE
+        - -29016   # CURVE_TREE_STORE_UNUSABLE
         - -29100   # INVALID_RECIPIENT
         - -29101   # INSUFFICIENT_FUNDS
         - -29102   # FEE_ESTIMATION_FAILED
@@ -763,8 +771,8 @@ components:
           -29011 WALLET_FILE_CORRUPT      wallet files: contents damaged or not
                                           a Shekyl wallet's (envelope, payload
                                           frame, ledger decode, preferences,
-                                          curve-tree store, keys whose public
-                                          material the seed does not derive).
+                                          keys whose public material the seed
+                                          does not derive).
                                           Distinct from -29004: a wrong
                                           password and a damaged file are
                                           different remedies
@@ -780,9 +788,23 @@ components:
                                           them first
           -29015 CURVE_TREE_UNAVAILABLE   build/refresh: the wallet's curve-tree
                                           membership data is unavailable for
-                                          this session (its actor stopped; a
+                                          this session (its actor stopped, or
+                                          its store would not resume; a
                                           respawn did not recover it). Close
-                                          and reopen the wallet
+                                          and reopen the wallet; a store that
+                                          cannot be used is then -29016
+          -29016 CURVE_TREE_STORE_UNUSABLE open: the wallet's curve-tree store
+                                          (the .curvetree file beside it) is
+                                          damaged or was written by a version
+                                          this build cannot read (data:
+                                          {"cause": "corrupt" | "unsupported"}).
+                                          It holds no keys and no balance:
+                                          delete it and open again — the wallet
+                                          rebuilds it from the chain, and
+                                          sending waits until the rebuild
+                                          finishes. Never a reason to restore
+                                          from the seed (that is -29011, for
+                                          the wallet's own files)
 
           -29100 INVALID_RECIPIENT        build/proofs: address parse or
                                           network check failed
@@ -959,7 +981,9 @@ components:
                                           answered with something that breaks
                                           the RPC contract (malformed,
                                           inconsistent or pruned replies, a
-                                          block that does not parse) — try
+                                          block that does not parse, leaves
+                                          its own block header does not
+                                          commit to) — try
                                           another daemon. What it sent stays
                                           in the server log
           -29210 CHAIN_UNSTABLE           refresh: the chain kept

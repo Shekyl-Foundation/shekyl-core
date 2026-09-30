@@ -12,9 +12,9 @@ use shekyl_engine_core::engine::error::{
 };
 use shekyl_engine_core::engine::SubmitError;
 use shekyl_engine_core::{
-    ChangePasswordError, DrainToPrincipalError, IoError, KeyError, OpenError, PScanStartError,
-    PendingTxError, PersistenceError, RefreshError, SendError, ServingStartError, SetTxNoteError,
-    StakeInError, StoreOpenFault,
+    ChangePasswordError, CurveTreeIngestFault, DrainToPrincipalError, IoError, KeyError, OpenError,
+    PScanStartError, PendingTxError, PersistenceError, RefreshError, SendError, ServingStartError,
+    SetTxNoteError, StakeInError, StoreOpenFault,
 };
 use shekyl_engine_file::{PayloadError, WalletEnvelopeError, WalletFileError};
 use shekyl_engine_prefs::PrefsError;
@@ -132,6 +132,10 @@ wallet_rpc_error_codes! {
     /// The wallet's curve-tree membership data is unavailable for this
     /// session; close and reopen the wallet.
     CurveTreeUnavailable = -29015,
+    /// Open: the wallet's curve-tree store (`.curvetree`) is damaged or from
+    /// a version this build cannot read. It is rebuilt from the chain once
+    /// deleted; `data.cause` says which.
+    CurveTreeStoreUnusable = -29016,
     /// Build: address parse / network check failed.
     InvalidRecipient = -29100,
     /// Build: spendable balance too low.
@@ -461,6 +465,14 @@ pub enum WalletRpcError {
     /// session — its actor stopped and a respawn did not recover it.
     #[error("the wallet's membership data is unavailable — close and reopen the wallet")]
     CurveTreeUnavailable,
+    /// `-29016`: the curve-tree store cannot be used. It holds no keys and
+    /// no balance — the wallet rebuilds it from the chain — so the remedy is
+    /// to delete it, never to restore the wallet.
+    #[error("{}", curve_tree_store_message(*cause))]
+    CurveTreeStoreUnusable {
+        /// Why the store cannot be used.
+        cause: CurveTreeStoreCause,
+    },
     /// `-29201`: the daemon did not answer.
     #[error(
         "the daemon did not answer — check that it is running and its address is right, then retry"
@@ -1010,6 +1022,7 @@ impl WalletRpcError {
             Self::WalletFileIoFailed => WalletRpcErrorCode::WalletFileIoFailed,
             Self::WalletCloseBlocked { .. } => WalletRpcErrorCode::WalletCloseBlocked,
             Self::CurveTreeUnavailable => WalletRpcErrorCode::CurveTreeUnavailable,
+            Self::CurveTreeStoreUnusable { .. } => WalletRpcErrorCode::CurveTreeStoreUnusable,
             Self::DaemonUnreachable => WalletRpcErrorCode::DaemonUnreachable,
             Self::RefreshInProgress => WalletRpcErrorCode::RefreshInProgress,
             Self::RescanBlocked { .. } => WalletRpcErrorCode::RescanBlocked,
@@ -1130,6 +1143,7 @@ impl WalletRpcError {
                 Some(json!({ "wallet": wallet, "expected": expected }))
             }
             Self::WalletCloseBlocked { count } => Some(json!({ "count": count })),
+            Self::CurveTreeStoreUnusable { cause } => Some(json!({ "cause": cause.as_str() })),
             Self::DaemonVersionMismatch {
                 wallet_version,
                 daemon_version,
@@ -1285,12 +1299,7 @@ impl From<RefreshError> for WalletRpcError {
             RefreshError::Io(io) => from_io_error(io),
             RefreshError::Cancelled => Self::RefreshCancelled,
             RefreshError::ReorgStorm => Self::ChainUnstable,
-            // The respawn already ran and did not recover the actor: the
-            // membership data is gone for this session.
-            RefreshError::CurveTreeIngest { context, .. } => {
-                tracing::warn!(context = %context, "curve-tree ingest failed after respawn");
-                Self::CurveTreeUnavailable
-            }
+            RefreshError::CurveTreeIngest { fault } => from_curve_tree_ingest_fault(fault),
             // Producer bugs (decision log, 2026-04-26), not states a client
             // can remedy.
             RefreshError::MalformedScanResult { reason } => {
@@ -1451,6 +1460,31 @@ fn from_daemon_fault(fault: DaemonFault, detail: &str) -> WalletRpcError {
             WalletRpcError::DaemonFeeResponseInvalid
         }
         DaemonFault::Internal => internal_detail("daemon request", detail),
+    }
+}
+
+/// A curve-tree ingest failure that survived the engine's one respawn, by
+/// its remedy. Reopening helps only where the session's tree is what
+/// failed; a fault a reopen reproduces never answers "close and reopen".
+fn from_curve_tree_ingest_fault(fault: CurveTreeIngestFault) -> WalletRpcError {
+    tracing::warn!(%fault, "curve-tree ingest failed");
+    match fault {
+        // The actor, or the store under it, would not come back for this
+        // session. A reopen reopens the store, which names its own fault.
+        CurveTreeIngestFault::ActorUnavailable
+        | CurveTreeIngestFault::ClientPoisoned
+        | CurveTreeIngestFault::RespawnFailed => WalletRpcError::CurveTreeUnavailable,
+        // The daemon's data broke the contract: leaves its own header does not
+        // commit to, or a block that does not decode.
+        CurveTreeIngestFault::RootMismatch | CurveTreeIngestFault::BackfillBlockUndecodable => {
+            WalletRpcError::DaemonProtocolViolation
+        }
+        // Contract and arithmetic faults a resume reproduces: bugs.
+        CurveTreeIngestFault::ClientRejected
+        | CurveTreeIngestFault::TipHeightOverflow
+        | CurveTreeIngestFault::BackfillHeightOverflow => {
+            internal_detail("curve-tree ingest", fault)
+        }
     }
 }
 
@@ -1683,12 +1717,51 @@ fn from_key_error(err: &KeyError) -> WalletRpcError {
     }
 }
 
+/// Why the curve-tree store cannot be used (`-29016`'s `data.cause`). The
+/// remedy is the same for both — delete the store and reopen — so they share
+/// a code; the message says which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CurveTreeStoreCause {
+    /// The store's contents contradict themselves.
+    Corrupt,
+    /// The store was written by a version this build cannot read.
+    Unsupported,
+}
+
+impl CurveTreeStoreCause {
+    /// The `data.cause` value.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Corrupt => "corrupt",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+/// `-29016`'s message. A wallet that holds its keys and balance elsewhere must
+/// not be told to restore from its seed for a cache it can rebuild.
+fn curve_tree_store_message(cause: CurveTreeStoreCause) -> String {
+    let what = match cause {
+        CurveTreeStoreCause::Corrupt => "is damaged",
+        CurveTreeStoreCause::Unsupported => "was written by a version this build cannot read",
+    };
+    format!(
+        "the wallet's membership data (the .curvetree file beside it) {what} — delete that \
+         file and open the wallet again. It is rebuilt from the chain; your keys and balance \
+         are not in it, and sending waits until the rebuild finishes"
+    )
+}
+
 fn from_store_open_fault(fault: StoreOpenFault, detail: &str) -> WalletRpcError {
     tracing::warn!(?fault, detail = %detail, "curve-tree store would not open");
     match fault {
         StoreOpenFault::LockedElsewhere => WalletRpcError::WalletLockedElsewhere,
-        StoreOpenFault::Corrupt => WalletRpcError::WalletFileCorrupt,
-        StoreOpenFault::Unsupported => WalletRpcError::WalletFileVersionUnsupported,
+        StoreOpenFault::Corrupt => WalletRpcError::CurveTreeStoreUnusable {
+            cause: CurveTreeStoreCause::Corrupt,
+        },
+        StoreOpenFault::Unsupported => WalletRpcError::CurveTreeStoreUnusable {
+            cause: CurveTreeStoreCause::Unsupported,
+        },
         StoreOpenFault::Io => WalletRpcError::WalletFileIoFailed,
         StoreOpenFault::Internal => WalletRpcError::InternalError("curve-tree store open".into()),
     }
@@ -2083,8 +2156,7 @@ mod tests {
                 context: "test invariant",
             },
             RefreshError::CurveTreeIngest {
-                context: "test ingest",
-                recoverable_by_respawn: false,
+                fault: CurveTreeIngestFault::ClientRejected,
             },
             RefreshError::Io(IoError::Scanner {
                 detail: "scan budget exhausted".into(),
@@ -2730,29 +2802,46 @@ mod tests {
     /// own diagnosis (which can name a path) stays off the wire.
     #[test]
     fn a_store_open_fault_names_its_remedy() {
-        for (fault, expected) in [
+        let unusable = |cause| Some(json!({ "cause": cause }));
+        for (fault, expected, data) in [
             (
                 StoreOpenFault::LockedElsewhere,
                 WalletRpcErrorCode::WalletLockedElsewhere,
+                None,
             ),
             (
                 StoreOpenFault::Corrupt,
-                WalletRpcErrorCode::WalletFileCorrupt,
+                WalletRpcErrorCode::CurveTreeStoreUnusable,
+                unusable("corrupt"),
             ),
             (
                 StoreOpenFault::Unsupported,
-                WalletRpcErrorCode::WalletFileVersionUnsupported,
+                WalletRpcErrorCode::CurveTreeStoreUnusable,
+                unusable("unsupported"),
             ),
-            (StoreOpenFault::Io, WalletRpcErrorCode::WalletFileIoFailed),
-            (StoreOpenFault::Internal, WalletRpcErrorCode::InternalError),
+            (
+                StoreOpenFault::Io,
+                WalletRpcErrorCode::WalletFileIoFailed,
+                None,
+            ),
+            (
+                StoreOpenFault::Internal,
+                WalletRpcErrorCode::InternalError,
+                None,
+            ),
         ] {
             let err: WalletRpcError = OpenError::Io(IoError::CurveTreeStore {
                 fault,
                 detail: LOCAL_PATH.into(),
             })
             .into();
-            assert_eq!(err.code(), expected);
-            assert!(!err.message().contains("/home"), "{}", err.message());
+            assert_eq!(err.code(), expected, "{fault:?}");
+            assert_eq!(err.data(), data, "{fault:?}");
+            let message = err.message();
+            assert!(!message.contains("/home"), "{message}");
+            // The store is a rebuildable cache: its remedy is to delete it,
+            // never to restore the wallet from its seed.
+            assert!(!message.contains("seed"), "{message}");
         }
     }
 
@@ -3065,6 +3154,27 @@ mod tests {
                 FirstStakeError::FeeEstimate(fee),
                 FirstStakeError::FeeEstimate(FeeEstimatorError::Daemon(f)) if f == fault
             ));
+        }
+    }
+
+    /// A curve-tree ingest failure answers "close and reopen" only where a
+    /// reopen can help; a daemon's bad data and a bug each keep their own.
+    #[test]
+    fn a_curve_tree_ingest_failure_names_its_remedy() {
+        use CurveTreeIngestFault as F;
+        use WalletRpcErrorCode as C;
+        for (fault, code) in [
+            (F::ActorUnavailable, C::CurveTreeUnavailable),
+            (F::ClientPoisoned, C::CurveTreeUnavailable),
+            (F::RespawnFailed, C::CurveTreeUnavailable),
+            (F::RootMismatch, C::DaemonProtocolViolation),
+            (F::BackfillBlockUndecodable, C::DaemonProtocolViolation),
+            (F::ClientRejected, C::InternalError),
+            (F::TipHeightOverflow, C::InternalError),
+            (F::BackfillHeightOverflow, C::InternalError),
+        ] {
+            let err: WalletRpcError = RefreshError::CurveTreeIngest { fault }.into();
+            assert_eq!(err.code(), code, "{fault:?}");
         }
     }
 

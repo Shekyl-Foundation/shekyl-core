@@ -92,7 +92,7 @@ use crate::{
         curve_tree_decode,
         local_ledger::LocalLedger,
         traits::{DaemonEngine, LedgerEngine},
-        Engine, EngineSignerKind, RefreshError,
+        CurveTreeIngestFault, Engine, EngineSignerKind, RefreshError,
     },
     scan::{OwnedTxLeaves, ScanResult},
 };
@@ -364,8 +364,8 @@ impl<
     ///
     /// It drains `result.block_leaves` once into an `Arc`-shared, height-keyed
     /// map and delegates to `curve_tree_ingest_scan_result_with_respawn`. On
-    /// a respawn-eligible failure ([`RefreshError::CurveTreeIngest`] with
-    /// `recoverable_by_respawn`) that helper reopens the actor via
+    /// a respawn-eligible failure ([`RefreshError::CurveTreeIngest`] whose
+    /// fault is [`CurveTreeIngestFault::recoverable_by_respawn`]) that helper reopens the actor via
     /// [`CurveTreeHandle::respawn`](super::curve_tree_actor::CurveTreeHandle::respawn)
     /// and re-runs the cursor-driven ingest **once** against the *same* drained
     /// leaves (the `Arc` map is retained across the retry, R1-Q4). The retry is
@@ -409,38 +409,29 @@ impl<
 /// - A fail-stopped actor ([`CurveTreeHandleError::Unavailable`]) and a
 ///   poisoned client ([`ClientError::Poisoned`] — whose own documented
 ///   recovery is "drop this object and resume over the same store") are
-///   `recoverable_by_respawn = true`: [`Engine::ingest_scan_result_with_respawn`]
+///   respawn-recoverable ([`CurveTreeIngestFault::recoverable_by_respawn`]):
+///   [`Engine::ingest_scan_result_with_respawn`]
 ///   respawns the actor and retries the cursor-driven ingest once, which
 ///   resumes from the held store's persisted tip (D2).
 /// - Every other client error (e.g.
 ///   [`ClientError::NonConsecutiveBlockHeight`], a producer-contract or
-///   store-state fault) is `false`: a reopen resumes the same cursor and
+///   store-state fault) is not: a reopen resumes the same cursor and
 ///   reproduces it, so it surfaces terminally rather than livelocking a retry.
 fn map_curve_tree_handle_error(err: &CurveTreeHandleError) -> RefreshError {
     match err {
-        CurveTreeHandleError::Unavailable => RefreshError::CurveTreeIngest {
-            context: "curve-tree actor unavailable",
-            recoverable_by_respawn: true,
-        },
-        CurveTreeHandleError::Client(ClientError::Poisoned) => RefreshError::CurveTreeIngest {
-            context: "curve-tree client poisoned",
-            recoverable_by_respawn: true,
-        },
+        CurveTreeHandleError::Unavailable => CurveTreeIngestFault::ActorUnavailable.into(),
+        CurveTreeHandleError::Client(ClientError::Poisoned) => {
+            CurveTreeIngestFault::ClientPoisoned.into()
+        }
         // §3.3 (CT-5b, O5): the reconstructed root diverged from the consensus
         // header-committed root. Terminal — a respawn re-derives the same root
         // from the same store, so it reproduces the mismatch rather than
         // healing it. Distinct context so an auditor reads the lying-daemon DoS
         // apart from a generic client rejection.
         CurveTreeHandleError::Client(ClientError::RootMismatch { .. }) => {
-            RefreshError::CurveTreeIngest {
-                context: "curve-tree root mismatch vs header",
-                recoverable_by_respawn: false,
-            }
+            CurveTreeIngestFault::RootMismatch.into()
         }
-        CurveTreeHandleError::Client(_) => RefreshError::CurveTreeIngest {
-            context: "curve-tree client rejected ingest",
-            recoverable_by_respawn: false,
-        },
+        CurveTreeHandleError::Client(_) => CurveTreeIngestFault::ClientRejected.into(),
     }
 }
 
@@ -455,19 +446,13 @@ pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits:
 ) -> Result<(), RefreshError> {
     match curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await {
         Ok(()) => Ok(()),
-        Err(RefreshError::CurveTreeIngest {
-            recoverable_by_respawn: true,
-            ..
-        }) => {
+        Err(RefreshError::CurveTreeIngest { fault }) if fault.recoverable_by_respawn() => {
             // Engine-side respawn (clause 2): runs after the failed `ask`
             // returned, never inside a handler under the engine guard.
             curve_tree
                 .respawn()
                 .await
-                .map_err(|_| RefreshError::CurveTreeIngest {
-                    context: "curve-tree respawn resume failed",
-                    recoverable_by_respawn: false,
-                })?;
+                .map_err(|_| CurveTreeIngestFault::RespawnFailed)?;
             curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await
         }
         Err(other) => Err(other),
@@ -582,10 +567,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
             None => BlockHeight::ZERO,
             Some(t) => t
                 .checked_add(BlockCount::ONE)
-                .ok_or(RefreshError::CurveTreeIngest {
-                    context: "ingested tip height overflow",
-                    recoverable_by_respawn: false,
-                })?,
+                .ok_or(CurveTreeIngestFault::TipHeightOverflow)?,
         };
         if next >= range_end {
             break;
@@ -595,22 +577,16 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
         // match. Both branches yield the pair so the verify below is uniform.
         let (leaves, expected_root) = if next < range_start {
             // Genesis/birthday backfill: tree-only daemon fetch + decode.
-            let number =
-                usize::try_from(next.to_raw()).map_err(|_| RefreshError::CurveTreeIngest {
-                    context: "backfill height exceeds usize",
-                    recoverable_by_respawn: false,
-                })?;
+            let number = usize::try_from(next.to_raw())
+                .map_err(|_| CurveTreeIngestFault::BackfillHeightOverflow)?;
             let block = daemon
                 .fetch_scannable_block(number)
                 .await
                 .map_err(|e| RefreshError::Io(e.into()))?;
-            let leaves =
-                Arc::new(curve_tree_decode::decode_block_leaves(&block).map_err(|_| {
-                    RefreshError::CurveTreeIngest {
-                        context: "backfill block decode failed",
-                        recoverable_by_respawn: false,
-                    }
-                })?);
+            let leaves = Arc::new(
+                curve_tree_decode::decode_block_leaves(&block)
+                    .map_err(|_| CurveTreeIngestFault::BackfillBlockUndecodable)?,
+            );
             // Backfill heights are below the producer's scanned range, so their
             // header root is not in `producer_roots`; take it from the
             // daemon-fetched block. The §3.3 verify still gates it: a daemon

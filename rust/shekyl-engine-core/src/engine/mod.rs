@@ -441,8 +441,8 @@ pub use diagnostics::{
     TracingDiagnosticSink, WatchdogAlarmReason, WatchdogProbeOutcome,
 };
 pub use error::{
-    ChangePasswordError, IoError, KeyError, OpenError, PendingTxError, PersistenceError,
-    RefreshError, SendError, SubmitError, TxError,
+    ChangePasswordError, CurveTreeIngestFault, IoError, KeyError, OpenError, PendingTxError,
+    PersistenceError, RefreshError, SendError, SubmitError, TxError,
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
 // `ValidatedFeeEstimates` is the type of `FeeEstimationContext`'s public

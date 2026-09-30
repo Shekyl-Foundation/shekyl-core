@@ -12,6 +12,7 @@
 //! `transfer/transfer_pending_tx_tests.rs` pattern).
 
 use super::*;
+use shekyl_rpc_client::RpcError;
 
 use proptest::prelude::*;
 use shekyl_crypto_pq::account::{

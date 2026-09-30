@@ -302,10 +302,14 @@ impl ClientError {
     }
 
     /// What this failure means when [`CurveTreeClient::open`] raised it
-    /// ([`StoreOpenFault`]). An open can only produce a store failure or one
-    /// of the two resume refusals; every other arm is raised by ingest or
-    /// assembly, and seeing one at open is a programming error. Exhaustive,
-    /// so a new variant has to be placed before it compiles.
+    /// ([`StoreOpenFault`]). An open reads nothing but the store, so what it
+    /// can raise is a store failure, a resume refusal, or the store's own
+    /// rows failing to rebuild — a ring snapshot that will not decode, or
+    /// whose leaf count disagrees with the drain index. Resume calls that
+    /// last case corruption (`rebuild_from_store`), and so does this. Every
+    /// other arm is raised by ingest or assembly, and seeing one at open is
+    /// a programming error. Exhaustive, so a new variant has to be placed
+    /// before it compiles.
     #[must_use]
     pub fn open_fault(&self) -> StoreOpenFault {
         match self {
@@ -313,7 +317,9 @@ impl ClientError {
             // Pruned-store resume is unbuilt (F5): a shape this build cannot
             // resume, not a broken store.
             ClientError::ResumeFromPrunedStore { .. } => StoreOpenFault::Unsupported,
-            ClientError::ResumeFromCorruptStore { .. } => StoreOpenFault::Corrupt,
+            ClientError::ResumeFromCorruptStore { .. }
+            | ClientError::Frontier { .. }
+            | ClientError::SnapshotLeafCountMismatch { .. } => StoreOpenFault::Corrupt,
             ClientError::RootMismatch { .. }
             | ClientError::OutputNotDrained { .. }
             | ClientError::IdentityMismatch { .. }
@@ -322,9 +328,7 @@ impl ClientError {
             | ClientError::ReferenceBeyondIngestedTip { .. }
             | ClientError::Poisoned
             | ClientError::LeafEntries { .. }
-            | ClientError::LeafPoint { .. }
-            | ClientError::Frontier { .. }
-            | ClientError::SnapshotLeafCountMismatch { .. } => StoreOpenFault::Internal,
+            | ClientError::LeafPoint { .. } => StoreOpenFault::Internal,
         }
     }
 }
@@ -2381,6 +2385,17 @@ mod tests {
             "expected DuplicateGindex {{ gindex: 0 }} for cross-table gindex \
              duplicate, got {err:?}"
         );
+    }
+
+    /// A ring snapshot that will not decode at open is the store's own row
+    /// failing its check: corruption, as the resume path names it.
+    #[test]
+    fn an_undecodable_snapshot_at_open_is_corruption() {
+        let err = ClientError::Frontier {
+            height: BlockHeight::from_raw(10),
+            source: crate::frontier::FrontierError::InvalidNodeScalars,
+        };
+        assert_eq!(err.open_fault(), StoreOpenFault::Corrupt);
     }
 
     #[test]
