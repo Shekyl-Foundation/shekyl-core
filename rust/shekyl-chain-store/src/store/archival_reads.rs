@@ -130,17 +130,20 @@ pub(super) fn bond_record<T: ReadTables>(
 /// the same range and skipped its epoch-marker rows, which the log no
 /// longer has (`ARW-Q2`). Empty when nothing above `height` names
 /// `persona` — including when `height` is the last height, where
-/// [`SlashLogKey::above`] is an empty range by construction, so the C++'s
-/// `u64::MAX` early-return is the range's own behaviour and not a case.
-/// A row that does not decode is SI-7.
+/// [`SlashLogKey::above`] has no range to give (no height lies above it),
+/// so the C++'s `u64::MAX` early-return is the key type's `None` and not a
+/// case here. A row that does not decode is SI-7.
 pub(super) fn slash_log_after<T: ReadTables>(
     txn: &T,
     persona: &PCanonicalId,
     height: BlockHeight,
 ) -> Result<Vec<SlashLogEntry>, ReadFault> {
+    let Some(above) = SlashLogKey::above(height) else {
+        return Ok(Vec::new());
+    };
     let table = txn.table(ARCHIVAL_SLASH_LOG)?;
     let mut out = Vec::new();
-    for row in table.range(SlashLogKey::above(height))? {
+    for row in table.range(above)? {
         let (_key, value) = row?;
         let entry = value
             .value()

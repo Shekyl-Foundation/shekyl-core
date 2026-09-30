@@ -22,7 +22,7 @@
 
 use core::fmt;
 
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 macro_rules! store_id {
@@ -548,11 +548,18 @@ impl SlashLogKey {
 
     /// Every row at a height **strictly above** `h`: `(h + 1, 0) ..` — the
     /// scan A2 `slash_log_after` takes (`db_lmdb.cpp:4804`, the C++ start
-    /// key `(at_height + 1, 0)`). Empty when `h` is the last height, which
-    /// the saturating step keeps well-defined.
+    /// key `(at_height + 1, 0)`). `None` when `h` is the last height: no
+    /// height lies above it, and a `RangeFrom` cannot say so — its start
+    /// would have to be a height that does not exist. (A saturated start
+    /// would name `h` itself and read the last height's own rows as
+    /// "above" it.) The caller's scan is empty, the C++'s `u64::MAX`
+    /// early return made a type.
     #[must_use]
-    pub const fn above(h: BlockHeight) -> core::ops::RangeFrom<SlashLogTuple> {
-        (h.to_raw().saturating_add(1), 0)..
+    pub const fn above(h: BlockHeight) -> Option<core::ops::RangeFrom<SlashLogTuple>> {
+        match h.checked_add(BlockCount::ONE) {
+            Some(next) => Some((next.to_raw(), 0)..),
+            None => None,
+        }
     }
 }
 
@@ -605,5 +612,24 @@ mod tests {
         assert!(last.contains(
             &LayerChunk::new(TreeLayer::from_raw(u8::MAX), ChunkIndex::from_raw(7)).key()
         ));
+    }
+
+    #[test]
+    fn slash_log_above_starts_at_the_next_heights_first_row_and_the_last_height_has_none() {
+        let h = BlockHeight::from_raw(250);
+        let above = SlashLogKey::above(h).expect("a height above 250 exists");
+        assert_eq!(
+            above.start,
+            SlashLogKey::new(BlockHeight::from_raw(251), 0).key()
+        );
+        // Every row *at* `h` sorts before the start, whatever its seq …
+        assert!(SlashLogKey::new(h, u32::MAX).key() < above.start);
+        // … and every row above it is in.
+        assert!(above.contains(&SlashLogKey::new(BlockHeight::from_raw(251), 0).key()));
+        assert!(above.contains(&SlashLogKey::new(BlockHeight::from_raw(u64::MAX), 7).key()));
+        // Nothing lies above the last height: the range does not exist,
+        // rather than starting at the last height and including its rows.
+        assert!(SlashLogKey::above(BlockHeight::from_raw(u64::MAX)).is_none());
+        assert!(SlashLogKey::above(BlockHeight::from_raw(u64::MAX - 1)).is_some());
     }
 }

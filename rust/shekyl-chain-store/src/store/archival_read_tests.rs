@@ -182,6 +182,9 @@ fn a2_is_the_personas_rows_strictly_above_the_height_in_log_order() {
         holding: SlashedHolding::CompleteTree,
         ..slash_entry(&p, 13, 4, 0)
     };
+    // One at the last height the key can name, so the boundary case has a
+    // row to wrongly return.
+    let at_last = slash_entry(&p, 17, 5, 3);
     plant(&path, |txn| {
         plant_slash(txn, 100, 0, &at_100_a);
         plant_slash(txn, 100, 1, &slash_entry(&other, 7, 1, 0));
@@ -189,6 +192,7 @@ fn a2_is_the_personas_rows_strictly_above_the_height_in_log_order() {
         plant_slash(txn, 250, 0, &at_250);
         plant_slash(txn, 250, 1, &slash_entry(&other, 11, 2, 0));
         plant_slash(txn, 400, 0, &at_400);
+        plant_slash(txn, u64::MAX, 0, &at_last);
     });
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().unwrap();
@@ -196,17 +200,18 @@ fn a2_is_the_personas_rows_strictly_above_the_height_in_log_order() {
 
     // Strictly above: rows *at* `h` are excluded (a slash at `h` is
     // already-removed state at `h`); the other persona's rows never appear.
-    assert_eq!(after(0), vec![at_100_a, at_100_b, at_250, at_400]);
-    assert_eq!(after(99), vec![at_100_a, at_100_b, at_250, at_400]);
-    assert_eq!(after(100), vec![at_250, at_400]);
-    assert_eq!(after(249), vec![at_250, at_400]);
-    assert_eq!(after(250), vec![at_400]);
-    assert_eq!(after(399), vec![at_400]);
-    assert_eq!(after(400), vec![]);
-    // The last height: nothing is strictly above it. The C++ special-cased
-    // this to keep `h + 1` from wrapping and scanning the whole log; here
-    // the key's `above` saturates to an empty range, with rows present.
-    assert_eq!(after(u64::MAX - 1), vec![]);
+    assert_eq!(after(0), vec![at_100_a, at_100_b, at_250, at_400, at_last]);
+    assert_eq!(after(99), vec![at_100_a, at_100_b, at_250, at_400, at_last]);
+    assert_eq!(after(100), vec![at_250, at_400, at_last]);
+    assert_eq!(after(249), vec![at_250, at_400, at_last]);
+    assert_eq!(after(250), vec![at_400, at_last]);
+    assert_eq!(after(399), vec![at_400, at_last]);
+    assert_eq!(after(400), vec![at_last]);
+    // The last height: nothing is strictly above it, so its own row is not
+    // "after" it. The C++ special-cased this to keep `h + 1` from wrapping
+    // and scanning the whole log; here the key's `above` has no range to
+    // give, and the read is empty with a row sitting at that very height.
+    assert_eq!(after(u64::MAX - 1), vec![at_last]);
     assert_eq!(after(u64::MAX), vec![]);
     // A stranger has no rows at any height.
     assert!(snap
@@ -237,7 +242,7 @@ fn a2_is_the_personas_rows_strictly_above_the_height_in_log_order() {
     assert_eq!(
         snap.slash_log_after(&p, BlockHeight::from_raw(300))
             .unwrap(),
-        vec![at_400]
+        vec![at_400, at_last]
     );
     cleanup(&path);
 }
