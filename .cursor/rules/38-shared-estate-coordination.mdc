@@ -41,8 +41,8 @@ In `shekyl-dev`, `infrastructure/`:
    restarts, no extra `tor`, no reboots, no heavy builds.
 5. **Never stop, restart, reconfigure or delete what another owner claimed**,
    and never edit their row. If you need the host, ask the owner (a Claude
-   session by its name) or Rick. A claim past its end with nothing running
-   goes to Rick; it is not a deletion.
+   named in the claim) or the shared-estate coordinator named in `USAGE.md`.
+   Escalate a claim past its end with nothing running; it is not yours to delete.
 6. **Address hosts by ssh alias or IP, never by the hostname a host reports.**
    The alias is the estate's record; a reported name is whatever the host was
    last set to, and two once collided.
