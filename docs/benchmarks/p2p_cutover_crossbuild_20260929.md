@@ -525,25 +525,36 @@ Conditions, per D9:
 
 - Responder: the floor device (Pi-4, aarch64, 4 cores), daemon
   `2f9565f71`, publishing its default ephemeral per-boot PoW onion
-  through the pinned `16.0a12` Tor managed beside it. Miner off.
+  through the pinned `16.0a12` Tor managed beside it. Miner off. This is
+  the shipping posture, pinned for this exact distribution by
+  `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` ("a managed ephemeral Tor with
+  onion-service proof-of-work on"); the operator-provisioned durable
+  `--anonymous-inbound` onion and an attached distro Tor are, in that
+  doc's words, "a different posture" and are not what the deadline
+  guards.
 - Dialer: a second daemon on the same floor device, at `2f9565f71`,
-  dialing that onion through its own pinned Tor client, restarted per
-  sample so each inbound connection is a fresh rendezvous circuit
-  (cached consensus, 3–4 s re-bootstrap). Both daemons and both Tor
-  processes shared the floor's four cores; the idle regtest daemon was
-  also resident.
+  dialing that onion through its own pinned Tor client. Both daemons and
+  both Tor processes shared the floor's four cores; the idle regtest
+  daemon was also resident.
 - Link: the live Tor network, a self-dial — both circuit ends on the
   floor, real rendezvous through public relays. This is **not** a
   geographically distributed circuit set; the distant-circuit inbound
   gap is owed (see below). The outbound gap to a South-America onion is
   the earlier Tor dial distribution's 1.26 s p99.
-- n = 66, one timeout. The clean rate was reachability-limited: the
-  floor's *ephemeral* onion does not propagate a descriptor as reliably
-  as a durable one, and one `DialFailed` marks the onion recently-failed
-  for 240 s (`P2P_ANON_FAILED_ADDR_FORGET_SECONDS`), so a lost circuit
-  costs four minutes. A 15-minute wall cap took 66 clean samples; a
-  full n ≥ 100 needs a durable onion (`--anonymous-inbound`, stable
-  descriptor), which is the follow-up.
+- n = 66, one timeout, over a 15-minute wall cap. What capped the clean
+  rate is a production property, not the onion mechanism: one
+  `DialFailed` marks the onion recently-failed for 240 s
+  (`P2P_ANON_FAILED_ADDR_FORGET_SECONDS`), which is correct — a node
+  that cannot reach a peer tries others rather than hammering it — and
+  it only rate-limits *because this rig dials one onion repeatedly*. The
+  harness compounded it: it restarted the client Tor between samples to
+  force a fresh circuit, which drops the cached onion descriptor and
+  re-fetches it each time. A real peer keeps its Tor warm and fetches
+  the descriptor once. So the n is a property of measuring one onion
+  under the shipping backoff, and a firmer n comes from a
+  production-representative rig (a warm client Tor, a longer window, or
+  several peers) over a distant circuit — **not** from switching to the
+  non-default durable onion, which would measure the wrong posture.
 
 | span | p50 | p90 | p95 | p99 | max | 2 × p99 |
 | --- | --- | --- | --- | --- | --- | --- |
