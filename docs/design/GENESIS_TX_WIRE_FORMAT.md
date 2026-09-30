@@ -596,7 +596,8 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   tx; `shekyl-pow-randomx` consumes the blob. Rename the crate (it's more than
   "tx-wire"); see §1/§4.
 - **Q6 — proof / Bp+ canonical-serialization coverage.** *(RESOLVED → freeze by
-  reference; **re-vetted 2026-09-29 on pin `2485a176`**, earlier the same day on
+  reference; **re-vetted 2026-09-29 on pin `2485a176`** (merged into the fork as
+  `3378433c`, the live pin, with an identical crypto tree), earlier the same day on
   `a08001f14c` and on 2026-06-25 on `2753111c50`)* The wire layer
   length-prefixes the FCMP++ proof as **opaque bytes** (`shekyl-wire`
   `Prunable::write`: `V(proof_len) ‖ fcmp_proof`) and writes the Bp+ by its fixed

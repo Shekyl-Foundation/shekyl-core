@@ -13,7 +13,8 @@
   constraint, and still rejects a full-rank system with no isolating row
   (upstream `31c26d96`, corrected on the fork). Helios/Selene zeroizes
   sampling, wide reduction, and invert intermediates (upstream `77788c36`).
-  Pin: `chore/oxide-crypto-2026-09` @ `2485a176`. The `fcmps` crate is Shekyl's
+  Pin: `chore/crypto-resync-from-tip` @ `3378433c` (the merge of fork PR #6;
+  same crypto tree as its tip `2485a176`). The `fcmps` crate is Shekyl's
   PL-D3 fork and is not mirrored from the pin
   (`SHEKYL_OXIDE_VENDORING.md` §"What the pin covers"); upstream shipped no
   `fcmps` logic change, so it is unchanged. Q6 re-vetted: an honest on-curve
