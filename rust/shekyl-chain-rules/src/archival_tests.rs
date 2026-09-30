@@ -47,13 +47,19 @@
 use super::*;
 use crate::harness::assert_refused;
 use crate::harness::fixture::{candidate_on, chain_of, listed, recorded, root, serve_credit_vin};
+use crate::rules::miner::closed_shards_before;
 use crate::view::RecordedBlock;
 use shekyl_archival_retention::{
-    p_canonical_id_from_hybrid_pubkey, HoldingsDescriptor, HoldingsKind, ShardSet,
+    p_canonical_id_from_hybrid_pubkey, BondPostKind as PostKind, HoldingsDescriptor, HoldingsKind,
+    ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC,
 };
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_types::archival::BadInterval;
+use shekyl_types::archival::{HeldShard, SlashLogEntry, SlashedHolding};
 use shekyl_types::{ArchivalLength, SHARD_LENGTH};
+use shekyl_wire::transaction::{
+    BondPost, BondPostKind as WireKind, Holdings as WireHoldings, Input,
+};
 use shekyl_wire::Transaction;
 
 const P1: [u8; 32] = [0xa1; 32];

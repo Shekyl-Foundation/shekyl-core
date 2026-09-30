@@ -178,15 +178,15 @@ pub enum Corrupt {
         at: BlockHeight,
     },
     /// The archival fold does not place the close of shard `shard` at or
-    /// below the height asked (`shard_close_height`): a shard
+    /// below the height asked (`shard_close_height`). A shard
     /// [`closed_shards_before`](crate::closed_shards_before) counted closed
     /// has its end `(shard + 1) · W` at most the parent's
     /// `cumulative_archival_len`, and a non-decreasing fold (SI-13) crosses
-    /// it at exactly one height. A cut the search cannot verify — the fold
-    /// below the end at the height it landed on, or already past it one
-    /// below — is a fold that went backwards, on a conforming store ruled
-    /// out by SI-13; an end that does not fit `u64` names a shard no fold
-    /// has closed.
+    /// that end at one height. The search refuses when the height it lands
+    /// on is still short of the end: the shard is open through the parent,
+    /// the end does not fit `u64`, or the fold fell below the end and stayed
+    /// down. SI-13, enforced when the store connects each block, is what
+    /// makes the fold non-decreasing.
     ShardCloseUnplaced {
         /// The shard whose close was asked.
         shard: ShardId,

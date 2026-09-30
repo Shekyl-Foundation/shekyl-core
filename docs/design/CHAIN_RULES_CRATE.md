@@ -226,7 +226,7 @@ rust/shekyl-chain-rules/
     ├── block.rs          Candidate (input), ValidatedBlock (payload)
     ├── verdict.rs        ChainValid<'id, V>, InvalidBlock, Locus, TxSlot, Verdict<T>, refused
     ├── validate.rs       validate, tx_form, tx_against
-    ├── archival.rs       ArchivalDelta and its parts; transition (L7), accrue (L8), apply_slash (L9), shard_close_height (DRS-E4)
+    ├── archival/         ArchivalDelta (mod); inputs (L7), slash (L9), close (L8, shard_close_height)
     ├── harness.rs        #[cfg(test)] MockChain / MockView<'_, 'id> / FaultingView<'id>, assert_refused, boundary_pair, fixture::*
     └── *_tests.rs        census_tests, coverage_tests, rule_set_tests, verdict_tests, validate_tests, harness_probe_tests
 ```
