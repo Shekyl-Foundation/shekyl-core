@@ -61,7 +61,7 @@ pub struct ArithmeticCircuitWitness<C: Ciphersuite> {
 }
 
 impl<C: Ciphersuite> ArithmeticCircuitWitness<C> {
-    /// Constructs a new witness instance.
+    /// Construct a new witness instance.
     ///
     /// Returns `None` if `aL.len() != aR.len()`.
     pub fn new(
@@ -97,6 +97,12 @@ pub enum AcStatementError {
     ConstrainedNonExistentVectorCommitment,
     /// A constraint referred to a non-existent commitment.
     ConstrainedNonExistentCommitment,
+    /// A Pedersen commitment was not isolated by any constraint.
+    ///
+    /// Isolation is decided on the combined row: one commitment has a nonzero weight and every
+    /// other Pedersen weight in that constraint is zero. A full-rank system with no such row is
+    /// rejected. Widening this check changes the statement relation.
+    DidNotConstrainCommitment,
     /// Too many commitments were specified as part of the statement.
     TooManyCommitments,
 }
@@ -116,6 +122,15 @@ where
     /// The commitments are expected to have been transcripted extenally to this statement's
     /// invocation. That's practically ensured by taking a `Commitments` struct here, which is only
     /// obtainable via a transcript. The commitments MUST be transcripted though.
+    ///
+    /// A term no constraint names is unconstrained. That includes a Pedersen commitment which is
+    /// not openable under the statement generators. The caller constrains every term whose value
+    /// the statement is meant to bind. Pedersen vector commitments may also carry `H_bold` terms,
+    /// which this proof cannot constrain.
+    ///
+    /// Each Pedersen commitment must be isolated by at least one constraint. Duplicate terms are
+    /// combined first, so `V(i) + V(i)` and `2·V(i)` are the same row. A full-rank system that never
+    /// isolates a commitment is rejected; accepting it would be a different statement relation.
     pub fn new(
         generators: ProofGenerators<'a, C>,
         constraints: Vec<LinComb<C::F>>,
@@ -123,19 +138,28 @@ where
     ) -> Result<Self, AcStatementError> {
         let Commitments { C, V } = commitments;
 
-        for constraint in &constraints {
-            if Some(generators.len()) <= constraint.highest_a_index {
-                Err(AcStatementError::ConstrainedNonExistentTerm)?;
+        {
+            let mut commitment_is_isolated = vec![false; V.len()];
+            for constraint in &constraints {
+                if Some(generators.len()) <= constraint.highest_a_index {
+                    Err(AcStatementError::ConstrainedNonExistentTerm)?;
+                }
+                if Some(C.len()) <= constraint.highest_c_index {
+                    Err(AcStatementError::ConstrainedNonExistentVectorCommitment)?;
+                }
+                if Some(V.len()) <= constraint.highest_v_index {
+                    Err(AcStatementError::ConstrainedNonExistentCommitment)?;
+                }
+                if let Some(index) = constraint.isolated_commitment(V.len()) {
+                    commitment_is_isolated[index] = true;
+                }
             }
-            if Some(C.len()) <= constraint.highest_c_index {
-                Err(AcStatementError::ConstrainedNonExistentVectorCommitment)?;
-            }
-            if Some(V.len()) <= constraint.highest_v_index {
-                Err(AcStatementError::ConstrainedNonExistentCommitment)?;
+            if commitment_is_isolated.into_iter().any(|isolated| !isolated) {
+                Err(AcStatementError::DidNotConstrainCommitment)?;
             }
         }
 
-        // This ensures we may perform `n' = 2 * n_c + 2, 2 * (n' + 1)` with plenty of room,
+        // This ensures we may set `n' = 2 * n_c + 2, 2 * (n' + 1)` with plenty of room,
         // without limiting any realistic uses of this proof
         if C.len() >= (usize::MAX >> 4) {
             Err(AcStatementError::TooManyCommitments)?;
