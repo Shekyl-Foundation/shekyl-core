@@ -122,10 +122,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`CHAIN_RULES_SLICE_5.md`](design/CHAIN_RULES_SLICE_5.md) §5
   - Target: pre-genesis
 
-- **Delete the clearnet pipe scaffolding at transport cutover.** `pipe.rs`, the descriptor-handoff FFI, and epee's `network_pipe_ops` are the interim host. The transport layer replaces them; they are not a test host for the option. The deletion set is D13 of the transport-layer design.
-  - Owner: [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md)
-  - Target: pre-genesis
-
 - **State the rule for a peer-exchange address type this node does not recognise.** The union is closed (`ADDR_IPV4`, `ADDR_IPV6`, `ADDR_I2P`, `ADDR_TOR` in `shekyl-levin` `payload/address.rs`) and freezes at genesis. A future network's address type belongs to that network's connector, so an unrecognised type needs a stated rule before then. Not decided in the transport-layer round.
   - Owner: [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md)
   - Target: pre-genesis

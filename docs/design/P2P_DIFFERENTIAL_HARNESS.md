@@ -1,9 +1,9 @@
 # P2P differential harness
 
-**Status: OPEN.** D11's gate before any transport deletion. Option off,
-on loopback. The comparison is what the peer receives back and whether
-the session is established. Cutover waits on the thread budget and the
-per-connector deadlines.
+**Status: OPEN.** The epee recording host is deleted. CI is
+`check-goldens` against the option-off parity goldens
+(`p2p-harness-seeds`). Option off, on loopback. The comparison is
+what the peer receives back and whether the session is established.
 
 ## Expected divergences
 
@@ -35,14 +35,16 @@ to match.
 
 ## How two stacks are compared
 
-The epee side is C++, in `boosted_tcp_server`. The seam side is Rust.
-The harness does not link epee into a Rust test. C++ is the recording
-reference, not the behaviour to copy (rule 20).
+The goldens were recorded from the epee side, C++ in
+`boosted_tcp_server`. That server and `epee-host` are deleted. CI
+is `check-goldens`. The seam side is Rust. The harness does not
+link epee into a Rust test. C++ was the recording reference, not
+the behaviour to copy (rule 20).
 
 The typed plan lives in Rust. `NamedSeed` plus `PROPERTY_SEEDS`
 (100–115) is the seed table. `AfterHandshake` (`none`, `follow`,
 `send-over`, `pause`) is what both hosts do after the first invoke.
-`all_seeds()` is the list `run-seeds` executes. There is no second
+`all_seeds()` is the list `check-goldens` runs. There is no second
 copy of that list in C++ or in a shell script.
 
 One scripted peer, `shekyl-p2p-harness`'s `peer`, is built on
@@ -57,32 +59,34 @@ Two hosts, each with a recording handler:
   clearnet `listen` with the option off. The session bytes are what
   the seam delivers to the Levin handler. It does not use the
   connector's tests, and it does not open a second admission table.
-- `epee-host`, the C++ binary. It hosts `boosted_tcp_server`, serves
-  one connection, and writes this transcript. It is the only C++ in
-  the harness, and it is not linked into the Rust crate. Handshake
-  encode and decode stay in this binary: that is the epee reference.
-  Host behaviour after the invoke is a CLI plan
+- `epee-host` (deleted). It hosted `boosted_tcp_server`, served
+  one connection, and wrote this transcript. It was the only C++ in
+  the harness, and it was not linked into the Rust crate. Handshake
+  encode and decode stayed in that binary: that was the epee reference.
+  Host behaviour after the invoke was a CLI plan
   (`--after none|follow|send-over|pause`, `--wait-ms`, `--pause-ms`,
   `--settle-ms`, `--over-bytes`). Durations and the send-queue cap
-  come from the Rust driver so this binary does not own the seed
-  table. A P2P connection enables epee's rate limiter, whose unset
-  target is 16 KiB/s. The harness sets that limit to the maximum so
-  this run compares Levin bytes. It does not test the operator link
-  budget.
+  came from the Rust driver so that binary did not own the seed
+  table. A P2P connection enabled epee's rate limiter, whose unset
+  target was 16 KiB/s. The harness set that limit to the maximum so
+  the recording compared Levin bytes. It did not test the operator
+  link budget.
 
-`seam-host SEED TRANSCRIPT` and `epee-host SEED TRANSCRIPT [...]`
-each print `host:port` on stdout, serve one connection, and write
-the host transcript. `peer ADDR SEED TRANSCRIPT` dials that address.
-`compare PEER_A HOST_A PEER_B HOST_B` diffs two runs. Those three
-bins stay for replay of a kept `p2p-harness-fail/` directory.
+`seam-host SEED TRANSCRIPT` prints `host:port` on stdout, serves
+one connection, and writes the host transcript. The deleted
+`epee-host` did the same. `peer ADDR SEED TRANSCRIPT` dials that
+address. `compare PEER_A HOST_A PEER_B HOST_B` diffs two runs.
+`peer`, `seam-host`, and `compare` stay for replay of a kept
+`p2p-harness-fail/` directory.
 
-The gate is `run-seeds EPEE_HOST`. It owns the seed list, runs the
-seam in-process (in parallel with the epee process), requires the
-seam run to match the script, and diffs the two hosts. A mismatch
-keeps the four transcripts under `p2p-harness-fail/seed-N/`.
-ctest `p2p-harness-seeds` is that driver plus the staged `epee-host`.
+Before the deletion the gate was `run-seeds EPEE_HOST`. It owned the
+seed list, ran the seam in-process (in parallel with the epee
+process), required the seam run to match the script, and diffed the
+two hosts. A mismatch kept the four transcripts under
+`p2p-harness-fail/seed-N/`. After the deletion, ctest
+`p2p-harness-seeds` is `check-goldens` on the committed goldens.
 The test job unpacks `build/` and has no cargo, so CMake copies
-`run-seeds`, `peer`, `seam-host`, and `compare` next to `epee-host`.
+`check-goldens`, `peer`, `seam-host`, and `compare` into that tree.
 On UNIX without cargo the test still exists and fails: absence of
 the bins is not a green skip.
 
@@ -164,7 +168,7 @@ against both hosts. It merges when that gate is green. A mismatch
 that is not seed 32's classified send-queue suffix is fixed in this
 pull request.
 
-The next pull request is the cutover. The zone binding and the
+The cutover is this branch. The zone binding and the
 deletion land together: a period where production runs on the seam
 with epee still in the tree is not a state anything needs. That
 branch carries the zone binding and the call sites that move with it
@@ -175,9 +179,10 @@ taken on that build and recorded as run records, then D13's deletions,
 the epee goldens, I2P recorded as removed, and the pipe branch
 deleted. It merges once, when the run records are in.
 
-The gates are unchanged. The differential harness passes before
-anything is deleted, which is this pull request. The measurements are
-taken on the build that ships, which is the cutover branch.
+UPDATE 2026-09-30: the epee host and `boosted_tcp_server` are
+deleted. `p2p-harness-seeds` runs `check-goldens` on the parity
+goldens. The measurements are taken on the build that ships, which
+is the cutover branch.
 
 ## Goldens
 
@@ -193,8 +198,8 @@ version line, the parity fields, and nothing else. Events are omitted.
 A send-over suffix past the script's handshake response is omitted.
 The six deferred invariants are not transcript fields, so they are
 not in the files. Recorded at `88a202195`. Option-off goldens;
-re-recorded at the flip per §Goldens. Then the epee host is
-deleted with the rest of epee.
+re-recorded at the flip per §Goldens. The epee host is deleted
+with that server. CI runs `check-goldens` on these files.
 
 After cutover, in CI, the same peer runs every seed against the Rust
 transport. Each run checks the goldens (the peer still sees the same

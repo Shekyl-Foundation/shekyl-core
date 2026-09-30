@@ -6,7 +6,7 @@
 //! One zone's server.
 //!
 //! It holds the Levin registry, the socketless executor, the bound ports,
-//! and `open`. It does not wrap `boosted_tcp_server`, and it does not
+//! and `open`. It does not wrap an epee TCP server, and it does not
 //! grow methods that existed only so epee could be configured.
 
 #pragma once

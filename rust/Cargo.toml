@@ -262,12 +262,12 @@ members = [
     # accept_tor, then the gap timer. See P2P_TRANSPORT_LAYER.md.
     "shekyl-tor",
     # The seam: SocketId, one cause, posts onto the connection strand.
-    # Production still builds epee's server until cutover.
+    # epee's TCP server is deleted (D13).
     "shekyl-seam",
     # P2P conformance harness (P2P_DIFFERENTIAL_HARNESS.md). The scripted
-    # peer, the seam host, the transcript comparator, and the run-seeds
-    # driver. Nothing in the production graph depends on it. The epee host
-    # is the C++ recording binary and is not linked into this crate.
+    # peer, the seam host, the transcript comparator, and check-goldens.
+    # Nothing in the production graph depends on it. The epee recording
+    # binary is deleted and is not linked into this crate.
     "shekyl-p2p-harness",
 
     # Persona serving loop: loopback shard server behind the P onion

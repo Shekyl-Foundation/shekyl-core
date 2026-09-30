@@ -28,6 +28,7 @@
 
 #include "common/command_line.h"
 #include "net/parse.h"
+#include "string_tools_lexical.h"
 #include "daemon/command_parser_executor.h"
 #include <boost/filesystem.hpp>
 #include <boost/algorithm/string/predicate.hpp>

@@ -3,9 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Drive every seed against the seam (in-process) and the epee host
-//! (the C++ recording binary). Owns the seed list. Keeps transcripts
-//! when the stacks disagree.
+//! The CI check is [`check_goldens`]: the seam against the parity
+//! goldens. [`run_all`] is the recorder that spawned the epee host.
+//! That binary is deleted. Owns the seed list.
 
 use std::fs;
 use std::io::{BufRead, BufReader};

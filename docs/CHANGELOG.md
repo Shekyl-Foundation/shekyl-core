@@ -8,7 +8,9 @@
   bind failure fails that zone's start. The Levin connection registry
   is unchanged. `--clearnet-transport-encrypt` stays, off by default,
   as the clearnet connector's channel option. The pipe that used to
-  implement it is gone. The flip deletes the option.
+  implement it is gone, and so is epee's TCP server. The harness
+  checks the seam against the option-off parity goldens. The flip
+  deletes the option and re-records those goldens.
 - `--limit-rate-up`, `--limit-rate-down`, and `--limit-rate` reach one
   token bucket per direction for the whole node. The default is
   unlimited (`-1`). `0` is refused at startup. A set rate counts wire

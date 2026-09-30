@@ -31,7 +31,6 @@
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/blockchain.h"
 #include "p2p/p2p_protocol_defs.h"
-#include "net/connection_basic.hpp"
 #include "p2p/net_peerlist.h"
 #include "p2p/net_node.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
@@ -81,7 +80,6 @@ int main(int argc, char* argv[])
   SL(epee::net_utils::ipv4_network_address);
   SL(epee::net_utils::network_address);
   SL(epee::net_utils::connection_context_base);
-  SL(epee::net_utils::connection_basic);
 
   SL(nodetool::peerlist_entry);
   SL(nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core>>);

@@ -3427,12 +3427,11 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::set_tos_flag(const boost::program_options::variables_map& vm, int flag)
   {
-    if(flag==-1){
+    (void)vm;
+    if (flag == -1)
       return true;
-    }
-    epee::net_utils::connection<epee::levin::async_protocol_handler<p2p_connection_context> >::set_tos_flag(flag);
-    _dbg1("Set ToS flag  " << flag);
-    return true;
+    MERROR("--tos-flag is not offered");
+    return false;
   }
 
   template<class t_payload_net_handler>
