@@ -92,10 +92,11 @@ The engine-service addendum in
 [`P2P_TIMING_ENGINE.md`](P2P_TIMING_ENGINE.md) is the concurrency
 contract the first line calls. C5 is recorded: the responder handshake
 is 685 µs, one rekey is 5.06 µs, seal and open of a 65,535-byte record
-is 889 µs. No accept-rate (D10.3), no per-connector deadline (D9), no
-transport-runtime thread count (D5), and no every-record rekey (D14
-item 4, decided with C9's window) is written. The implementation does
-not invent those numbers.
+is 889 µs. The D9 deadlines are written by `transport_spans`:
+clearnet dial 1.415 s, handshake 1.426 s, gap 1.430 s, Tor dial 9.1 s,
+gap 2.6 s. No accept-rate (D10.3), no transport-runtime thread count
+(D5), and no every-record rekey (D14 item 4, decided with C9's window)
+is written. The implementation does not invent those numbers.
 
 **The tree matches the citations that the first line will rely on.**
 Fifty-six `file:line` citations in this document fall inside their
@@ -1589,7 +1590,9 @@ own `wait_before_write_ns` and `total_retrans`. No millisecond here
 depends on that event. The three legs, and the New
 York leg that confirms the slope is about 1, are in the benchmark
 record. A measured satellite-class link whose RTT exceeds 700 ms
-reopens the ceiling. These milliseconds are not wired yet.
+reopens the ceiling. These milliseconds, the Tor dial of 9.1 s, and the
+Tor gap of 2.6 s are what `transport_spans` writes. Shutdown waits out
+the longest of them, the Tor dial.
 
 One rekey is 5.06 µs against 889 µs to seal and open a 65,535-byte
 record, under one percent at that size. Fixed windows are smaller than
@@ -1759,13 +1762,13 @@ round can reject them.
   cutover is not a flag day is about two builds talking to each
   other. UPDATE 2026-09-30: the clearnet pair, the Tor dial and inbound
   distributions, the South America and New York clearnet figures
-  (recorded, not wired; the clearnet deadlines are the D9 ceiling
-  form, 1.415 / 1.426 / 1.430 s) and the Tor gap timer, and one Tor
-  stem hop are in
+  (the clearnet deadlines are the D9 ceiling form, 1.415 / 1.426 /
+  1.430 s, written by `transport_spans` with the Tor dial 9.1 s and gap
+  2.6 s) and one Tor stem hop are in
   [`p2p_cutover_crossbuild_20260929.md`](../benchmarks/p2p_cutover_crossbuild_20260929.md).
   The epee-to-epee stem still did not cross in the first cross-build.
   The thread-budget legs are not in it; they wait on the ledger row.
-  Deadline wiring and D13 are not done.
+  Deadline wiring is that write. D13 is not done.
 - **One descriptor per connection.** Count `readlink` results equal to
   that socket's `socket:[inode]`. Assert one. Do not count
   `/proc/self/fd` for the whole process.

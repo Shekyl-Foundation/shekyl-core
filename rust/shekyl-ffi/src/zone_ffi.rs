@@ -58,7 +58,11 @@ struct Host {
     tor_tx: mpsc::UnboundedSender<TorAdmitted>,
     shutdown_timeout: Duration,
     network_id: [u8; 16],
-    handshake_within: Tick,
+    clearnet_dial_within: Tick,
+    clearnet_handshake_within: Tick,
+    clearnet_gap_within: Tick,
+    tor_dial_within: Tick,
+    tor_gap_within: Tick,
     send_queue_bytes: usize,
     on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
 }
@@ -73,13 +77,19 @@ static HOST: LazyLock<Mutex<Option<Arc<Host>>>> = LazyLock::new(|| Mutex::new(No
 static GAPS: LazyLock<Mutex<std::collections::HashMap<u64, oneshot::Sender<()>>>> =
     LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
-/// Spans and the runtime budget. The numbers are the caller's, and each
-/// one is unmeasured until a run record names it. This module does not
-/// pick a thread count or a deadline.
+/// Spans and the runtime budget. The numbers are the caller's. The five
+/// deadlines are the measured spans; `workers` and `blocking` stay the
+/// structural floor until the thread-budget leg. `shutdown_timeout_ns`
+/// is the longest armed deadline. Field order matches `shekyl_zone_params`.
+/// This module does not pick a thread count or a deadline.
 #[repr(C)]
 pub struct ShekylZoneParams {
     pub network_id: *const u8,
-    pub handshake_within_ns: u64,
+    pub clearnet_dial_within_ns: u64,
+    pub clearnet_handshake_within_ns: u64,
+    pub clearnet_gap_within_ns: u64,
+    pub tor_dial_within_ns: u64,
+    pub tor_gap_within_ns: u64,
     pub send_queue_bytes: u64,
     pub shutdown_timeout_ns: u64,
     pub workers: usize,
@@ -144,7 +154,9 @@ impl ZoneDial {
             sockets: self.host.sockets.clone(),
             kind: ready.kind,
             network_id: self.host.network_id,
-            handshake_within: self.host.handshake_within,
+            dial_within: self.host.clearnet_dial_within,
+            handshake_within: self.host.clearnet_handshake_within,
+            gap_within: self.host.clearnet_gap_within,
             tally: ready.tally,
             sessions,
             on_cause: Arc::new(move |cause| {
@@ -167,6 +179,11 @@ impl ZoneDial {
                 else => Err(CloseCause::new(CloseKind::DialFailed)),
             }
         })?;
+        if let Some(gap) = admitted.gap {
+            GAPS.lock()
+                .expect("gaps")
+                .insert(admitted.open.id().get(), gap);
+        }
         Ok(Channel {
             open: admitted.open,
             session: admitted.session,
@@ -197,8 +214,8 @@ impl ZoneDial {
             address,
             proxy,
             sockets: self.host.sockets.clone(),
-            dial_within: self.host.handshake_within,
-            gap_within: self.host.handshake_within,
+            dial_within: self.host.tor_dial_within,
+            gap_within: self.host.tor_gap_within,
             sessions,
             on_cause: Arc::new(move |cause| {
                 if let Some(tx) = fail_tx.lock().expect("dial failure").take() {
@@ -277,7 +294,11 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
         tor_tx,
         shutdown_timeout: Duration::from_nanos(params.shutdown_timeout_ns),
         network_id,
-        handshake_within: Tick::new(params.handshake_within_ns),
+        clearnet_dial_within: Tick::new(params.clearnet_dial_within_ns),
+        clearnet_handshake_within: Tick::new(params.clearnet_handshake_within_ns),
+        clearnet_gap_within: Tick::new(params.clearnet_gap_within_ns),
+        tor_dial_within: Tick::new(params.tor_dial_within_ns),
+        tor_gap_within: Tick::new(params.tor_gap_within_ns),
         send_queue_bytes: usize::try_from(params.send_queue_bytes).unwrap_or(usize::MAX),
         on_cause,
     });
@@ -311,6 +332,9 @@ async fn pump(
 
 fn adopt_clearnet(hub: &Hub, admitted: ClearnetAdmitted) {
     let id = admitted.open.id();
+    if let Some(gap) = admitted.gap {
+        GAPS.lock().expect("gaps").insert(id.get(), gap);
+    }
     let endpoint = Endpoint::Clearnet {
         ip: admitted.ip,
         port: admitted.port,
@@ -476,7 +500,8 @@ fn spawn_clearnet(
     let on_cause = Arc::clone(&host.on_cause);
     let ceiling = Arc::clone(&host.ceiling);
     let network_id = host.network_id;
-    let handshake_within = host.handshake_within;
+    let handshake_within = host.clearnet_handshake_within;
+    let gap_within = host.clearnet_gap_within;
     let send_queue_bytes = host.send_queue_bytes;
     host.handle.spawn(async move {
         loop {
@@ -495,6 +520,7 @@ fn spawn_clearnet(
                 kind,
                 network_id,
                 handshake_within,
+                gap_within,
                 tally: Arc::clone(&tally),
                 sessions: mpsc::unbounded_channel().0,
                 on_cause: Arc::clone(&on_cause),
@@ -581,7 +607,7 @@ fn spawn_tor(host: &Host, listener: TcpListener) {
     let engine = host.engine.clone();
     let on_cause = Arc::clone(&host.on_cause);
     let ceiling = Arc::clone(&host.ceiling);
-    let gap_within = host.handshake_within;
+    let gap_within = host.tor_gap_within;
     let send_queue_bytes = host.send_queue_bytes;
     host.handle.spawn(async move {
         loop {
@@ -859,7 +885,11 @@ mod tests {
         let network_id = [7u8; 16];
         let params = ShekylZoneParams {
             network_id: network_id.as_ptr(),
-            handshake_within_ns: 1_000_000_000,
+            clearnet_dial_within_ns: 1_000_000_000,
+            clearnet_handshake_within_ns: 1_000_000_000,
+            clearnet_gap_within_ns: 1_000_000_000,
+            tor_dial_within_ns: 1_000_000_000,
+            tor_gap_within_ns: 1_000_000_000,
             send_queue_bytes: 65_536,
             shutdown_timeout_ns: 1_000_000_000,
             workers: 1,

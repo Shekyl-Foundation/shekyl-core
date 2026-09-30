@@ -3657,17 +3657,29 @@ namespace nodetool
   template<class t_payload_net_handler>
   shekyl_zone_params node_server<t_payload_net_handler>::transport_spans() const
   {
-    // Unmeasured, every one of them. The run record replaces the value;
-    // it does not adopt what is written here.
-    // Handshake span: the inherited invoke timeout, not the derived deadline.
+    // Clearnet dial, handshake, and gap: 2 x (700 ms GEO-satellite RTT
+    // ceiling + the node-local residual), rounded up to 1 ms. Residuals
+    // are the larger of the LAN, South America (~170 ms), and New York
+    // (~24 ms) legs in docs/benchmarks/p2p_cutover_crossbuild_20260929.md.
+    // Dial 1.415 s (residual 7.2 ms), handshake 1.426 s (12.6 ms, the
+    // measured median of the body), gap 1.430 s (residual 14.7 ms). The
+    // ~700 ms handshake tail is not a term in any of these.
+    // Tor dial 9.1 s: 2 x p99 (4.54 s) of the floor dial distribution,
+    // South America circuit, proof-of-work on. Tor gap 2.6 s: the outbound
+    // direction, the larger of the two distant-circuit gaps.
+    // Shutdown waits out the longest armed deadline, the Tor dial.
     // Send queue: one admitted packet, room for the largest legitimate message.
-    // Runtime workers: the structural floor, one worker besides the blocking lane.
-    const std::uint64_t invoke_ns = static_cast<std::uint64_t>(P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT) * 1000000ull;
+    // workers and blocking: the structural floor. The thread-budget leg
+    // replaces them after the ledger row.
     shekyl_zone_params spans{};
     spans.network_id = nullptr;
-    spans.handshake_within_ns = invoke_ns;
+    spans.clearnet_dial_within_ns = 1415000000ull;
+    spans.clearnet_handshake_within_ns = 1426000000ull;
+    spans.clearnet_gap_within_ns = 1430000000ull;
+    spans.tor_dial_within_ns = 9100000000ull;
+    spans.tor_gap_within_ns = 2600000000ull;
     spans.send_queue_bytes = LEVIN_DEFAULT_MAX_PACKET_SIZE;
-    spans.shutdown_timeout_ns = invoke_ns;
+    spans.shutdown_timeout_ns = 9100000000ull;
     spans.workers = 2;
     spans.blocking = 1;
     return spans;

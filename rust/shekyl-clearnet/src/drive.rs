@@ -30,7 +30,7 @@ use shekyl_transport_layer::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::seam::{SeamRecv, SeamSend};
 use crate::{ChannelChoice, HandshakeTally, Session};
@@ -64,6 +64,9 @@ pub struct Admitted {
     pub session: Session,
     pub ip: IpAddr,
     pub port: u16,
+    /// Fired by `shekyl_zone_session_established`. Dropped before that
+    /// closes the connection instead of waiting out the gap.
+    pub gap: Option<oneshot::Sender<()>>,
 }
 
 pub struct Dial {
@@ -72,7 +75,9 @@ pub struct Dial {
     pub sockets: Sockets,
     pub kind: ChannelChoice,
     pub network_id: NetworkId,
+    pub dial_within: Tick,
     pub handshake_within: Tick,
+    pub gap_within: Tick,
     pub tally: Arc<HandshakeTally>,
     pub sessions: mpsc::UnboundedSender<Session>,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
@@ -87,6 +92,7 @@ pub struct Accept {
     pub kind: ChannelChoice,
     pub network_id: NetworkId,
     pub handshake_within: Tick,
+    pub gap_within: Tick,
     pub tally: Arc<HandshakeTally>,
     pub sessions: mpsc::UnboundedSender<Session>,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
@@ -105,6 +111,7 @@ where
         kind,
         network_id,
         handshake_within,
+        gap_within,
         tally,
         sessions,
         on_cause,
@@ -135,6 +142,7 @@ where
             kind,
             network_id,
             handshake_within,
+            gap_within,
             tally,
             sessions,
             send_queue_bytes,
@@ -151,6 +159,7 @@ where
             kind,
             network_id,
             handshake_within,
+            gap_within,
             tally,
             sessions,
             send_queue_bytes,
@@ -178,7 +187,9 @@ where
         sockets,
         kind,
         network_id,
+        dial_within,
         handshake_within,
+        gap_within,
         tally,
         sessions,
         on_cause,
@@ -195,31 +206,63 @@ where
     };
     let dest = SocketAddr::new(ip, port);
     let target = proxy.unwrap_or(dest);
-    let dialed = Instant::now();
-    let Ok(mut stream) = TcpStream::connect(target).await else {
+    let Ok(owner) = engine.register(OwnerClass::Transport) else {
         on_cause(CloseCause::new(CloseKind::DialFailed));
         return;
     };
-    if proxy.is_some() {
-        match socks_connect(&mut stream, Isolation::Principal, Destination::Ip(dest)).await {
-            Ok(()) => {}
-            Err(SocksError::Refused { reply }) => {
-                drop(stream.shutdown().await);
-                on_cause(CloseCause::proxy_refused(u16::from(reply)));
-                return;
-            }
-            Err(
-                SocksError::Io(_)
-                | SocksError::Malformed
-                | SocksError::AuthRejected { .. }
-                | SocksError::AuthFailed { .. },
-            ) => {
-                drop(stream.shutdown().await);
-                on_cause(CloseCause::new(CloseKind::DialFailed));
-                return;
+    let now = owner.clock().now();
+    let deadline = Tick::new(now.get().saturating_add(dial_within.get()));
+    if owner.arm(deadline).is_err() {
+        ignore(owner.deregister());
+        on_cause(CloseCause::new(CloseKind::DialFailed));
+        return;
+    }
+    let mut wake = std::pin::pin!(owner.wait_wake_async());
+    let connect = async {
+        let dialed = Instant::now();
+        let Ok(mut stream) = TcpStream::connect(target).await else {
+            return Err(CloseCause::new(CloseKind::DialFailed));
+        };
+        if proxy.is_some() {
+            match socks_connect(&mut stream, Isolation::Principal, Destination::Ip(dest)).await {
+                Ok(()) => {}
+                Err(SocksError::Refused { reply }) => {
+                    drop(stream.shutdown().await);
+                    return Err(CloseCause::proxy_refused(u16::from(reply)));
+                }
+                Err(
+                    SocksError::Io(_)
+                    | SocksError::Malformed
+                    | SocksError::AuthRejected { .. }
+                    | SocksError::AuthFailed { .. },
+                ) => {
+                    drop(stream.shutdown().await);
+                    return Err(CloseCause::new(CloseKind::DialFailed));
+                }
             }
         }
-    }
+        Ok((stream, span_ns(dialed.elapsed())))
+    };
+    tokio::pin!(connect);
+    let connected = tokio::select! {
+        biased;
+        result = wake.as_mut() => {
+            let kind = match result {
+                Ok(_) => CloseKind::TransportTimeout,
+                Err(_) => CloseKind::DialFailed,
+            };
+            Err(CloseCause::new(kind))
+        }
+        result = &mut connect => result,
+    };
+    ignore(owner.deregister());
+    let (mut stream, connect_ns) = match connected {
+        Ok(pair) => pair,
+        Err(cause) => {
+            on_cause(cause);
+            return;
+        }
+    };
     let now = engine.clock().now();
     let reserved = match sockets.open_clearnet(ip, now) {
         Ok(open) => open,
@@ -235,7 +278,7 @@ where
     };
     tracing::info!(
         conn = reserved.id().get(),
-        connect_ns = span_ns(dialed.elapsed()),
+        connect_ns,
         proxied = proxy.is_some(),
         "clearnet dial connected"
     );
@@ -246,6 +289,7 @@ where
             kind,
             network_id,
             handshake_within,
+            gap_within,
             tally,
             sessions,
             send_queue_bytes,
@@ -262,6 +306,7 @@ where
             kind,
             network_id,
             handshake_within,
+            gap_within,
             tally,
             sessions,
             send_queue_bytes,
@@ -303,6 +348,7 @@ async fn serve<C>(
     kind: ChannelChoice,
     network_id: NetworkId,
     handshake_within: Tick,
+    gap_within: Tick,
     tally: Arc<HandshakeTally>,
     sessions: mpsc::UnboundedSender<Session>,
     send_queue_bytes: usize,
@@ -350,23 +396,43 @@ where
             return cause;
         }
     };
+    let mut gap_watch = None;
     if let Some(tx) = handoff {
         let Some(open) = reserved.take() else {
             drop(hold);
             drop(writer.await);
             return CloseCause::new(CloseKind::LocalClose);
         };
+        let Ok(owner) = engine.register(OwnerClass::Transport) else {
+            drop(open);
+            drop(hold);
+            drop(writer.await);
+            return CloseCause::new(CloseKind::LocalClose);
+        };
+        let now = owner.clock().now();
+        let deadline = Tick::new(now.get().saturating_add(gap_within.get()));
+        if owner.arm(deadline).is_err() {
+            ignore(owner.deregister());
+            drop(open);
+            drop(hold);
+            drop(writer.await);
+            return CloseCause::new(CloseKind::LocalClose);
+        }
+        let (gap_tx, gap_rx) = oneshot::channel();
         let admitted = Admitted {
             open,
             session,
             ip: peer.ip(),
             port: peer.port(),
+            gap: Some(gap_tx),
         };
         if tx.send(admitted).is_err() {
+            ignore(owner.deregister());
             drop(hold);
             drop(writer.await);
             return CloseCause::new(CloseKind::LocalClose);
         }
+        gap_watch = Some((owner, gap_rx));
     } else if sessions.send(session).is_err() {
         drop(hold);
         drop(writer.await);
@@ -374,6 +440,55 @@ where
     }
     let read_fut = read_half(read, recv, inbound, Arc::clone(&overfull), conn, message2);
     tokio::pin!(read_fut);
+    if let Some((owner, mut gap_rx)) = gap_watch {
+        let mut wake = std::pin::pin!(owner.wait_wake_async());
+        let mut gap_open = true;
+        loop {
+            tokio::select! {
+                biased;
+                result = &mut gap_rx, if gap_open => {
+                    gap_open = false;
+                    ignore(owner.deregister());
+                    if result.is_err() {
+                        drop(hold);
+                        writer.abort();
+                        drop(writer.await);
+                        return CloseCause::new(CloseKind::LocalClose);
+                    }
+                }
+                result = wake.as_mut(), if gap_open => {
+                    ignore(owner.deregister());
+                    drop(hold);
+                    writer.abort();
+                    drop(writer.await);
+                    let kind = match result {
+                        Ok(_) => CloseKind::LevinHandshakeTimeout,
+                        Err(_) => CloseKind::LocalClose,
+                    };
+                    return CloseCause::new(kind);
+                }
+                read_cause = &mut read_fut => {
+                    if gap_open {
+                        ignore(owner.deregister());
+                    }
+                    drop(hold);
+                    writer.abort();
+                    drop(writer.await);
+                    return read_cause;
+                }
+                write_cause = &mut writer => {
+                    if gap_open {
+                        ignore(owner.deregister());
+                    }
+                    drop(hold);
+                    return write_cause
+                        .ok()
+                        .flatten()
+                        .unwrap_or(CloseCause::new(CloseKind::LocalClose));
+                }
+            }
+        }
+    }
     tokio::select! {
         read_cause = &mut read_fut => {
             drop(hold);

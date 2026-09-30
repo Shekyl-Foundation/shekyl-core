@@ -4283,11 +4283,18 @@ int shekyl_executor_record(const char* name, std::size_t lanes, std::size_t work
 void shekyl_executor_release(std::uint64_t handle);
 
 /// Spans and the transport-runtime budget. The caller supplies every
-/// number, and each number is unmeasured until a run record names it.
-/// `network_id` is 16 bytes.
+/// number. The five deadlines are the measured spans; `workers` and
+/// `blocking` stay the structural floor until the thread-budget leg.
+/// `shutdown_timeout_ns` is the longest of the armed deadlines.
+/// `network_id` is 16 bytes. Field order matches the Rust `repr(C)`
+/// struct.
 struct shekyl_zone_params {
   const std::uint8_t* network_id;
-  std::uint64_t handshake_within_ns;
+  std::uint64_t clearnet_dial_within_ns;
+  std::uint64_t clearnet_handshake_within_ns;
+  std::uint64_t clearnet_gap_within_ns;
+  std::uint64_t tor_dial_within_ns;
+  std::uint64_t tor_gap_within_ns;
   std::uint64_t send_queue_bytes;
   std::uint64_t shutdown_timeout_ns;
   std::size_t workers;

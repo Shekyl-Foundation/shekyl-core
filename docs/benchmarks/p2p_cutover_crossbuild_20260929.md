@@ -260,11 +260,10 @@ Conditions, per D9:
 
 p99 is the 99th of the 100 sorted samples (4.537 s and 1.260 s), one
 sample from each max. Twice each is 9.07 s and 2.52 s, rounded up to
-9.1 s and 2.6 s per D9. The placeholder both clocks run on today is
-the Levin invoke timeout, 5 s. This run's slowest dial cleared it by
-240 ms. A later run under these conditions whose p99 exceeds 4.55 s
-or 1.30 s reopens the respective deadline. Neither is wired yet, and
-the clearnet distributions are owed before the deadline commit.
+9.1 s and 2.6 s per D9. This run's slowest dial cleared the old Levin
+invoke timeout (5 s) by 240 ms. A later run under these conditions
+whose p99 exceeds 4.55 s or 1.30 s reopens the respective deadline.
+`transport_spans` writes 9.1 s as the Tor dial and 2.6 s as the Tor gap.
 
 The inbound drive's wake was per hub when these samples were taken:
 every strand answer woke every waiting driver. One other session was
@@ -688,8 +687,9 @@ covers both directions; its deadline is the maximum of the two gap
 distributions: inbound 2.5 s (here) and outbound 2.6 s (2 × the Tor
 dial distribution's 1.26 s p99). The **outbound direction governs at
 2.6 s**; the inbound is below it. Both directions are now n ≈ 100 over
-distant circuits, so this is the value for the deadline commit — and
-the earlier n = 66 self-dial's 3.65 s does not appear there.
+distant circuits, so this is the value `transport_spans` writes for
+the Tor gap, and the earlier n = 66 self-dial's 3.65 s does not appear
+there.
 
 **First-contact availability.** Across 110 attempts, one timed out, and
 it was the one attempt whose fresh daemon logged a `DialFailed` — a
