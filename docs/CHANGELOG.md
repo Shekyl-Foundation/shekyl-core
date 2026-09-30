@@ -331,8 +331,18 @@
   hidden startup flag. Unbounded disk, no reward. The password is not
   kept after that call.
 
-### Consensus validator — census 4.G, the whole coinbase (DRS-E6 slice 7, commits 3–9)
+### Consensus validator — census 4.G, the whole coinbase (DRS-E6 slice 7, commits 3–10; #889, #907)
 
+- **One paid-reward composition for producer and validator.**
+  `shekyl_economics::price_emission` owns the order
+  `paid_block_reward → compute_emission_split → compute_fee_burn →
+  advance_already_generated`; the validator's derived arm and the block
+  template both call it, so a template and the validator judging its block
+  cannot price two figures. `configured_emission` is the validator's
+  genesis arm (the coinbase sum stands, CEN-F11); `REPRICING_PASSES` is
+  the one settle budget. Before this the two composed the four steps
+  separately and were held equal by the replay oracle rather than by
+  construction.
 - **The Rust validator derives the block-weight medians and everything the
   block determines about its coinbase.** CEN-G6/G6b (`Medians::derive`,
   `Weights::derive` over the two windows, now one key each in
