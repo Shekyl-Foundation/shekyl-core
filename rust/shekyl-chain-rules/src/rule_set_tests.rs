@@ -142,14 +142,14 @@ fn genesis_enforces_the_census_minus_held_rows_in_order() {
     assert_eq!(enforced, expected);
     assert_eq!(
         enforced.len(),
-        CenRow::ALL.len() - 17,
-        "A1 and A4 are held; E5 is enforced at open; F2, F8, F19, F21, G3, G4, G5, H2, H8, H12, H13, H23, I2, I3 hold by construction"
+        CenRow::ALL.len() - 19,
+        "A1 and A4 are held; E5 is enforced at open; F2, F8, F19, F21, G3, G4, G5, H2, H8, H12, H13, H23, I2, I3, L8, L9 hold by construction"
     );
     assert_eq!(
         format!("{genesis:?}"),
         format!(
             "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (per-block; held, at-open and by-construction rows excluded), header_major_version: 1, difficulty: Lwma1, mined_money_unlock_window: BlockCount(60), reorg_cap: BlockCount(720), tx_spendable_age: BlockCount(10), settlement_schedule: SettlementSchedule(10000) }}",
-            v = CenRow::ALL.len() - 17,
+            v = CenRow::ALL.len() - 19,
             n = CenRow::ALL.len()
         )
     );

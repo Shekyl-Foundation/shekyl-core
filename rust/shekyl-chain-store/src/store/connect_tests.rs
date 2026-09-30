@@ -21,8 +21,8 @@ use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
     anchor, at, candidate, connect_chain, connect_chain_burning, connect_genesis,
-    connect_genesis_judged, connect_with_image_planted_under_the_token, judge, priced_on, spend,
-    spend_at, spend_paying, spendable_prefix, FIRST_SPEND_HEIGHT,
+    connect_genesis_judged, connect_with_image_planted_under_the_token, credited, judge, priced_on,
+    spend, spend_at, spend_paying, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, production_horizons, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
@@ -734,16 +734,20 @@ fn a_key_image_recorded_under_a_judged_token_is_si1() {
 fn the_same_transaction_in_two_blocks_is_si3() {
     let path = tmp("connect-txhash");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (_, genesis) = connect_genesis(&store);
     // A spend with a fresh key image each time but the SAME body cannot be
     // built (the key image is in the body). The one legal listed shape with
     // no key image is a serve-credit-only transaction: the same hash twice,
     // nothing for SI-1 to see. (A coinbase-shaped body served here until
     // E6 slice 5 landed CEN-H5, which refuses `gen` outside the miner slot
-    // — the fixture was the input the row exists to refuse.)
-    let dup = fixture::serve_credit_only([0x77; 32]);
+    // — the fixture was the input the row exists to refuse.) Since DRS-E4
+    // commit 4 the credit connects only behind the join that opens its
+    // record (CEN-L7), and the join spends — so the block sits at the
+    // first spend height, as the SI-1 belt's does.
+    let s = FIRST_SPEND_HEIGHT;
+    let hashes = connect_chain(&store, &spendable_prefix(&[]));
+    let [join, dup] = credited(9, [0x77; 32]);
     let dup_hash = dup.hash();
-    let b1 = candidate(1, genesis.hash(), vec![dup]);
+    let b1 = candidate(s, hashes[at(s - 1)], vec![anchor(&hashes, s, join), dup]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let judged = judge(&view, b1)?;

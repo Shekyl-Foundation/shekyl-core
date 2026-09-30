@@ -142,6 +142,9 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::I19,
                 CenRow::I20,
                 CenRow::L1,
+                // DRS-E4 commit 4: the archival transition, which passes
+                // with nothing archival to fold and records the row.
+                CenRow::L7,
             ]
         );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));

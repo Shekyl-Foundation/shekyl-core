@@ -187,6 +187,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::I19,
             CenRow::I20,
             CenRow::L1,
+            // DRS-E4 commit 4: the archival transition on the verdict
+            // (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 4); L8 and L9 below.
+            CenRow::L7,
         ]
     );
     let by_construction: Vec<CenRow> = CenRow::ALL
@@ -211,13 +214,17 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::H23,
             CenRow::I2,
             CenRow::I3,
+            CenRow::L8,
+            CenRow::L9,
         ],
         "slice 4 Q4: the wire's version and output tag, the view brand, the epoch parameter; \
          slice 5 Q6: the same version (H2, H13) and tag (H12) for listed transactions, one \
          commitment per output (H8), and a parsed transaction as `tx_form`'s input (H23); \
          slice 6 Q3: the CT type set plus H15 (I2) and the same version a fourth time (I3); \
          slice 7 row 8: every listed body through `tx_form` and `tx_against` with no pool \
-         door and no skip (G3, G4), and the full form the only body a block rule sees (G5)"
+         door and no skip (G3, G4), and the full form the only body a block rule sees (G5); \
+         DRS-E4 commit 4: the accrual fold (L8) and the slash fold (L9) return the C++'s \
+         aborts as `Corrupt` by type"
     );
     assert!(PolicyRow::ALL
         .iter()

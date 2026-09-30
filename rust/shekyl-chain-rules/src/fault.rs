@@ -44,7 +44,7 @@
 use core::fmt;
 
 use shekyl_fcmp::LeafInput;
-use shekyl_types::{BlockHash, BlockHeight, GlobalOutputIndex};
+use shekyl_types::{BlockHash, BlockHeight, GlobalOutputIndex, PCanonicalId, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 
 use crate::rule_set::RuleSet;
@@ -241,6 +241,84 @@ pub enum Corrupt {
         /// What the served frontier refused.
         fault: FrontierFault,
     },
+    /// A recorded bond record holds values the retention folds rule out
+    /// ([`RecordInvariant`] says which). Every record the store holds was
+    /// written from a delta the validator derived through those same folds,
+    /// so a record they refuse is bytes no conforming store holds — the
+    /// C++ writer's `FATAL: … invariant broken` arms, as a halt on the cell
+    /// rather than a process abort (DRS-E4 §3.1; CEN-L9). Not the fold
+    /// errors that name the *post* — a debit that is not the record's
+    /// total, a Reinstate whose holdings moved — those are CEN-L7's
+    /// refusals of the block, and the record is fine.
+    BondRecordInvariant {
+        /// The persona whose record is inconsistent.
+        persona: PCanonicalId,
+        /// Which invariant the fold found broken.
+        which: RecordInvariant,
+    },
+    /// The open epoch's accruing budget plus this block's accrual does not
+    /// fit the type (CEN-L8's third clause; SI-8 on
+    /// `archival_budget_accruing`). The accrual is bounded by the emission
+    /// (every block's is a share of a paid reward that fits `u64`), so a
+    /// running total that wraps is a fold that ran ahead of the chain, the
+    /// class `CumulativeDifficultyOverflow` names — observed by the
+    /// validator because the validator computes the post-image (ARW-Q1).
+    AccrualOverflow {
+        /// The open epoch whose total overflowed.
+        epoch: SettlementEpoch,
+    },
+}
+
+/// Which of a bond record's invariants a retention fold found broken —
+/// [`Corrupt::BondRecordInvariant`]'s discriminant. Each arm is a C++ writer
+/// `FATAL` that names the *record*, not the post (`db_lmdb.cpp`
+/// `apply_archival_unbond` / `apply_archival_reinstate` /
+/// `process_archival_slash_apply_one`); the store maps the class onto the
+/// `archival_bond` cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordInvariant {
+    /// `bonded_total` is not the floor its holdings imply
+    /// (`ReleaseConnectError::RecordFloorInvariantBroken`,
+    /// `ReinstateConnectError::RecordFloorInvariantBroken`).
+    FloorBroken,
+    /// More than one open bad interval — the P2B-9 Pin 5 coalescing
+    /// invariant (`ReinstateConnectError::MultipleOpenIntervals`).
+    MultipleOpenIntervals,
+    /// The open interval starts at or after the Reinstate that closes it
+    /// (`ReinstateConnectError::IntervalOrdering`).
+    IntervalOrdering,
+    /// Interval or counter arithmetic left the type's range on a fold
+    /// (`ReinstateConnectError::CounterRange`).
+    CounterRange,
+    /// The interval log is at its cap when a slash must append an open
+    /// interval. Reinstate verify keeps two entries of headroom below the
+    /// cap and a slash appends only when no interval is open, so a valid
+    /// chain never reaches this — the C++'s *"a log above the cap cannot
+    /// exist on disk"*.
+    IntervalLogFull,
+    /// A slash lands on a shard the compact record does not hold. The scan
+    /// slashes what the record holds, from the record — the two cannot
+    /// disagree unless the record changed under the scan.
+    ShardNotHeld,
+    /// `bonded_total` is below the bond floor a slash burns. The floor
+    /// invariant (`FloorBroken`) makes every held shard's floor part of the
+    /// total; a total below one floor while a shard is held is the same
+    /// invariant, observed at the subtraction.
+    BondedUnderflow,
+}
+
+impl fmt::Display for RecordInvariant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::FloorBroken => "bonded_total is not the floor its holdings imply",
+            Self::MultipleOpenIntervals => "more than one open bad interval",
+            Self::IntervalOrdering => "the open bad interval does not precede the close",
+            Self::CounterRange => "interval arithmetic out of range",
+            Self::IntervalLogFull => "the bad-interval log is at its cap",
+            Self::ShardNotHeld => "a slashed shard is not held",
+            Self::BondedUnderflow => "bonded_total is below the bond floor",
+        })
+    }
 }
 
 /// What a **parent-side view read** can raise: the view's own fault, or a
@@ -396,6 +474,12 @@ impl fmt::Display for Corrupt {
                 "recorded output {output:?} has a {input} that does not decompress; its leaf cannot be constructed"
             ),
             Self::TreeUnservable { fault } => write!(f, "curve tree cannot be grown: {fault}"),
+            Self::BondRecordInvariant { persona, which } => {
+                write!(f, "bond record of {persona} is inconsistent: {which} (SI-7)")
+            }
+            Self::AccrualOverflow { epoch } => {
+                write!(f, "budget accruing for epoch {epoch} overflows (SI-8)")
+            }
         }
     }
 }

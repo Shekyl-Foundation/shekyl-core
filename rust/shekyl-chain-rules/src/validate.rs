@@ -43,6 +43,7 @@
 use shekyl_types::BlockHash;
 use shekyl_wire::Transaction;
 
+use crate::archival;
 use crate::block::{Candidate, Derived, StructurallyValid, ValidatedBlock};
 use crate::coverage::RuleCoverage;
 use crate::drain;
@@ -466,6 +467,23 @@ pub fn validate<'id, V: ChainView<'id>>(
     // could have fired so a refused block never grows anything.
     let (root_after, drained) = drain::tree_after(view, connecting, rule_set)?;
 
+    // The archival transition (DRS-E4 §3.1, `ARW-Q1`): what this block
+    // does to the bond records, the serve credits, the slash log and the
+    // epoch state, derived here and carried to the store, which holds no
+    // archival arithmetic. A rule (CEN-L7) — a post the folds cannot apply
+    // refuses the block at its input — so it runs before the assembly.
+    let archival = match archival::transition(
+        view,
+        connecting,
+        rule_set,
+        cx.candidate(),
+        paid.accrual,
+        &mut coverage,
+    )? {
+        Ok(delta) => delta,
+        Err(refused) => return Ok(Err(refused)),
+    };
+
     let hash = formed.hash();
     let (candidate, _stateless) = formed.into_parts();
     let block = ValidatedBlock::derive(
@@ -478,6 +496,7 @@ pub fn validate<'id, V: ChainView<'id>>(
             drain: drained,
             weights,
             emission: paid,
+            archival,
         },
     );
     Ok(Ok(ChainValid::mint(block, rule_set, coverage)))

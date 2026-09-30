@@ -49,6 +49,23 @@ pub(super) fn spend(key_image: usize, outputs: usize) -> Transaction {
     fixture::spend(fixture::point(key_image), outputs)
 }
 
+/// A serve credit **with the record it credits**: the `JoinMarket` post
+/// that opens persona `p`'s `archival_bond` row (a spend of `key_image`
+/// funding the bond — 4-part, like every spend), then the credit for `p`
+/// (the one legal listed shape with no key image and no `pqc_auths`,
+/// CEN-H20 — 3-part). Since DRS-E4 commit 4 the validator refuses a credit
+/// for a persona with no record (CEN-L7, SI-15's first check), so a credit
+/// connects only behind its join — the rules harness's
+/// `TxShape::precedents`, restated for the store. The join spends, so the
+/// pair sits no lower than [`FIRST_SPEND_HEIGHT`], and it is listed in
+/// this order.
+pub(super) fn credited(key_image: usize, p: [u8; 32]) -> [Transaction; 2] {
+    [
+        fixture::join_market(fixture::point(key_image), p),
+        fixture::serve_credit_only(p),
+    ]
+}
+
 /// A candidate for a height **nothing has drained into**: its header carries
 /// the empty tree, which is what CEN-B5 requires while `root_at(height)` is
 /// `EMPTY` — every height below `mined_money_unlock_window` on a chain whose

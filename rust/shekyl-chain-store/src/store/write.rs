@@ -77,7 +77,7 @@ use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 use super::chain_reads::ReadFault;
 use super::prune::Horizons;
 
-use shekyl_chain_rules::{Corrupt, FrontierFault, LeafInput, PerHeightRecord};
+use shekyl_chain_rules::{Corrupt, FrontierFault, LeafInput, PerHeightRecord, RecordInvariant};
 use shekyl_units::AtomicUnits;
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
@@ -251,6 +251,10 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// | --- | --- |
     /// | `CumulativeDifficultyNotMonotone { at }` | `WorkNotIncreasing { height: at }` (SI-10) |
     /// | `CumulativeDifficultyOverflow` | `FoldOverflow { cell: "block_info.cumulative_difficulty" }` (SI-8) |
+    /// | `BondRecordInvariant { which, .. }` | `CellCorrupt { key: "archival_bond", .. }` with `which` as the reason (SI-7) |
+    /// | `AccrualOverflow { .. }` | `FoldOverflow { cell: "archival_budget_accruing" }` (SI-8) |
+    ///
+    /// (The arms between are documented inline on the match.)
     ///
     /// A zero next-block target is **not** in this table and never was a
     /// store matter: LWMA-1 has no output floor and a conforming slow chain
@@ -373,6 +377,47 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
                         reason: "the frontier's layer count disagrees with the leaf count",
                     }),
                 },
+            },
+            // The archival transition (DRS-E4 commit 4) read a bond record
+            // the retention folds refuse as a record — a `bonded_total` off
+            // its floor, two open intervals, a shard the record does not
+            // hold. The record decoded; its values are ones no conforming
+            // writer produces, so it is SI-7 on `archival_bond` with the
+            // invariant named. The persona is not on the row: the noted
+            // connecting height is the context, as for every arm here.
+            Corrupt::BondRecordInvariant { persona: _, which } => StoreInvariant::CellCorrupt {
+                key: "archival_bond",
+                fault: CellFault::Undecodable(CodecError::Invalid {
+                    codec: "bond_record",
+                    reason: match which {
+                        RecordInvariant::FloorBroken => {
+                            "bonded_total is below the floor its holdings imply"
+                        }
+                        RecordInvariant::MultipleOpenIntervals => {
+                            "more than one bad interval is open"
+                        }
+                        RecordInvariant::IntervalOrdering => "the bad intervals are not in order",
+                        RecordInvariant::CounterRange => {
+                            "an interval bound is outside the epoch counter's range"
+                        }
+                        RecordInvariant::IntervalLogFull => {
+                            "the bad-interval log is at its cap and a fold must append"
+                        }
+                        RecordInvariant::ShardNotHeld => {
+                            "a slash names a shard the record does not hold"
+                        }
+                        RecordInvariant::BondedUnderflow => {
+                            "bonded_total is below one bond floor at a slash"
+                        }
+                    },
+                }),
+            },
+            // The open epoch's accruing budget plus this block's inflow does
+            // not fit (CEN-L8's overflow clause). The validator computes the
+            // post-image (`ARW-Q1`), so the SI-8 fold on
+            // `archival_budget_accruing` is observed from the rule side.
+            Corrupt::AccrualOverflow { epoch: _ } => StoreInvariant::FoldOverflow {
+                cell: "archival_budget_accruing",
             },
         };
         self.poison.arm(row)

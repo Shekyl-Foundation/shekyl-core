@@ -42,6 +42,8 @@ pub enum TxShape {
     Coinbase,
     /// [`listed`] — the ordinary spend.
     Listed,
+    /// [`join_market`] — the bond post that creates a persona's record.
+    JoinMarket,
     /// [`serve_credit_only`].
     ServeCreditOnly,
 }
@@ -50,13 +52,18 @@ impl TxShape {
     /// Where the chain starts.
     pub const FIRST: Self = Self::Coinbase;
 
+    /// The persona the archival shapes share: the join posts its record,
+    /// the serve credit names it.
+    pub const PERSONA: [u8; 32] = [0x77; 32];
+
     /// The shape after this one; `None` closes the chain. A variant
     /// left out of this chain is unreachable from `FIRST` and the gate
     /// never sees it — so a new variant is *placed*, deliberately, here.
     pub const fn next(self) -> Option<Self> {
         match self {
             Self::Coinbase => Some(Self::Listed),
-            Self::Listed => Some(Self::ServeCreditOnly),
+            Self::Listed => Some(Self::JoinMarket),
+            Self::JoinMarket => Some(Self::ServeCreditOnly),
             Self::ServeCreditOnly => None,
         }
     }
@@ -66,17 +73,33 @@ impl TxShape {
         match self {
             Self::Coinbase => coinbase(1),
             Self::Listed => listed(point(9)),
-            Self::ServeCreditOnly => serve_credit_only([0x77; 32]),
+            Self::JoinMarket => join_market(point(10), Self::PERSONA),
+            Self::ServeCreditOnly => serve_credit_only(Self::PERSONA),
+        }
+    }
+
+    /// The bodies that must be listed **before** this shape in the block
+    /// that connects it — the archival state it reads, which only an
+    /// earlier body in the same block can create on a chain that holds
+    /// none. A serve credit names a persona with a record (CEN-L7), so it
+    /// lists behind that persona's [`join_market`]; every other shape
+    /// stands alone. The listed slot in [`valid_at`](Self::valid_at) is
+    /// the one behind these.
+    pub fn precedents(self) -> Vec<Transaction> {
+        match self {
+            Self::Coinbase | Self::Listed | Self::JoinMarket => Vec::new(),
+            Self::ServeCreditOnly => vec![Self::JoinMarket.build()],
         }
     }
 
     /// The slots at which the shape is a valid transaction. The coinbase
     /// is valid at the miner slot only; every other shape at the pool's
-    /// slot and listed.
+    /// slot and listed — behind its [`precedents`](Self::precedents).
     pub const fn valid_at(self) -> &'static [TxSlot] {
         match self {
             Self::Coinbase => &[TxSlot::Miner],
-            Self::Listed | Self::ServeCreditOnly => &[TxSlot::Lone, TxSlot::Listed(0)],
+            Self::Listed | Self::JoinMarket => &[TxSlot::Lone, TxSlot::Listed(0)],
+            Self::ServeCreditOnly => &[TxSlot::Lone, TxSlot::Listed(1)],
         }
     }
 
@@ -777,20 +800,65 @@ pub fn balanced_emission(
     tx
 }
 
+/// The bond floor a [`join_market`] posts and is bonded at — the
+/// complete-tree floor, one bond (`bond_floor_of(CompleteTree, _)`).
+pub const BOND_FLOOR: u64 = shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
+
+/// A parseable **serve-credit vin** — the kept half of the response
+/// (`RF-D1`) crediting persona `p` for `shard` in `settlement_epoch`, its
+/// countersignature filler (CEN-J10 reads that; nothing here does).
+pub fn serve_credit_vin(p: [u8; 32], shard: u64, settlement_epoch: u64) -> Input {
+    let kept = shekyl_archival_retention::ArchivalServeCreditResponse {
+        p_canonical_id: p,
+        shard_id: shard,
+        settlement_epoch,
+        ed25519_countersignature: [0x5c; 64],
+    };
+    Input::ServeCredit {
+        canonical_bytes: kept.serialize().expect("a kept half serializes"),
+    }
+}
+
+/// A **JoinMarket bond post** for persona `p` (CEN-H21's shape on
+/// [`balanced_bond_post`]): a complete-tree holding bonded at
+/// [`BOND_FLOOR`], funded by the spend of `key_image`. The one archival
+/// body that connects on a chain with **no archival state** — it creates
+/// `p`'s record — so it is what precedes a serve credit or a claim for `p`
+/// in a block (CEN-L7 refuses either for a persona without a record).
+pub fn join_market(key_image: [u8; 32], p: [u8; 32]) -> Transaction {
+    use shekyl_wire::{BondPostKind, Holdings};
+    balanced_bond_post(
+        key_image,
+        BondPost {
+            hybrid_public_key: vec![0xb1; PQC_HYBRID_SINGLE_KEY_LEN],
+            p_canonical_id: PCanonicalId::from_bytes(p),
+            kind: BondPostKind::JoinMarket {
+                bond_spend_pk: vec![0xb5; PQC_HYBRID_SINGLE_KEY_LEN],
+                endpoint: [0xe0; 32],
+            },
+            holdings: Holdings::CompleteTree,
+            bonded_total_atomic: BOND_FLOOR,
+            bond_credit: BOND_FLOOR,
+            bond_debit: 0,
+        },
+    )
+}
+
 /// A **serve-credit-only** transaction (CEN-H20's shape: serve-credit
-/// inputs and nothing else, no outputs, zero fee, no spend material),
-/// carrying `record` as its one pass record. The one legal non-coinbase
-/// shape with **no key image** — what a test needs when it must list the
-/// same body twice (SI-3) without tripping the spent-key-image set. The
-/// record's bytes are the wire's minimum (tag byte, then payload); the
-/// serving-credit rules that read them are 4.J's, not this crate's yet.
-pub fn serve_credit_only(record: [u8; 32]) -> Transaction {
-    let mut canonical_bytes = vec![shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT];
-    canonical_bytes.extend_from_slice(&record);
+/// inputs and nothing else, no outputs, zero fee, no spend material)
+/// crediting persona `p` for shard 0 in settlement epoch 0 — the open
+/// epoch on any chain shorter than one (every fixture chain is). The one
+/// legal non-coinbase shape with **no key image** — what a test needs
+/// when it must list the same body twice (SI-3) without tripping the
+/// spent-key-image set. It connects only behind [`join_market`] for `p`
+/// (CEN-L7 / SI-15: a credit names a persona with a record), which is why
+/// [`TxShape::ServeCreditOnly`] lists at `Listed(1)` with the join as its
+/// precedent; alone it is a body for `tx_form`, not for `validate`.
+pub fn serve_credit_only(p: [u8; 32]) -> Transaction {
     Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
-            inputs: vec![Input::ServeCredit { canonical_bytes }],
+            inputs: vec![serve_credit_vin(p, 0, 0)],
             outputs: Vec::new(),
             extra: Vec::new(),
         },
