@@ -46,6 +46,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
+- **A stalled in-flight write after a local close holds the fd.** #909's `Hub::record` discards the queued tail on a caused close, so a banned or refused peer no longer holds our connection task through *queued* frames. It does not bound the frame the writer already popped: `write_all` on that frame blocks the task (and the fd) for as long as the peer refuses to read, and `overfull` trips only on queue growth, not on a stalled tail (`capped-stream/src/copy.rs`). The bound is the shape ruled out of #909 in favour of discard (this box, 2026-09-29): an `AfterChannel` stall deadline (the variant exists in `cause.rs`, nothing arms one) derived like the other transport deadlines. Blocked on the transport-deadline commit (the derived deadlines are owed there; this one derives with them). Falsify by a test in which a peer stops reading after a local close and the connection task and its fd are released within a bound rather than held.
+  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
+  - Target: pre-genesis
+
 - **`tor-pin-verify` has no `linux-aarch64` leg.** The workflow downloads, GPG-verifies, extracts, and re-verifies one target, `linux-x86_64`, and runs the live lifecycle tests on it. The aarch64 pin (16.0a12, ruled 2026-09-29) was verified by hand on the floor device. The download-verify-hash chain does not need an aarch64 runner; the lifecycle tests do. Blocked on a decision between a hash-only aarch64 job and an aarch64 runner. Falsify by a dispatch of the workflow that checks the aarch64 digest against `CURRENT_PIN`'s `aarch64` arm.
   - Owner: [`ARCHIVAL_BOND_2D2_SP_T0_TOR.md`](design/ARCHIVAL_BOND_2D2_SP_T0_TOR.md)
   - Target: pre-genesis

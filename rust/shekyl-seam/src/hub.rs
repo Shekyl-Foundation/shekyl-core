@@ -693,15 +693,18 @@ impl Hub {
             let _ = open.close(cause);
         }
         // The cause is recorded whichever side it came from; the socket
-        // has to follow. Closing the send queue ends the connector's
-        // writer, which ends its connection task, which drops the socket.
-        // Measured before this (clearnet, LAN, 2026-09-30): after a local
-        // close the socket stayed open until the peer's next frame arrived,
-        // 54 s later on the timed-sync cadence. Nothing else here reaches
-        // the wire: `open.close` releases the admission slot, and the
-        // session whose drop closes the queue is parked in the inbound drive.
+        // has to follow. Discarding the send queue ends the connector's
+        // writer (its next `pop` returns `None`), which ends its connection
+        // task, which drops the socket. Measured before this (clearnet, LAN,
+        // 2026-09-30): after a local close the socket stayed open until the
+        // peer's next frame arrived, 54 s later on the timed-sync cadence.
+        // Nothing else here reaches the wire: `open.close` releases the
+        // admission slot, and the session whose drop closes the queue is
+        // parked in the inbound drive. The tail is dropped, not flushed —
+        // every cause this path records (ban, refusal, del_in_connections,
+        // peer-gone) has nothing queued it needs delivered.
         if let Some(send) = send {
-            send.close();
+            send.discard();
         }
         if let Some(dial) = dial {
             dial.reader_stopped(id);
@@ -1167,10 +1170,10 @@ mod tests {
     }
 
     /// A close that starts on the caller's side reaches the connector's
-    /// writer: its next pop returns `None` once the queue drains, so the
-    /// connection task ends and the socket is dropped. Before this the
-    /// writer parked until the peer sent a frame; on the wire the socket
-    /// stayed open for the whole interval.
+    /// writer: its next pop returns `None` at once — the queued tail is
+    /// discarded, not drained — so the connection task ends and the socket
+    /// is dropped. Before this the writer parked until the peer sent a
+    /// frame; on the wire the socket stayed open for the whole interval.
     #[test]
     fn a_local_close_ends_the_writer() {
         let rig = rig();
@@ -1181,15 +1184,15 @@ mod tests {
         let writer = opened.writer.clone();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         thread::spawn(move || {
-            let drained = writer.pop_blocking();
-            let ended = writer.pop_blocking();
-            drop(done_tx.send((drained, ended)));
+            drop(done_tx.send(writer.pop_blocking()));
         });
-        let (drained, ended) = done_rx
+        let ended = done_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("writer still parked after a local close");
-        assert_eq!(drained.as_deref(), Some(&b"reply"[..]));
-        assert!(ended.is_none(), "queue open after a local close");
+        assert!(
+            ended.is_none(),
+            "queued tail not discarded on a local close"
+        );
         assert_eq!(
             rig.hub.cause(opened.id).map(CloseCause::kind),
             Some(CloseKind::LocalClose)

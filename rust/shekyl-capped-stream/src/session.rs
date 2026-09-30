@@ -40,15 +40,19 @@ impl SendHalf {
         }
     }
 
-    /// Close the queue. Queued bytes still drain; the writer then finishes,
+    /// Close the queue and drop the pending tail; the writer then finishes,
     /// and the connection task drops the socket.
     ///
     /// This is how a close that started on the caller's side reaches the
     /// wire. Without it the socket stays open until the peer next sends:
     /// the [`Session`] whose drop would close the queue is held by the
     /// inbound drive, parked in [`Session::recv`] waiting for that frame.
-    pub fn close(&self) {
-        self.queue.close();
+    ///
+    /// The tail is discarded, not drained: a ban, a protocol refusal, or
+    /// `del_in_connections` has nothing queued that it needs delivered. See
+    /// [`crate::ByteQueue::discard`] for what this does not bound.
+    pub fn discard(&self) {
+        self.queue.discard();
     }
 }
 

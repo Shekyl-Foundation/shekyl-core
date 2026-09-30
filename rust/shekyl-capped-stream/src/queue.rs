@@ -112,6 +112,23 @@ impl ByteQueue {
         self.wake();
     }
 
+    /// Close and drop the pending tail. The writer's next `pop`/`pop_blocking`
+    /// returns `None` at once rather than after draining what is queued.
+    ///
+    /// This is the local-close path: a ban, a protocol refusal, or
+    /// `del_in_connections` has nothing it needs delivered, so the tail is
+    /// dropped, not flushed. It does not touch a write already in progress —
+    /// `write_all` on the frame the writer already popped runs to completion
+    /// or the socket errors; a stalled in-flight write is not bounded here.
+    pub(crate) fn discard(&self) {
+        let mut inner = self.inner.lock().expect("outbound");
+        inner.closed = true;
+        inner.items.clear();
+        inner.used = 0;
+        drop(inner);
+        self.wake();
+    }
+
     /// The next buffer and the class the sender named. `None` means the
     /// queue is closed and empty. The byte count stays until [`Self::release`].
     pub(crate) async fn pop(&self) -> Option<(MessageClass, Vec<u8>)> {
