@@ -741,10 +741,12 @@ where
     let tally_job = Arc::clone(tally);
     let network_id = *network_id;
     let fired_job = Arc::clone(&fired);
-    let join =
-        tokio::task::spawn_blocking(move || initiator_job(network_id, &fired_job, &tally_job));
+    let queued = Instant::now();
+    let join = tokio::task::spawn_blocking(move || {
+        initiator_job(network_id, &fired_job, &tally_job, queued)
+    });
     let job = await_job(join, &mut wake, &fired).await;
-    let (initiator, message1) = match job {
+    let (initiator, message1, spans) = match job {
         Ok(Ok(done)) if !fired.load(Ordering::Acquire) => done,
         Ok(Ok(_) | Err(SkipOrFail::Skipped)) => {
             ignore(owner.deregister());
@@ -766,6 +768,7 @@ where
     let mut flight = Vec::with_capacity(PREFIX_LEN + message1.len());
     flight.extend_from_slice(&prefix_for(&network_id));
     flight.extend_from_slice(&message1);
+    let writing = Instant::now();
     let wrote = tokio::select! {
         biased;
         result = wake.as_mut() => {
@@ -787,6 +790,19 @@ where
             CloseKind::TransportHandshakeFailed
         });
     }
+    // The three waits before message 1 is on the wire, separately: the
+    // blocking lane (`queue_ns`), the arithmetic (`compute_ns`), and the
+    // socket write under the up-link gate (`write_ns`). The responder logs
+    // the first two; without the same here a pre-write stall on the
+    // initiator has no attribution (floor device, 2026-09-30: 4.3 s
+    // between TCP connect and the peer's first read, nothing else logged).
+    tracing::info!(
+        conn,
+        queue_ns = spans.queue_ns,
+        compute_ns = spans.compute_ns,
+        write_ns = span_ns(writing.elapsed()),
+        "clearnet initiator message1 sent"
+    );
     let mut prefix = [0u8; PREFIX_LEN];
     if let Err(kind) = read_or_wake(read, &mut prefix, &mut wake, &fired, conn).await {
         note_skip(tally, kind);
@@ -838,16 +854,26 @@ fn initiator_job(
     network_id: NetworkId,
     fired: &AtomicBool,
     tally: &HandshakeTally,
-) -> Result<(Initiator, Vec<u8>), SkipOrFail> {
+    queued: Instant,
+) -> Result<(Initiator, Vec<u8>, PoolSpans), SkipOrFail> {
+    let queue_ns = span_ns(queued.elapsed());
     if fired.load(Ordering::Acquire) {
         tally.skip();
         tally.dequeue();
         return Err(SkipOrFail::Skipped);
     }
+    let computing = Instant::now();
     match Initiator::new(&network_id) {
-        Ok(done) => {
+        Ok((initiator, message1)) => {
             tally.dequeue();
-            Ok(done)
+            Ok((
+                initiator,
+                message1,
+                PoolSpans {
+                    queue_ns,
+                    compute_ns: span_ns(computing.elapsed()),
+                },
+            ))
         }
         Err(_) => {
             tally.dequeue();
