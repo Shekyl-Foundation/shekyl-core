@@ -435,11 +435,22 @@ inversion CEN-L16 was minted to name.
   So `Candidate` (`chain-rules/src/block.rs:100–105`: a block and its
   bodies, nothing else) gains the sidecar as a third field,
   `attestation_witness: Option<AttestationWitnessBytes>`, `None` for an
-  empty set; the verdict carries it to `connect` — **passed through with
-  `Origin::PassedThrough` until CEN-B4 lands in `validate`** (E6's row;
-  `passed_through_facts` names it meanwhile, so a file whose witnesses
-  were written unjudged says so); the corpus reader fills it `None` for
-  every format-2 capture, which is true of them (§1 item 6). The corpus
+  empty set; the verdict carries it to `connect` — ~~passed through with
+  `Origin::PassedThrough` until CEN-B4 lands in `validate`~~ **UPDATE
+  2026-09-29 (substrate moved before commit 1): `Fact`/`Origin` and
+  `PassedThroughFacts` were deleted with `ConnectFacts` (`08a1e7d7d`), so
+  the unjudged witness is recorded as a coverage gap — CEN-B4 in
+  `Provenance`'s `rule_coverage_gaps` — until CEN-B4 lands in `validate`**
+  (E6's row). This is the better claim, not a workaround, and commit 5's
+  text says so: a coverage gap says *B4 is a row in force that the verdict
+  did not evaluate* — a statement about **judgment**; `Origin::PassedThrough`
+  said *this value came from elsewhere* — a statement about **plumbing**.
+  The second was always the weaker claim about the same situation, and the
+  scaffold's retirement forced the stronger one. The parity-evidence rule is
+  unchanged in effect: a file whose witnesses were written unjudged is not
+  evidence, because its coverage gaps are non-empty. The corpus reader
+  fills the field `None` for every format-2 capture, which is true of them
+  (§1 item 6). The corpus
   cannot carry a non-empty witness today for a second reason worth
   recording: the sidecar travels on the **sync wire** — the get-objects
   answer attaches the stored witness (`blockchain.cpp:2562`), and the Rust
@@ -524,7 +535,12 @@ Net: three tables typed (`slash_log`, `slash_applied`, the accumulator), six
 deleted (`shard_segment`, the four dead journals, `epoch_close_log`), one
 dissolved (`budget_accrual`), one held; `tables.snap` moves by **−7 + 1**;
 the `NOT_PORTED` register gains seven rows and `RUST_ONLY_TABLES` one; layout
-16 → 17.
+~~16 → 17~~ **17 → 18** (as built: slice 7 wave B took 17 for the
+`ConnectFacts` deletion before this increment started). The seven rows are
+two relationships under one direction — five journals whose function
+`undo_log` performs, two tables retired by ruling or re-keyed — and each
+row's reason leads with which, because the gate reads them the same and a
+reader looking for the data must not (found in `undo_log` vs. held nowhere).
 
 **Which bijection direction each deletion is — decided here, not at the
 gate (2026-09-29, on the maintainer's question).** "Dissolved into
@@ -571,12 +587,18 @@ reproduces the budget byte-identically) is the test, and it must pass on
 the new shape before the old one is deleted.
 
 The value written is the verdict's `staker_emission + staker_pool_amount`.
-Until CEN-F17 lands (slice 7 wave B, on this increment's operand — §3.7),
+~~Until CEN-F17 lands (slice 7 wave B, on this increment's operand — §3.7),
 the burn term is what `burned` already is: a `Fact` with
-`Origin::PassedThrough`, one more row in `DELETED_BY` naming F17. **Disclosed
-here** (rule 22): the accrual is half passed-through at landing, the file
+`Origin::PassedThrough`, one more row in `DELETED_BY` naming F17. Disclosed
+here (rule 22): the accrual is half passed-through at landing, the file
 says so in `passed_through_facts`, and the E2 grade is not archival parity
-evidence until F17 derives the other half.
+evidence until F17 derives the other half.~~ **UPDATE 2026-09-29 (substrate
+moved before commit 1): CEN-F17 landed (slice 7 wave B, PR #907) and
+`Fact`/`Origin` were deleted with `ConnectFacts` (`08a1e7d7d`), so the
+accrual is fully derived at landing** — both halves of the sum are the
+validator's own — and the disclosure above is discharged, not carried.
+F17's operand is still leaf-based (`frozen_segment_count(leaf_count_at)`);
+commit 3 re-keys it to `cumulative_tx_count` per `ARW-Q6` (§3.7).
 
 ### 3.6 The close's absences — `ARW-Q4`, default: write what the fold returns
 
@@ -803,11 +825,11 @@ event kind; those are the two commits most likely to grow.
 
 | # | Commit | Cost | What would make it larger |
 | --- | --- | --- | --- |
-| 1 | **Tables and types.** `archival_slash_log`, `archival_slash_applied` typed; `archival_budget_accruing` added (`RUST_ONLY_TABLES`); seven tables leave as `NOT_PORTED` rows — the fifth direction, not `FOLDED_INTO` (§3.4's last paragraph says why); `total_bonded_atomic` not minted; layout 17; snapshots; SI-19…23 minted. `BondRecord` and its vocabulary to `shekyl-types` (`ARW-Q8`). | M | a hidden reader of a deleted table (falsify: `rg` each name outside `schema.rs` and `apply_policy.rs` before cutting) |
+| 1 | **Tables and types.** `archival_slash_log`, `archival_slash_applied` typed; `archival_budget_accruing` added (`RUST_ONLY_TABLES`); seven tables leave as `NOT_PORTED` rows — the fifth direction, not `FOLDED_INTO` (§3.4's last paragraph says why); `total_bonded_atomic` not minted; layout 18 (predicted 17; wave B took it); snapshots; SI-19…23 minted. `BondRecord` and its vocabulary to `shekyl-types` (`ARW-Q8`). | M | a hidden reader of a deleted table (falsify: `rg` each name outside `schema.rs` and `apply_policy.rs` before cutting) |
 | 2 | **`ChainView` grows the archival reads** (§2.3) — trait, `BatchView`, `MockView` held to each other by the conformance test; A2 `slash_log_after` and `holds_shard_at` land (the `SAR-Q7` pair), with the LMDB as-of-height cases (`archival_substrate_lmdb.cpp:1674–1893`) as Rust tests. | M | `MockView` needing archival state it cannot construct honestly — the signal that a `Mock*` is being built (§5.2) |
 | 3 | **The shard universe** (§3.7): `closed_shards` on the view; CEN-F17's operand ruled; `segment_leaf_count` out of the JSON; the consensus-side `leaves_per_segment` readers deleted. | S | a wallet-side reader in the consensus closure (falsify: `cargo tree -i shekyl-fcmp -e features` shows the freeze module reached from `shekyl-chain-rules`) |
 | 4 | **The transition on the verdict** (§3.1): `ArchivalDelta` derived in `validate` from the vin arms and the folds; the slash scan and the close as functions of the view; carried on `ChainValid`. Tests: each arm on a driven chain; the KAT B3 pop-and-re-close on the accumulator shape. | **L** | the slash scan's view reads being the wrong shape (a scan over `archival_bond` needs a range read the view does not have — this is where it shows) |
-| 5 | **The phase bodies** (§3.2) with SI-19…23 built; `Candidate.attestation_witness` and its pass-through until CEN-B4; the stubbed-family skip-and-widen (`ARW-9`); the regtest injector on the store; **the slash scan measured** (B9: once per epoch on the floor, against the C++'s own note) — the accrual's burn half a `Fact` until F17 (§3.5, disclosed). | M | `pop` of a block that closed an epoch: the journal's restore of insert-once rows under a tuple key (the `Restorable` impl the table did not need until now) |
+| 5 | **The phase bodies** (§3.2) with SI-19…23 built; `Candidate.attestation_witness`, written unjudged under a CEN-B4 coverage gap until B4 lands in `validate` (§3.2's UPDATE: the judgment claim, not the plumbing one — the commit text says why); the stubbed-family skip-and-widen (`ARW-9`); the regtest injector on the store; **the slash scan measured** (B9: once per epoch on the floor, against the C++'s own note) — the accrual fully derived, F17 having landed (§3.5's UPDATE). | M | `pop` of a block that closed an epoch: the journal's restore of insert-once rows under a tuple key (the `Restorable` impl the table did not need until now) |
 | 6 | **`digest_v1`** (§3.8): the Rust hasher over the archival families; the C++ walker's marshal; the trace format's checkpoint carries v1; format tag bumped. **`LMDB_WRITE_ATOMICITY_AUDIT.md` §10 moves in this commit, not in commit 10**: the sixteen archival journals' `Digest v0` state → `v1` and the §7.1.1 exclusion retired, so the document and the mechanism move together — that exclusion is load-bearing for what the digest is allowed not to cover, and a stale sentence there does real damage (ruled 2026-09-29). | M | the C++ walker: the only C++ this increment adds, and rule 20 holds it to a marshal — if it grows arithmetic, stop |
 | 7 | **The injection event** (§3.8 item 3): `IngestEvent::Inject` with its stated scope (regtest-only, one row kind, the injector its sole producer), the exporter reading the injector's receipt, the connector applying it through the store's regtest door, the trace-half check (an `Inject` iff the manifest's `out_of_band_writes` names one); **re-capture of all six captured chains** (`CAPTURED_SHAPES`, `vectors_tests.rs` — the format moves for the whole corpus or the all-captures gate refuses the two left behind) under the corrected regtest table and the v1 checkpoint, the generator writing the injection's height and persona into the manifest. | M | the exporter cannot see the injection (no receipt in LMDB) — then the generator writes one, and the re-capture waits on it |
 | 8 | **The oracle** — the protected commit. Replay all six chains; the v1 digest at every tip; the sufficiency red for every family the run exercises (§3.8 item 2). A tip disagreement on `bond-post` or `emission-claim` **stops the PR** and is adjudicated against the spec (E2 §0), never toward the C++ — with one named exception: a divergence that traces to zero-as-absence (§3.6) is the projection's bug, not a finding. | S | a disagreement — which is what the commit exists to produce |
