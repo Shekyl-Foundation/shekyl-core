@@ -255,6 +255,36 @@ impl<F: PrimeField> LinComb<F> {
     pub fn c(&self) -> F {
         self.c
     }
+
+    /// The Pedersen commitment this constraint isolates, after combining duplicate terms.
+    ///
+    /// `Add` and `Sub` concatenate terms, and `Mul` scales the terms already present, so the same
+    /// linear form can be stored as one entry or as several. This combines those entries with
+    /// [`accumulate_vector`], which is the sum the prover and verifier use, and returns the index
+    /// whose combined weight is the row's only nonzero weight.
+    ///
+    /// Returns `None` when every combined weight is zero, or when two commitments remain nonzero.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a term names an index `>= commitment_count`. The statement constructor rejects that
+    /// index before it asks which commitment is isolated.
+    pub(crate) fn isolated_commitment(&self, commitment_count: usize) -> Option<usize> {
+        let mut weights = ScalarVector::new(commitment_count);
+        accumulate_vector(&mut weights, &self.WV, F::ONE);
+
+        let mut isolated = None;
+        for (index, weight) in weights.0.iter().enumerate() {
+            if bool::from(weight.is_zero()) {
+                continue;
+            }
+            if isolated.is_some() {
+                return None;
+            }
+            isolated = Some(index);
+        }
+        isolated
+    }
 }
 
 /// Accumulate a sparse vector into an accumulator with a multiplicative weight applied.

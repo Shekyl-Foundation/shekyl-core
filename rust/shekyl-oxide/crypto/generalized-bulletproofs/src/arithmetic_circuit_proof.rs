@@ -97,7 +97,11 @@ pub enum AcStatementError {
     ConstrainedNonExistentVectorCommitment,
     /// A constraint referred to a non-existent commitment.
     ConstrainedNonExistentCommitment,
-    /// A Pedersen commitment was not adequately constrained to prove the intended statement.
+    /// A Pedersen commitment was not isolated by any constraint.
+    ///
+    /// Isolation is decided on the combined row: one commitment has a nonzero weight and every
+    /// other Pedersen weight in that constraint is zero. A full-rank system with no such row is
+    /// rejected. Widening this check changes the statement relation.
     DidNotConstrainCommitment,
     /// Too many commitments were specified as part of the statement.
     TooManyCommitments,
@@ -119,18 +123,14 @@ where
     /// invocation. That's practically ensured by taking a `Commitments` struct here, which is only
     /// obtainable via a transcript. The commitments MUST be transcripted though.
     ///
-    /// Unconstrained terms are exactly that: unconstrained. If Pedersen (vector) commitments are
-    /// present without any constraints, they may have arbitrary terms
-    /// _or may not even be openable across the pre-defined generators_. The caller must explicitly
-    /// constrain every term they wish to have an expected value. Additionally, the
-    /// Pedersen vector commitments MAY have terms from the `H_bold` generators which can NOT be
-    /// constrained to any value or structure by this proof.
+    /// A term no constraint names is unconstrained. That includes a Pedersen commitment which is
+    /// not openable under the statement generators. The caller constrains every term whose value
+    /// the statement is meant to bind. Pedersen vector commitments may also carry `H_bold` terms,
+    /// which this proof cannot constrain.
     ///
-    /// The constraints for the Pedersen commitments MUST have full rank in order to prove the
-    /// intended statement. This code performs the overzealous check that for each
-    /// Pedersen commitment, there is at least one constraint which constrains it but no other
-    /// Pedersen commitments. This MAY be improved in the future to properly check if the result is
-    /// of full rank where such a change WILL NOT be considered a breaking change.
+    /// Each Pedersen commitment must be isolated by at least one constraint. Duplicate terms are
+    /// combined first, so `V(i) + V(i)` and `2·V(i)` are the same row. A full-rank system that never
+    /// isolates a commitment is rejected; accepting it would be a different statement relation.
     pub fn new(
         generators: ProofGenerators<'a, C>,
         constraints: Vec<LinComb<C::F>>,
@@ -139,7 +139,7 @@ where
         let Commitments { C, V } = commitments;
 
         {
-            let mut individually_constrained = vec![false; V.len()];
+            let mut commitment_is_isolated = vec![false; V.len()];
             for constraint in &constraints {
                 if Some(generators.len()) <= constraint.highest_a_index {
                     Err(AcStatementError::ConstrainedNonExistentTerm)?;
@@ -150,14 +150,11 @@ where
                 if Some(V.len()) <= constraint.highest_v_index {
                     Err(AcStatementError::ConstrainedNonExistentCommitment)?;
                 }
-                if (constraint.WV.len() == 1) && bool::from(!constraint.WV[0].1.is_zero()) {
-                    individually_constrained[constraint.WV[0].0] = true;
+                if let Some(index) = constraint.isolated_commitment(V.len()) {
+                    commitment_is_isolated[index] = true;
                 }
             }
-            if individually_constrained
-                .into_iter()
-                .any(|is_constrained| !is_constrained)
-            {
+            if commitment_is_isolated.into_iter().any(|isolated| !isolated) {
                 Err(AcStatementError::DidNotConstrainCommitment)?;
             }
         }

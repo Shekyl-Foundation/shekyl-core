@@ -265,33 +265,85 @@ fn fuzz_test_arithmetic_circuit() {
     }
 }
 
-#[test]
-fn an_unconstrained_commitment_is_rejected() {
+fn pedersen_statement(
+    commitment_count: usize,
+    constraints: Vec<LinComb<<Ristretto as Ciphersuite>::F>>,
+) -> Result<(), AcStatementError> {
     let generators = insecure_test_generators(&mut OsRng, 1).unwrap();
+    let points = (0..commitment_count)
+        .map(|index| {
+            if index % 2 == 0 {
+                generators.g()
+            } else {
+                generators.h()
+            }
+        })
+        .collect();
     let mut transcript = Transcript::new([0; 32]);
-    let commitments = transcript.write_commitments(vec![], vec![generators.h()]);
-    let err = ArithmeticCircuitStatement::<Ristretto>::new(
+    let commitments = transcript.write_commitments(vec![], points);
+    ArithmeticCircuitStatement::<Ristretto>::new(
         generators.reduce(1).unwrap(),
-        vec![],
+        constraints,
         commitments,
     )
-    .unwrap_err();
-    assert_eq!(err, AcStatementError::DidNotConstrainCommitment);
+    .map(|_| ())
+}
+
+fn assert_commitments_rejected(
+    commitment_count: usize,
+    constraints: Vec<LinComb<<Ristretto as Ciphersuite>::F>>,
+) {
+    assert_eq!(
+        pedersen_statement(commitment_count, constraints).unwrap_err(),
+        AcStatementError::DidNotConstrainCommitment,
+    );
 }
 
 #[test]
-fn a_commitment_mixed_with_another_is_not_individually_constrained() {
-    let generators = insecure_test_generators(&mut OsRng, 1).unwrap();
-    let mut transcript = Transcript::new([0; 32]);
-    let commitments = transcript.write_commitments(vec![], vec![generators.g(), generators.h()]);
+fn an_unconstrained_commitment_is_rejected() {
+    assert_commitments_rejected(1, vec![]);
+}
+
+#[test]
+fn a_commitment_mixed_with_another_is_not_isolated() {
     let one = <Ristretto as Ciphersuite>::F::ONE;
-    let err = ArithmeticCircuitStatement::<Ristretto>::new(
-        generators.reduce(1).unwrap(),
+    assert_commitments_rejected(
+        2,
         vec![LinComb::empty()
             .term(one, Variable::V(0))
             .term(one, Variable::V(1))],
-        commitments,
-    )
-    .unwrap_err();
-    assert_eq!(err, AcStatementError::DidNotConstrainCommitment);
+    );
+}
+
+#[test]
+fn a_sum_of_terms_and_a_scaled_term_isolate_the_same_commitment() {
+    let one = <Ristretto as Ciphersuite>::F::ONE;
+    let two = one + one;
+    let summed = LinComb::from(Variable::V(0)) + &LinComb::from(Variable::V(0));
+    let scaled = LinComb::from(Variable::V(0)) * two;
+    pedersen_statement(1, vec![summed]).unwrap();
+    pedersen_statement(1, vec![scaled]).unwrap();
+}
+
+#[test]
+fn cancelled_terms_do_not_isolate_a_commitment() {
+    let commitment = LinComb::from(Variable::V(0));
+    assert_commitments_rejected(1, vec![commitment.clone() - &commitment]);
+}
+
+#[test]
+fn a_zero_weight_does_not_isolate_a_commitment() {
+    let zero = <Ristretto as Ciphersuite>::F::ZERO;
+    assert_commitments_rejected(1, vec![LinComb::empty().term(zero, Variable::V(0))]);
+}
+
+#[test]
+fn cancelling_one_commitment_leaves_the_other_isolated() {
+    let one = <Ristretto as Ciphersuite>::F::ONE;
+    let v0 = LinComb::from(Variable::V(0));
+    let v1 = LinComb::from(Variable::V(1));
+    // V(0) + V(1) - V(1) is V(0) once the partner cancels.
+    let isolates_v0 = (v0 + &v1) - &v1;
+    let isolates_v1 = LinComb::empty().term(one, Variable::V(1));
+    pedersen_statement(2, vec![isolates_v0, isolates_v1]).unwrap();
 }

@@ -596,8 +596,8 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   tx; `shekyl-pow-randomx` consumes the blob. Rename the crate (it's more than
   "tx-wire"); see §1/§4.
 - **Q6 — proof / Bp+ canonical-serialization coverage.** *(RESOLVED → freeze by
-  reference; **re-vetted 2026-09-29 on pin `a08001f14c`**, earlier 2026-06-25 on
-  `2753111c50`)* The wire layer
+  reference; **re-vetted 2026-09-29 on pin `2485a176`**, earlier the same day on
+  `a08001f14c` and on 2026-06-25 on `2753111c50`)* The wire layer
   length-prefixes the FCMP++ proof as **opaque bytes** (`shekyl-wire`
   `Prunable::write`: `V(proof_len) ‖ fcmp_proof`) and writes the Bp+ by its fixed
   fields (`BpPlus`: `a‖a1‖b‖r1‖s1‖d1‖V(|L|)·L‖V(|R|)·R`); the canonical *interiors*
@@ -637,6 +637,17 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   are unchanged. Verified: `kat_fcmp_proof_size_depth1_row` (engine-core) still matches
   `FCMP_PROOF_SIZE_KAT`, and `cargo test --locked -p shekyl-fcmp` is green (79/79).
   The freeze **holds** at `a08001f14c`.
+
+  **Re-vet (2026-09-29, pin `a08001f14c` → `2485a176`, shekyl-core #911).**
+  The Pedersen isolation gate now combines duplicate terms before it decides, so
+  `V(i) + V(i)` and `2·V(i)` are one row. Shekyl's FCMP statement passes an empty
+  `V`, so accepting the concatenated shape does not change a membership proof.
+  Helios/Selene `to_bytes` clears the sign bit for every `x == 0` representative;
+  `recover_y(0)` is still `None`, so an honest on-curve point never takes that
+  path. `fcmps` and the Bp+ interior are untouched. Verified:
+  `kat_fcmp_proof_size_depth1_row` (engine-core) still matches
+  `FCMP_PROOF_SIZE_KAT`, and `cargo test --locked -p shekyl-fcmp` is green
+  (81 passed, 1 ignored). The freeze **holds** at `2485a176`.
 - **Q7 — tag-numbering decision.** *(RESOLVED → clean dense renumber)* Monero is a
   proven *pattern*, not a *basis*: tags renumbered to the §2.0 dense scheme
   (inputs `0x00`–`0x04`, outputs `0x00`–`0x01`, ct `Null=0x00`/`Fcmp=0x01`); dead
