@@ -39,6 +39,27 @@ pub const SEGMENT_FREEZE_REORG_MARGIN_BLOCKS: u64 = ARCHIVAL_REORG_DEPTH_BLOCKS;
 /// Output maturity / spendable age in blocks (`CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE`).
 pub const SPENDABLE_AGE_BLOCKS: u64 = DEFAULT_LOCK_WINDOW as u64;
 
+/// **`W`** — the depth at which the wallet's persisted state is final.
+///
+/// A segment freezes once it is this old ([`segment_freeze_eligible`]), so a
+/// reorg **shallower** than `W` never touches frozen state and needs no undo
+/// log (`WALLET_SIDE_STORE.md` §6.3.2 row 2), while a reorg **deeper** than
+/// `W` would have to unmake something already sealed — which is why
+/// [`crate::LeafStore::rollback_to_fork`] refuses there rather than repairing
+/// (`CT-6` C7).
+///
+/// Summed from its two owners rather than written as `730`, and named here
+/// because three places needed the sum: the freeze gate below, the C7 refusal,
+/// and the bench's replay window. A quantity three readers derive
+/// independently is one that drifts.
+pub const FINALITY_DEPTH_BLOCKS: u64 = SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS;
+
+// The snapshot ring's horizon must sit strictly inside `W`, because the band
+// between them is where a rollback is past the ring yet still repairable by
+// folding (`CT-6` §10.3). If the two ever met, C7's refusal would swallow that
+// band and turn a correct recovery into a re-sync.
+const _: () = assert!(SEGMENT_FREEZE_REORG_MARGIN_BLOCKS < FINALITY_DEPTH_BLOCKS);
+
 /// Width of one stored leaf, in bytes.
 ///
 /// Derived from the leaf's scalar content rather than written as `128`: a
@@ -65,8 +86,7 @@ pub use shekyl_fcmp::tree::{leaves_per_segment, outputs_per_node};
 /// Height-based freeze gate (`CT1_ROUND1_PINS.md`).
 #[must_use]
 pub fn segment_freeze_eligible(tip_height: u64, end_block_height: u64) -> bool {
-    tip_height.saturating_sub(end_block_height)
-        >= SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS
+    tip_height.saturating_sub(end_block_height) >= FINALITY_DEPTH_BLOCKS
 }
 
 /// Recompute segment `k`'s sub-root `R_k` from its `E` leaf scalars.
