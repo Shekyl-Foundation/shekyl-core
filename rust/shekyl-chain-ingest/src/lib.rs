@@ -93,6 +93,10 @@ mod pipeline_tests;
 #[cfg(all(test, feature = "pipeline"))]
 pub(crate) mod scenario;
 #[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod scenario_archival;
+#[cfg(all(test, feature = "pipeline"))]
+mod scenario_archival_tests;
+#[cfg(all(test, feature = "pipeline"))]
 pub(crate) mod scenario_spend;
 #[cfg(feature = "pipeline")]
 pub mod schedule;

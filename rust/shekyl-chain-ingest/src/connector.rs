@@ -59,11 +59,13 @@ use kameo::actor::{Actor, ActorRef, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
-    recorded, validate, AtHeight, CenRow, ChainView, Corrupt, EffectiveMedian, Fault, InvalidBlock,
-    PaidEmission, PerHeightRecord, Retry, Stale, StructurallyValid, Verdict, ViewRead, Weights,
+    recorded, validate, ArchivalDelta, AtHeight, CenRow, ChainView, Corrupt, EffectiveMedian,
+    Fault, InvalidBlock, PaidEmission, PerHeightRecord, Retry, Stale, StructurallyValid, Verdict,
+    ViewRead, Weights,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
+use shekyl_types::archival::BondRecord;
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId};
 
 use crate::schedule::ChainRules;
 
@@ -185,6 +187,13 @@ pub struct Applied {
     /// at every height by difference — the penalty's parity oracle on the
     /// one captured block over the median.
     pub emission: Vec<(BlockHeight, PaidEmission)>,
+    /// Each connected block's archival transition — what the verdict says
+    /// the block does to the bond records, the serve credits, the slash log
+    /// and the epoch state (`ValidatedBlock::archival`, DRS-E4 commit 4) —
+    /// one per entry of `connected`. The scenario driver reads it for the
+    /// blocks it mines: until the writer lands (E4 commit 5) the store
+    /// holds none of it, so the delta is observable only here.
+    pub archival: Vec<(BlockHeight, ArchivalDelta)>,
     /// The census rows the connected blocks' verdicts exercised — the
     /// union of each `ChainValid`'s coverage, for the grader's clause (1).
     pub exercised: BTreeSet<&'static str>,
@@ -232,6 +241,18 @@ pub struct HashAt {
 pub struct RootAt {
     /// The height asked for.
     pub height: BlockHeight,
+}
+
+/// `persona`'s bond record as the store holds it — `archival_bond[persona]`
+/// (DRS-E1 A1), the row CEN-L7 reads a persona's standing from. `None` is
+/// no record. The read the archival scenarios hold the writer to: at DRS-E4
+/// commit 4 the transition is derived and not written, so this is `None`
+/// after a join the validator admitted, and the E4 writer's landing is what
+/// turns it `Some` (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 5's falsifier).
+#[derive(Clone, Copy, Debug)]
+pub struct BondRecordOf {
+    /// The persona asked for.
+    pub persona: PCanonicalId,
 }
 
 /// What a block producer needs from the chain to build the next
@@ -408,6 +429,7 @@ impl Message<Apply> for Connector {
                         let root_after = valid.block().root_after();
                         let weights = *valid.block().weights();
                         let emission = *valid.block().emission();
+                        let archival = valid.block().archival().clone();
                         applied
                             .exercised
                             .extend(valid.coverage().iter().map(CenRow::as_str));
@@ -416,6 +438,7 @@ impl Message<Apply> for Connector {
                         applied.roots.push((height, root_after));
                         applied.weights.push((height, weights));
                         applied.emission.push((height, emission));
+                        applied.archival.push((height, archival));
                     }
                     Ok(Err(refused)) => {
                         applied.refused = Some((height, refused));
@@ -608,5 +631,17 @@ impl Message<RootAt> for Connector {
             AtHeight::Recorded(root) => Some(root),
             AtHeight::AboveTip => None,
         })
+    }
+}
+
+impl Message<BondRecordOf> for Connector {
+    type Reply = Result<Option<BondRecord>, RunFault>;
+
+    async fn handle(
+        &mut self,
+        msg: BondRecordOf,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self.writer.read()?.bond_record(&msg.persona)?)
     }
 }

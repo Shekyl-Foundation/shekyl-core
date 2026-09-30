@@ -1,12 +1,48 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The archival transition over an honest-empty chain (DRS-E4 commit 4):
-//! what one block's posts, credits and claims do to the delta, what CEN-L7
-//! refuses and where, and the two record-level folds CEN-L8 and CEN-L9
-//! pin by construction. The slash scan and the epoch close over a
-//! populated archival state are commit 5's scenario driver (E4 §5.2: no
-//! `Mock*` archival state; the driver runs the production stack).
+//! The archival transition's fixture-side cases (DRS-E4 commit 4). Every
+//! case here says which of rule 50's exemptions admits it, because the
+//! transition's production witness lives elsewhere and a fixture case has
+//! to earn its place against that:
+//!
+//! - **Exemption 1 — pure arithmetic on plain values.** The slash fold over
+//!   a constructed [`BondRecord`] and the shard-close search over a fold
+//!   sequence: functions of their arguments, no chain asserted.
+//! - **Exemption 3 — a state the store cannot hold.** CEN-L8's overflow and
+//!   CEN-L9's shard-not-held / bonded-underflow arms, a non-monotone fold,
+//!   and a compact holding with a repeated shard (the wire decoder refuses
+//!   it before any rule reads the block, so L7's arm there is a belt behind
+//!   the decoder). These stay on the fixture permanently: no production
+//!   path produces the state, and the belt's job is to refuse it anyway.
+//!
+//! What is **not** here any more: the single-block arms over a view with no
+//! bonds — a join's insert, a same-block credit, the refusals of a post for
+//! a persona with no record, the accrual. A `MockChain` asserting "this
+//! persona has no bond" is a view with no archival state asserting a fact
+//! about a chain; rule 50's third job was minted for exactly that. Their
+//! witness is `shekyl-chain-ingest::scenario_archival_tests`: posts a
+//! persona's keys built and signed, riding the driver's real spend, judged
+//! over the redb store's view. A claim by a persona with no bond is
+//! witnessed on redb by the `emission-claim` corpus vector
+//! (`vectors_tests`, the disclosed red pinned exactly at L7).
+//!
+//! # The interim pile — INTERIM, replaced by commit 5
+//!
+//! The cases under "same-block record" run an arm whose premise is a
+//! record **written by an earlier post in the same block** — a join, then
+//! a release / reinstate / second join / claim for the same persona, in
+//! one block. Through the production stack that premise is unreachable for
+//! the posts: CEN-G10 refuses a second bond post for a `P` in a block
+//! before the transition runs, so those arms only ever see a *persisted*
+//! record; and the claim needs an emission body the driver cannot yet
+//! produce. They are the transition's only witness for those arms until
+//! the writer lands, and they are labeled as such rather than dressed as
+//! exemptions. **Blocked on** E4 commit 5 (`DRS_E4_ARCHIVAL_WRITER.md` §6
+//! row 5: the writer, and the scenario driver's phase bodies). **Falsify
+//! by** `scenario_archival_tests::a_join_is_the_records_insert_and_the_store_does_not_yet_hold_it`
+//! — when its `bond_record` read turns `Some`, the redb witness for these
+//! arms can be written and this pile is deleted with it.
 
 use super::*;
 use crate::harness::assert_refused;
@@ -147,64 +183,27 @@ fn open_epoch() -> SettlementEpoch {
     SettlementEpoch::from_raw(SettlementSchedule::GENESIS.epoch_at_height(3))
 }
 
-// ---- the JoinMarket ---------------------------------------------------
+// ---- exemption 3: a holding the wire refuses to carry -------------------
 
+/// Exemption 3. `shekyl_wire::Holdings::read` refuses a repeated shard id,
+/// so no block reaching `validate` carries one; the transition's arm is a
+/// belt behind the decoder and the fixture is the only place it can be
+/// reached.
 #[test]
-fn a_join_market_inserts_a_record_joining_at_the_open_epoch() {
-    let p = persona(P1);
-    let delta = run(vec![body_with(vec![join(p, &[3, 5])])]).expect("passes");
-    let epoch = open_epoch();
-    let [write] = delta.records() else {
-        panic!("one record write, got {:?}", delta.records());
-    };
-    assert_eq!(write.persona(), &p);
-    assert_eq!(write.kind(), RecordWriteKind::Insert);
-    let record = write.record();
-    assert_eq!(record.join_settlement_epoch, epoch);
-    assert_eq!(record.bonded_total, AtomicUnits::from_raw(2 * FLOOR));
-    assert_eq!(record.endpoint, [0xe0; 32]);
-    assert_eq!(record.bond_spend_pk, vec![0xb5; SINGLE_KEY_CANONICAL_LEN]);
-    assert_eq!(
-        record.holdings,
-        Holdings::shard_set(vec![
-            HeldShard {
-                shard: ShardId::from_raw(3),
-                add_epoch: epoch,
-            },
-            HeldShard {
-                shard: ShardId::from_raw(5),
-                add_epoch: epoch,
-            },
-        ])
-        .expect("two shards")
+fn a_compact_join_with_a_duplicate_shard_is_refused() {
+    assert_refused(
+        run(vec![body_with(vec![join(persona(P1), &[3, 3])])]),
+        CenRow::L7,
+        at(0, 0),
     );
-    assert!(record.bad_intervals.is_empty());
-    assert!(record.claimed_settlement_epochs.is_empty());
-    assert_eq!(record.first_paying_emission_height, None);
-    // Nothing else moved on an honest-empty chain at height 3.
-    assert!(delta.serve_credits().is_empty());
-    assert!(delta.slashes().is_empty());
-    assert_eq!(delta.slash_watermark(), None);
-    assert_eq!(delta.close(), None);
 }
 
-#[test]
-fn a_complete_tree_join_is_recorded_as_one() {
-    let p = persona(P1);
-    let delta = run(vec![body_with(vec![post(
-        p,
-        WireKind::JoinMarket {
-            bond_spend_pk: vec![0xb5; SINGLE_KEY_CANONICAL_LEN],
-            endpoint: [0xe0; 32],
-        },
-        WireHoldings::CompleteTree,
-        FLOOR,
-        0,
-    )])])
-    .expect("passes");
-    assert_eq!(delta.records()[0].record().holdings, Holdings::CompleteTree);
-}
+// ---- INTERIM: same-block record (module docs) — replaced by commit 5 ----
 
+/// INTERIM. A second join for a persona whose record was inserted earlier
+/// in the block: G10 refuses this block in production (two bond posts, one
+/// `P`), so the arm — a join over an existing record — is seen only over a
+/// persisted record, commit 5's witness.
 #[test]
 fn a_second_join_for_the_same_persona_is_refused_at_its_input() {
     let p = persona(P1);
@@ -218,58 +217,8 @@ fn a_second_join_for_the_same_persona_is_refused_at_its_input() {
     );
 }
 
-#[test]
-fn a_compact_join_holding_nothing_is_refused() {
-    assert_refused(
-        run(vec![body_with(vec![join(persona(P1), &[])])]),
-        CenRow::L7,
-        at(0, 0),
-    );
-}
-
-#[test]
-fn a_compact_join_with_a_duplicate_shard_is_refused() {
-    assert_refused(
-        run(vec![body_with(vec![join(persona(P1), &[3, 3])])]),
-        CenRow::L7,
-        at(0, 0),
-    );
-}
-
-// ---- serve credits -----------------------------------------------------
-
-#[test]
-fn a_serve_credit_after_a_join_in_the_same_block_is_keyed() {
-    let p = persona(P1);
-    let delta = run(vec![body_with(vec![
-        join(p, &[3]),
-        serve_credit_vin(P1, 3, 0),
-    ])])
-    .expect("passes");
-    assert_eq!(
-        delta.serve_credits(),
-        &[ServeCreditKey {
-            persona: p,
-            shard: ShardId::from_raw(3),
-            epoch: SettlementEpoch::ZERO,
-        }]
-    );
-}
-
-#[test]
-fn a_serve_credit_for_a_persona_with_no_bond_is_refused_at_its_input() {
-    assert_refused(
-        run(vec![
-            body_with(vec![join(persona(P1), &[3])]),
-            body_with(vec![serve_credit_vin([0xa2; 32], 3, 0)]),
-        ]),
-        CenRow::L7,
-        at(1, 0),
-    );
-}
-
-// ---- Release and Reinstate --------------------------------------------
-
+/// INTERIM. A release of a record inserted earlier in the block (G10 in
+/// production; the release of a persisted record is commit 5's).
 #[test]
 fn a_release_empties_the_record_and_closes_the_interval_cleanly() {
     let p = persona(P1);
@@ -301,6 +250,7 @@ fn a_release_empties_the_record_and_closes_the_interval_cleanly() {
     );
 }
 
+/// INTERIM. Same premise as the release above.
 #[test]
 fn a_release_whose_debit_is_not_the_record_total_is_refused() {
     let p = persona(P1);
@@ -319,20 +269,8 @@ fn a_release_whose_debit_is_not_the_record_total_is_refused() {
     );
 }
 
-#[test]
-fn a_release_for_a_persona_with_no_bond_is_refused() {
-    assert_refused(
-        run(vec![body_with(vec![other(
-            persona(P1),
-            PostKind::Release as u8,
-            WireHoldings::CompleteTree,
-            FLOOR,
-        )])]),
-        CenRow::L7,
-        at(0, 0),
-    );
-}
-
+/// INTERIM. A reinstate over a record inserted earlier in the block (G10
+/// in production). No wallet producer emits a Reinstate yet either.
 #[test]
 fn a_reinstate_with_no_open_interval_is_refused() {
     let p = persona(P1);
@@ -351,35 +289,10 @@ fn a_reinstate_with_no_open_interval_is_refused() {
     );
 }
 
-#[test]
-fn a_reinstate_for_a_persona_with_no_bond_is_refused() {
-    assert_refused(
-        run(vec![body_with(vec![other(
-            persona(P1),
-            PostKind::Reinstate as u8,
-            WireHoldings::ShardSetCompact(vec![3]),
-            0,
-        )])]),
-        CenRow::L7,
-        at(0, 0),
-    );
-}
-
-#[test]
-fn an_unknown_post_kind_is_refused() {
-    let p = persona(P1);
-    assert_refused(
-        run(vec![body_with(vec![
-            join(p, &[3]),
-            other(p, 9, WireHoldings::CompleteTree, 0),
-        ])]),
-        CenRow::L7,
-        at(0, 1),
-    );
-}
-
-// ---- claims -------------------------------------------------------------
-
+/// INTERIM. A claim on the open epoch by a persona whose record was
+/// inserted earlier in the block: the driver has no emission body yet
+/// (`emission-claim` is the corpus vector's, and it is the no-bond arm).
+/// The `NotSettled` arm over a persisted record is commit 5's.
 #[test]
 fn a_claim_for_an_epoch_not_yet_settled_is_refused() {
     let p = claimant(0xc1);
@@ -395,31 +308,12 @@ fn a_claim_for_an_epoch_not_yet_settled_is_refused() {
     );
 }
 
-#[test]
-fn a_claim_by_a_persona_with_no_bond_is_refused() {
-    assert_refused(
-        run(vec![body_with(vec![emission_vin(0xc1, &[0])])]),
-        CenRow::L7,
-        at(0, 0),
-    );
-}
+// ---- exemption 3: CEN-L8 and CEN-L9's corrupt-view arms -----------------
 
-// ---- the accrual --------------------------------------------------------
-
-#[test]
-fn the_accrual_is_the_open_epochs_post_image() {
-    let delta = run(Vec::new()).expect("passes");
-    assert_eq!(
-        delta.accrual(),
-        Accrual {
-            epoch: open_epoch(),
-            total: INFLOW,
-        }
-    );
-}
-
-/// CEN-L8's overflow clause, by construction: the accrual fold is total
-/// over `checked_add` and its one failure is a [`Corrupt`], never a wrap.
+/// Exemption 3. CEN-L8's overflow clause: the accrual fold is total over
+/// `checked_add` and its one failure is a [`Corrupt`], never a wrap. No
+/// store holds an accrual one unit under `u64::MAX`; the arm is reached
+/// only by construction.
 #[test]
 fn l8_an_accrual_that_overflows_is_a_corrupt_view() {
     let epoch = SettlementEpoch::from_raw(4);
@@ -437,8 +331,10 @@ fn l8_an_accrual_that_overflows_is_a_corrupt_view() {
     );
 }
 
-// ---- the slash fold -----------------------------------------------------
+// ---- the slash fold: exemption 3 (L9) and exemption 1 (the fold) --------
 
+/// A constructed record: plain values the fold cases below are functions
+/// of. Its keys are fixture bytes because nothing here derives from them.
 fn record_holding(shards: &[u64], add_epoch: u64) -> BondRecord {
     BondRecord {
         hybrid_pubkey: vec![0xb1; 4],
@@ -462,9 +358,10 @@ fn record_holding(shards: &[u64], add_epoch: u64) -> BondRecord {
     }
 }
 
-/// CEN-L9, by construction: the record-shaped `FATAL`s of the C++ slash
-/// (a shard the record does not hold; a `bonded_total` below one floor)
-/// are [`Corrupt`] here, and the interval decision cannot fail — it is an
+/// Exemption 3. CEN-L9's record-shaped invariants (a shard the record does
+/// not hold; a `bonded_total` below one floor) are [`Corrupt`] here — a
+/// `BondRecord` the store cannot hold, because the transition that writes
+/// one never produces it — and the interval decision cannot fail: it is an
 /// `Option` the fold answers, not a fault it raises.
 #[test]
 fn l9_slashing_a_shard_the_record_does_not_hold_is_a_corrupt_view() {
@@ -492,6 +389,9 @@ fn l9_slashing_a_shard_the_record_does_not_hold_is_a_corrupt_view() {
     );
 }
 
+/// Exemption 1. The fold's arithmetic over a constructed record: one shard
+/// out, one floor burned, one interval opened, a same-epoch second slash
+/// coalescing into it.
 #[test]
 fn a_slash_removes_the_shard_opens_one_interval_and_burns_one_floor() {
     let p = persona(P1);
@@ -528,6 +428,7 @@ fn a_slash_removes_the_shard_opens_one_interval_and_burns_one_floor() {
     assert_eq!(record.bad_intervals.len(), 1);
 }
 
+/// Exemption 1. The complete-tree arm of the same fold.
 #[test]
 fn a_complete_tree_slash_demotes_the_record_to_an_empty_compact_one() {
     let p = persona(P1);
@@ -546,11 +447,12 @@ fn a_complete_tree_slash_demotes_the_record_to_an_empty_compact_one() {
     assert_eq!(record.bonded_total, AtomicUnits::ZERO);
 }
 
-// ---- shard close heights -----------------------------------------------
+// ---- shard close heights: exemption 1 (the search) and 3 (the cut) ------
 
-/// `SCC-Q3` on `SHT-Q2`'s partition: the height whose archival fold
-/// first reached a shard's end, found by binary search over
-/// `cumulative_archival_len`.
+/// Exemption 1. `SCC-Q3` on `SHT-Q2`'s partition: the height whose
+/// archival fold first reached a shard's end, found by binary search over
+/// `cumulative_archival_len` — a function of the fold sequence, which is
+/// the only thing the `MockChain` here carries.
 #[test]
 fn shard_close_height_is_the_block_whose_fold_reached_the_shards_end() {
     let w = SHARD_LENGTH.to_raw();
@@ -597,8 +499,9 @@ fn shard_close_height_is_the_block_whose_fold_reached_the_shards_end() {
     });
 }
 
-/// A fold that fell back below a shard's end after reaching it is the cut
-/// the search cannot verify (SI-13): height 0 reached the end, the later
+/// Exemption 3. A fold that fell back below a shard's end after reaching
+/// it — a sequence the store's monotone `cumulative_archival_len` cannot
+/// hold — is the cut the search cannot verify (SI-13): height 0 reached the end, the later
 /// heights fell back below it, the search steps past the fallen middle,
 /// lands on the tip, and finds the fold there short of the end — so it
 /// refuses rather than name the tip (or height 0, which it never probed

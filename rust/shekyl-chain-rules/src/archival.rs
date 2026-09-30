@@ -138,6 +138,14 @@ impl Rule for L7 {
 /// Everything a block's connect does to the archival state, derived by the
 /// verdict. The store writes it; it computes none of it (`ARW-Q1`).
 ///
+/// `Clone` has one caller: the ingest connector's `Applied` reply, which
+/// carries each connected block's delta beside its root, weights and
+/// emission — the verdict's derivations, cloned off the `ChainValid`
+/// before `connect` consumes it — so a scenario reads what the validator
+/// derived for a block it mined through the production stack. Reopened if
+/// a second caller emerges; a third would be the moment to ask whether the
+/// verdict should hand the delta out by reference instead.
+///
 /// Cannot be constructed outside this crate. The fields are private:
 ///
 /// ```compile_fail,E0451
@@ -163,7 +171,7 @@ impl Rule for L7 {
 ///     None,
 /// );
 /// ```
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchivalDelta {
     records: Vec<RecordWrite>,
     serve_credits: Vec<ServeCreditKey>,
@@ -239,8 +247,9 @@ impl ArchivalDelta {
 
 /// One bond record's post-image and whether the store inserts or replaces
 /// it. Insert-once for the JoinMarket (SI-19); upsert with the pre-image
-/// journaled for the rest (§3.2 phase 2).
-#[derive(Debug, PartialEq, Eq)]
+/// journaled for the rest (§3.2 phase 2). `Clone` for [`ArchivalDelta`]'s
+/// one cloning caller.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordWrite {
     persona: PCanonicalId,
     record: BondRecord,
@@ -312,8 +321,9 @@ pub struct Accrual {
 }
 
 /// An epoch's close: the frozen facts the fold produced over the epoch's
-/// snapshot, each insert-once (SI-21).
-#[derive(Debug, PartialEq, Eq)]
+/// snapshot, each insert-once (SI-21). `Clone` for [`ArchivalDelta`]'s one
+/// cloning caller.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EpochClose {
     epoch: SettlementEpoch,
     r_market: Vec<(ShardId, RMarket)>,

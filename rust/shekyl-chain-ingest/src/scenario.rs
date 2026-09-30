@@ -54,18 +54,21 @@ use shekyl_block_template::{
     build, EmissionOperands, MinerKeys, Template, TemplateContext, TemplateError,
 };
 use shekyl_chain_rules::{
-    form, seed_height, Candidate, CenRow, FormAttempt, InvalidBlock, RuleSet, Substrate,
-    EMISSION_SPLIT_EPOCH,
+    form, seed_height, ArchivalDelta, Candidate, CenRow, FormAttempt, InvalidBlock, PaidEmission,
+    RuleSet, Substrate, EMISSION_SPLIT_EPOCH,
 };
 use shekyl_crypto_pq::kem::{HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation};
 use shekyl_economics::EconomicParams;
-use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
+use shekyl_types::archival::BondRecord;
+use shekyl_types::{
+    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, PowHash, Timestamp,
+};
 use shekyl_wire::Transaction;
 use zeroize::Zeroizing;
 
 use crate::connector::{
-    Apply, ChainFacts, Connector, ConnectorArgs, HashAt, Rewind, Rewound, RootAt, RunFault,
-    TemplateFacts,
+    Apply, BondRecordOf, ChainFacts, Connector, ConnectorArgs, HashAt, Rewind, Rewound, RootAt,
+    RunFault, TemplateFacts,
 };
 use crate::schedule::ChainRules;
 use crate::test_support::{cleanup, open_store, tmp};
@@ -149,6 +152,12 @@ pub struct Mined {
     pub template: Template,
     /// The census rows the validator recorded for this block.
     pub judged_by: Vec<CenRow>,
+    /// The emission the verdict priced the block at (`Applied::emission`).
+    pub emission: PaidEmission,
+    /// What the verdict derived the block does to the archival state
+    /// (`Applied::archival`). The witness the archival scenarios read,
+    /// because the store does not write it until the E4 writer lands.
+    pub archival: ArchivalDelta,
 }
 
 /// Why a scripted step did not land. Refusals are data (the scenario asked
@@ -307,11 +316,19 @@ where
             .copied()
             .filter(|row| applied.exercised.contains(row.as_str()))
             .collect();
+        let (_, emission) = applied.emission[0];
+        let (_, archival) = applied
+            .archival
+            .into_iter()
+            .next()
+            .expect("one connected block carries one archival delta");
         Ok(Mined {
             height,
             hash,
             template,
             judged_by,
+            emission,
+            archival,
         })
     }
 
@@ -335,6 +352,14 @@ where
     pub async fn root_at(&self, height: BlockHeight) -> Result<Option<CurveTreeRoot>, RunFault> {
         self.connector
             .ask(RootAt { height })
+            .await
+            .map_err(handler_error)
+    }
+
+    /// `persona`'s bond record as the store holds it (`BondRecordOf`).
+    pub async fn bond_record(&self, persona: PCanonicalId) -> Result<Option<BondRecord>, RunFault> {
+        self.connector
+            .ask(BondRecordOf { persona })
             .await
             .map_err(handler_error)
     }
