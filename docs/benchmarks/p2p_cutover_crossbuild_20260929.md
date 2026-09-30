@@ -352,12 +352,103 @@ the floor, `LocalClose` there and `PeerClosed` on the dialer within
 1 ms of each other. Unit test `a_local_close_ends_the_writer` is red on
 the previous shape.
 
+## Clearnet LAN distribution, floor device initiator (2026-09-30 UTC)
+
+Two runs, recorded side by side, not merged. Raw samples:
+[`p2p_clearnet_lan_floor_initiator_run1_20260930.tsv`](p2p_clearnet_lan_floor_initiator_run1_20260930.tsv),
+[`p2p_clearnet_lan_floor_initiator_run2_20260930.tsv`](p2p_clearnet_lan_floor_initiator_run2_20260930.tsv).
+
+Conditions, per D9:
+
+- Dialer: the floor device (Pi 4 Model B, aarch64, 4 cores), daemon
+  `1485e5ae3` in run 1 and `54ba2b6cd` in run 2 (the second adds the
+  initiator's pre-write spans; no behaviour change), one outbound and
+  nothing else; `--clearnet-transport-encrypt` on, ephemeral Tor off.
+  The RandomX miner was off. Sharing its four cores: the same idle
+  regtest daemon as the responder leg.
+- Responder: a LAN VM (x86_64, 8 cores), the portable daemon at
+  `1485e5ae3`, inbound cap 16, one inbound live at a time. It is not a
+  quiet host: it shared its cores with a testnet miner of an unrelated
+  lane at about 3.4 cores throughout, and its load average rose from
+  5 to 8.5 across the two runs. It was the only LAN acceptor available
+  — this build host's firewall admits ssh only and there is no
+  privilege here to open a port, and the other VM carries the same
+  miner. The floor device's own spans are what this leg is for; the
+  responder's tails are the VM's and are attributed as such below.
+- Link: one LAN segment, 0.2 ms RTT.
+- Method: as the responder leg — dialer-side `out_peers` churn, spans
+  matched by connection id.
+- n = 100 each, no timeouts.
+
+Run 1 (`1485e5ae3`):
+
+| span | p50 | p90 | p99 | max | 2 × p99 |
+| --- | --- | --- | --- | --- | --- |
+| TCP connect (`connect_ns`, floor) | 0.54 ms | 0.72 ms | 0.88 ms | 0.99 ms | 1.8 ms |
+| initiator handshake (`handshake_ns`, floor) | 3.40 ms | 4.51 ms | 109 ms | 4.30 s | — (VM's, see below) |
+| responder queue wait (`queue_ns`, VM) | 74 µs | 145 µs | 344 µs | 561 µs | — |
+| responder compute (`compute_ns`, VM) | 0.66 ms | 0.86 ms | 1.24 ms | 1.43 ms | — |
+| responder handshake (`handshake_ns`, VM) | 1.84 ms | 2.52 ms | 79 ms | 108 ms | — |
+| channel to session (`gap_ns`, floor) | 2.49 ms | 3.18 ms | 4.30 ms | 74 ms | 8.6 ms |
+
+Run 2 (`54ba2b6cd`), the floor's three waits before message 1 added:
+
+| span | p50 | p90 | p99 | max | 2 × p99 |
+| --- | --- | --- | --- | --- | --- |
+| TCP connect (`connect_ns`, floor) | 0.49 ms | 0.64 ms | 0.84 ms | 0.88 ms | 1.7 ms |
+| initiator blocking-lane wait (`queue_ns`, floor) | 54 µs | 99 µs | 357 µs | 1.41 ms | 0.8 ms |
+| initiator compute (`compute_ns`, floor: keygen and message 1) | 0.40 ms | 0.91 ms | 1.04 ms | 1.15 ms | 2.1 ms |
+| initiator write under the up gate (`write_ns`, floor) | 89 µs | 141 µs | 210 µs | 239 µs | 0.5 ms |
+| initiator handshake (`handshake_ns`, floor) | 3.42 ms | 4.45 ms | 715 ms | 4.19 s | — (VM's, see below) |
+| responder queue wait (`queue_ns`, VM) | 81 µs | 155 µs | 310 µs | 887 µs | — |
+| responder compute (`compute_ns`, VM) | 0.66 ms | 0.84 ms | 1.12 ms | 2.02 ms | — |
+| responder handshake (`handshake_ns`, VM) | 1.76 ms | 2.68 ms | 35 ms | 4.18 s | — |
+| channel to session (`gap_ns`, floor) | 2.44 ms | 3.49 ms | 34 ms | 111 ms | — (VM's) |
+
+Precision 0.1 ms. What the two runs establish:
+
+- The floor device as initiator is tight where it can be measured on
+  its own. Across 200 handshakes its TCP connect p99 is under 0.9 ms
+  and, in the 100 that have them, its lane wait, compute and write are
+  each under 1.5 ms at their max, with no sample of the pre-write path
+  above that. The 0.40 ms is the initiator's first job only (what it
+  needs to send message 1); its second job, on message 2, is not
+  spanned, so it is not compared with the responder's 2.17 ms from
+  the previous section.
+- Every tail above 20 ms is the VM's. Run 1 samples 24, 91, 95 and run
+  2 samples 28 and 59 are long on both sides with the VM's compute at
+  0.6–0.8 ms: a wait around the compute on the loaded host, not in it.
+  Run 2 sample 59 (4.19 s, both sides) puts the wait between the VM
+  accepting the socket and reading message 1 — the floor's own
+  pre-write spans on that sample are 52 µs, 0.98 ms, 97 µs.
+- Run 1 sample 41 (4.30 s on the floor, 1.3 ms on the VM) was read at
+  the time as a floor-side stall. Run 2 refutes the reading: the VM's
+  span starts when its accept path starts, and on a starved host that
+  is late, so a short VM span with a long floor span is the same VM
+  wait with the clock started after it. The pre-write spans were added
+  because run 1 could not tell these apart; run 2 can, and found no
+  floor-side stall in 100.
+- Run 2 sample 46 (715 ms on the floor, 1.76 ms on the VM, floor
+  pre-write spans normal) is the one sample neither side's spans
+  attribute: the VM's responder span ends before its writer puts
+  message 2 on the wire, and the floor has no span on its message-2
+  read and second job. On a host at load 8.5 the VM's writer is the
+  likelier; it is not shown. A span on the responder's message-2
+  write would close this and is owed with the deadline commit.
+- The initiator-handshake and gap p99s in this leg are the VM's
+  scheduling and derive nothing. The floor's initiator handshake under
+  a quiet responder is the previous section's 7.15 ms read from the
+  other end; its connect and handshake deadlines are owed to the
+  off-site leg.
+
+A later run under these conditions whose p99 exceeds 0.88 ms (connect),
+0.36 ms (lane), 1.04 ms (compute) or 0.21 ms (write) on the floor
+device reopens the respective figure (p99s 0.877, 0.357, 1.037 and
+0.210 ms, rounded up at 0.01 ms).
+
 ## Not this run
 
 Tor relay and the floor device's inbound Tor distribution were not
-run. The clearnet distribution with the floor device as initiator, the
-off-site clearnet leg and the thread-budget legs are not in this
-record. The off-site clearnet leg waits on a firewall rule for the
-seed-side daemon's private port; the floor-as-initiator leg cannot
-target this build host (its firewall admits ssh only, and there is no
-privilege here to open the port) and runs against a LAN VM instead.
+run. The off-site clearnet leg and the thread-budget legs are not in
+this record. The off-site clearnet leg waits on a firewall rule for
+the seed-side daemon's private port.
