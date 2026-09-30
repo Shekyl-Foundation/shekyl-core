@@ -657,6 +657,14 @@ fn the_mock_view_and_the_batch_view_answer_the_same_reads() {
     // the store's empty state and the mock's empty state are the *same*
     // empties, so a rule tested over the mock reads the absences the store
     // reads.
+    //
+    // Read this block's greenness for what it is: agreement about absence,
+    // not coverage of the reads. Until E4 commit 4 writes a row, absence is
+    // the only thing the two views have to agree on, and every read's
+    // *present* arm is witnessed by `archival_read_tests` against the store
+    // alone. When the writer lands, the chain here gains a bond and this
+    // comparison starts holding the present arms too — its strength grows
+    // with the writer, and nothing here should be read as having it yet.
     let real_archival: Result<ArchivalReads, TestErr> =
         store.write(|batch| Ok(ArchivalReads::of(&batch.chain_view())?));
     let mocked_archival = mock.with_view(|view| match ArchivalReads::of(&view) {
