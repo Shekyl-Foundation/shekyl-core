@@ -1090,7 +1090,13 @@ impl Transition {
                 .map(|s| s.entry)
                 .filter(|entry| entry.persona == persona),
         );
-        Ok(holds_shard_at(record, shard, fire, &slashed_after))
+        Ok(holds_shard_at(
+            self.schedule,
+            record,
+            shard,
+            fire,
+            &slashed_after,
+        ))
     }
 
     /// `archival_failure_window_slashable`: the decision epoch is a miss;

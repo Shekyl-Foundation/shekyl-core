@@ -14,6 +14,7 @@ use crate::reward_arithmetic::{
     mul_div_floor, scarcity_micro, work_milli_from_micro, WORK_MILLI_SCALE,
 };
 pub use shekyl_types::archival::SettlementEpochBlocks;
+use shekyl_types::{BlockHeight, SettlementEpoch};
 
 const _: () = assert!(
     SETTLEMENT_EPOCH_BLOCKS > 0,
@@ -103,6 +104,15 @@ impl SettlementSchedule {
     #[must_use]
     pub const fn epoch_at_height(self, block_height: u64) -> u64 {
         block_height / self.seb()
+    }
+
+    /// [`Self::epoch_at_height`] in the typed domain: the settlement epoch
+    /// containing `height`. The form a consumer that holds typed heights
+    /// (the validator's archival transition, the as-of-height holdings fold)
+    /// reads; the raw form above is the FFI's edge.
+    #[must_use]
+    pub const fn epoch_at(self, height: BlockHeight) -> SettlementEpoch {
+        SettlementEpoch::from_raw(self.epoch_at_height(height.to_raw()))
     }
 
     /// Settlement epoch whose `archival_r_market` rows are readable **as of

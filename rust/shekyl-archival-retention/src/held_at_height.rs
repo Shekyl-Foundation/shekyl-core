@@ -56,6 +56,19 @@
 //!   every height, and the drop epoch's pending acceptances are forfeited —
 //!   the symmetric twin of the forfeited add epoch.
 //!
+//! # Which schedule places the height in an epoch
+//!
+//! The caller's. Every arm compares `at_height`'s epoch against an add
+//! epoch, and *which* epoch a height falls in is the settlement schedule's
+//! to say — rule-set data since `ARW-15` (`RuleSet::settlement_schedule`),
+//! not a process fact. The fold takes the [`SettlementSchedule`] it is
+//! judged under; it does not read the process latch
+//! (`settlement_epoch_at_height`), which is the entry point for callers
+//! that hold no rule set (the type's doc). Under a fakechain schedule that
+//! differs from the latch the two would classify the same fire height into
+//! different epochs, and this fold would then answer *held* for a reward
+//! the validator's own schedule says was not yet earned.
+//!
 //! # What the fold does not check
 //!
 //! That the rows are this persona's: A2 scopes them by the read, and the
@@ -67,12 +80,13 @@
 use shekyl_types::archival::{BondRecord, SlashLogEntry, SlashedHolding};
 use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
 
-use crate::consensus_state::settlement_epoch_at_height;
+use crate::consensus_state::SettlementSchedule;
 
 /// Whether `record`'s persona held `shard` **as of** `at_height` — the
 /// post-connect state of block `at_height` — given every slash logged
 /// against the persona strictly above `at_height` (`slashed_after`, the
-/// S-ARCH A2 read at the same height). The fold `db_lmdb.cpp:4890`
+/// S-ARCH A2 read at the same height), with `schedule` placing
+/// `at_height` in its settlement epoch. The fold `db_lmdb.cpp:4890`
 /// computed inside the LMDB layer, over the store's two reads instead.
 ///
 /// `slashed_after` is the persona's rows already: the fold does not
@@ -81,12 +95,13 @@ use crate::consensus_state::settlement_epoch_at_height;
 /// holding — so the walk stops at the first.
 #[must_use]
 pub fn holds_shard_at(
+    schedule: SettlementSchedule,
     record: &BondRecord,
     shard: ShardId,
     at_height: BlockHeight,
     slashed_after: &[SlashLogEntry],
 ) -> bool {
-    let at_epoch = SettlementEpoch::from_raw(settlement_epoch_at_height(at_height.to_raw()));
+    let at_epoch = schedule.epoch_at(at_height);
     if record.holdings.holds(shard) {
         match record.holdings.add_epoch(shard) {
             // Complete tree: held back to join, at every height.
@@ -123,13 +138,20 @@ mod tests {
     //! in the test, so what is asserted is the composition the C++ fused.
     //! The `slash_revert_*` cases beside them are pop-revert tests, which
     //! is `undo_log`'s job (`ARW-Q2`) and not this fold's.
+    //!
+    //! Every case runs under one named schedule, [`SCHEDULE`] — the genesis
+    //! geometry, as the C++ fixtures ran — and the last case runs the same
+    //! record under two schedules to show the argument decides.
 
     use shekyl_types::archival::{HeldShard, Holdings};
     use shekyl_types::PCanonicalId;
     use shekyl_units::AtomicUnits;
 
     use super::*;
-    use crate::constants::effective_settlement_epoch_blocks;
+    use crate::consensus_state::SettlementEpochBlocks;
+
+    /// The schedule the LMDB cases ran under.
+    const SCHEDULE: SettlementSchedule = SettlementSchedule::GENESIS;
 
     fn shard(n: u64) -> ShardId {
         ShardId::from_raw(n)
@@ -143,17 +165,18 @@ mod tests {
         BlockHeight::from_raw(n)
     }
 
-    /// The first height of epoch `e` — the C++ fixture's
+    /// The first height of epoch `e` under [`SCHEDULE`] — the C++ fixture's
     /// `shekyl_archival_epoch_open_height`.
     fn open(e: u64) -> BlockHeight {
-        h(e * effective_settlement_epoch_blocks())
+        h(SCHEDULE.open_height(e))
     }
 
-    /// Epoch `e`'s last block, `(e + 1)·SEB − 1` — the C++ fixture's
-    /// `shekyl_archival_epoch_last_block`, one below the close-*processing*
-    /// height `consensus_state::epoch_close_height` names.
+    /// Epoch `e`'s last block under [`SCHEDULE`], `(e + 1)·SEB − 1` — the
+    /// C++ fixture's `shekyl_archival_epoch_last_block`, one below the
+    /// close-*processing* height `consensus_state::epoch_close_height`
+    /// names.
     fn last(e: u64) -> BlockHeight {
-        h(open(e + 1).to_raw() - 1)
+        h(SCHEDULE.last_block(e))
     }
 
     fn persona() -> PCanonicalId {
@@ -207,14 +230,14 @@ mod tests {
             SlashLogEntry {
                 persona: persona(),
                 shard: shard(s),
-                epoch: epoch(settlement_epoch_at_height(at)),
+                epoch: SCHEDULE.epoch_at(h(at)),
                 holding,
             },
         )
     }
 
     fn held(record: &BondRecord, log: &Log, s: u64, at: BlockHeight) -> bool {
-        holds_shard_at(record, shard(s), at, &log.after(at))
+        holds_shard_at(SCHEDULE, record, shard(s), at, &log.after(at))
     }
 
     /// `holds_shard_honors_at_height_across_slash_removal` (:1697). Add
@@ -261,8 +284,8 @@ mod tests {
 
         // The last height: nothing is strictly above it, so the answer is
         // the tip state. In the C++ this was an early return guarding a
-        // wrapping start key; here A2's range is empty by construction and
-        // the fold sees no rows.
+        // wrapping start key; here A2 has no range to scan (the key's
+        // `above` is `None` there) and the fold sees no rows.
         assert!(log.after(h(u64::MAX)).is_empty());
         assert!(!held(&record, &log, 7, h(u64::MAX)));
         assert!(held(&record, &log, 9, h(u64::MAX)));
@@ -349,5 +372,40 @@ mod tests {
         assert!(!held(&record, &log, 7, last(6)));
         // Tenure two from epoch 7 on.
         assert!(held(&record, &log, 7, open(7)));
+    }
+
+    /// The schedule argument decides which epoch a height is in — not the
+    /// process latch. The same record and fire height, under two
+    /// schedules: a short fakechain geometry places the height past the
+    /// add epoch (held); the genesis geometry — which is also what the
+    /// latch holds in this process — places it inside epoch 0 (not held).
+    /// Had the fold read the latch, the first answer would be wrong.
+    #[test]
+    fn the_schedule_passed_in_places_the_height_not_the_process_latch() {
+        let short = SettlementSchedule::new(
+            SettlementEpochBlocks::new(100).expect("a non-zero fakechain epoch"),
+        );
+        let record = record(compact(&[(7, 2)]));
+        let log = Log(Vec::new());
+        // Epoch 3's open under the short schedule …
+        let fire = h(short.open_height(3));
+        // … which the genesis geometry (and so the latch) reads as epoch 0.
+        assert_eq!(SCHEDULE.epoch_at(fire), epoch(0));
+        assert_eq!(SettlementSchedule::effective().epoch_at(fire), epoch(0));
+
+        assert!(holds_shard_at(
+            short,
+            &record,
+            shard(7),
+            fire,
+            &log.after(fire)
+        ));
+        assert!(!holds_shard_at(
+            SCHEDULE,
+            &record,
+            shard(7),
+            fire,
+            &log.after(fire)
+        ));
     }
 }
