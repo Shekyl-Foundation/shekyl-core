@@ -30,12 +30,14 @@
 //! change nor a config edit can move this crate's pop revert away from the
 //! store. (*Corrected 2026-09-19:* this sentence previously said "admission
 //! and pop revert". **`frozen_segment_count` is not read by bond admission** —
-//! its consumers are the coverage RPC and freeze / pop-revert. *Corrected
-//! again by DRS-E4 commit 3:* it is no longer CEN-F17's escalation operand
-//! either — that is the closed transaction-shard count,
-//! `shekyl_types::closed_shards_through` (`DRS_E4_ARCHIVAL_WRITER.md`
-//! ARW-Q6) — and this module leaves with its remaining consumers at the
-//! cutover (E4 §3.9). Bond admission's shard predicate was ruled
+//! its consumers are the C++ validator's D2 escalation operand, the
+//! coverage RPC and freeze / pop-revert. *Narrowed by DRS-E4 commit 4:*
+//! the Rust validator's CEN-F17 operand is the closed archival-shard
+//! count of the recorded fold (`shekyl_chain_rules::closed_shards_before`,
+//! `DRS_E4_ARCHIVAL_WRITER.md` ARW-Q6); the C++ keeps this count because
+//! LMDB has no fold to read — CEN-L10's ruled divergence — and this module
+//! leaves with its remaining consumers at the cutover (E4 §3.9). Bond
+//! admission's shard predicate was ruled
 //! 2026-09-19 and is **unbuilt**; see
 //! `docs/design/ARCHIVAL_BOND_ADD_ADMISSION.md` §3.) Level 2 was gate-2's provisional sizing; the freeze
 //! pipeline round pinned it (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §5.2).
@@ -53,9 +55,9 @@ include!(concat!(env!("OUT_DIR"), "/segment_leaf_count_generated.rs"));
 // config-generated SEGMENT_LEAF_COUNT must equal the partition derivation
 // that lives in `shekyl_fcmp::tree` — the one home both stores consume. The
 // wallet-side shard store partitions by `leaves_per_segment()`; this crate's
-// consensus reader (`frozen_segment_count`: the coverage RPC and pop revert
-// — **not** bond admission, and not CEN-F17's operand since DRS-E4 commit 3;
-// see the module doc)
+// consensus reader (`frozen_segment_count`: the C++ validator's D2 operand,
+// the coverage RPC and pop revert — **not** bond admission, and not the
+// Rust validator's CEN-F17 operand since DRS-E4 commit 4; see the module doc)
 // partitions by the JSON value. Until this assert the two agreed only because
 // the JSON value happened to equal the width product `38 · 18 · 38`; a
 // `SEGMENT_LAYER_J` move, or a config edit that reads as a tune, would have

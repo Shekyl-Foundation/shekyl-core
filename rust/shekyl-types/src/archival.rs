@@ -81,34 +81,93 @@ use crate::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 /// refused before any allocation is sized from the count.
 pub const MAX_HOLDINGS_SHARDS: usize = ARCHIVAL_MAX_HOLDINGS_SHARDS;
 
-/// `T` — transactions per archival shard: shard `k` is the storage ids
-/// `[k·T, (k+1)·T)`, `k = ⌊tx_id / T⌋` (`PDM-Q6` item 5, RULED
-/// 2026-09-23; `DRS_E1_SPRUNE.md` §2). The one consensus constant of the
-/// partition: no boundary table, no length rows, no byte lengths.
+scalar_u64! {
+    /// An **archival length**: the bytes of archival good a transaction carries —
+    /// its prunable region plus its `pqc_auths` segment, exactly the bytes a body
+    /// store holds and discards — or the sum of those over a run of transactions
+    /// (`SHT-Q2`, RULED 2026-09-29). Stored as a skeleton row, never
+    /// declared or signed. A coinbase's is zero.
+    ///
+    /// **The txid binding is pending.** A full body's length is fixed by its
+    /// bytes, which the txid already binds through the prunable hash; a
+    /// pruned form carries that hash but not the bytes, so its length is
+    /// bound by nothing until the txid gains the length term the ruling
+    /// names. That term is held on the ruling for how a pruned form supplies
+    /// the length (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.6, the FOLLOWUPS
+    /// "Build SHT-Q2" row).
+    ///
+    /// A distinct type because the partition it drives used to be a
+    /// transaction count, and a `u64` would let a count, a storage id and a
+    /// length stand in for one another without a word of complaint.
+    ArchivalLength
+}
+
+impl ArchivalLength {
+    /// `self + other`, or `None` on overflow — the fold's only arithmetic.
+    #[must_use]
+    pub const fn checked_add(self, other: Self) -> Option<Self> {
+        match self.0.checked_add(other.0) {
+            Some(sum) => Some(Self(sum)),
+            None => None,
+        }
+    }
+}
+
+/// `W`: the archival length of a shard (`SHT-Q2`, RULED 2026-09-29;
+/// `ARCHIVAL_SHARD_T_DERIVATION.md` §8.6, §9). Shard `k` holds the
+/// transactions whose cumulative archival length **before** them lies in
+/// `[k·W, (k+1)·W)` — [`shard_of`]. Global multiples: no boundary table,
+/// and membership depends on nothing but the cumulative length, which every
+/// node derives from the rows it keeps.
 ///
-/// A storage id is not `cumulative_tx_count`. That field counts listed
-/// transactions. [`storage_ids_through`] adds one coinbase per block;
-/// `first_tx_id(h)` for `h ≥ 1` is that total at height `h − 1`, and
-/// `first_tx_id(0)` is `0`. Every node derives the same shard set from
-/// that total and `T`.
-///
-/// **PROVISIONAL numeric** (Round-2 gate with `n`, `D_max`, `w_launch`):
-/// chosen so a typical shard at ~16.7 KB/tx lands near 3.33 MB. Sourced
-/// from `config/consensus_constants.json` (`archival_shard_tx_count`, via
-/// this crate's `build.rs`) like the gate's other numerics, and exposed
-/// here, the shard vocabulary's home, so the store's discard, CEN-F17's
-/// escalation operand and the archiver's holdings name one `T` — and one
-/// closure frontier, [`closed_shards`]. A second home for `T` — a literal
-/// in a shipped crate, or a shard boundary derived from anything but
-/// `cumulative_tx_count` and this — is the FOLLOWUPS row's falsifier.
-pub const SHARD_TX_COUNT: u64 = ARCHIVAL_SHARD_TX_COUNT;
+/// **PROVISIONAL numeric**, `3,000,000` bytes: the §9 selection rule's
+/// output (the smallest `W` whose overshoot — one transaction's largest
+/// archival length over `W` — is at most 5 %), re-pinned before genesis by
+/// the overshoot tolerance and the multi-size W₂ and `U1b` measurements.
+/// Sourced from `config/consensus_constants.json`
+/// (`archival_shard_length_bytes`, via this crate's `build.rs`); this is its
+/// one home. The static relation "one transaction's largest archival length
+/// is below `W`", which is what keeps every shard non-empty, is
+/// const-asserted in `shekyl-chain-rules` (`rules/tx.rs`, beside CEN-H3's
+/// `max_tx_weight`), where both constants are visible.
+pub const SHARD_LENGTH: ArchivalLength = ArchivalLength::from_raw(ARCHIVAL_SHARD_LENGTH_BYTES);
+
+/// The shard a transaction belongs to, from the cumulative archival length
+/// of every transaction before it: `⌊cum_before / W⌋`. The partition's one
+/// boundary function; nothing else places a boundary.
+#[must_use]
+pub const fn shard_of(cum_before: ArchivalLength) -> crate::ShardId {
+    crate::ShardId::from_raw(cum_before.to_raw() / SHARD_LENGTH.to_raw())
+}
+
+/// Where shard `k` starts: the cumulative archival length `k·W`, or `None`
+/// when it overflows. A transaction is in shard `k` or later iff its
+/// cumulative-before is at least this.
+#[must_use]
+pub const fn shard_start(k: crate::ShardId) -> Option<ArchivalLength> {
+    match k.to_raw().checked_mul(SHARD_LENGTH.to_raw()) {
+        Some(start) => Some(ArchivalLength::from_raw(start)),
+        None => None,
+    }
+}
+
+/// Where the shard holding offset `at` starts: `⌊at / W⌋·W`, which is
+/// `shard_start(shard_of(at))` without the overflow — it is at most `at`.
+/// The opening a fold that has reached `at` has certainly crossed.
+#[must_use]
+pub const fn shard_floor(at: ArchivalLength) -> ArchivalLength {
+    ArchivalLength::from_raw(at.to_raw() - at.to_raw() % SHARD_LENGTH.to_raw())
+}
 
 include!(concat!(
     env!("OUT_DIR"),
     "/consensus_constants_generated.rs"
 ));
 
-const _: () = assert!(SHARD_TX_COUNT > 0, "a shard holds at least one transaction");
+const _: () = assert!(
+    SHARD_LENGTH.to_raw() > 0,
+    "a shard has a positive archival length"
+);
 
 // The cap bounds a `Vec` length, so `build.rs` emits it as `usize` rather than
 // `u64` like its neighbour: there is no cast to lint, and a value exceeding
@@ -133,40 +192,6 @@ pub const fn storage_ids_through(listed: u64, height: u64) -> Option<u64> {
         return None;
     };
     listed.checked_add(blocks)
-}
-
-/// Shards closed once `storage_ids` transaction ids have been issued:
-/// `⌊storage_ids / T⌋` — every `k` whose last id `(k+1)·T − 1` is below
-/// the total, so the closed shards are exactly `0..closed_shards(ids)`.
-///
-/// **The one home of the closure frontier** (`PDM-Q6` item 5; E4
-/// `ARW-Q6`). The store's discard, the slash scan's shard universe and
-/// CEN-F17's escalation operand `n` all read it here, never a division of
-/// their own — two sites computing one boundary predicate is the
-/// off-by-one-drift shape (`SHARD_TX_COUNT`'s falsifier). The operand is
-/// a storage-id total, not `cumulative_tx_count`: see
-/// [`closed_shards_through`] for the form that starts from the recorded
-/// field.
-#[must_use]
-pub const fn closed_shards(storage_ids: u64) -> u64 {
-    storage_ids / SHARD_TX_COUNT
-}
-
-/// [`closed_shards`] through `height`, from `cumulative_tx_count` at that
-/// height — [`storage_ids_through`] adds the one coinbase per block that
-/// the listed count omits, then the frontier is taken. `None` when the id
-/// total overflows.
-///
-/// The coinbase term is load-bearing: `⌊cumulative_tx_count / T⌋` is the
-/// shorthand the plans write and it is off by `⌊(height + 1) / T⌋` shards
-/// on any chain with blocks — a block's coinbase is a storage id, and the
-/// shard it lands in is the shard the C++ store's `tx_id` names.
-#[must_use]
-pub const fn closed_shards_through(listed: u64, height: u64) -> Option<u64> {
-    match storage_ids_through(listed, height) {
-        Some(ids) => Some(closed_shards(ids)),
-        None => None,
-    }
 }
 
 /// Upper bound on a bond record's standing-log entries. **Genesis-frozen
@@ -952,6 +977,41 @@ mod tests {
         assert!(ShardSet::empty().is_empty());
     }
 
+    /// `SHT-Q2`'s boundary function: a transaction whose cumulative-before is
+    /// exactly `k·W` opens shard `k`; one byte less is still shard `k − 1`.
+    #[test]
+    fn a_transaction_starting_exactly_at_k_w_opens_shard_k() {
+        let w = SHARD_LENGTH.to_raw();
+        assert_eq!(shard_of(ArchivalLength::ZERO), crate::ShardId::ZERO);
+        for k in [1u64, 2, 7, 1_000] {
+            let start = shard_start(crate::ShardId::from_raw(k)).expect("fits");
+            assert_eq!(start.to_raw(), k * w);
+            assert_eq!(shard_of(start).to_raw(), k, "k·W opens shard {k}");
+            assert_eq!(
+                shard_of(ArchivalLength::from_raw(start.to_raw() - 1)).to_raw(),
+                k - 1,
+                "one byte before k·W is still shard {}",
+                k - 1
+            );
+        }
+        assert_eq!(
+            shard_start(crate::ShardId::from_raw(u64::MAX)),
+            None,
+            "k·W overflows"
+        );
+        for at in [0, 1, w - 1, w, w + 1, 7 * w - 1, 7 * w, u64::MAX] {
+            let at = ArchivalLength::from_raw(at);
+            let floor = shard_floor(at);
+            assert!(floor <= at, "the floor never passes its offset");
+            assert_eq!(shard_of(floor), shard_of(at), "one shard");
+            assert_eq!(Some(floor), shard_start(shard_of(at)), "k·W");
+        }
+        assert_eq!(
+            ArchivalLength::from_raw(u64::MAX).checked_add(ArchivalLength::from_raw(1)),
+            None
+        );
+    }
+
     #[test]
     fn storage_ids_count_one_coinbase_per_block() {
         // Height 0, no listed transactions: the genesis coinbase is id 0,
@@ -961,34 +1021,6 @@ mod tests {
         // coinbases — 201 ids issued, so the first id at height 200 is 201.
         assert_eq!(storage_ids_through(1, 199), Some(201));
         assert_eq!(storage_ids_through(u64::MAX, 0), None);
-    }
-
-    #[test]
-    fn the_closure_frontier_is_the_floor_of_the_id_total_over_t() {
-        let t = SHARD_TX_COUNT;
-        // Shard `k` closes when its last id `(k+1)·T − 1` has been issued,
-        // i.e. once `(k+1)·T` ids exist — one short leaves it open.
-        assert_eq!(closed_shards(0), 0);
-        assert_eq!(closed_shards(t - 1), 0);
-        assert_eq!(closed_shards(t), 1);
-        assert_eq!(closed_shards(2 * t - 1), 1);
-        assert_eq!(closed_shards(2 * t), 2);
-        assert_eq!(closed_shards(u64::MAX), u64::MAX / t);
-    }
-
-    #[test]
-    fn the_frontier_through_a_height_counts_the_coinbases() {
-        let t = SHARD_TX_COUNT;
-        // Height 0 with `T − 1` listed transactions: the genesis coinbase
-        // makes `T` ids, and the first shard is closed — the listed count
-        // alone would say it is not.
-        assert_eq!(closed_shards_through(t - 1, 0), Some(1));
-        assert_eq!(closed_shards_through(t - 2, 0), Some(0));
-        // Blocks with nothing listed still issue ids: `T` empty blocks
-        // (heights `0..T`) close one shard.
-        assert_eq!(closed_shards_through(0, t - 1), Some(1));
-        assert_eq!(closed_shards_through(0, t - 2), Some(0));
-        assert_eq!(closed_shards_through(u64::MAX, 0), None);
     }
 
     #[test]

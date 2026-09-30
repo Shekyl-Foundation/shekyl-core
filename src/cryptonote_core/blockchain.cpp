@@ -1400,13 +1400,10 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
 
   // F-H: consensus coinbase output-count cap (FOLLOWUPS "GENESIS-FREEZE: cap
   // the coinbase output count"; ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
-  // §12.3). Coinbase outputs are curve-tree leaves every archiver must
-  // hold yet pay no fee, so an uncapped foreign coinbase is an unpriced
-  // burden channel -- the W9 fee-path burden-coupling defense has a second
-  // face without this. (Under the shard-keyed n of DRS-E4 the coinbase is
-  // one storage id whatever its output count, so the outputs no longer move
-  // the escalation operand; the archival burden they impose is unchanged and
-  // the cap stands on it.) The cap is EXACTLY 1: the honest template has
+  // §12.3). Coinbase outputs are curve-tree leaves that count toward
+  // frozen_segment_count yet pay no fee, so an uncapped foreign coinbase is an
+  // unpriced burden channel -- the W9 fee-path burden-coupling defense has a
+  // second face without this. The cap is EXACTLY 1: the honest template has
   // only ever built one output (create_block_template max_outs = 1), the
   // staker pool accrues off-coinbase, and a uniform coinbase is
   // privacy-consistent. Genesis is exempt -- its hardcoded coinbase is
@@ -1471,27 +1468,14 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
 }
 //------------------------------------------------------------------
 // D2 escalation operand read-point (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
-// §6.2): n = closed_shard_count at PARENT-block state — the transaction
-// shards (T = archival_shard_tx_count ids each; C++ holds no copy of T)
-// whose last id the parent chain has issued:
-// shekyl_archival_closed_shard_count(get_tx_count()).
-// get_tx_count() is the ids issued (add_transaction_data assigns
-// tx_id = get_tx_count(), one per coinbase and one per listed transaction),
-// which is the same total the Rust validator forms from its recorded
-// cumulative_tx_count plus the coinbases (shekyl_chain_rules::
-// closed_shards_before) — the two validators price one operand. Re-keyed
-// from the curve tree's frozen J-segment count by DRS-E4 commit 3
-// (ARCHIVAL_PRUNED_DAEMON_MODE.md PDM-Q6 item 4; DRS_E4_ARCHIVAL_WRITER.md
-// ARW-Q6), in one change with the Rust side; behaviour-neutral while the
-// escalation ships flat.
-//
-// add_block advances the chain height and inserts the block's transactions
-// in the same write txn, and pop_block trims both in the same write txn
+// §6.2): n = frozen_segment_count at PARENT-block state, derived from the
+// curve-tree leaf count. add_block advances the chain height and grows the
+// tree in the same write txn, and pop_block trims both in the same write txn
 // (see the pop invariant comment in blockchain_db.cpp), so
-// m_db->height() == block_height is EQUIVALENT to "this block's ids have not
-// yet been issued" — the count read below is the parent's, by construction,
-// on every surviving path (the prev_block template path that could not
-// satisfy this was deleted; see create_block_template).
+// m_db->height() == block_height is EQUIVALENT to "the tree has not yet grown
+// for this block" — the leaf count read below is the parent's, by
+// construction, on every surviving path (the prev_block template path that
+// could not satisfy this was deleted; see create_block_template).
 //
 // The check is load-bearing at CONNECT: handle_block_to_main_chain computes n
 // before validate_miner_transaction and m_db->add_block, and a refactor that
@@ -1499,7 +1483,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
 // stop the node here, not skew the split. The teeth depend on the OPERAND,
 // not just the call site: block_height must be a height captured BEFORE
 // add_block (connect passes its blockchain_height snapshot). "Simplifying"
-// the call to parent_closed_shard_count(m_db->height()) makes the check a
+// the call to parent_frozen_segment_count(m_db->height()) makes the check a
 // permanent tautology — it still looks correct and still passes every test,
 // while the reordering it exists to catch becomes undetectable. Do not pass a
 // fresh m_db->height() at a load-bearing site. At TEMPLATE build it is a tripwire
@@ -1507,21 +1491,21 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
 // guarantee there comes from using the same expression, not from this check;
 // its value is refusing any future reintroduction of a non-tip parent, which
 // is exactly how the deleted prev_block path would have violated it.
-uint64_t Blockchain::parent_closed_shard_count(uint64_t block_height) const
+uint64_t Blockchain::parent_frozen_segment_count(uint64_t block_height) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
   const uint64_t db_height = m_db->height();
   CHECK_AND_ASSERT_THROW_MES(db_height == block_height,
     "escalation operand read-point violated: template and connect must read "
-    "n = closed_shard_count at the same parent state, but m_db->height() ("
+    "n = frozen_segment_count at the same parent state, but m_db->height() ("
     << db_height << ") != block_height (" << block_height
-    << ") — the store has already issued ids past this block's parent");
-  return shekyl_archival_closed_shard_count(m_db->get_tx_count());
+    << ") — the curve tree has already grown past this block's parent");
+  return shekyl_archival_frozen_segment_count(m_db->get_curve_tree_leaf_count());
 }
 //------------------------------------------------------------------
 // This function validates the miner transaction reward
-bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t closed_shard_count, uint64_t total_burned)
+bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count, uint64_t total_burned)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   const uint64_t block_height = std::get<txin_gen>(b.miner_tx.vin[0]).height;
@@ -1557,10 +1541,10 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   uint64_t miner_base_reward = em_split.miner_emission;
 
   // Component 2: fee burn split — miner only receives miner_fee_income.
-  // closed_shard_count is the caller's parent-state read (the asserting
+  // frozen_segment_count is the caller's parent-state read (the asserting
   // read-point above); the escalated share cannot reach miner_fee_income
   // (§12.11.1 Leg 1), so this stays the security-budget-preserving split.
-  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume, supply, closed_shard_count);
+  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume, supply, frozen_segment_count);
   uint64_t effective_fee = burn.miner_fee_income;
 
   if(miner_base_reward + effective_fee < money_in_use)
@@ -1721,9 +1705,9 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
 
   // DRS/Stage-3a: the from_block (prev_block) template path was DELETED.
   // It built on a caller-specified parent, which could be an alt-chain block,
-  // so m_db->height() != height there -- and there is no height-indexed
-  // storage-id count, so that path had no way to read its own parent's
-  // closed_shard_count for the D2 escalation. Templates now always extend the
+  // so m_db->height() != height there -- and there is no height-indexed curve
+  // leaf count, so that path had no way to read its own parent's
+  // frozen_segment_count for the D2 escalation. Templates now always extend the
   // tip, which makes m_db->height() == height an assertable precondition on
   // every surviving path. The RPC refuses prev_block loudly rather than
   // silently building on the tip. Reopen: see docs/FOLLOWUPS.md.
@@ -1838,8 +1822,8 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   // calls: the retry below re-prices the coinbase after the weight changes, and
   // a second read there could price against a different n than the first pass
   // (criterion #1 — template and connect must agree by construction).
-  const uint64_t closed_shard_count = parent_closed_shard_count(height);
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, closed_shard_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
+  const uint64_t frozen_segment_count = parent_frozen_segment_count(height);
+  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1848,7 +1832,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, closed_shard_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     const size_t coinbase_weight = get_transaction_weight(b.miner_tx);
@@ -5828,13 +5812,13 @@ leave:
   // tree has already grown for this block) and shared by the money check below
   // and the staker-inflow accrual — the same single-read discipline as
   // base_reward (F-B1c): verify's operand IS the accrual's operand.
-  const uint64_t closed_shard_count = parent_closed_shard_count(blockchain_height);
+  const uint64_t frozen_segment_count = parent_frozen_segment_count(blockchain_height);
   // The destroyed-fee fold at PARENT state, read ONCE here and handed to both
   // validate_miner_transaction and the accrual below (single-read discipline,
-  // as for closed_shard_count): circulating_supply = already_generated_coins
+  // as for frozen_segment_count): circulating_supply = already_generated_coins
   // − total_burned is derived in Rust from this pair (FL-R16c).
   const uint64_t total_burned = m_db->get_total_burned();
-  if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version(), closed_shard_count, total_burned))
+  if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version(), frozen_segment_count, total_burned))
   {
     MERROR_VER("Block with id: " << id << " has incorrect miner transaction");
     reject_block_form(bvc);
@@ -5914,7 +5898,7 @@ leave:
 
     const shekyl::BurnResult burn = shekyl::compute_fee_burn(
         fee_summary, get_tx_volume_window(blockchain_height),
-        shekyl::supply_facts{already_generated_coins, total_burned}, closed_shard_count);
+        shekyl::supply_facts{already_generated_coins, total_burned}, frozen_segment_count);
 
     archival_budget_accrual = em_split.staker_emission + burn.staker_pool_amount;
     block_burn_amount = burn.actually_destroyed;

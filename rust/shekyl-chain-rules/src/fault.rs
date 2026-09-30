@@ -44,7 +44,9 @@
 use core::fmt;
 
 use shekyl_fcmp::LeafInput;
-use shekyl_types::{BlockHash, BlockHeight, GlobalOutputIndex, PCanonicalId, SettlementEpoch};
+use shekyl_types::{
+    BlockHash, BlockHeight, GlobalOutputIndex, PCanonicalId, SettlementEpoch, ShardId,
+};
 use shekyl_units::AtomicUnits;
 
 use crate::rule_set::RuleSet;
@@ -175,15 +177,21 @@ pub enum Corrupt {
         /// The upper height of the pair whose prefix sum is below the lower's.
         at: BlockHeight,
     },
-    /// The recorded `cumulative_tx_count` at a height plus that height's
-    /// coinbases does not fit `u64` — `shekyl_types::storage_ids_through`
-    /// refused it, so CEN-F17's operand (the shards that total closes)
-    /// could not be taken. The listed count is bounded by the ids the
-    /// store has issued, which are bounded by what fits its tables, so a
-    /// total that overflows is a fold that ran ahead of the chain (SI-8's
-    /// class), not a large chain.
-    StorageIdsOverflow {
-        /// The height whose id total overflowed.
+    /// The archival fold does not place the close of shard `shard` at or
+    /// below the height asked (`shard_close_height`): a shard
+    /// [`closed_shards_before`](crate::closed_shards_before) counted closed
+    /// has its end `(shard + 1) · W` at most the parent's
+    /// `cumulative_archival_len`, and a non-decreasing fold (SI-13) crosses
+    /// it at exactly one height. A cut the search cannot verify — the fold
+    /// below the end at the height it landed on, or already past it one
+    /// below — is a fold that went backwards, on a conforming store ruled
+    /// out by SI-13; an end that does not fit `u64` names a shard no fold
+    /// has closed.
+    ShardCloseUnplaced {
+        /// The shard whose close was asked.
+        shard: ShardId,
+        /// The height the search landed on, or the parent when the shard's
+        /// end does not fit.
         at: BlockHeight,
     },
     /// The recorded `total_burned` exceeds the parent's `coins_generated`
@@ -454,9 +462,9 @@ impl fmt::Display for Corrupt {
                 f,
                 "cumulative transaction count decreases at height {at:?} (SI-13)"
             ),
-            Self::StorageIdsOverflow { at } => write!(
+            Self::ShardCloseUnplaced { shard, at } => write!(
                 f,
-                "cumulative transaction count plus coinbases overflows at height {at:?} (SI-8)"
+                "the archival fold does not place the close of shard {shard:?} at height {at:?} (SI-13)"
             ),
             Self::BurnExceedsEmission {
                 coins_generated,

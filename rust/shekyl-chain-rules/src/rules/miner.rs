@@ -47,13 +47,15 @@
 //! F14/F14b (the weight penalty), F16 (the split) and G12 (the supply)
 //! are `rules::reward`'s — the definition chain after the medians (slice 7
 //! commit 5). F18 (the exact payout) needs F17's `miner_fee_income` and is
-//! wave B's. F17's operand `n` is the **closed transaction-shard count**
-//! at parent state ([`closed_shards_before`]): the C++ read the frozen
-//! J-segment count, a partition of tree leaves the retired freeze
-//! pipeline defined (`PDM-Q12`), until the shard re-key
-//! moved the archival unit to the `T`-transaction shard
-//! (`ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q6 item 4; DRS-E4 `ARW-Q6`,
-//! commit 3) and both validators re-keyed `n` in one change. The
+//! wave B's. F17's operand `n` is the **closed archival-shard count** at
+//! parent state ([`closed_shards_before`]): the shards of `W` archival
+//! bytes the parent chain's fold has filled (`SHT-Q2`;
+//! `ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q6 item 4; DRS-E4 `ARW-Q6`). The
+//! C++ template still reads its own partition — the curve tree's frozen
+//! J-segment count (`Blockchain::parent_frozen_segment_count`), the
+//! divergence CEN-L10 rules deliberate: the LMDB store keeps no archival
+//! fold, the escalation ships flat so the split is bit-identical, and the
+//! C++ is deleted at cutover rather than taught a second fold. The
 //! arithmetic bodies for all of them are Rust already (`shekyl-economics`,
 //! adopted by the slice-4 precursor).
 //!
@@ -74,7 +76,7 @@ use shekyl_economics::{
     base_block_reward, effective_emission, tail_subsidy_per_block, CirculatingSupply,
     ClosedShardCount, EconomicParams, TxVolume,
 };
-use shekyl_types::BlockHeight;
+use shekyl_types::{shard_of, BlockHeight};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
 
@@ -435,14 +437,10 @@ pub(crate) struct BurnOperands {
     /// one owner; `total_burned > coins_generated` is
     /// [`Corrupt::BurnExceedsEmission`], never a zero).
     pub(crate) supply: CirculatingSupply,
-    /// The D2 escalation operand `n`: the transaction shards the **parent**
+    /// The D2 escalation operand `n`: the archival shards the **parent**
     /// chain has closed, [`closed_shards_before`] the connecting height —
-    /// the storage ids issued through the parent (its recorded
-    /// `cumulative_tx_count` plus one coinbase per block) over `T`, at the
-    /// one closure frontier `shekyl_types::closed_shards`. The C++ reads
-    /// the same figure as `shekyl_archival_closed_shard_count` of its
-    /// `get_tx_count()` at parent state (`Blockchain::parent_closed_shard_count`),
-    /// so the two validators price one operand.
+    /// its recorded `cumulative_archival_len` over `W`, at the partition's
+    /// one boundary function `shekyl_types::shard_of`.
     pub(crate) closed_shards: ClosedShardCount,
 }
 
@@ -516,40 +514,36 @@ impl Emission {
     }
 }
 
-/// The transaction shards closed **through** `height`: the storage ids
-/// issued by then — the recorded `cumulative_tx_count` plus one coinbase
-/// per block, `shekyl_types::storage_ids_through` — over `T`, at the one
-/// closure frontier `shekyl_types::closed_shards`. Shard `k` is closed once
-/// its last id `(k+1)·T − 1` has been issued, so the closed shards are
-/// exactly `0..n`.
+/// The archival shards closed **through** `height`: the recorded
+/// `cumulative_archival_len` — every transaction's archival length in
+/// blocks `0..=height` (`SHT-Q2`) — over `W`, at the partition's one
+/// boundary function `shekyl_types::shard_of`. Shard `k` holds the
+/// transactions whose fold-before lies in `[k·W, (k+1)·W)`, so it is closed
+/// once the fold has reached `(k+1)·W`, and the closed shards are exactly
+/// `0..n`.
 ///
 /// This is the read the archival surface shares: the slash scan's universe
 /// (E4 §3.7) and CEN-F17's operand ([`closed_shards_before`]) are this
-/// function at two heights, and the store's discard is the same frontier
-/// over the same id total. Height `h` is a per-height record any height
-/// `≤ tip` has, so `AboveTip` is [`Corrupt::HoleBelowTip`]; an id total
-/// that does not fit is [`Corrupt::StorageIdsOverflow`].
+/// function at two heights, and the store's discard is the same
+/// `shard_of` over the same fold. Height `h` is a per-height record any
+/// height `≤ tip` has, so `AboveTip` is [`Corrupt::HoleBelowTip`].
 ///
 /// # Errors
 ///
 /// [`ViewRead::View`] on a view fault; [`ViewRead::Corrupt`] when `height`
-/// is not recorded or its id total overflows.
+/// is not recorded.
 pub fn closed_shards_through<'id, V: ChainView<'id>>(
     view: &V,
     height: BlockHeight,
 ) -> Result<ClosedShardCount, ViewRead<V::Fault>> {
-    let listed = recorded(view, height)?.cumulative_tx_count;
-    shekyl_types::closed_shards_through(listed, height.to_raw())
-        .map(ClosedShardCount::new)
-        .ok_or(ViewRead::Corrupt(Corrupt::StorageIdsOverflow {
-            at: height,
-        }))
+    let through = recorded(view, height)?.cumulative_archival_len;
+    Ok(ClosedShardCount::new(shard_of(through).to_raw()))
 }
 
 /// CEN-F17's escalation operand `n` for a block connecting at `connecting`:
 /// [`closed_shards_through`] the **parent**, `connecting − 1` — the shards
-/// the chain had closed before this block issued an id. Genesis has no
-/// parent and no ids before it: [`ClosedShardCount::ZERO`].
+/// the chain had closed before this block added to the fold. Genesis has
+/// no parent and nothing before it: [`ClosedShardCount::ZERO`].
 ///
 /// Parent state by construction, not by assertion: the read is keyed by
 /// the height the candidate names, never by the tip after it connected,

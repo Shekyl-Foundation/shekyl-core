@@ -46,7 +46,9 @@ use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, CenRow, ChainView, Corrupt, Fault, FormAttempt, Locus,
     RecordedBlock, RecordedWeights, RuleSet, Stale, Substrate, Trust, TxSlot, Verdict,
 };
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp, TxHash};
+use shekyl_types::{
+    ArchivalLength, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp, TxHash,
+};
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{
@@ -221,6 +223,7 @@ fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Cand
                     // transaction.
                     coins_generated,
                     cumulative_tx_count: 0,
+                    cumulative_archival_len: ArchivalLength::ZERO,
                 },
                 root_after,
                 // The two weights the store recorded for `h` — the
@@ -411,6 +414,7 @@ fn a_drifted_mock_is_caught_by_the_comparison() {
                 cumulative_difficulty: work,
                 coins_generated,
                 cumulative_tx_count: 0,
+                cumulative_archival_len: ArchivalLength::ZERO,
             },
             late_root,
         );

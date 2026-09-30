@@ -397,29 +397,34 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
 }
 
 #[test]
-fn the_second_rust_only_table_is_catalogued_last_and_named() {
+fn the_rust_only_tables_are_catalogued_last_and_named() {
     let ordinal = schema::ordinal_of("txs_pqc_auth_hash").expect("catalogued");
+    let last = schema::ordinal_of("txs_archival_len").expect("catalogued");
     // The journal stores ordinals as `u32`. A catalogue that does not fit
     // that width cannot be journaled, so the length check fails here
     // rather than at the first pop.
     let catalogue_len =
         u32::try_from(schema::catalogue().len()).expect("catalogue length fits in a table ordinal");
+    // `txs_pqc_auth_hash` was appended last (A3); `txs_archival_len`
+    // (`SHT-Q2`) was appended after it, so the two hold the final slots.
+    assert_eq!(ordinal.index() + 1, last.index());
     assert_eq!(
-        ordinal.index() + 1,
+        last.index() + 1,
         catalogue_len,
-        "txs_pqc_auth_hash is the final catalogue slot"
+        "txs_archival_len is the final catalogue slot"
     );
-    // 33 LMDB mirrors plus the four Rust-only tables
+    // 33 LMDB mirrors plus the five Rust-only tables
     // (`archival_budget_accruing`, `curve_tree_leaf_counts`, `undo_log`,
-    // `txs_pqc_auth_hash`) at SCHEMA_VERSION 18 — 47 mirrors until S-POOL
-    // moved `txpool_meta` / `txpool_blob` to the pool file (layout 12,
-    // `schema::MIRRORED_ELSEWHERE`), 45 until S-ALT folded
+    // `txs_pqc_auth_hash`, `txs_archival_len`) at SCHEMA_VERSION 19 — 47
+    // mirrors until S-POOL moved `txpool_meta` / `txpool_blob` to the pool
+    // file (layout 12, `schema::MIRRORED_ELSEWHERE`), 45 until S-ALT folded
     // `archival_alt_attestation_witness` into `alt_blocks` (layout 13,
     // `schema::FOLDED_INTO`), 44 until DRS-E3 did not port four tree-side
     // tables (layout 15, `schema::NOT_PORTED`) and added
-    // `curve_tree_leaf_counts`, 40 until DRS-E4 did not port seven archival
-    // tables (layout 18) and added `archival_budget_accruing`.
-    assert_eq!(catalogue_len, 37);
+    // `curve_tree_leaf_counts`; 44 when `SHT-Q2` added `txs_archival_len`
+    // (layout 18); 38 since DRS-E4 did not port seven archival tables and
+    // added `archival_budget_accruing` (layout 19).
+    assert_eq!(catalogue_len, 38);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names,
@@ -427,12 +432,18 @@ fn the_second_rust_only_table_is_catalogued_last_and_named() {
             "archival_budget_accruing",
             "curve_tree_leaf_counts",
             "undo_log",
-            "txs_pqc_auth_hash"
+            "txs_pqc_auth_hash",
+            "txs_archival_len"
         ]
     );
     // One 32-byte codec; `Coded<PqcAuthHash>` on the value side.
     assert_eq!(
         <shekyl_types::PqcAuthHash as Canonical>::FIXED_WIDTH,
         Some(32)
+    );
+    // One 8-byte codec; `Coded<ArchivalLength>` on the value side.
+    assert_eq!(
+        <shekyl_types::ArchivalLength as Canonical>::FIXED_WIDTH,
+        Some(8)
     );
 }

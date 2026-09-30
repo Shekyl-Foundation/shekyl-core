@@ -291,13 +291,16 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
                 cell: "block_info.cumulative_tx_count",
                 height: at.to_raw(),
             },
-            // CEN-F17 added the coinbases to the recorded listed count and
-            // the storage-id total did not fit (DRS-E4 commit 3). The
-            // listed fold is bounded by the ids the store issued, so a
-            // total that wraps is SI-8's class read from the rule side:
-            // the fold ran ahead of the chain, on the same cell SI-13 reads.
-            Corrupt::StorageIdsOverflow { at: _ } => StoreInvariant::FoldOverflow {
-                cell: "block_info.cumulative_tx_count",
+            // The close's age operand could not be placed: the archival
+            // fold `shard_close_height` searched does not cross a closed
+            // shard's end at one height (DRS-E4 commit 4, on `SHT-Q2`'s
+            // partition). The fold is non-decreasing on a conforming store,
+            // so this is SI-13 read from the rule side, on the archival
+            // cell — the same row the prune's descent arms when it finds
+            // the fold going backwards.
+            Corrupt::ShardCloseUnplaced { shard: _, at } => StoreInvariant::FoldNotMonotone {
+                cell: "block_info.cumulative_archival_len",
+                height: at.to_raw(),
             },
             // CEN-F17 read the `total_burned` register above the parent's
             // `coins_generated` (E6 slice 7 wave B). Burn destroys issued

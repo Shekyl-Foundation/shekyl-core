@@ -179,6 +179,7 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
                 cumulative_difficulty: info.cumulative_difficulty,
                 coins_generated: info.coins_generated,
                 cumulative_tx_count: info.cumulative_tx_count,
+                cumulative_archival_len: info.cumulative_archival_len,
             }),
         })
     }

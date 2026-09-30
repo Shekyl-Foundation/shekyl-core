@@ -133,12 +133,11 @@ B5Operands expected_operands(const Blockchain& bc)
   ops.split = shekyl::compute_emission_split(ops.base_reward, kBlockHeight,
     /*genesis_ng_height=*/0);
   // n = 0 is the same parent-state operand the production check reads:
-  // B5TestDB has issued no storage ids (get_tx_count() is 0), so
-  // parent_closed_shard_count yields 0.
+  // B5TestDB's curve tree is empty, so parent_frozen_segment_count yields 0.
   // Nothing has been burned on B5TestDB's chain, so the derived supply is
   // the gross figure: the pair is exactly what the production check reads.
   ops.burn = shekyl::compute_fee_burn(kFee, tx_volume,
-    shekyl::supply_facts{kAlreadyGenerated, /*total_burned=*/0}, /*closed_shard_count=*/0);
+    shekyl::supply_facts{kAlreadyGenerated, /*total_burned=*/0}, /*frozen_segment_count=*/0);
   return ops;
 }
 
@@ -166,7 +165,7 @@ TEST(economics_b5_fee_coinbase, fee_bearing_exact_coinbase_accepts)
   // total_burned = 0: nothing has been destroyed on B5TestDB's chain, the
   // same parent-state fact the production check reads (FL-R16c).
   EXPECT_TRUE(bap.bc.validate_miner_transaction(b, /*cumulative_block_weight=*/0,
-    kFee, base_reward_out, kAlreadyGenerated, kHfVersion, /*closed_shard_count=*/0, /*total_burned=*/0));
+    kFee, base_reward_out, kAlreadyGenerated, kHfVersion, /*frozen_segment_count=*/0, /*total_burned=*/0));
   // Fix α regression guard: the out-param stays the FULL subsidy (miner +
   // staker emission) so the connect path accumulates the full amount into
   // already_generated_coins.
@@ -186,7 +185,7 @@ TEST(economics_b5_fee_coinbase, coinbase_claiming_staker_pool_rejects)
     ops.split.miner_emission + ops.burn.miner_fee_income + ops.burn.staker_pool_amount);
   uint64_t base_reward_out = 0;
   EXPECT_FALSE(bap.bc.validate_miner_transaction(b, 0, kFee, base_reward_out,
-    kAlreadyGenerated, kHfVersion, /*closed_shard_count=*/0, /*total_burned=*/0));
+    kAlreadyGenerated, kHfVersion, /*frozen_segment_count=*/0, /*total_burned=*/0));
 }
 
 TEST(economics_b5_fee_coinbase, coinbase_claiming_staker_emission_rejects)
@@ -202,7 +201,7 @@ TEST(economics_b5_fee_coinbase, coinbase_claiming_staker_emission_rejects)
     ops.split.miner_emission + ops.split.staker_emission + ops.burn.miner_fee_income);
   uint64_t base_reward_out = 0;
   EXPECT_FALSE(bap.bc.validate_miner_transaction(b, 0, kFee, base_reward_out,
-    kAlreadyGenerated, kHfVersion, /*closed_shard_count=*/0, /*total_burned=*/0));
+    kAlreadyGenerated, kHfVersion, /*frozen_segment_count=*/0, /*total_burned=*/0));
 }
 
 TEST(economics_b5_fee_coinbase, fee_underclaim_rejects_exactness)
@@ -218,5 +217,5 @@ TEST(economics_b5_fee_coinbase, fee_underclaim_rejects_exactness)
   const block b = make_block_with_coinbase(kBlockHeight, ops.split.miner_emission);
   uint64_t base_reward_out = 0;
   EXPECT_FALSE(bap.bc.validate_miner_transaction(b, 0, kFee, base_reward_out,
-    kAlreadyGenerated, kHfVersion, /*closed_shard_count=*/0, /*total_burned=*/0));
+    kAlreadyGenerated, kHfVersion, /*frozen_segment_count=*/0, /*total_burned=*/0));
 }

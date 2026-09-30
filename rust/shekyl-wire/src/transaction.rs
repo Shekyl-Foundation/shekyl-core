@@ -44,7 +44,7 @@
 use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::keccak256;
-use shekyl_types::{BlockHash, PCanonicalId, PrefixHash, MAX_HOLDINGS_SHARDS};
+use shekyl_types::{ArchivalLength, BlockHash, PCanonicalId, PrefixHash, MAX_HOLDINGS_SHARDS};
 
 use crate::bytes::{read_array, read_byte};
 use crate::tx_extra::{check_tx_extra_shape, parse as parse_tx_extra, ExtraSubject};
@@ -1394,6 +1394,18 @@ impl TxSegments {
         out.extend_from_slice(&self.prunable);
         out
     }
+
+    /// The **archival length** — `|prunable| + |pqc_auths|`, the two
+    /// segments a prune discards (`SHT-Q2` RULED, Rick 2026-09-29): the
+    /// bytes that count toward a shard's `W`. The `pqc_auths` term is the
+    /// stored segment, which carries no count prefix. Zero exactly when
+    /// the transaction carries no archival good (`carries_archival_good`;
+    /// pinned class by class in `shekyl-chain-rules`' `tx_domain_tests`).
+    #[must_use]
+    pub fn archival_len(&self) -> ArchivalLength {
+        let bytes = self.prunable.len() + self.pqc_auths.len();
+        ArchivalLength::from_raw(u64::try_from(bytes).expect("a segment length fits u64"))
+    }
 }
 
 impl Transaction {
@@ -1435,6 +1447,20 @@ impl Transaction {
             pqc_auths,
             prunable,
         })
+    }
+
+    /// This **body's** archival length ([`TxSegments::archival_len`]).
+    ///
+    /// Like [`Self::prunable_hash`], a recomputation from the object in
+    /// hand: on a body whose prunable region and `pqc_auths` have been
+    /// discarded it reads `0`, which is not the accepted length of that
+    /// transaction. The store keeps the length a connect recorded; a pruned
+    /// body's length is supplied, never recomputed.
+    #[must_use]
+    pub fn archival_len(&self) -> ArchivalLength {
+        self.write_segments()
+            .expect("write_segments writes into Vecs; Vec writes are infallible")
+            .archival_len()
     }
 
     /// Read the transaction.

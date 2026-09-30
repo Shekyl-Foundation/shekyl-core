@@ -2,27 +2,77 @@
 
 ## [Unreleased]
 
-### Consensus — CEN-F17's escalation operand `n` is the closed transaction-shard count (DRS-E4 commit 3)
+### Consensus — the Rust validator's CEN-F17 operand `n` is the closed archival-shard count (DRS-E4 commit 4)
 
-- The D2 staker-share escalation's operand `n` (`staker_pool_share_at`) is
-  re-keyed from the curve tree's frozen J-segment count — the partition the
-  retired freeze pipeline defined (`PDM-Q12`) — to the number of `T`-shards
-  the parent chain has closed: `⌊storage_ids / T⌋`, storage ids being the
-  listed transactions plus one coinbase per block, `T =
-  archival_shard_tx_count`. One atomic C++/Rust change: `Blockchain::
-  parent_closed_shard_count` (was `parent_frozen_segment_count`) reads
-  `get_tx_count()` through the new `shekyl_archival_closed_shard_count`;
-  the Rust validator reads `shekyl_chain_rules::closed_shards_before`; both
-  resolve to `shekyl_types::closed_shards`, the closure frontier's one home.
-  **Behaviour-neutral on every shipped parameterization**: the escalation is
-  flat (asymptote = floor), so the burn split is bit-identical before and
-  after. `escalation_knee_n` is carried unchanged and is re-derived in the
-  new unit before the ceremony raises the asymptote (FOLLOWUPS' D2 row).
-  `FrozenSegmentCount` → `ClosedShardCount` across `shekyl-economics` and
-  its callers; the FFI parameters named `frozen_segment_count` are now
-  `closed_shard_count`. `shekyl_archival_frozen_segment_count` stays for the
-  C++ freeze pipeline and coverage RPC until the cutover deletes them.
-  (`DRS_E4_ARCHIVAL_WRITER.md` §3.7, ARW-Q6.)
+- The D2 staker-share escalation's operand `n` (`staker_pool_share_at`) in
+  the Rust validator is re-keyed from the curve tree's frozen J-segment
+  count — the partition the retired freeze pipeline defined (`PDM-Q12`) —
+  to the archival shards the parent chain has closed on `SHT-Q2`'s
+  partition: `shard_of(cumulative_archival_len)` at parent state
+  (`shekyl_chain_rules::closed_shards_before`), and a closed shard's age
+  operand is the height whose fold first reached the shard's end
+  (`shard_close_height`), a binary search over the recorded fold, not a
+  stored freeze. The C++ validator keeps its frozen-segment operand
+  (`Blockchain::parent_frozen_segment_count`): LMDB keeps no archival fold,
+  and adding one to the C++ is refused (rule 20) — the difference is
+  CEN-L10's ruled divergence, closed by the cutover that deletes the C++
+  path. **Behaviour-neutral on every shipped parameterization**: the
+  escalation is flat (asymptote = floor), so the burn split is
+  bit-identical on both validators before and after. `escalation_knee_n`
+  is carried unchanged and is re-derived in the new unit before the
+  ceremony raises the asymptote (FOLLOWUPS' D2 row). `FrozenSegmentCount`
+  → `ClosedShardCount` across `shekyl-economics` and its Rust callers; the
+  FFI parameters keep the name `frozen_segment_count`, which is what the
+  C++ passes. (`DRS_E4_ARCHIVAL_WRITER.md` §3.7, ARW-Q6.)
+- Contract: the chain store's `SCHEMA_VERSION` 18 → 19 — the seven LMDB
+  archival tables the E4 writer does not port are catalogued
+  `NOT_PORTED`, `archival_budget_accruing` (one accrual row per open
+  epoch, ARW-Q3) is added, and the store's layout manifests are v3 with
+  the settlement schedule the store was opened under (ARW-15;
+  `StoreCannot::SettlementEpochMismatch` at open). Pre-genesis,
+  rebuild-never-migrate.
+
+### Chain store — shards are cut by archival length (`SHT-Q2`, Rust half)
+
+- Shards are cut by **archival length**, not transaction count: shard `k`
+  holds the transactions whose cumulative archival length before them lies
+  in `[k·W, (k+1)·W)` (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.6, RULED
+  2026-09-29). A transaction's archival length is `|prunable| +
+  |pqc_auths|` — the two segments a prune discards
+  (`TxSegments::archival_len`, `Transaction::archival_len`). `W =
+  3,000,000` bytes, PROVISIONAL: `archival_shard_length_bytes` in
+  `consensus_constants.json`, generated into `shekyl_types::SHARD_LENGTH`;
+  `archival_shard_tx_count` / `SHARD_TX_COUNT` are deleted, and the
+  consensus-constants digest re-pinned. `shard_of`, `shard_start` and
+  `shard_floor` are the one definition of the boundary; the static relation
+  `max_tx_weight() < W` is const-asserted beside CEN-H3.
+- Contract: the chain store gains `txs_archival_len` (Rust-only, ordinal
+  43; present ⇔ length `> 0` ⇔ the transaction carries archival good, so
+  the coinbase writes none; never pruned) and `block_info` widens 104 →
+  112 bytes with `cumulative_archival_len`. `SCHEMA_VERSION` 17 → 18,
+  snapshots regenerated; pre-genesis, rebuild-never-migrate. SI-24
+  (`ArchivalLengthsDisagree`; SI-19…23 are the E4 plan's) is minted: a
+  block's length rows sum from its parent's cell to its own. SI-13 covers
+  the new fold.
+- The retention prune names `D(E)` as `⌊C(lo)/W⌋ .. ⌊C(hi)/W⌋` and finds a
+  shard's first storage id by a descent that walks each block's length
+  rows — permanent skeleton data, so a pruned node and an archival node
+  place every boundary alike. The descent checks every block it passes
+  against its parent, SI-13 and SI-24, before anything is discarded: a
+  discard cannot be undone, a binary search accepts a run of cells shifted
+  together, and monotonicity alone accepts a shift that persists from one
+  block upward. `h_scarce` uses the same descent. Tested at an exact multiple of `W`, with the largest
+  transaction CEN-H3 admits straddling a boundary, with two shards in one
+  batch, across a reorg that pops back over a boundary, against a model
+  computed from the lengths the fixture asked for, and against a shifted
+  run of cells.
+- The C++ LMDB archival path is frozen (row 3 = (b)): LMDB keeps its
+  segment partition, and CEN-L10 is re-graded DIVERGENT in the CSR-3a
+  register as the ruled, intended difference. The staking sim holds the
+  retired `T = 200` locally so its registered runs reproduce.
+- Not yet in this change: the txid mixer's length term and the C++
+  `calculate_transaction_hash` FFI call, which wait on how pruned forms
+  supply the length.
 
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 
@@ -353,8 +403,18 @@
   hidden startup flag. Unbounded disk, no reward. The password is not
   kept after that call.
 
-### Consensus validator — census 4.G, the whole coinbase (DRS-E6 slice 7, commits 3–9)
+### Consensus validator — census 4.G, the whole coinbase (DRS-E6 slice 7, commits 3–10; #889, #907)
 
+- **One paid-reward composition for producer and validator.**
+  `shekyl_economics::price_emission` owns the order
+  `paid_block_reward → compute_emission_split → compute_fee_burn →
+  advance_already_generated`; the validator's derived arm and the block
+  template both call it, so a template and the validator judging its block
+  cannot price two figures. `configured_emission` is the validator's
+  genesis arm (the coinbase sum stands, CEN-F11); `REPRICING_PASSES` is
+  the one settle budget. Before this the two composed the four steps
+  separately and were held equal by the replay oracle rather than by
+  construction.
 - **The Rust validator derives the block-weight medians and everything the
   block determines about its coinbase.** CEN-G6/G6b (`Medians::derive`,
   `Weights::derive` over the two windows, now one key each in

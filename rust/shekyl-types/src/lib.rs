@@ -902,11 +902,11 @@ hash32! {
 }
 
 pub mod archival;
+pub use archival::{shard_floor, shard_of, shard_start, ArchivalLength, SHARD_LENGTH};
 pub use archival::{
-    closed_shards, closed_shards_through, storage_ids_through, BadInterval, HoldingsDescriptor,
-    HoldingsKind, HoldingsKindError, ShardSet, ShardSetError, MAX_ATTESTATION_WITNESS_BYTES,
-    MAX_BOND_BAD_INTERVALS, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
-    SHARD_TX_COUNT,
+    storage_ids_through, BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindError,
+    ShardSet, ShardSetError, MAX_ATTESTATION_WITNESS_BYTES, MAX_BOND_BAD_INTERVALS,
+    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
 };
 
 pub mod relay;

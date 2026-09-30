@@ -21,8 +21,8 @@
 
 use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{
-    BlockHeight, CurveTreeRoot, GlobalOutputIndex, PqcAuthHash, PrunableHash, SettlementEpoch,
-    ShardId, TreeLeaf, TreePosition,
+    ArchivalLength, BlockHeight, CurveTreeRoot, GlobalOutputIndex, PqcAuthHash, PrunableHash,
+    SettlementEpoch, ShardId, TreeLeaf, TreePosition,
 };
 use shekyl_units::AtomicUnits;
 
@@ -215,6 +215,24 @@ impl Canonical for SettlementEpochBlocks {
             codec: Self::NAME,
             reason: "zero blocks per epoch names no schedule",
         })
+    }
+}
+
+/// `txs_archival_len[tx_id]` and `block_info`'s cumulative fold — a
+/// transaction's archival length, or a run's (`SHT-Q2`). The `shekyl-types`
+/// newtype, stored as its raw LE `u64`.
+impl Canonical for ArchivalLength {
+    const NAME: &'static str = "archival_length";
+    const FIXED_WIDTH: Option<usize> = Some(8);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.to_raw().encode_into(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        u64::decode(bytes)
+            .map(Self::from_raw)
+            .map_err(|e| e.in_codec(Self::NAME))
     }
 }
 

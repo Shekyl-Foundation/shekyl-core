@@ -43,7 +43,7 @@ public:
 
     m_bob.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
 
-    if (!construct_miner_tx(0, 0, 0, 2, 0, /*closed_shard_count=*/0, m_bob.get_keys().m_account_address, m_tx))
+    if (!construct_miner_tx(0, 0, 0, 2, 0, /*frozen_segment_count=*/0, m_bob.get_keys().m_account_address, m_tx))
       return false;
 
     return shekyl_tx_extra_tx_pubkey(m_tx.extra.data(), m_tx.extra.size(),

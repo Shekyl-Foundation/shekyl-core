@@ -17,6 +17,7 @@ use shekyl_archival_retention::{
 };
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_types::archival::BadInterval;
+use shekyl_types::{ArchivalLength, SHARD_LENGTH};
 use shekyl_wire::Transaction;
 
 const P1: [u8; 32] = [0xa1; 32];
@@ -547,26 +548,28 @@ fn a_complete_tree_slash_demotes_the_record_to_an_empty_compact_one() {
 
 // ---- shard close heights -----------------------------------------------
 
-/// `SCC-Q3`: the height of the block that issued a shard's last storage
-/// id, found by binary search over `cumulative_tx_count`.
+/// `SCC-Q3` on `SHT-Q2`'s partition: the height whose archival fold
+/// first reached a shard's end, found by binary search over
+/// `cumulative_archival_len`.
 #[test]
-fn shard_close_height_is_the_block_that_issued_the_shards_last_id() {
-    let t = SHARD_TX_COUNT;
-    // ids through h = listed + h + 1: h1 reaches T (shard 0 closes), h3
-    // reaches 2T + 4 (shard 1 closes), h4 adds nothing.
-    let listed = [0, t - 2, t - 2, 2 * t, 2 * t];
-    let chain = listed.iter().enumerate().fold(
-        crate::harness::MockChain::default(),
-        |chain, (h, &listed)| {
-            chain.push(
-                RecordedBlock {
-                    cumulative_tx_count: listed,
-                    ..recorded(1_000 + h as u64)
-                },
-                root(0x11),
-            )
-        },
-    );
+fn shard_close_height_is_the_block_whose_fold_reached_the_shards_end() {
+    let w = SHARD_LENGTH.to_raw();
+    // Fold through h: h1 reaches W (shard 0 closes), h3 reaches 2W + 4
+    // (shard 1 closes), h4 adds nothing.
+    let folds = [0, w, w + 3, 2 * w + 4, 2 * w + 4];
+    let chain =
+        folds
+            .iter()
+            .enumerate()
+            .fold(crate::harness::MockChain::default(), |chain, (h, &fold)| {
+                chain.push(
+                    RecordedBlock {
+                        cumulative_archival_len: ArchivalLength::from_raw(fold),
+                        ..recorded(1_000 + h as u64)
+                    },
+                    root(0x11),
+                )
+            });
     let parent = BlockHeight::from_raw(4);
     chain.with_view(|view| {
         assert_eq!(
@@ -581,6 +584,49 @@ fn shard_close_height_is_the_block_that_issued_the_shards_last_id() {
             closed_shards_before(&view, BlockHeight::from_raw(5))
                 .map(shekyl_economics::ClosedShardCount::get),
             Ok(2)
+        );
+        // Shard 2 is open through the parent: no height places its close,
+        // and the search says so rather than returning the tip.
+        assert_eq!(
+            shard_close_height(&view, ShardId::from_raw(2), parent),
+            Err(ViewRead::Corrupt(Corrupt::ShardCloseUnplaced {
+                shard: ShardId::from_raw(2),
+                at: parent,
+            }))
+        );
+    });
+}
+
+/// A fold that fell back below a shard's end after reaching it is the cut
+/// the search cannot verify (SI-13): height 0 reached the end, the later
+/// heights fell back below it, the search steps past the fallen middle,
+/// lands on the tip, and finds the fold there short of the end — so it
+/// refuses rather than name the tip (or height 0, which it never probed
+/// as such) as the close.
+#[test]
+fn shard_close_height_refuses_a_fold_that_is_not_monotone_at_the_cut() {
+    let w = SHARD_LENGTH.to_raw();
+    let folds = [w, w - 1, w - 1];
+    let chain =
+        folds
+            .iter()
+            .enumerate()
+            .fold(crate::harness::MockChain::default(), |chain, (h, &fold)| {
+                chain.push(
+                    RecordedBlock {
+                        cumulative_archival_len: ArchivalLength::from_raw(fold),
+                        ..recorded(1_000 + h as u64)
+                    },
+                    root(0x11),
+                )
+            });
+    chain.with_view(|view| {
+        assert_eq!(
+            shard_close_height(&view, ShardId::from_raw(0), BlockHeight::from_raw(2)),
+            Err(ViewRead::Corrupt(Corrupt::ShardCloseUnplaced {
+                shard: ShardId::from_raw(0),
+                at: BlockHeight::from_raw(2),
+            }))
         );
     });
 }

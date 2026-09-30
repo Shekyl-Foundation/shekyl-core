@@ -27,7 +27,7 @@ pub use price::{priced, priced_at, repriced};
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
-use shekyl_types::SigningPayloadHash;
+use shekyl_types::{ArchivalLength, SigningPayloadHash};
 
 /// The well-formed **transaction** shapes this module builds, as a
 /// closed set. The sanity gate walks the chain from [`FIRST`](Self::FIRST)
@@ -191,6 +191,16 @@ pub const POINTS: [[u8; 32]; 16] = [
 /// block over a long chain) uses [`point_at`].
 pub const fn point(k: usize) -> [u8; 32] {
     POINTS[k - 1]
+}
+
+/// CEN-H3's weight bound — the largest weight a non-coinbase transaction
+/// may have (`rules::tx::max_tx_weight`, derived from the full-reward
+/// zone). Re-exported, not restated, for fixtures that build the largest
+/// transaction a block admits: `SHT-Q2`'s boundary tests straddle a shard
+/// boundary with one.
+#[must_use]
+pub const fn max_tx_weight() -> usize {
+    crate::rules::tx::max_tx_weight()
 }
 
 /// `k·G`, compressed, for any `k ≥ 1` — the **computed** form of
@@ -958,6 +968,7 @@ pub fn recorded_with_work(
         // that is about them sets both (`recorded_with_emission`).
         coins_generated: AtomicUnits::ZERO,
         cumulative_tx_count: 0,
+        cumulative_archival_len: ArchivalLength::ZERO,
     }
 }
 

@@ -184,18 +184,28 @@ use super::{Canonical, CodecError};
 ///   writes one cell fewer, which is the layout change (a `16` file has a
 ///   cell this binary does not know; the seal refuses it — rebuild, never
 ///   migrate). No table moves; no digest family moves.
-/// - `18` — DRS-E4 commit 1 (`DRS_E4_ARCHIVAL_WRITER.md` §3.3, §3.4, §6):
+/// - `18` — the `SHT-Q2` build (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.6,
+///   RULED 2026-09-29): **shards are cut by archival length.**
+///   `txs_archival_len` is born, Rust-only, appended at ordinal 43: each
+///   transaction's `|prunable| + |pqc_auths|`, sparse (present ⇔ `> 0`),
+///   never pruned. `block_info` widens 104 → 112 bytes with
+///   `cumulative_archival_len`, the running total every shard boundary is
+///   read off (`⌊C / W⌋`), widened under S-CHAIN-R's Q4 ruling. The prune
+///   stores nothing new: `D(E)` is still named by the epoch. Digest v0 reads
+///   `block_info` by `bi_hash` alone, and the new table is outside the
+///   digest domain, so no digest family moves.
+/// - `19` — DRS-E4 commit 1 (`DRS_E4_ARCHIVAL_WRITER.md` §3.3, §3.4, §6):
 ///   **the archival write surface's tables decided.** Seven X-macro tables
 ///   leave as `NOT_PORTED` — five C++ pop journals and the epoch-close log
 ///   (the undo log holds their pre-images), the per-height accrual rows (a
 ///   view), the retired freeze registry — and the ordinals of every later
-///   table shift, which is the layout change: an undo row written under
-///   `17` names targets by ordinal. `archival_slash_log` and
-///   `archival_slash_applied` gain their types (`(u64, u32) →
-///   slash_log_entry`, `([u8; 32], u64, u64) → Present`);
+///   table shift (`txs_archival_len` 43 → 37), which is the layout change:
+///   an undo row written under `18` names targets by ordinal.
+///   `archival_slash_log` and `archival_slash_applied` gain their types
+///   (`(u64, u32) → slash_log_entry`, `([u8; 32], u64, u64) → Present`);
 ///   `archival_budget_accruing` is born Rust-only. No digest family moves
 ///   yet (`digest_v1` is commit 6's).
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(18);
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(19);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -252,10 +262,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(18));
-        assert_eq!(SCHEMA_VERSION.encode(), [18, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(19));
+        assert_eq!(SCHEMA_VERSION.encode(), [19, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[18, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[19, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

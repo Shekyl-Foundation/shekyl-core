@@ -257,13 +257,13 @@ pub struct ChainFacts {
     pub parent_coins_generated: shekyl_units::AtomicUnits,
     /// Everything burned through the tip.
     pub total_burned: shekyl_units::AtomicUnits,
-    /// CEN-F17's `n` at `connecting`: the transaction shards the parent
-    /// chain has closed, read through the validator's own definition
-    /// (`shekyl_chain_rules::closed_shards_before`, one owner of the
-    /// frontier in `shekyl_types::closed_shards`), so the producer prices
-    /// the fee split at the operand the validator reads
+    /// CEN-F17's `n` at `connecting`: the archival shards the parent
+    /// chain's fold has closed, read through the validator's own definition
+    /// (`shekyl_chain_rules::closed_shards_before`, `shekyl_types::shard_of`
+    /// the parent's `cumulative_archival_len`), so the producer prices the
+    /// fee split at the operand the validator reads
     /// (`rules::miner::BurnOperands`; E6 slice 7 wave B, re-keyed from the
-    /// leaf count's frozen-segment count by DRS-E4 commit 3).
+    /// leaf count's frozen-segment count by DRS-E4 commit 4).
     pub closed_shards: shekyl_economics::ClosedShardCount,
     /// CEN-F20's window at `connecting`.
     pub tx_volume: shekyl_economics::TxVolume,

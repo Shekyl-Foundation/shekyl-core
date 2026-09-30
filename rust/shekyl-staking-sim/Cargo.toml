@@ -15,11 +15,6 @@ description = "Agent-based staker-archival coverage simulation (docs/design/STAK
 # the economics sim is.
 
 [dependencies]
-# `T` (`SHARD_TX_COUNT`) — the composition model's per-shard variance is suppressed
-# by `sqrt(T)`, so the sim reads the partition constant rather than carrying a second
-# copy: a `T` re-pin moves the sim's dispersion with it. Leaf crate, `no_std`, build
-# script only (rule 17: first-party, already in this workspace).
-shekyl-types = { path = "../shekyl-types" }
 serde = { workspace = true }
 serde_json = "1"
 # `--budget-throttle` (F-B1c-c2 reopen evidence, budget_throttle.rs): the

@@ -107,6 +107,8 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             cumulative_tx_count: 0,
             // The median in force **for** height 0, at height 0 (SCR-19).
             long_term_effective_median: weights.medians.long_term_effective_median,
+            // The coinbase carries no archival good, so no length (SHT-Q2).
+            cumulative_archival_len: shekyl_types::ArchivalLength::ZERO,
         }
     );
     assert_eq!(emission.coins_generated, AtomicUnits::ZERO);
@@ -317,13 +319,15 @@ fn two_blocks_in_one_batch_with_a_spend() {
     assert_eq!(c0.height, BlockHeight::from_raw(s - 1));
     assert_eq!(c1.height, BlockHeight::from_raw(s));
     // the spend block: miner tx 7 (tx_indices, txs_pruned, txs_prunable,
-    // txs_prunable_hash, output_txs, member, tx_outputs) + spend 12 (1 key
+    // txs_prunable_hash, output_txs, member, tx_outputs) + spend 13 (1 key
     // image + the same 4 tx rows + the 4-part txid's txs_pqc_auths segment
-    // and txs_pqc_auth_hash row + 2 outputs × (output_txs + member) +
-    // tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 = 25. Nothing
-    // has matured at this height, so the tree tables write no row; nothing
-    // burned (no fee, no volume), so no burn row and no fold pre-image.
-    assert_eq!(c1.journaled, 25);
+    // and txs_pqc_auth_hash row + its txs_archival_len row (`SHT-Q2`; the
+    // coinbase carries no length and writes none) + 2 outputs × (output_txs
+    // + member) + tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 =
+    // 26. Nothing has matured at this height, so the tree tables write no
+    // row; nothing burned (no fee, no volume), so no burn row and no fold
+    // pre-image.
+    assert_eq!(c1.journaled, 26);
     // Dense store ids: one coinbase per block through the spend block
     // (tx_ids `0..=s`, output_ids likewise), then the spend (tx_id `s + 1`,
     // output_ids `s + 1`, `s + 2`); amount_index under 0 equals output_id.

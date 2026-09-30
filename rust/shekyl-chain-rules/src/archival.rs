@@ -72,7 +72,8 @@
 //!   [`closed_shards_before`](crate::closed_shards_before); the C++ walked
 //!   a segment table. A shard's close height, which the close's age term
 //!   needs, is [`shard_close_height`] — `SCC-Q3`'s formula, a binary
-//!   search over `cumulative_tx_count`, not a stored freeze.
+//!   search over the archival fold `cumulative_archival_len` (`SHT-Q2`),
+//!   not a stored freeze.
 //! - **The stale eligibility copy is deliberate.** The C++ slash scan
 //!   judged every shard of a record against the record *as the epoch's
 //!   scan began* while applying each slash to the live row, so an offline
@@ -106,7 +107,7 @@ use shekyl_types::archival::{
     SlashLogEntry, SlashedHolding,
 };
 use shekyl_types::{
-    storage_ids_through, BlockHeight, PCanonicalId, SettlementEpoch, ShardId, SHARD_TX_COUNT,
+    shard_start, ArchivalLength, BlockHeight, PCanonicalId, SettlementEpoch, ShardId,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{
@@ -387,13 +388,14 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
     Ok(Ok(transition.into_delta(accrued, close)))
 }
 
-/// The height at which closed shard `shard` closed: the height of the
-/// block that issued storage id `(shard + 1) · T − 1`, the smallest
-/// `h ≤ parent` with `storage_ids_through(h) ≥ (shard + 1) · T`
-/// (`ARCHIVAL_SHARD_COUNT_CUTOVER.md` `SCC-Q3`). The close's age operand
-/// (`EpochCloseShard::freeze_height`), derived from `cumulative_tx_count`
-/// by binary search instead of read from a segment table — the same fold
-/// the store's prune uses to find a tx id's height.
+/// The height at which closed shard `shard` closed: the block whose
+/// archival fold first reached the shard's end, the smallest `h ≤ parent`
+/// with `cumulative_archival_len(h) ≥ (shard + 1) · W`
+/// (`ARCHIVAL_SHARD_COUNT_CUTOVER.md` `SCC-Q3`, on `SHT-Q2`'s partition).
+/// The close's age operand (`EpochCloseShard::freeze_height`), derived
+/// from the recorded fold by binary search instead of read from a segment
+/// table — the same crossing the store's prune places when it retires the
+/// shard.
 ///
 /// Public for the one reason [`closed_shards_before`] is: the producer
 /// composing a close reads the operand here, never from a second copy of
@@ -401,47 +403,50 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
 ///
 /// # Errors
 ///
-/// The view's fault; [`Corrupt::StorageIdsOverflow`] when a height's ids
-/// do not fit; [`Corrupt::TxCountNotMonotone`] when the ids through
-/// consecutive heights are not non-decreasing at the cut — the search
-/// assumes monotone counts and refuses to return a height it cannot
+/// The view's fault; [`Corrupt::ShardCloseUnplaced`] when the height the
+/// search lands on does not carry the shard's end. The search assumes a
+/// monotone fold — SI-13 is the store's belt at write, not this one's —
+/// and a shard the parent has closed ([`closed_shards_before`]); under
+/// those two, the landing height is the close. When either fails (the
+/// shard is still open through `parent`, or the fold fell back below the
+/// end), the one check a binary search can make is that its landing point
+/// reaches the end, and it refuses rather than return a height it cannot
 /// verify, exactly as the prune's twin does.
 pub fn shard_close_height<'id, V: ChainView<'id>>(
     view: &V,
     shard: ShardId,
     parent: BlockHeight,
 ) -> Result<BlockHeight, ViewRead<V::Fault>> {
+    let unplaced = |at: u64| {
+        ViewRead::Corrupt(Corrupt::ShardCloseUnplaced {
+            shard,
+            at: BlockHeight::from_raw(at),
+        })
+    };
+    // The shard's end, `(shard + 1) · W`. A closed shard's end is at most
+    // the parent's fold, so one that does not fit was never closed.
     let target = shard
         .to_raw()
         .checked_add(1)
-        .and_then(|n| n.checked_mul(SHARD_TX_COUNT))
-        .ok_or(ViewRead::Corrupt(Corrupt::StorageIdsOverflow {
-            at: parent,
-        }))?;
-    let ids_through = |h: u64| -> Result<u64, ViewRead<V::Fault>> {
-        let at = BlockHeight::from_raw(h);
-        let listed = recorded(view, at)?.cumulative_tx_count;
-        storage_ids_through(listed, h).ok_or(ViewRead::Corrupt(Corrupt::StorageIdsOverflow { at }))
+        .and_then(|next| shard_start(ShardId::from_raw(next)))
+        .ok_or_else(|| unplaced(parent.to_raw()))?;
+    let fold_through = |h: u64| -> Result<ArchivalLength, ViewRead<V::Fault>> {
+        Ok(recorded(view, BlockHeight::from_raw(h))?.cumulative_archival_len)
     };
     let (mut lo, mut hi) = (0u64, parent.to_raw());
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        if ids_through(mid)? >= target {
+        if fold_through(mid)? >= target {
             hi = mid;
         } else {
             lo = mid.saturating_add(1);
         }
     }
-    let not_monotone = ViewRead::Corrupt(Corrupt::TxCountNotMonotone {
-        at: BlockHeight::from_raw(lo),
-    });
-    if ids_through(lo)? < target {
-        return Err(not_monotone);
-    }
-    if let Some(below) = lo.checked_sub(1) {
-        if ids_through(below)? >= target {
-            return Err(not_monotone);
-        }
+    // Every height the search stepped past fell short of the end, so the
+    // landing point is the first that can reach it; whether it does is the
+    // one thing left to verify.
+    if fold_through(lo)? < target {
+        return Err(unplaced(lo));
     }
     Ok(BlockHeight::from_raw(lo))
 }
@@ -1158,7 +1163,7 @@ impl Transition {
         let universe = closed_shards_before(view, self.connecting)?.get();
         let mut shards = Vec::new();
         for k in 0..universe {
-            // `universe > 0` needs at least `T` storage ids, so a parent
+            // `universe > 0` needs a fold of at least `W`, so a parent
             // exists; `saturating_sub` only spells that.
             let parent = BlockHeight::from_raw(self.connecting.to_raw().saturating_sub(1));
             shards.push(EpochCloseShard {

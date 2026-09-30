@@ -830,7 +830,7 @@ different states and the table says which.**
 | `SF-D1` — addressing clause ("no leaf addressing; materialise the segment") | **Re-keyed.** No per-tx addressing on the route either; the read is still whole-shard. The clause's *reason* (`R_k` needs the whole segment) is gone; its *conclusion* (one resource, one path) stands on `RF-R1` alone. | Line-local. |
 | `CR-D2` — carrier (pass-record partition) | **Re-keyed, kept side re-priced by `RF-D1`'s row** (~230 B → ~100 B). The partition itself is unchanged; the pruned half is inside the good (`PDM-Q-F15`). | Pointer, plus the re-price. |
 | `TJ-D` — this charter as design home | **Re-keyed.** TJ-D named leaves; the home is the same, the subject moved. | The two reconciliations TJ-D owes are restated against the tx unit in its own row. |
-| **D2 escalation operand `n`** — `staker_pool_share_at(n, …)` (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §6.2), CEN-F17; C++ `Blockchain::parent_frozen_segment_count`, Rust `frozen_segments_at` | **Row added 2026-09-30 — the census had missed it (FOLLOWUPS' D2 row). Re-keyed, in code, DRS-E4 commit 3, both validators in one change.** The argument survives: `n` is "how much the archive holds" at parent state; only the unit moved. | `n` = closed `T`-shards through the parent, `⌊storage_ids / T⌋` with storage ids the listed transactions **plus the coinbases** (`shekyl_types::closed_shards_through`; C++ `parent_closed_shard_count` = `shekyl_archival_closed_shard_count(get_tx_count())`). `knee_n` is **carried, not converted** — behaviour-neutral while the escalation is flat; re-derived in the new unit by the Stage-2 sweep before the ceremony (FOLLOWUPS' D2 row, narrowed to that). `g(age)`'s segment-keyed branch is that row's remaining subject. |
+| **D2 escalation operand `n`** — `staker_pool_share_at(n, …)` (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §6.2), CEN-F17; C++ `Blockchain::parent_frozen_segment_count`, Rust `frozen_segments_at` | **Row added 2026-09-30 — the census had missed it (FOLLOWUPS' D2 row). Re-keyed, in code, DRS-E4 commit 3 (both validators, `T`) and again at commit 4's `SHT-Q2` merge (Rust only, `W`).** The argument survives: `n` is "how much the archive holds" at parent state; only the unit moved. | Rust `n` = closed archival shards through the parent, `shard_of(cumulative_archival_len)` (`shekyl_chain_rules::closed_shards_before`). The C++ keeps `parent_frozen_segment_count` — LMDB has no archival fold to read, and the template is not thickened to get one (rule 20); CEN-L10's ruled divergence, flat-neutral until cutover. `knee_n` is **carried, not converted** — behaviour-neutral while the escalation is flat; re-derived in the new unit by the Stage-2 sweep before the ceremony (FOLLOWUPS' D2 row, narrowed to that). `g(age)`'s segment-keyed branch is that row's remaining subject. |
 
 *Consequence.* SF sub-PR 2 is unblocked with its verify seam's
 `expected` named; the credit wire's **bytes** need no edit and its
@@ -876,6 +876,12 @@ neither remains:
 
 The settlement writer prices by weight, the fetcher streams, the wallet
 store knows what it holds. **No one in consensus needs the count.**
+
+*Superseded 2026-09-29 by `SHT-Q2` (`ARCHIVAL_SHARD_T_DERIVATION.md`
+§8.6, RULED): a shard is `W` archival bytes, not `T` transactions —
+`k = ⌊cum_before / W⌋` over the archival-length prefix sum, and
+`shekyl_types::SHARD_LENGTH` replaces `SHARD_TX_COUNT`. The ruling below is
+the record of item 5 as ruled; its streaming and pricing grounds stand.*
 
 *Ruling — (e).* A shard is **`T` transactions by `tx_id`**:
 `k = ⌊tx_id / T⌋`, `[k·T, (k+1)·T)` — item 3's original 2026-09-17 shape,

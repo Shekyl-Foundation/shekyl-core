@@ -35,7 +35,7 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_economics::{
     base_block_reward, effective_emission, CirculatingSupply, ClosedShardCount, TxVolume,
 };
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{ArchivalLength, BlockHash, BlockHeight, SHARD_LENGTH};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Output, Transaction};
 
@@ -384,6 +384,20 @@ fn recorded_with_emission(
     }
 }
 
+/// [`recorded_with_emission`] with the archival fold set: what CEN-F17's
+/// operand reads (these fixtures list nothing, so the listed count stays
+/// zero — the fold, not the count, places the shard boundary).
+fn recorded_with_archival(
+    timestamp: u64,
+    coins_generated: u64,
+    cumulative_archival_len: u64,
+) -> RecordedBlock {
+    RecordedBlock {
+        cumulative_archival_len: ArchivalLength::from_raw(cumulative_archival_len),
+        ..recorded_with_emission(timestamp, coins_generated, 0)
+    }
+}
+
 fn emission_on(chain: &MockChain) -> Emission {
     let connecting = Tip::connecting_height(chain.tip().as_ref());
     chain.with_view(|view| {
@@ -508,29 +522,28 @@ fn cen_f17_reads_the_supply_net_of_burn_and_halts_when_the_burn_exceeds_the_emis
     );
 }
 
-/// F17's escalation operand `n` is the transaction shards the **parent**
-/// chain has closed, counting the one coinbase per block that the recorded
-/// listed count omits: a genesis block listing `T − 1` transactions has
-/// issued `T` ids and closed shard 0, where `⌊cumulative_tx_count / T⌋`
-/// (the plans' shorthand) says none. Genesis itself has no parent and no
-/// operand. An id total that does not fit is the corrupt view, never a
-/// wrapped count.
+/// F17's escalation operand `n` is the archival shards the **parent**
+/// chain has closed: `shard_of` its recorded fold, so a genesis block whose
+/// transactions fold to exactly `W` bytes has closed shard 0, and one byte
+/// fewer leaves it open (`SHT-Q2`: the boundary is the fold reaching
+/// `(k+1)·W`, not a transaction count). Genesis itself has no parent and
+/// no operand.
 #[test]
-fn cen_f17_counts_the_shards_the_parent_closed_coinbases_included() {
-    let t = shekyl_types::SHARD_TX_COUNT;
+fn cen_f17_counts_the_shards_the_parents_archival_fold_closed() {
+    let w = SHARD_LENGTH.to_raw();
     let params = economics();
     let ag = params.emission_curve_asymptote / 3;
     let chain = MockChain::default().push(
-        recorded_with_emission(1_000, ag, t - 1),
+        recorded_with_archival(1_000, ag, w),
         crate::harness::fixture::root(1),
     );
     let Subsidy::Derived { burn, .. } = emission_on(&chain).subsidy else {
         panic!("height 1 derives");
     };
     assert_eq!(burn.closed_shards, ClosedShardCount::new(1));
-    // One listed fewer and the parent's ids stop one short of the shard.
+    // One byte fewer and the parent's fold stops short of the shard's end.
     let chain = MockChain::default().push(
-        recorded_with_emission(1_000, ag, t - 2),
+        recorded_with_archival(1_000, ag, w - 1),
         crate::harness::fixture::root(1),
     );
     let Subsidy::Derived { burn, .. } = emission_on(&chain).subsidy else {
@@ -550,19 +563,6 @@ fn cen_f17_counts_the_shards_the_parent_closed_coinbases_included() {
         assert_eq!(
             closed_shards_before(&view, BlockHeight::from_raw(0)),
             Ok(ClosedShardCount::ZERO)
-        );
-    });
-
-    let chain = MockChain::default().push(
-        recorded_with_emission(1_000, ag, u64::MAX),
-        crate::harness::fixture::root(1),
-    );
-    chain.with_view(|view| {
-        assert_eq!(
-            closed_shards_before(&view, BlockHeight::from_raw(1)),
-            Err(ViewRead::Corrupt(Corrupt::StorageIdsOverflow {
-                at: BlockHeight::from_raw(0),
-            }))
         );
     });
 }

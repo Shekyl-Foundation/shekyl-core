@@ -43,8 +43,8 @@ use shekyl_types::archival::{
     BondRecord, PassCount, RMarket, ServedShard, SigmaWorkMilli, SlashLogEntry,
 };
 use shekyl_types::{
-    BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, GlobalOutputIndex, KeyImage,
-    LongTermWeight, PCanonicalId, SettlementEpoch, ShardId, TxHash,
+    ArchivalLength, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
+    GlobalOutputIndex, KeyImage, LongTermWeight, PCanonicalId, SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::BlockHeader;
@@ -183,6 +183,16 @@ pub struct RecordedBlock {
     /// `Σ tx_hashes.len()` over the prior `min(h, W)` blocks is the
     /// difference of two of these.
     pub cumulative_tx_count: u64,
+    /// Archival length of every transaction in blocks `0..=this`, a prefix
+    /// sum (`block_info.cumulative_archival_len`, `SHT-Q2`; SI-24 ties it
+    /// to the per-transaction rows). The shard partition's operand: shard
+    /// `k` holds the transactions whose fold-before lies in `[k·W, (k+1)·W)`
+    /// (`shekyl_types::shard_of`), so the shards the chain through this
+    /// block has closed are `0..shard_of(this)` — CEN-F17's `n`
+    /// ([`closed_shards_before`](crate::closed_shards_before)) and the
+    /// close's age operand ([`shard_close_height`](crate::shard_close_height))
+    /// read it here.
+    pub cumulative_archival_len: ArchivalLength,
 }
 
 /// What one recorded output contributes to its curve-tree leaf — the three

@@ -60,7 +60,7 @@ namespace shekyl {
 // to correct. All of it is shekyl-economics::compute_fee_burn now. What
 // crosses here is FACTS: the fee sum, the exact volume window, the two store
 // facts the supply derives from, and the escalation operand — each read at
-// PARENT-block state (Blockchain::parent_closed_shard_count is the
+// PARENT-block state (Blockchain::parent_frozen_segment_count is the
 // asserting read-point for n; coins_generated and total_burned come from
 // the same pre-add_block state).
 
@@ -85,7 +85,7 @@ inline BurnResult compute_fee_burn(
     uint64_t total_fees,
     tx_volume_window tx_volume,
     supply_facts supply,
-    uint64_t closed_shard_count)
+    uint64_t frozen_segment_count)
 {
     ShekylBurnSplit split{};
     const int32_t st = shekyl_compute_fee_burn(
@@ -94,7 +94,7 @@ inline BurnResult compute_fee_burn(
         tx_volume.blocks,
         supply.coins_generated,
         supply.total_burned,
-        closed_shard_count,
+        frozen_segment_count,
         &split);
     // A supply underflow is a store-invariant violation (total_burned above
     // coins_generated): halt, never proceed on a zero the burn would read as

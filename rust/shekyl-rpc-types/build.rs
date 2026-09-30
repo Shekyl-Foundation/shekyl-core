@@ -132,7 +132,23 @@ use std::path::PathBuf;
 /// `SCC-4`'s cap on `dev` — and each pinned a digest over a file without the
 /// other's keys. This value digests the merged file, all three keys present;
 /// no value moved on either side.
-const PINNED_DIGEST: &str = "b5530d56b1310f69fe99c5a4959486134a59b8739daea36bc2b13b826a84bb34";
+///
+/// **Re-pinned 2026-09-29 (the `SHT-Q2` build, `ARCHIVAL_SHARD_T_DERIVATION.md`
+/// §8.6): a key was REPLACED — `archival_shard_tx_count = 200` by
+/// `archival_shard_length_bytes = 3000000`.** Not a rename: the name, the unit
+/// and the value all changed, because the partition did. Shards are cut by
+/// archival length now — shard `k` holds the transactions whose cumulative
+/// archival length before them lies in `[k·W, (k+1)·W)` — and nothing reads a
+/// transaction count any more. The chain question, answered of the new value:
+/// a node at `W = 3,000,000` and one at `2,000,000` place the same transactions
+/// in different shards, so their retention prunes discard different bodies at
+/// the same boundary and every holding, pass and challenge that names a shard
+/// means different bytes — a split, so the key belongs here. The second test:
+/// `W` is a partition parameter a network could legitimately name differently
+/// (it is PROVISIONAL and re-pinned before genesis by measurement), not a
+/// proof-system structural parameter. One authority, read by
+/// `rust/shekyl-types/build.rs` (`shekyl_types::SHARD_LENGTH`).
+const PINNED_DIGEST: &str = "7fa4b861ecaf24e560d1ce6594ccaaeaf6898beb4b1ca3f527706fdcb1403164";
 
 fn main() {
     let manifest_dir =
