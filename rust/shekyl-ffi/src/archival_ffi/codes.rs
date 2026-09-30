@@ -497,7 +497,9 @@ pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_DEBIT_ZERO: u8 = 4;
 pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_DEBIT_NOT_RECORD_TOTAL: u8 = 5;
 /// Connect: the record's `bonded_total == bond_floor(holdings)` invariant is broken.
 pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_RECORD_FLOOR_INVARIANT: u8 = 6;
-/// Connect: `total_bonded_atomic` would underflow.
+/// Connect: the C++ store's `total_bonded_atomic` would underflow on the
+/// fold's refund debit (edge check in `shekyl_archival_release_connect`; the
+/// fold itself has no counter operand).
 pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_TOTAL_BONDED_UNDERFLOW: u8 = 7;
 /// Connect: the interval log is at the codec cap; the clean close cannot append.
 pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_INTERVAL_LOG_FULL: u8 = 8;
@@ -725,9 +727,6 @@ pub(super) fn map_release_connect_error(e: ReleaseConnectError) -> u8 {
         }
         ReleaseConnectError::RecordFloorInvariantBroken => {
             SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_RECORD_FLOOR_INVARIANT
-        }
-        ReleaseConnectError::TotalBondedUnderflow => {
-            SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_TOTAL_BONDED_UNDERFLOW
         }
         ReleaseConnectError::IntervalLogFull => SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_INTERVAL_LOG_FULL,
     }

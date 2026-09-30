@@ -26,16 +26,15 @@
 //! mint) build on these types; secrets never appear in this module's Engine
 //! surface (rule 36).
 
-use shekyl_archival_retention::bond_wire::{
-    ArchivalBondPostVin, BondPostKind as RetentionBondPostKind,
-};
-use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind};
+use shekyl_archival_bond_builder::bond_post_input;
+use shekyl_archival_retention::bond_wire::ArchivalBondPostVin;
+use shekyl_archival_retention::BondKind;
 use shekyl_engine_state::pending_post_block::PendingBondPost;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_tx_builder::{encode_final_tx, LeafEntry, WireEncodeInput};
 use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{BondPost, BondPostKind as WireBondPostKind, Holdings, Input};
+use shekyl_wire::Input;
 
 // ---------------------------------------------------------------------------
 // PBoundBytes — the byte↔persona pairing, minted only here (pin P-1)
@@ -577,73 +576,28 @@ pub(crate) struct FundingInputContext {
     pub c2_layers: Vec<Vec<[u8; 32]>>,
 }
 
-/// Map a [`HoldingsDescriptor`] (the retention-side typed holdings) onto the
-/// canonical wire [`Holdings`] enum.
-pub(crate) fn wire_holdings(holdings: &HoldingsDescriptor) -> Holdings {
-    match holdings.kind {
-        HoldingsKind::ShardSetCompact => Holdings::ShardSetCompact(holdings.shard_ids.to_vec()),
-        HoldingsKind::CompleteTree => Holdings::CompleteTree,
-    }
-}
-
-/// Map a built [`ArchivalBondPostVin`] onto the canonical wire
-/// [`Input::BondPost`] prefix input (`GENESIS_TX_WIRE_FORMAT.md` §9.11).
+/// Wallet producer policy over [`bond_post_input`]
+/// (`GENESIS_TX_WIRE_FORMAT.md` §9.11).
 ///
-/// The GF-1 debit-authorizer `bond_spend_pk` rides the vin itself
-/// (JoinMarket-coupled per §9.11 — the GF-1 wire increment collapsed the old
-/// caller-supplies-alongside seam), so this mapping just moves it across; the
-/// vin's `write`/`read` coupling guarantees a JoinMarket vin carries a
-/// canonical-length key.
-///
-/// **`Release` was added here by PR-P4**, and the refusal it replaced is worth
-/// recording: this function used to reject every non-JoinMarket kind with "has
-/// no wallet-side producer yet". That was true when it was written and its own
-/// doc called it *drift rather than a decided posture* — the gap was the
-/// missing producer, not consensus, which has given `Release` a full
-/// allowed-terms row with implemented verify since #303. `build_release_vin` is
-/// that producer, so the premise is discharged for this one kind.
-///
-/// `Reinstate` still refuses: its producer does not exist yet (staged, not
-/// dead — verify/connect are live). `HoldingsUpdate` is REJECTED
-/// (immutable-bond): the kind is unrepresentable, so it cannot appear here.
-///
-/// Map a retention vin onto the consensus wire. JoinMarket-coupled fields
-/// live on [`shekyl_archival_retention::BondKind`]; a Release cannot carry
-/// them. Reinstate has no wallet producer yet.
+/// The field copy has one home, [`bond_post_input`], and it maps every
+/// [`BondKind`]. This function is which of those kinds the wallet produces.
+/// JoinMarket and Release have producers (`build_join_market_vin`,
+/// `build_release_vin`). Reinstate's verify and connect arms are live and
+/// its wallet producer is not yet (staged, rule 21), so a Reinstate vin
+/// refuses here. HoldingsUpdate is rejected (immutable-bond, 2026-09-20):
+/// the kind is unrepresentable, so it has no arm.
 pub(crate) fn wire_bond_post_input(vin: &ArchivalBondPostVin) -> Result<Input, BondAssemblyError> {
-    let kind = match &vin.kind {
-        shekyl_archival_retention::BondKind::JoinMarket {
-            bond_spend_pk,
-            endpoint,
-        } => WireBondPostKind::JoinMarket {
-            bond_spend_pk: bond_spend_pk.clone(),
-            endpoint: *endpoint,
-        },
-        shekyl_archival_retention::BondKind::Release => {
-            WireBondPostKind::Other(RetentionBondPostKind::Release as u8)
-        }
-        other => {
-            return Err(BondAssemblyError::build(
-                "wire bond-post mapping",
-                format!(
-                    "post kind {:?} has no wallet-side producer yet; \
-                     JoinMarket and Release can be assembled",
-                    other.tag()
-                ),
-            ));
-        }
-    };
-    Ok(Input::BondPost(Box::new(BondPost {
-        hybrid_public_key: vin.hybrid_public_key.clone(),
-        // The retention descriptor carries the id as bytes; typing it is that
-        // crate's (RTN-7 §3.2 addressee), not this boundary's.
-        p_canonical_id: PCanonicalId::from_bytes(vin.p_canonical_id),
-        kind,
-        holdings: wire_holdings(&vin.holdings),
-        bonded_total_atomic: vin.bonded_total_atomic,
-        bond_credit: vin.bond_credit,
-        bond_debit: vin.bond_debit,
-    })))
+    match &vin.kind {
+        BondKind::JoinMarket { .. } | BondKind::Release => Ok(bond_post_input(vin)),
+        BondKind::Reinstate => Err(BondAssemblyError::build(
+            "wire bond-post mapping",
+            format!(
+                "post kind {:?} has no wallet-side producer yet; \
+                 JoinMarket and Release can be assembled",
+                vin.kind.tag()
+            ),
+        )),
+    }
 }
 
 /// Finalize the assembled bond transaction: serialize the fully-populated
@@ -1143,5 +1097,42 @@ mod tests {
             "bytes must not render: {rendered}"
         );
         assert_eq!(rendered, "PBoundBytes(<redacted persona-bound tx>)");
+    }
+
+    fn producer_vin(kind: BondKind) -> ArchivalBondPostVin {
+        use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind, ShardSet};
+        ArchivalBondPostVin {
+            hybrid_public_key: vec![1],
+            p_canonical_id: [2; 32],
+            kind,
+            holdings: HoldingsDescriptor {
+                kind: HoldingsKind::CompleteTree,
+                shard_ids: ShardSet::empty(),
+            },
+            bonded_total_atomic: 0,
+            bond_credit: 0,
+            bond_debit: 0,
+        }
+    }
+
+    /// JoinMarket and Release assemble. Reinstate is staged: verify and
+    /// connect are live, and the wallet producer is not, so the policy
+    /// refuses it by name.
+    #[test]
+    fn the_wallet_produces_join_and_release_and_refuses_reinstate() {
+        assert!(wire_bond_post_input(&producer_vin(BondKind::JoinMarket {
+            bond_spend_pk: vec![3],
+            endpoint: [4; 32],
+        }))
+        .is_ok());
+        assert!(wire_bond_post_input(&producer_vin(BondKind::Release)).is_ok());
+        let text = wire_bond_post_input(&producer_vin(BondKind::Reinstate))
+            .unwrap_err()
+            .to_string();
+        assert!(text.contains("Reinstate"), "{text}");
+        assert!(
+            text.contains("JoinMarket and Release can be assembled"),
+            "{text}"
+        );
     }
 }

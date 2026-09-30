@@ -107,8 +107,15 @@ pub extern "C" fn shekyl_compute_burn_split(
 ///
 /// Thin FFI over the canonical Rust entry
 /// [`shekyl_economics::compute_burn_split_at`]. `frozen_segment_count` is the
-/// burden operand `n`, read **at parent-block state** (M3-1 cached-counter
-/// drift class). Numerics stay in shipped `EconomicParams`.
+/// burden operand `n` as the C++ validator has it — its frozen J-segment
+/// count (`shekyl_archival_frozen_segment_count`, `archival_ffi::schedule`),
+/// read **at parent-block state** (M3-1 cached-counter drift class) and
+/// wrapped as [`shekyl_economics::ClosedShardCount`] here, the one marshalling
+/// site. The Rust validator's `n` is the closed archival-shard count
+/// (`shekyl_chain_rules::closed_shards_before`); LMDB keeps no archival fold,
+/// so the C++ cannot take it, and the divergence is CEN-L10's — ruled,
+/// bit-identical while the escalation ships flat, closed at cutover.
+/// Numerics stay in shipped `EconomicParams`.
 ///
 /// **The share cannot reach `miner_fee_income`** (§12.11.1 Leg 1). At the
 /// genesis-neutral parameterization this is bit-identical to
@@ -119,11 +126,11 @@ pub extern "C" fn shekyl_compute_burn_split_escalated(
     burn_pct: u64,
     frozen_segment_count: u64,
 ) -> ShekylBurnSplit {
-    use shekyl_economics::{compute_burn_split_at, EconomicParams, FrozenSegmentCount};
+    use shekyl_economics::{compute_burn_split_at, ClosedShardCount, EconomicParams};
     burn_split_to_c(compute_burn_split_at(
         total_fees,
         burn_pct,
-        FrozenSegmentCount::new(frozen_segment_count),
+        ClosedShardCount::new(frozen_segment_count),
         &EconomicParams::default(),
     ))
 }
@@ -165,7 +172,7 @@ pub unsafe extern "C" fn shekyl_compute_fee_burn(
     frozen_segment_count: u64,
     out: *mut ShekylBurnSplit,
 ) -> i32 {
-    use shekyl_economics::{compute_fee_burn, EconomicParams, FrozenSegmentCount, TxVolume};
+    use shekyl_economics::{compute_fee_burn, ClosedShardCount, EconomicParams, TxVolume};
     if out.is_null() {
         return SHEKYL_ECONOMICS_NULL_OUT;
     }
@@ -176,7 +183,7 @@ pub unsafe extern "C" fn shekyl_compute_fee_burn(
         total_fees,
         TxVolume::window(tx_count_sum, window_blocks),
         supply,
-        FrozenSegmentCount::new(frozen_segment_count),
+        ClosedShardCount::new(frozen_segment_count),
         &EconomicParams::default(),
     );
     // SAFETY: non-null per the check above; the caller guarantees writability.
@@ -252,12 +259,13 @@ pub extern "C" fn shekyl_compute_emission_split(
 /// The D2-escalated staker share at `frozen_segment_count`, fixed-point `SCALE`.
 ///
 /// Observability / callers that need the share without a split. Same
-/// parent-state read-point obligation as [`shekyl_compute_burn_split_escalated`].
+/// parent-state read-point obligation, and the same CEN-L10 operand, as
+/// [`shekyl_compute_burn_split_escalated`].
 #[no_mangle]
 pub extern "C" fn shekyl_staker_pool_share_at(frozen_segment_count: u64) -> u64 {
-    use shekyl_economics::{staker_pool_share_at, EconomicParams, FrozenSegmentCount};
+    use shekyl_economics::{staker_pool_share_at, ClosedShardCount, EconomicParams};
     staker_pool_share_at(
-        FrozenSegmentCount::new(frozen_segment_count),
+        ClosedShardCount::new(frozen_segment_count),
         &EconomicParams::default().escalation(),
     )
     .to_raw()

@@ -579,6 +579,7 @@ fn the_read_transaction_body_agrees_with_the_batch_body() {
                     cumulative_difficulty: info.cumulative_difficulty,
                     coins_generated: info.coins_generated,
                     cumulative_tx_count: info.cumulative_tx_count,
+                    cumulative_archival_len: info.cumulative_archival_len,
                 }),
                 "the batch view is the same body wrapped, with the row's work"
             );

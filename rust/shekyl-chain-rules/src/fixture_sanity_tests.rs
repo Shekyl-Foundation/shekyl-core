@@ -31,8 +31,9 @@ use shekyl_wire::Transaction;
 /// above genesis as well as at it.
 /// Judge one shape at one slot the way production would reach it: `tx_form`
 /// at that slot directly, and — for a listed slot — through `validate` with
-/// the shape as the block's one body; for the miner slot, through
-/// `validate` on a candidate whose coinbase it is. The chain is the
+/// the shape listed behind its [`TxShape::precedents`] (the block's only
+/// bodies; the slot names where the shape lands); for the miner slot,
+/// through `validate` on a candidate whose coinbase it is. The chain is the
 /// youngest that can list a spend ([`spendable_chain`]), and a listed body
 /// is anchored on it: a fixture's reference is chain-relative, so it is
 /// written where the chain is known, not baked into the shape.
@@ -48,7 +49,22 @@ fn judge_at(shape: TxShape, slot: TxSlot, tx: &Transaction) {
                 candidate = repriced(&chain, candidate);
             }
             TxSlot::Listed(_) | TxSlot::Lone => {
-                candidate = candidate_on(&chain, vec![anchored_on(&chain, tx.clone())]);
+                let mut bodies = shape.precedents();
+                if let TxSlot::Listed(n) = slot {
+                    assert_eq!(
+                        bodies.len(),
+                        n,
+                        "{shape:?} lists at Listed({n}), which is behind its precedents"
+                    );
+                }
+                bodies.push(tx.clone());
+                candidate = candidate_on(
+                    &chain,
+                    bodies
+                        .into_iter()
+                        .map(|body| anchored_on(&chain, body))
+                        .collect(),
+                );
             }
         }
         let formed = formed_on(&chain, candidate);
@@ -86,7 +102,7 @@ fn refused_message(shape: TxShape, slot: TxSlot, site: &str, refused: &InvalidBl
 #[test]
 fn every_well_formed_shape_passes_at_every_slot_it_names() {
     let shapes = TxShape::all();
-    assert_eq!(shapes.len(), 3, "the chain reaches every variant");
+    assert_eq!(shapes.len(), 4, "the chain reaches every variant");
     for shape in shapes {
         let tx = shape.build();
         for &slot in shape.valid_at() {

@@ -7,80 +7,72 @@
 //! own (`20-rust-vs-cpp-policy.mdc` §4; `40-ffi-discipline.mdc` coarse-call rule).
 
 use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
-use crate::constants::{effective_settlement_epoch_blocks, SETTLEMENT_EPOCH_BLOCKS};
+#[cfg(test)]
+use crate::constants::SETTLEMENT_EPOCH_BLOCKS;
 use crate::reward_arithmetic::{
     mul_div_floor, scarcity_micro, work_milli_from_micro, WORK_MILLI_SCALE,
 };
+pub use shekyl_types::archival::SettlementEpochBlocks;
 
-const _: () = assert!(
-    SETTLEMENT_EPOCH_BLOCKS > 0,
-    "settlement epoch must be nonzero"
-);
+mod settlement_schedule;
+pub use settlement_schedule::SettlementSchedule;
 
-/// Settlement epoch containing `block_height` (`floor(height / SEB)`), where
-/// `SEB` is [`effective_settlement_epoch_blocks`] — the genesis pin, or the
-/// clamped fakechain-only regtest override.
-///
-/// Used for bond-connect `join_settlement_epoch` derivation and prune-horizon
-/// arithmetic; the daemon performs no epoch arithmetic of its own.
+// The process-latched entry points — [`SettlementSchedule::effective`]'s
+// geometry, for the C++ daemon (through `shekyl-ffi`), the wallet and the
+// admission gather, none of which holds a rule set. Each is the method of
+// the same name on the type; the validator reads the type off `RuleSet`.
+
+/// [`SettlementSchedule::epoch_at_height`] under the process-latched
+/// schedule ([`crate::effective_settlement_epoch_blocks`]).
 #[must_use]
 pub fn settlement_epoch_at_height(block_height: u64) -> u64 {
-    block_height / effective_settlement_epoch_blocks()
+    SettlementSchedule::effective().epoch_at_height(block_height)
 }
 
-/// Settlement epoch whose `archival_r_market` rows are readable **as of the
-/// parent block** (`H − 1`).
-///
-/// Epoch `E` covers `[E·SEB, (E+1)·SEB)` and closes at `(E+1)·SEB`, so while the
-/// parent sits in epoch `P`, every epoch **strictly below** `P` has closed.
-/// Returns `0` before the first close (no rows exist yet; LMDB NOTFOUND must
-/// still marshal as `0` — see admission's applicant-counts-itself term).
-///
-/// Single source for the admission gather's epoch key — C++ must not re-derive
-/// `settlement_epoch_at_height(parent) − 1` by hand.
+/// [`SettlementSchedule::last_settled_epoch_as_of_parent`] under the
+/// process-latched schedule.
 #[must_use]
 pub fn last_settled_epoch_as_of_parent(parent_height: u64) -> u64 {
-    settlement_epoch_at_height(parent_height).saturating_sub(1)
+    SettlementSchedule::effective().last_settled_epoch_as_of_parent(parent_height)
 }
 
-/// Settlement epoch that closes at `block_height`, when one does.
-///
-/// Epoch `E` covers heights `[E·SEB, (E+1)·SEB)`; its close is processed at
-/// the first height of the next epoch (`(E+1)·SEB`). Returns `None` at
-/// height 0 and at non-boundary heights.
+/// [`SettlementSchedule::close_due_at_height`] under the process-latched
+/// schedule.
 #[must_use]
 pub fn epoch_close_due_at_height(block_height: u64) -> Option<u64> {
-    let seb = effective_settlement_epoch_blocks();
-    if block_height == 0 || !block_height.is_multiple_of(seb) {
-        return None;
-    }
-    Some(block_height / seb - 1)
+    SettlementSchedule::effective().close_due_at_height(block_height)
 }
 
-/// The block height at which settlement epoch `epoch` closes — the inverse of
-/// [`epoch_close_due_at_height`]. Epoch `E` covers `[E·SEB, (E+1)·SEB)`, so it closes at
-/// `(E+1)·SEB` (the first height of the next epoch). Returns `None` if `(E+1)·SEB` would
-/// overflow `u64` (an impossible epoch). Single-sources the close-boundary formula so
-/// callers needing "is epoch `E` finalized at height `H`?" (`epoch_close_height(E) <= H`)
-/// do not re-derive `(E+1)·SEB` by hand and risk drift from this genesis-frozen mapping.
+/// [`SettlementSchedule::close_height`] under the process-latched schedule.
 #[must_use]
 pub fn epoch_close_height(epoch: u64) -> Option<u64> {
-    epoch
-        .checked_add(1)
-        .and_then(|next| next.checked_mul(effective_settlement_epoch_blocks()))
+    SettlementSchedule::effective().close_height(epoch)
 }
 
-/// Prune horizon at `block_height`: epochs strictly below the returned value
-/// are unclaimable (`E < tip − MAX_CLAIM_AGE_W`, ARCHIVAL_CONSENSUS_STATE.md §5)
-/// and may be deleted. `None` while the chain is younger than the window.
+/// [`SettlementSchedule::open_height`] under the process-latched schedule.
+#[must_use]
+pub fn settlement_epoch_open_height(epoch: u64) -> u64 {
+    SettlementSchedule::effective().open_height(epoch)
+}
+
+/// [`SettlementSchedule::last_block`] under the process-latched schedule.
+#[must_use]
+pub fn settlement_epoch_last_block(epoch: u64) -> u64 {
+    SettlementSchedule::effective().last_block(epoch)
+}
+
+/// [`SettlementSchedule::slash_deadline_height`] under the process-latched
+/// schedule.
+#[must_use]
+pub fn settlement_epoch_slash_deadline_height(epoch: u64) -> u64 {
+    SettlementSchedule::effective().slash_deadline_height(epoch)
+}
+
+/// [`SettlementSchedule::prune_below_epoch_at_height`] under the
+/// process-latched schedule.
 #[must_use]
 pub fn prune_below_epoch_at_height(block_height: u64, max_claim_age_w: u64) -> Option<u64> {
-    let tip_epoch = settlement_epoch_at_height(block_height);
-    if tip_epoch > max_claim_age_w {
-        Some(tip_epoch - max_claim_age_w)
-    } else {
-        None
-    }
+    SettlementSchedule::effective().prune_below_epoch_at_height(block_height, max_claim_age_w)
 }
 
 // `BadInterval` moved to `shekyl-types` (`DRS_E1_SARCH.md` `SAR-Q2`,
@@ -311,16 +303,18 @@ pub struct EpochCloseInputs<'a> {
 }
 
 impl<'a> EpochCloseInputs<'a> {
-    /// The close-path construction: the pinned consensus params
-    /// (schedule, age weight) filled from the compiled
-    /// constants pipeline — the **single** source both this and
-    /// [`Self::verify_view`] draw from, so the close FFI shim and the
-    /// verify views cannot drift on a param (the
+    /// The close under `schedule`: the epoch length from the schedule the
+    /// caller holds, the age weight from the compiled constants — the
+    /// **single** source every view draws from, so the validator's close,
+    /// the close FFI shim and the verify views cannot drift on a param (the
     /// `SETTLEMENT_EPOCH_BLOCKS → effective_settlement_epoch_blocks()`
-    /// swap previously had to edit the FFI's struct literal and this
-    /// constructor in lockstep; now the params exist once).
+    /// swap once had to edit the FFI's struct literal and this constructor
+    /// in lockstep; now the params exist once). The validator passes the
+    /// rule set's schedule; [`Self::close_view`] is the same view under the
+    /// process-latched one.
     #[must_use]
-    pub fn close_view(
+    pub fn under_schedule(
+        schedule: SettlementSchedule,
         settlement_epoch: u64,
         close_block_height: u64,
         bonds: &'a [EpochCloseBond<'a>],
@@ -330,12 +324,33 @@ impl<'a> EpochCloseInputs<'a> {
         Self {
             settlement_epoch,
             close_block_height,
-            settlement_epoch_blocks: effective_settlement_epoch_blocks(),
+            settlement_epoch_blocks: schedule.blocks().get(),
             age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
             bonds,
             shards,
             credit_pairs,
         }
+    }
+
+    /// The close-path construction for callers without a rule set (the
+    /// close FFI shim): [`Self::under_schedule`] over
+    /// [`SettlementSchedule::effective`].
+    #[must_use]
+    pub fn close_view(
+        settlement_epoch: u64,
+        close_block_height: u64,
+        bonds: &'a [EpochCloseBond<'a>],
+        shards: &'a [EpochCloseShard],
+        credit_pairs: &'a [CreditPair],
+    ) -> Self {
+        Self::under_schedule(
+            SettlementSchedule::effective(),
+            settlement_epoch,
+            close_block_height,
+            bonds,
+            shards,
+            credit_pairs,
+        )
     }
 
     /// The verify-view construction (`EMISSION_CLAIM_BUILDER.md` §7.3):

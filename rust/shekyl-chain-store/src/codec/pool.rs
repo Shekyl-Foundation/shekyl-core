@@ -48,7 +48,7 @@ use shekyl_types::{
 };
 use shekyl_units::AtomicUnits;
 
-use super::reader::Reader;
+use shekyl_store_codec::reader::Reader;
 
 /// The C++ `null_hash`: the absence sentinel for the FCMP++ verification
 /// cache (`tx_pool.cpp:500–501`, SPL-10), not a hash that was verified.

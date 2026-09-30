@@ -6,7 +6,8 @@ questions (§12) **ruled at PR #753 review** (defaults kept; G4 tightened to
 `ChainValid<'id, V>`). §4 reflects what landed — **§4.3, §4.4 and §4.6 last
 verified against slice 7 commit 10 (`CHAIN_RULES_SLICE_7.md`), 2026-09-29:
 the E3 and slice-7 reads (`total_burned` included), `RecordedBlock`'s five
-fields, `ValidatedBlock`'s ten (the increment-1 sketch had stood at four
+fields, `ValidatedBlock`'s ten — eleven since DRS-E4 commit 4 added
+`archival` (2026-09-30) — (the increment-1 sketch had stood at four
 through slice 2, E3 and slice 7), `price` / `judge_emission` (the derived
 arm and the block template both call `shekyl_economics::price_emission`;
 the validator's genesis arm is `configured_emission`), G2 in `form`
@@ -225,6 +226,7 @@ rust/shekyl-chain-rules/
     ├── block.rs          Candidate (input), ValidatedBlock (payload)
     ├── verdict.rs        ChainValid<'id, V>, InvalidBlock, Locus, TxSlot, Verdict<T>, refused
     ├── validate.rs       validate, tx_form, tx_against
+    ├── archival/         ArchivalDelta (mod); inputs (L7), slash (L9), close (L8, shard_close_height)
     ├── harness.rs        #[cfg(test)] MockChain / MockView<'_, 'id> / FaultingView<'id>, assert_refused, boundary_pair, fixture::*
     └── *_tests.rs        census_tests, coverage_tests, rule_set_tests, verdict_tests, validate_tests, harness_probe_tests
 ```
@@ -305,16 +307,25 @@ impl RuleSetId {
 /// The header version a rule set *admits* will be another — a parameter, never
 /// the identity.
 #[derive(Clone, Copy, PartialEq, Eq)]                 // Debug by hand: prints the row *count*
-pub struct RuleSet { id: RuleSetId, enforced: &'static [CenRow], header_major_version: u8, difficulty: DifficultyRule }
-pub enum DifficultyRule { Lwma1, Fixed(Target) } // `Fixed` only via `RuleSet::fakechain(NonZeroU128)` — CEN-D7 as data (slice 2 §4.5); `RuleSetId` is then NOT a proxy for rule-set equality
+pub struct RuleSet { id: RuleSetId, enforced: &'static [CenRow], header_major_version: u8, difficulty: DifficultyRule,
+                     mined_money_unlock_window: BlockCount, reorg_cap: BlockCount, tx_spendable_age: BlockCount,
+                     settlement_schedule: SettlementSchedule }   // the archival epoch geometry is rule-set data (DRS-E4 ARW-15, 2026-09-30)
+pub enum DifficultyRule { Lwma1, Fixed(Target) } // `Fixed` only via `RuleSet::fakechain(..)` — CEN-D7 as data (slice 2 §4.5); `RuleSetId` is then NOT a proxy for rule-set equality
+/// Fakechain's two schedule levers as one validated pair, `0 < reorg_cap < settlement` (SPR-9); `PRODUCTION` is the genesis pins.
+pub struct FakechainSchedule { settlement: SettlementEpochBlocks, reorg_cap: BlockCount }
 impl RuleSet {
     pub const GENESIS: Self;                           // enforced: CenRow::ALL
     const ISSUED: &'static [Self];                     // every rule set a schedule may name
     /// The rule set an id names; `None` for an id no schedule has issued.
     pub fn for_id(id: RuleSetId) -> Option<Self>;
+    /// Fakechain only: GENESIS with `Fixed(d)` for `Some(d)` and the pair's epoch and cap;
+    /// `fakechain(None, FakechainSchedule::PRODUCTION) == GENESIS`.
+    pub const fn fakechain(fixed: Option<NonZeroU128>, schedule: FakechainSchedule) -> Self;
     pub const fn id(&self) -> RuleSetId;
     /// The consensus rows this rule set enforces, in census order.
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_;
+    pub const fn reorg_cap(&self) -> BlockCount;                      // SPR-8
+    pub const fn settlement_schedule(&self) -> SettlementSchedule;    // what `archival::transition` and the store's connect belt read
 }
 
 /// Height → rule set, per network. Nettype selects **data** (rule 71): three
@@ -531,6 +542,7 @@ pub struct ValidatedBlock {
     drain: Option<Drain>,                        // what matured here and the growth it produced (E3)
     weights: Weights,                            // weight, long-term weight, the two medians (G6/G6b; slice 7 commit 4)
     emission: PaidEmission,                      // paid, split, fee_burn, owed, accrual, coins_generated (F14b/F16/F17/G11/G12/G13; slice 7 commits 5 and 9)
+    archival: ArchivalDelta,                     // record writes, serve credits, slashes, the accrual row, the close (L7; DRS-E4 commit 4, ARW-Q1)
 }
 impl ValidatedBlock {
     pub const fn hash(&self) -> BlockHash;
@@ -544,12 +556,14 @@ impl ValidatedBlock {
     pub const fn drain(&self) -> Option<&Drain>;
     pub const fn weights(&self) -> &Weights;
     pub const fn emission(&self) -> &PaidEmission;   // `.burned()` = the destroyed fee share
+    pub const fn archival(&self) -> &ArchivalDelta;  // constructible only by `archival::transition` (two compile_fail pins)
 }
 ```
 
 *(Struct sketch re-verified against `block.rs` at slice 7 commit 10,
 2026-09-29 — the four-field increment-1 sketch had stood while slice 2, E3
-and slice 7 each added their derived values.)* Since slice 7 wave B the
+and slice 7 each added their derived values; `archival` added at DRS-E4
+commit 4, 2026-09-30, eleven fields.)* Since slice 7 wave B the
 store's `connect(valid, in_force)` takes **only** this token: every value it
 records that the candidate did not declare is read from here, and the
 pass-through `ConnectFacts` is deleted.

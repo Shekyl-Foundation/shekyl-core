@@ -22,7 +22,7 @@
 
 use redb::ReadableTable;
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{Candidate, RuleSet};
+use shekyl_chain_rules::{Candidate, FakechainSchedule, RuleSet};
 use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, SHARD_LENGTH};
 use shekyl_wire::{Ct, Transaction};
 
@@ -39,15 +39,28 @@ use crate::schema::{BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN, UNDO_LOG};
 
 const SEB: u64 = 100;
 const RETENTION: u64 = 50;
-/// The Fakechain rule set this schedule runs: the genesis rules with a
-/// reorg cap that fits the retention (SCW-7) — a regtest wanting a 50-block
-/// retention gets a rule set whose cap is at most 50, not a store field the
-/// validator defers to (PR #861 review).
-const RULES: RuleSet = RuleSet::fakechain(None, BlockCount::from_raw(RETENTION));
+/// The Fakechain rule set this schedule runs: the genesis rules under a
+/// 100-block epoch with a reorg cap that fits the retention (SCW-7) — a
+/// regtest wanting a 50-block retention gets a rule set whose cap is at
+/// most 50, not a store field the validator defers to (PR #861 review),
+/// and one whose epoch is the store's, or `connect` refuses it (SCW-2,
+/// `ARW-15`).
+const RULES: RuleSet = RuleSet::fakechain(None, pair(SEB, RETENTION));
+
+/// A `(SEB, cap)` pair at compile time; a bad one is a compile error.
+const fn pair(seb: u64, cap: u64) -> FakechainSchedule {
+    let Some(epoch) = SettlementEpochBlocks::new(seb) else {
+        panic!("a zero epoch");
+    };
+    match FakechainSchedule::new(epoch, BlockCount::from_raw(cap)) {
+        Ok(pair) => pair,
+        Err(_) => panic!("the cap is not inside the epoch"),
+    }
+}
 
 fn horizons() -> Horizons {
     Horizons::new(
-        SettlementEpochBlocks::new(SEB).expect("non-zero"),
+        RULES.settlement_schedule().blocks(),
         BlockCount::from_raw(RETENTION),
         RULES.reorg_cap(),
     )
@@ -603,7 +616,7 @@ fn h_scarce_is_the_last_discarded_shards_close_height() {
 
 /// The Fakechain set for the ten-block schedule the `SHT-Q2` boundary and
 /// SI-13 / SI-24 tests run.
-const SHORT: RuleSet = RuleSet::fakechain(None, BlockCount::from_raw(3));
+const SHORT: RuleSet = RuleSet::fakechain(None, pair(SHORT_SEB, 3));
 
 /// The ten-block schedule's epoch.
 const SHORT_SEB: u64 = 10;
@@ -1379,6 +1392,63 @@ fn a_retention_below_the_in_force_cap_is_refused_at_open_and_at_connect() {
         "nothing connected"
     );
     cleanup(&path);
+}
+
+/// SCW-2 at connect (DRS-E4 `ARW-15`): the in-force set's settlement epoch
+/// is the pinned one, or the verdict's archival rows — join epochs,
+/// serve-credit windows, the close — were judged under a geometry the file
+/// does not hold. A set whose cap the retention covers but whose epoch is
+/// another is refused at its first block with the pair named; the header
+/// open refused the same mismatch against the epoch the caller named.
+#[test]
+fn a_set_naming_another_epoch_is_refused_at_connect() {
+    let other = RuleSet::fakechain(None, pair(200, RETENTION));
+    assert_eq!(other.reorg_cap(), RULES.reorg_cap(), "the cap is covered");
+    let path = tmp("prune-epoch-at-connect");
+    let store =
+        ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("create");
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let cand = candidate(0, BlockHash::NULL, Vec::new());
+        Ok(batch.connect(judge_under(&view, cand, &other)?, other)?)
+    });
+    assert_eq!(
+        out,
+        Err(TestErr::Store(
+            StoreError::from(StoreCannot::SettlementEpochMismatch {
+                pinned: SettlementEpochBlocks::new(SEB).expect("non-zero"),
+                session: SettlementEpochBlocks::new(200).expect("non-zero"),
+            })
+            .to_string()
+        ))
+    );
+    assert!(store.connect_state().is_live(), "a refusal is not a halt");
+    cleanup(&path);
+}
+
+/// `Horizons::under` is the set's own pair read back: the genesis set gives
+/// the production horizons, and a Fakechain set under a shortened schedule
+/// gives horizons `connect` accepts under that set — the one way a replay
+/// driver and a test open a store, off the set rather than off a second
+/// copy of its numbers.
+#[test]
+fn horizons_under_a_set_are_the_ones_its_connect_accepts() {
+    let epoch = SettlementEpochBlocks::new(10_000).expect("non-zero");
+    assert_eq!(
+        Horizons::under(&RuleSet::GENESIS),
+        Horizons::production(epoch),
+    );
+    let short = RuleSet::fakechain(None, pair(512, 64));
+    let under = Horizons::under(&short).expect("a well-formed pair");
+    assert_eq!(
+        under.epoch(),
+        SettlementEpochBlocks::new(512).expect("non-zero")
+    );
+    assert_eq!(under.check_against(&short), Ok(()));
+    assert!(
+        under.check_against(&RuleSet::GENESIS).is_err(),
+        "the genesis set names another cap and another epoch"
+    );
 }
 
 /// **`SHT-Q1` leg (f): the domain answer is stable across a prune.**

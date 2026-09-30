@@ -62,7 +62,7 @@ fn main() {
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
     let out_file = out_dir.join("consensus_constants_generated.rs");
-    // Crate-private: `src/archival.rs` re-exports it as the typed
+    // Crate-private: `src/archival/mod.rs` re-exports it as the typed
     // `SHARD_LENGTH` and carries the `> 0` sentinel.
     // `ARCHIVAL_MAX_HOLDINGS_SHARDS` is emitted as `usize`, not `u64`, because it
     // bounds a `Vec` length: emitting the width its consumer needs means there is

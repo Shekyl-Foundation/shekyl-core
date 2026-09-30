@@ -8,7 +8,7 @@
 //! suite rather than growing past the 1k line.
 
 use shekyl_chain_rules::{ChainView, FrontierFault, LeafInput, RuleSet};
-use shekyl_types::{BlockHeight, GlobalOutputIndex};
+use shekyl_types::{BlockHeight, GlobalOutputIndex, ShardId};
 
 use super::connect_fixtures::{candidate, connect_chain, judge};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
@@ -136,6 +136,41 @@ fn a_decreasing_tx_count_is_the_fold_belt_observed_by_the_validator() {
     });
     let row = StoreInvariant::FoldNotMonotone {
         cell: "block_info.cumulative_tx_count",
+        height: 0,
+    };
+    expect_row(&out, row);
+    assert_eq!(row.row(), 13);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(1),
+            row,
+        }
+    );
+    cleanup(&path);
+}
+
+/// The close's age fault — the archival fold does not place a closed
+/// shard's end at one height (`Corrupt::ShardCloseUnplaced`, DRS-E4
+/// commit 4) — is SI-13 on the archival cell, the row the prune's descent
+/// arms for the same fold: observed by the validator, halting the writer
+/// at the connecting height.
+#[test]
+fn an_unplaced_shard_close_is_the_fold_monotone_belt_observed_by_the_validator() {
+    let path = tmp("connect-refuse-corrupt-shard-close");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[Vec::new()]);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::ShardCloseUnplaced {
+                shard: ShardId::from_raw(0),
+                at: BlockHeight::from_raw(0),
+            })
+            .into())
+    });
+    let row = StoreInvariant::FoldNotMonotone {
+        cell: "block_info.cumulative_archival_len",
         height: 0,
     };
     expect_row(&out, row);
@@ -363,6 +398,65 @@ fn a_served_frontier_halts_on_the_cell_that_disagreed() {
             }),
         },
     );
+    cleanup(&path);
+}
+
+/// A bond record the retention folds refuse as a record
+/// (`Corrupt::BondRecordInvariant`, DRS-E4 commit 4) is SI-7 on
+/// `archival_bond`: the bytes decoded, the values are ones no conforming
+/// writer produces, and the halt names which invariant.
+#[test]
+fn a_bond_record_the_folds_refuse_is_si7_on_archival_bond() {
+    let path = tmp("connect-refuse-corrupt-bond-record");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::BondRecordInvariant {
+                persona: shekyl_types::PCanonicalId::from_bytes([0xa1; 32]),
+                which: shekyl_chain_rules::RecordInvariant::FloorBroken,
+            })
+            .into())
+    });
+    let row = StoreInvariant::CellCorrupt {
+        key: "archival_bond",
+        fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+            codec: "bond_record",
+            reason: "bonded_total is below the floor its holdings imply",
+        }),
+    };
+    expect_row(&out, row);
+    assert_eq!(row.row(), 7);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::ZERO,
+            row,
+        }
+    );
+    cleanup(&path);
+}
+
+/// The accruing budget overflowing (`Corrupt::AccrualOverflow`, CEN-L8's
+/// overflow clause) is SI-8 on `archival_budget_accruing`, observed by
+/// the validator that computes the post-image (`ARW-Q1`).
+#[test]
+fn an_accrual_overflow_is_the_fold_overflow_belt_on_budget_accruing() {
+    let path = tmp("connect-refuse-corrupt-accrual");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::AccrualOverflow {
+                epoch: shekyl_types::SettlementEpoch::from_raw(3),
+            })
+            .into())
+    });
+    let row = StoreInvariant::FoldOverflow {
+        cell: "archival_budget_accruing",
+    };
+    expect_row(&out, row);
+    assert_eq!(row.row(), 8);
     cleanup(&path);
 }
 

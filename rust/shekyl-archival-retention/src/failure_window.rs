@@ -229,9 +229,10 @@ const _: () = assert!(
 /// gates structurally. Re-pinning `CHALLENGE_RESOLUTION_BLOCKS` below one
 /// block requires reordering the connect hooks first, and that is a decision
 /// about both sides, not a constant bump. The affine-shape coupling of the
-/// two independently-maintained derivations (`epoch_close_height` here,
-/// `settlement_epoch_slash_deadline_height` in `shekyl-ffi`) is asserted by
-/// test in `shekyl-ffi`'s schedule module, which imports both.
+/// two derivations (`epoch_close_height` and
+/// `settlement_epoch_slash_deadline_height`, both in `consensus_state` since
+/// DRS-E4 commit 4 moved the geometry to its one home) is asserted by test
+/// in `shekyl-ffi`'s schedule module, which imports both.
 const _: () = assert!(
     CHALLENGE_RESOLUTION_BLOCKS >= 1,
     "CHALLENGE_RESOLUTION_BLOCKS = 0 lands the slash pass for epoch E on the \

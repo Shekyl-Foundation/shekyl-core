@@ -171,7 +171,7 @@ pub struct ServeCreditGateInputs {
     /// marshaled, not re-derived (the derivation is already Rust behind that
     /// FFI).
     pub h_open: u64,
-    /// `H_close` — C++ derives via `shekyl_archival_epoch_close_height(E)`.
+    /// `H_close` — C++ derives via `shekyl_archival_epoch_last_block(E)`.
     pub h_close: u64,
     /// Step 7 (`:4288`): the seal-block hash iff
     /// `get_block_hash_from_height(H_seal)` succeeded. With the seal-on-chain

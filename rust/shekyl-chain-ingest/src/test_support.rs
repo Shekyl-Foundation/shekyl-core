@@ -56,8 +56,8 @@ use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
-    AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
-    GlobalOutputIndex, KeyImage, LongTermWeight, TxHash,
+    ArchivalLength, AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight,
+    CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::tx_extra::{admitted_leaf_blob, parse, pqc_leaf_entries_per_output};
@@ -247,10 +247,21 @@ impl GrownTree {
             .checked_add(emission.burned())
             .expect("a fixture chain's burned fold fits u64");
         let coins_generated = emission.coins_generated;
-        let listed_before = height
-            .to_raw()
-            .checked_sub(1)
-            .map_or(0, |parent| self.blocks[at(parent)].cumulative_tx_count);
+        let (listed_before, archival_before) =
+            height
+                .to_raw()
+                .checked_sub(1)
+                .map_or((0, ArchivalLength::ZERO), |parent| {
+                    let p = &self.blocks[at(parent)];
+                    (p.cumulative_tx_count, p.cumulative_archival_len)
+                });
+        // The archival fold the store keeps (`SHT-Q2`): the coinbase's and
+        // every listed transaction's `archival_len`, on the parent's.
+        let cumulative_archival_len = core::iter::once(&block.miner_transaction)
+            .chain(txs)
+            .map(Transaction::archival_len)
+            .try_fold(archival_before, ArchivalLength::checked_add)
+            .expect("a fixture chain's archival fold fits u64");
         self.blocks.push(RecordedBlock {
             hash: block.hash(),
             header: block.header.clone(),
@@ -259,6 +270,7 @@ impl GrownTree {
             coins_generated,
             cumulative_tx_count: listed_before
                 + u64::try_from(txs.len()).expect("a fixture body count fits"),
+            cumulative_archival_len,
         });
         self.weights.push(RecordedWeights {
             weight: BlockWeight::from_raw(weight),
@@ -403,6 +415,9 @@ impl<'id> ChainView<'id> for GrownTree {
     fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
         Ok(self.total_burned)
     }
+
+    // A grown tree posts no bond (`DRS_E4_ARCHIVAL_WRITER.md` §5.2).
+    shekyl_chain_rules::archival_reads!(empty);
 }
 
 /// The miner transaction for `height`: the rules harness's, which since
@@ -846,6 +861,21 @@ pub fn expected_state(chain: &[(Block, Vec<Transaction>)]) -> Digest {
 
 pub fn open_store(path: &std::path::Path) -> ChainStore {
     ChainStore::create(path, EPOCH).expect("create")
+}
+
+/// A store under the `(SEB, cap)` pair of the rule set that will judge its
+/// blocks — a chain mined on a levered regtest schedule opens its store
+/// the way the daemon did (`Horizons::under`), or `connect` refuses the
+/// first block for naming another epoch (`ARW-15`).
+pub fn open_store_under(path: &std::path::Path, in_force: &RuleSet) -> ChainStore {
+    let horizons = shekyl_chain_store::store::Horizons::under(in_force)
+        .expect("a well-formed rule set's pair is a store schedule");
+    ChainStore::with_horizons(
+        path,
+        shekyl_chain_store::apply_policy::ApplyPolicy::default(),
+        horizons,
+    )
+    .expect("create")
 }
 
 /// A connector whose task the test holds, so that stopping it can wait until

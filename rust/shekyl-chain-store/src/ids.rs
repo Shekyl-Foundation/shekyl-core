@@ -22,7 +22,7 @@
 
 use core::fmt;
 
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 macro_rules! store_id {
@@ -426,6 +426,143 @@ impl ServeCreditKey {
     }
 }
 
+/// The key of one applied slash: `archival_slash_applied[(P, shard, E)]`
+/// (DRS-E4; `DRS_E4_ARCHIVAL_WRITER.md` §3.3).
+///
+/// The C++ packed it as `P_id ‖ BE64(shard) ‖ BE64(epoch)` under LMDB's
+/// default byte comparator; the tuple `([u8; 32], u64, u64)` orders
+/// component-wise, the same order, with nothing to pin. Fields are private:
+/// the tuple is assembled only through [`Self::key`] / [`Self::from_key`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct SlashAppliedKey {
+    persona: PCanonicalId,
+    shard: ShardId,
+    epoch: SettlementEpoch,
+}
+
+/// The redb tuple a [`SlashAppliedKey`] is stored under.
+pub type SlashAppliedTuple = ([u8; 32], u64, u64);
+
+impl SlashAppliedKey {
+    /// The key for one applied slash.
+    #[must_use]
+    pub const fn new(persona: PCanonicalId, shard: ShardId, epoch: SettlementEpoch) -> Self {
+        Self {
+            persona,
+            shard,
+            epoch,
+        }
+    }
+
+    /// Whose slash.
+    #[must_use]
+    pub const fn persona(&self) -> &PCanonicalId {
+        &self.persona
+    }
+
+    /// Which shard's challenge failed.
+    #[must_use]
+    pub const fn shard(self) -> ShardId {
+        self.shard
+    }
+
+    /// Which epoch's failure it settles.
+    #[must_use]
+    pub const fn epoch(self) -> SettlementEpoch {
+        self.epoch
+    }
+
+    /// The stored tuple.
+    #[must_use]
+    pub const fn key(self) -> SlashAppliedTuple {
+        (
+            self.persona.to_bytes(),
+            self.shard.to_raw(),
+            self.epoch.to_raw(),
+        )
+    }
+
+    /// The key a stored tuple names.
+    #[must_use]
+    pub const fn from_key((persona, shard, epoch): SlashAppliedTuple) -> Self {
+        Self {
+            persona: PCanonicalId::from_bytes(persona),
+            shard: ShardId::from_raw(shard),
+            epoch: SettlementEpoch::from_raw(epoch),
+        }
+    }
+}
+
+/// The key of one slash-log row: `archival_slash_log[(height, seq)]` — the
+/// connecting height the scheduler ran at and the row's ordinal within it
+/// (DRS-E4 `ARW-Q2`; dense per height, SI-22).
+///
+/// The C++ packed it as `BE(height) ‖ BE(seq)` with a reserved
+/// `u32::MAX` seq for its epoch-marker row kind; the tuple `(u64, u32)`
+/// orders the same way, and the marker kind is not carried, so every seq is
+/// a slash. Fields are private: the tuple is assembled only through
+/// [`Self::key`] / [`Self::from_key`], and the one scan the read takes —
+/// every row strictly above a height — is [`Self::above`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct SlashLogKey {
+    height: BlockHeight,
+    seq: u32,
+}
+
+/// The redb tuple a [`SlashLogKey`] is stored under.
+pub type SlashLogTuple = (u64, u32);
+
+impl SlashLogKey {
+    /// The key of the `seq`-th slash applied at `height`.
+    #[must_use]
+    pub const fn new(height: BlockHeight, seq: u32) -> Self {
+        Self { height, seq }
+    }
+
+    /// The connecting height the slash was applied at.
+    #[must_use]
+    pub const fn height(self) -> BlockHeight {
+        self.height
+    }
+
+    /// The row's ordinal within its height, from `0`.
+    #[must_use]
+    pub const fn seq(self) -> u32 {
+        self.seq
+    }
+
+    /// The stored tuple.
+    #[must_use]
+    pub const fn key(self) -> SlashLogTuple {
+        (self.height.to_raw(), self.seq)
+    }
+
+    /// The key a stored tuple names.
+    #[must_use]
+    pub const fn from_key((height, seq): SlashLogTuple) -> Self {
+        Self {
+            height: BlockHeight::from_raw(height),
+            seq,
+        }
+    }
+
+    /// Every row at a height **strictly above** `h`: `(h + 1, 0) ..` — the
+    /// scan A2 `slash_log_after` takes (`db_lmdb.cpp:4804`, the C++ start
+    /// key `(at_height + 1, 0)`). `None` when `h` is the last height: no
+    /// height lies above it, and a `RangeFrom` cannot say so — its start
+    /// would have to be a height that does not exist. (A saturated start
+    /// would name `h` itself and read the last height's own rows as
+    /// "above" it.) The caller's scan is empty, the C++'s `u64::MAX`
+    /// early return made a type.
+    #[must_use]
+    pub const fn above(h: BlockHeight) -> Option<core::ops::RangeFrom<SlashLogTuple>> {
+        match h.checked_add(BlockCount::ONE) {
+            Some(next) => Some((next.to_raw(), 0)..),
+            None => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,5 +612,24 @@ mod tests {
         assert!(last.contains(
             &LayerChunk::new(TreeLayer::from_raw(u8::MAX), ChunkIndex::from_raw(7)).key()
         ));
+    }
+
+    #[test]
+    fn slash_log_above_starts_at_the_next_heights_first_row_and_the_last_height_has_none() {
+        let h = BlockHeight::from_raw(250);
+        let above = SlashLogKey::above(h).expect("a height above 250 exists");
+        assert_eq!(
+            above.start,
+            SlashLogKey::new(BlockHeight::from_raw(251), 0).key()
+        );
+        // Every row *at* `h` sorts before the start, whatever its seq …
+        assert!(SlashLogKey::new(h, u32::MAX).key() < above.start);
+        // … and every row above it is in.
+        assert!(above.contains(&SlashLogKey::new(BlockHeight::from_raw(251), 0).key()));
+        assert!(above.contains(&SlashLogKey::new(BlockHeight::from_raw(u64::MAX), 7).key()));
+        // Nothing lies above the last height: the range does not exist,
+        // rather than starting at the last height and including its rows.
+        assert!(SlashLogKey::above(BlockHeight::from_raw(u64::MAX)).is_none());
+        assert!(SlashLogKey::above(BlockHeight::from_raw(u64::MAX - 1)).is_some());
     }
 }

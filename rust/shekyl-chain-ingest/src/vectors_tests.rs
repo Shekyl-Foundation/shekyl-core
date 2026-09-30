@@ -49,8 +49,11 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use shekyl_chain_rules::harness::MockSubstrate;
-use shekyl_chain_rules::{ReleaseAnchors, Substrate};
-use shekyl_types::BlockHeight;
+use shekyl_chain_rules::{
+    CenRow, FakechainSchedule, InvalidBlock, Locus, ReleaseAnchors, SettlementEpochBlocks,
+    Substrate, TxSlot,
+};
+use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::corpus::CorpusReader;
 use crate::metrics::Metrics;
@@ -60,11 +63,11 @@ use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::substrate::ProductionSubstrate;
 use crate::test_support::h;
-use crate::test_support::{cleanup, open_store, tmp};
+use crate::test_support::{cleanup, open_store_under, tmp};
 use crate::trace::Trace;
 use shekyl_chain_rules::Candidate;
 use shekyl_pow_randomx::CacheStore;
-/// `manifest.json`, as the capture writes it (format 2).
+/// `manifest.json`, as the capture writes it (format 3).
 #[derive(Deserialize, Debug)]
 struct Manifest {
     format_version: u32,
@@ -74,6 +77,14 @@ struct Manifest {
     block_count: u64,
     spend_txid: Option<String>,
     fixed_difficulty: u128,
+    /// The `(SEB, cap)` pair the daemon mined this chain under — the
+    /// regtest schedule levers when the generator pulled them, the genesis
+    /// pair otherwise. The replay judges the chain under a Fakechain rule
+    /// set naming exactly this pair and opens its store under the same
+    /// (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-15`): a 512-block epoch judged
+    /// under the production one refuses the first block past height 511.
+    settlement_epoch_blocks: u64,
+    reorg_cap_blocks: u64,
     /// The hash of block 0 as the daemon reported it — the operand that
     /// decides what these chains are valid against (§5.2).
     genesis_hash: String,
@@ -136,7 +147,7 @@ fn captured_chains() -> Vec<(PathBuf, Manifest)> {
                 .unwrap_or_else(|e| panic!("{}: manifest does not parse: {e}", p.display()));
             assert_eq!(
                 manifest.format_version,
-                2,
+                3,
                 "{}: capture format {} is not the one this test reads",
                 p.display(),
                 manifest.format_version
@@ -175,6 +186,59 @@ const CAPTURED_SHAPES: [&str; 6] = [
     "spend-depth3",
 ];
 
+/// The one refusal the gate currently expects, pinned as a verdict rather
+/// than hidden behind `#[ignore]`: `DRS_E4_ARCHIVAL_WRITER.md` §6 row 4's
+/// disclosed interim red. `emission-claim`'s claim at height 1025 finds no
+/// JoinMarket record because the transition derives the record on the
+/// verdict (commit 4) and no store writer persists it until the phase
+/// bodies land (commit 5), so CEN-L7 refuses at the claim's input. The pin
+/// is two-sided: a refusal anywhere else, under any other row, is a
+/// finding; and the chain replaying in full is commit 5 landing, at which
+/// point this row is deleted and `hold` judges the chain like the other
+/// five. Falsify: `rg interim_refusal` → this function has no rows.
+fn interim_refusal(manifest: &Manifest) -> Option<(BlockHeight, InvalidBlock)> {
+    match manifest.shape.as_str() {
+        "emission-claim" => Some((
+            BlockHeight::from_raw(1025),
+            InvalidBlock {
+                rule: CenRow::L7,
+                locus: Locus::Input {
+                    slot: TxSlot::Listed(0),
+                    input: 2,
+                },
+            },
+        )),
+        _ => None,
+    }
+}
+
+/// Judge a pinned chain against its [`interim_refusal`]; `true` when the
+/// chain is pinned and the pin held, `false` when it is not pinned and
+/// [`hold`] judges it. Both replay lanes call this so they cannot disagree
+/// about what the corpus is expected to do.
+fn holds_as_pinned(manifest: &Manifest, report: &RunReport) -> bool {
+    let Some(pin) = interim_refusal(manifest) else {
+        return false;
+    };
+    assert_eq!(
+        report.refused,
+        Some(pin),
+        "{} ({}): the pinned interim refusal moved. `None` here is commit 5 landing — delete this \
+         chain's `interim_refusal` row and let `hold` judge it; any other value is a finding \
+         (E2 §0)",
+        manifest.shape,
+        manifest.generator
+    );
+    eprintln!(
+        "{}: refused at {:?} as pinned (DRS-E4 §6 row 4, until commit 5); {} blocks connected \
+         before it",
+        manifest.shape,
+        pin.0,
+        report.connected.len()
+    );
+    true
+}
+
 /// Replay one captured chain through the production pipeline against a
 /// fresh store; return the report.
 async fn replay<S>(dir: &Path, manifest: &Manifest, substrate: Arc<S>) -> RunReport
@@ -187,18 +251,34 @@ where
     let mut source =
         CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
     let trace = Arc::new(Trace::read(std::io::Cursor::new(trace.as_slice())).expect("read trace"));
+    let schedule = FakechainSchedule::new(
+        SettlementEpochBlocks::new(manifest.settlement_epoch_blocks)
+            .expect("a captured chain's epoch is non-zero"),
+        BlockCount::from_raw(manifest.reorg_cap_blocks),
+    )
+    .unwrap_or_else(|e| {
+        panic!(
+            "{}: the manifest's pair is not a schedule: {e}",
+            manifest.shape
+        )
+    });
     let rules = ChainRules::Regtest {
         fixed_difficulty: Some(
             NonZeroU128::new(manifest.fixed_difficulty).expect("a regtest difficulty is non-zero"),
         ),
+        schedule,
     };
     let path = tmp(&format!("vectors-{}", manifest.shape));
+    // The store runs the pair the chain was mined under, read off the same
+    // rule set `connect` judges by — not the production epoch the other
+    // tests' stores pin, which `connect` would refuse at block 0.
+    let store = open_store_under(&path, &rules.in_force(BlockHeight::from_raw(0)));
     let report = run(
         &mut source,
         substrate,
         Arc::new(Metrics::new()),
         rules,
-        open_store(&path),
+        store,
         trace,
         PipelineConfig {
             window: NonZeroUsize::new(64).expect("non-zero"),
@@ -421,6 +501,9 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
     for (dir, manifest) in captured_chains() {
         genesis_is_the_current_builds(&manifest);
         let report = replay(&dir, &manifest, Arc::clone(&substrate)).await;
+        if holds_as_pinned(&manifest, &report) {
+            continue;
+        }
         hold(&dir, &manifest, &report);
         eprintln!(
             "{}: {} blocks connected, digest MATCH at {}, roots MATCH at all {} heights, weights \
@@ -451,6 +534,9 @@ async fn replays_every_captured_chain_under_the_production_substrate() {
     for (dir, manifest) in captured_chains() {
         genesis_is_the_current_builds(&manifest);
         let report = replay(&dir, &manifest, substrate.clone()).await;
+        if holds_as_pinned(&manifest, &report) {
+            continue;
+        }
         hold(&dir, &manifest, &report);
     }
 }

@@ -386,8 +386,10 @@ pub fn effective_settlement_epoch_blocks() -> u64 {
 /// [`ARCHIVAL_REORG_DEPTH_BLOCKS`] (`D_max`, `PDM-Q11`), or — only in a
 /// process that armed — the validated `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`
 /// override. **This is the cap the daemon's Fakechain rule set names**
-/// (`shekyl_chain_rules::RuleSet::fakechain(fixed, cap)`): the rule set is
-/// the consensus home of the cap and the store's undo retention is
+/// (`shekyl_chain_rules::RuleSet::fakechain(fixed, schedule)`, the
+/// schedule a `FakechainSchedule` pair of this and
+/// [`effective_settlement_epoch_blocks`], DRS-E4 `ARW-15`): the rule set
+/// is the consensus home of the cap and the store's undo retention is
 /// constrained by it (S-CHAIN-W SCW-7); this accessor is where a levered
 /// daemon reads the value it hands that constructor. Same read-once,
 /// armed-only semantics as [`effective_settlement_epoch_blocks`].

@@ -41,7 +41,7 @@ use shekyl_economics::params::{EconomicParams, SCALE};
 use shekyl_economics::{
     base_block_reward, base_emission_at, calc_burn_pct_from_activity,
     calc_effective_emission_share, calc_release_multiplier, compute_burn_split_at,
-    effective_emission, params_digest, split_block_emission, FrozenSegmentCount, TxVolume,
+    effective_emission, params_digest, split_block_emission, ClosedShardCount, TxVolume,
 };
 
 use crate::engine::SimParams;
@@ -229,7 +229,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         let total_fees = (u128::from(tx_volume) * u128::from(config.fee_per_tx))
             .min(u128::from(u64::MAX)) as u64;
         let fee_split =
-            compute_burn_split_at(total_fees, burn_pct, FrozenSegmentCount::ZERO, &params);
+            compute_burn_split_at(total_fees, burn_pct, ClosedShardCount::ZERO, &params);
 
         if samples.contains(&block) {
             // Pool-weighted total: at V3.0 the sim has no separate

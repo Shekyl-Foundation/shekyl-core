@@ -93,6 +93,10 @@ mod pipeline_tests;
 #[cfg(all(test, feature = "pipeline"))]
 pub(crate) mod scenario;
 #[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod scenario_archival;
+#[cfg(all(test, feature = "pipeline"))]
+mod scenario_archival_tests;
+#[cfg(all(test, feature = "pipeline"))]
 pub(crate) mod scenario_spend;
 #[cfg(feature = "pipeline")]
 pub mod schedule;
@@ -125,7 +129,7 @@ pub use pipeline::{
     run, Checkpoint, Disagreement, PipelineConfig, PipelineFault, RunReport, Switch,
 };
 #[cfg(feature = "pipeline")]
-pub use schedule::{Chain, ChainRules, FixedDifficultyRefused};
+pub use schedule::{Chain, ChainRules, RegtestLever, RegtestLeverRefused};
 #[cfg(feature = "pipeline")]
 pub use seed::{SeedClaim, SeedLedger};
 #[cfg(feature = "pipeline")]

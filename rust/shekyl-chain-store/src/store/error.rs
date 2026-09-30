@@ -293,13 +293,17 @@ pub enum StoreCannot {
         height: u64,
     },
     /// The file was built under a different settlement-epoch schedule than
-    /// this session's (S-CHAIN-W SCW-2).
+    /// the one this session runs (S-CHAIN-W SCW-2): the epoch the caller
+    /// named at open, or — at every `connect` — the epoch the in-force rule
+    /// set carries (`RuleSet::settlement_schedule`, DRS-E4 `ARW-15`).
     ///
     /// Persisted join epochs and serve-credit windows would be silently
     /// mislabeled under the other schedule, so the open is refused with the
     /// remedy named — reopen under the pinned schedule, or use a fresh data
-    /// directory. A refusal, not [`StoreInvariant::CellCorrupt`]: the file is
-    /// coherent, the session is wrong for it.
+    /// directory — and a connect under a set naming another epoch is
+    /// refused at that block. A refusal, not
+    /// [`StoreInvariant::CellCorrupt`]: the file is coherent, the session
+    /// is wrong for it.
     SettlementEpochMismatch {
         /// The schedule the file was built under.
         pinned: SettlementEpochBlocks,

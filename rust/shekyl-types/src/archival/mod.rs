@@ -52,13 +52,18 @@
 //!   the witness layout and const-asserts equality; the wire twin
 //!   `PQC_HYBRID_SINGLE_SIG_LEN` const-asserts the signature factor.
 //!
-//! The persisted record these words compose into — `BondRecord` — is the
-//! daemon store's own (`shekyl-chain-store::codec::archival`), as
-//! `CurveTreeState` is: its amount field is `AtomicUnits`, which this crate
-//! does not see (`shekyl-units` is a sibling foundation crate, not a
-//! dependency), and no second store persists it. Should E6 slice 8 need the
-//! record on `ChainView`, the record moves here and that edge is decided
-//! then (`DRS_E1_SARCH.md` decision log, 2026-09-23).
+//! The persisted record these words compose into — [`BondRecord`], with
+//! [`Holdings`], [`HeldShard`], [`FirstPayingHeight`] and the two close-row
+//! scalars [`RMarket`] and [`SigmaWorkMilli`] — **lives here since
+//! 2026-09-29** (DRS-E4 `ARW-Q8`). It was the daemon store's own
+//! (`shekyl-chain-store::codec::archival`) while the store was its only
+//! reader, because its amount field is `AtomicUnits` and this crate did not
+//! take `shekyl-units`; E6 slice 8 reads the record through `ChainView`,
+//! which is the second reader `SAR-Q2`'s reopening clause named, so the edge
+//! is taken (`shekyl-units` is `no_std` + `alloc` as this crate is) and the
+//! record moves. Its `Canonical` codec is `shekyl-store-codec`'s, where the
+//! orphan rule puts an impl of a store trait for a vocabulary type; the
+//! daemon store re-exports the types so its paths did not move.
 
 use alloc::vec::Vec;
 use core::fmt;
@@ -488,6 +493,60 @@ impl BadInterval {
         self.end_exclusive == Self::OPEN_END
     }
 }
+
+/// Blocks per settlement epoch — the one number the epoch geometry is a
+/// function of (`floor(height / SEB)` and its inverses).
+///
+/// Three readers, one word (moved here at DRS-E4 `ARW-15`; the fifth
+/// instance of the module's placement argument): the daemon store **pins**
+/// it in its header at create and refuses a session under another value
+/// (S-CHAIN-W SCW-2); the rule set **carries** it — the genesis constant on
+/// every issued set, the regtest lever's value on a Fakechain set — so the
+/// validator derives epochs, closes and slash deadlines from the rules in
+/// force and never from a process's environment (rule 71: nettype selects
+/// data, never control flow); and `shekyl-archival-retention` **computes**
+/// with it (`SettlementSchedule`, the one home of the geometry). The store
+/// compares its pin to the in-force set's at every connect, which is what
+/// makes the two readers one schedule and not two.
+///
+/// `0` is not a schedule: the C++ used it as "unpinned", and a file the
+/// store writes is never unpinned, so the type cannot spell it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SettlementEpochBlocks(core::num::NonZeroU64);
+
+impl SettlementEpochBlocks {
+    /// `blocks` per epoch; `None` for zero, which names no schedule.
+    #[must_use]
+    pub const fn new(blocks: u64) -> Option<Self> {
+        match core::num::NonZeroU64::new(blocks) {
+            Some(n) => Some(Self(n)),
+            None => None,
+        }
+    }
+
+    /// The schedule, in blocks.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+impl core::fmt::Display for SettlementEpochBlocks {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{} blocks/epoch", self.0)
+    }
+}
+
+mod bond;
+mod serve;
+mod slash;
+
+pub use bond::{
+    BondRecord, FirstPayingHeight, HeldShard, HeldShards, Holdings, HoldingsError, RMarket,
+    SigmaWorkMilli, MAX_BOND_KEY_BYTES,
+};
+pub use serve::{PassCount, ServedShard};
+pub use slash::{SlashLogEntry, SlashedHolding};
 
 #[cfg(test)]
 mod tests {
