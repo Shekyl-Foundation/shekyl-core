@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+### `CT-6` C7 — a reorg past finality refuses, and says why
+
+- **`FINALITY_DEPTH_BLOCKS` is `W`'s one home.** The sum
+  `SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` had two
+  independent derivations — the bench's `corpus.rs::W` and an inline sum in
+  `segment_freeze_eligible` — and C7 would have been a third. All three now
+  read one constant, and a `const` assertion pins the snapshot ring's horizon
+  **strictly inside** it, because the band between them is where a rollback is
+  past the ring and still repairable by folding.
+- **A refresh refuses a reorg deeper than `W`**
+  (`validate_reorg_within_finality`). Below `F = tip − W` the segments are
+  frozen and truncating through them deletes their freeze records — sealed
+  state the rest of the system may already have served. The bound is `> W` and
+  not `>= W`: keeping exactly `tip − W` drops nothing frozen, because
+  `segment_freeze_eligible` seals a segment ending at `e` once `tip − e >= W`.
+- **The seat is the wallet's refresh path, not `LeafStore`.** The store must
+  perform that truncation *correctly* — F9 requires it, and the replica
+  generator forks arbitrarily deep on purpose — so a guard on the shared
+  primitive would contradict the store's own contract and break a second
+  consumer. Both hold, one per layer: the store must do it right; the wallet
+  must never ask.
+- **Rule 82: the remedy reaches the caller.** `WalletRpcErrorCode`
+  **`ResyncRequired` (`-29204`)**, in the refresh family rather than the proof
+  block, carrying the reorg depth and `W` in its message — a bare "re-sync"
+  gives the user nothing to judge. It deliberately bypasses `internal_detail`,
+  which logs its detail and returns only the category, and which is why the
+  remedy previously reached a server log instead of the user. During a
+  *rescan* the same failure stays `RescanIncomplete`: the reset is already
+  durable, so the durability fact is what a client branches on.
+
+
 ### Crypto — vendored FCMP++ subtree resynced to `2485a176`
 
 - Helios/Selene `from_bytes` still accepts the canonical identity (`x == 0`

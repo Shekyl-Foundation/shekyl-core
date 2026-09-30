@@ -178,6 +178,37 @@ pub enum RefreshError {
     /// Every other ingest failure (producer-contract, decode, a tree-state
     /// client error a resume would reproduce) is `false` and surfaces
     /// terminally.
+    /// The chain reorged **deeper than `W`**, the depth at which this wallet's
+    /// persisted state is final ([`shekyl_curve_tree::FINALITY_DEPTH_BLOCKS`]) — so the rollback
+    /// the refresh would have to perform is one the wallet must not attempt
+    /// (`CT-6` C7, `WALLET_SIDE_STORE.md` §6.3.4 row 1).
+    ///
+    /// **Why refusing beats repairing.** Below `F = tip − W` the segments are
+    /// frozen, and truncating through them deletes their freeze records —
+    /// state the rest of the system treats as sealed and may already have
+    /// served. The store *can* perform that truncation correctly (F9 requires
+    /// it, and the replica generator depends on it); the question this variant
+    /// answers is whether a **wallet refresh** should ever ask, and the answer
+    /// is no. A proving state that can be silently wrong is worse than one
+    /// that is large.
+    ///
+    /// **Rule 82: the remedy is a full re-sync**, which is C8's
+    /// refuse-and-resync rather than a retry — a resume reproduces the same
+    /// fork depth against the same store.
+    #[error(
+        "chain reorged {} blocks, deeper than the {finality_depth}-block finality window; \
+         a full re-sync is required",
+        tip.saturating_sub(*fork_height)
+    )]
+    ReorgDeeperThanFinality {
+        /// The height the reorg would keep.
+        fork_height: u64,
+        /// The wallet's tree tip when it was asked.
+        tip: u64,
+        /// `W` — [`shekyl_curve_tree::FINALITY_DEPTH_BLOCKS`].
+        finality_depth: u64,
+    },
+
     #[error("curve-tree ingest failed: {context}")]
     CurveTreeIngest {
         /// Compile-time-fixed name of the ingest failure class, named

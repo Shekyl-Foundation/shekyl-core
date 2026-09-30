@@ -260,7 +260,7 @@ round's fixed points, each inherited from a verified source.
 | **C4** | Every horizon **is** `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` read from the JSON authority. No second literal | F2 |
 | **C5** | Reference-height selection is `select_reference_height` / `two_sided_reference_height`, unchanged | F1 |
 | **C6** | The frontier advance is **public and identity-free**; path capture is a per-identity filter over it. No component sees two identities' ownership. **`identity-free` is a claim about the bytes, never about access**: that the content reveals no ownership does not make the file carrying it shared, and a design that reads public content out of another identity's sealed file is `WSS-13` relocated, not C6 satisfied | §6.3.3 |
-| **C7** | A reorg deeper than the horizon **refuses**; it never silently produces a wrong tree, and it says so as a rule-82 failure mode (the remedy is a full resync) | §6.3.4 row 1 |
+| **C7** | A reorg deeper than the horizon **refuses**; it never silently produces a wrong tree, and it says so as a rule-82 failure mode (the remedy is a full resync). **BUILT 2026-09-30 (increment 5).** The horizon is `W` = `FINALITY_DEPTH_BLOCKS`, not the ring's `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`: between the two a rollback is past the snapshot tier and still repairable by folding, so the bound is `> W`. The seat is `validate_reorg_within_finality` in the engine's refresh path, **not** `LeafStore::rollback_to_fork` — the store must perform a deep truncation correctly (F9; the replica generator depends on it), and the policy is about whether a wallet refresh may ask. Rule-82 copy reaches the caller as `ResyncRequired` (`-29204`) carrying the depth and `W`, rather than the server-side log `internal_detail` would have left it in | §6.3.4 row 1 |
 | **C8** | Everything here is derived-from-canon: recovery is **refuse-and-resync**, never a migration. Persistence is a cache | `WSS` R3 |
 | **C9** | The graded quantity is §6.3.4 rows 2 and 3, on rule 76's floor, by the landed `shekyl-wss-q1b-bench` harness | §6.3.4; `WSS_Q1B_BENCH_SPEC.md` |
 
@@ -306,7 +306,7 @@ have re-imported the dependency this round exists outside of.
 | **2** | **The C1 oracle, height-keyed.** At every fixture height `h`, root, depth, and drained-leaf count equal `assemble_leaf_stream` + `root_from_scalars` over the leaves drained through `h - 1`. That cutoff is written in the test, not read from `drained_through`. Depth is graded at the two leaf counts where `layer_count_for_leaves` steps (`0`, and `SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH`). **Q2 examiner armed here, graded at increment 4:** `examine_tier_readings` compares a `TierReading` (root and depth) per tier. `TierCoverage::OutsideSpan` is the only non-answer; a tier error has no variant to hide in. Agreeing overlap is success, a root or depth mismatch is `Disagree`, and a height in neither `HeightSpan` is `Uncovered`. The 2026-09-23 decision-log row records why the examiner is armed before its tiers exist | §6.3.4 row 4; Q2 | Q2 (**ruled**); Q1's *shape* only — its constants are not inputs to the oracle |
 | **3** | **Per-transaction reconstruction reuse.** `drained`/`layers` once per tx, `gindex → drain-position` index | **Closeout (a)** — F3b | 2 |
 | **4** | **The snapshot ring + advance — BUILT (§10).** One dense ring over the reorg horizon, total by construction (`Q1` RULED 2026-09-28, §9) — no tiers, no spacing, no eviction. `shekyl_curve_tree::frontier::Frontier` advances inside `ingest_block`; the ring is the `frontier_snapshots` table of the wallet's own `LeafStore`, written and evicted in the block's own transaction; `root_and_depth_at` reads it for in-horizon heights and falls through to `root_at_count` elsewhere. `per_block_advance_worst_case_s` is **re-derived from the built advance** (Q4). The increment-2 examiner grades the real segment tier against the real snapshot tier, **unmodified** | **Closeout (b)** — F3a | 2, 3; Q2, Q3 (**ruled**); **`Q1` RULED by derivation (§9); `Q4` pre-registered with its re-point as a landing condition** — the gate is open |
-| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy | §6.3.3; C7 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
+| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (bound, wire code, both durability declarations, §10.3's framing corrected); **path capture not started** — it has no code anywhere, and §6.3.3 still describes *"two private capture sides"*, which `Q5`'s dissolution contradicts, so that sentence is reconciled before anything is built against it | §6.3.3; C7 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
 | **6** | **Re-grade rows 2 and 3** on the amortized form, same harness, same rig — **and it is also `Q4`'s only seat.** Increment 4 re-derived the advance field and measured it off-rig; a fraction of cadence computed anywhere but the pinned Pi 4 is a property of the machine that computed it (rule 76). The blocker is the board, not the code | §6.3.4; Q4 | 4 |
 | **7** | **`.curvetree` retirement** | `WSS-18` | **P-store lane** (Q6) |
 
@@ -596,9 +596,23 @@ so both production read paths go through the one dispatcher.
 
 **A reorg deeper than the horizon is not refused here, and that is C7's
 seat, not this increment's.** A `rollback_to_fork` below `tip − horizon`
-succeeds today by folding the whole drained prefix: correct, slow, and loud
-about nothing. Increment 5 owns C7's refusal and its rule-82 copy; what
-increment 4 owes it is the seam, which is the ring's span.
+succeeds today by folding the whole drained prefix. Increment 5 owns C7's
+refusal and its rule-82 copy; what increment 4 owes it is the seam, which is
+the ring's span.
+
+**Corrected 2026-09-30, when increment 5 built it.** This paragraph read
+*"correct, slow, and loud about nothing"*, which understates the store's
+behaviour in one direction and overstates what C7 may change in the other.
+`truncate_internals` **deletes frozen segment rows**, so a rollback below
+`F = tip − W` unmakes sealed state rather than merely re-folding a large
+prefix. And the store is *required* to do that correctly — F9 pins it, and the
+replica generator (`shekyl_curve_tree_replica_rollback_to_fork`) forks
+arbitrarily deep on purpose — so **C7's bound is not a guard on the
+primitive.** It is a policy about whether a *wallet refresh* may ask for such a
+rollback, and it lives at `validate_reorg_within_finality`, where the tip and
+the intent are both known. Both statements hold at once, one per layer: the
+store must perform a deep truncation correctly; the wallet must never request
+one.
 
 **Rewind.** `truncate_internals` — the shared core under both
 `rollback_to_fork` and `truncate_from_tree_position` — deletes every ring row

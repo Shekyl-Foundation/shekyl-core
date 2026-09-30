@@ -128,6 +128,19 @@ pub enum WalletRpcErrorCode {
     /// Rescan: the reset persisted, then the producer failed before the
     /// ledger was rebuilt. History is empty until a rescan finishes; retry.
     RescanIncomplete = -29203,
+    /// Refresh: the chain reorged deeper than this wallet's finality window
+    /// `W`, so its proving state cannot be repaired in place — the remedy is a
+    /// **full re-sync** (`CT-6` C7, rule 82; C8's refuse-and-resync).
+    ///
+    /// Terminal for this store rather than retryable: a resume meets the same
+    /// fork depth against the same state and reproduces it. Distinct from
+    /// [`Self::RescanIncomplete`], which says a rescan must *finish*; this one
+    /// says one must *start*.
+    ///
+    /// In the refresh family (`-292xx`) and not the proof block (`-293xx`)
+    /// because it is a sync failure — the code's neighbours are what a client
+    /// branches on.
+    ResyncRequired = -29204,
     /// `check_*`: proof string failed decode / framing / size caps.
     ProofMalformed = -29300,
     /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
@@ -349,6 +362,23 @@ pub enum WalletRpcError {
          rescan finishes — retry once the problem is resolved"
     )]
     RescanIncomplete,
+    /// The chain reorged deeper than the wallet's finality window `W`, so its
+    /// proving state cannot be repaired in place (`CT-6` C7, rule 82).
+    ///
+    /// The depths ride the message because the remedy is drastic and the user
+    /// is entitled to the reason: a bare "re-sync" gives them nothing to
+    /// judge, and nothing to report if the depth looks impossible.
+    #[error(
+        "the chain reorged {depth} blocks, deeper than the {finality_depth}-block window this \
+         wallet treats as final; its proving state cannot be repaired in place — a full re-sync \
+         is required"
+    )]
+    ResyncRequired {
+        /// How far back the reorg reached.
+        depth: u64,
+        /// `W` — the depth past which this wallet's state is final.
+        finality_depth: u64,
+    },
     /// Build: address parse / network check failed.
     #[error("invalid recipient")]
     InvalidRecipient,
@@ -730,6 +760,7 @@ impl WalletRpcError {
             Self::RefreshInProgress => WalletRpcErrorCode::RefreshInProgress,
             Self::RescanBlocked { .. } => WalletRpcErrorCode::RescanBlocked,
             Self::RescanIncomplete => WalletRpcErrorCode::RescanIncomplete,
+            Self::ResyncRequired { .. } => WalletRpcErrorCode::ResyncRequired,
             Self::InvalidRecipient => WalletRpcErrorCode::InvalidRecipient,
             Self::InsufficientFunds => WalletRpcErrorCode::InsufficientFunds,
             Self::FeeEstimationFailed => WalletRpcErrorCode::FeeEstimationFailed,
@@ -865,9 +896,17 @@ impl WalletRpcError {
                 tracing::warn!(detail = %io, "rescan scan failed after durable reset");
                 Self::RescanIncomplete
             }
+            // `ReorgDeeperThanFinality` joins this group rather than emitting
+            // `ResyncRequired`: after a durable reset the wallet's history is
+            // already empty and a rescan is already the remedy, so the
+            // durability fact is what a client must branch on. Telling it to
+            // start the re-sync it is in the middle of would be the wrong
+            // instruction, and splitting the code here is the subclass-miss
+            // this group exists to prevent.
             RefreshError::Cancelled
             | RefreshError::MalformedScanResult { .. }
             | RefreshError::CurveTreeIngest { .. }
+            | RefreshError::ReorgDeeperThanFinality { .. }
             | RefreshError::ConcurrentMutation { .. }
             | RefreshError::InternalInvariantViolation { .. } => {
                 tracing::warn!(?err, "rescan scan failed after durable reset");
@@ -946,6 +985,18 @@ impl From<RefreshError> for WalletRpcError {
             RefreshError::CurveTreeIngest { context, .. } => {
                 internal_detail("curve-tree ingest", context)
             }
+            // Rule 82's seat. Unlike its neighbours this does *not* go through
+            // `internal_detail`, which keeps its detail server-side: the
+            // remedy is the whole point of the error, so the depths travel to
+            // the caller rather than to a log line they cannot read.
+            RefreshError::ReorgDeeperThanFinality {
+                fork_height,
+                tip,
+                finality_depth,
+            } => Self::ResyncRequired {
+                depth: tip.saturating_sub(fork_height),
+                finality_depth,
+            },
         }
     }
 }
@@ -1445,6 +1496,47 @@ mod tests {
             "post-reset scan failure must not echo local paths: {}",
             err.message()
         );
+    }
+
+    /// `CT-6` C7 / rule 82. The remedy has to reach the caller, which is the
+    /// half that was missing: `internal_detail` logs its detail and returns
+    /// only the category, so a refusal routed through it would have told the
+    /// user "curve-tree ingest" and put the remedy in a server log.
+    #[test]
+    fn a_reorg_past_finality_tells_the_caller_to_resync() {
+        let err = WalletRpcError::from(RefreshError::ReorgDeeperThanFinality {
+            fork_height: 9_000,
+            tip: 10_000,
+            finality_depth: 730,
+        });
+        assert_eq!(err.code(), WalletRpcErrorCode::ResyncRequired);
+        assert_eq!(WalletRpcErrorCode::ResyncRequired as i32, -29204);
+
+        let message = err.to_string();
+        assert!(
+            message.contains("re-sync"),
+            "the remedy must be in the message the caller reads: {message}"
+        );
+        // The depth travels too: a bare remedy gives the user nothing to judge
+        // and nothing to report if 1 000 blocks looks impossible to them.
+        assert!(
+            message.contains("1000") && message.contains("730"),
+            "the cause must travel with the remedy: {message}"
+        );
+    }
+
+    /// The same failure *during* a rescan is `RescanIncomplete`, not
+    /// `ResyncRequired`: the reset is already durable, so the durability fact
+    /// is what a client branches on, and telling it to start the re-sync it is
+    /// in the middle of would be the wrong instruction.
+    #[test]
+    fn during_a_rescan_the_durability_fact_wins() {
+        let err = WalletRpcError::from_rescan_scan_failure(RefreshError::ReorgDeeperThanFinality {
+            fork_height: 9_000,
+            tip: 10_000,
+            finality_depth: 730,
+        });
+        assert_eq!(err.code(), WalletRpcErrorCode::RescanIncomplete);
     }
 
     /// Durability is the axis, not the failure subclass: ConcurrentMutation

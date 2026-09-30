@@ -77,7 +77,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
-use shekyl_curve_tree::ClientError;
+use shekyl_curve_tree::{ClientError, FINALITY_DEPTH_BLOCKS};
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
@@ -514,6 +514,42 @@ fn validate_reorg_fork_height(fork_height: BlockHeight) -> Result<(), RefreshErr
     Ok(())
 }
 
+/// `CT-6` C7: refuse a reorg that would rewind the curve tree past `W`.
+///
+/// **Separate from [`validate_reorg_fork_height`] because it answers a
+/// different question about a different subject.** That one is
+/// well-formedness — a `fork_height` of 0 is malformed for the ledger and the
+/// tree alike, and the ledger merge checks it with no tree in hand. This one
+/// is a *policy* about the curve tree's frozen segments, so it applies only
+/// where a tree tip exists to measure against. Folding them into one function
+/// with an `Option` tip would have given the ledger's call a branch that
+/// could never fire.
+///
+/// **And it is the wallet's seat, not the store's.** `LeafStore` can truncate
+/// through a frozen segment correctly — F9 requires exactly that, and the
+/// replica generator forks arbitrarily deep on purpose — so the bound belongs
+/// where the *intent* is known rather than on the primitive both consumers
+/// share.
+fn validate_reorg_within_finality(
+    fork_height: BlockHeight,
+    tree_tip: BlockHeight,
+) -> Result<(), RefreshError> {
+    // `keep` is the height retained, so a reorg keeping exactly `tip − W`
+    // drops nothing frozen: `segment_freeze_eligible` seals a segment ending
+    // at `e` once `tip − e >= W`, and every such `e` is at or below the kept
+    // height. One block deeper is the first that would unmake a freeze record,
+    // which is why this is `>` and not `>=`.
+    let keep = fork_height.to_raw().saturating_sub(1);
+    if tree_tip.to_raw().saturating_sub(keep) > FINALITY_DEPTH_BLOCKS {
+        return Err(RefreshError::ReorgDeeperThanFinality {
+            fork_height: keep,
+            tip: tree_tip.to_raw(),
+            finality_depth: FINALITY_DEPTH_BLOCKS,
+        });
+    }
+    Ok(())
+}
+
 async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     curve_tree: &CurveTreeHandle,
     daemon: &D,
@@ -555,13 +591,20 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     // Only roll back when the tree holds blocks at or above the fork — a tree
     // still climbing below it has nothing to drop (R3-Q6).
     if let Some(rewind) = result.reorg_rewind.as_ref() {
-        validate_reorg_fork_height(rewind.fork_height)?;
-        let keep = rewind.fork_height - BlockCount::ONE;
-        if let Some(tip) = curve_tree
+        // The tip is read before validation because C7's depth bound needs it.
+        // A malformed `fork_height` of 0 therefore costs one tip read before
+        // it is refused — the validator still checks that first, and nothing
+        // is rolled back either way.
+        let tree_tip = curve_tree
             .ingested_tip_height()
             .await
-            .map_err(|e| map_curve_tree_handle_error(&e))?
-        {
+            .map_err(|e| map_curve_tree_handle_error(&e))?;
+        validate_reorg_fork_height(rewind.fork_height)?;
+        if let Some(tip) = tree_tip {
+            validate_reorg_within_finality(rewind.fork_height, tip)?;
+        }
+        let keep = rewind.fork_height - BlockCount::ONE;
+        if let Some(tip) = tree_tip {
             if tip > keep {
                 curve_tree
                     .rollback_to_fork(keep)
