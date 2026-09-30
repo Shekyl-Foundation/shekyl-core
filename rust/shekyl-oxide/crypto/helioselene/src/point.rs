@@ -31,6 +31,11 @@ macro_rules! curve {
 
         const B: $Field = $B;
 
+        /// Last byte of a 32-byte compressed point. The high bit is the sign of `y`.
+        const Y_SIGN_BYTE: usize = 31;
+        const Y_SIGN_SHIFT: u32 = 7;
+        const Y_SIGN_BIT: u8 = 1 << Y_SIGN_SHIFT;
+
         // Evaluate the curve equation to obtain what would be the `y^2` for this `x`, if it was the
         // `x` coordinate for a valid, on-curve point
         fn curve_equation(x: $Field) -> $Field {
@@ -226,7 +231,7 @@ macro_rules! curve {
                 loop {
                     let mut bytes = $Field::random(&mut rng).to_repr();
                     let mut_ref: &mut [u8] = bytes.as_mut();
-                    mut_ref[31] |= u8::try_from(rng.next_u32() % 2).unwrap() << 7;
+                    mut_ref[Y_SIGN_BYTE] |= u8::try_from(rng.next_u32() % 2).unwrap() * Y_SIGN_BIT;
                     let opt = Self::from_bytes(&bytes);
                     if opt.is_some().into() {
                         return opt.unwrap();
@@ -371,13 +376,11 @@ macro_rules! curve {
             type Repr = <$Field as PrimeField>::Repr;
 
             fn from_bytes(bytes: &Self::Repr) -> CtOption<Self> {
-                // Extract and clear the sign bit
-                let sign = Choice::from(bytes[31] >> 7);
+                let sign = Choice::from((bytes[Y_SIGN_BYTE] & Y_SIGN_BIT) >> Y_SIGN_SHIFT);
                 let mut bytes = *bytes;
                 let mut_ref: &mut [u8] = bytes.as_mut();
-                mut_ref[31] &= !(1 << 7);
+                mut_ref[Y_SIGN_BYTE] &= !Y_SIGN_BIT;
 
-                // Parse x, recover y
                 $Field::from_repr(bytes).and_then(|x| {
                     let is_identity = x.is_zero();
 
@@ -386,25 +389,25 @@ macro_rules! curve {
                         y
                     });
 
-                    // If this the identity, set y to 1
-                    let y = CtOption::conditional_select(
-                        &y,
-                        &CtOption::new($Field::ONE, 1.into()),
-                        is_identity,
-                    );
-                    // Create the point if we have a y solution
-                    let point = y.map(|y| $Point {
+                    let affine = y.map(|y| $Point {
                         x,
                         y,
                         z: $Field::ONE,
                     });
+                    // `x == 0` is the identity, whichever representative `recover_y` produced.
+                    let point = CtOption::conditional_select(
+                        &affine,
+                        &CtOption::new($Point::identity(), 1.into()),
+                        is_identity,
+                    );
 
-                    let not_negative_zero = !(is_identity & sign);
-                    // Only return the point if it isn't -0
+                    // The identity, and a point whose y is zero, have one canonical sign.
+                    let y_is_zero = y.map(|y| y.is_zero()).unwrap_or(0.into());
+                    let sign_must_be_clear = is_identity | y_is_zero;
                     CtOption::conditional_select(
                         &CtOption::new($Point::identity(), 0.into()),
                         &point,
-                        not_negative_zero,
+                        !(sign & sign_must_be_clear),
                     )
                 })
             }
@@ -414,19 +417,18 @@ macro_rules! curve {
             }
 
             fn to_bytes(&self) -> Self::Repr {
-                let Some(z) = Option::<$Field>::from(self.z.invert()) else {
-                    return [0; 32];
-                };
+                // A non-invertible z is the point at infinity, so the affine coordinates are zero.
+                let z = self.z.invert().unwrap_or($Field::ZERO);
                 let x = self.x * z;
                 let y = self.y * z;
 
                 let mut bytes = x.to_repr();
                 let mut_ref: &mut [u8] = bytes.as_mut();
-
-                // Normalize the sign to 0 when x is 0
-                let y_sign =
-                    u8::conditional_select(&y.is_odd().unwrap_u8(), &0, x.ct_eq(&$Field::ZERO));
-                mut_ref[31] |= y_sign << 7;
+                // `is_identity` is `x == 0`, including a representative whose z still inverts.
+                // That point has no y-parity, so the sign bit stays clear.
+                let clear_sign = x.ct_eq(&$Field::ZERO);
+                let y_sign = u8::conditional_select(&y.is_odd().unwrap_u8(), &0, clear_sign);
+                mut_ref[Y_SIGN_BYTE] |= y_sign * Y_SIGN_BIT;
                 bytes
             }
         }
@@ -476,6 +478,36 @@ macro_rules! curve {
                 let z: Self::FieldElement = Option::from(point.z.invert())?;
                 Some((point.x * z, point.y * z))
             }
+        }
+
+        #[test]
+        fn identity_encoding_round_trips_and_rejects_the_sign_bit() {
+            use group::{Group as _, GroupEncoding as _};
+
+            let identity = $Point::identity();
+            let bytes = identity.to_bytes();
+            let decoded = $Point::from_bytes(&bytes).unwrap();
+            assert!(bool::from(decoded.x.is_zero()));
+            assert!(bool::from(decoded.y.ct_eq(&$Field::ONE)));
+            assert!(bool::from(decoded.z.is_zero()));
+            assert_eq!(decoded.to_bytes(), bytes);
+
+            let mut signed = bytes;
+            signed[Y_SIGN_BYTE] |= Y_SIGN_BIT;
+            assert!(Option::<$Point>::from($Point::from_bytes(&signed)).is_none());
+
+            // x == 0 with an invertible z still compares as the identity, and must serialize as one.
+            let noncanonical = $Point {
+                x: $Field::ZERO,
+                y: $Field::ONE,
+                z: $Field::ONE,
+            };
+            assert!(bool::from(noncanonical.is_identity()));
+            let encoded = noncanonical.to_bytes();
+            assert_eq!(encoded[Y_SIGN_BYTE] & Y_SIGN_BIT, 0);
+            assert_eq!(encoded, identity.to_bytes());
+            let decoded = $Point::from_bytes(&encoded).unwrap();
+            assert!(bool::from(decoded.z.is_zero()));
         }
     };
 }

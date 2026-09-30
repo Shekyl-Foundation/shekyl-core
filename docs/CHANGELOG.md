@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Crypto — vendored FCMP++ subtree resynced to `2485a176`
+
+- Helios/Selene `from_bytes` still accepts the canonical identity (`x == 0`
+  with the sign bit clear) and rejects the sign-set encoding of that point.
+  `to_bytes` clears that sign for every `x == 0` representative, including one
+  whose `z` still inverts, and stays constant-time (upstream `b4dd1c99`, Least
+  Authority). Generalized Bulletproofs isolates each Pedersen commitment by the
+  combined weight of its row, so `V(i) + V(i)` and `2·V(i)` are the same
+  constraint, and still rejects a full-rank system with no isolating row
+  (upstream `31c26d96`, corrected on the fork). Helios/Selene zeroizes
+  sampling, wide reduction, and invert intermediates (upstream `77788c36`).
+  Pin: `chore/crypto-resync-from-tip` @ `3378433c` (the merge of fork PR #6;
+  same crypto tree as its tip `2485a176`). The `fcmps` crate is Shekyl's
+  PL-D3 fork and is not mirrored from the pin
+  (`SHEKYL_OXIDE_VENDORING.md` §"What the pin covers"); upstream shipped no
+  `fcmps` logic change, so it is unchanged. Q6 re-vetted: an honest on-curve
+  proof's content, length, and framing are unchanged
+  (`GENESIS_TX_WIRE_FORMAT.md` Q6).
+
 ### Chain store — shards are cut by archival length (`SHT-Q2`, Rust half)
 
 - Shards are cut by **archival length**, not transaction count: shard `k`
