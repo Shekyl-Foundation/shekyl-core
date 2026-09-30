@@ -1567,17 +1567,24 @@ link Shekyl intends to serve: 700 ms, a GEO-satellite round trip taken
 at the top of the ~600–700 ms range. A phone tether sits inside that
 ceiling. The second is the node-local p99 from the floor legs, the
 larger residual (span p99 minus that leg's RTT) so the term is not
-under-stated: connect 7.2 ms, initiator handshake 12.6 ms, gap 14.7 ms.
-The factor of two is jitter and congestion on the ceiling link. Twice
-the p99 of a shorter honest path is not a deadline: every dial on a
-longer honest path fails, and a failed clearnet dial marks the address
-for up to `P2P_FAILED_ADDR_FORGET_SECONDS` (1 h). Rounded up to 1 ms:
-connect 1.415 s, initiator handshake 1.426 s, gap 1.430 s. The three
-legs those residuals come from, and the New York leg that confirms the
-slope is about 1, are in the benchmark record. A measured
-satellite-class link whose RTT exceeds 700 ms reopens the ceiling.
-These milliseconds are not wired yet; the wiring commit names these
-links.
+under-stated: connect 7.2 ms, gap 14.7 ms. The handshake term is the
+median residual of the body, 12.6 ms, not rank ⌈0.99 n⌉: that rank is
+an unattributed tail (676.6 ms here, 715 ms on the loaded LAN
+responder), and the quiet South America responder has no such tail.
+Using the median is defensible while the tail is unattributed. It is
+not yet a number to write. A 676 ms stall on the 700 ms ceiling lands
+near 1.38 s against the 1.426 s that 2 × (700 + 12.6) rounds up to,
+about 50 ms of headroom, and the span that says whether the stall is
+the responder's writer or the socket is the message-2 write, still
+unlogged. The factor of two is jitter and congestion on the ceiling
+link. Twice the p99 of a shorter honest path is not a deadline: every
+dial on a longer honest path fails, and a failed clearnet dial marks
+the address for up to `P2P_FAILED_ADDR_FORGET_SECONDS` (1 h). Rounded
+up to 1 ms, once that span has attributed the tail: connect 1.415 s,
+initiator handshake 1.426 s, gap 1.430 s. The three legs, and the New
+York leg that confirms the slope is about 1, are in the benchmark
+record. A measured satellite-class link whose RTT exceeds 700 ms
+reopens the ceiling. These milliseconds are not wired yet.
 
 One rekey is 5.06 µs against 889 µs to seal and open a 65,535-byte
 record, under one percent at that size. Fixed windows are smaller than

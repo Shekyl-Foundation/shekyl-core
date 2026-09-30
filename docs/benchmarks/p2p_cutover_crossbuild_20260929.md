@@ -528,8 +528,8 @@ Conditions, per D9:
   (x86_64, 2 cores), `--clearnet-transport-encrypt` on, ephemeral Tor
   off, bound to the measurement port only. That host's production
   testnet daemon stayed up; load average was about 2.7 on 2 cores.
-  Initiator spans are the floor's, so that load is named and is not
-  what the connect and handshake columns read.
+  Initiator spans are the floor's clock. That load is still a candidate
+  for the handshake tail below: the wait is for the responder.
 - Link: the public internet, a home LAN to that datacenter. Ping RTT
   min / avg / max 21.2 / 24.0 / 25.1 ms (20 echoes).
 - Method: the same dialer-side `out_peers` churn as the other initiator
@@ -554,16 +554,45 @@ America 12.6 ms). The 99th is 115.7 ms and the max is 676.6 ms. On
 both of those samples the connect and the gap were ordinary (connect
 27 and 31 ms, gap 22 and 28 ms), and the pre-write queue, compute and
 write were sub-millisecond. The stall is the initiator waiting inside
-the Noise handshake, not the link and not the Levin gap. Those two
-samples stay in this distribution. They do not become the node-local
-term: a term that is 13 ms on one leg and 92 ms on the next is not the
-term that barely moved.
+the Noise handshake, after message 1 has been written and before
+message 2 has been read. The Levin gap on those rows is ordinary, so
+the wait ended before the session was handed to C++.
 
-Node-local p99, the larger residual of the three legs: connect 7.2 ms
-(this leg), handshake 12.6 ms (South America), gap 14.7 ms (this leg).
-Deadlines, 2 × (700 ms ceiling + that residual), rounded up to 1 ms:
-connect 1.415 s, initiator handshake 1.426 s, gap 1.430 s. A measured
-satellite-class link whose RTT exceeds 700 ms reopens the ceiling.
+**The handshake node-local term is the median residual, and that is
+provisional.** Rank ⌈0.99 n⌉ of this leg is the tail. The South America
+leg's p99 residual (12.6 ms) and this leg's median residual (12.5 ms)
+agree, and that is the term the deadline uses while the tail is
+unattributed. The reason it matters is the margin, not the term. An
+honest link at the 700 ms ceiling that also takes the 676 ms stall
+lands near 1.38 s, against a 1.426 s handshake deadline: about 50 ms
+of headroom on a stall the spans do not explain. If the stall is in
+our writer, the number moves when it is fixed. If it is a retransmit,
+the factor of two is what covers it. The deadline commit does not
+write 1.426 s until a span says which.
+
+The same hole already has one attributed neighbour, and it is not this
+leg. South America's handshake max is 183.0 ms (p99 182.6 ms): no tail,
+on a responder whose load average was 0.08. The 715 ms sample is LAN
+run 2 sample 46, the floor against the loaded VM: 715 ms on the floor,
+1.76 ms on the VM, floor pre-write spans normal. The VM's responder
+span ends when the computed flight is handed to the writer task, before
+`write_budgeted` puts message 2 on the socket. Two stalls near 700 ms
+(715 ms on that VM, 676.6 ms here) and one at 115.7 ms, each with an
+ordinary connect and gap, each on a responder that was not quiet. The
+quiet WAN responder produced none. That is a responder-side wait in
+the unspanned write, not a property of the RTT. C++ is not in it:
+`listen_clearnet` binds a Rust listener, the Noise read and write run
+on that socket, and the seam adopts the session only after
+`open_channel` returns. The pipe FFI is still in the tree and has no
+caller on this path. Nagle is left on (nothing sets `TCP_NODELAY`);
+both flights are one segment under one MSS, and the responder's
+message 2 is its first send, so Nagle does not hold it. The delayed-ACK
+timer does not make a 676 ms stall.
+
+What closes it is the span already owed: the responder's message-2
+write, split into the wait before `write_all` and the `write_all`
+itself. Time before the write is the runtime on a loaded host. Time
+inside `write_all` is the socket.
 
 ## Tor inbound distribution, floor device responder (2026-09-30 UTC)
 
