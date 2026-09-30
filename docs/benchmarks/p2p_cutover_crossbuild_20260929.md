@@ -610,9 +610,14 @@ p99 3.8 ms. The second saturated both cores with busy loops (load
 average 2.1) and left the production daemon up. Handshake p99 43.3 ms,
 max 49.4 ms. Across those 100 lines, `total_retrans` was 0,
 `retransmits` was 0, writer wait p99 0.20 ms (max 0.30 ms), `write_ns`
-p99 3.9 ms (max 10.0 ms). The 115.7 ms and 676.6 ms rows did not recur,
-and neither did a retransmission. CPU saturation is not that stall.
-The median residual stays the handshake term.
+p99 3.9 ms (max 10.0 ms). The 115.7 ms and 676.6 ms rows did not recur. These runs do not name
+which of the three cases those rows were: there is no ~700 ms row
+under the line. The host during them was not the loaded posture of
+the morning distribution. The production daemon was up and idle
+(about 1% of a core). The busy-loop saturation is a different load,
+and it also produced no tail and no retransmission. The handshake
+term stays the median residual, provisional, until a run that has
+the rows.
 
 ## Tor inbound distribution, floor device responder (2026-09-30 UTC)
 
