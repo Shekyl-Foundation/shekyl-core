@@ -259,10 +259,7 @@ fn the_ceiling_counts_encrypted_zones_and_states_its_peak() {
         "CEILING_ZONES must equal the number of encrypted zones, not a \
          transcription of today's answer"
     );
-    assert_eq!(
-        counted, 2,
-        "Tor and I2P — a change here is a ceiling change"
-    );
+    assert_eq!(counted, 2, "Tor — a change here is a ceiling change");
 
     // The peak is an UPPER BOUND, so it rounds up. Asserted against the
     // rounded-up scaling rather than a re-derivation of the same division,

@@ -313,7 +313,7 @@ namespace levin
       const relay_zone_params params = public_zone_params();
 
       /* One bit, and it is NOT the noise enable. The transposition hazard the
-         named bits were introduced for (RP-3a shipped it once: the i2p/tor
+         named bits were introduced for (RP-3a shipped it once: the Tor
          outbound-only fluff rule swapped with the noise enable) cannot recur
          from here, because only one of the two is ever set. The Rust side
          still pins both values and refuses noise on a cleartext zone. */
@@ -350,8 +350,8 @@ namespace levin
       /* The carrier needs an ENCRYPTED link — it hides by payload
          indistinguishability, which needs encryption at step one. That is
          `LinkSecrecy`, a different axis from the outbound-fluff rule above
-         even though today's zone set makes the two conditions coincide: i2p
-         and tor are both encrypted AND anonymizing, and this line must not be
+         even though today's zone set makes the two conditions coincide: Tor
+         is both encrypted AND anonymizing, and this line must not be
          read as testing the second. P2P link encryption on a cleartext zone
          would separate them.
 
@@ -503,7 +503,7 @@ namespace levin
           forever — so only the last outstanding callback does work. The
           inherited `flush_callbacks` guarded the same hazard on `flush_txs`. */
       std::uint32_t pending_wakes;
-      const epee::net_utils::zone nzone;         //!< Zone is public ipv4/ipv6 connections, or i2p or tor
+      const epee::net_utils::zone nzone;         //!< Zone is public ipv4/ipv6 connections, or Tor or tor
       const bool pad_txs;                        //!< Pad txs to the next boundary for privacy
 
       /*! One transaction handed to the carrier, awaiting its verdict.
@@ -726,13 +726,13 @@ namespace levin
              order transactions were received in is an observable, and forwarding
              it would hand it to every peer downstream. */
 
-          /* A FLUFF over i2p/tor sends with the `fluff` flag — this arm only,
+          /* A FLUFF over Tor sends with the `fluff` flag — this arm only,
              and that is now a distinction rather than a blanket rule.
 
-             The inherited comment here said the flag went on *every* i2p/tor
-             release, on the reasoning that "the i2p/tor network is therefore
+             The inherited comment here said the flag went on *every* Tor
+             release, on the reasoning that "the Tor network is therefore
              replacing the sybil protection of Dandelion++", and closed by
-             noting that "Dandelion++ stem phase over i2p/tor is also worth
+             noting that "Dandelion++ stem phase over Tor is also worth
              investigating". §89 answers that: the zone stems, because a
              transport is a parameter and changing it does not change the
              graph. The sybil-substitution reasoning is retired with it — §64
@@ -1947,7 +1947,7 @@ namespace levin
       case relay_method::stem:
       case relay_method::local:
         /* GATE 3 of 3, deleted at §89.5. This was gated on
-           `zone_->nzone == public_`, so stem/local on i2p/tor fell
+           `zone_->nzone == public_`, so stem/local on Tor fell
            through into the fluff arm and the anonymity zone diffused where
            the design said it stemmed (§63). Tor is a transport like the
            clear internet; changing the transport does not change the graph.

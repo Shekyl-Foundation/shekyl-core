@@ -799,7 +799,7 @@ namespace nodetool
        that is a manual step and not a default. Q12-R1 generates the addresses
        and lands them here; nothing about Tor on mainnet works until it does.
 
-       These lists previously held MONERO's onion and i2p seeds, which is worse
+       These lists previously held MONERO's onion and Tor seeds, which is worse
        than empty rather than better. A Shekyl node started with `--tx-proxy
        tor` dialed six Monero hidden services, failed the network-ID handshake
        at each, and had nowhere else to go — the same dead zone, reached more
@@ -807,7 +807,6 @@ namespace nodetool
        seed operators on the way. An unbootstrapped zone is at least visible as
        what it is. */
     case epee::net_utils::zone::tor:
-    case epee::net_utils::zone::i2p:
       return {};
     default:
       break;
@@ -1040,7 +1039,6 @@ namespace nodetool
     }
 
     //try to bind
-    m_ssl_support = epee::net_utils::ssl_support_t::e_ssl_support_disabled;
     // D7 ruling 4. Off through cutover. The flip deletes the option.
     const bool clearnet_encrypt = command_line::get_arg(vm, arg_clearnet_transport_encrypt);
     for (auto& zone : m_network_zones)
@@ -1048,8 +1046,6 @@ namespace nodetool
       zone.second.m_net_server.get_config_object().set_handler(this);
       zone.second.m_net_server.get_config_object().m_invoke_timeout = std::chrono::milliseconds{P2P_DEFAULT_INVOKE_TIMEOUT};
 
-      if (zone.first == epee::net_utils::zone::i2p)
-        continue;
       if (!zone.second.m_bind_ip.empty())
       {
         const shekyl_inbound_ceiling ceiling = transport_ceiling();
@@ -1592,7 +1588,7 @@ namespace nodetool
         << (last_seen_stamp ? epee::misc_utils::get_time_interval_string(time(NULL) - last_seen_stamp):"never")
         << ")...");
 
-    auto con = zone.m_connect(zone, na, m_ssl_support);
+    auto con = zone.m_connect(zone, na);
     if(!con)
     {
       bool is_priority = is_priority_node(na);
@@ -1657,7 +1653,7 @@ namespace nodetool
                                   << (last_seen_stamp ? epee::misc_utils::get_time_interval_string(time(NULL) - last_seen_stamp):"never")
                                   << ")...");
 
-    auto con = zone.m_connect(zone, na, m_ssl_support);
+    auto con = zone.m_connect(zone, na);
     if (!con) {
       bool is_priority = is_priority_node(na);
 
@@ -2460,9 +2456,6 @@ namespace nodetool
         case epee::net_utils::zone::tor:
           node_data.address = net::tor_address::unknown();
           break;
-        case epee::net_utils::zone::i2p:
-          node_data.address = net::i2p_address::unknown();
-          break;
         default:
           node_data.address = epee::net_utils::network_address{epee::net_utils::ipv4_network_address(0, 0)};
           break;
@@ -2622,17 +2615,12 @@ namespace nodetool
     /* Anonymity-zone selection for originated traffic that chose the zone.
        The mix is only a mix if originated and relayed (coherence-held)
        classes land on the same zone: a helper that always took rbegin()
-       (tor) while dual-stack origins preferred i2p would leave i2p carrying
-       originated traffic only — F-6's oracle, still, on the preferred zone
-       (§30.1 / §59.6).
-
-       Order is pinned: public_ < i2p < tor. With one anonymity zone, rbegin()
-       is that zone. With both, i2p wins when noise-filled, else outbound,
-       then tor. m_network_zones is a sorted map. */
+       Tor is the anonymity zone, and it is the greatest zone discriminant,
+       so rbegin() on the sorted map is that zone when one is configured.
+       m_network_zones is a sorted map. */
     static_assert(std::is_same<std::underlying_type<enet::zone>::type, std::uint8_t>{}, "expected uint8_t zone");
     static_assert(unsigned(enet::zone::invalid) == 0, "invalid expected to be 0");
     static_assert(unsigned(enet::zone::public_) == 1, "public_ expected to be 1");
-    static_assert(unsigned(enet::zone::i2p) == 2, "i2p expected to be 2");
     static_assert(unsigned(enet::zone::tor) == 3, "tor expected to be 3");
 
     /* Anonymity-zone pick for originated traffic that chose the zone (or a
@@ -2869,7 +2857,7 @@ namespace nodetool
     std::vector<peerlist_entry> local_peerlist_new;
     zone.m_peerlist.get_peerlist_head(local_peerlist_new, true, max_peerlist_size);
 
-    /* Tor/I2P nodes receiving connections via forwarding (from tor/i2p daemon)
+    /* Tor nodes receiving connections via forwarding (from Tor daemon)
     do not know the address of the connecting peer. This is relayed to them,
     iff the node has setup an inbound hidden service.
 
@@ -3698,7 +3686,7 @@ namespace nodetool
 
   template<typename t_payload_net_handler>
   std::optional<p2p_connection_context_t<typename t_payload_net_handler::connection_context>>
-  node_server<t_payload_net_handler>::public_connect(network_zone& zone, epee::net_utils::network_address const& na, epee::net_utils::ssl_support_t)
+  node_server<t_payload_net_handler>::public_connect(network_zone& zone, epee::net_utils::network_address const& na)
   {
     p2p_connection_context con{};
     if (!zone.m_net_server.open(na, con))

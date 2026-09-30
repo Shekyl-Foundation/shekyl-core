@@ -863,11 +863,6 @@ mod tests {
     #[test]
     fn the_anonymity_zones_take_the_longer_interim_hop() {
         let anon = DandelionParams::adopted_for(RelayZone::Tor);
-        assert_eq!(
-            anon,
-            DandelionParams::adopted_for(RelayZone::I2p),
-            "i2p and tor are both rendezvous-addressed; nothing distinguishes them here"
-        );
         // §63.2's own worst case — "ten times clearnet latency" — reproduced
         // as verification floor + the labelled rendezvous assumption.
         assert_eq!(anon.time_between_hop_ms, 1_750);
@@ -910,12 +905,7 @@ mod tests {
             );
         }
 
-        for zone in [
-            RelayZone::Invalid,
-            RelayZone::Public,
-            RelayZone::I2p,
-            RelayZone::Tor,
-        ] {
+        for zone in [RelayZone::Invalid, RelayZone::Public, RelayZone::Tor] {
             let representative =
                 DandelionParams::CLASS_REPRESENTATIVES[DandelionParams::adopted_class(zone)];
             assert_eq!(

@@ -376,7 +376,7 @@ namespace cryptonote
         if (existing_tx)
         {
           /* If Dandelion++ loop. Do not use txes in the `local` state in the
-             loop detection - txes in that state should be outgoing over i2p/tor
+             loop detection - txes in that state should be outgoing over Tor
              then routed back via public dandelion++ stem. Pretend to be
              another stem node in that situation, a loop over the public
              network hasn't been hit yet. */

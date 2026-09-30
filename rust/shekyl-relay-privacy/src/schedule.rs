@@ -475,7 +475,7 @@ pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 2_297;
 /* `ADOPTED_FORWARD_DELAY_MEAN_SECS` and `ForwardDelay` were here, and Q12-U2
 deleted them with `relay_method::forward`.
 
-They were F-4's family fix for the i2p/tor -> clearnet forwarding delay:
+They were F-4's family fix for the Tor -> clearnet forwarding delay:
 memoryless rather than the inherited Poisson, at an unchanged 22 s mean.
 `ForwardDelay`'s own docstring called this outcome in advance -- "if Q-12
 deletes `relay_method::forward`, the call site goes with it and the
@@ -725,7 +725,7 @@ impl EmbargoTimer {
     }
 }
 
-/// Noise-channel send cadence for the I2P/Tor zones.
+/// Noise-channel send cadence for the Tor zones.
 ///
 /// Constant-rate cover traffic, a different mechanism from Dandelion++ that
 /// happens to share the inherited `zone` struct and its timers. It is here
@@ -1047,7 +1047,6 @@ mod tests {
         // how 874 s came to be wrong for the anonymity path.
         for zone in [
             crate::zone::RelayZone::Public,
-            crate::zone::RelayZone::I2p,
             crate::zone::RelayZone::Tor,
             crate::zone::RelayZone::Invalid,
         ] {

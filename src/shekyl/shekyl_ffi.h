@@ -3428,7 +3428,7 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 //!
 //! Named bits rather than two `bool` parameters, deliberately. Adjacent bools
 //! in a C signature transpose silently — and transposing THESE two swaps the
-//! i2p/tor outbound-only fluff rule with the noise enable, which is the exact
+//! Tor outbound-only fluff rule with the noise enable, which is the exact
 //! regression RP-3a's first pass shipped (caught only because eight `private_*`
 //! gtests happened to cover it). Function *signatures* on this surface are
 //! gated by `scripts/ci/check_relay_ffi_signatures.sh` (conflicting-declaration
@@ -3436,7 +3436,7 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 //! `zone_flag_bits_do_not_transpose` owns those, and a bitmask removes the
 //! ordering question the signature gate cannot see.
 //!
-//! The i2p/tor rule follows the NETWORK, not noise mode: a hidden-service zone
+//! The Tor rule follows the NETWORK, not noise mode: a hidden-service zone
 //! with noise disabled still needs it. That is why the bits are independent.
 //! Keep these values in sync with `SHEKYL_RELAY_ZONE_*` in `relay_zone_ffi`.
 #define SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY 1u
@@ -4148,7 +4148,6 @@ constexpr std::uint32_t SHEKYL_DIRECTION_INBOUND = 0;
 constexpr std::uint32_t SHEKYL_DIRECTION_OUTBOUND = 1;
 constexpr std::uint8_t SHEKYL_ADDR_IPV4 = 1;
 constexpr std::uint8_t SHEKYL_ADDR_IPV6 = 2;
-constexpr std::uint8_t SHEKYL_ADDR_I2P = 3;
 constexpr std::uint8_t SHEKYL_ADDR_TOR = 4;
 /// A v3 onion hostname, including `.onion`.
 constexpr std::uint16_t SHEKYL_SEAM_HOST_MAX = 62;

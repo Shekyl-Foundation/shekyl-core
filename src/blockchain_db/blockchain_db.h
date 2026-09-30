@@ -264,7 +264,7 @@ struct txpool_tx_meta_t
   uint8_t fcmp_verified: 1;  // set when fcmp_verification_hash is valid
   //! Zone this transaction ARRIVED over. See set_origin_zone/get_origin_zone.
   //
-  // Q12-U1. Exactly two bits, because `invalid`/`public_`/`i2p`/`tor` is four
+  // Q12-U1. Exactly two bits. The named zones are `invalid`, `public_`, and `tor`.
   // values -- the right width, not merely spare room. The record stays a fixed
   // 192 bytes, so nothing about the format grows and there is no version to
   // bump (rule 42 governs `rust/shekyl-engine-{state,file}/**`; this is

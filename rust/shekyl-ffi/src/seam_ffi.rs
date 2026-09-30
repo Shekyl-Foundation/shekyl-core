@@ -57,7 +57,6 @@ pub const SHEKYL_DIRECTION_OUTBOUND: u32 = 1;
 /// `epee::net_utils::address_type`. The encoding uses these tags.
 const ADDR_IPV4: u8 = 1;
 const ADDR_IPV6: u8 = 2;
-const ADDR_I2P: u8 = 3;
 const ADDR_TOR: u8 = 4;
 
 const _: () = {
@@ -65,7 +64,7 @@ const _: () = {
     assert!(ConnectorId::Tor as u8 as u32 == SHEKYL_CONNECTOR_TOR);
     assert!(Direction::Inbound.index() == SHEKYL_DIRECTION_INBOUND as usize);
     assert!(Direction::Outbound.index() == SHEKYL_DIRECTION_OUTBOUND as usize);
-    assert!(ADDR_IPV4 == 1 && ADDR_IPV6 == 2 && ADDR_I2P == 3 && ADDR_TOR == 4);
+    assert!(ADDR_IPV4 == 1 && ADDR_IPV6 == 2 && ADDR_TOR == 4);
     assert!(TOR_HOST_MAX == 62);
     assert!(POST_ESTABLISHED == 1 && POST_DELIVER == 2 && POST_CLOSED == 3);
 };

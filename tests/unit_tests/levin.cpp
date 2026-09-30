@@ -474,7 +474,7 @@ namespace
             EXPECT_EQ(connection_ids_.size(), connections_->get_connections_count());
         }
 
-        /*! Build a notifier on the clearnet or i2p zone.
+        /*! Build a notifier on the clearnet or Tor zone.
 
             No noise parameter: the C++ noise machinery is deleted and
             `NoiseQueues` owns the window, so a `noise_size` argument has
@@ -484,7 +484,7 @@ namespace
             it drive explicitly. */
         std::shared_ptr<cryptonote::levin::notify> make_notifier(bool is_public, bool pad_txs)
         {
-            epee::net_utils::zone zone = is_public ? epee::net_utils::zone::public_ : epee::net_utils::zone::i2p;
+            epee::net_utils::zone zone = is_public ? epee::net_utils::zone::public_ : epee::net_utils::zone::tor;
             receiver_.notifier.reset(
               new cryptonote::levin::notify{io_service_, connections_, zone, pad_txs, events_}
             );
@@ -653,7 +653,7 @@ namespace
                with the relay rather than off the txpool entry. Asserting the
                METHOD alone would pass whichever zone the dispatch attributed
                it to, which is the axis this round changed. */
-            EXPECT_EQ(epee::net_utils::zone::i2p, events_.relayed_zone(method));
+            EXPECT_EQ(epee::net_utils::zone::tor, events_.relayed_zone(method));
             EXPECT_EQ(txs, events_.take_relayed(method));
 
             if (!is_stem)
@@ -698,7 +698,7 @@ namespace
             return is_stem;
         }
 
-        /*! Build a private (i2p) notifier with ten alternating in/out peers
+        /*! Build a private (Tor) notifier with ten alternating in/out peers
             and two fixed txs — shared setup for the stemming cases. */
         std::shared_ptr<cryptonote::levin::notify> make_private_stem_fixture(const bool padded)
         {
@@ -801,7 +801,7 @@ TEST(r1_coherence_predicate, table)
     using epee::net_utils::zone;
 
     // Fluff is the exit on every origin — coherence would strand txs.
-    for (const auto origin : {zone::public_, zone::i2p, zone::tor, zone::invalid})
+    for (const auto origin : {zone::public_, zone::tor, zone::tor, zone::invalid})
         EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(relay_method::fluff, origin));
 
     // Clearnet / invalid never cohere via this path.
@@ -816,7 +816,7 @@ TEST(r1_coherence_predicate, table)
     // Pre-fluff on a real anonymity zone — the live §89 path.
     for (const auto method : {relay_method::stem, relay_method::local})
     {
-        EXPECT_TRUE(cryptonote::r1_coherence_keeps_origin(method, zone::i2p));
+        EXPECT_TRUE(cryptonote::r1_coherence_keeps_origin(method, zone::tor));
         EXPECT_TRUE(cryptonote::r1_coherence_keeps_origin(method, zone::tor));
         EXPECT_TRUE(cryptonote::is_pre_fluff_relay(method));
     }
@@ -840,7 +840,7 @@ TEST(once_at_origin_route, table)
     EXPECT_EQ(zone_route::decision::keep_arrival,
               cryptonote::once_at_origin_route(relay_method::stem, zone::tor).get());
     EXPECT_EQ(zone_route::decision::keep_arrival,
-              cryptonote::once_at_origin_route(relay_method::stem, zone::i2p).get());
+              cryptonote::once_at_origin_route(relay_method::stem, zone::tor).get());
     EXPECT_EQ(zone_route::decision::keep_arrival,
               cryptonote::once_at_origin_route(relay_method::local, zone::tor).get());
 
@@ -866,7 +866,7 @@ TEST(once_at_origin_route, table)
     EXPECT_EQ(zone_route::decision::broadcast_all_zones,
               cryptonote::once_at_origin_route(relay_method::fluff, zone::tor).get());
     EXPECT_EQ(zone_route::decision::broadcast_all_zones,
-              cryptonote::once_at_origin_route(relay_method::fluff, zone::i2p).get());
+              cryptonote::once_at_origin_route(relay_method::fluff, zone::tor).get());
     EXPECT_EQ(zone_route::decision::broadcast_all_zones,
               cryptonote::once_at_origin_route(relay_method::fluff, zone::public_).get());
     EXPECT_EQ(zone_route::decision::broadcast_all_zones,
@@ -899,11 +899,6 @@ TEST(stem_tally_json, row_carries_zone_from_the_merge)
     EXPECT_NE(std::string::npos, tor.find("\"propagated\":3"));
     EXPECT_NE(std::string::npos, tor.find("\"silent\":1"));
     EXPECT_NE(std::string::npos, tor.find("\"distinct_sources\":2"));
-
-    const std::string i2p =
-      cryptonote::levin::format_stem_tally_row_json(row, epee::net_utils::zone::i2p);
-    EXPECT_NE(std::string::npos, i2p.find("\"zone\":\"i2p\""));
-    EXPECT_EQ(std::string::npos, i2p.find("\"zone\":\"tor\""));
 
     EXPECT_NE(
       std::string::npos,
@@ -3107,7 +3102,7 @@ TEST_F(levin_notify, the_noise_carrier_is_off_by_default)
         /* Read what each arm actually demonstrates, because they are NOT the
            same refusal and only one of them is this test's subject.
 
-           On i2p, `has_noise` is false because the development opt-in is off
+           On Tor, `has_noise` is false because the development opt-in is off
            — the property named above, and the one the sibling test flips. On
            the PUBLIC zone there are two refusals stacked, and the second never
            runs: even with the opt-in ON, `Zone::new` rejects a noise carrier
@@ -3121,7 +3116,7 @@ TEST_F(levin_notify, the_noise_carrier_is_off_by_default)
         const auto status = notifier.get_status();
         EXPECT_FALSE(status.has_noise)
             << "the carrier is off unless a development build turns it on "
-            << "(zone is " << (is_public ? "public" : "i2p") << ")";
+            << "(zone is " << (is_public ? "public" : "Tor") << ")";
     }
 }
 

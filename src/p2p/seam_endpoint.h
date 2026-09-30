@@ -34,7 +34,6 @@
 #include <boost/uuid/uuid_io.hpp>
 
 #include "misc_log_ex.h"
-#include "net/i2p_address.h"
 #include "net/levin_protocol_handler_async.h"
 #include "net/tor_address.h"
 #include "shekyl/shekyl_ffi.h"
@@ -80,8 +79,6 @@ namespace shekyl
     using epee::net_utils::network_address;
     if (obs.zone_only != 0 && obs.address_type == SHEKYL_ADDR_TOR)
       return network_address{net::tor_address::unknown()};
-    if (obs.zone_only != 0 && obs.address_type == SHEKYL_ADDR_I2P)
-      return network_address{net::i2p_address::unknown()};
     if (obs.address_type == SHEKYL_ADDR_IPV4 && obs.len == 4)
     {
       // The FFI carries an IPv4 address as its four octets, in network order.
@@ -101,13 +98,6 @@ namespace shekyl
     {
       const std::string host(reinterpret_cast<const char*>(obs.bytes), obs.len);
       auto made = net::tor_address::make(host, obs.port);
-      if (made.has_value())
-        return network_address{*made};
-    }
-    if (obs.address_type == SHEKYL_ADDR_I2P && obs.len > 0 && obs.len <= SHEKYL_SEAM_HOST_MAX)
-    {
-      const std::string host(reinterpret_cast<const char*>(obs.bytes), obs.len);
-      auto made = net::i2p_address::make(host);
       if (made.has_value())
         return network_address{*made};
     }

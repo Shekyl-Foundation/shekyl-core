@@ -197,7 +197,7 @@ const _: () = assert!(
 
 /// Encrypted zones one node may carry at once — the **worst posture**.
 ///
-/// Tor and I2P today. This is the multiplier that made the old per-zone
+/// Tor today. This is the multiplier that made the old per-zone
 /// figure misleading: `NOISE_CHANNELS` is documented as *"max outbound
 /// connections **per zone**"*, so a per-zone rate understates a dual-zone node
 /// by exactly this factor.
@@ -293,7 +293,7 @@ const _: () = assert!(
 /// burst across every channel, as opposed to the sustained load the node is
 /// provisioned for.
 ///
-/// **NOT a circuit requirement.** A Tor or I2P circuit carries **one** of the
+/// **NOT a circuit requirement.** A Tor or Tor circuit carries **one** of the
 /// four channels, so sizing a circuit against this figure over-provisions it
 /// by 4×. [`PER_CIRCUIT_PEAK_BYTES_PER_SEC`] is that number. The two were
 /// conflated here in an earlier draft, which is easy to do and expensive in
@@ -341,7 +341,7 @@ pub const PER_NODE_PEAK_BYTES_PER_SEC: u32 = {
 /// Peak cover bandwidth **per circuit**, in bytes per second.
 ///
 /// One channel at the shortest interval the cadence can draw. This is the
-/// figure a Tor or I2P **circuit** probe sizes against, because a circuit
+/// figure a Tor or Tor **circuit** probe sizes against, because a circuit
 /// carries one channel — [`PER_NODE_PEAK_BYTES_PER_SEC`] is four of these
 /// aggregated and over-provisions a single circuit by 4×.
 ///

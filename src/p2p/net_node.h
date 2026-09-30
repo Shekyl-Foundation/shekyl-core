@@ -60,7 +60,6 @@
 #include "math_helper.h"
 #include "net_node_common.h"
 #include "net/enums.h"
-#include "net/net_ssl.h"
 #include "net/parse.h"
 #include "common/command_line.h"
 #include "shekyl/shekyl_ffi.h"
@@ -231,8 +230,7 @@ namespace nodetool
       // recovery this value comes from is a hidden-service property. Anything
       // that is not demonstrably an anonymity address keeps the public hour,
       // which is also the safe default for any zone added later.
-      const bool anonymity_zone =
-        zone == epee::net_utils::zone::tor || zone == epee::net_utils::zone::i2p;
+      const bool anonymity_zone = zone == epee::net_utils::zone::tor;
       if (!anonymity_zone)
         return P2P_FAILED_ADDR_FORGET_SECONDS;
 
@@ -318,7 +316,7 @@ namespace nodetool
     typedef shekyl::zone_server<epee::levin::async_protocol_handler<p2p_connection_context>> net_server;
 
     struct network_zone;
-    using connect_func = std::optional<p2p_connection_context>(network_zone&, epee::net_utils::network_address const&, epee::net_utils::ssl_support_t);
+    using connect_func = std::optional<p2p_connection_context>(network_zone&, epee::net_utils::network_address const&);
 
     struct config_t
     {
@@ -738,7 +736,7 @@ namespace nodetool
     //keep connections to initiate some interactions
 
 
-    static std::optional<p2p_connection_context> public_connect(network_zone&, epee::net_utils::network_address const&, epee::net_utils::ssl_support_t);
+    static std::optional<p2p_connection_context> public_connect(network_zone&, epee::net_utils::network_address const&);
     shekyl_zone_params transport_spans() const;
     shekyl_inbound_ceiling transport_ceiling() const;
 
@@ -776,8 +774,6 @@ namespace nodetool
     std::uint32_t m_applied_ceiling_kind = 0;
     std::uint32_t m_applied_ceiling_value = 0;
     cryptonote::network_type m_nettype;
-
-    epee::net_utils::ssl_support_t m_ssl_support;
   };
 
     extern const command_line::arg_descriptor<std::string> arg_p2p_bind_ip;

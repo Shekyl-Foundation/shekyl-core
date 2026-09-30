@@ -1331,10 +1331,8 @@ TEST(node_server, unknown_zone_keeps_the_public_window)
             P2P_FAILED_ADDR_FORGET_SECONDS);
   EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::public_, 1),
             P2P_FAILED_ADDR_FORGET_SECONDS);
-  // ...while both real anonymity zones do get it.
+  // The anonymity zone gets the short window.
   EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::tor, 1),
-            P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
-  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::i2p, 1),
             P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
 }
 

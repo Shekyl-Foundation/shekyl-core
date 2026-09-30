@@ -39,7 +39,6 @@ namespace net
     struct uri_components;
     struct user_and_pass;
     struct userinfo_and_hostport;
-    class i2p_address;
 
     namespace socks
     {

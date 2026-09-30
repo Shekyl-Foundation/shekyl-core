@@ -344,7 +344,7 @@ fn socket_of(address: &NetworkAddress) -> Option<(IpAddr, u16)> {
     match address {
         NetworkAddress::Ipv4 { ip, port } => Some((IpAddr::V4(*ip), *port)),
         NetworkAddress::Ipv6 { ip, port } => Some((IpAddr::V6(*ip), *port)),
-        NetworkAddress::Tor { .. } | NetworkAddress::I2p { .. } => None,
+        NetworkAddress::Tor { .. } => None,
     }
 }
 

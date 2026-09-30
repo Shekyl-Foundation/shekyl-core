@@ -29,7 +29,7 @@ namespace
 
   TEST(txpool_origin_zone, round_trips_every_zone)
   {
-    for (const zone z : {zone::invalid, zone::public_, zone::i2p, zone::tor})
+    for (const zone z : {zone::invalid, zone::public_, zone::tor})
     {
       cryptonote::txpool_tx_meta_t meta{};
       meta.set_origin_zone(z);
@@ -63,7 +63,7 @@ namespace
   // aliasing hides.
   TEST(txpool_origin_zone, origin_and_relay_method_do_not_alias)
   {
-    for (const zone z : {zone::invalid, zone::public_, zone::i2p, zone::tor})
+    for (const zone z : {zone::invalid, zone::public_, zone::tor})
     {
       for (const cryptonote::relay_method m : {
              cryptonote::relay_method::none, cryptonote::relay_method::local,
@@ -184,9 +184,9 @@ namespace
   {
     cryptonote::txpool_tx_meta_t tor{};
     tor.set_origin_zone(zone::tor);
-    cryptonote::txpool_tx_meta_t i2p{};
-    i2p.set_origin_zone(zone::i2p);
-    EXPECT_NE(tor.get_origin_zone(), i2p.get_origin_zone());
+    cryptonote::txpool_tx_meta_t pub{};
+    pub.set_origin_zone(zone::public_);
+    EXPECT_NE(tor.get_origin_zone(), pub.get_origin_zone());
     EXPECT_NE(zone::invalid, tor.get_origin_zone());
   }
 }

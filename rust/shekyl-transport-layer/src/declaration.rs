@@ -22,8 +22,6 @@ pub enum NetworkColumn {
     Clearnet,
     /// Tor.
     Tor,
-    /// Present so a third network has a shape. No connector is built.
-    I2p,
 }
 
 macro_rules! connectors {
@@ -83,8 +81,7 @@ macro_rules! connectors {
 }
 
 connectors! {
-    /// A connector that is built. I2P is a column in the table and is not
-    /// one of these.
+    /// A connector that is built.
     enum ConnectorId {
         /// Clearnet.
         Clearnet => Clearnet,
@@ -109,8 +106,6 @@ pub enum Addressing {
     Ip,
     /// Onion v3. The connector dials those hostnames only.
     OnionV3,
-    /// A `.b32.i2p` host.
-    B32I2p,
 }
 
 /// The addressing family an address presents.
@@ -122,7 +117,6 @@ pub const fn addressing_of(address: &NetworkAddress) -> Addressing {
     match address {
         NetworkAddress::Ipv4 { .. } | NetworkAddress::Ipv6 { .. } => Addressing::Ip,
         NetworkAddress::Tor { .. } => Addressing::OnionV3,
-        NetworkAddress::I2p { .. } => Addressing::B32I2p,
     }
 }
 
@@ -171,9 +165,8 @@ const NO_ADDED_LAYER: &[AddedLayer] = &[];
 ///
 /// Clearnet declares no native encryption, so the plan is
 /// [`AddedLayer::Noise`]. Tor declares classical encryption, so the plan
-/// is empty. I2P's encryption cell is not assessed, so the column is
-/// not usable. A new [`NativeEncryption`] variant has to say which of
-/// those it is.
+/// is empty. An unassessed encryption cell is not usable. A new
+/// [`NativeEncryption`] variant has to say which of those it is.
 #[must_use]
 pub const fn stack_plan(column: NetworkColumn) -> StackPlan {
     match declaration(column).encryption() {
@@ -251,8 +244,6 @@ pub enum InboundIdentity {
 pub enum DeadlineInput {
     /// Measured on that connector. The number is not written yet.
     MeasuredPerConnector,
-    /// There is no connector to measure.
-    WhenAConnectorExists,
 }
 
 /// Rendezvous arrival priced by onion-service proof of work.
@@ -396,31 +387,13 @@ pub const fn declaration(which: NetworkColumn) -> Declaration {
             deadline_inputs: Assessment::Assessed(DeadlineInput::MeasuredPerConnector),
             rendezvous: Assessment::Assessed(Rendezvous::Enabled),
         },
-        NetworkColumn::I2p => Declaration {
-            addressing: Assessment::Assessed(Addressing::B32I2p),
-            encryption: Assessment::NotAssessed,
-            destination_authenticated: Assessment::NotAssessed,
-            address_hidden_from_peer: Assessment::NotAssessed,
-            destination_hidden_from_local_observer: Assessment::NotAssessed,
-            address_hidden_from_remote_observer: Assessment::NotAssessed,
-            correlation: Assessment::NotAssessed,
-            local_observer_visibility: Assessment::NotAssessed,
-            relay_origin: Assessment::Assessed(NotProvided),
-            bannable_inbound: Assessment::NotAssessed,
-            stream: Assessment::NotAssessed,
-            inbound_identity: Assessment::NotAssessed,
-            deadline_inputs: Assessment::Assessed(DeadlineInput::WhenAConnectorExists),
-            rendezvous: Assessment::NotAssessed,
-        },
     }
 }
 
 /// The connector whose addressing cell is the family `address` presents.
 ///
-/// I2P presents [`Addressing::B32I2p`] and no connector declares that
-/// family, so the result is [`None`]. Two connectors declaring one family
-/// is the D7 falsifier: the result is [`None`] rather than a silent pick,
-/// and the crate test rejects that table.
+/// Two connectors declaring one family is the D7 falsifier: the result is
+/// [`None`] rather than a silent pick, and the crate test rejects that table.
 #[must_use]
 pub fn connector_for(address: &NetworkAddress) -> Option<ConnectorId> {
     let family = addressing_of(address);
@@ -472,7 +445,6 @@ mod tests {
             cell(column.addressing(), |value| match value {
                 Addressing::Ip => "ipv4/ipv6",
                 Addressing::OnionV3 => "onion v3",
-                Addressing::B32I2p => "b32.i2p",
             }),
             cell(column.encryption(), |value| match value {
                 NativeEncryption::NoneNative => "none native",
@@ -505,7 +477,6 @@ mod tests {
             }),
             cell(column.deadline_inputs(), |value| match value {
                 DeadlineInput::MeasuredPerConnector => "measured per connector",
-                DeadlineInput::WhenAConnectorExists => "when a connector exists",
             }),
             cell(column.rendezvous(), |value| match value {
                 Rendezvous::NotApplicable => "not applicable",
@@ -522,25 +493,16 @@ mod tests {
     }
 
     #[test]
-    fn an_unassessed_cell_reads_not_assessed() {
-        assert!(matches!(
-            declaration(NetworkColumn::I2p).encryption(),
-            Assessment::NotAssessed
-        ));
-        assert_eq!(unassessed(NetworkColumn::I2p), 11);
+    fn clearnet_and_tor_are_assessed() {
         assert_eq!(unassessed(NetworkColumn::Tor), 0);
         assert_eq!(unassessed(NetworkColumn::Clearnet), 0);
     }
 
     #[test]
     fn no_cell_uses_a_reputation_word() {
-        for column in [
-            NetworkColumn::Clearnet,
-            NetworkColumn::Tor,
-            NetworkColumn::I2p,
-        ] {
+        for column in [NetworkColumn::Clearnet, NetworkColumn::Tor] {
             match column {
-                NetworkColumn::Clearnet | NetworkColumn::Tor | NetworkColumn::I2p => {}
+                NetworkColumn::Clearnet | NetworkColumn::Tor => {}
             }
             for text in cell_texts(declaration(column)) {
                 let lower = text.to_ascii_lowercase();
@@ -573,12 +535,6 @@ mod tests {
             Assessment::Assessed(BannableInbound::NoAddress)
         );
         assert_eq!(tor.rendezvous(), Assessment::Assessed(Rendezvous::Enabled));
-        let i2p = declaration(NetworkColumn::I2p);
-        assert_eq!(i2p.relay_origin(), Assessment::Assessed(NotProvided));
-        assert_eq!(
-            i2p.deadline_inputs(),
-            Assessment::Assessed(DeadlineInput::WhenAConnectorExists)
-        );
     }
 
     #[test]
@@ -605,13 +561,6 @@ mod tests {
                 },
                 Some(ConnectorId::Tor),
             ),
-            (
-                NetworkAddress::I2p {
-                    host: "example.b32.i2p".to_owned(),
-                    port: 0,
-                },
-                None,
-            ),
         ];
         for (address, expected) in samples {
             assert_eq!(connector_for(&address), expected);
@@ -636,14 +585,9 @@ mod tests {
             StackPlan::Ready { layers } => assert!(layers.is_empty()),
             StackPlan::NotUsable => panic!("tor meets the encryption contract"),
         }
-        assert_eq!(stack_plan(NetworkColumn::I2p), StackPlan::NotUsable);
-        for column in [
-            NetworkColumn::Clearnet,
-            NetworkColumn::Tor,
-            NetworkColumn::I2p,
-        ] {
+        for column in [NetworkColumn::Clearnet, NetworkColumn::Tor] {
             match column {
-                NetworkColumn::Clearnet | NetworkColumn::Tor | NetworkColumn::I2p => {}
+                NetworkColumn::Clearnet | NetworkColumn::Tor => {}
             }
             let ready = matches!(stack_plan(column), StackPlan::Ready { .. });
             let built = ConnectorId::ALL.iter().any(|id| id.column() == column);

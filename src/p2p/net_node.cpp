@@ -54,7 +54,6 @@
 #include "net/socks.h"
 #include "net/parse.h"
 #include "net/tor_address.h"
-#include "net/i2p_address.h"
 #include "p2p/p2p_protocol_defs.h"
 #include "string_tools.h"
 #include "string_tools_lexical.h"
@@ -241,9 +240,6 @@ namespace nodetool
             case epee::net_utils::zone::tor:
                 proxies.back().zone = epee::net_utils::zone::tor;
                 break;
-            case epee::net_utils::zone::i2p:
-                proxies.back().zone = epee::net_utils::zone::i2p;
-                break;
             default:
                 MERROR("Invalid network for --" << arg_tx_proxy.name);
                 return std::nullopt;
@@ -314,10 +310,6 @@ namespace nodetool
             case net::tor_address::get_type_id():
                 inbounds.back().our_address = std::move(*our_address);
                 inbounds.back().default_remote = net::tor_address::unknown();
-                break;
-            case net::i2p_address::get_type_id():
-                inbounds.back().our_address = std::move(*our_address);
-                inbounds.back().default_remote = net::i2p_address::unknown();
                 break;
             default:
                 MERROR("Invalid inbound address (" << address << ") for --" << arg_anonymous_inbound.name << ": " << (our_address ? "invalid type" : our_address.error().message()));

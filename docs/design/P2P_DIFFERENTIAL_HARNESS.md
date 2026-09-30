@@ -176,7 +176,7 @@ branch carries the zone binding and the call sites that move with it
 the Rust list, `m_our_address` comes from Tor publication, `get_info`
 reports real socket counts), the cross-build run and the measurements
 taken on that build and recorded as run records, then D13's deletions,
-the epee goldens, I2P recorded as removed, and the pipe branch
+the epee goldens, the I2P address type deleted, and the pipe branch
 deleted. It merges once, when the run records are in.
 
 UPDATE 2026-09-30: the epee host and `boosted_tcp_server` are

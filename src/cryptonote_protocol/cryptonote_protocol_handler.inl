@@ -429,7 +429,7 @@ namespace cryptonote
       return true;
     }
 
-    // No chain synchronization over hidden networks (tor, i2p, etc.)
+    // No chain synchronization over hidden networks (tor, Tor, etc.)
     if(context.m_remote_address.get_zone() != epee::net_utils::zone::public_)
     {
       context.set_state_normal();
@@ -863,7 +863,7 @@ namespace cryptonote
        and coherence keeps it on the zone it arrived over.
 
        `dandelionpp_fluff` is unchanged and still overrides below: a sender who
-       disabled white noise over i2p/tor is fluffing, and the receiving hidden
+       disabled white noise over Tor is fluffing, and the receiving hidden
        service fluffs immediately — that is the deliberate exit from the
        anonymity zone (§59.1), not a routing inference about the transport. */
 
@@ -1035,8 +1035,6 @@ namespace cryptonote
       auto point = steady_clock::now();
       auto time_from_epoh = point.time_since_epoch();
       auto sec = duration_cast< seconds >( time_from_epoh ).count();*/
-
-    //epee::net_utils::network_throttle_manager::get_global_throttle_inreq().logger_handle_net("log/dr-shekyl/net/req-all.data", sec, get_avg_block_size());
 
     if(arg.blocks.empty())
     {
@@ -2174,8 +2172,6 @@ skip:
         context.m_expect_response = NOTIFY_RESPONSE_GET_OBJECTS::ID;
         MLOG_P2P_MESSAGE("-->>NOTIFY_REQUEST_GET_OBJECTS: blocks.size()=" << req.blocks.size()
             << "requested blocks count=" << count << " / " << l_m_bss << " from " << span.first << ", first hash " << req.blocks.front());
-        //epee::net_utils::network_throttle_manager::get_global_throttle_inreq().logger_handle_net("log/dr-shekyl/net/req-all.data", sec, get_avg_block_size());
-
         context.m_num_requested += req.blocks.size();
         post_notify<NOTIFY_REQUEST_GET_OBJECTS>(req, context);
         MLOG_PEER_STATE("requesting objects");
@@ -2240,7 +2236,6 @@ skip:
 
       //std::string blob; // for calculate size of request
       //epee::serialization::store_t_to_binary(r, blob);
-      //epee::net_utils::network_throttle_manager::get_global_throttle_inreq().logger_handle_net("log/dr-shekyl/net/req-all.data", sec, get_avg_block_size());
       //LOG_PRINT_CCONTEXT_L1("r = " << 200);
 
       context.m_last_request_time = boost::posix_time::microsec_clock::universal_time();

@@ -14,7 +14,7 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-/// One peer address. The four variants are the closed address union.
+/// One peer address. The three variants are the closed address union.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NetworkAddress {
     /// IPv4 and a port.
@@ -31,13 +31,6 @@ pub enum NetworkAddress {
         /// TCP port.
         port: u16,
     },
-    /// A `.b32.i2p` host and the port the union carries.
-    I2p {
-        /// Host name.
-        host: String,
-        /// Port.
-        port: u16,
-    },
     /// An onion host and a port.
     ///
     /// `host` includes the `.onion` suffix when it is a hostname. Whether
@@ -51,13 +44,13 @@ pub enum NetworkAddress {
 }
 
 impl NetworkAddress {
-    /// The IP, when this address has one. Onion and I2P names do not.
+    /// The IP, when this address has one. An onion name does not.
     #[must_use]
     pub fn ip(&self) -> Option<IpAddr> {
         match self {
             Self::Ipv4 { ip, .. } => Some(IpAddr::V4(*ip)),
             Self::Ipv6 { ip, .. } => Some(IpAddr::V6(*ip)),
-            Self::I2p { .. } | Self::Tor { .. } => None,
+            Self::Tor { .. } => None,
         }
     }
 }
@@ -83,14 +76,6 @@ mod tests {
             NetworkAddress::Tor {
                 host: "example.onion".to_owned(),
                 port: 18080,
-            }
-            .ip(),
-            None
-        );
-        assert_eq!(
-            NetworkAddress::I2p {
-                host: "example.b32.i2p".to_owned(),
-                port: 0,
             }
             .ip(),
             None

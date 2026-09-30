@@ -30,7 +30,7 @@ fn arrived(phase: ArrivedPhase) -> PoolRecord {
         fee: AtomicUnits::from_raw(12_345),
         receive_time: secs(1_000),
         relay_state: RelayState::Arrived {
-            zone: NetZone::I2p,
+            zone: NetZone::Tor,
             phase,
         },
         relayed: false,
@@ -95,12 +95,7 @@ fn every_phase_and_clock_arm_round_trips() {
         },
         Responsibility::Disarmed,
     ));
-    for zone in [
-        NetZone::Invalid,
-        NetZone::Public,
-        NetZone::I2p,
-        NetZone::Tor,
-    ] {
+    for zone in [NetZone::Invalid, NetZone::Public, NetZone::Tor] {
         round_trip(PoolRecord {
             relay_state: RelayState::Arrived {
                 zone,

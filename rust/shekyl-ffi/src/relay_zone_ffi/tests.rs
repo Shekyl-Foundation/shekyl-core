@@ -795,7 +795,7 @@ fn queue_fluff_rejects_a_null_ptr_with_nonzero_len() {
 /// rather than cancelling out — which a both-bits-set case would not catch.
 ///
 /// Why the stakes justify a dedicated test: transposing these two swaps the
-/// i2p/tor outbound-only fluff rule with the covert enable, which is exactly the
+/// Tor outbound-only fluff rule with the covert enable, which is exactly the
 /// regression RP-3a's first pass shipped. That one survived only because eight
 /// `private_*` gtests happened to cover the fluff side; nothing covered this
 /// side, and the C++ header is hand-written, so no codegen would catch a
@@ -1115,7 +1115,7 @@ fn a_nil_successor_arms_no_observation_but_a_real_one_does() {
 /// §89.2 makes `hop` per-zone, but the handle was still built from
 /// `DandelionParams::adopted()` for every zone — so an anonymity zone armed a
 /// clearnet 190 s observation against the 499 s embargo its own successor
-/// draws. Every honest i2p/tor peer would age into `silent` before it was even
+/// draws. Every honest Tor peer would age into `silent` before it was even
 /// allowed to re-relay, and `stem_tallies` would report the whole anonymity
 /// peer set as withholding.
 ///

@@ -156,7 +156,7 @@
 /* CRYPTONOTE_FORWARD_DELAY_BASE / _AVERAGE were here, and Q12-U2 deleted them
    with the mechanism they timed.
 
-   They delayed forwarding from i2p/tor to ipv4/6 "such that 2+ incoming
+   They delayed forwarding from Tor to ipv4/6 "such that 2+ incoming
    connections could have sent the tx" — a delay on the tor->clearnet bridge.
    Q12-D3 removes the bridge from the admission path: an arrival stems on the
    zone it arrived over rather than crossing to clearnet on a timer, so there

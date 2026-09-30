@@ -452,10 +452,6 @@ mod tests {
             channel_choice(NetworkColumn::Tor, ClearnetOption::On),
             Ok(ChannelChoice::Plain)
         );
-        assert_eq!(
-            channel_choice(NetworkColumn::I2p, ClearnetOption::On),
-            Err(ChoiceError::NotUsable)
-        );
     }
 
     #[cfg(target_os = "linux")]

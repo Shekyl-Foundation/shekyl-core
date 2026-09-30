@@ -502,9 +502,8 @@ does not start epee for that zone. Tor bind failure still drops the
 zone. Publish failure still leaves it outbound-only. UPDATE
 2026-09-30: the epee server is deleted (D13). The harness reference
 is the parity goldens, checked by `check-goldens`. It is not a
-branch inside a zone that already started on the seam. I2P gets no
-seam server and no new epee server. The cutover states that I2P
-support is removed until an I2P connector exists.
+branch inside a zone that already started on the seam. The I2P
+address type is deleted. An I2P connector reopens it.
 
 **The FFI is the posts, the completions, and the synchronous connect.**
 
@@ -1005,8 +1004,8 @@ a class fills the argument the writer already takes.
 **Cutover order, after the harness merges.** One branch, one merge,
 when the run records are in: the zone binding, this budget, the call
 sites that move with them, the cross-build run and the measurements on
-that build, then D13's deletions, the epee goldens, I2P recorded as
-removed, and the pipe branch deleted.
+that build, then D13's deletions, the epee goldens, the I2P address
+type deleted, and the pipe branch deleted.
 
 ---
 
@@ -1839,11 +1838,11 @@ The set:
 `noise.rs`, `channel.rs`, `prefix.rs`, and `aead.rs` are not in this
 list. They are the crypto core.
 
-Deleting the SOCKS dial removes the C++ I2P path (`zone::i2p` and the
-`--tx-proxy` handling that dials it). I2P support is removed until an
-I2P connector is built. The cutover PR states that. It is not a silent
-deletion (rule 15). D14 records the same ruling: clearnet and Tor cut
-over together.
+The I2P address type, its parser, and `zone::i2p` are deleted with
+the SOCKS dial. Discriminant 2 stays unused so `zone::tor` remains 3.
+An I2P connector reopens the address type and that discriminant in
+the connector's pull request. D14 records the same ruling: clearnet
+and Tor cut over together.
 
 ---
 
@@ -1854,8 +1853,8 @@ over together.
    budget. The numbers are measured against the Pi-4 floor.
 2. **Overlays.** Clearnet and Tor cut over together. Staging would
    leave epee's socket-bearing server beside the transport layer.
-   I2P's C++ path is removed with epee's SOCKS code, and the cutover
-   PR says so, until an I2P connector exists.
+   The I2P address type and zone arm are deleted with epee's SOCKS
+   code. An I2P connector reopens them.
 3. **Levin framing stays C++ through cutover and moves with LV-3.**
    The adapter already passes bytes, so the transport layer never sees
    a command. Moving framing now would edit `async_protocol_handler`
