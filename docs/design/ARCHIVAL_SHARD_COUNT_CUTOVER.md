@@ -291,7 +291,8 @@ above.
 **Order within the effort:**
 
 1. **Counts defined once** in `shekyl-types` — one home for the domain ordinal, as
-   `SHARD_TX_COUNT` already is for `T` (and `SCC-4` folded in).
+   `SHARD_LENGTH` is for `W` (*was `SHARD_TX_COUNT` for `T`; deleted by the
+   `SHT-Q2` build, PR #910*) (and `SCC-4` folded in).
 2. **Constants re-derived** in their new units (§D) — `knee_n` in transactions
    before anything reads it.
 3. **Sims re-baselined** against the re-derived constants, so the economics

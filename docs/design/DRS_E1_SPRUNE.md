@@ -106,8 +106,10 @@ contracts (§5 below) with no home; this document is the home.
 > `current_epoch = settlement_epoch_at_height(tip)` and
 > `close_epoch(k) = settlement_epoch_at_height(close_height(k))`.
 
-Shard `k` — **`T` transactions by `tx_id`, `[k·T, (k+1)·T)`, `k = ⌊tx_id / T⌋`**
-(`PDM-Q6` item 5, RULED 2026-09-23; F32's byte bound superseded) — has its
+Shard `k` — **`W` archival bytes, `k = ⌊cum_before / W⌋` over the cumulative
+archival length** (`SHT-Q2` RULED 2026-09-29, `ARCHIVAL_SHARD_T_DERIVATION.md`
+§8.6; *re-keyed from `T` transactions by `tx_id`, `[k·T, (k+1)·T)`, `PDM-Q6`
+item 5 as RULED 2026-09-23*) — has its
 prunable regions and `pqc_auths` discarded **atomically, as a
 whole**, at the epoch boundary after its **freeze epoch**
 `close_epoch(k) + 1`. There is no per-daemon input (`PDM-Q9`: all daemons
@@ -284,7 +286,12 @@ the daemon.
   one store state with one meaning. ~~Owed with S-CHAIN-W amendment A4:
   (iv) the length rows, pairwise~~ **WITHDRAWN 2026-09-23 — `PDM-Q6` item 5:
   shards are fixed-cardinality `T`, there are no length rows, A4 is not
-  owed, and §7.7 has three legs.**
+  owed, and §7.7 has three legs.** *Re-read 2026-09-29 (`SHT-Q2`): there
+  **is** a length row now, `txs_archival_len`, but it is not A4 — A4 was a
+  declared length; this one is computed from the bytes and bound through the
+  txid, and it is permanent (outside every prune surface, beside the hash
+  rows). Leg (iv) as A4 stated it stays withdrawn; the length row's own
+  invariant is SI-24 (rows sum to `block_info.cumulative_archival_len`).*
 - **Hash rows are outside every prune surface**, permanent.
   `txs_prunable_hash` (exists), `txs_pqc_auth_hash` (A3, #772).
 - **`StoreCannot::PopBelowFloor`** as the pop refusal; the undo-log
