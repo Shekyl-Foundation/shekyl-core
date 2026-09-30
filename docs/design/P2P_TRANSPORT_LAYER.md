@@ -1571,30 +1571,22 @@ at the top of the ~600–700 ms range. A phone tether sits inside that
 ceiling. The second is the node-local p99 from the floor legs, the
 larger residual (span p99 minus that leg's RTT) so the term is not
 under-stated: connect 7.2 ms, gap 14.7 ms. The handshake term is the
-median residual of the body, 12.6 ms, not rank ⌈0.99 n⌉: that rank is
-an unattributed tail (676.6 ms here, 715 ms on the loaded LAN
-responder), and the quiet South America responder has no such tail.
-The median is the term only while no instrumented row has classified
-the tail. `clearnet responder message2` is the line that does it, and
-it stays: one `getsockopt` per inbound session. The duplicate descriptor
-does not hold the socket open; a local close `shutdown`s the write
-half, and the duplicate drops when the read half returns. The first
-decoded chunk is after message 2 is acknowledged, so
-`tcpi_total_retrans` includes every copy of it. A run that contains
-the ~700 ms rows names the next step: `total_retrans` 2 and the median
-stops being provisional; a nonzero writer wait with `total_retrans` 0
-and the deadline commit waits on the D5 leg; both zero while the floor
-is still waiting and the cause stays open rather than becoming a
-number. Two instrumented n = 100 runs on the datacenter path, the
-production daemon idle (load 0.18) and then both cores saturated by
-busy loops (load 2.1), had `total_retrans` 0 and no handshake above
-56 ms. Neither run contained the rows, so neither names the case. The
-number is not written from their absence. The factor of two is jitter and
-congestion on the ceiling link. Twice the p99 of a shorter honest path is not a deadline: every
-dial on a longer honest path fails, and a failed clearnet dial marks
-the address for up to `P2P_FAILED_ADDR_FORGET_SECONDS` (1 h). Rounded
-up to 1 ms, if that run names the median: connect 1.415 s,
-initiator handshake 1.426 s, gap 1.430 s. The three legs, and the New
+median residual of the body, 12.6 ms, measured. Rank ⌈0.99 n⌉ of the
+New York leg is a tail and is not this term. The derivation was
+complete when that leg landed: LAN, South America, and New York, n =
+100 each, slope about 1, this residual, and the ceiling. The factor of
+two is jitter and congestion on the ceiling link. Twice the p99 of a
+shorter honest path is not a deadline: every dial on a longer honest
+path fails, and a failed clearnet dial marks the address for up to
+`P2P_FAILED_ADDR_FORGET_SECONDS` (1 h). Rounded up to 1 ms: connect
+1.415 s, initiator handshake 1.426 s, gap 1.430 s. A ~700 ms handshake
+tail (715 ms on the LAN VM, 676.6 ms on the morning datacenter leg,
+and 115.7 ms beside it) is an open item, not an input. Instrumented
+runs ruled out retransmission, responder runtime, CPU saturation, and
+memory pressure; the cause is unknown. `clearnet responder message2`
+stays on every inbound session, and the next occurrence reports its
+own `wait_before_write_ns` and `total_retrans`. No millisecond here
+depends on that event. The three legs, and the New
 York leg that confirms the slope is about 1, are in the benchmark
 record. A measured satellite-class link whose RTT exceeds 700 ms
 reopens the ceiling. These milliseconds are not wired yet.

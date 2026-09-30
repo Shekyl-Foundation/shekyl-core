@@ -558,17 +558,14 @@ the Noise handshake, after message 1 has been written and before
 message 2 has been read. The Levin gap on those rows is ordinary, so
 the wait ended before the session was handed to C++.
 
-**The handshake node-local term is the median residual, and that is
-provisional.** Rank ⌈0.99 n⌉ of this leg is the tail. The South America
-leg's p99 residual (12.6 ms) and this leg's median residual (12.5 ms)
-agree, and that is the term the deadline uses while the tail is
-unattributed. The reason it matters is the margin, not the term. An
-honest link at the 700 ms ceiling that also takes the 676 ms stall
-lands near 1.38 s, against a 1.426 s handshake deadline: about 50 ms
-of headroom on a stall the spans do not explain. If the stall is in
-our writer, the number moves when it is fixed. If it is a retransmit,
-the factor of two is what covers it. The deadline commit does not
-write 1.426 s until a span says which.
+**The handshake node-local term is the median residual, measured.**
+Rank ⌈0.99 n⌉ of this leg is a tail, and the tail is not a term in the
+deadline. The South America leg's p99 residual (12.6 ms) and this
+leg's median residual (12.5 ms) are the same number. The derivation
+was complete when this leg landed: three distributions, slope about 1,
+that residual, and the 700 ms ceiling. Rounded up to 1 ms: connect
+1.415 s, initiator handshake 1.426 s, gap 1.430 s. Nothing later in
+this section changes those.
 
 The same hole already has one attributed neighbour, and it is not this
 leg. South America's handshake max is 183.0 ms (p99 182.6 ms): no tail,
@@ -578,9 +575,9 @@ run 2 sample 46, the floor against the loaded VM: 715 ms on the floor,
 span ends when the computed flight is handed to the writer task, before
 `write_budgeted` puts message 2 on the socket. Two stalls near 700 ms
 (715 ms on that VM, 676.6 ms here) and one at 115.7 ms, each with an
-ordinary connect and gap, each on a responder that was not quiet. The
-quiet WAN responder produced none. That is a responder-side wait in
-the unspanned write, not a property of the RTT. C++ is not in it:
+ordinary connect and gap. The quiet South America responder produced
+none. Read at the time as a responder-side wait in the then-unspanned
+write. The exclusion runs below close that reading. C++ is not in it:
 `listen_clearnet` binds a Rust listener, the Noise read and write run
 on that socket, and the seam adopts the session only after
 `open_channel` returns. The pipe FFI is still in the tree and has no
@@ -589,7 +586,8 @@ both flights are one segment under one MSS, and the responder's
 message 2 is its first send, so Nagle does not hold it. The delayed-ACK
 timer does not make a 676 ms stall.
 
-What closes it is one line, `clearnet responder message2`, logged when
+The instrument for the tail, not a term in those deadlines, is one
+line, `clearnet responder message2`, logged when
 the peer's first byte arrives, which is after message 2 has been
 delivered. `wait_before_write_ns` is the writer task's delay after the
 flight is handed off. `write_ns` is only `write_all`, and that returns
@@ -610,14 +608,32 @@ p99 3.8 ms. The second saturated both cores with busy loops (load
 average 2.1) and left the production daemon up. Handshake p99 43.3 ms,
 max 49.4 ms. Across those 100 lines, `total_retrans` was 0,
 `retransmits` was 0, writer wait p99 0.20 ms (max 0.30 ms), `write_ns`
-p99 3.9 ms (max 10.0 ms). The 115.7 ms and 676.6 ms rows did not recur. These runs do not name
-which of the three cases those rows were: there is no ~700 ms row
-under the line. The host during them was not the loaded posture of
-the morning distribution. The production daemon was up and idle
-(about 1% of a core). The busy-loop saturation is a different load,
-and it also produced no tail and no retransmission. The handshake
-term stays the median residual, provisional, until a run that has
-the rows.
+p99 3.9 ms (max 10.0 ms). The 115.7 ms and 676.6 ms rows did not recur under either of those
+loads. CPU contention is not the stall: writer wait under load was
+0.20 ms at p99.
+
+A third n = 100, same path, held 2.7 GiB of anonymous memory on that
+3.8 GiB host. It has no swap. About 150 MiB stayed available, above
+`min_free_kbytes` (66 MiB), and both daemons stayed up. `total_retrans`
+was 0 on all 100 lines. Writer wait median 0.084 ms, p99 0.69 ms, max
+1.0 ms. `write_ns` p99 5.0 ms, max 7.3 ms. Floor handshake median
+37.0 ms, p99 57.9 ms, max 117.2 ms (one row). That row's responder
+line was wait 0.38 ms, write 0.31 ms, `total_retrans` 0. Memory
+pressure did not produce a ~700 ms row, and it did not produce a
+retransmission. A 700 ms freeze of the host is not something these
+deadlines absorb, and this run did not show one.
+
+**Open, and not a deadline term.** A handshake tail near 700 ms was
+seen twice — 715 ms on the LAN VM, 676.6 ms on the morning datacenter
+leg — and once at 115.7 ms on that morning leg. About 500 later WAN
+handshakes did not add another. It is not retransmission
+(`total_retrans` 0 on every instrumented line), not the responder's
+runtime (writer wait at most 1.0 ms under memory pressure, 0.20 ms
+p99 under CPU saturation), not CPU, and not memory pressure. Cause
+unknown. The instrument is in production: `clearnet responder
+message2` on every inbound session, so the next one reports its own
+`wait_before_write_ns` and `total_retrans` in that daemon's log. No
+millisecond in the deadlines above depends on it.
 
 ## Tor inbound distribution, floor device responder (2026-09-30 UTC)
 
