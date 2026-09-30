@@ -637,7 +637,42 @@ dialer. Whether a session left up stays up is watched on the rerun. One
 drop, with the other end still holding the object, is not a timer.
 
 The transport half of a hop is the Tor gap distributions (outbound
-1.26 s p99; inbound 1.221 s p99). The hop itself is the rerun.
+1.26 s p99; inbound 1.221 s p99).
+
+### The hop, same day
+
+One transaction, measurement daemons only. The seed's measurement
+daemon mined a fixed-difficulty chain; the floor's measurement daemon
+synced that chain over clearnet (the inherited early return above means
+it will not sync it over the Tor session). The seed's only outbound was
+the Tor session to the floor's per-boot onion. The production daemon
+was not mined: its height moved 13434 → 13441 across the run, the
+testnet's own pace. Wallet and `start_mining` were pointed at the
+measurement RPC.
+
+The session that carried the stem is the one opened at the start of
+the run. Its spans: dial 4.30 s (first circuit, descriptor included),
+outbound gap 784 ms, inbound gap 781 ms. No `seam close` on either end
+from establishment through the hop, about four minutes. The three
+close fields are therefore empty for this run — neither end recorded a
+close, so there is no "who saw it first." The 39 s one-sided
+`PeerClosed` from the previous attempt was not reproduced on a session
+left up.
+
+| event | time (UTC) |
+| --- | --- |
+| seed: `Sent 1 transaction(s) … using Dandelion++ stem` | 11:26:54.382 |
+| floor: `Including transaction` (same tx) | 11:26:55.040 |
+| floor: `Transaction added to pool` | 11:26:56.400 |
+
+The hop, stem-send to the receiver's first log of the transaction, is
+**658 ms**. The receiver then validated it into its pool 1.36 s later.
+It tried to stem onward, logged `Unable to send transaction(s) via
+Dandelion++ stem` (a two-node stem has no further outbound), and queued
+the transaction for fluff. One hop, accepted. n = 1; it is the
+existence of the hop over Tor, not a distribution, and it does not
+replace the 350 ms placeholder in D-5 — a distribution of hops is a
+later run on this same shape.
 
 ## Not this run
 
