@@ -46,11 +46,11 @@
 //! range `⌊C(lo)/W⌋ .. ⌊C(hi)/W⌋`, read off **two `block_info` rows**.
 //!
 //! The rows to delete are storage ids, and the offset `k·W` names one: the
-//! first transaction starting at or past it. A [`Descent`] finds the height
-//! where the fold first reaches the offset, walking `block_info` down from
-//! `(E−1)·SEB`; [`first_id_at_offset`] then walks that block's ids reading
-//! `txs_archival_len` (absent ⇔ `0`) — permanent skeleton rows no prune
-//! deletes. No table of boundaries and no read of what is present — a
+//! first transaction starting at or past it. A [`Descent`] walks
+//! `block_info` down from `(E−1)·SEB`, walking each block's ids over its
+//! `txs_archival_len` rows (absent ⇔ `0`) — permanent skeleton rows no
+//! prune deletes — and stops on the block where the fold first reaches the
+//! offset, with the id. No table of boundaries and no read of what is present — a
 //! presence read that *selected* what to discard would be a second,
 //! node-local source (§8), and the whole point is that every node computes
 //! the same `D(E)` whether it discarded last epoch, skeleton-synced or just
@@ -58,20 +58,26 @@
 //! archival node both hold. Every epoch comparison is a branch or an
 //! addition, never `E − 2` on a `u64` (§4, Bugbot 2026-09-23).
 //!
-//! # Every row the discard rests on is checked (SI-13)
+//! # Every block the discard rests on is checked (SI-13, SI-24)
 //!
-//! A search over the cell is only as sound as the fold is monotone, and a
-//! discard cannot be taken back. A binary search checks SI-13 at the rows it
-//! probes; a run of cells shifted together passes every probe, every
-//! bracket and SI-19 inside the run, and settles on a second crossing that
-//! the true fold does not have (Copilot, PR #910). So the descent reads
-//! **every** row from `(E−1)·SEB − 1` down to where `D(E)`'s first shard
-//! opens, and checks each against the row above it: the crossings it
-//! returns are the fold's only crossings. That opening can lie below the
-//! window — a shard spans as many epochs as it takes to fill `W` — but
-//! consecutive discards descend over disjoint shards plus the two-epoch
-//! window, so each `block_info` row is read a bounded number of times over
-//! its life, not once per boundary.
+//! A search over the cell is only as sound as the cell, and a discard
+//! cannot be taken back. A binary search checks the rows it probes; a run
+//! of cells shifted together passes every probe, and a shift that starts at
+//! one block and persists above it keeps the fold monotone everywhere
+//! (Copilot, PR #910, twice). So the descent reads **every** block from
+//! `(E−1)·SEB − 1` down to where `D(E)`'s first shard opens and checks each
+//! against its parent: both folds non-decreasing (SI-13) and its length
+//! rows summing from the parent's cell to its own (SI-24). The crossings it
+//! returns are then placed by the rows, not by a cell that could have
+//! moved. That opening can lie below the window — a shard spans as many
+//! epochs as it takes to fill `W` — but the windows of consecutive
+//! boundaries overlap and each descent reaches the opening of the first
+//! shard it discards, so the checked spans chain down to genesis (the first
+//! discard's shard `0` opens there), and each block and its rows are read
+//! a bounded number of times over their life, not once per boundary. What
+//! no boundary re-reads is a block below its descent after an earlier
+//! boundary checked it: a store-wide audit re-summing from genesis is that
+//! instrument, not the per-boundary batch.
 //!
 //! Running inside the boundary block's own transaction makes "connected
 //! past `E·SEB` with `D(E)` un-run" unrepresentable: a batch that dies
@@ -138,7 +144,7 @@ const BLOCK_INFO_CELL: &str = "block_info";
 const TX_COUNT_CELL: &str = "block_info.cumulative_tx_count";
 
 /// The archival-length fold inside that cell (`SHT-Q2`). SI-8, SI-13 and
-/// SI-19 name it.
+/// SI-24 name it.
 const ARCHIVAL_LEN_CELL: &str = "block_info.cumulative_archival_len";
 
 /// The per-transaction length rows, as a decode fault names them.
@@ -439,15 +445,16 @@ struct Discard {
 /// `D(E)` and its storage ids (module docs). `D(E)` is `⌊C(lo)/W⌋ ..
 /// ⌊C(hi)/W⌋` over the window `[lo, hi)`; its ids run from the first
 /// transaction at or past `start·W` to the first at or past `end·W`, both
-/// placed by one [`Descent`] from `hi`. `e ≥ 2`.
+/// placed by one [`Descent`] from block `hi − 1`. `e ≥ 2`.
 fn discard_at<T: ReadTables>(txn: &T, horizons: Horizons, e: u64) -> Result<Discard, ReadFault> {
     let window = horizons.discard_window(e);
     let before_lo = archival_before(txn, window.start)?;
-    let before_hi = archival_before(txn, window.end)?;
+    // `hi = (E−1)·SEB ≥ SEB ≥ 1`: block `hi − 1` exists and its cell is `C(hi)`.
+    let top = Descent::from_block(txn, window.end - 1)?;
+    let before_hi = top.through();
     // SI-13 on the two samples. When a shard closed, the descent re-reads
-    // every row between them, `lo − 1` included; when none did, nothing is
-    // discarded and this is the one check the boundary makes. `hi ≥ SEB ≥
-    // 1`, so `hi − 1` is the row that decreased.
+    // and checks every block between them; when none did, nothing is
+    // discarded and this is the one check the boundary makes.
     if before_hi < before_lo {
         return Err(archival_not_monotone(window.end - 1));
     }
@@ -455,30 +462,8 @@ fn discard_at<T: ReadTables>(txn: &T, horizons: Horizons, e: u64) -> Result<Disc
     if shards.is_empty() {
         return Ok(Discard { shards, ids: 0..0 });
     }
-    let offsets = shard_floor(before_lo)..shard_floor(before_hi);
-    let ids = ids_at_offsets(Descent::at(txn, window.end, before_hi), offsets)?;
+    let ids = top.ids_at(shard_floor(before_lo)..shard_floor(before_hi))?;
     Ok(Discard { shards, ids })
-}
-
-/// The storage ids of the transactions starting at archival offsets in
-/// `offsets`: from the first at or past `offsets.start` to the first at or
-/// past `offsets.end`. `descent` stands at or above where the fold reaches
-/// `offsets.end`.
-fn ids_at_offsets<T: ReadTables>(
-    mut descent: Descent<'_, T>,
-    offsets: Range<ArchivalLength>,
-) -> Result<Range<u64>, ReadFault> {
-    let end = first_id_at_offset(
-        descent.txn,
-        offsets.end,
-        descent.first_reaching(offsets.end)?,
-    )?;
-    let start = first_id_at_offset(
-        descent.txn,
-        offsets.start,
-        descent.first_reaching(offsets.start)?,
-    )?;
-    Ok(start..end)
 }
 
 /// Archival length recorded **before** height `h`: `C(h)`, the parent's
@@ -499,79 +484,115 @@ fn archival_not_monotone(height: u64) -> ReadFault {
     })
 }
 
-/// The archival fold read **downward**, one `block_info` row per step, each
-/// checked against the row above it (SI-13). Where it stands, `height`,
-/// the fold before it is `before` — `C(height)` — and every row from
-/// `height` to where it started has been checked. It answers where the fold
-/// first reaches an offset: with every row between checked, the crossing it
-/// finds is the fold's only one (module docs, *Every row the discard rests
-/// on is checked*).
+/// The archival fold read **downward**, one block per step, each block
+/// **checked against its parent** before the descent passes it: both folds
+/// do not decrease (SI-13), and the block's `txs_archival_len` rows sum
+/// from the parent's cell to its own (SI-24). The first catches a decrease
+/// cheaply; the second catches what monotonicity cannot — a shift that
+/// starts at one block and persists above it (Copilot, PR #910). With every
+/// block between checked, the crossing the descent finds is the fold's
+/// only one, placed by the rows themselves (module docs, *Every row the
+/// discard rests on is checked*).
 struct Descent<'t, T> {
     txn: &'t T,
+    /// The block the next step checks, and its row.
     height: u64,
-    before: ArchivalLength,
+    info: BlockInfo,
+}
+
+/// Where the fold first reaches an offset: the block holding the crossing,
+/// and the storage id of the first transaction starting at or past the
+/// offset — the next block's first id when every transaction of the block
+/// starts below it.
+#[derive(Clone, Copy)]
+struct Crossing {
+    height: u64,
+    first_id: u64,
 }
 
 impl<'t, T: ReadTables> Descent<'t, T> {
-    /// Stand at `height`, whose `C(height)` the caller has read as `before`.
-    const fn at(txn: &'t T, height: u64, before: ArchivalLength) -> Self {
-        Self {
+    /// Stand on block `height`, reading its row.
+    fn from_block(txn: &'t T, height: u64) -> Result<Self, ReadFault> {
+        Ok(Self {
             txn,
             height,
-            before,
-        }
+            info: block_info_at(txn, height)?,
+        })
     }
 
-    /// The lowest height whose cumulative archival length reaches `offset`:
+    /// The fold through the block the descent started on — `C` of the
+    /// height above it.
+    const fn through(&self) -> ArchivalLength {
+        self.info.cumulative_archival_len
+    }
+
+    /// The storage ids of the transactions starting at archival offsets in
+    /// `offsets`, both ends placed by this descent — the higher first.
+    fn ids_at(mut self, offsets: Range<ArchivalLength>) -> Result<Range<u64>, ReadFault> {
+        let end = self.first_reaching(offsets.end)?.first_id;
+        let start = self.first_reaching(offsets.start)?.first_id;
+        Ok(start..end)
+    }
+
+    /// The lowest block whose cumulative archival length reaches `offset`:
     /// the `h` with `C(h) < offset ≤ C(h + 1)`, or genesis when `offset` is
     /// `0`. `offset` is at most the fold where the descent stands, and a
     /// descent is asked non-increasing offsets — it only goes down. It
-    /// stops **at** the answer, so the next, lower offset resumes there.
-    fn first_reaching(&mut self, offset: ArchivalLength) -> Result<u64, ReadFault> {
-        debug_assert!(offset <= self.before, "asked above where it stands");
-        while let Some(below) = self.height.checked_sub(1) {
-            let earlier = archival_before(self.txn, below)?;
-            if earlier > self.before {
-                return Err(archival_not_monotone(below));
+    /// stops **on** the crossing block, so the next, lower offset resumes
+    /// there.
+    fn first_reaching(&mut self, offset: ArchivalLength) -> Result<Crossing, ReadFault> {
+        debug_assert!(offset <= self.through(), "asked above where it stands");
+        loop {
+            let parent = match self.height.checked_sub(1) {
+                Some(below) => Some(block_info_at(self.txn, below)?),
+                None => None,
+            };
+            let first_id = walk_block(self.txn, self.height, &self.info, parent.as_ref(), offset)?;
+            match parent {
+                Some(parent) if parent.cumulative_archival_len >= offset => {
+                    self.height -= 1;
+                    self.info = parent;
+                }
+                _ => {
+                    return Ok(Crossing {
+                        height: self.height,
+                        first_id,
+                    })
+                }
             }
-            if earlier < offset {
-                return Ok(below);
-            }
-            self.height = below;
-            self.before = earlier;
         }
-        Ok(0)
     }
 }
 
-/// The storage id of the first transaction whose archival offset is at or
-/// past `offset` — the id shard `offset / W` opens at when `offset` is a
-/// multiple of `W` (module docs). `height` is where the fold first reaches
-/// `offset` ([`Descent::first_reaching`]); no earlier height holds such a
-/// transaction. Its ids are walked in issue order from `C(h)`, adding each
-/// `txs_archival_len` row (absent ⇔ `0`); when every transaction of `h`
-/// starts below `offset`, the answer is the next height's first id. The whole block is walked either way, and
-/// the sum must land on the block's own cumulative cell: a disagreement is
-/// SI-19, a length row and the fold that was built from it no longer
-/// agreeing.
-fn first_id_at_offset<T: ReadTables>(
+/// Check block `height` against its parent's row (`None` at genesis) and
+/// place `offset` in it. SI-13 on both folds — on the raw listed samples,
+/// before the coinbase term is added, because a decrease of one derives to
+/// an empty id range rather than an inverted one (Copilot, PR #861). Then
+/// its ids are walked in issue order from the parent's archival cell,
+/// adding each `txs_archival_len` row (absent ⇔ `0`), and the sum must land
+/// on the block's own cell: a disagreement is SI-24, a length row and the
+/// fold built from it no longer agreeing. Returns the first id at or past
+/// `offset`, or the block's end id when every transaction starts below it.
+fn walk_block<T: ReadTables>(
     txn: &T,
-    offset: ArchivalLength,
     height: u64,
+    info: &BlockInfo,
+    parent: Option<&BlockInfo>,
+    offset: ArchivalLength,
 ) -> Result<u64, ReadFault> {
-    let info = block_info_at(txn, height)?;
-    // SI-13 on the raw listed samples, before the coinbase term is added:
-    // a decrease of one derives to an empty id range, not an inverted one,
-    // and would read as a block with no transactions (Copilot, PR #861).
-    let listed_before = listed_before(txn, height)?;
+    let (before, listed_before) = parent.map_or((ArchivalLength::ZERO, 0), |p| {
+        (p.cumulative_archival_len, p.cumulative_tx_count)
+    });
+    if info.cumulative_archival_len < before {
+        return Err(archival_not_monotone(height));
+    }
     if info.cumulative_tx_count < listed_before {
         return Err(fold_not_monotone(height));
     }
     let first = first_tx_id(height, listed_before)?;
     let end = ids_from(info.cumulative_tx_count, height)?;
-    let through = info.cumulative_archival_len;
     let lens = txn.table(TXS_ARCHIVAL_LEN)?;
-    let mut at = archival_before(txn, height)?;
+    let mut at = before;
     let mut found = None;
     for id in first..end {
         if found.is_none() && at >= offset {
@@ -590,27 +611,16 @@ fn first_id_at_offset<T: ReadTables>(
                 cell: ARCHIVAL_LEN_CELL,
             }))?;
     }
-    if at != through {
+    if at != info.cumulative_archival_len {
         return Err(ReadFault::Invariant(
             StoreInvariant::ArchivalLengthsDisagree {
                 height,
                 rows: at.to_raw(),
-                cell: through.to_raw(),
+                cell: info.cumulative_archival_len.to_raw(),
             },
         ));
     }
     Ok(found.unwrap_or(end))
-}
-
-/// Listed (non-coinbase) transactions recorded **before** height `h`: the
-/// raw `cumulative_tx_count` fold at `h − 1`, and `0` at genesis. The
-/// sample SI-13 is stated over; the coinbase term is added by
-/// [`first_tx_id`], after the check.
-fn listed_before<T: ReadTables>(txn: &T, height: u64) -> Result<u64, ReadFault> {
-    let Some(parent) = height.checked_sub(1) else {
-        return Ok(0);
-    };
-    Ok(block_info_at(txn, parent)?.cumulative_tx_count)
 }
 
 /// `first_tx_id(h)`: the storage id of the first transaction at height `h`,
@@ -655,8 +665,9 @@ fn block_info_at<T: ReadTables>(txn: &T, height: u64) -> Result<BlockInfo, ReadF
 /// same number on a node that discarded and on one that never held a body.
 ///
 /// The same [`Descent`] as the boundary's, from `(E−1)·SEB` down to that
-/// close height: a read costs the span of the shard open at `(E−1)·SEB`,
-/// which on a quiet chain is many epochs. `PDM-Q5`'s consumer, when it
+/// close height, every block checked: a read costs the span of the shard
+/// open at `(E−1)·SEB` and its length rows, which on a quiet chain is many
+/// epochs. `PDM-Q5`'s consumer, when it
 /// lands, decides whether to cache it — it changes once per epoch.
 pub(super) fn h_scarce<T: ReadTables>(
     txn: &T,
@@ -670,14 +681,14 @@ pub(super) fn h_scarce<T: ReadTables>(
     // Every shard below `⌊C(hi) / W⌋` has `close_epoch + 2 ≤ E`; the last
     // of them, `k`, closes at the first height reaching `(k+1)·W` — where
     // `⌊C(hi) / W⌋·W` is crossed.
-    let hi = horizons.discard_window(e).end;
-    let before_hi = archival_before(txn, hi)?;
+    // `hi ≥ SEB ≥ 1`, as at the boundary.
+    let mut top = Descent::from_block(txn, horizons.discard_window(e).end - 1)?;
+    let before_hi = top.through();
     if shard_of(before_hi).to_raw() == 0 {
         return Ok(None);
     }
-    Descent::at(txn, hi, before_hi)
-        .first_reaching(shard_floor(before_hi))
-        .map(Some)
+    top.first_reaching(shard_floor(before_hi))
+        .map(|crossing| Some(crossing.height))
 }
 
 /// Delete every row of a `u64`-keyed table in `ids` — the discard's one
@@ -726,9 +737,8 @@ impl super::read::ReadSnapshot<'_> {
         let offset = |k| shekyl_types::shard_start(shekyl_types::ShardId::from_raw(k));
         let offsets =
             offset(shards.start).expect("k·W fits")..offset(shards.end).expect("k·W fits");
-        let above = tip + 1;
-        let before = archival_before(self.txn(), above).map_err(ReadFault::into_plain)?;
-        ids_at_offsets(Descent::at(self.txn(), above, before), offsets)
+        Descent::from_block(self.txn(), tip)
+            .and_then(|top| top.ids_at(offsets))
             .map_err(ReadFault::into_plain)
     }
 }

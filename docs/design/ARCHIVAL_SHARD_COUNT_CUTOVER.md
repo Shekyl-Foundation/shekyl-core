@@ -89,8 +89,8 @@ id→shard map, the last closed shard, `h_scarce`, the archival-length row and t
 cumulative cell are built as the rows below describe, with two differences from the
 text. The storage-id arithmetic keeps its coinbase term, because ids stay storage ids
 and the boundary is an archival offset. The shard's opening height is found by a descent
-that checks every `block_info` row (SI-13), not by the binary search the `h_scarce` row
-names. The rows' `file:line` cites are the census pin's; `store/prune.rs` is the live
+that checks every block it passes against its parent (SI-13, and SI-24: its length rows
+sum to its cell), not by the binary search the `h_scarce` row names. The rows' `file:line` cites are the census pin's; `store/prune.rs` is the live
 statement. **Held:** the txid mixer row, on the pruned-form blocker (FOLLOWUPS "Build
 `SHT-Q2`").
 

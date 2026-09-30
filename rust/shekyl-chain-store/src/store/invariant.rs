@@ -217,15 +217,16 @@ pub enum StoreInvariant {
         /// Which break the writer observed.
         observed: LeafCountFault,
     },
-    /// **SI-19** — the archival fold is the sum of its rows:
+    /// **SI-24** — the archival fold is the sum of its rows:
     /// `block_info[h].cumulative_archival_len` equals the parent's value
     /// plus the `txs_archival_len` rows (absent ⇔ `0`) of the storage ids
     /// `h` issued (`SHT-Q2`). `connect` writes both from one measurement of
     /// the segments, so they cannot disagree at the write; a disagreement
     /// is a row or a cell changed under the store. Armed by the prune's
-    /// offset walk (`prune.rs` `first_id_at_offset`), which sums a block's
-    /// rows to place a shard boundary inside it and would otherwise place
-    /// it by numbers the fold does not support.
+    /// descent (`prune.rs` `walk_block`), which checks every block it
+    /// passes and would otherwise place a shard boundary by a cell the rows
+    /// do not support. (SI-19…23 are held by the E4 plan,
+    /// `DRS_E4_ARCHIVAL_WRITER.md` §4.)
     ArchivalLengthsDisagree {
         /// The height whose rows were summed.
         height: u64,
@@ -295,7 +296,7 @@ impl StoreInvariant {
             Self::PoolEntryUnpaired { .. } => 16,
             Self::PositionMapsNotBijective => 17,
             Self::LeafCountNotAdvanced { .. } => 18,
-            Self::ArchivalLengthsDisagree { .. } => 19,
+            Self::ArchivalLengthsDisagree { .. } => 24,
         }
     }
 }

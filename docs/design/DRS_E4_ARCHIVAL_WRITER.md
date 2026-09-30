@@ -1,5 +1,16 @@
 # DRS-E4 — the archival writer: pre-flight
 
+**AMENDED 2026-09-29 by the `SHT-Q2` build (PR #910), three places, no
+ruling reopened.** (1) **The shard universe (§3.7, `ARW-Q6`)** is
+`⌊C(h) / W⌋` over `block_info.cumulative_archival_len`
+(`ARCHIVAL_SHARD_T_DERIVATION.md` §8.6, RULED) — not `⌊cumulative_tx_count
+/ T⌋`; `ARW-Q6`'s ruling, *the view, not a stored count*, stands, and only
+its operand is re-keyed. The Round-0 text that states the count form (§1,
+§2) is the record at its pin. (2) **Invariant numbers:** this plan's
+SI-19…23 stand; the `SHT-Q2` build took SI-24. (3) **Layout:** 17 went to
+E6 slice 7 wave B and 18 to `SHT-Q2`, so commit 1's "layout 17" is the next
+free layout when it cuts.
+
 **Status:** OPEN — **Round 0 executed 2026-09-29 at `dev@cac2dadbe`** (#889
 merged; the slice-7 c3 tree). Findings `ARW-1…ARW-14` recorded (§5);
 **Round 1 RULED 2026-09-29 (maintainer, on PR #904)** — nine rulings, the
@@ -593,6 +604,11 @@ store *means* is SI-21.
 
 ### 3.7 The shard universe — `ARW-Q6`, default: closed `T`-shards, read off the chain
 
+*Operand amended 2026-09-29 (`SHT-Q2`, the banner): `closed_shards(view, h) =
+⌊C(h) / W⌋` over `block_info.cumulative_archival_len`, through
+`shekyl_types::shard_of` — the prune's cell and function, one definition.
+The paragraph below is the count-era statement as ruled.*
+
 Two consumers of the retired leaf partition sit on this surface: the
 complete-tree slash arm (§1 item 9) and CEN-F17's `n` (§1 item 8,
 FOLLOWUPS `:727`). Under `PDM-Q6` item 5 both become
@@ -839,7 +855,7 @@ present; the six manifests at `format_version: 3`).
 | --- | --- |
 | E6 slice 8 (4.J, 26 rows) | `rg 'fn bond_record\|fn slash_log_after' rust/shekyl-chain-rules/src/view.rs` → the trait methods with `BatchView` impls |
 | CEN-L16 | `rg 'fn holds_shard_at' rust/shekyl-archival-retention/src` → present; `rg 'archival_bond_holds_shard_of' src/blockchain_db` → still present until cutover, and the census row says both |
-| CEN-F17's operand | `rg 'fn closed_shards' rust/shekyl-chain-rules/src/view.rs`; `rg segment_leaf_count config/consensus_constants.json` → nothing |
+| CEN-F17's operand | `rg 'fn closed_shards' rust/shekyl-chain-rules/src/view.rs`; `rg segment_leaf_count config/consensus_constants.json` → nothing; `closed_shards` reads `cumulative_archival_len` through `shekyl_types::shard_of` and never `cumulative_tx_count` (`SHT-Q2`; the retired `T` would re-enter here) |
 | E2's S-ARCH bar (SAR-11) | `rg 'digest_v1' rust/shekyl-chain-store/src` → present; each manifest's checkpoint at v1; the sufficiency test red for each **exercised** family, with rule 47's half first — every retained writable family names a witness through an exhaustive `match` over `ArchivalFamily` (falsify by adding a variant to the X-macro: the test must fail to compile, not pass; `cargo test -p shekyl-chain-ingest stubbed_family_reddens`; §3.8 item 2) |
 | The injected credit modelled | `rg 'Inject' rust/shekyl-chain-ingest/src/source.rs` → a variant; `emission-claim`'s trace carries one; **the manifest half HOLDS 2026-09-29**: `rg out_of_band_writes rust/shekyl-chain-ingest/tests/vectors/*/manifest.json` → six hits, one non-empty, and `vectors_tests::only_the_named_chains_carry_out_of_band_writes` green |
 | `SAR-Q7`'s staged pair | `rg 'fn slash_log_after' rust/shekyl-chain-store/src/store/archival_reads.rs` → present |
@@ -868,7 +884,7 @@ Extended: the E2 conformance run with `digest_v1` on (commit 8).
 | **ARW-Q3** | The accrual: per-height rows range-summed at the close (the C++), or one accumulator row per epoch? | **RULED: one row per epoch; and — second half, posed on review and RULED the same day (2026-09-29) — the accruing row is deleted at close**, in the transaction that writes `archival_budget[E]`. | §3.5: nothing reads a single height's accrual; pop-symmetry through the pre-image; KAT B3 is the test. **Second half's reason of record:** the accumulator's job ends when the epoch closes — after the close the row is a second copy of a value that now has its permanent home, and *the one nobody reads is the one that drifts*. SI-23 (*at most one row, the open epoch's*) is what makes the deletion structural rather than a habit: a stale accumulator becomes a store-invariant violation, not a silently wrong operand — CEN-L1's belt-beneath-a-rule shape, and the same reason it is an invariant and not a comment. It also closes the one reading under which Q3 and Q9 could have been muddled: had the closed epoch's row survived beside its budget row, the accumulator would have become a per-epoch history nobody asked for, and someone would eventually have read it. **Q3 and Q9 are one question with opposite answers** — the fact-or-view test: per-height rows collapse to one per epoch because nothing reads a single height; `total_bonded_atomic` becomes a sum because nothing reads it but its own maintainers. One principle, two dispositions; SI-20's delta check is what makes the second safe. |
 | **ARW-Q4** | The close's zero rows: skip (the C++), or write `RMarket(0)` for every shard in the snapshot? | **RULED: write them**; the digest projects zero-rows out on both sides | §3.6, and the reason is the better half of the ruling: zero must be distinguishable from absent, and the C++ skipping `r_market == 0` on the same screen that writes a zero budget row *because* zero must be distinguishable is the **absence-as-value class caught mid-contradiction**. |
 | **ARW-Q5** | The §7.1.1 discharge: an archival digest family tip-compared plus the stamp, or a replacement KAT only (stub-reddens, no digest)? | **RULED: both** — `digest_v1` and the stamp; `IngestEvent::Inject` with the scope §3.8 states (regtest-only, one row kind, the injector its sole producer, present in no captured chain but the one) | the gate's own text names either; a digest without the stamp cannot attribute a red to a family, and a stamp without a digest never compares content. Neither alone is the gate's intent. |
-| **ARW-Q6** | The shard universe for the complete-tree challenge set and F17's `n`: closed `T`-shards `⌊cumulative_tx_count / T⌋` on the view, or a stored count? | **RULED: the view** | §3.7: a function of a fact the store holds; a stored count is `curve_tree_meta`'s shape with no C1-style one-row read to justify it. |
+| **ARW-Q6** | The shard universe for the complete-tree challenge set and F17's `n`: closed `T`-shards `⌊cumulative_tx_count / T⌋` on the view, or a stored count? | **RULED: the view** — *operand re-keyed 2026-09-29 by `SHT-Q2`: `⌊C / W⌋` over `cumulative_archival_len` (§3.7's note); the ruling stands* | §3.7: a function of a fact the store holds; a stored count is `curve_tree_meta`'s shape with no C1-style one-row read to justify it. |
 | **ARW-Q7** | Closed-epoch rows: pruned (at what horizon, by whom — S-PRUNE's boundary batch, or the close), or kept? | **RULED: kept; no epoch prune in this increment** | `ARW-11`: the C++ prune's only consumer was a pop floor SI-6 already provides; rows per closed epoch are `O(shards held)` and claims reach back `W = 26` epochs. Reopens on a measured size argument (B9) — then it is a phase of S-PRUNE's boundary batch, inside the same transaction, and the horizon is derived from `W`, not chosen. |
 | **ARW-Q8** | `BondRecord`'s home: stays in `shekyl-chain-store::codec::archival` with `ChainView` re-spelling it, or moves to `shekyl-types` under `SAR-Q2`'s reopening clause? | **RULED: moves** — the clause is **satisfied, not invoked** | `SAR-Q2` kept `BondRecord` in the store because no second consumer existed; slice 8's `ChainView` need is that consumer — the clause firing on its own trigger, the third time this month a deferral has closed the way it was written to (beside RTN-7's, `docs/completed/RTN_7_WIRE_HASH_TYPES.md`, and the S-ARCH §5 gate that had lifted eighteen days before anyone re-read it). S-ARCH §3.4 as built: *reopens if slice 8 needs `BondRecord` on `ChainView`*; it does. The `AtomicUnits` objection (shekyl-units is shekyl-types' sibling) is answered by carrying `bonded_total` as `AtomicUnits` from `shekyl-units`, which `shekyl-types` may already reach or the record type lives beside `shekyl_types::archival` in whichever crate rule 18 names when both readers exist — commit 1 decides the crate by `cargo tree`, not by preference, and says which. |
 | **ARW-Q9** | `total_bonded_atomic`: a typed cell maintained on every bond write (the C++), or a sum over `archival_bond` with SI-20 checking the delta? | **RULED: the sum, checked** | `ARW-7`: no reader; a running total is a view — Q3's principle, the other disposition (see Q3's row). Reopens with a production reader that needs `O(1)` (the RPC's `get_info`?) — then it is a cell *with* SI-20's check, never without. |

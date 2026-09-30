@@ -127,10 +127,10 @@
 //! who finds "bumped for a removal" in the history is looking at this
 //! sentence's consequence, not over-caution.
 //!
-//! Three tables have no X-macro twin (`docs/completed/DRS_E1_SCHAIN_W.md` §5, SCW-11):
-//! `undo_log`, the first, `txs_pqc_auth_hash`, the second (S-CHAIN-R
-//! amendment A3, `PDM-Q-F26`), and `txs_archival_len`, the third (`SHT-Q2`).
-//! Each is declared in [`RUST_ONLY_TABLES`] with
+//! Four tables have no X-macro twin (`docs/completed/DRS_E1_SCHAIN_W.md` §5, SCW-11):
+//! `undo_log`, the first; `txs_pqc_auth_hash` (S-CHAIN-R amendment A3,
+//! `PDM-Q-F26`); `curve_tree_leaf_counts` (DRS-E3, `CTW-Q4`); and
+//! `txs_archival_len` (`SHT-Q2`). Each is declared in [`RUST_ONLY_TABLES`] with
 //! the reason it exists, and the bijection gate reads that map: a definition
 //! with neither a twin **nor** a named reason is still red with the
 //! extra-leg's original refusal, so the mirror assumption retires one table

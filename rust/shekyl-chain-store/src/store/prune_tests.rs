@@ -602,7 +602,7 @@ fn h_scarce_is_the_last_discarded_shards_close_height() {
 }
 
 /// The Fakechain set for the ten-block schedule the `SHT-Q2` boundary and
-/// SI-13 / SI-19 tests run.
+/// SI-13 / SI-24 tests run.
 const SHORT: RuleSet = RuleSet::fakechain(None, BlockCount::from_raw(3));
 
 /// The ten-block schedule's epoch.
@@ -1036,7 +1036,7 @@ fn a_decreasing_archival_total_refuses_the_boundary() {
 /// SI-13 across the whole run the boundary reads, not at its samples
 /// (Copilot, PR #910). Cells 13–16 are raised together by 900 000 with
 /// their length rows untouched: each shifted cell still equals its parent
-/// plus its rows, so SI-19 holds at every block inside the run, and the
+/// plus its rows, so SI-24 holds at every block inside the run, and the
 /// fold now reaches `W` twice — at 15 (`2 900 000 → 3 100 000`, a second,
 /// spurious crossing) and at 19. The endpoints `C(0)` and `C(20)` are
 /// true. A search that trusts monotonicity can settle on 15 and place
@@ -1072,7 +1072,46 @@ fn a_shifted_run_between_two_samples_refuses_the_boundary() {
     cleanup(&path);
 }
 
-/// SI-19: the boundary at 30 sums block 19's length rows to place `W`, and
+/// SI-24 at every block the descent passes (Copilot, PR #910): a shift
+/// that starts at one block and persists through `hi` keeps the fold
+/// monotone everywhere and agrees with the rows at every block above its
+/// start. Cells 25–39 are raised by 1 200 000, rows untouched, so `C(30)`
+/// reads 6 100 000 instead of 4 900 000 and `D(4)` at 40 would name shards
+/// `0..2` — discarding blocks 20–29, which are in shard 1, still open. The
+/// descent checks block 25 against its parent: `3 900 000 + 200 000 =
+/// 4 100 000` against a cell of 5 300 000, before anything is discarded.
+#[test]
+fn a_shift_that_persists_through_the_window_refuses_the_boundary() {
+    let path = tmp("prune-archival-persist");
+    let b = short_chain_to(&path, 39);
+    for height in 25..=39 {
+        plant_info(&path, height, |info| {
+            info.cumulative_archival_len =
+                ArchivalLength::from_raw(info.cumulative_archival_len.to_raw() + 1_200_000);
+        });
+    }
+    let (store, out) = connect_short(&path, &b, 40);
+    assert!(out.is_err(), "the boundary does not commit over the shift");
+    assert_eq!(tip(&store), 39);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(40),
+            row: StoreInvariant::ArchivalLengthsDisagree {
+                height: 25,
+                rows: 4_100_000,
+                cell: 5_300_000,
+            },
+        }
+    );
+    // Blocks 20–29: ids 50–78, shard 1.
+    for id in 50..79 {
+        assert_eq!(prunable_state(&store, id), Some(true), "id {id} is held");
+    }
+    cleanup(&path);
+}
+
+/// SI-24: the boundary at 30 sums block 19's length rows to place `W`, and
 /// a row that no longer adds up to the block's cell refuses the boundary
 /// rather than place it by numbers the fold does not support.
 #[test]
