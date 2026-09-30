@@ -26,7 +26,7 @@ pub struct SendHalf {
 impl SendHalf {
     /// Queue one whole message. A buffer that does not fit is not stored.
     ///
-    /// [`CloseKind::SendQueueFull`]: the queue closed as overfull and
+    /// [`CloseKind::SendQueueFull`] means the queue closed as overfull and
     /// tripped [`Overfull`], in one step (`ByteQueue`'s module docs).
     /// [`CloseKind::IoError`] means the queue is already closed.
     pub fn try_send(&self, bytes: Vec<u8>) -> Result<(), CloseKind> {
@@ -47,7 +47,8 @@ pub const UNREAD_FRAMES: usize = 1;
 /// Closes the queue when the connection task ends.
 ///
 /// The caller may still hold the [`Session`]. Further sends then fail,
-/// and a writer blocked in [`ByteQueue::pop`] wakes.
+/// and a writer waiting for bytes — [`crate::write_capped`] or
+/// [`ByteQueue::pop_blocking`] — wakes with [`crate::CloseReason::Local`].
 pub struct QueueHold {
     queue: ByteQueue,
 }

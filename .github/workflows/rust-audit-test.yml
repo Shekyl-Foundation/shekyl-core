@@ -410,6 +410,7 @@ jobs:
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --lib
           -p shekyl-tor-control-wallet -p shekyl-tor-control-client -p shekyl-p-serve -p shekyl-p-host
           -p shekyl-operator-alarm -p shekyl-economics -p shekyl-store-codec
+          -p shekyl-capped-stream
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp

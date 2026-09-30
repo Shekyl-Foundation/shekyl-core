@@ -63,7 +63,8 @@ impl CloseReason {
     }
 }
 
-/// [`ByteQueue::try_push`] could not store the buffer.
+/// A push could not store the buffer. [`crate::SendHalf::try_send`] maps
+/// each case to its close kind.
 #[derive(Debug, PartialEq, Eq)]
 pub enum PushError {
     /// `bytes` would pass the cap. Nothing was stored.
@@ -179,9 +180,9 @@ impl ByteQueue {
     /// empty. Blocks the calling thread. The byte count stays until
     /// [`Self::release`].
     ///
-    /// [`Self::pop`] is the same wait on a task. This is the wait for a
-    /// thread that is not a task: the seam harness writer, until zone bind
-    /// runs the connector's `write_capped`.
+    /// [`crate::write_capped`] waits the same way on a task. This is the
+    /// wait for a thread that is not a task: the seam harness writer, until
+    /// zone bind runs the connector's `write_capped`.
     ///
     /// # Errors
     ///
