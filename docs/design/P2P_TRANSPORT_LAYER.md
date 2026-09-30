@@ -1099,6 +1099,74 @@ are one FOLLOWUPS row, owned by this document. `Pool::shutdown` bounds
 the wait for a blocking task. Drop remains the unbounded fallback and
 is never taken from inside a task.
 
+UPDATE 2026-09-30, thread-budget measurement conditions. The budget is
+three counts, each an editable placeholder today, each "the run record
+replaces this value": the transport runtime's `workers` and `blocking`
+(`transport_spans`, `net_node.inl:3671-3672`, `2` and `1`) and the
+interim executor's `executor_workers` (`net_node.inl:1173`, `2`). A
+count is changed by editing the placeholder and relinking the daemon;
+none is a runtime knob, so a sweep is one relink per count, C++ only.
+The RPC runtime (one worker per core), the Tor-control runtime (one
+worker), and the timing engine's dedicated thread are fixed pools no
+attacker leg minimises; they enter the sum, not the sweep.
+
+- **What is derived.** For each swept pool, the **smallest** count at
+  which it meets its duty under the load that pool faces — found by
+  reducing the count until the duty fails, and taking the smallest that
+  still passes, not the largest the cores hold. Over-provisioning is
+  budget the ledger has to carry forever; under-provisioning is the
+  starvation the separate-runtimes ruling exists to prevent. Per D5 the
+  budget is the sum of every live pool's threads — swept counts plus the
+  fixed pools plus the dedicated thread — against four cores, read from
+  `shekyl-thread-ledger`, with the miner outside it.
+
+- **The legs.** Each is one record.
+  1. **Steady sync (baseline).** The floor device syncing and relaying
+     against one honest peer, no attack. Establishes idle pool occupancy
+     and the idle timer lateness the mining-floor and flood records are
+     compared against. This is the idle record D9's mining comparison
+     and leg 4 below both read.
+  2. **Accept flood** (transport `workers`). Many inbound connections
+     churning admission — dial, admit, close — from the other end.
+     Duty: admissions and deliveries keep pace (no D9 deadline missed
+     for want of a worker) **and** the operator pools are not starved —
+     RPC still answers within its own idle budget while the flood runs.
+     The second half is the isolation property D5 is for; a worker count
+     that serves the flood but stalls RPC has not met the duty.
+  3. **NNhfs handshake flood** (transport `blocking`). Many concurrent
+     inbound handshakes, so the DH compute queues on the blocking lane.
+     Duty: honest handshakes still finish inside the D9 handshake
+     deadline. This leg needs no new instrumentation — the responder's
+     `queue_ns` span is the lane wait, and the smallest `blocking` that
+     keeps `queue_ns + compute_ns` under the deadline at the target
+     accept rate (D10.3) is the answer. The accept rate is stated with
+     the record, not assumed.
+  4. **Timer lateness under load** (`executor_workers`). D6's evidence
+     step 7: how late the relay `Driver`'s wake and the 1 s idle
+     cadences fire while an attacker drives message and admission load
+     on the executor. Duty: lateness stays small against the
+     Dandelion++ embargo D6 isolates, so stem and fluff timing is not
+     moved by peer load. Taken on the interim executor now and again
+     after the timing-engine round (D6); the interim is the asio sleep,
+     the later run is the Rust `Driver`. The bound it compares to comes
+     from the relay spec, not from this document.
+
+- **The pins, per D9.** Floor device (Pi-4, aarch64, 4 cores), miner
+  off. Each record states its swept count, the leg, the load generator
+  (how many concurrent dialers or streams and from where), the sample
+  count or duration, the binary pin at each end, the link, and what
+  else shares the four cores (the idle regtest daemon, named). A later
+  record on another device or at another count is compared to this one,
+  not written over it.
+
+- **Reopen, per pool.** A later run under these conditions whose
+  smallest passing count for a pool exceeds the pinned budget reopens
+  that pool's budget, re-derived from the larger run. A mining floor
+  device is its own record and the standing reopen, the same shape D5
+  and D9 give it: when the miner's threads on the same four cores push
+  a pool's smallest passing count above the idle-floor budget, the
+  budget is re-derived with the miner on.
+
 ---
 
 ## D6 — the executor above the transport (RULED 2026-09-25: a bounded interim)
@@ -1196,7 +1264,9 @@ a hard-coded 10 threads (`:1150`). It hosts:
 - Timer lateness under load. Step 7 measures how
   late relay timers fire under peer-driven load, taken both on the
   interim and after the timing engine lands. The interim's pool budget
-  and the blocking pool's budget both come from it.
+  and the blocking pool's budget both come from it. Its conditions are
+  pinned as leg 4 of D5's thread-budget measurement conditions
+  (2026-09-30); this is the same leg, not a second one.
 
 **The register.** P2P-3 §4.2's timing-engine row is two pieces
 (updated 2026-09-25). The core precedes the transport layer, so
