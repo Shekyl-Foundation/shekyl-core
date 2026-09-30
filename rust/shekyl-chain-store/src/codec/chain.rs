@@ -30,8 +30,8 @@
 use shekyl_chain_rules::RuleSetId;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
-    BlockHash, BlockHeight, BlockWeight, CommitmentBytes, LongTermWeight, OneTimePubkey,
-    OutputIndexInTx, Timelock, Timestamp, TxHash,
+    ArchivalLength, BlockHash, BlockHeight, BlockWeight, CommitmentBytes, LongTermWeight,
+    OneTimePubkey, OutputIndexInTx, Timelock, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
@@ -54,10 +54,12 @@ pub(crate) fn stored_timelock(raw: u64) -> Timelock {
     }
 }
 
-/// `block_info[height]` — the per-height record, 104 bytes: LMDB
+/// `block_info[height]` — the per-height record, 112 bytes: LMDB
 /// `mdb_block_info_4`'s fields minus `bi_height` (88 bytes, in LMDB's order)
 /// followed by the two per-block fold fields FL-R3-STORE routes here
-/// (`DRS_E1_SCHAIN_R.md` §3.6, Q4 ruled: widen the record, no second table).
+/// (`DRS_E1_SCHAIN_R.md` §3.6, Q4 ruled: widen the record, no second table),
+/// then `SHT-Q2`'s cumulative archival length, widened under the same
+/// ruling.
 ///
 /// Every field but `hash`, `rct_outputs` and `cumulative_tx_count` is a
 /// consensus-visible value the store records and never derives (C2-R8 Q4;
@@ -69,7 +71,9 @@ pub(crate) fn stored_timelock(raw: u64) -> Timelock {
 /// not port" (live major is 1); the field name follows what the bytes hold.
 /// `cumulative_tx_count` **is** a running total — the parent's plus this
 /// block's listed transactions, `checked_add` under SI-8 — because that is
-/// the read `get_tx_volume_window` needs in O(1).
+/// the read `get_tx_volume_window` needs in O(1). `cumulative_archival_len`
+/// is a running total for the same reason: every shard boundary is read off
+/// it, `⌊C / W⌋`, with no table of boundaries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockInfo {
     /// `bi_timestamp`.
@@ -99,11 +103,19 @@ pub struct BlockInfo {
     /// median of long-term weights is a long-term weight, so the same
     /// newtype; `cumulative_tx_count` is a count, like `rct_outputs`.
     pub long_term_effective_median: LongTermWeight,
+    /// Archival length recorded through this height —
+    /// `Σ_{i ≤ h} Σ_{tx ∈ i} archival_len(tx)`, coinbases included (their
+    /// length is zero). Store-derived like `cumulative_tx_count`: the
+    /// parent's value plus this block's, `checked_add` under SI-8. The
+    /// **parent's** value is `C(h)`, the offset a transaction at `h` starts
+    /// from before its block-mates; a transaction starting at offset `c`
+    /// belongs to shard `⌊c / W⌋` (`SHT-Q2` RULED, Rick 2026-09-29).
+    pub cumulative_archival_len: ArchivalLength,
 }
 
 impl Canonical for BlockInfo {
     const NAME: &'static str = "block_info";
-    const FIXED_WIDTH: Option<usize> = Some(104);
+    const FIXED_WIDTH: Option<usize> = Some(112);
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.timestamp.to_raw().to_le_bytes());
@@ -116,10 +128,11 @@ impl Canonical for BlockInfo {
         out.extend_from_slice(&self.long_term_weight.to_raw().to_le_bytes());
         out.extend_from_slice(&self.cumulative_tx_count.to_le_bytes());
         out.extend_from_slice(&self.long_term_effective_median.to_raw().to_le_bytes());
+        out.extend_from_slice(&self.cumulative_archival_len.to_raw().to_le_bytes());
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        let b = exact::<104>(Self::NAME, bytes)?;
+        let b = exact::<112>(Self::NAME, bytes)?;
         Ok(Self {
             timestamp: Timestamp::from_raw(le_u64(&b[0..8])),
             coins_generated: AtomicUnits::from_raw(le_u64(&b[8..16])),
@@ -132,6 +145,7 @@ impl Canonical for BlockInfo {
             long_term_weight: LongTermWeight::from_raw(le_u64(&b[80..88])),
             cumulative_tx_count: le_u64(&b[88..96]),
             long_term_effective_median: LongTermWeight::from_raw(le_u64(&b[96..104])),
+            cumulative_archival_len: ArchivalLength::from_raw(le_u64(&b[104..112])),
         })
     }
 }
@@ -406,12 +420,15 @@ mod tests {
             long_term_weight: LongTermWeight::from_raw(7),
             cumulative_tx_count: 8,
             long_term_effective_median: LongTermWeight::from_raw(9),
+            cumulative_archival_len: ArchivalLength::from_raw(10),
         };
         let bytes = info.encode();
-        assert_eq!(bytes.len(), 104);
-        // The two FL-R3 fields follow LMDB's 88 bytes (§3.6, Q4).
+        assert_eq!(bytes.len(), 112);
+        // The two FL-R3 fields follow LMDB's 88 bytes (§3.6, Q4), then
+        // SHT-Q2's cumulative archival length.
         assert_eq!(&bytes[88..96], &8u64.to_le_bytes());
         assert_eq!(&bytes[96..104], &9u64.to_le_bytes());
+        assert_eq!(&bytes[104..112], &10u64.to_le_bytes());
         // LMDB offsets shifted left by the 8 dropped height bytes.
         assert_eq!(&bytes[0..8], &1u64.to_le_bytes());
         assert_eq!(&bytes[16..24], &3u64.to_le_bytes());
@@ -422,11 +439,11 @@ mod tests {
         assert_eq!(&bytes[80..88], &7u64.to_le_bytes());
         assert_eq!(BlockInfo::decode(&bytes), Ok(info));
         assert!(matches!(
-            BlockInfo::decode(&bytes[..103]),
+            BlockInfo::decode(&bytes[..111]),
             Err(CodecError::Length {
                 codec: "block_info",
-                expected: 104,
-                actual: 103
+                expected: 112,
+                actual: 111
             })
         ));
     }

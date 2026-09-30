@@ -127,9 +127,10 @@
 //! who finds "bumped for a removal" in the history is looking at this
 //! sentence's consequence, not over-caution.
 //!
-//! Two tables have no X-macro twin (`docs/completed/DRS_E1_SCHAIN_W.md` §5, SCW-11):
-//! `undo_log`, the first, and `txs_pqc_auth_hash`, the second (S-CHAIN-R
-//! amendment A3, `PDM-Q-F26`). Each is declared in [`RUST_ONLY_TABLES`] with
+//! Four tables have no X-macro twin (`docs/completed/DRS_E1_SCHAIN_W.md` §5, SCW-11):
+//! `undo_log`, the first; `txs_pqc_auth_hash` (S-CHAIN-R amendment A3,
+//! `PDM-Q-F26`); `curve_tree_leaf_counts` (DRS-E3, `CTW-Q4`); and
+//! `txs_archival_len` (`SHT-Q2`). Each is declared in [`RUST_ONLY_TABLES`] with
 //! the reason it exists, and the bijection gate reads that map: a definition
 //! with neither a twin **nor** a named reason is still red with the
 //! extra-leg's original refusal, so the mirror assumption retires one table
@@ -159,8 +160,8 @@
 use redb::{TableDefinition, TableHandle, TypeName};
 
 use shekyl_types::{
-    BlockHeight, CurveTreeRoot, GlobalOutputIndex, PqcAuthHash, PrunableHash, TreeLeaf,
-    TreePosition,
+    ArchivalLength, BlockHeight, CurveTreeRoot, GlobalOutputIndex, PqcAuthHash, PrunableHash,
+    TreeLeaf, TreePosition,
 };
 use shekyl_units::AtomicUnits;
 
@@ -341,6 +342,15 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
          digest that lets PDM-Q6 discard the pqc_auths segment; the C++ store never held it \
          because it never discarded that segment. Out of the digest domain: the txid the \
          digest already folds commits to the same value",
+    ),
+    (
+        "txs_archival_len",
+        "each transaction's archival length, the operand of SHT-Q2's shard partition \
+         (floor(cumulative_before / W)): the skeleton datum that keeps every shard boundary \
+         computable after a prune discards the segments it measures. The C++ archival path is \
+         frozen (SHT-Q2 row 3 = (b)), so LMDB never holds it; the partition difference is the \
+         CSR-3a divergence that ruling registers. Out of the digest domain: a length of the \
+         txs_prunable and txs_pqc_auths rows the digest already folds",
     ),
 ];
 
@@ -620,6 +630,18 @@ tables! {
     /// (ordinal 50).
     pub const TXS_PQC_AUTH_HASH: TableDefinition<u64, Coded<PqcAuthHash>> =
         TableDefinition::new("txs_pqc_auth_hash");
+
+    /// `txs_archival_len` — **Rust-only** ([`RUST_ONLY_TABLES`]); tx_id →
+    /// the transaction's [`ArchivalLength`], `|prunable| + |pqc_auths|`
+    /// (`SHT-Q2` RULED, Rick 2026-09-29). Sparse: row present ⇔ length
+    /// `> 0` ⇔ the transaction carries archival good, so the coinbase
+    /// writes none and an absent row reads `0`. Written by `connect` beside
+    /// the digests and, like them, **never** deleted by a prune: it is the
+    /// skeleton datum that places a shard boundary after the bodies it
+    /// measures are gone. `pop` reverses the journaled insert with the rest
+    /// of the block. Appended last (ordinal 43).
+    pub const TXS_ARCHIVAL_LEN: TableDefinition<u64, Coded<ArchivalLength>> =
+        TableDefinition::new("txs_archival_len");
 }
 
 #[cfg(test)]
@@ -681,6 +703,7 @@ mod tests {
             ("curve_tree_leaf_counts", 40),
             ("undo_log", 41),
             ("txs_pqc_auth_hash", 42),
+            ("txs_archival_len", 43),
         ];
         for &(name, index) in pinned {
             assert_eq!(

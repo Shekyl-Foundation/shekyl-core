@@ -2,6 +2,48 @@
 
 ## [Unreleased]
 
+### Chain store — shards are cut by archival length (`SHT-Q2`, Rust half)
+
+- Shards are cut by **archival length**, not transaction count: shard `k`
+  holds the transactions whose cumulative archival length before them lies
+  in `[k·W, (k+1)·W)` (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.6, RULED
+  2026-09-29). A transaction's archival length is `|prunable| +
+  |pqc_auths|` — the two segments a prune discards
+  (`TxSegments::archival_len`, `Transaction::archival_len`). `W =
+  3,000,000` bytes, PROVISIONAL: `archival_shard_length_bytes` in
+  `consensus_constants.json`, generated into `shekyl_types::SHARD_LENGTH`;
+  `archival_shard_tx_count` / `SHARD_TX_COUNT` are deleted, and the
+  consensus-constants digest re-pinned. `shard_of`, `shard_start` and
+  `shard_floor` are the one definition of the boundary; the static relation
+  `max_tx_weight() < W` is const-asserted beside CEN-H3.
+- Contract: the chain store gains `txs_archival_len` (Rust-only, ordinal
+  43; present ⇔ length `> 0` ⇔ the transaction carries archival good, so
+  the coinbase writes none; never pruned) and `block_info` widens 104 →
+  112 bytes with `cumulative_archival_len`. `SCHEMA_VERSION` 17 → 18,
+  snapshots regenerated; pre-genesis, rebuild-never-migrate. SI-24
+  (`ArchivalLengthsDisagree`; SI-19…23 are the E4 plan's) is minted: a
+  block's length rows sum from its parent's cell to its own. SI-13 covers
+  the new fold.
+- The retention prune names `D(E)` as `⌊C(lo)/W⌋ .. ⌊C(hi)/W⌋` and finds a
+  shard's first storage id by a descent that walks each block's length
+  rows — permanent skeleton data, so a pruned node and an archival node
+  place every boundary alike. The descent checks every block it passes
+  against its parent, SI-13 and SI-24, before anything is discarded: a
+  discard cannot be undone, a binary search accepts a run of cells shifted
+  together, and monotonicity alone accepts a shift that persists from one
+  block upward. `h_scarce` uses the same descent. Tested at an exact multiple of `W`, with the largest
+  transaction CEN-H3 admits straddling a boundary, with two shards in one
+  batch, across a reorg that pops back over a boundary, against a model
+  computed from the lengths the fixture asked for, and against a shifted
+  run of cells.
+- The C++ LMDB archival path is frozen (row 3 = (b)): LMDB keeps its
+  segment partition, and CEN-L10 is re-graded DIVERGENT in the CSR-3a
+  register as the ruled, intended difference. The staking sim holds the
+  retired `T = 200` locally so its registered runs reproduce.
+- Not yet in this change: the txid mixer's length term and the C++
+  `calculate_transaction_hash` FFI call, which wait on how pruned forms
+  supply the length.
+
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 
 - `shekyl_engine_core::TxRecipient` carries `rid: Option<PaymentRequestId>`,

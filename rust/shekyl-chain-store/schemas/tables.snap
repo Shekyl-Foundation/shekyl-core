@@ -1,7 +1,7 @@
 # shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:
 #   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
 # and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
-tables = 43
+tables = 44
 [tables]
 alt_blocks = #13 map<shekyl::LmdbHashKey, shekyl::Coded<alt_block>>
 archival_attestation_witness = #20 map<u64, shekyl::Blob<attestation_witness>>
@@ -40,6 +40,7 @@ spent_keys = #12 map<shekyl::LmdbHashKey, shekyl::Present>
 tx_indices = #8 map<shekyl::LmdbHashKey, shekyl::Coded<tx_index>>
 tx_outputs = #9 map<u64, shekyl::Coded<tx_output_indices>>
 txs = #3 map<u64, shekyl::Unshaped>
+txs_archival_len = #43 map<u64, shekyl::Coded<archival_length>>
 txs_pqc_auth_hash = #42 map<u64, shekyl::Coded<pqc_auth_hash>>
 txs_pqc_auths = #5 map<u64, shekyl::Blob<tx_pqc_auths>>
 txs_prunable = #6 map<u64, shekyl::Blob<tx_prunable>>

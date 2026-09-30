@@ -78,6 +78,7 @@ fn record_block(batch: &WriteBatch<'_, '_>, height: u64, blk: &Block) -> Result<
         long_term_weight: shekyl_types::LongTermWeight::ZERO,
         cumulative_tx_count: 0,
         long_term_effective_median: shekyl_types::LongTermWeight::ZERO,
+        cumulative_archival_len: shekyl_types::ArchivalLength::ZERO,
     };
     batch
         .open_insert_table(BLOCK_INFO, PROBE_ROW)?
@@ -322,6 +323,7 @@ fn a_block_blob_that_does_not_hash_to_block_info_is_si7() {
             long_term_weight: shekyl_types::LongTermWeight::ZERO,
             cumulative_tx_count: 0,
             long_term_effective_median: shekyl_types::LongTermWeight::ZERO,
+            cumulative_archival_len: shekyl_types::ArchivalLength::ZERO,
         };
         batch
             .open_insert_table(BLOCK_INFO, PROBE_ROW)?
@@ -432,7 +434,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
 /// commit even when the closure swallows the fault. Planted on the surface
 /// where a corrupt row is still **representable**: a `blocks` blob that does
 /// not parse. It used to be planted as a 3-byte `block_info` row; under
-/// §11.1(f) `block_info` is `Coded<BlockInfo>`, fixed-width 104, and the
+/// §11.1(f) `block_info` is `Coded<BlockInfo>`, fixed-width 112, and the
 /// crate refuses a wrong width before redb would assert it — a wrong-width
 /// `block_info` row cannot reach
 /// the file (`a_wrong_width_row_is_refused_before_it_can_reach_a_coded_table` below), so its
@@ -509,6 +511,7 @@ fn a_block_info_row_with_no_blocks_row_is_si7() {
             long_term_weight: shekyl_types::LongTermWeight::ZERO,
             cumulative_tx_count: 0,
             long_term_effective_median: shekyl_types::LongTermWeight::ZERO,
+            cumulative_archival_len: shekyl_types::ArchivalLength::ZERO,
         };
         batch
             .open_insert_table(BLOCK_INFO, PROBE_ROW)?
@@ -664,7 +667,7 @@ fn the_read_transaction_body_classifies_holes_and_bad_blobs_as_si7() {
 /// case) — has **no representable instance**: the bytes never reach the
 /// file. The tightening it motivated stands (`chain_reads` module docs, *The
 /// tip is one decoded read*); what changed is that `BlockInfo`, whose codec
-/// checks only width (now 104 bytes), can no longer be undecodable in a file
+/// checks only width (now 112 bytes), can no longer be undecodable in a file
 /// redb accepted.
 ///
 /// This test pins what replaced the scenario: the wrong-width write is

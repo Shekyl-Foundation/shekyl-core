@@ -874,6 +874,12 @@ neither remains:
 The settlement writer prices by weight, the fetcher streams, the wallet
 store knows what it holds. **No one in consensus needs the count.**
 
+*Superseded 2026-09-29 by `SHT-Q2` (`ARCHIVAL_SHARD_T_DERIVATION.md`
+§8.6, RULED): a shard is `W` archival bytes, not `T` transactions —
+`k = ⌊cum_before / W⌋` over the archival-length prefix sum, and
+`shekyl_types::SHARD_LENGTH` replaces `SHARD_TX_COUNT`. The ruling below is
+the record of item 5 as ruled; its streaming and pricing grounds stand.*
+
 *Ruling — (e).* A shard is **`T` transactions by `tx_id`**:
 `k = ⌊tx_id / T⌋`, `[k·T, (k+1)·T)` — item 3's original 2026-09-17 shape,
 restored. Membership and `close_height(k) = height((k+1)·T − 1)` derive

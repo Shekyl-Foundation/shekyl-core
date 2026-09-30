@@ -184,7 +184,17 @@ use super::{Canonical, CodecError};
 ///   writes one cell fewer, which is the layout change (a `16` file has a
 ///   cell this binary does not know; the seal refuses it — rebuild, never
 ///   migrate). No table moves; no digest family moves.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(17);
+/// - `18` — the `SHT-Q2` build (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.6,
+///   RULED 2026-09-29): **shards are cut by archival length.**
+///   `txs_archival_len` is born, Rust-only, appended at ordinal 43: each
+///   transaction's `|prunable| + |pqc_auths|`, sparse (present ⇔ `> 0`),
+///   never pruned. `block_info` widens 104 → 112 bytes with
+///   `cumulative_archival_len`, the running total every shard boundary is
+///   read off (`⌊C / W⌋`), widened under S-CHAIN-R's Q4 ruling. The prune
+///   stores nothing new: `D(E)` is still named by the epoch. Digest v0 reads
+///   `block_info` by `bi_hash` alone, and the new table is outside the
+///   digest domain, so no digest family moves.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(18);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -241,10 +251,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(17));
-        assert_eq!(SCHEMA_VERSION.encode(), [17, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(18));
+        assert_eq!(SCHEMA_VERSION.encode(), [18, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[17, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[18, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

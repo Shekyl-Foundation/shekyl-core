@@ -1286,6 +1286,11 @@ LMDB/Rust-store partition difference is registered as an intended CSR-3a diverge
 the engine swap completes before genesis, or this is revisited. The census carries both
 (`ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F).
 
+**Build status, 2026-09-29 (PR #910).** Items 2, 4 and 5 are done, and item 1's row and
+cell are built. Item 1's mixer term and item 3's pins and corpora are held on one
+blocker, how a pruned form supplies the length (FOLLOWUPS "Build `SHT-Q2`", where the
+four resolutions and the recommendation are recorded).
+
 **Consequences recorded with the ruling:**
 
 - **The overshoot bound carries over.** A shard's archival length lies in
