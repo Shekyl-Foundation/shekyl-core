@@ -339,6 +339,13 @@ impl WalletFile {
     /// disk; the next open will hit the lost-`.wallet` rescan path
     /// (2i).
     pub fn create(params: &CreateParams<'_>) -> Result<Self, WalletFileError> {
+        if let Some(dir) = params.base_path.parent() {
+            if !dir.as_os_str().is_empty() && !dir.is_dir() {
+                return Err(WalletFileError::DirectoryMissing {
+                    dir: dir.to_path_buf(),
+                });
+            }
+        }
         let keys_path = keys_path_from(params.base_path);
         let state_path = state_path_from(params.base_path);
         let pscan_path = pscan_state_path_from(params.base_path);
@@ -1691,6 +1698,24 @@ mod tests {
         before
             .verify_password(b"old")
             .expect("a snapshot is a point in time: the earlier one still answers for then");
+    }
+
+    /// A missing directory is named as such, before anything is written —
+    /// not the `NotFound` of whichever write runs first.
+    #[test]
+    fn create_into_a_missing_directory_is_directory_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let absent = dir.path().join("absent");
+        let base = absent.join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+        let params = make_params(&fx, &base, b"pw", &ledger, &cap);
+        match WalletFile::create(&params) {
+            Err(WalletFileError::DirectoryMissing { dir: named }) => assert_eq!(named, absent),
+            other => panic!("expected DirectoryMissing, got {other:?}"),
+        }
+        assert!(!absent.exists(), "nothing was created");
     }
 
     #[test]

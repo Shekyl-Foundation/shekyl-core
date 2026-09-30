@@ -12,11 +12,13 @@ use shekyl_engine_core::engine::error::{
 };
 use shekyl_engine_core::engine::SubmitError;
 use shekyl_engine_core::{
-    ChangePasswordError, DrainToPrincipalError, IoError, OpenError, PScanStartError,
+    ChangePasswordError, DrainToPrincipalError, IoError, KeyError, OpenError, PScanStartError,
     PendingTxError, PersistenceError, RefreshError, SendError, ServingStartError, SetTxNoteError,
-    StakeInError,
+    StakeInError, StoreOpenFault,
 };
-use shekyl_engine_file::WalletFileError;
+use shekyl_engine_file::{PayloadError, WalletEnvelopeError, WalletFileError};
+use shekyl_engine_prefs::PrefsError;
+use shekyl_engine_state::WalletLedgerError;
 use shekyl_engine_state::{SetNoteError, TxNoteTooLong};
 use shekyl_rpc_client::{RejectCause, SubmitVerdict};
 use thiserror::Error;
@@ -53,13 +55,31 @@ This bond declares your node a whole-corpus archival backstop. It is not a staki
 To proceed, confirm that you are choosing a non-earning, unbounded-storage service posture.
 CLI: type exactly: `serve without reward` — RPC: set `acknowledge_non_earning_unbounded: true`.";
 
-/// Allocated application / protocol error codes (spec enum).
-///
-/// Emitting a code outside this set is a conformance failure. RESERVED-range
-/// codes land in the sub-PR that implements their method (rule 21).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub enum WalletRpcErrorCode {
+/// Declare the code table once: the enum and [`WalletRpcErrorCode::ALL`]
+/// come from the same list, so the set a test compares with the contract
+/// is the set the server can emit.
+macro_rules! wallet_rpc_error_codes {
+    ($($(#[$doc:meta])* $name:ident = $value:literal,)*) => {
+        /// Allocated application / protocol error codes (spec enum).
+        ///
+        /// Emitting a code outside this set is a conformance failure. RESERVED-range
+        /// codes land in the sub-PR that implements their method (rule 21).
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[repr(i32)]
+        pub enum WalletRpcErrorCode {
+            $($(#[$doc])* $name = $value,)*
+        }
+
+        impl WalletRpcErrorCode {
+            /// Every allocated code, in declaration order: exactly the
+            /// contract's `WalletRpcErrorCode` enum
+            /// (`docs/api/wallet_rpc.yaml`), both directions, by test.
+            pub const ALL: &'static [Self] = &[$(Self::$name,)*];
+        }
+    };
+}
+
+wallet_rpc_error_codes! {
     /// JSON-RPC parse error.
     ParseError = -32700,
     /// JSON-RPC invalid request.
@@ -87,6 +107,29 @@ pub enum WalletRpcErrorCode {
     /// The open wallet's session has ended (its key actor stopped and the
     /// key material is wiped); close and reopen the wallet, then retry.
     WalletSessionEnded = -29006,
+    /// Open: the wallet file belongs to a different network than this
+    /// server runs (`data`: `wallet`, `expected`).
+    WalletNetworkMismatch = -29007,
+    /// Open / create: another process holds the wallet's lock — it is
+    /// open elsewhere.
+    WalletLockedElsewhere = -29008,
+    /// Create: the wallet directory does not exist.
+    WalletDirMissing = -29009,
+    /// Wallet files: the filesystem refused access.
+    WalletFileAccessDenied = -29010,
+    /// Wallet files: the contents are damaged or not a wallet's.
+    WalletFileCorrupt = -29011,
+    /// Wallet files: written by a version or in a shape this build cannot
+    /// read.
+    WalletFileVersionUnsupported = -29012,
+    /// Wallet files: a read or write failed underneath (disk, filesystem).
+    WalletFileIoFailed = -29013,
+    /// Close: transactions are in flight (`data`: `count`); submit or
+    /// discard them first.
+    WalletCloseBlocked = -29014,
+    /// The wallet's curve-tree membership data is unavailable for this
+    /// session; close and reopen the wallet.
+    CurveTreeUnavailable = -29015,
     /// Build: address parse / network check failed.
     InvalidRecipient = -29100,
     /// Build: spendable balance too low.
@@ -113,6 +156,31 @@ pub enum WalletRpcErrorCode {
     /// refused what it said — distinct from `-29102`'s "the fee query
     /// itself failed" (rule 82).
     DaemonFeeUnreasonable = -29109,
+    /// Build: the wallet has not synced any blocks yet.
+    WalletNotSynced = -29110,
+    /// Build: funds exist but wait on the membership-data rebuild.
+    SpendUnavailableRebuilding = -29111,
+    /// Build: an output is too fresh for the reference block
+    /// (`data`: `wait_blocks`).
+    OutputNotYetSpendable = -29112,
+    /// Build: the chain is too short to anchor a reference block
+    /// (`data`: `synced_height`, `ref_anchor_age`).
+    ChainTooShortToSpend = -29113,
+    /// Build: the rebuild-loop breaker is tripped (`data`: `kind`); the
+    /// operator acknowledges it before builds resume.
+    SubmitLoopBreakerTripped = -29114,
+    /// Submit: a submit for this reservation is already in progress.
+    SubmitAlreadyPending = -29115,
+    /// Submit: the proof needs re-anchoring and cannot be right now;
+    /// the reservation is kept — retry.
+    ReanchorUnavailable = -29116,
+    /// Submit: the proof cannot be re-anchored content-preservingly;
+    /// discard and rebuild.
+    ReselectionRequired = -29117,
+    /// Build: the daemon's fee answer could not be read.
+    DaemonFeeResponseInvalid = -29118,
+    /// Build: the signer tried and a downstream failure stopped it.
+    SignerFailed = -29119,
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200,
     /// Refresh / rescan / proofs: daemon RPC failed.
@@ -128,6 +196,8 @@ pub enum WalletRpcErrorCode {
     /// Rescan: the reset persisted, then the producer failed before the
     /// ledger was rebuilt. History is empty until a rescan finishes; retry.
     RescanIncomplete = -29203,
+    /// Refresh: cancelled before it completed (the wallet is closing).
+    RefreshCancelled = -29204,
     /// `check_*`: proof string failed decode / framing / size caps.
     ProofMalformed = -29300,
     /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
@@ -252,6 +322,16 @@ pub enum WalletRpcErrorCode {
     /// unreachable, not the wallet out of sync (`-29527`) nor an internal
     /// fault (`-32603`). Check the daemon and retry.
     CollectDaemonUnreachable = -29529,
+    /// Open (staker): the sealed staking-scan state could not be loaded;
+    /// the wallet refuses to open without its scan.
+    StakeStateUnreadable = -29530,
+    /// Open (staker): the wallet's Tor configuration is unusable, so the
+    /// serving host cannot start.
+    ServingTorUnusable = -29531,
+    /// Open (staker): the persona's serving identity is unavailable.
+    ServingIdentityUnavailable = -29532,
+    /// Open (staker): serving needs the wallet's own node on loopback.
+    ServingLocalNodeRequired = -29533,
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
@@ -323,6 +403,45 @@ pub enum WalletRpcError {
     /// the live key actor maps its stopped-actor failure here too.
     #[error("wallet session ended — close and reopen the wallet, then retry")]
     WalletSessionEnded,
+    /// `-29007`: the wallet file was made for another network. Network names
+    /// are public, so both ride `data`.
+    #[error("this wallet belongs to {wallet}, but this server runs {expected}")]
+    WalletNetworkMismatch {
+        /// The network the wallet file declares.
+        wallet: String,
+        /// The network this server runs.
+        expected: String,
+    },
+    /// `-29008`: another process holds the wallet's lock.
+    #[error("the wallet is open in another process — close it there first")]
+    WalletLockedElsewhere,
+    /// `-29009`: create was pointed at a directory that does not exist.
+    #[error("the wallet directory does not exist — create it, then retry")]
+    WalletDirMissing,
+    /// `-29010`: the filesystem refused access to a wallet file.
+    #[error("access to the wallet's files was denied — check their permissions")]
+    WalletFileAccessDenied,
+    /// `-29011`: a wallet file is damaged, or is not a wallet's.
+    #[error("the wallet's files are damaged or are not a Shekyl wallet — restore from your seed")]
+    WalletFileCorrupt,
+    /// `-29012`: a wallet file was written by a version, or in a shape, this
+    /// build cannot read.
+    #[error("the wallet's files were written by a version this build cannot read")]
+    WalletFileVersionUnsupported,
+    /// `-29013`: a read or write of the wallet's files failed underneath —
+    /// disk full, filesystem error. The cause stays in the server log.
+    #[error("reading or writing the wallet's files failed — check the disk, then retry")]
+    WalletFileIoFailed,
+    /// `-29014`: close refused while transactions are in flight.
+    #[error("{count} transaction(s) are in flight — submit or discard them, then close")]
+    WalletCloseBlocked {
+        /// Pending transactions still held.
+        count: usize,
+    },
+    /// `-29015`: the curve-tree membership data is unavailable for this
+    /// session — its actor stopped and a respawn did not recover it.
+    #[error("the wallet's membership data is unavailable — close and reopen the wallet")]
+    CurveTreeUnavailable,
     /// Daemon RPC unreachable / failed.
     #[error("daemon unreachable")]
     DaemonUnreachable,
@@ -349,6 +468,9 @@ pub enum WalletRpcError {
          rescan finishes — retry once the problem is resolved"
     )]
     RescanIncomplete,
+    /// `-29204`: the refresh was cancelled before it completed.
+    #[error("the refresh was cancelled before it completed — retry once the wallet is open")]
+    RefreshCancelled,
     /// Build: address parse / network check failed.
     #[error("invalid recipient")]
     InvalidRecipient,
@@ -369,6 +491,61 @@ pub enum WalletRpcError {
         rate: u64,
         /// The violated bound (atomic units per weight).
         bound: u64,
+    },
+    /// `-29110`: the wallet has not synced a block yet.
+    #[error("the wallet has not synced any blocks yet — refresh, then retry")]
+    WalletNotSynced,
+    /// `-29111`: the funds exist but wait on the membership-data rebuild.
+    /// Amounts stay off the wire.
+    #[error(
+        "spending is temporarily unavailable while the wallet rebuilds its membership \
+         data — retry when the rebuild finishes"
+    )]
+    SpendUnavailableRebuilding,
+    /// `-29112`: an output is too fresh for the reference block.
+    #[error("funds are not spendable yet — they become spendable in about {wait_blocks} block(s)")]
+    OutputNotYetSpendable {
+        /// Blocks the tip must advance first.
+        wait_blocks: u64,
+    },
+    /// `-29113`: the chain is too short to anchor a reference block.
+    #[error("the chain is too short to spend from yet — wait for more blocks")]
+    ChainTooShortToSpend {
+        /// The wallet's synced height.
+        synced_height: u64,
+        /// The minimum synced height a reference block needs.
+        ref_anchor_age: u64,
+    },
+    /// `-29114`: the rebuild-loop breaker is tripped; builds stop until the
+    /// operator acknowledges it (`acknowledge_submit_loop_breaker`).
+    #[error(
+        "sends are paused: the daemon refused the same kind of transaction twice — \
+         investigate (data.cause), then call acknowledge_submit_loop_breaker"
+    )]
+    SubmitLoopBreakerTripped {
+        /// The rejection the breaker tripped on, in the `-29106` vocabulary.
+        cause: RejectCause,
+    },
+    /// `-29115`: a submit for this reservation is already running.
+    #[error("a submit for this transaction is already in progress — wait for its result")]
+    SubmitAlreadyPending,
+    /// `-29116`: re-anchoring cannot complete right now; the reservation is
+    /// kept.
+    #[error("the transaction could not be refreshed for submission right now — retry")]
+    ReanchorUnavailable,
+    /// `-29117`: the proof cannot be re-anchored content-preservingly.
+    #[error("the transaction can no longer be submitted as built — discard it and build again")]
+    ReselectionRequired,
+    /// `-29118`: the daemon answered the fee query with something the wallet
+    /// could not read. Distinct from `-29102` (no answer) and `-29109` (an
+    /// answer refused as unreasonable).
+    #[error("the daemon's fee answer could not be read")]
+    DaemonFeeResponseInvalid,
+    /// `-29119`: the signer tried and a downstream failure stopped it.
+    #[error("the signer failed: {reason}")]
+    SignerFailed {
+        /// Compile-time-fixed description of the failure.
+        reason: &'static str,
     },
     /// Submit: unknown / expired reservation handle.
     #[error("reservation not found")]
@@ -688,6 +865,25 @@ pub enum WalletRpcError {
         /// The transport constructor's own refusal.
         detail: String,
     },
+    /// `-29530`: a staker's sealed scan state would not load, and a staker
+    /// does not open without its scan (privacy is not a degraded mode).
+    #[error(
+        "the wallet's staking scan state could not be loaded, so it will not open \
+         without it — see the server log"
+    )]
+    StakeStateUnreadable,
+    /// `-29531`: the wallet's Tor configuration is unusable.
+    #[error("the wallet's Tor configuration is unusable, so serving cannot start")]
+    ServingTorUnusable,
+    /// `-29532`: the persona's serving identity is unavailable.
+    #[error("the persona's serving identity is unavailable, so serving cannot start")]
+    ServingIdentityUnavailable,
+    /// `-29533`: serving needs the wallet's own node on loopback.
+    #[error(
+        "serving needs this wallet's own node: point the wallet server's daemon \
+         address at a local node"
+    )]
+    ServingLocalNodeRequired,
 
     /// `verify_message` (`-29800`): the signature is well-formed and intact
     /// but does not verify for that address, message, and network. This is
@@ -726,14 +922,34 @@ impl WalletRpcError {
             Self::WalletFileNotFound => WalletRpcErrorCode::WalletFileNotFound,
             Self::InvalidPassword => WalletRpcErrorCode::InvalidPassword,
             Self::WalletSessionEnded => WalletRpcErrorCode::WalletSessionEnded,
+            Self::WalletNetworkMismatch { .. } => WalletRpcErrorCode::WalletNetworkMismatch,
+            Self::WalletLockedElsewhere => WalletRpcErrorCode::WalletLockedElsewhere,
+            Self::WalletDirMissing => WalletRpcErrorCode::WalletDirMissing,
+            Self::WalletFileAccessDenied => WalletRpcErrorCode::WalletFileAccessDenied,
+            Self::WalletFileCorrupt => WalletRpcErrorCode::WalletFileCorrupt,
+            Self::WalletFileVersionUnsupported => WalletRpcErrorCode::WalletFileVersionUnsupported,
+            Self::WalletFileIoFailed => WalletRpcErrorCode::WalletFileIoFailed,
+            Self::WalletCloseBlocked { .. } => WalletRpcErrorCode::WalletCloseBlocked,
+            Self::CurveTreeUnavailable => WalletRpcErrorCode::CurveTreeUnavailable,
             Self::DaemonUnreachable => WalletRpcErrorCode::DaemonUnreachable,
             Self::RefreshInProgress => WalletRpcErrorCode::RefreshInProgress,
             Self::RescanBlocked { .. } => WalletRpcErrorCode::RescanBlocked,
             Self::RescanIncomplete => WalletRpcErrorCode::RescanIncomplete,
+            Self::RefreshCancelled => WalletRpcErrorCode::RefreshCancelled,
             Self::InvalidRecipient => WalletRpcErrorCode::InvalidRecipient,
             Self::InsufficientFunds => WalletRpcErrorCode::InsufficientFunds,
             Self::FeeEstimationFailed => WalletRpcErrorCode::FeeEstimationFailed,
             Self::DaemonFeeUnreasonable { .. } => WalletRpcErrorCode::DaemonFeeUnreasonable,
+            Self::WalletNotSynced => WalletRpcErrorCode::WalletNotSynced,
+            Self::SpendUnavailableRebuilding => WalletRpcErrorCode::SpendUnavailableRebuilding,
+            Self::OutputNotYetSpendable { .. } => WalletRpcErrorCode::OutputNotYetSpendable,
+            Self::ChainTooShortToSpend { .. } => WalletRpcErrorCode::ChainTooShortToSpend,
+            Self::SubmitLoopBreakerTripped { .. } => WalletRpcErrorCode::SubmitLoopBreakerTripped,
+            Self::SubmitAlreadyPending => WalletRpcErrorCode::SubmitAlreadyPending,
+            Self::ReanchorUnavailable => WalletRpcErrorCode::ReanchorUnavailable,
+            Self::ReselectionRequired => WalletRpcErrorCode::ReselectionRequired,
+            Self::DaemonFeeResponseInvalid => WalletRpcErrorCode::DaemonFeeResponseInvalid,
+            Self::SignerFailed { .. } => WalletRpcErrorCode::SignerFailed,
             Self::ReservationNotFound => WalletRpcErrorCode::ReservationNotFound,
             Self::SnapshotInvalidated => WalletRpcErrorCode::SnapshotInvalidated,
             Self::ContentGenMismatch { .. } => WalletRpcErrorCode::ContentGenMismatch,
@@ -781,6 +997,10 @@ impl WalletRpcError {
             Self::CollectSyncing { .. } => WalletRpcErrorCode::CollectSyncing,
             Self::CollectDaemonUnreachable { .. } => WalletRpcErrorCode::CollectDaemonUnreachable,
             Self::UnstakeLocalNodeRequired { .. } => WalletRpcErrorCode::UnstakeLocalNodeRequired,
+            Self::StakeStateUnreadable => WalletRpcErrorCode::StakeStateUnreadable,
+            Self::ServingTorUnusable => WalletRpcErrorCode::ServingTorUnusable,
+            Self::ServingIdentityUnavailable => WalletRpcErrorCode::ServingIdentityUnavailable,
+            Self::ServingLocalNodeRequired => WalletRpcErrorCode::ServingLocalNodeRequired,
             Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
             Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
             Self::MessageSigUnsupportedScheme { .. } => {
@@ -821,6 +1041,21 @@ impl WalletRpcError {
                 Some(json!({ "cause": cause, "detail": detail }))
             }
             Self::MessageSigUnsupportedScheme { scheme } => Some(json!({ "scheme": scheme })),
+            Self::WalletNetworkMismatch { wallet, expected } => {
+                Some(json!({ "wallet": wallet, "expected": expected }))
+            }
+            Self::WalletCloseBlocked { count } => Some(json!({ "count": count })),
+            Self::OutputNotYetSpendable { wait_blocks } => {
+                Some(json!({ "wait_blocks": wait_blocks }))
+            }
+            Self::ChainTooShortToSpend {
+                synced_height,
+                ref_anchor_age,
+            } => Some(json!({
+                "synced_height": synced_height,
+                "ref_anchor_age": ref_anchor_age,
+            })),
+            Self::SubmitLoopBreakerTripped { cause } => Some(json!({ "cause": cause })),
             Self::DaemonFeeUnreasonable {
                 reason,
                 rate,
@@ -878,20 +1113,23 @@ impl WalletRpcError {
 }
 
 impl From<OpenError> for WalletRpcError {
+    /// Every arm named: an open failure reaches `-32603` only when it is a
+    /// bug (a key-derivation primitive failing), never as a guess.
     fn from(err: OpenError) -> Self {
         match err {
             OpenError::IncorrectPassword => Self::InvalidPassword,
-            OpenError::OutstandingPendingTx { count } => {
-                Self::InternalError(format!("outstanding pending transaction(s): {count}"))
-            }
-            OpenError::NetworkMismatch { wallet, expected } => Self::InternalError(format!(
-                "network mismatch: wallet={wallet}, expected={expected}"
-            )),
-            OpenError::Io(IoError::WalletFile { detail }) => classify_wallet_file_detail(&detail),
+            OpenError::OutstandingPendingTx { count } => Self::WalletCloseBlocked { count },
+            OpenError::NetworkMismatch { wallet, expected } => Self::WalletNetworkMismatch {
+                wallet: wallet.to_string(),
+                expected: expected.to_string(),
+            },
             OpenError::Io(IoError::Daemon { .. }) => Self::DaemonUnreachable,
-            OpenError::Io(other) => internal_detail("wallet I/O error", other),
-            OpenError::Key(e) => internal_detail("wallet key error", e),
-            OpenError::Persistence(e) => internal_detail("wallet persistence error", e),
+            OpenError::Io(IoError::Scanner { detail }) => {
+                internal_detail("wallet scanner setup failed", detail)
+            }
+            OpenError::Io(io) => from_storage_io(io),
+            OpenError::Key(e) => from_key_error(&e),
+            OpenError::Persistence(e) => e.into(),
         }
     }
 }
@@ -899,10 +1137,11 @@ impl From<OpenError> for WalletRpcError {
 impl From<ChangePasswordError> for WalletRpcError {
     fn from(err: ChangePasswordError) -> Self {
         match err {
-            ChangePasswordError::RotateFailed(PersistenceError::WalletFile(
-                WalletFileError::Envelope(_),
-            )) => Self::InvalidPassword,
-            ChangePasswordError::RotateFailed(e) => internal_detail("password rotation failed", e),
+            ChangePasswordError::RotateFailed(e) => e.into(),
+            // The password DID change; only the preferences flush failed. A
+            // storage code here would tell the client the rotation failed, and
+            // a retry with the old password would then refuse. Category-only,
+            // naming what happened.
             ChangePasswordError::RotatedButPrefsFlushFailed(e) => {
                 internal_detail("password rotated but preferences flush failed", e)
             }
@@ -914,6 +1153,12 @@ impl From<RefreshError> for WalletRpcError {
     fn from(err: RefreshError) -> Self {
         match err {
             RefreshError::AlreadyRunning => Self::RefreshInProgress,
+            // A concurrent refresh merged first; the remedy is the
+            // single-flight one — retry.
+            RefreshError::ConcurrentMutation { wallet, result } => {
+                tracing::info!(%wallet, %result, "refresh lost a concurrent merge");
+                Self::RefreshInProgress
+            }
             // A state conflict, not a malformed request: `rescan_blockchain`
             // takes an empty params object, so the params were by definition
             // correct. `-32602` here would tell an automated client its
@@ -922,29 +1167,30 @@ impl From<RefreshError> for WalletRpcError {
             RefreshError::RescanBlocked { reservations } => Self::RescanBlocked {
                 detail: format!("{reservations} reservation(s)"),
             },
-            // Past the point of no return for the in-memory ledger; durable
-            // save may have failed. Category-only message — `detail` can
-            // carry a local filesystem path (rule 30 / `message()` contract).
+            // The reset's durable save failed: a storage failure. The detail
+            // can carry a local filesystem path, so it stays in the log.
             RefreshError::RescanPersist(detail) => {
-                internal_detail("rescan reset persistence failed", detail)
+                tracing::warn!(detail = %detail, "rescan reset persistence failed");
+                Self::WalletFileIoFailed
             }
             RefreshError::Io(IoError::Daemon { .. } | IoError::Scanner { .. }) => {
                 Self::DaemonUnreachable
             }
-            RefreshError::Io(other) => internal_detail("refresh I/O error", other),
-            RefreshError::ConcurrentMutation { wallet, result } => internal_detail(
-                "refresh concurrent mutation",
-                format!("wallet={wallet}, result={result}"),
-            ),
+            RefreshError::Io(io) => from_storage_io(io),
+            RefreshError::Cancelled => Self::RefreshCancelled,
+            // The respawn already ran and did not recover the actor: the
+            // membership data is gone for this session.
+            RefreshError::CurveTreeIngest { context, .. } => {
+                tracing::warn!(context = %context, "curve-tree ingest failed after respawn");
+                Self::CurveTreeUnavailable
+            }
+            // Producer bugs (decision log, 2026-04-26), not states a client
+            // can remedy.
             RefreshError::MalformedScanResult { reason } => {
                 internal_detail("malformed scan result", reason)
             }
-            RefreshError::Cancelled => Self::InternalError("refresh cancelled".into()),
             RefreshError::InternalInvariantViolation { context } => {
                 internal_detail("refresh invariant", context)
-            }
-            RefreshError::CurveTreeIngest { context, .. } => {
-                internal_detail("curve-tree ingest", context)
             }
         }
     }
@@ -953,32 +1199,24 @@ impl From<RefreshError> for WalletRpcError {
 impl From<PScanStartError> for WalletRpcError {
     fn from(err: PScanStartError) -> Self {
         match err {
-            // The auto-start (`start_pscan_if_staker`) guards on the stake engine
-            // before spawning, and a fresh open holds a fresh single-flight slot,
-            // so neither of these is reachable on the lifecycle path. Map them
-            // defensively rather than panicking if a future caller hits them.
-            PScanStartError::NoStakeEngine => {
-                Self::InternalError("p-scan start: no stake engine".into())
+            // The auto-start (`start_pscan_if_staker`) guards on the stake
+            // engine before spawning, and a fresh open holds a fresh
+            // single-flight slot, so neither is reachable on the lifecycle
+            // path: reaching one is a bug.
+            PScanStartError::NoStakeEngine => internal_detail("p-scan start", "no stake engine"),
+            PScanStartError::AlreadyRunning => {
+                internal_detail("p-scan start", "task already running")
             }
             // A mid-session bond-watch recovery: a domain state with a
             // user-doable remedy (reopen), never an internal fault.
             PScanStartError::RecoveredPendingReopen => Self::StakeRecoveredPendingReopen,
-            PScanStartError::AlreadyRunning => {
-                Self::InternalError("p-scan start: task already running".into())
-            }
             // The reachable one: a corrupt / version-mismatched `.wallet.pscan`
-            // (or `.wallet.pending`) seal. Fail the staker's open closed — a
-            // staker whose firewall scan cannot start must not open into a state
-            // where it silently is not scanning (privacy is not a degraded mode).
-            //
-            // The client message is deliberately stable and detail-free: the
-            // boxed cause can carry a local filesystem path or internal schema
-            // detail, and this string is returned over JSON-RPC. The detailed
-            // cause is logged server-side at the reachable call site
+            // (or `.wallet.pending`) seal. A staker whose firewall scan cannot
+            // start must not open into a state where it silently is not
+            // scanning (privacy is not a degraded mode). The boxed cause can
+            // carry a local path; it is logged at the reachable call site
             // (`lifecycle::wrap_and_start_pscan`), not handed to the client.
-            PScanStartError::LoadFailed(_source) => {
-                Self::InternalError("p-scan sealed state failed to load".into())
-            }
+            PScanStartError::LoadFailed(_source) => Self::StakeStateUnreadable,
         }
     }
 }
@@ -986,28 +1224,24 @@ impl From<PScanStartError> for WalletRpcError {
 impl From<ServingStartError> for WalletRpcError {
     fn from(err: ServingStartError) -> Self {
         match err {
-            ServingStartError::NoStakeEngine => {
-                Self::InternalError("serving start: no stake engine".into())
+            ServingStartError::NoStakeEngine => internal_detail("serving start", "no stake engine"),
+            ServingStartError::AlreadyRunning => {
+                internal_detail("serving start", "task already running")
             }
             ServingStartError::RecoveredPendingReopen => Self::StakeRecoveredPendingReopen,
-            // Reachable on the open path. The source can name a local
-            // filesystem path (the derived `<P>.wallet.tor` directory);
-            // that stays in the server log, not on the JSON-RPC wire.
-            ServingStartError::TorConfig(_source) => {
-                Self::InternalError("serving start: tor data directory is unusable".into())
+            // Each source can name a local path (the derived tor directory) or
+            // the refused URL; those stay in the server log.
+            ServingStartError::TorConfig(source) => {
+                tracing::warn!(error = %source, "serving start: tor configuration unusable");
+                Self::ServingTorUnusable
             }
-            ServingStartError::Identity(_source) => {
-                Self::InternalError("serving start: persona identity unavailable".into())
+            ServingStartError::Identity(source) => {
+                tracing::warn!(error = %source, "serving start: persona identity unavailable");
+                Self::ServingIdentityUnavailable
             }
-            // Reachable: a remote daemon is refused so the serve-set is
-            // never derived over the principal's shared connection. The
-            // source can name the refused URL; the client gets the
-            // remedy, not the URL.
-            ServingStartError::DaemonNotLoopback(_source) => {
-                Self::InternalError("serving currently requires your own node on loopback".into())
-            }
-            ServingStartError::AlreadyRunning => {
-                Self::InternalError("serving start: task already running".into())
+            ServingStartError::DaemonNotLoopback(source) => {
+                tracing::warn!(error = %source, "serving start: daemon is not loopback");
+                Self::ServingLocalNodeRequired
             }
         }
     }
@@ -1016,6 +1250,11 @@ impl From<ServingStartError> for WalletRpcError {
 impl From<FeeEstimatorError> for WalletRpcError {
     fn from(err: FeeEstimatorError) -> Self {
         match err {
+            FeeEstimatorError::DaemonUnreachable => Self::FeeEstimationFailed,
+            FeeEstimatorError::DaemonResponseInvalid { reason } => {
+                tracing::warn!(reason = %reason, "daemon fee response invalid");
+                Self::DaemonFeeResponseInvalid
+            }
             FeeEstimatorError::DaemonFeeUnreasonable(v) => Self::DaemonFeeUnreasonable {
                 reason: v.reason(),
                 rate: v.rate(),
@@ -1026,39 +1265,205 @@ impl From<FeeEstimatorError> for WalletRpcError {
             FeeEstimatorError::CustomFeeOutOfRange(band) => {
                 Self::InvalidParams(format!("custom fee rate out of range: {band}"))
             }
-            _ => Self::FeeEstimationFailed,
+            // `FeeEstimatorError` is `#[non_exhaustive]` (Phase 0a, semver for
+            // consumers outside the workspace), so this arm is forced. Inside
+            // one workspace build it is unreachable: every variant is named
+            // above. A new variant lands here until it is named.
+            other => internal_detail("fee estimator variant unmapped at the RPC boundary", other),
         }
     }
 }
 
 impl From<SendError> for WalletRpcError {
+    /// Every arm named (no fall-through): each build refusal carries the
+    /// remedy it names, and `-32603` is left to proof / signature
+    /// construction failing and broken build preconditions — bugs.
     fn from(err: SendError) -> Self {
         match err {
             SendError::InvalidRecipient { .. } => Self::InvalidRecipient,
             SendError::Fee(e) => e.into(),
             SendError::InsufficientFunds { .. } => Self::InsufficientFunds,
-            SendError::Io(IoError::Daemon { .. }) => Self::FeeEstimationFailed,
-            SendError::Io(other) => Self::InternalError(other.to_string()),
-            SendError::Tx(e) => Self::InternalError(e.to_string()),
-            SendError::CannotSign { reason } => {
-                Self::InternalError(format!("cannot sign: {reason}"))
+            SendError::Io(IoError::Daemon { .. } | IoError::Scanner { .. }) => {
+                Self::DaemonUnreachable
             }
-            SendError::SpendUnavailableRebuilding { .. } => Self::InternalError(
-                "spending temporarily unavailable while membership data rebuilds".into(),
-            ),
+            SendError::Io(io) => from_storage_io(io),
+            SendError::Tx(e) => internal_detail("transaction construction", e),
+            SendError::NotSynced => Self::WalletNotSynced,
+            // No spend-key material in scope: the session's signer is gone,
+            // which is what `-29006` names — reopen the wallet.
+            SendError::SignerUnavailable => Self::WalletSessionEnded,
+            SendError::SignerFailed { reason } => Self::SignerFailed { reason },
+            SendError::BuildInvariant { reason } => internal_detail("build invariant", reason),
+            SendError::SpendUnavailableRebuilding { .. } => Self::SpendUnavailableRebuilding,
             SendError::CurveTreeUnavailable { detail } => {
-                Self::InternalError(format!("curve-tree unavailable: {detail}"))
+                tracing::warn!(detail = %detail, "curve-tree actor unavailable at build");
+                Self::CurveTreeUnavailable
             }
-            SendError::OutputNotYetSpendable { .. } => {
-                Self::InternalError("output not yet spendable at the reference block".into())
-            }
-            SendError::WalletTooYoungToSpend { .. } => {
-                Self::InternalError("wallet too young to spend".into())
-            }
-            SendError::SubmitLoopBreakerTripped { .. } => {
-                Self::InternalError("submit loop-breaker tripped".into())
-            }
+            SendError::OutputNotYetSpendable { wait_blocks, .. } => Self::OutputNotYetSpendable {
+                wait_blocks: wait_blocks.to_raw(),
+            },
+            SendError::WalletTooYoungToSpend {
+                synced_height,
+                ref_anchor_age,
+            } => Self::ChainTooShortToSpend {
+                synced_height: synced_height.to_raw(),
+                ref_anchor_age: ref_anchor_age.to_raw(),
+            },
+            SendError::SubmitLoopBreakerTripped { kind } => Self::SubmitLoopBreakerTripped {
+                cause: terminal_to_reject_cause(kind),
+            },
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The wallet's storage: typed causes to named codes. Every path, the file
+// store's and the curve-tree store's, stays in the server log.
+// ---------------------------------------------------------------------------
+
+/// An [`IoError`] from the wallet's own storage. The daemon and scanner arms
+/// are the callers' to name — their meaning differs by operation — so they
+/// reach here only from a caller that has no better word for them.
+fn from_storage_io(io: IoError) -> WalletRpcError {
+    match io {
+        IoError::WalletFile(e) => from_wallet_file_error(&e),
+        IoError::CurveTreeStore { fault, detail } => from_store_open_fault(fault, &detail),
+        IoError::Daemon { .. } => WalletRpcError::DaemonUnreachable,
+        IoError::Scanner { detail } => internal_detail("scanner", detail),
+    }
+}
+
+/// A wallet-file failure, variant by variant. The upstream `Display`s name
+/// paths (`… at {path}`), so no message is taken from them; the detail is
+/// logged here.
+fn from_wallet_file_error(err: &WalletFileError) -> WalletRpcError {
+    use WalletFileError as F;
+    let code = match err {
+        F::Envelope(e) => return from_envelope_error(e, err),
+        F::Payload(PayloadError::UnsupportedVersion { .. }) => {
+            WalletRpcError::WalletFileVersionUnsupported
+        }
+        F::Payload(
+            PayloadError::TooShort { .. }
+            | PayloadError::BadMagic
+            | PayloadError::UnknownPayloadKind(_)
+            | PayloadError::NonZeroReserved
+            | PayloadError::BodyLenMismatch { .. }
+            | PayloadError::BodyLenTooLarge { .. },
+        )
+        | F::UnexpectedPayloadKind { .. }
+        | F::UnknownNetwork(_) => WalletRpcError::WalletFileCorrupt,
+        F::Ledger(
+            WalletLedgerError::UnsupportedFormatVersion { .. }
+            | WalletLedgerError::UnsupportedBlockVersion { .. },
+        )
+        | F::UnknownCapability(_) => WalletRpcError::WalletFileVersionUnsupported,
+        F::Ledger(WalletLedgerError::Postcard(_) | WalletLedgerError::InvariantFailed { .. }) => {
+            WalletRpcError::WalletFileCorrupt
+        }
+        F::Io(e) => from_io_kind(e.kind()),
+        F::KeysFileAlreadyExists { .. } | F::SaveAsTargetExists { .. } => {
+            WalletRpcError::WalletFileExists
+        }
+        F::DirectoryMissing { .. } => WalletRpcError::WalletDirMissing,
+        F::AlreadyLocked { .. } => WalletRpcError::WalletLockedElsewhere,
+        F::AtomicWriteRename { .. } | F::AtomicWriteFinalizeStaged { .. } => {
+            WalletRpcError::WalletFileIoFailed
+        }
+        F::NetworkMismatch { expected, found } => WalletRpcError::WalletNetworkMismatch {
+            wallet: found.to_string(),
+            expected: expected.to_string(),
+        },
+        F::Prefs(e) => return from_prefs_error(e, err),
+        // `save_as` is not a JSON-RPC method, and a write-once violation is a
+        // bug by the variant's own contract.
+        F::SaveAsCrossFilesystem { .. } | F::KeysFileWriteOnceViolation { .. } => {
+            return internal_detail("wallet file", err);
+        }
+    };
+    tracing::warn!(error = %err, code = code.code().as_i32(), "wallet file refused");
+    code
+}
+
+fn from_envelope_error(e: &WalletEnvelopeError, whole: &WalletFileError) -> WalletRpcError {
+    use WalletEnvelopeError as E;
+    let code = match e {
+        E::InvalidPasswordOrCorrupt => WalletRpcError::InvalidPassword,
+        E::TooShort
+        | E::BadMagic
+        | E::KdfParamsOutOfRange { .. }
+        | E::CapContentLenMismatch { .. }
+        | E::StateSeedBlockMismatch => WalletRpcError::WalletFileCorrupt,
+        E::FormatVersionTooNew { .. }
+        | E::UnsupportedKdfAlgo(_)
+        | E::UnsupportedWrapCount(_)
+        | E::UnknownCapabilityMode(_) => WalletRpcError::WalletFileVersionUnsupported,
+        E::Internal(_) => return internal_detail("wallet envelope", whole),
+    };
+    tracing::warn!(error = %whole, code = code.code().as_i32(), "wallet envelope refused");
+    code
+}
+
+/// A preferences failure. `logged` is what the log names — the wrapping
+/// file error when there is one, so the log keeps its context.
+fn from_prefs_error(e: &PrefsError, logged: &dyn std::fmt::Display) -> WalletRpcError {
+    let code = match e {
+        PrefsError::Io(io) => from_io_kind(io.kind()),
+        PrefsError::UnsupportedSchemaVersion { .. } => WalletRpcError::WalletFileVersionUnsupported,
+        PrefsError::Bucket3Field { .. }
+        | PrefsError::OversizeToml { .. }
+        | PrefsError::TomlParse(_)
+        | PrefsError::HmacMismatch { .. }
+        | PrefsError::HmacWrongLength { .. } => WalletRpcError::WalletFileCorrupt,
+        PrefsError::TomlSerialize(_) => return internal_detail("wallet preferences", logged),
+    };
+    tracing::warn!(error = %logged, code = code.code().as_i32(), "wallet preferences refused");
+    code
+}
+
+/// A filesystem failure by kind. `NotFound` is the file-level answer: a
+/// missing *directory* on create is named before any write
+/// ([`WalletFileError::DirectoryMissing`]).
+fn from_io_kind(kind: std::io::ErrorKind) -> WalletRpcError {
+    match kind {
+        std::io::ErrorKind::NotFound => WalletRpcError::WalletFileNotFound,
+        std::io::ErrorKind::PermissionDenied => WalletRpcError::WalletFileAccessDenied,
+        // `io::ErrorKind` is foreign and `#[non_exhaustive]`: every other kind
+        // is the filesystem failing underneath (disk full, I/O error, …).
+        _ => WalletRpcError::WalletFileIoFailed,
+    }
+}
+
+impl From<PersistenceError> for WalletRpcError {
+    fn from(err: PersistenceError) -> Self {
+        match err {
+            PersistenceError::WalletFile(e) => from_wallet_file_error(&e),
+            PersistenceError::Prefs(e) => from_prefs_error(&e, &e),
+        }
+    }
+}
+
+fn from_key_error(err: &KeyError) -> WalletRpcError {
+    match err {
+        // The keys file declares public material its seed does not derive:
+        // damaged or tampered.
+        KeyError::PublicBytesMismatch => {
+            tracing::warn!("keys file public material does not match its seed");
+            WalletRpcError::WalletFileCorrupt
+        }
+        KeyError::UnsupportedDerivationPair => WalletRpcError::WalletFileVersionUnsupported,
+        KeyError::Primitive { detail } => internal_detail("key derivation primitive", detail),
+    }
+}
+
+fn from_store_open_fault(fault: StoreOpenFault, detail: &str) -> WalletRpcError {
+    tracing::warn!(?fault, detail = %detail, "curve-tree store would not open");
+    match fault {
+        StoreOpenFault::LockedElsewhere => WalletRpcError::WalletLockedElsewhere,
+        StoreOpenFault::Corrupt => WalletRpcError::WalletFileCorrupt,
+        StoreOpenFault::Unsupported => WalletRpcError::WalletFileVersionUnsupported,
+        StoreOpenFault::Io => WalletRpcError::WalletFileIoFailed,
+        StoreOpenFault::Internal => WalletRpcError::InternalError("curve-tree store open".into()),
     }
 }
 
@@ -1264,16 +1669,12 @@ impl From<SubmitError> for WalletRpcError {
                 Self::submit_rejected(retryable_to_reject_cause(cause))
             }
             SubmitError::DaemonAmbiguous { .. } => Self::SubmitAmbiguous,
-            SubmitError::SubmitAlreadyPending { .. } => {
-                Self::InternalError("submit already pending for this reservation".into())
-            }
-            SubmitError::ReanchorUnavailable { .. } => {
-                Self::InternalError("re-anchor unavailable; retry later".into())
-            }
-            SubmitError::ReselectionRequired { .. } => {
-                Self::InternalError("reselection required; discard and rebuild".into())
-            }
-            other => Self::InternalError(other.to_string()),
+            SubmitError::SubmitAlreadyPending { .. } => Self::SubmitAlreadyPending,
+            SubmitError::ReanchorUnavailable { .. } => Self::ReanchorUnavailable,
+            SubmitError::ReselectionRequired { .. } => Self::ReselectionRequired,
+            // `SubmitError` is `#[non_exhaustive]` (Phase 0a); every variant is
+            // named above, so inside one workspace build this is unreachable.
+            other => internal_detail("submit variant unmapped at the RPC boundary", other),
         }
     }
 }
@@ -1313,9 +1714,9 @@ impl From<shekyl_engine_core::AbandonTxError> for WalletRpcError {
                 // Single owner of the journal → wire map (`project`).
                 state: crate::project::outgoing_transfer_state_of(state),
             },
-            // Fail-closed rollback already ran; category-only message
-            // (the detail can carry a filesystem path).
-            E::Persistence(e) => internal_detail("abandon persistence failed", e),
+            // Fail-closed rollback already ran; what is left is the storage
+            // failure, named by its cause (paths stay in the log).
+            E::Persistence(e) => e.into(),
         }
     }
 }
@@ -1348,9 +1749,9 @@ impl From<SetTxNoteError> for WalletRpcError {
     fn from(err: SetTxNoteError) -> Self {
         match err {
             SetTxNoteError::Note(e) => e.into(),
-            // Fail-closed rollback already ran; category-only message
-            // (the detail can carry a filesystem path).
-            SetTxNoteError::Persistence(e) => internal_detail("wallet persistence error", e),
+            // Fail-closed rollback already ran; what is left is the storage
+            // failure, named by its cause (paths stay in the log).
+            SetTxNoteError::Persistence(e) => e.into(),
         }
     }
 }
@@ -1366,11 +1767,11 @@ impl From<PendingTxError> for WalletRpcError {
             }
             PendingTxError::DiscardBlockedPendingDaemonAck { .. }
             | PendingTxError::Io(IoError::Daemon { .. }) => Self::SubmitAmbiguous,
-            PendingTxError::SubmitAlreadyPending { .. } => {
-                Self::InternalError("submit already pending for this reservation".into())
-            }
-            PendingTxError::Io(other) => Self::InternalError(other.to_string()),
-            other => Self::InternalError(other.to_string()),
+            PendingTxError::SubmitAlreadyPending { .. } => Self::SubmitAlreadyPending,
+            PendingTxError::Io(io) => from_storage_io(io),
+            // `PendingTxError` is `#[non_exhaustive]` (Phase 0a); every variant
+            // is named above, so inside one workspace build this is unreachable.
+            other => internal_detail("pending-tx variant unmapped at the RPC boundary", other),
         }
     }
 }
@@ -1379,24 +1780,13 @@ impl From<PendingTxError> for WalletRpcError {
 /// server-side. `message()` is the most-logged surface and, in remote mode,
 /// crosses to the client, so it must never carry a local filesystem path or
 /// internal schema (rule 30; the `message()` contract). The full detail is
-/// preserved in the server's own logs for diagnosis — mirroring the
-/// `PScanStartError::LoadFailed` discipline above.
+/// preserved in the server's own logs for diagnosis.
+///
+/// Reserved for what is a bug or an unrecoverable internal state: anything a
+/// user or operator can act on has its own code.
 fn internal_detail(category: &'static str, detail: impl std::fmt::Display) -> WalletRpcError {
     tracing::warn!(category, detail = %detail, "wallet-rpc internal error");
     WalletRpcError::InternalError(category.to_owned())
-}
-
-fn classify_wallet_file_detail(detail: &str) -> WalletRpcError {
-    let lower = detail.to_ascii_lowercase();
-    if lower.contains("already exists") || lower.contains("refusing to overwrite") {
-        WalletRpcError::WalletFileExists
-    } else if lower.contains("not found") || lower.contains("no such file") {
-        WalletRpcError::WalletFileNotFound
-    } else if lower.contains("password") || lower.contains("corrupt") {
-        WalletRpcError::InvalidPassword
-    } else {
-        WalletRpcError::InternalError(detail.to_owned())
-    }
 }
 
 #[cfg(test)]
@@ -1410,11 +1800,15 @@ mod tests {
     }
 
     #[test]
-    fn maps_keys_already_exists_detail() {
-        let err = classify_wallet_file_detail(
-            "refusing to overwrite existing keys file at /tmp/x.wallet.keys",
-        );
+    fn maps_keys_already_exists_by_type() {
+        let err: WalletRpcError = OpenError::Io(IoError::WalletFile(
+            WalletFileError::KeysFileAlreadyExists {
+                path: "/tmp/x.wallet.keys".into(),
+            },
+        ))
+        .into();
         assert_eq!(err.code(), WalletRpcErrorCode::WalletFileExists);
+        assert!(!err.message().contains("/tmp"), "{}", err.message());
     }
 
     #[test]
@@ -1483,14 +1877,10 @@ mod tests {
     }
 
     #[test]
-    fn rescan_persist_is_category_only() {
+    fn rescan_persist_is_a_storage_failure_without_the_path() {
         let err: WalletRpcError =
             RefreshError::RescanPersist("/home/user/.shekyl/wallet.keys: ENOSPC".into()).into();
-        assert_eq!(err.code(), WalletRpcErrorCode::InternalError);
-        assert_eq!(
-            err.message(),
-            "internal error: rescan reset persistence failed"
-        );
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletFileIoFailed);
         assert!(
             !err.message().contains("/home"),
             "persist failure must not leak filesystem paths"
@@ -1987,5 +2377,340 @@ mod tests {
         }
         .into();
         assert_eq!(err.code().as_i32(), -29102);
+    }
+
+    // ---------------------------------------------------------------------
+    // Specific causes, specific codes (the catch-all audit)
+    // ---------------------------------------------------------------------
+
+    const LOCAL_PATH: &str = "/home/user/.shekyl/wallets/w";
+
+    fn file_err(e: WalletFileError) -> WalletRpcError {
+        OpenError::Io(IoError::WalletFile(e)).into()
+    }
+
+    /// Every wallet-file variant lands on its named code, and no message
+    /// carries a path — even when the upstream `Display` does.
+    #[test]
+    fn every_wallet_file_failure_has_its_own_code_and_no_path() {
+        use std::io::{Error as IoErr, ErrorKind};
+        use std::path::PathBuf;
+        let path = || PathBuf::from(LOCAL_PATH);
+        let cases: Vec<(WalletFileError, WalletRpcErrorCode)> = vec![
+            (
+                WalletFileError::DirectoryMissing { dir: path() },
+                WalletRpcErrorCode::WalletDirMissing,
+            ),
+            (
+                WalletFileError::AlreadyLocked { path: path() },
+                WalletRpcErrorCode::WalletLockedElsewhere,
+            ),
+            (
+                WalletFileError::KeysFileAlreadyExists { path: path() },
+                WalletRpcErrorCode::WalletFileExists,
+            ),
+            (
+                WalletFileError::Io(IoErr::from(ErrorKind::NotFound)),
+                WalletRpcErrorCode::WalletFileNotFound,
+            ),
+            (
+                WalletFileError::Io(IoErr::from(ErrorKind::PermissionDenied)),
+                WalletRpcErrorCode::WalletFileAccessDenied,
+            ),
+            (
+                WalletFileError::Io(IoErr::other("disk full")),
+                WalletRpcErrorCode::WalletFileIoFailed,
+            ),
+            (
+                WalletFileError::AtomicWriteRename {
+                    target: path(),
+                    source: IoErr::other("EXDEV"),
+                },
+                WalletRpcErrorCode::WalletFileIoFailed,
+            ),
+            (
+                WalletFileError::Envelope(WalletEnvelopeError::InvalidPasswordOrCorrupt),
+                WalletRpcErrorCode::InvalidPassword,
+            ),
+            (
+                WalletFileError::Envelope(WalletEnvelopeError::BadMagic),
+                WalletRpcErrorCode::WalletFileCorrupt,
+            ),
+            (
+                WalletFileError::Envelope(WalletEnvelopeError::FormatVersionTooNew {
+                    got: 9,
+                    max: 1,
+                }),
+                WalletRpcErrorCode::WalletFileVersionUnsupported,
+            ),
+            (
+                WalletFileError::Payload(PayloadError::BadMagic),
+                WalletRpcErrorCode::WalletFileCorrupt,
+            ),
+            (
+                WalletFileError::Payload(PayloadError::UnsupportedVersion { file: 9, binary: 1 }),
+                WalletRpcErrorCode::WalletFileVersionUnsupported,
+            ),
+            (
+                WalletFileError::Ledger(WalletLedgerError::UnsupportedFormatVersion {
+                    file: 9,
+                    binary: 1,
+                }),
+                WalletRpcErrorCode::WalletFileVersionUnsupported,
+            ),
+            (
+                WalletFileError::NetworkMismatch {
+                    expected: shekyl_engine_file::Network::Testnet,
+                    found: shekyl_engine_file::Network::Mainnet,
+                },
+                WalletRpcErrorCode::WalletNetworkMismatch,
+            ),
+            (
+                WalletFileError::Prefs(PrefsError::Io(IoErr::from(ErrorKind::PermissionDenied))),
+                WalletRpcErrorCode::WalletFileAccessDenied,
+            ),
+            (
+                WalletFileError::Prefs(PrefsError::TomlParse("bad".into())),
+                WalletRpcErrorCode::WalletFileCorrupt,
+            ),
+            (
+                WalletFileError::KeysFileWriteOnceViolation { path: path() },
+                WalletRpcErrorCode::InternalError,
+            ),
+        ];
+        for (cause, expected) in cases {
+            let shown = format!("{cause}");
+            let err = file_err(cause);
+            assert_eq!(err.code(), expected, "{shown}");
+            assert!(
+                !err.message().contains("/home"),
+                "{expected:?} leaked a path: {}",
+                err.message()
+            );
+        }
+    }
+
+    /// The network mismatch names both networks (public), in `data` too.
+    #[test]
+    fn a_network_mismatch_names_both_networks() {
+        let err: WalletRpcError = OpenError::NetworkMismatch {
+            wallet: shekyl_engine_file::Network::Mainnet,
+            expected: shekyl_engine_file::Network::Testnet,
+        }
+        .into();
+        assert_eq!(err.code().as_i32(), -29007);
+        let data = err.data().expect("data");
+        assert_ne!(data["wallet"], data["expected"]);
+    }
+
+    #[test]
+    fn a_blocked_close_counts_what_is_in_flight() {
+        let err: WalletRpcError = OpenError::OutstandingPendingTx { count: 2 }.into();
+        assert_eq!(err.code().as_i32(), -29014);
+        assert_eq!(err.data().expect("data")["count"], 2);
+    }
+
+    /// The curve-tree store's classified fault reaches its code; the store's
+    /// own diagnosis (which can name a path) stays off the wire.
+    #[test]
+    fn a_store_open_fault_names_its_remedy() {
+        for (fault, expected) in [
+            (
+                StoreOpenFault::LockedElsewhere,
+                WalletRpcErrorCode::WalletLockedElsewhere,
+            ),
+            (
+                StoreOpenFault::Corrupt,
+                WalletRpcErrorCode::WalletFileCorrupt,
+            ),
+            (
+                StoreOpenFault::Unsupported,
+                WalletRpcErrorCode::WalletFileVersionUnsupported,
+            ),
+            (StoreOpenFault::Io, WalletRpcErrorCode::WalletFileIoFailed),
+            (StoreOpenFault::Internal, WalletRpcErrorCode::InternalError),
+        ] {
+            let err: WalletRpcError = OpenError::Io(IoError::CurveTreeStore {
+                fault,
+                detail: LOCAL_PATH.into(),
+            })
+            .into();
+            assert_eq!(err.code(), expected);
+            assert!(!err.message().contains("/home"), "{}", err.message());
+        }
+    }
+
+    /// Each build refusal a user or operator can act on has its own code;
+    /// `-32603` is left to construction failing and broken preconditions.
+    #[test]
+    fn every_build_refusal_names_its_remedy() {
+        use shekyl_types::{BlockCount, BlockHeight};
+        let cases: Vec<(SendError, WalletRpcErrorCode)> = vec![
+            (SendError::NotSynced, WalletRpcErrorCode::WalletNotSynced),
+            (
+                SendError::SignerUnavailable,
+                WalletRpcErrorCode::WalletSessionEnded,
+            ),
+            (
+                SendError::SignerFailed {
+                    reason: "device unplugged",
+                },
+                WalletRpcErrorCode::SignerFailed,
+            ),
+            (
+                SendError::SpendUnavailableRebuilding {
+                    needed: 9,
+                    spendable_now: 1,
+                    pending_rebuild: 8,
+                },
+                WalletRpcErrorCode::SpendUnavailableRebuilding,
+            ),
+            (
+                SendError::CurveTreeUnavailable {
+                    detail: "actor stopped".into(),
+                },
+                WalletRpcErrorCode::CurveTreeUnavailable,
+            ),
+            (
+                SendError::OutputNotYetSpendable {
+                    eligible_height: BlockHeight::from_raw(110),
+                    reference_block_height: BlockHeight::from_raw(100),
+                    wait_blocks: BlockCount::from_raw(10),
+                },
+                WalletRpcErrorCode::OutputNotYetSpendable,
+            ),
+            (
+                SendError::WalletTooYoungToSpend {
+                    synced_height: BlockHeight::from_raw(3),
+                    ref_anchor_age: BlockCount::from_raw(10),
+                },
+                WalletRpcErrorCode::ChainTooShortToSpend,
+            ),
+            (
+                SendError::SubmitLoopBreakerTripped {
+                    kind: TerminalErrorKind::FeeTooLow,
+                },
+                WalletRpcErrorCode::SubmitLoopBreakerTripped,
+            ),
+            (
+                SendError::Io(IoError::Daemon {
+                    detail: "connection refused".into(),
+                }),
+                WalletRpcErrorCode::DaemonUnreachable,
+            ),
+            (
+                SendError::BuildInvariant {
+                    reason: "lock poisoned",
+                },
+                WalletRpcErrorCode::InternalError,
+            ),
+        ];
+        for (cause, expected) in cases {
+            let shown = format!("{cause}");
+            let err: WalletRpcError = cause.into();
+            assert_eq!(err.code(), expected, "{shown}");
+        }
+        // Amounts stay off the wire even when the engine's Display has them.
+        let rebuilding: WalletRpcError = SendError::SpendUnavailableRebuilding {
+            needed: 123_456,
+            spendable_now: 1,
+            pending_rebuild: 8,
+        }
+        .into();
+        assert!(
+            !rebuilding.message().contains("123456"),
+            "{}",
+            rebuilding.message()
+        );
+        let wait: WalletRpcError = SendError::OutputNotYetSpendable {
+            eligible_height: BlockHeight::from_raw(110),
+            reference_block_height: BlockHeight::from_raw(100),
+            wait_blocks: BlockCount::from_raw(10),
+        }
+        .into();
+        assert_eq!(wait.data().expect("data")["wait_blocks"], 10);
+    }
+
+    /// The submit and pending-tx refusals that used to share `-32603`.
+    #[test]
+    fn submit_refusals_have_their_own_codes() {
+        use shekyl_engine_core::ReservationId;
+        let rid = ReservationId::from_raw(7);
+        let cases: Vec<(WalletRpcError, WalletRpcErrorCode)> = vec![
+            (
+                SubmitError::SubmitAlreadyPending {
+                    reservation_id: rid,
+                }
+                .into(),
+                WalletRpcErrorCode::SubmitAlreadyPending,
+            ),
+            (
+                SubmitError::ReanchorUnavailable {
+                    reservation_id: rid,
+                }
+                .into(),
+                WalletRpcErrorCode::ReanchorUnavailable,
+            ),
+            (
+                SubmitError::ReselectionRequired {
+                    reservation_id: rid,
+                }
+                .into(),
+                WalletRpcErrorCode::ReselectionRequired,
+            ),
+            (
+                PendingTxError::SubmitAlreadyPending {
+                    reservation_id: rid,
+                }
+                .into(),
+                WalletRpcErrorCode::SubmitAlreadyPending,
+            ),
+            (
+                FeeEstimatorError::DaemonResponseInvalid { reason: "not json" }.into(),
+                WalletRpcErrorCode::DaemonFeeResponseInvalid,
+            ),
+            (
+                RefreshError::Cancelled.into(),
+                WalletRpcErrorCode::RefreshCancelled,
+            ),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(err.code(), expected, "{err:?}");
+        }
+    }
+
+    /// The code table here and the contract's `WalletRpcErrorCode` enum are
+    /// one set, both directions: a code the server can emit that the contract
+    /// does not list is a conformance failure, and a contract code with no
+    /// variant is a promise nothing keeps.
+    #[test]
+    fn the_code_table_is_the_contracts() {
+        let contract = include_str!("../../../docs/api/wallet_rpc.yaml");
+        let schema = contract
+            .find("\n    WalletRpcErrorCode:\n")
+            .expect("the contract declares WalletRpcErrorCode");
+        let after = &contract[schema..];
+        let list = after.find("enum:").expect("an enum list") + "enum:".len();
+        let mut listed = std::collections::BTreeSet::new();
+        for line in after[list..].lines().skip(1) {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') {
+                continue;
+            }
+            let Some(rest) = t.strip_prefix("- ") else {
+                break;
+            };
+            let number = rest.split('#').next().expect("a value").trim();
+            listed.insert(number.parse::<i32>().expect("a numeric code"));
+        }
+        assert!(listed.len() > 50, "the parse found the list: {listed:?}");
+        let emitted: std::collections::BTreeSet<i32> =
+            WalletRpcErrorCode::ALL.iter().map(|c| c.as_i32()).collect();
+        let unlisted: Vec<_> = emitted.difference(&listed).collect();
+        let unbacked: Vec<_> = listed.difference(&emitted).collect();
+        assert!(
+            unlisted.is_empty() && unbacked.is_empty(),
+            "emitted but not in the contract: {unlisted:?}; in the contract with no variant: {unbacked:?}"
+        );
     }
 }

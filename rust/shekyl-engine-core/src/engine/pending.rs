@@ -685,9 +685,7 @@ pub(crate) fn build_pending_tx_in_state(
 
     let synced = ledger.height();
     let Some(tip_hash) = ledger.block_hash_at(synced).copied() else {
-        return Err(SendError::CannotSign {
-            reason: "wallet has not ingested any block yet",
-        });
+        return Err(SendError::NotSynced);
     };
 
     let mut total_amount = AtomicUnits::ZERO;
@@ -907,7 +905,7 @@ where
         // in flight — both are legitimate `Poll::Pending` reasons that
         // the sync wrapper cannot drive. Callers on an async runtime
         // must use `build_pending_tx_async`.
-        Poll::Pending => Err(SendError::CannotSign {
+        Poll::Pending => Err(SendError::BuildInvariant {
             reason: "sync Engine::build_pending_tx requires an immediately-ready \
                      PendingTxEngine future (async assembly or build-permit \
                      contention — use build_pending_tx_async)",
@@ -994,7 +992,7 @@ impl<
     /// `build` performs real async I/O — it awaits the curve-tree actor's
     /// `AssembleTx` to assemble the FCMP++ membership path — so the sync wrapper's
     /// immediate-ready contract ([`poll_immediate_build`]) cannot drive it and
-    /// returns `CannotSign`. Callers already on an async runtime use this method
+    /// returns `BuildInvariant`. Callers already on an async runtime use this method
     /// (the "async `Engine` methods" pairing the sync wrapper's doc anticipates).
     /// `&self` (W-B step 1): the slow FCMP++ membership assembly inside
     /// build no longer needs the embedder's exclusive Engine borrow —

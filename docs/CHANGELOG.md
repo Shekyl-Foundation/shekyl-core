@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+### Wallet RPC — every failure a user can act on has its own code
+
+- A wallet created in a directory that does not exist was reported as
+  `-29003 WALLET_FILE_NOT_FOUND`. The RPC read the cause back out of an error
+  message: `IoError::WalletFile` carried only a string, and the classifier
+  searched it for "not found". `IoError::WalletFile` now carries
+  `WalletFileError` itself, `WalletFile::create` names a missing directory
+  before writing anything (`DirectoryMissing`), and the classifier is gone.
+  The same create now answers `-29009 WALLET_DIR_MISSING`.
+- 24 codes are allocated in `docs/api/wallet_rpc.yaml`, each for a cause that
+  previously reached `-32603` or a neighbouring code's text:
+  - wallet storage `-29007..-29015` (network mismatch, locked by another
+    process, missing directory, access denied, corrupt, unsupported version,
+    I/O failure, close blocked by in-flight transactions, curve-tree data
+    unavailable);
+  - build and submit `-29110..-29119` (not synced, membership rebuild,
+    output too fresh, chain too short, loop-breaker tripped, submit already
+    pending, re-anchor unavailable, reselection required, unreadable fee
+    answer, signer failed);
+  - `-29204 REFRESH_CANCELLED`;
+  - a staker's open-time refusals `-29530..-29533`.
+- Every wallet-file failure the text classifier did not recognise (a damaged
+  file, a lock held by another process, a failed atomic write) answered
+  `-32603` with the upstream error's own text as the message. That text names
+  local paths ("lock held on {path}", "rename into {target}"), so paths reached
+  the wire. Each now has its code, and a category-only message. The envelope's
+  "invalid password or corrupted" stays `-29004`: the envelope cannot tell the
+  two apart. A build's daemon failure answers `-29201` rather than
+  `-29102 FEE_ESTIMATION_FAILED`.
+- The curve-tree store classifies its own open failures
+  (`ClientError::open_fault`: locked elsewhere, corrupt, unsupported, I/O,
+  internal); the wallet carries the class, not a string.
+- `SendError::CannotSign` was split by meaning: `NotSynced`,
+  `SignerUnavailable` (answered as `-29006`), `SignerFailed`, and
+  `BuildInvariant` for preconditions only a bug breaks. The engine's
+  diagnostics no longer compare a reason string to recognise "not synced", and
+  no longer label proof-construction failures as an invalid recipient.
+- `-32603` is left to bugs and invariant failures. The `#[non_exhaustive]`
+  engine enums keep the wildcard arm Rust requires, with every current variant
+  named ahead of it.
+- A test holds `WalletRpcErrorCode` and the contract's enum to one set, in
+  both directions. The Rust table is declared once, and `ALL` is generated
+  from it. `IoError::Ledger`, which nothing constructed, is deleted.
+
 ### Crypto — vendored FCMP++ subtree resynced to `2485a176`
 
 - Helios/Selene `from_bytes` still accepts the canonical identity (`x == 0`

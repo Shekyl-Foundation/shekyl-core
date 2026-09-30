@@ -1679,13 +1679,18 @@ synthetic vectors satisfy that seam without the client existing yet.
 
 ## 7. Error surface (no new silent stubs)
 
+*Amended 2026-09-30: `SendError::CannotSign` was split by meaning — `NotSynced`
+(no block ingested yet), `SignerUnavailable`, `SignerFailed`, and
+`BuildInvariant` for the preconditions only a bug breaks. Each has its own
+wallet-RPC code; the table below uses the new names.*
+
 | Failure | Error |
 |---------|-------|
 | Daemon fee RPC down | `SendError::Io` / `FeeEstimatorError::DaemonUnreachable` |
 | Absurd priority fee | `SendError::Tx(TxError::DaemonFeeUnreasonable { ... })` |
-| Signer / builder failure | `SendError::Tx` or `SendError::CannotSign` |
+| Signer / builder failure | `SendError::Tx` (proof or signature construction), `SendError::SignerUnavailable` (no spend-key material in scope), or `SendError::SignerFailed { reason }` (a downstream signer failure) |
 | Output not yet spendable at reference block (`eligible_height > reference_height`) | `BuildError::OutputNotYetSpendable { eligible_height, reference_block_height, wait_blocks }` (C2, §3.7.5) — clean wait-N-blocks signal, **not** an opaque assembly miss |
-| Locally-assembled path malformed (length/shape) | `SendError::CannotSign` via the C3 precondition (§3.7.6) — distinguishes local-assembly bug from prover bug **before** committing prover effort |
+| Locally-assembled path malformed (length/shape) | `SendError::BuildInvariant` via the C3 precondition (§3.7.6) — distinguishes local-assembly bug from prover bug **before** committing prover effort |
 | Malformed tx at submit (incl. generic daemon `Failed`) | `TxSubmitOutcome::DaemonRejectedTerminal { Malformed }` → `SubmitError::DaemonRejectedTerminal` (§3.6 honest-subset mapping) |
 | Ambiguous daemon (transport/protocol failure) | `Err(Self::Error)` → `SubmitError::DaemonAmbiguous` (existing R9 discipline) |
 | Stale FCMP++ root at submit | **Deferred to Phase 6** — currently maps to `DaemonRejectedTerminal { Malformed }` (indistinguishable from generic `Failed`). `TxSubmitOutcome::ProofStale` variant exists for the future bounded rebuild loop; detection reopens on a daemon-side stale-root signal (`SHEKYLD_PREREQUISITE`, §3.6). Interim guard: proactive `reference.rs` horizon |

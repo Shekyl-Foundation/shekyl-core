@@ -7,24 +7,32 @@
 
 // --- IO --------------------------------------------------------------------
 
-/// Failures at the wallet's IO boundary: filesystem, daemon RPC,
-/// scanner network calls. Wraps the upstream error types via `#[from]`
-/// (lands alongside the lifecycle / refresh commits that introduce the
-/// call sites).
+/// Failures at the wallet's IO boundary: its files, the daemon RPC, and
+/// scanner network calls.
 ///
-/// `IoError` is intentionally distinct from
-/// [`std::io::Error`] — the wallet-core layer's IO surface includes
-/// daemon RPC and scanner failures, not just filesystem syscalls. The
-/// RPC binary maps each variant to a stable JSON-RPC error code.
+/// `IoError` is intentionally distinct from [`std::io::Error`] — the
+/// wallet-core layer's IO surface includes daemon RPC and scanner failures,
+/// not just filesystem syscalls. The RPC binary maps each variant to a
+/// stable JSON-RPC error code. The file variants carry their causes typed,
+/// so that mapping is a `match`, never a reading of the message text.
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
-    /// Engine-file envelope / atomic write / advisory lock / payload
-    /// frame failure. Wraps [`shekyl_engine_file::WalletFileError`]
-    /// (`#[from]` lands with the `open_*` commit).
-    #[error("wallet-file failure: {detail}")]
-    WalletFile {
-        /// Stringified upstream error. Typed `#[from]` from
-        /// `WalletFileError` lands alongside the open/save call sites.
+    /// A failure of the wallet's own files: envelope, payload frame, ledger
+    /// decode, atomic write, advisory lock, preferences, or the filesystem
+    /// beneath them. The upstream error, typed.
+    #[error("wallet-file failure: {0}")]
+    WalletFile(#[from] shekyl_engine_file::WalletFileError),
+
+    /// The wallet's curve-tree companion store would not open. `fault` is
+    /// what the failure means for the remedy, classified where it was
+    /// raised ([`shekyl_curve_tree::ClientError::open_fault`]); `detail` is
+    /// the store's own diagnosis, for the log only — it can name local
+    /// paths, so it never reaches a wire.
+    #[error("curve-tree store open failed: {detail}")]
+    CurveTreeStore {
+        /// What the failure means for whoever has to act on it.
+        fault: shekyl_curve_tree::StoreOpenFault,
+        /// The store's diagnosis, for the log.
         detail: String,
     },
 
@@ -40,15 +48,6 @@ pub enum IoError {
     /// computation, or pool-state retrieval.
     #[error("scanner failure: {detail}")]
     Scanner {
-        /// Stringified upstream error.
-        detail: String,
-    },
-
-    /// Bookkeeping-block / ledger-block (de)serialization failure.
-    /// Wraps [`shekyl_engine_state::WalletLedgerError`] (`#[from]` lands
-    /// with the lifecycle commit).
-    #[error("ledger (de)serialization failure: {detail}")]
-    Ledger {
         /// Stringified upstream error.
         detail: String,
     },

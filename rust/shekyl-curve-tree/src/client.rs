@@ -62,7 +62,9 @@ use crate::recon::{
     assemble_leaf_stream, collect_block_leaves, extract_leaf_commitments, root_from_scalars,
     TxOutputs,
 };
-use crate::store::{LeafStore, PostureDeclaration, SegmentPin, ServingReader, StoreError};
+use crate::store::{
+    LeafStore, PostureDeclaration, SegmentPin, ServingReader, StoreError, StoreOpenFault,
+};
 use crate::types::{
     BlockHeight, CommitmentBytes, CurveTreeRoot, Gindex, LeafEntry, OneTimePubkey, OutputIdentity,
     ReferenceBlock, TargetKind,
@@ -297,6 +299,33 @@ impl ClientError {
     #[must_use]
     pub fn is_already_open(&self) -> bool {
         matches!(self, ClientError::Store(e) if e.is_already_open())
+    }
+
+    /// What this failure means when [`CurveTreeClient::open`] raised it
+    /// ([`StoreOpenFault`]). An open can only produce a store failure or one
+    /// of the two resume refusals; every other arm is raised by ingest or
+    /// assembly, and seeing one at open is a programming error. Exhaustive,
+    /// so a new variant has to be placed before it compiles.
+    #[must_use]
+    pub fn open_fault(&self) -> StoreOpenFault {
+        match self {
+            ClientError::Store(e) => e.open_fault(),
+            // Pruned-store resume is unbuilt (F5): a shape this build cannot
+            // resume, not a broken store.
+            ClientError::ResumeFromPrunedStore { .. } => StoreOpenFault::Unsupported,
+            ClientError::ResumeFromCorruptStore { .. } => StoreOpenFault::Corrupt,
+            ClientError::RootMismatch { .. }
+            | ClientError::OutputNotDrained { .. }
+            | ClientError::IdentityMismatch { .. }
+            | ClientError::TooManyInputs { .. }
+            | ClientError::NonConsecutiveBlockHeight { .. }
+            | ClientError::ReferenceBeyondIngestedTip { .. }
+            | ClientError::Poisoned
+            | ClientError::LeafEntries { .. }
+            | ClientError::LeafPoint { .. }
+            | ClientError::Frontier { .. }
+            | ClientError::SnapshotLeafCountMismatch { .. } => StoreOpenFault::Internal,
+        }
     }
 }
 

@@ -130,7 +130,7 @@ where
         // concurrent build's `AssembleTx` round-trip would make the
         // breaker cost a full build's latency per refused attempt, and
         // would make the sync `Engine::build_pending_tx` wrapper report
-        // permit contention (`CannotSign`) instead of the real error.
+        // permit contention (`BuildInvariant`) instead of the real error.
         if let Err(err) = request.check_recipients() {
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
@@ -145,7 +145,7 @@ where
             let tripped = self
                 .state
                 .lock()
-                .map_err(|_| SendError::CannotSign {
+                .map_err(|_| SendError::BuildInvariant {
                     reason: "pending-tx state lock poisoned",
                 })?
                 .loop_breaker
@@ -237,7 +237,7 @@ where
                             .ok_or_else(|| {
                                 fail_build_after_attempted(
                                     self.sink.as_ref(),
-                                    SendError::CannotSign {
+                                    SendError::BuildInvariant {
                                         reason: "reference-height block hash missing from ledger",
                                     },
                                 )
@@ -274,7 +274,7 @@ where
         let handle = self.curve_tree.as_ref().ok_or_else(|| {
             fail_build_after_attempted(
                 self.sink.as_ref(),
-                SendError::CannotSign {
+                SendError::BuildInvariant {
                     reason: "curve tree required to assemble a membership proof",
                 },
             )
@@ -282,7 +282,7 @@ where
         let reference = reference.ok_or_else(|| {
             fail_build_after_attempted(
                 self.sink.as_ref(),
-                SendError::CannotSign {
+                SendError::BuildInvariant {
                     reason: "no reference block resolved for membership assembly",
                 },
             )
@@ -306,7 +306,7 @@ where
         if paths.iter().any(|p| p.tree.tree_depth != tree_depth) {
             return Err(fail_build_after_attempted(
                 self.sink.as_ref(),
-                SendError::CannotSign {
+                SendError::BuildInvariant {
                     reason: "assembled tree depth diverged from the fee estimate",
                 },
             ));
