@@ -1509,23 +1509,23 @@ Deadlines are derived **per connector**. Inputs, when they exist:
 flight sizes (1,224 and 1,160 bytes on the wire, prefix included), the
 Pi-4 crypto cost from step 3, and RTT measured on that connector. A
 single global handshake deadline would break on a network whose mixing
-delay is seconds. No deadline is written into this document before that
-measurement. Rule 26 B9.
+delay is seconds. Clearnet deadlines are the 2026-09-30 update below;
+Tor's are in the benchmark record. Rule 26 B9.
 
 Pi-4 C5 run, 2026-09-26, the floor device (aarch64, 4 cores), about 90 seconds:
 [`p2p_c5_pi4_20260926T005507Z.txt`](../benchmarks/p2p_c5_pi4_20260926T005507Z.txt).
 Initiator 928 µs, responder 685 µs, one rekey 5.06 µs, seal/open of
 65,535 bytes 889 µs. The responder figure is the per-connection cost
 D10.3's clearnet accept-rate bound is derived from. The bound waits on
-a stated CPU budget. No rate is written here. Deadline milliseconds
-are not written here either.
+a stated CPU budget. No rate is written here. Clearnet deadline milliseconds are the
+2026-09-30 update below. Tor's stay in the benchmark record.
 
 UPDATE 2026-09-29: each deadline is the p99 of honest completions on
 the floor device, over real links, for that connector, times two.
 p99 is about one honest attempt in a hundred timing out; the node
-tries another peer. The factor of two is the margin for honest links
-this measurement does not include (mobile, satellite, a congested
-overlay). It is one policy for every deadline. The distributions
+tries another peer. SUPERSEDED 2026-09-30 for clearnet: the factor of
+two does not cover a longer honest path (mobile, satellite). Tor keeps
+this form, because Tor's delay is the overlay. The distributions
 produce the p99; they do not produce the factor.
 
 UPDATE 2026-09-29, measurement conditions. Each distribution is taken
@@ -1560,6 +1560,24 @@ that will not exist:
   conditions whose p99 exceeds the derived deadline reopens it, and
   the deadline is re-derived from the larger run. The same shape D5
   gives a mining floor device.
+
+UPDATE 2026-09-30, clearnet form. A clearnet deadline is twice the sum
+of two terms. The first is a stated RTT ceiling for the farthest honest
+link Shekyl intends to serve: 700 ms, a GEO-satellite round trip taken
+at the top of the ~600–700 ms range. A phone tether sits inside that
+ceiling. The second is the node-local p99 from the floor legs, the
+larger residual (span p99 minus that leg's RTT) so the term is not
+under-stated: connect 7.2 ms, initiator handshake 12.6 ms, gap 14.7 ms.
+The factor of two is jitter and congestion on the ceiling link. Twice
+the p99 of a shorter honest path is not a deadline: every dial on a
+longer honest path fails, and a failed clearnet dial marks the address
+for up to `P2P_FAILED_ADDR_FORGET_SECONDS` (1 h). Rounded up to 1 ms:
+connect 1.415 s, initiator handshake 1.426 s, gap 1.430 s. The three
+legs those residuals come from, and the New York leg that confirms the
+slope is about 1, are in the benchmark record. A measured
+satellite-class link whose RTT exceeds 700 ms reopens the ceiling.
+These milliseconds are not wired yet; the wiring commit names these
+links.
 
 One rekey is 5.06 µs against 889 µs to seal and open a 65,535-byte
 record, under one percent at that size. Fixed windows are smaller than
@@ -1728,9 +1746,10 @@ round can reject them.
   directions. The loopback harness is one build. The claim that
   cutover is not a flag day is about two builds talking to each
   other. UPDATE 2026-09-30: the clearnet pair, the Tor dial and inbound
-  distributions, the South America clearnet figures (recorded, not
-  wired; a high-RTT leg is owed before a clearnet deadline is written)
-  and the Tor gap timer, and one Tor stem hop are in
+  distributions, the South America and New York clearnet figures
+  (recorded, not wired; the clearnet deadlines are the D9 ceiling
+  form, 1.415 / 1.426 / 1.430 s) and the Tor gap timer, and one Tor
+  stem hop are in
   [`p2p_cutover_crossbuild_20260929.md`](../benchmarks/p2p_cutover_crossbuild_20260929.md).
   The epee-to-epee stem still did not cross in the first cross-build.
   The thread-budget legs are not in it; they wait on the ledger row.

@@ -58,6 +58,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D5
   - Target: pre-genesis
 
+- **A timed-out clearnet dial and a refused one do not share the hour-long forget.** `P2P_FAILED_ADDR_FORGET_SECONDS` (3600, `cryptonote_config.h`) marks an address the same way whether the dial timed out or the peer refused. A timeout on a far link is evidence about the link, not the peer (rule 82); one window for both is how a node on a long honest path forgets every peer it tries. The two causes take different windows, named in the owner doc. Not a #909 change. Falsify by the owner doc naming both windows and the dial path applying the timeout window only to a timeout.
+  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
+  - Target: pre-genesis
+
 - **A stalled in-flight write after a local close holds the fd.** #909's `Hub::record` discards the queued tail on a caused close, so a banned or refused peer no longer holds our connection task through *queued* frames. It does not bound the frame the writer already popped: `write_all` on that frame blocks the task (and the fd) for as long as the peer refuses to read, and `overfull` trips only on queue growth, not on a stalled tail (`capped-stream/src/copy.rs`). The bound is the shape ruled out of #909 in favour of discard (this box, 2026-09-29): an `AfterChannel` stall deadline (the variant exists in `cause.rs`, nothing arms one) derived like the other transport deadlines. Blocked on the transport-deadline commit (the derived deadlines are owed there; this one derives with them). Falsify by a test in which a peer stops reading after a local close and the connection task and its fd are released within a bound rather than held.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis

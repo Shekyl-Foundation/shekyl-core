@@ -494,31 +494,76 @@ is the 170 ms link, not the Pi-4. This is why the deadline is derived
 here and not on the LAN: the LAN leg measured the floor's compute with
 the network term near zero; this leg measures the term that dominates.
 
-**Not a shipped deadline.** Each of these is p99 × 2 of one fibre path,
-a home LAN to a host in South America, TCP RTT about 170 ms, and each
-p99 is one round trip of that path (connect 174 ms, handshake 183 ms,
-gap 179 ms). Twice that RTT is the honest-failure rate D9 defines for
-links near 170 ms. An honest link whose RTT is above about 340 ms —
-a satellite path, congested mobile, a long transpacific route — fails
-every dial, not one in a hundred. A failed clearnet dial then marks
-the address for up to `P2P_FAILED_ADDR_FORGET_SECONDS` (1 h,
-`cryptonote_config.h`). A node on that link forgets each peer it
-tries, for an hour, and does the same to the next: it eclipses itself
-by geography. The factor of two covers up to twice this path. The
-reopen would catch a longer path only after a node on it had been
-shipped a deadline it cannot use.
-
-The deadline commit does not write 349 / 366 / 359 ms. It waits on one
-more clearnet distribution, the floor dialing a seed in a New York
-datacenter, a link by name from the class the factor of two is being
-asked to cover. The commit states which link each deadline was derived
-on. The Tor gap timer is not in this hold: 2.6 s is the maximum of two
-distant-circuit distributions, one each direction.
+**Not a shipped deadline, and not the input to one.** Each of 349 /
+366 / 359 ms is p99 × 2 of this one fibre path (TCP RTT about 170 ms).
+Twice that RTT is the honest-failure rate for links near 170 ms. An
+honest link above about 340 ms fails every dial, and a failed clearnet
+dial marks the address for up to an hour
+(`P2P_FAILED_ADDR_FORGET_SECONDS`). The clearnet form is the D9 update
+of 2026-09-30: twice (a 700 ms stated RTT ceiling + the node-local
+p99). This path supplies the handshake residual (182.56 − 170 = 12.6
+ms), which is the largest handshake residual of the three legs. It
+does not supply the deadline. The Tor gap timer is not in this hold:
+2.6 s is the maximum of two distant-circuit distributions, one each
+direction.
 
 A later distribution under these conditions whose p99 exceeds 174.07 ms
 (connect), 182.56 ms (handshake) or 179.34 ms (gap) reopens the
 respective figure for *this* path. It does not by itself adopt a
 deadline.
+
+## Clearnet New York distribution, floor device initiator (2026-09-30 UTC)
+
+The third RTT point. It confirms the slope; it does not set the
+deadline. Raw samples:
+[`p2p_clearnet_nyc_floor_initiator_20260930.tsv`](p2p_clearnet_nyc_floor_initiator_20260930.tsv).
+
+Conditions, per D9:
+
+- Dialer: the floor device (Pi-4, aarch64, 4 cores), one outbound and
+  nothing else; `--clearnet-transport-encrypt` on, ephemeral Tor off,
+  RandomX miner off. Sharing its four cores: the same idle regtest
+  daemon as the other floor legs.
+- Responder: a measurement daemon on a New York datacenter host
+  (x86_64, 2 cores), `--clearnet-transport-encrypt` on, ephemeral Tor
+  off, bound to the measurement port only. That host's production
+  testnet daemon stayed up; load average was about 2.7 on 2 cores.
+  Initiator spans are the floor's, so that load is named and is not
+  what the connect and handshake columns read.
+- Link: the public internet, a home LAN to that datacenter. Ping RTT
+  min / avg / max 21.2 / 24.0 / 25.1 ms (20 echoes).
+- Method: the same dialer-side `out_peers` churn as the other initiator
+  legs. Responder spans were not collected.
+- n = 100, no timeouts. p99 is rank ⌈0.99 n⌉, the 99th of 100.
+
+| span | p50 | p99 | max | residual vs 24.0 ms |
+| --- | --- | --- | --- | --- |
+| TCP connect | 26.1 ms | 31.2 ms | 31.5 ms | 7.2 ms |
+| initiator handshake | 36.5 ms | 115.7 ms | 676.6 ms | see below |
+| channel to session (gap) | 26.5 ms | 38.7 ms | 39.9 ms | 14.7 ms |
+| initiator queue / compute / write | 63 µs / 0.42 ms / 91 µs | 0.20 / 1.02 / 0.20 ms | — | — |
+
+Connect and gap sit one RTT plus a few-to-fifteen milliseconds, the
+same shape as the LAN (RTT 0.2 ms; residuals under 1 / 7 / 5 ms) and
+the South America path (RTT about 170 ms; residuals 4 / 13 / 9 ms).
+Slope about 1 across 0.2 ms, 24 ms and 170 ms.
+
+The handshake rank is not that shape. 98 of 100 handshakes are at or
+under 48.8 ms (median residual 12.5 ms, which matches the South
+America 12.6 ms). The 99th is 115.7 ms and the max is 676.6 ms. On
+both of those samples the connect and the gap were ordinary (connect
+27 and 31 ms, gap 22 and 28 ms), and the pre-write queue, compute and
+write were sub-millisecond. The stall is the initiator waiting inside
+the Noise handshake, not the link and not the Levin gap. Those two
+samples stay in this distribution. They do not become the node-local
+term: a term that is 13 ms on one leg and 92 ms on the next is not the
+term that barely moved.
+
+Node-local p99, the larger residual of the three legs: connect 7.2 ms
+(this leg), handshake 12.6 ms (South America), gap 14.7 ms (this leg).
+Deadlines, 2 × (700 ms ceiling + that residual), rounded up to 1 ms:
+connect 1.415 s, initiator handshake 1.426 s, gap 1.430 s. A measured
+satellite-class link whose RTT exceeds 700 ms reopens the ceiling.
 
 ## Tor inbound distribution, floor device responder (2026-09-30 UTC)
 
