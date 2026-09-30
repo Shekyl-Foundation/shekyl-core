@@ -160,7 +160,7 @@ fn cold_authority_ffi_credit_kind_is_not_rescued_by_matching_keys() {
 fn ffi_constants_match_timing_cluster() {
     assert_eq!(SETTLEMENT_EPOCH_BLOCKS, 10_000);
     assert_eq!(shekyl_archival_epoch_open_height(100), 1_000_000);
-    assert_eq!(shekyl_archival_epoch_close_height(100), 1_009_999);
+    assert_eq!(shekyl_archival_epoch_last_block(100), 1_009_999);
 }
 
 #[test]
@@ -1477,7 +1477,7 @@ fn emission_epoch_work_sums_to_persisted_sigma() {
 
 /// The close-processing boundary wrapper single-sources
 /// `consensus_state::epoch_close_height`: `(E+1)·SEB`, one above the
-/// settlement close height, 0 for the overflowing epoch.
+/// epoch's last block, 0 for the overflowing epoch.
 #[test]
 fn epoch_close_processing_height_wrapper() {
     assert_eq!(
@@ -1490,7 +1490,7 @@ fn epoch_close_processing_height_wrapper() {
     );
     assert_eq!(
         shekyl_archival_epoch_close_processing_height(5),
-        shekyl_archival_epoch_close_height(5) + 1
+        shekyl_archival_epoch_last_block(5) + 1
     );
     assert_eq!(shekyl_archival_epoch_close_processing_height(u64::MAX), 0);
 }

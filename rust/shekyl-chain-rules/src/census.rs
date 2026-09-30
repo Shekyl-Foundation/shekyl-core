@@ -526,9 +526,18 @@ census_rows! {
         // uniqueness, run in `validate` after every slot; SI-1 is the store's
         // belt beneath it, never the rule.
         L1 implemented(crate::rules::tx_against::L1),
-        L7 pending,
-        L8 pending,
-        L9 pending,
+        // L7–L9 are the C++ archival connect hooks, which the verdict runs
+        // as the archival transition (DRS-E4 commit 4, `ARW-Q1`): the
+        // store holds no archival arithmetic. L7 is the rule — a post,
+        // credit or claim the folds cannot apply refuses the block at its
+        // input. L8 and L9 are the folds themselves: the close is a
+        // derivation the delta carries, and what the C++ aborted on
+        // (accrual overflow; a slash the record cannot take) is a
+        // `Corrupt` the fold returns by type — no per-block predicate, so
+        // no rule type; the falsifiers exercise the folds directly.
+        L7 implemented(crate::archival::L7),
+        L8 by_construction(crate::archival::accrue, "l8_an_accrual_that_overflows_is_a_corrupt_view"),
+        L9 by_construction(crate::archival::apply_slash, "l9_slashing_a_shard_the_record_does_not_hold_is_a_corrupt_view"),
         L10 pending,
         L11 pending,
         L12 pending,

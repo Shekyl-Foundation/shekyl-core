@@ -13,7 +13,7 @@ use shekyl_types::{BlockHash, BlockHeight, PqcAuthHash, PrunableHash, TxHash};
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{
-    connect_chain_anchored, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
+    connect_chain_anchored, credited, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, EPOCH};
@@ -31,18 +31,18 @@ fn hash_of(tx: &Transaction) -> TxHash {
     tx.txid_parts().hash
 }
 
-/// The spendable prefix, with block 1 listing one 3-part body (a
-/// serve-credit-only transaction — no `pqc_auths` by rule, CEN-H20; it
-/// spends nothing, so CEN-I11 lets it sit that low), then the first
-/// admissible spend block listing a spend, which carries per-input
-/// `pqc_auths` and is 4-part. Coinbases at every height, so the dense id
-/// space is `0..TX_COUNT`: the coinbases interleaved with the serve credit
-/// after coinbase 1, and the spend last.
+/// The spendable prefix, then the first admissible spend block listing
+/// three bodies: the join that opens a record, the 3-part serve credit on
+/// it (a serve-credit-only transaction — no `pqc_auths` by rule, CEN-H20;
+/// since DRS-E4 commit 4 it connects only behind its record, CEN-L7, so
+/// it sits in the spend block rather than at height 1), and a spend, which
+/// carries per-input `pqc_auths` and is 4-part. Coinbases at every height,
+/// so the dense id space is `0..TX_COUNT`: the coinbases through the spend
+/// block, then the join, the serve credit, the spend.
 fn tx_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>, Transaction, Transaction) {
     let store = ChainStore::create(path, EPOCH).expect("create");
-    let plain = shekyl_chain_rules::harness::fixture::serve_credit_only([0x5e; 32]);
-    let mut listing = spendable_prefix(&[vec![spend(15, 2)]]);
-    listing[1] = vec![plain.clone()];
+    let [join, plain] = credited(10, [0x5e; 32]);
+    let listing = spendable_prefix(&[vec![join, plain.clone(), spend(15, 2)]]);
     // The spend as connected — anchored on the chain — is the one the reads
     // are asked about by hash.
     let (hashes, mut anchored) = connect_chain_anchored(&store, &listing);
@@ -53,11 +53,11 @@ fn tx_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>, Transaction,
     (store, hashes, plain, with_pqc)
 }
 
-/// The height [`tx_chain`]'s spend sits at.
+/// The height [`tx_chain`]'s spend block sits at.
 const SPEND_HEIGHT: u64 = FIRST_SPEND_HEIGHT;
 /// [`tx_chain`]'s dense id count: one coinbase per height through the
-/// spend block, the serve credit, the spend.
-const TX_COUNT: u64 = SPEND_HEIGHT + 1 + 2;
+/// spend block, the join, the serve credit, the spend.
+const TX_COUNT: u64 = SPEND_HEIGHT + 1 + 3;
 
 fn is_si7_absent(err: &StoreError, table: &str) -> bool {
     matches!(
@@ -83,11 +83,16 @@ fn tx_location_is_some_for_a_recorded_hash_and_none_for_an_unknown_one() {
         .tx_location(&hash_of(&with_pqc))
         .expect("read")
         .expect("recorded");
-    assert_eq!(plain_loc.height, BlockHeight::from_raw(1));
+    assert_eq!(plain_loc.height, BlockHeight::from_raw(SPEND_HEIGHT));
     assert_eq!(pqc_loc.height, BlockHeight::from_raw(SPEND_HEIGHT));
     assert!(
         plain_loc.id < pqc_loc.id,
-        "ids are dense in connect order: {plain_loc:?} before {pqc_loc:?}"
+        "ids are dense in listing order: {plain_loc:?} before {pqc_loc:?}"
+    );
+    assert_eq!(
+        pqc_loc.id.to_raw(),
+        TX_COUNT - 1,
+        "the spend is listed last, so it takes the last id"
     );
     // A miss is ordinary — `None`, the counter-rule's worked case (Q1 B).
     assert_eq!(

@@ -21,6 +21,10 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # Typed-side cleartext balance terms (bond_credit -> OutputTerm — §7.2).
 shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 shekyl-units = { path = "../shekyl-units" }
+# `PCanonicalId::from_bytes` at the vin's byte edge (rule 18).
+shekyl-types = { path = "../shekyl-types" }
+# Consensus `Input::BondPost` for [`bond_post_input`].
+shekyl-wire = { path = "../shekyl-wire" }
 thiserror.workspace = true
 
 [dev-dependencies]

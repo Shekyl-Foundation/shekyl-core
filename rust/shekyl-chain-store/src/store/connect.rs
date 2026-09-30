@@ -208,13 +208,16 @@ impl<'id> WriteBatch<'_, 'id> {
             }
             .into());
         }
-        // SCW-7 at the height it applies to: the undo retention covers the
-        // in-force set's reorg cap, or a legal reorg from this block would
-        // meet `PopBelowFloor`. `Horizons::new` refused this at open against
-        // the cap the caller named; this is the same inequality against the
-        // set actually handed in, so a schedule step that raises the cap is
-        // refused at its first block, not discovered at its first reorg.
-        self.horizons().check_covers(&in_force)?;
+        // SCW-7 and SCW-2 at the height they apply to: the undo retention
+        // covers the in-force set's reorg cap, or a legal reorg from this
+        // block would meet `PopBelowFloor`; and the pinned settlement epoch
+        // is the in-force set's, or the verdict's archival rows were judged
+        // under a geometry this file does not hold. The open refused both
+        // against what the caller named; this is the same pair against the
+        // set actually handed in, so a schedule step that moves either is
+        // refused at its first block, not discovered at its first reorg or
+        // its first mislabeled claim.
+        self.horizons().check_against(&in_force)?;
 
         // ---- provenance (§3.8): what this verdict did NOT bring ----------
         // Widened before the writes and inside this transaction, so it

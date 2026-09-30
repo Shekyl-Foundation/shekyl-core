@@ -14,82 +14,38 @@
 //! written on every network (rule 71: the store sees a datum, never a
 //! nettype), which on a public network is a constant matching a constant.
 //! What the store owns is **record at create, compare at open, refuse
-//! loudly on mismatch** — the same shape as `schema_version`. Which value
-//! is *effective* is the caller's (`shekyl-archival-retention`); the store
-//! never reads the environment.
+//! loudly on mismatch** — the same shape as `schema_version` — and, since
+//! DRS-E4 `ARW-15` put the schedule on the rule set, **compare at every
+//! connect** against the set in force (`Horizons::check_against`). Which
+//! value is in force is the rule set's (`RuleSet::settlement_schedule`);
+//! the store never reads the environment.
 //!
+//! The type is `shekyl_types::archival::SettlementEpochBlocks` — the rule
+//! set carries it and the retention crate computes with it, so it lives
+//! where all three readers reach (rule 18) — and its codec is
+//! `shekyl-store-codec`'s (`vocabulary.rs`), where every impl of the
+//! foreign [`Canonical`](super::Canonical) trait on a foreign type has to
+//! be. This module is the pin's **meaning** for this store; the cell it
+//! fills is [`SettlementEpochBlocksCell`](super::SettlementEpochBlocksCell).
 //! `0` is not a schedule: the C++ used it as "unpinned", and a file this
 //! crate wrote is never unpinned, so a zero cell is corruption (SI-7), not
-//! a state.
+//! a state — the type cannot spell it, and the decode refuses it.
 
-use core::num::NonZeroU64;
-
-use super::{Canonical, CodecError};
-
-/// Blocks per settlement epoch, pinned into the store header at create.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SettlementEpochBlocks(NonZeroU64);
-
-impl SettlementEpochBlocks {
-    /// `blocks` per epoch; `None` for zero, which names no schedule.
-    #[must_use]
-    pub const fn new(blocks: u64) -> Option<Self> {
-        match NonZeroU64::new(blocks) {
-            Some(n) => Some(Self(n)),
-            None => None,
-        }
-    }
-
-    /// The schedule, in blocks.
-    #[must_use]
-    pub const fn get(self) -> u64 {
-        self.0.get()
-    }
-}
-
-impl core::fmt::Display for SettlementEpochBlocks {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{} blocks/epoch", self.0)
-    }
-}
-
-impl Canonical for SettlementEpochBlocks {
-    /// Also the `properties` key the C++ wrote (`"settlement_epoch_blocks"`),
-    /// so a cell this crate reads back is the one that store pinned.
-    const NAME: &'static str = "settlement_epoch_blocks";
-    const FIXED_WIDTH: Option<usize> = Some(8);
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.get().encode_into(out);
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        let blocks = u64::decode(bytes).map_err(|e| e.in_codec(Self::NAME))?;
-        Self::new(blocks).ok_or(CodecError::Invalid {
-            codec: Self::NAME,
-            reason: "zero blocks per epoch names no schedule",
-        })
-    }
-}
+pub use shekyl_types::archival::SettlementEpochBlocks;
 
 #[cfg(test)]
 mod tests {
+    use super::super::{Canonical, CodecError};
     use super::*;
 
+    /// The pin's fixed width as this store's header reads it: exactly one
+    /// encoding, or a `CodecError` (the snapshot fixture pins the bytes).
     #[test]
-    fn encodes_as_u64_le_and_refuses_zero_and_wrong_widths() {
+    fn the_pin_round_trips_and_refuses_wrong_widths() {
         let pin = SettlementEpochBlocks::new(10_000).expect("non-zero");
-        assert_eq!(pin.encode(), 10_000u64.to_le_bytes());
         assert_eq!(SettlementEpochBlocks::decode(&pin.encode()), Ok(pin));
         assert_eq!(pin.to_string(), "10000 blocks/epoch");
         assert_eq!(SettlementEpochBlocks::new(0), None);
-        assert_eq!(
-            SettlementEpochBlocks::decode(&[0; 8]),
-            Err(CodecError::Invalid {
-                codec: "settlement_epoch_blocks",
-                reason: "zero blocks per epoch names no schedule",
-            })
-        );
         assert_eq!(
             SettlementEpochBlocks::decode(&[1, 0]),
             Err(CodecError::Length {

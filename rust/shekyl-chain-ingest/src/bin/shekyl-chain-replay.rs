@@ -13,9 +13,11 @@
 //!   record and refuses a pruned answer by height, RD-F15);
 //! - `replay` — run a corpus through `form → validate → connect` against a
 //!   redb store, borrowing the passed-through facts from a trace and
-//!   digesting at its checkpoint; `--fixed-difficulty n` is accepted with
-//!   `--chain regtest` only, exactly as `shekyld --regtest` binds it
-//!   (RD-Q7; refused elsewhere by construction, `ChainRules::new`).
+//!   digesting at its checkpoint; `--fixed-difficulty n` and the schedule
+//!   pair `--settlement-epoch-blocks n --reorg-cap m` are accepted with
+//!   `--chain regtest` only, exactly as `shekyld --regtest` binds its
+//!   levers (RD-Q7, DRS-E4 `ARW-15`; refused elsewhere by construction,
+//!   `ChainRules::new`).
 //!
 //! The trace comes from `shekyl-e2-trace-export` (the C++ harvest shim).
 //! Everything this binary composes is library code in
@@ -37,13 +39,12 @@
 
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
-use std::num::{NonZeroU128, NonZeroUsize};
+use std::num::{NonZeroU128, NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use shekyl_archival_retention::constants::SETTLEMENT_EPOCH_BLOCKS;
 use shekyl_chain_ingest::corpus::{CorpusNet, CorpusReader, CorpusWriter};
 use shekyl_chain_ingest::fetch::fetch_corpus;
 use shekyl_chain_ingest::grader::{grade_run, Register};
@@ -52,11 +53,12 @@ use shekyl_chain_ingest::pipeline::{run, Disagreement, PipelineConfig, RunReport
 use shekyl_chain_ingest::schedule::ChainRules;
 use shekyl_chain_ingest::substrate::ProductionSubstrate;
 use shekyl_chain_ingest::trace::Trace;
-use shekyl_chain_store::codec::SettlementEpochBlocks;
-use shekyl_chain_store::store::ChainStore;
+use shekyl_chain_rules::{FakechainSchedule, SettlementEpochBlocks};
+use shekyl_chain_store::apply_policy::ApplyPolicy;
+use shekyl_chain_store::store::{ChainStore, Horizons};
 use shekyl_pow_randomx::CacheStore;
 use shekyl_rpc_transport::HttpRpc;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockCount, BlockHeight};
 
 /// Heights per `/get_blocks_by_height.bin` request: a 2301-block regtest
 /// fetch is a few dozen round trips, and one reply stays well under the
@@ -120,6 +122,16 @@ enum Command {
         /// does. Accepted with `--chain regtest` only.
         #[arg(long)]
         fixed_difficulty: Option<NonZeroU128>,
+        /// Blocks per settlement epoch the corpus's daemon ran
+        /// (`SHEKYL_SETTLEMENT_EPOCH_BLOCKS`). Given with `--reorg-cap`,
+        /// and accepted with `--chain regtest` only; the production
+        /// schedule when absent.
+        #[arg(long, requires = "reorg_cap")]
+        settlement_epoch_blocks: Option<NonZeroU64>,
+        /// The reorg cap that daemon ran (`SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`),
+        /// strictly inside the epoch. Given with `--settlement-epoch-blocks`.
+        #[arg(long, requires = "settlement_epoch_blocks")]
+        reorg_cap: Option<NonZeroU64>,
         /// Blocks formed ahead of the writer at once (non-zero).
         #[arg(long, default_value_t = PipelineConfig::DEFAULT_WINDOW)]
         window: NonZeroUsize,
@@ -173,18 +185,21 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
             store,
             chain,
             fixed_difficulty,
+            settlement_epoch_blocks,
+            reorg_cap,
             window,
             hashers,
             register,
             grade_out,
             metrics_out,
         } => {
+            let schedule = schedule_flags(settlement_epoch_blocks, reorg_cap)?;
             replay(Replay {
                 corpus,
                 trace,
                 store,
                 chain,
-                rules: ChainRules::new(chain.into(), fixed_difficulty)?,
+                rules: ChainRules::new(chain.into(), fixed_difficulty, schedule)?,
                 cfg: PipelineConfig { window, hashers },
                 register,
                 grade_out,
@@ -192,6 +207,30 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
             })
             .await
         }
+    }
+}
+
+/// The schedule pair from its two flags: both or neither (clap holds that),
+/// the production pair when neither. A cap not strictly inside the epoch
+/// is refused here, as the daemon refuses it at arm.
+fn schedule_flags(
+    settlement_epoch_blocks: Option<NonZeroU64>,
+    reorg_cap: Option<NonZeroU64>,
+) -> Result<FakechainSchedule, Failure> {
+    match (settlement_epoch_blocks, reorg_cap) {
+        (Some(epoch), Some(cap)) => {
+            let epoch = SettlementEpochBlocks::new(epoch.get()).expect("NonZeroU64 is non-zero");
+            Ok(FakechainSchedule::new(
+                epoch,
+                BlockCount::from_raw(cap.get()),
+            )?)
+        }
+        (None, None) => Ok(FakechainSchedule::PRODUCTION),
+        // `requires` on both flags makes this unreachable from the command
+        // line; a programmatic caller that pairs them apart is a bug.
+        (Some(_), None) | (None, Some(_)) => Err(
+            "--settlement-epoch-blocks and --reorg-cap are one pair; give both or neither".into(),
+        ),
     }
 }
 
@@ -237,10 +276,13 @@ fn register_first(path: Option<&std::path::Path>) -> Result<Option<Register>, Fa
 
 async fn replay(replay: Replay) -> Result<(), Failure> {
     let register = register_first(replay.register.as_deref())?;
-    // The settlement epoch is a consensus constant, not a knob: a store
-    // sealed under another epoch would be another chain.
-    let epoch = SettlementEpochBlocks::new(SETTLEMENT_EPOCH_BLOCKS)
-        .expect("the consensus settlement epoch is non-zero");
+    // The store runs the `(SEB, cap)` pair of the rule set that judges the
+    // chain — the production pair, or the regtest daemon's levers — read
+    // off that set, not off a second copy (`Horizons::under`). A store
+    // sealed under another epoch would be another chain: `connect` refuses
+    // the first block (SCW-2, `ARW-15`), and an existing file pinned to a
+    // different epoch is refused at open.
+    let horizons = Horizons::under(&replay.rules.in_force(BlockHeight::from_raw(0)))?;
     let trace = Arc::new(Trace::read(BufReader::new(File::open(&replay.trace)?))?);
     let mut source = CorpusReader::open(BufReader::new(File::open(&replay.corpus)?))?;
     if source.net() != replay.chain {
@@ -251,7 +293,7 @@ async fn replay(replay: Replay) -> Result<(), Failure> {
         )
         .into());
     }
-    let store = ChainStore::create(&replay.store, epoch)?;
+    let store = ChainStore::with_horizons(&replay.store, ApplyPolicy::default(), horizons)?;
     let metrics = Arc::new(Metrics::new());
     let substrate = Arc::new(ProductionSubstrate::new(
         Arc::new(CacheStore::new()),
@@ -458,14 +500,80 @@ mod tests {
     }
 
     #[test]
-    fn the_flag_off_regtest_is_refused_where_the_rules_are_built() {
-        let refused = ChainRules::new(Chain::Public(Network::Testnet), NonZeroU128::new(7));
+    fn the_levers_off_regtest_are_refused_where_the_rules_are_built() {
+        let production = FakechainSchedule::PRODUCTION;
+        let refused = ChainRules::new(
+            Chain::Public(Network::Testnet),
+            NonZeroU128::new(7),
+            production,
+        );
         assert!(refused.is_err());
-        let ok = ChainRules::new(Chain::Regtest, NonZeroU128::new(7)).expect("regtest");
+        let ok = ChainRules::new(Chain::Regtest, NonZeroU128::new(7), production).expect("regtest");
         assert_eq!(
             ok.in_force(BlockHeight::from_raw(3)),
-            shekyl_chain_rules::RuleSet::fakechain(NonZeroU128::new(7), shekyl_chain_rules::D_MAX)
+            shekyl_chain_rules::RuleSet::fakechain(NonZeroU128::new(7), production)
         );
+    }
+
+    /// The schedule pair: both flags or neither, zero refused at parse, a
+    /// cap outside the epoch refused where the pair is built, and the store
+    /// horizons the run opens under are the set's own.
+    #[test]
+    fn the_schedule_pair_parses_as_one_and_names_the_stores_horizons() {
+        let base = [
+            "replay", "--corpus", "c", "--trace", "t", "--store", "s", "--chain", "regtest",
+        ];
+        let cli = parse(
+            &[
+                &base[..],
+                &["--settlement-epoch-blocks", "512", "--reorg-cap", "64"],
+            ]
+            .concat(),
+        )
+        .expect("parses");
+        let Command::Replay {
+            settlement_epoch_blocks,
+            reorg_cap,
+            ..
+        } = cli.command
+        else {
+            panic!("replay");
+        };
+        let schedule = schedule_flags(settlement_epoch_blocks, reorg_cap).expect("inside");
+        assert_eq!(schedule.settlement().blocks().get(), 512);
+        assert_eq!(schedule.reorg_cap(), BlockCount::from_raw(64));
+        let rules = ChainRules::new(Chain::Regtest, None, schedule).expect("regtest");
+        let horizons = Horizons::under(&rules.in_force(BlockHeight::from_raw(0))).expect("pair");
+        assert_eq!(horizons.epoch().get(), 512);
+
+        // Neither flag: the production pair, and the production horizons.
+        assert_eq!(
+            schedule_flags(None, None).expect("production"),
+            FakechainSchedule::PRODUCTION
+        );
+        // One without the other is refused by clap, and by the builder.
+        assert!(parse(&[&base[..], &["--settlement-epoch-blocks", "512"]].concat()).is_err());
+        assert!(parse(&[&base[..], &["--reorg-cap", "64"]].concat()).is_err());
+        assert!(schedule_flags(NonZeroU64::new(512), None).is_err());
+        // Zero is not an epoch or a cap; a cap at or past the epoch is not
+        // inside it.
+        assert!(parse(
+            &[
+                &base[..],
+                &["--settlement-epoch-blocks", "0", "--reorg-cap", "64"]
+            ]
+            .concat()
+        )
+        .is_err());
+        assert!(parse(
+            &[
+                &base[..],
+                &["--settlement-epoch-blocks", "512", "--reorg-cap", "0"]
+            ]
+            .concat()
+        )
+        .is_err());
+        assert!(schedule_flags(NonZeroU64::new(512), NonZeroU64::new(512)).is_err());
     }
 
     #[test]

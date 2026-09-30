@@ -33,7 +33,7 @@
 // Stage 3a: the escalation is CONSENSUS code now, so this module deps it rather
 // than restating it. Nothing here computes a ramp.
 use shekyl_economics::escalation::{
-    staker_pool_share_at, EscalationParams, FrozenSegmentCount, ScaledShare,
+    staker_pool_share_at, ClosedShardCount, EscalationParams, ScaledShare,
 };
 use shekyl_economics::params::{EconomicParams, SCALE};
 
@@ -83,7 +83,7 @@ impl EscalationCurve {
     /// statement about the sim rather than about consensus.
     #[must_use]
     pub fn share(&self, n: u64) -> u64 {
-        staker_pool_share_at(FrozenSegmentCount::new(n), &self.params()).to_raw()
+        staker_pool_share_at(ClosedShardCount::new(n), &self.params()).to_raw()
     }
 
     /// This candidate as consensus [`EscalationParams`] (well-formed by

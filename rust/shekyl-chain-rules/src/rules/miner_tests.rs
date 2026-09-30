@@ -33,9 +33,9 @@ use crate::verdict::{ChainValid, Locus, TxSlot, Verdict};
 use crate::view::{RecordedBlock, Tip};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_economics::{
-    base_block_reward, effective_emission, CirculatingSupply, FrozenSegmentCount, TxVolume,
+    base_block_reward, effective_emission, CirculatingSupply, ClosedShardCount, TxVolume,
 };
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{ArchivalLength, BlockHash, BlockHeight, SHARD_LENGTH};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Output, Transaction};
 
@@ -384,6 +384,20 @@ fn recorded_with_emission(
     }
 }
 
+/// [`recorded_with_emission`] with the archival fold set: what CEN-F17's
+/// operand reads (these fixtures list nothing, so the listed count stays
+/// zero — the fold, not the count, places the shard boundary).
+fn recorded_with_archival(
+    timestamp: u64,
+    coins_generated: u64,
+    cumulative_archival_len: u64,
+) -> RecordedBlock {
+    RecordedBlock {
+        cumulative_archival_len: ArchivalLength::from_raw(cumulative_archival_len),
+        ..recorded_with_emission(timestamp, coins_generated, 0)
+    }
+}
+
 fn emission_on(chain: &MockChain) -> Emission {
     let connecting = Tip::connecting_height(chain.tip().as_ref());
     chain.with_view(|view| {
@@ -454,14 +468,14 @@ fn cen_f13_f15_price_the_parents_accumulator() {
     // F17's two chain operands, read at the same parent state: the supply
     // is `coins_generated − total_burned` (FL-R16c; the mock burned
     // nothing here, so the supply is the accumulator), and `n` is the
-    // frozen-segment count of the leaf count at the connecting height —
-    // the mock's tree is empty, so zero.
+    // shards the parent chain closed — one block of forty listed
+    // transactions is forty-one ids, below `T`, so zero.
     assert_eq!(
         burn.supply,
         CirculatingSupply::derive(AtomicUnits::from_raw(ag), AtomicUnits::ZERO)
             .expect("nothing burned")
     );
-    assert_eq!(burn.frozen_segments, FrozenSegmentCount::ZERO);
+    assert_eq!(burn.closed_shards, ClosedShardCount::ZERO);
 }
 
 /// F17's supply operand nets the planted burn off the accumulator — the
@@ -506,6 +520,51 @@ fn cen_f17_reads_the_supply_net_of_burn_and_halts_when_the_burn_exceeds_the_emis
             total_burned: over,
         })
     );
+}
+
+/// F17's escalation operand `n` is the archival shards the **parent**
+/// chain has closed: `shard_of` its recorded fold, so a genesis block whose
+/// transactions fold to exactly `W` bytes has closed shard 0, and one byte
+/// fewer leaves it open (`SHT-Q2`: the boundary is the fold reaching
+/// `(k+1)·W`, not a transaction count). Genesis itself has no parent and
+/// no operand.
+#[test]
+fn cen_f17_counts_the_shards_the_parents_archival_fold_closed() {
+    let w = SHARD_LENGTH.to_raw();
+    let params = economics();
+    let ag = params.emission_curve_asymptote / 3;
+    let chain = MockChain::default().push(
+        recorded_with_archival(1_000, ag, w),
+        crate::harness::fixture::root(1),
+    );
+    let Subsidy::Derived { burn, .. } = emission_on(&chain).subsidy else {
+        panic!("height 1 derives");
+    };
+    assert_eq!(burn.closed_shards, ClosedShardCount::new(1));
+    // One byte fewer and the parent's fold stops short of the shard's end.
+    let chain = MockChain::default().push(
+        recorded_with_archival(1_000, ag, w - 1),
+        crate::harness::fixture::root(1),
+    );
+    let Subsidy::Derived { burn, .. } = emission_on(&chain).subsidy else {
+        panic!("height 1 derives");
+    };
+    assert_eq!(burn.closed_shards, ClosedShardCount::ZERO);
+    // The definitions the producer reads agree, and genesis has none.
+    chain.with_view(|view| {
+        assert_eq!(
+            closed_shards_before(&view, BlockHeight::from_raw(1)),
+            Ok(ClosedShardCount::ZERO)
+        );
+        assert_eq!(
+            closed_shards_through(&view, BlockHeight::from_raw(0)),
+            Ok(ClosedShardCount::ZERO)
+        );
+        assert_eq!(
+            closed_shards_before(&view, BlockHeight::from_raw(0)),
+            Ok(ClosedShardCount::ZERO)
+        );
+    });
 }
 
 /// F13's floor: a past-asymptote accumulator is a legitimate perpetual-tail

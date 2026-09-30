@@ -24,7 +24,15 @@
 //! nowhere else — once [`Canonical`] is foreign to a store crate, an impl
 //! for a foreign type can live only where the trait lives, and the
 //! vocabulary crates are `no_std` and must not learn about `redb`
-//! (`CURVE_TREE_STORE_SHAPES.md` CTS-13, CTS-Q6).
+//! (`CURVE_TREE_STORE_SHAPES.md` CTS-13, CTS-Q6). Since DRS-E4 (`ARW-Q8`,
+//! 2026-09-29) that set includes the archival **bond record** and the two
+//! close-row scalars: `shekyl_types::archival::{BondRecord, RMarket,
+//! SigmaWorkMilli}` moved to the vocabulary crate when `ChainView` became
+//! their second reader, and their codecs — the one variable-width record
+//! this crate encodes — followed the orphan rule here (`archival`), with
+//! the strict cursor they read through ([`reader`]) made shared for the
+//! same reason. The daemon store's rule-42 fixture for the record
+//! (`bond_record.snap`) still pins the bytes: the bytes did not move.
 //!
 //! What does **not** live here is as load-bearing as what does. Each
 //! store's own column codecs stay in that store. So does the daemon's
@@ -47,7 +55,9 @@
 
 #![deny(unsafe_code)]
 
+mod archival;
 mod primitives;
+pub mod reader;
 mod shape;
 mod vocabulary;
 

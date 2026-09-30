@@ -44,6 +44,58 @@ subsystem, ask:
 Record the answer in the module's docstring or in `docs/FOLLOWUPS.md`. Don't
 assume something is needed because it exists.
 
+## The C++ is a template, not a source
+
+Shekyl is built to its design specifications. The inherited C++ shows
+*one* way the specification was once met; it is read for what it reveals
+about the problem — the facts a validator needs, the read points, the
+failure modes it met — and never transcribed. A field name in the C++ is
+not a definition: `cumulative_tx_count` counts a block's **listed**
+transactions, while the shard partition (`consensus_constants.json`) is
+over **storage ids**, which the C++ issues to coinbases too. A lane that
+read the C++ carefully and took the field as the quantity wrote
+`⌊cumulative_tx_count / T⌋` for the closed-shard frontier — off by the
+coinbases — in a pre-flight otherwise right. Derive from the spec; check
+the C++ against it; where they differ, the spec is what Shekyl builds and
+the C++ is a finding to record (`16-architectural-inheritance.mdc`).
+
+## A formula two lanes need is a function, not a row
+
+A recorded formula does not propagate. S-PRUNE corrected the frontier
+above at build (`DRS_E1_SPRUNE.md` SPR-1, 2026-09-25: `first_tx_id(h)` is
+`storage_ids_through(cumulative_tx_count(h−1), h−1)`, the reason written
+down, the charter ratified) — and E4's pre-flight, four days later,
+re-derived the same quantity with the same coinbase term dropped. E4's
+author read the C++ and the census; nothing pointed at S-PRUNE's row, and
+a row saying "remember the coinbases" is found only by someone who already
+suspects they need it. The correction was right, recorded, ratified, and
+did not reach the next author. That is unusually clean evidence that
+documentation is the wrong remedy for this class.
+
+What propagates is a function nobody can avoid calling.
+`shekyl_types::closed_shards(storage_ids)` sits beside `T` and
+`storage_ids_through`; the validator, the prune's slash scan and the C++
+(through one FFI) all call it, and no site divides by `T` for a frontier.
+The formula cannot be gotten wrong because nobody writes it. The close
+heights the evening before took the same shape — two quantities with one
+name became two names, and the collision became unrepresentable.
+
+So, when a derivation is needed by more than one lane, crate or language:
+
+1. **Give it one home** — a function in the crate that owns its inputs
+   (`shekyl-types` for the partition; the rules crate for a rule), with
+   its inputs' definitions in the same place.
+2. **Make the other sites call it**, including the C++ through the FFI.
+   A second site that re-derives is the defect, whatever value it
+   currently produces; the gate is `rg` for the operator on the operand
+   (`/ T`, `/ SEGMENT_LEAF_COUNT`) finding one site.
+3. **Then write the row**, pointing at the function. The row records why;
+   the function is what the next lane cannot miss.
+
+A FOLLOWUPS row, a charter finding, or a census cell that carries a
+formula and no function is a deferral of this step, and the next lane will
+re-derive.
+
 ## One mechanism, one job
 
 When one setting, field, timer, structure or message serves several jobs

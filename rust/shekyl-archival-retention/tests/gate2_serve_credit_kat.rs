@@ -16,9 +16,10 @@ use shekyl_archival_retention::VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE;
 use shekyl_archival_retention::{
     challenge_fire_height, challenge_leaf_chunk_bounds, challenge_leaf_index,
     challenge_seal_height, challenged_leaf_bytes, challenged_leaf_offset_in_chunk, encode_path,
-    hybrid_countersignature, p_canonical_id_from_hybrid_pubkey, split_countersignature,
-    verify_segment_path, ArchivalServeCreditPruned, ArchivalServeCreditResponse,
-    SegmentPathOpening, ED25519_COUNTERSIGNATURE_LEN, SEGMENT_LEAF_COUNT, SETTLEMENT_EPOCH_BLOCKS,
+    hybrid_countersignature, p_canonical_id_from_hybrid_pubkey, settlement_epoch_last_block,
+    settlement_epoch_open_height, split_countersignature, verify_segment_path,
+    ArchivalServeCreditPruned, ArchivalServeCreditResponse, SegmentPathOpening,
+    ED25519_COUNTERSIGNATURE_LEN, SEGMENT_LEAF_COUNT,
 };
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, SignatureScheme,
@@ -97,15 +98,6 @@ fn layers_from_json(v: &Value) -> Vec<Vec<[u8; 32]>> {
                 .collect()
         })
         .collect()
-}
-
-fn settlement_epoch_open_height(settlement_epoch: u64) -> u64 {
-    settlement_epoch.saturating_mul(SETTLEMENT_EPOCH_BLOCKS)
-}
-
-fn settlement_epoch_close_height(settlement_epoch: u64) -> u64 {
-    settlement_epoch_open_height(settlement_epoch)
-        .saturating_add(SETTLEMENT_EPOCH_BLOCKS.saturating_sub(1))
 }
 
 fn integration_keypair(
@@ -198,7 +190,7 @@ fn build_integration_substrate(
 
     let block_hash_at_seal = [0xABu8; 32];
     let h_open = settlement_epoch_open_height(settlement_epoch);
-    let h_close = settlement_epoch_close_height(settlement_epoch);
+    let h_close = settlement_epoch_last_block(settlement_epoch);
     let h_seal = challenge_seal_height(h_open);
     let h_fire = challenge_fire_height(
         h_open,

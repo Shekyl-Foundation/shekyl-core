@@ -62,7 +62,7 @@ use shekyl_wire::Block;
 
 use super::archival::AttestationWitnessBytes;
 use super::chain::BlockBody;
-use super::reader::{put_bytes, Reader};
+use shekyl_store_codec::reader::{put_bytes, Reader};
 
 /// Why [`AltBlock::checked`] refused to build a record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

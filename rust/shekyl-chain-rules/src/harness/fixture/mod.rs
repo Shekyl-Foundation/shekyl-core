@@ -27,7 +27,10 @@ pub use price::{priced, priced_at, repriced};
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
-use shekyl_types::SigningPayloadHash;
+use shekyl_types::{ArchivalLength, SigningPayloadHash};
+
+mod archival;
+pub use archival::{join_market, serve_credit_only, serve_credit_vin, BOND_FLOOR};
 
 /// The well-formed **transaction** shapes this module builds, as a
 /// closed set. The sanity gate walks the chain from [`FIRST`](Self::FIRST)
@@ -42,6 +45,8 @@ pub enum TxShape {
     Coinbase,
     /// [`listed`] — the ordinary spend.
     Listed,
+    /// [`join_market`] — the bond post that creates a persona's record.
+    JoinMarket,
     /// [`serve_credit_only`].
     ServeCreditOnly,
 }
@@ -50,13 +55,18 @@ impl TxShape {
     /// Where the chain starts.
     pub const FIRST: Self = Self::Coinbase;
 
+    /// The persona the archival shapes share: the join posts its record,
+    /// the serve credit names it.
+    pub const PERSONA: [u8; 32] = [0x77; 32];
+
     /// The shape after this one; `None` closes the chain. A variant
     /// left out of this chain is unreachable from `FIRST` and the gate
     /// never sees it — so a new variant is *placed*, deliberately, here.
     pub const fn next(self) -> Option<Self> {
         match self {
             Self::Coinbase => Some(Self::Listed),
-            Self::Listed => Some(Self::ServeCreditOnly),
+            Self::Listed => Some(Self::JoinMarket),
+            Self::JoinMarket => Some(Self::ServeCreditOnly),
             Self::ServeCreditOnly => None,
         }
     }
@@ -66,17 +76,33 @@ impl TxShape {
         match self {
             Self::Coinbase => coinbase(1),
             Self::Listed => listed(point(9)),
-            Self::ServeCreditOnly => serve_credit_only([0x77; 32]),
+            Self::JoinMarket => join_market(point(10), Self::PERSONA),
+            Self::ServeCreditOnly => serve_credit_only(Self::PERSONA),
+        }
+    }
+
+    /// The bodies that must be listed **before** this shape in the block
+    /// that connects it — the archival state it reads, which only an
+    /// earlier body in the same block can create on a chain that holds
+    /// none. A serve credit names a persona with a record (CEN-L7), so it
+    /// lists behind that persona's [`join_market`]; every other shape
+    /// stands alone. The listed slot in [`valid_at`](Self::valid_at) is
+    /// the one behind these.
+    pub fn precedents(self) -> Vec<Transaction> {
+        match self {
+            Self::Coinbase | Self::Listed | Self::JoinMarket => Vec::new(),
+            Self::ServeCreditOnly => vec![Self::JoinMarket.build()],
         }
     }
 
     /// The slots at which the shape is a valid transaction. The coinbase
     /// is valid at the miner slot only; every other shape at the pool's
-    /// slot and listed.
+    /// slot and listed — behind its [`precedents`](Self::precedents).
     pub const fn valid_at(self) -> &'static [TxSlot] {
         match self {
             Self::Coinbase => &[TxSlot::Miner],
-            Self::Listed | Self::ServeCreditOnly => &[TxSlot::Lone, TxSlot::Listed(0)],
+            Self::Listed | Self::JoinMarket => &[TxSlot::Lone, TxSlot::Listed(0)],
+            Self::ServeCreditOnly => &[TxSlot::Lone, TxSlot::Listed(1)],
         }
     }
 
@@ -787,37 +813,6 @@ pub fn balanced_emission(
     tx
 }
 
-/// A **serve-credit-only** transaction (CEN-H20's shape: serve-credit
-/// inputs and nothing else, no outputs, zero fee, no spend material),
-/// carrying `record` as its one pass record. The one legal non-coinbase
-/// shape with **no key image** — what a test needs when it must list the
-/// same body twice (SI-3) without tripping the spent-key-image set. The
-/// record's bytes are the wire's minimum (tag byte, then payload); the
-/// serving-credit rules that read them are 4.J's, not this crate's yet.
-pub fn serve_credit_only(record: [u8; 32]) -> Transaction {
-    let mut canonical_bytes = vec![shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT];
-    canonical_bytes.extend_from_slice(&record);
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![Input::ServeCredit { canonical_bytes }],
-            outputs: Vec::new(),
-            extra: Vec::new(),
-        },
-        ct: Ct::Fcmp {
-            fee: 0,
-            reference_block: UNRECORDED_REFERENCE,
-            base: CtBase {
-                enc_amounts: Vec::new(),
-                enc_labels: Vec::new(),
-                commitments: Vec::new(),
-            },
-            pqc_auths: Vec::new(),
-            prunable: None,
-        },
-    }
-}
-
 /// A header with every field set to a recognisable non-zero value —
 /// the shape of a *recorded* block. A candidate takes its `previous` and
 /// `curve_tree_root` from the chain it is built on ([`candidate_on`]).
@@ -900,6 +895,7 @@ pub fn recorded_with_work(
         // that is about them sets both (`recorded_with_emission`).
         coins_generated: AtomicUnits::ZERO,
         cumulative_tx_count: 0,
+        cumulative_archival_len: ArchivalLength::ZERO,
     }
 }
 

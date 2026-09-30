@@ -29,7 +29,7 @@
 use crate::burn::{compute_fee_burn, BurnSplit};
 use crate::emission::{advance_already_generated, paid_block_reward, EmissionError};
 use crate::emission_share::{compute_emission_split, EmissionSplit};
-use crate::escalation::FrozenSegmentCount;
+use crate::escalation::ClosedShardCount;
 use crate::params::EconomicParams;
 use crate::supply::CirculatingSupply;
 use crate::volume::TxVolume;
@@ -70,8 +70,8 @@ pub struct EmissionInputs<'a> {
     pub total_fees: u64,
     /// Circulating supply the burn ratio reads (CEN-F17).
     pub supply: CirculatingSupply,
-    /// Frozen-segment count the burn share escalates on (CEN-F17).
-    pub frozen_segments: FrozenSegmentCount,
+    /// Closed transaction-shard count the burn share escalates on (CEN-F17).
+    pub closed_shards: ClosedShardCount,
     /// Height the staker share's decay is measured from (CEN-F21).
     pub split_epoch: u64,
     /// The parameter set. A reference: the set is resolved once by the caller.
@@ -184,7 +184,7 @@ pub fn price_emission(inputs: &EmissionInputs<'_>) -> Result<PaidEmission, Rewar
         inputs.total_fees,
         inputs.tx_volume,
         inputs.supply,
-        inputs.frozen_segments,
+        inputs.closed_shards,
         inputs.params,
     );
     let owed = split
@@ -255,7 +255,7 @@ mod tests {
             tx_volume: TxVolume::ZERO,
             total_fees,
             supply,
-            frozen_segments: FrozenSegmentCount::ZERO,
+            closed_shards: ClosedShardCount::ZERO,
             split_epoch: SHIPPED_SPLIT_EPOCH,
             params,
         }

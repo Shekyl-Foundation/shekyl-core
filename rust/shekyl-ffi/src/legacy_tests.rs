@@ -66,12 +66,12 @@ fn escalated_split_is_bit_identical_to_flat_at_the_genesis_parameterization() {
 /// The observability entry agrees with what the split actually applied.
 #[test]
 fn exposed_share_matches_the_share_the_split_used() {
-    use shekyl_economics::{staker_pool_share_at, EconomicParams, FrozenSegmentCount};
+    use shekyl_economics::{staker_pool_share_at, ClosedShardCount, EconomicParams};
     let params = EconomicParams::default();
     for n in [0u64, 1, 100_000, u64::MAX] {
         assert_eq!(
             shekyl_staker_pool_share_at(n),
-            staker_pool_share_at(FrozenSegmentCount::new(n), &params.escalation()).to_raw()
+            staker_pool_share_at(ClosedShardCount::new(n), &params.escalation()).to_raw()
         );
     }
 }
@@ -79,11 +79,10 @@ fn exposed_share_matches_the_share_the_split_used() {
 /// Escalated FFI is a pure packing of the canonical Rust entry — no second formula.
 #[test]
 fn escalated_ffi_matches_compute_burn_split_at() {
-    use shekyl_economics::{compute_burn_split_at, EconomicParams, FrozenSegmentCount};
+    use shekyl_economics::{compute_burn_split_at, ClosedShardCount, EconomicParams};
     let params = EconomicParams::default();
     for n in [0u64, 1, 100_000, u64::MAX] {
-        let rust =
-            compute_burn_split_at(1_000_000_000, 500_000, FrozenSegmentCount::new(n), &params);
+        let rust = compute_burn_split_at(1_000_000_000, 500_000, ClosedShardCount::new(n), &params);
         let c = shekyl_compute_burn_split_escalated(1_000_000_000, 500_000, n);
         assert_eq!(c.miner_fee_income, rust.miner_fee_income);
         assert_eq!(c.staker_pool_amount, rust.staker_pool_amount);
@@ -1224,7 +1223,7 @@ fn relay_constants_cross_the_abi_from_the_rust_owner() {
 #[test]
 fn compute_fee_burn_ffi_derives_the_supply_and_matches_the_crate() {
     use shekyl_economics::{
-        compute_fee_burn, CirculatingSupply, EconomicParams, FrozenSegmentCount, TxVolume,
+        compute_fee_burn, CirculatingSupply, ClosedShardCount, EconomicParams, TxVolume,
     };
     use shekyl_units::AtomicUnits;
     let p = EconomicParams::default();
@@ -1253,7 +1252,7 @@ fn compute_fee_burn_ffi_derives_the_supply_and_matches_the_crate() {
         fees,
         TxVolume::window(sum, blocks),
         supply,
-        FrozenSegmentCount::new(n),
+        ClosedShardCount::new(n),
         &p,
     );
     assert_eq!(out.miner_fee_income, want.miner_fee_income);

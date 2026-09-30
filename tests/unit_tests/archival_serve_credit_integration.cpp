@@ -602,7 +602,7 @@ uint64_t expected_fire_height(const IntegrationKat& kat)
   const crypto::hash p_id = hash_from_hex(kat.p_id_hex);
   const crypto::hash seal_hash = hash_from_hex(kat.seal_hash_hex);
   const uint64_t h_open = shekyl_archival_epoch_open_height(kat.settlement_epoch);
-  const uint64_t h_close = shekyl_archival_epoch_close_height(kat.settlement_epoch);
+  const uint64_t h_close = shekyl_archival_epoch_last_block(kat.settlement_epoch);
   return shekyl_archival_challenge_fire_height(h_open, h_close,
     reinterpret_cast<const uint8_t*>(seal_hash.data),
     reinterpret_cast<const uint8_t*>(p_id.data),
