@@ -600,6 +600,20 @@ loaded host. `total_retrans` 2 with a write near 0 is a segment loss,
 and the factor of two covers it. Both zero while the floor is still
 waiting is a cause this split has not named.
 
+Collected the same day, floor dialing the same datacenter responder,
+after that line was in the responder. Two runs, n = 100 each, no
+timeouts. The first was the host as it stood: load average 0.18, the
+production daemon idle beside the measurement one. Handshake p99
+44.6 ms, max 55.6 ms. Across 101 `message2` lines, `total_retrans` was
+0, `retransmits` was 0, writer wait p99 6.6 ms (max 6.8 ms), `write_ns`
+p99 3.8 ms. The second saturated both cores with busy loops (load
+average 2.1) and left the production daemon up. Handshake p99 43.3 ms,
+max 49.4 ms. Across those 100 lines, `total_retrans` was 0,
+`retransmits` was 0, writer wait p99 0.20 ms (max 0.30 ms), `write_ns`
+p99 3.9 ms (max 10.0 ms). The 115.7 ms and 676.6 ms rows did not recur,
+and neither did a retransmission. CPU saturation is not that stall.
+The median residual stays the handshake term.
+
 ## Tor inbound distribution, floor device responder (2026-09-30 UTC)
 
 The Tor connector's inbound side. On Tor inbound the daemon does no
