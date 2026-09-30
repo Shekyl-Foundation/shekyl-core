@@ -12,7 +12,7 @@ use redb::backends::InMemoryBackend;
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
 use crate::segment::{
-    leaves_per_segment, segment_freeze_eligible, SegmentId, FINALITY_DEPTH_BLOCKS, LEAF_BYTES,
+    leaves_per_segment, segment_freeze_eligible, SegmentId, LEAF_BYTES,
     SEGMENT_FREEZE_REORG_MARGIN_BLOCKS,
 };
 use crate::served_frame::ServedFrameHeader;
@@ -614,29 +614,6 @@ pub enum StoreError {
         found: u64,
         /// Version this build reads and writes.
         expected: u64,
-    },
-    /// A rollback whose fork sits **below the finalized frontier** `F = tip −
-    /// W` — deeper than any reorg this design admits (`CT-6` C7,
-    /// `WALLET_SIDE_STORE.md` §6.3.4 row 1).
-    ///
-    /// **Refused rather than repaired, and not because repair is slow.** Below
-    /// `F` the segments are frozen, and the truncation under
-    /// [`LeafStore::rollback_to_fork`] deletes frozen segment rows — so a
-    /// deeper rollback does not merely re-fold a large prefix, it unmakes
-    /// state the rest of the system treats as sealed and may already have
-    /// served. The wallet cannot repair that locally, and a proving state that
-    /// can be silently wrong is worse than one that is large.
-    ///
-    /// **The remedy is a full re-sync**, and it is a rule-82 failure mode: the
-    /// caller renders it in those terms rather than as a generic rejection.
-    ReorgDeeperThanFinality {
-        /// The fork height the caller asked to keep.
-        fork_height: u64,
-        /// The store's tip when it asked.
-        sync_tip: u64,
-        /// `W` — the depth past which state is final
-        /// ([`crate::FINALITY_DEPTH_BLOCKS`]).
-        finality_depth: u64,
     },
     /// A frontier snapshot was offered for a height strictly below the store's
     /// `sync_tip`.
@@ -1771,21 +1748,6 @@ impl LeafStore {
                 sync_tip,
             });
         }
-        // C7. `fork_height` is the height *kept*, so keeping exactly `tip − W`
-        // drops nothing frozen: `segment_freeze_eligible` freezes a segment
-        // ending at `e` once `tip − e >= W`, and every such `e` is at or below
-        // the kept height. One block deeper is the first that would delete a
-        // frozen row, which is why this is `> W` and not `>= W`. Checked
-        // before the partition search and before any write, so a refusal
-        // leaves the store exactly as it was.
-        if sync_tip.saturating_sub(fork_height.to_raw()) > FINALITY_DEPTH_BLOCKS {
-            return Err(StoreError::ReorgDeeperThanFinality {
-                fork_height: fork_height.to_raw(),
-                sync_tip,
-                finality_depth: FINALITY_DEPTH_BLOCKS,
-            });
-        }
-
         // Steps 1–2 under a scoped read of the leaf tables.
         let (partition, migrated) = {
             let leaf_meta = txn.open_table(LEAF_META_TABLE)?;
@@ -2720,63 +2682,6 @@ mod tests {
         assert_eq!(pending_gindexes(&store), vec![4]);
         assert_eq!(store.leaf_count().unwrap(), 1);
         assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(70));
-    }
-
-    /// C7. The refusal must bite one block below the finalized frontier and
-    /// **not** at it, because the band between the ring's horizon and `W` is
-    /// where the fold is still the right answer (§10.3). Both sides of the
-    /// bound, so the threshold is shown to be what is under test rather than
-    /// a value nothing lands near.
-    #[test]
-    fn a_reorg_deeper_than_finality_is_refused_and_the_band_above_it_is_not() {
-        let at_tip = |tip: u64| {
-            let store = LeafStore::open_ephemeral().unwrap();
-            store
-                .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(tip))
-                .unwrap();
-            store
-        };
-        let tip = 5_000u64;
-
-        // Keeping exactly `tip − W` drops nothing frozen: a segment ending at
-        // `e` freezes once `tip − e >= W`, and every such `e` is at or below
-        // the kept height.
-        at_tip(tip)
-            .rollback_to_fork(BlockHeight::from_raw(tip - FINALITY_DEPTH_BLOCKS))
-            .expect("a rollback to the finalized frontier keeps every frozen row");
-
-        // The fold's own band — outside the snapshot ring, inside `W`. That
-        // the band is non-empty is a relation between two constants, so it is
-        // asserted where they live (`segment.rs`) and at compile time; a
-        // runtime check here could not fail.
-        at_tip(tip)
-            .rollback_to_fork(BlockHeight::from_raw(
-                tip - SEGMENT_FREEZE_REORG_MARGIN_BLOCKS - 1,
-            ))
-            .expect("past the ring's horizon is still the fold's job, not a refusal");
-
-        // One block deeper than `W` is the first that would delete a frozen
-        // row, and it is refused.
-        let store = at_tip(tip);
-        let too_deep = BlockHeight::from_raw(tip - FINALITY_DEPTH_BLOCKS - 1);
-        let err = store
-            .rollback_to_fork(too_deep)
-            .expect_err("a fork below the finalized frontier must refuse");
-        assert!(
-            matches!(
-                err,
-                StoreError::ReorgDeeperThanFinality {
-                    fork_height,
-                    sync_tip,
-                    finality_depth,
-                } if fork_height == too_deep.to_raw()
-                    && sync_tip == tip
-                    && finality_depth == FINALITY_DEPTH_BLOCKS
-            ),
-            "expected ReorgDeeperThanFinality, got: {err:?}"
-        );
-        // Refused before any write: the tip the caller tried to unmake stands.
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(tip));
     }
 
     #[test]

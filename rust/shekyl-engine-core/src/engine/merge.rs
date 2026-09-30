@@ -77,7 +77,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
-use shekyl_curve_tree::{ClientError, StoreError};
+use shekyl_curve_tree::ClientError;
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
@@ -438,18 +438,6 @@ fn map_curve_tree_handle_error(err: &CurveTreeHandleError) -> RefreshError {
                 recoverable_by_respawn: false,
             }
         }
-        // CT-6 C7: the fork sits below `F = tip − W`, so the rollback would
-        // delete frozen segment rows — state the rest of the system treats as
-        // sealed. Terminal, and distinct from a generic rejection because the
-        // remedy is specific: the proving state cannot be repaired locally and
-        // the wallet must be re-synced (rule 82). Same reason `RootMismatch`
-        // earns its own arm — an auditor reads the case from source.
-        CurveTreeHandleError::Client(ClientError::Store(StoreError::ReorgDeeperThanFinality {
-            ..
-        })) => RefreshError::CurveTreeIngest {
-            context: "curve-tree reorg deeper than finality; full re-sync required",
-            recoverable_by_respawn: false,
-        },
         CurveTreeHandleError::Client(_) => RefreshError::CurveTreeIngest {
             context: "curve-tree client rejected ingest",
             recoverable_by_respawn: false,
