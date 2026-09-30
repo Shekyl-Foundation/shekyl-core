@@ -446,9 +446,74 @@ A later run under these conditions whose p99 exceeds 0.88 ms (connect),
 device reopens the respective figure (p99s 0.877, 0.357, 1.037 and
 0.210 ms, rounded up at 0.01 ms).
 
+## Clearnet WAN distribution, floor device initiator (2026-09-30 UTC)
+
+The off-site leg. Raw samples:
+[`p2p_clearnet_wan_floor_initiator_20260930.tsv`](p2p_clearnet_wan_floor_initiator_20260930.tsv).
+This is the leg the clearnet connect and initiator-handshake deadlines
+are derived from — the LAN legs' 0.76 ms connect is the segment's, not
+the connector's.
+
+Conditions, per D9:
+
+- Dialer: the floor device (Pi-4, aarch64, 4 cores), daemon
+  `2f9565f71`, one outbound and nothing else; `--clearnet-transport-encrypt`
+  on, ephemeral Tor off, RandomX miner off. Sharing its four cores: the
+  same idle regtest daemon as the LAN legs.
+- Responder: an off-site Foundation seed host (x86_64, 4 cores), the
+  portable daemon at `2f9565f71`, `--clearnet-transport-encrypt` on,
+  ephemeral Tor off, inbound cap 16. It carried its production testnet
+  daemon alongside the measurement one; load average 0.08 throughout,
+  so the responder's cost is not what this leg reads.
+- Link: the public internet, a home LAN to a host in South America,
+  TCP RTT about 170 ms. This is one fibre path; higher-RTT honest links
+  (mobile, satellite, a congested overlay) are what the factor of two
+  covers and what the reopen catches.
+- Method: as the LAN initiator leg — dialer-side `out_peers` churn,
+  spans matched by connection id. The responder's spans were not
+  collected (they are the LAN responder leg's subject; this leg is the
+  floor's WAN cost, and reading a South-America log per sample buys
+  nothing the deadline needs).
+- n = 100, no timeouts.
+
+| span | p50 | p90 | p99 | max | 2 × p99 |
+| --- | --- | --- | --- | --- | --- |
+| TCP connect (`connect_ns`, floor) | 169.6 ms | 172.3 ms | 174.1 ms | 174.7 ms | **349 ms** |
+| initiator handshake (`handshake_ns`, floor: first job, message 1, read message 2) | 177.8 ms | 181.0 ms | 182.6 ms | 183.0 ms | **366 ms** |
+| channel to session (`gap_ns`, floor: the Levin `COMMAND_HANDSHAKE`) | 168.8 ms | 175.3 ms | 179.3 ms | 179.7 ms | **359 ms** |
+| initiator blocking-lane wait (`queue_ns`, floor) | 70 µs | 121 µs | 502 µs | 782 µs | — |
+| initiator compute (`compute_ns`, floor) | 0.43 ms | 1.00 ms | 1.02 ms | 1.04 ms | — |
+| initiator write under the up gate (`write_ns`, floor) | 100 µs | 128 µs | 273 µs | 331 µs | — |
+
+Precision 1 ms. Each of the three spans is one WAN round trip: TCP
+connect is the SYN exchange, the Noise handshake is message 1 out and
+message 2 back, and the Levin gap is `COMMAND_HANDSHAKE`. The floor's
+own work inside the handshake is the last three rows — lane, compute
+and write together under 2 ms at p99 — so 99% of the 183 ms handshake
+is the 170 ms link, not the Pi-4. This is why the deadline is derived
+here and not on the LAN: the LAN leg measured the floor's compute with
+the network term near zero; this leg measures the term that dominates.
+
+**The three clearnet deadlines** the transport-deadline commit wires,
+each p99 × 2 rounded up per D9:
+
+- clearnet dial (TCP connect): **349 ms** (p99 174.074 ms).
+- clearnet initiator handshake: **366 ms** (p99 182.560 ms).
+- clearnet channel-to-session gap: **359 ms** (p99 179.337 ms).
+
+These replace the placeholders the cutover ships with: `transport_spans`'
+5 s invoke-timeout stand-in for the handshake, and clearnet `dial_one`'s
+missing dial deadline (a filtered port hung the dial ~2 min on the first
+LAN attempt; **349 ms** is the bound it lacked).
+
+A later distribution under these conditions whose p99 exceeds 174.07 ms
+(connect), 182.56 ms (handshake) or 179.34 ms (gap) reopens the
+respective deadline, re-derived from the larger run — including a link
+whose RTT exceeds this one's, which is the factor of two made to fail
+rather than assumed to hold.
+
 ## Not this run
 
 Tor relay and the floor device's inbound Tor distribution were not
-run. The off-site clearnet leg and the thread-budget legs are not in
-this record. The off-site clearnet leg waits on a firewall rule for
-the seed-side daemon's private port.
+run. The thread-budget legs (D5 conditions pinned 2026-09-30) are not
+in this record.
