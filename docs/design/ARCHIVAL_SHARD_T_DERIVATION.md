@@ -736,6 +736,24 @@ observation exists.
   **Amended before the run, the same day:** this line first named the testnet miner,
   which runs a mining daemon at full CPU. That would bias the measurement, so the run
   moved to the quiet node.
+- **Aborted soak, and its restart — recorded before the restart (2026-09-30).** The
+  first run's cold arm completed: 600 fetches, 200 of each size. It is kept as this
+  run's cold arm, which is reported and not used to select. The soak stopped on
+  2026-09-29 after **142 observations** (about 70 minutes of the 24 h). The client
+  tor's control port did not answer one `SIGNAL NEWNYM` within 30 s, and the harness
+  treated that as fatal. The fix, in the harness's own PR: an unanswered `NEWNYM` is
+  retried after the 10 s rate-limit spacing, counted, and reported apart from every
+  arm. Only 10 in a row stop the run. A fetch is never timed on circuits that were
+  not rotated, so a slow control reply adds no observation and removes none.
+  - The 142 observations are **kept as a record and not pooled** with the restart.
+    Two windows a day apart would mix the time-varying dispersion the soak exists to
+    sample, and pooling would be a choice made after seeing them.
+  - The restart runs **the soak arm only**, with the same object ladder, 30 s
+    spacing, host and Tor bundle, and the harness at that PR's commit, for a fresh
+    24 h. It runs in a persistent terminal session on the node, so it does not
+    depend on the session that started it. The host line above still holds, the idle
+    wallet-RPC process included (checked at the restart).
+  - The fit below reads the restart's soak.
 - **Fit.** Per percentile (p50, p90, p99), over the **soak** arm: least squares of
   `t = t_fixed + bytes / v` over the three sizes. The cold arm is fitted and reported,
   not used to select.

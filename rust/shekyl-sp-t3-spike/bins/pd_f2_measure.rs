@@ -353,7 +353,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut cold_by_shard: Vec<Vec<Observation>> = (0..shard_count).map(|_| Vec::new()).collect();
     for i in 0..cold_n * objects_len(shard_count) {
         let shard = u64::try_from(i).expect("index fits u64") % shard_count;
-        app.rotate_client_circuits().await?;
+        app.rotate_client_circuits_retrying().await?;
         let obs = app.timed_fetch_shard(0, shard).await;
         append_rows(&mut out, &label("cold", shard), std::slice::from_ref(&obs));
         cold_by_shard[usize::try_from(shard).expect("shard fits usize")].push(obs);
@@ -407,7 +407,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // it is this width's alone. A non-zero delta voids the row.
         let refused_before = app.refused_total();
         for i in 0..conc_n {
-            app.rotate_client_circuits().await?;
+            app.rotate_client_circuits_retrying().await?;
             // One task per fetch, as a daemon's scheduler would issue them;
             // joined in order so the round's observations land together.
             // Starting persona rotates by round (`sweep_round_indices`).
@@ -454,7 +454,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while Instant::now() < until {
             let shard = n % shard_count;
             n += 1;
-            app.rotate_client_circuits().await?;
+            app.rotate_client_circuits_retrying().await?;
             let obs = app.timed_fetch_shard(0, shard).await;
             // Flush EVERY observation, not every 25th. A 24 h run on a dev box is
             // a run that gets killed, and the doc comment on `append_rows`
@@ -487,6 +487,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "endpoints shed {} connections at the serve-side cap over the whole run",
         app.refused_total()
+    );
+    // An apparatus count, like the two above: an unanswered `NEWNYM` was
+    // retried before its fetch, so it is in no arm's rows.
+    println!(
+        "client NEWNYMs unanswered and retried over the whole run: {}",
+        app.newnym_unanswered()
     );
 
     // The two pin inputs this run exists to produce, last so they are what

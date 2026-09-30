@@ -55,6 +55,8 @@
 //!   process here: it rotates nothing on the serving side. Tor rate-limits
 //!   `NEWNYM` to one per ten seconds and silently defers a faster one, so the
 //!   harness spaces its signals itself; that wait is *outside* the timed path.
+//!   A signal the control port does not answer is retried, not timed through
+//!   and not fatal ([`Apparatus::rotate_client_circuits_retrying`]).
 //! - **Warm** — no signal between fetches to the same persona, so the client
 //!   tor reuses its rendezvous circuit and only the stream cost is paid. This
 //!   is the organic fill scheduler's steady state against one `P`.
@@ -77,8 +79,10 @@
 //! the persona's ephemeral test key, which the client leg reads at bring-up the
 //! way a daemon reads the bond record.
 
+use std::future::Future;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -169,6 +173,13 @@ pub const NEWNYM_MIN_SPACING: Duration = Duration::from_secs(10);
 /// control actor fails the rotation instead of hanging a bring-up past
 /// its shared deadline.
 const NEWNYM_ASK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Unanswered `SIGNAL NEWNYM`s in a row that
+/// [`Apparatus::rotate_client_circuits_retrying`] tolerates. One is a slow
+/// control reply; this many in a row, each [`NEWNYM_ASK_TIMEOUT`] long, is a
+/// control port that has stopped answering, and the run stops rather than
+/// time fetches it can no longer make cold.
+pub const NEWNYM_UNANSWERED_LIMIT: u32 = 10;
 
 /// How long a managed tor may take to bootstrap before bring-up gives up.
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(300);
@@ -462,6 +473,9 @@ pub struct Apparatus {
     /// Wall-clock of the last `NEWNYM` sent to the client tor, for the
     /// rate-limit spacing.
     last_newnym: Mutex<Option<Instant>>,
+    /// `NEWNYM`s the client tor's control port did not answer and that were
+    /// retried — an apparatus count, reported apart from every arm.
+    newnym_unanswered: AtomicU64,
     /// The published personas, in slot order.
     pub personas: Vec<Persona>,
     /// The body length every fetch is checked against — **derived, never
@@ -490,6 +504,10 @@ pub enum ApparatusError {
     Bootstrap,
     /// A control connection failed.
     Control(String),
+    /// The client tor's control port did not answer `SIGNAL NEWNYM` within
+    /// the bound. Distinct from [`Self::Control`] because a long arm retries
+    /// it ([`Apparatus::rotate_client_circuits_retrying`]).
+    NewnymUnanswered,
     /// `ADD_ONION` was refused.
     AddOnion(u16),
     /// tor's reply carried no parseable service id, or published an id other
@@ -526,6 +544,11 @@ impl std::fmt::Display for ApparatusError {
         match self {
             Self::Bootstrap => write!(f, "tor did not bootstrap"),
             Self::Control(e) => write!(f, "control connection failed: {e}"),
+            Self::NewnymUnanswered => write!(
+                f,
+                "SIGNAL NEWNYM did not reply within {} s",
+                NEWNYM_ASK_TIMEOUT.as_secs()
+            ),
             Self::AddOnion(s) => write!(f, "ADD_ONION refused with status {s}"),
             Self::NoServiceId => write!(
                 f,
@@ -735,6 +758,7 @@ impl Apparatus {
             client_tor,
             client,
             last_newnym: Mutex::new(None),
+            newnym_unanswered: AtomicU64::new(0),
             personas,
             expected_lens,
         })
@@ -873,9 +897,7 @@ impl Apparatus {
         )
         .await
         .map_err(|e| match e {
-            AskError::Timeout => {
-                ApparatusError::Control("SIGNAL NEWNYM did not reply in time".to_owned())
-            }
+            AskError::Timeout => ApparatusError::NewnymUnanswered,
             AskError::Control(c) => ApparatusError::Control(c.to_string()),
             AskError::ActorGone => {
                 ApparatusError::Control("tor control actor gone during SIGNAL NEWNYM".to_owned())
@@ -889,6 +911,35 @@ impl Apparatus {
         }
         *self.last_newnym.lock().expect("newnym clock") = Some(Instant::now());
         Ok(())
+    }
+
+    /// [`Self::rotate_client_circuits`] for an arm's fetches, retrying a
+    /// `NEWNYM` the control port did not answer.
+    ///
+    /// A long arm meets a slow control reply sooner or later. Stopping the
+    /// run for one throws away every observation still to come, and timing
+    /// the fetch anyway would record it on circuits tor may not have dropped,
+    /// which is not a cold observation. So the signal is retried after the
+    /// rate-limit spacing; each unanswered one is counted
+    /// ([`Self::newnym_unanswered`]) and reported apart from every arm; and
+    /// only [`NEWNYM_UNANSWERED_LIMIT`] in a row stops the run. Any other
+    /// control failure stops it at once, as before.
+    pub async fn rotate_client_circuits_retrying(&self) -> Result<(), ApparatusError> {
+        let unanswered = retry_unanswered(
+            || self.rotate_client_circuits(),
+            NEWNYM_UNANSWERED_LIMIT,
+            NEWNYM_MIN_SPACING,
+        )
+        .await?;
+        self.newnym_unanswered
+            .fetch_add(u64::from(unanswered), Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// `NEWNYM`s that went unanswered and were retried, over the whole run.
+    #[must_use]
+    pub fn newnym_unanswered(&self) -> u64 {
+        self.newnym_unanswered.load(Ordering::Relaxed)
     }
 
     /// Time one fetch of shard `0` from `persona_index` through the client tor.
@@ -1024,10 +1075,88 @@ async fn probe_once(
     }
 }
 
+/// Run `attempt` until it succeeds, retrying only
+/// [`ApparatusError::NewnymUnanswered`] after `pause`, and giving up on the
+/// `limit`-th in a row. Returns how many went unanswered before one was
+/// answered; any other error returns at once. The policy of
+/// [`Apparatus::rotate_client_circuits_retrying`], apart from the control
+/// port so it can be driven in a test.
+async fn retry_unanswered<F, Fut>(
+    mut attempt: F,
+    limit: u32,
+    pause: Duration,
+) -> Result<u32, ApparatusError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<(), ApparatusError>>,
+{
+    let mut unanswered = 0;
+    loop {
+        match attempt().await {
+            Ok(()) => return Ok(unanswered),
+            Err(ApparatusError::NewnymUnanswered) if unanswered + 1 < limit => {
+                unanswered += 1;
+                tokio::time::sleep(pause).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use shekyl_p_fetch::Malformed;
+
+    /// An attempt that fails with `errors` in order, then succeeds, and
+    /// counts its calls.
+    fn scripted(
+        errors: Vec<ApparatusError>,
+    ) -> (
+        Arc<Mutex<u32>>,
+        impl FnMut() -> std::future::Ready<Result<(), ApparatusError>>,
+    ) {
+        let calls = Arc::new(Mutex::new(0u32));
+        let seen = Arc::clone(&calls);
+        let mut errors = errors.into_iter();
+        let attempt = move || {
+            *seen.lock().expect("calls") += 1;
+            std::future::ready(errors.next().map_or(Ok(()), Err))
+        };
+        (calls, attempt)
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_newnym_is_retried_and_counted() {
+        let (calls, attempt) = scripted(vec![
+            ApparatusError::NewnymUnanswered,
+            ApparatusError::NewnymUnanswered,
+        ]);
+        let unanswered = retry_unanswered(attempt, 10, Duration::ZERO).await;
+        assert!(matches!(unanswered, Ok(2)), "two retried, then answered");
+        assert_eq!(*calls.lock().expect("calls"), 3);
+    }
+
+    #[tokio::test]
+    async fn a_wedged_control_port_stops_at_the_limit() {
+        let (calls, attempt) =
+            scripted((0..20).map(|_| ApparatusError::NewnymUnanswered).collect());
+        let out = retry_unanswered(attempt, 10, Duration::ZERO).await;
+        assert!(matches!(out, Err(ApparatusError::NewnymUnanswered)));
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            10,
+            "the tenth in a row stops it"
+        );
+    }
+
+    #[tokio::test]
+    async fn any_other_control_failure_is_not_retried() {
+        let (calls, attempt) = scripted(vec![ApparatusError::Control("actor gone".to_owned())]);
+        let out = retry_unanswered(attempt, 10, Duration::ZERO).await;
+        assert!(matches!(out, Err(ApparatusError::Control(_))));
+        assert_eq!(*calls.lock().expect("calls"), 1);
+    }
 
     #[test]
     fn anchor_is_the_burial_depth_below_own_height() {
