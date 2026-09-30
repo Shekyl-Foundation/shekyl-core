@@ -325,4 +325,22 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, StoreError> {
         self.batch.get_property::<ArchivalLastSlashEpochCell>()
     }
+
+    fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, StoreError> {
+        archival_reads::bond_records(self.batch.txn()).map_err(|f| self.arm(f))
+    }
+
+    fn slash_applied(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<bool, StoreError> {
+        archival_reads::slash_applied(self.batch.txn(), persona, shard, epoch)
+            .map_err(|f| self.arm(f))
+    }
+
+    fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, StoreError> {
+        archival_reads::budget_accruing(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    }
 }

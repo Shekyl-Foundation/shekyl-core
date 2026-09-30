@@ -144,6 +144,23 @@ impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> ChainView<'id> for Outpu
     fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
         Ok(None)
     }
+    fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, Infallible> {
+        Ok(Vec::new())
+    }
+    fn slash_applied(
+        &self,
+        _: &PCanonicalId,
+        _: ShardId,
+        _: SettlementEpoch,
+    ) -> Result<bool, Infallible> {
+        Ok(false)
+    }
+    fn budget_accruing(
+        &self,
+        _: SettlementEpoch,
+    ) -> Result<Option<shekyl_units::AtomicUnits>, Infallible> {
+        Ok(None)
+    }
 }
 
 #[test]

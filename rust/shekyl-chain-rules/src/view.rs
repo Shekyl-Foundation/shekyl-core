@@ -377,7 +377,7 @@ pub trait ChainView<'id> {
     // E4 fold that derives a bond post's transition: a record is state, the
     // class the view exists to carry (G13 — no recorded body crosses it).
     // Each is a by-key read, so `Option` / empty and not `AtHeight`:
-    // absence has one meaning per read, spelled on the read. All nine are
+    // absence has one meaning per read, spelled on the read. All are
     // parent-state reads (F19's brand) — there is no height to key them by.
     // -----------------------------------------------------------------------
 
@@ -452,4 +452,38 @@ pub trait ChainView<'id> {
     /// (the C++'s `u64::MAX` sentinel, gone by the type). CEN-J16's
     /// "settlement current through the anchor".
     fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Self::Fault>;
+
+    // -----------------------------------------------------------------------
+    // The transition's reads (DRS-E4 commit 4; `DRS_E4_ARCHIVAL_WRITER.md`
+    // §3.2 phase 9). A1–A9 answer a rule's question about one persona or
+    // one epoch; the slash scan and the close ask over *every* record, and
+    // the accrual reads the open epoch's running sum. Parent-state reads
+    // like the rest.
+    // -----------------------------------------------------------------------
+
+    /// **A11.** Every bond record, in persona-key order, each with its
+    /// persona; empty for a chain with no bonds. The slash scan's and the
+    /// close's universe (`db_lmdb.cpp:5301`'s record cursor and `:7600`'s
+    /// gather both walk `archival_bond` whole). Key order is the order the
+    /// scan applies slashes in, so the slash log's per-height sequence is a
+    /// function of the view and not of any iteration the store chose.
+    fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, Self::Fault>;
+
+    /// **A12.** Whether the slash for `(persona, shard, epoch)` has been
+    /// applied — the scan's dedup, read before anything else about the
+    /// triple (`archival_challenge_failed_at_height`'s first probe,
+    /// `db_lmdb.cpp:5471`). A set membership, so `bool` and never `Option`.
+    fn slash_applied(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<bool, Self::Fault>;
+
+    /// **A13.** The staker inflow accrued so far in `epoch` while it is
+    /// **open** (`archival_budget_accruing[E]`, SI-23), or `None` when no
+    /// block has accrued into it yet — the first block of an epoch, or a
+    /// closed epoch whose row the close deleted. The accrual adds this
+    /// block's inflow to it; the close freezes it as `budget(E)` (A8).
+    fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Self::Fault>;
 }

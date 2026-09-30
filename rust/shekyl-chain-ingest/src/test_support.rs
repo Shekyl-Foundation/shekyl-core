@@ -458,6 +458,23 @@ impl<'id> ChainView<'id> for GrownTree {
     fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
         Ok(None)
     }
+
+    fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, Infallible> {
+        Ok(Vec::new())
+    }
+
+    fn slash_applied(
+        &self,
+        _: &PCanonicalId,
+        _: ShardId,
+        _: SettlementEpoch,
+    ) -> Result<bool, Infallible> {
+        Ok(false)
+    }
+
+    fn budget_accruing(&self, _: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
+        Ok(None)
+    }
 }
 
 /// The miner transaction for `height`: the rules harness's, which since

@@ -336,6 +336,31 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
         ) -> Result<Option<shekyl_types::SettlementEpoch>, Self::Fault> {
             Ok(None)
         }
+        fn bond_records(
+            &self,
+        ) -> Result<
+            Vec<(
+                shekyl_types::PCanonicalId,
+                shekyl_types::archival::BondRecord,
+            )>,
+            Self::Fault,
+        > {
+            Ok(Vec::new())
+        }
+        fn slash_applied(
+            &self,
+            _: &shekyl_types::PCanonicalId,
+            _: shekyl_types::ShardId,
+            _: shekyl_types::SettlementEpoch,
+        ) -> Result<bool, Self::Fault> {
+            Ok(false)
+        }
+        fn budget_accruing(
+            &self,
+            _: shekyl_types::SettlementEpoch,
+        ) -> Result<Option<shekyl_units::AtomicUnits>, Self::Fault> {
+            Ok(None)
+        }
     }
     let genesis = formed(candidate(Vec::new()));
     let verdict = infallible(B5::check(

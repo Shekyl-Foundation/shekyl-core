@@ -982,6 +982,34 @@ impl ReadSnapshot<'_> {
         archival_reads::attestation_witness_at(&self.txn, height)
             .map_err(chain_reads::ReadFault::into_plain)
     }
+
+    /// **A11.** Every bond record with its persona, in key order. Empty
+    /// when the chain has no bonds. An undecodable row is SI-7.
+    pub fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, StoreError> {
+        archival_reads::bond_records(&self.txn).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A12.** Whether the slash for `(persona, shard, epoch)` has been
+    /// applied.
+    pub fn slash_applied(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<bool, StoreError> {
+        archival_reads::slash_applied(&self.txn, persona, shard, epoch)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A13.** The open epoch's accrued staker inflow. `None` before the
+    /// first accrual and after the close (SI-23).
+    pub fn budget_accruing(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<AtomicUnits>, StoreError> {
+        archival_reads::budget_accruing(&self.txn, epoch)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
 }
 
 /// One row of the tx walk (T6): the hash and where the store recorded it,

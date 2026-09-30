@@ -690,6 +690,12 @@ struct ArchivalReads {
     sigma_work: Option<shekyl_types::archival::SigmaWorkMilli>,
     budget: Option<shekyl_units::AtomicUnits>,
     watermark: Option<shekyl_types::SettlementEpoch>,
+    records: Vec<(
+        shekyl_types::PCanonicalId,
+        shekyl_types::archival::BondRecord,
+    )>,
+    slash_applied: bool,
+    accruing: Option<shekyl_units::AtomicUnits>,
 }
 
 impl ArchivalReads {
@@ -704,6 +710,9 @@ impl ArchivalReads {
         sigma_work: None,
         budget: None,
         watermark: None,
+        records: Vec::new(),
+        slash_applied: false,
+        accruing: None,
     };
 
     fn of<'id, V: ChainView<'id>>(view: &V) -> Result<Self, V::Fault> {
@@ -720,6 +729,9 @@ impl ArchivalReads {
             sigma_work: view.sigma_work(epoch)?,
             budget: view.budget(epoch)?,
             watermark: view.last_settled_slash_epoch()?,
+            records: view.bond_records()?,
+            slash_applied: view.slash_applied(&persona, shard, epoch)?,
+            accruing: view.budget_accruing(epoch)?,
         })
     }
 }

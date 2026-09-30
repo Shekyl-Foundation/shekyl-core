@@ -368,6 +368,23 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
     fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
         Ok(None)
     }
+
+    fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, Infallible> {
+        Ok(Vec::new())
+    }
+
+    fn slash_applied(
+        &self,
+        _: &PCanonicalId,
+        _: ShardId,
+        _: SettlementEpoch,
+    ) -> Result<bool, Infallible> {
+        Ok(false)
+    }
+
+    fn budget_accruing(&self, _: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
+        Ok(None)
+    }
 }
 
 /// The fault a [`FaultingView`] raises.
@@ -475,6 +492,23 @@ impl<'id> ChainView<'id> for FaultingView<'id> {
     }
 
     fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn slash_applied(
+        &self,
+        _: &PCanonicalId,
+        _: ShardId,
+        _: SettlementEpoch,
+    ) -> Result<bool, Faulted> {
+        Err(Faulted)
+    }
+
+    fn budget_accruing(&self, _: SettlementEpoch) -> Result<Option<AtomicUnits>, Faulted> {
         Err(Faulted)
     }
 }
@@ -636,6 +670,23 @@ impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
 
     fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
         self.inner.last_settled_slash_epoch()
+    }
+
+    fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, Infallible> {
+        self.inner.bond_records()
+    }
+
+    fn slash_applied(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<bool, Infallible> {
+        self.inner.slash_applied(persona, shard, epoch)
+    }
+
+    fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
+        self.inner.budget_accruing(epoch)
     }
 }
 

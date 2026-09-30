@@ -27,6 +27,16 @@
 //! - **A10** [`attestation_witness_at`] — a recorded block's witness bytes,
 //!   with the two absences the C++ collapsed into one empty blob told apart.
 //!
+//! The transition's own reads (DRS-E4 commit 4; `DRS_E4_ARCHIVAL_WRITER.md`
+//! §3.2 phase 9) — over every record, or over a table only the scan reads:
+//!
+//! - **A11** [`bond_records`] — every record in persona-key order, the slash
+//!   scan's and the close's universe.
+//! - **A12** [`slash_applied`] — the `(P, shard, E)` set membership the scan
+//!   dedups on.
+//! - **A13** [`budget_accruing`] — the open epoch's running staker inflow
+//!   (SI-23), the accrual's pre-image and the close's operand.
+//!
 //! # Absence, stated once (`DRS_E1_SARCH.md` §3.3)
 //!
 //! - **"No bond record" is a case**, not a `false`: every caller branches
@@ -75,10 +85,11 @@ use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{AttestationWitnessBytes, BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry};
-use crate::ids::{ServeCreditKey, SlashLogKey};
+use crate::ids::{ServeCreditKey, SlashAppliedKey, SlashLogKey};
 use crate::schema::{
-    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_R_MARKET,
-    ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_LOG,
+    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
+    ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
+    ARCHIVAL_SLASH_LOG,
 };
 
 use super::chain_reads::{self, undecodable, ReadFault, ReadTables};
@@ -94,6 +105,8 @@ const R_MARKET: &str = "archival_r_market";
 const SIGMA_WORK: &str = "archival_sigma_work";
 /// The `archival_budget` cell as faults name it.
 const BUDGET: &str = "archival_budget";
+/// The `archival_budget_accruing` cell as faults name it.
+const BUDGET_ACCRUING: &str = "archival_budget_accruing";
 /// The `archival_attestation_witness` cell as faults name it.
 const WITNESS: &str = "archival_attestation_witness";
 
@@ -324,4 +337,56 @@ pub(super) fn attestation_witness_at<T: ReadTables>(
         )
     })?;
     Ok(AtHeight::Recorded(Some(bytes.to_vec())))
+}
+
+/// **A11.** Every `archival_bond` row, decoded, in key order — the redb
+/// B-tree's order over the 32-byte persona, which is the LMDB comparator's
+/// order over the same bytes, so the scan applies slashes in the order the
+/// C++ cursor did. A row that does not decode is SI-7 (SI-14's arm too).
+pub(super) fn bond_records<T: ReadTables>(
+    txn: &T,
+) -> Result<Vec<(PCanonicalId, BondRecord)>, ReadFault> {
+    let table = txn.table(ARCHIVAL_BOND)?;
+    let mut out = Vec::new();
+    for row in table.iter()? {
+        let (key, value) = row?;
+        let record = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(BOND, cause))?;
+        out.push((PCanonicalId::from_bytes(key.value()), record));
+    }
+    Ok(out)
+}
+
+/// **A12.** Whether `archival_slash_applied` holds `(persona, shard,
+/// epoch)`. A set table ([`Present`](crate::schema::Present)): the row's
+/// existence is the whole fact, so there is nothing to decode and nothing
+/// to be `Option` about.
+pub(super) fn slash_applied<T: ReadTables>(
+    txn: &T,
+    persona: &PCanonicalId,
+    shard: ShardId,
+    epoch: SettlementEpoch,
+) -> Result<bool, ReadFault> {
+    Ok(txn
+        .table(ARCHIVAL_SLASH_APPLIED)?
+        .get(SlashAppliedKey::new(*persona, shard, epoch).key())?
+        .is_some())
+}
+
+/// **A13.** `archival_budget_accruing[epoch]` — the staker inflow accrued
+/// so far in an **open** epoch. `None` before the epoch's first accrual and
+/// after its close deleted the row (SI-23: the table holds at most the open
+/// epoch's row). A row that does not decode is SI-7.
+pub(super) fn budget_accruing<T: ReadTables>(
+    txn: &T,
+    epoch: SettlementEpoch,
+) -> Result<Option<AtomicUnits>, ReadFault> {
+    chain_reads::cell(
+        txn,
+        ARCHIVAL_BUDGET_ACCRUING,
+        epoch.to_raw(),
+        BUDGET_ACCRUING,
+    )
 }
