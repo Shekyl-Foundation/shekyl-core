@@ -305,16 +305,25 @@ impl RuleSetId {
 /// The header version a rule set *admits* will be another — a parameter, never
 /// the identity.
 #[derive(Clone, Copy, PartialEq, Eq)]                 // Debug by hand: prints the row *count*
-pub struct RuleSet { id: RuleSetId, enforced: &'static [CenRow], header_major_version: u8, difficulty: DifficultyRule }
-pub enum DifficultyRule { Lwma1, Fixed(Target) } // `Fixed` only via `RuleSet::fakechain(NonZeroU128)` — CEN-D7 as data (slice 2 §4.5); `RuleSetId` is then NOT a proxy for rule-set equality
+pub struct RuleSet { id: RuleSetId, enforced: &'static [CenRow], header_major_version: u8, difficulty: DifficultyRule,
+                     mined_money_unlock_window: BlockCount, reorg_cap: BlockCount, tx_spendable_age: BlockCount,
+                     settlement_schedule: SettlementSchedule }   // the archival epoch geometry is rule-set data (DRS-E4 ARW-15, 2026-09-30)
+pub enum DifficultyRule { Lwma1, Fixed(Target) } // `Fixed` only via `RuleSet::fakechain(..)` — CEN-D7 as data (slice 2 §4.5); `RuleSetId` is then NOT a proxy for rule-set equality
+/// Fakechain's two schedule levers as one validated pair, `0 < reorg_cap < settlement` (SPR-9); `PRODUCTION` is the genesis pins.
+pub struct FakechainSchedule { settlement: SettlementEpochBlocks, reorg_cap: BlockCount }
 impl RuleSet {
     pub const GENESIS: Self;                           // enforced: CenRow::ALL
     const ISSUED: &'static [Self];                     // every rule set a schedule may name
     /// The rule set an id names; `None` for an id no schedule has issued.
     pub fn for_id(id: RuleSetId) -> Option<Self>;
+    /// Fakechain only: GENESIS with `Fixed(d)` for `Some(d)` and the pair's epoch and cap;
+    /// `fakechain(None, FakechainSchedule::PRODUCTION) == GENESIS`.
+    pub const fn fakechain(fixed: Option<NonZeroU128>, schedule: FakechainSchedule) -> Self;
     pub const fn id(&self) -> RuleSetId;
     /// The consensus rows this rule set enforces, in census order.
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_;
+    pub const fn reorg_cap(&self) -> BlockCount;                      // SPR-8
+    pub const fn settlement_schedule(&self) -> SettlementSchedule;    // what `archival::transition` and the store's connect belt read
 }
 
 /// Height → rule set, per network. Nettype selects **data** (rule 71): three

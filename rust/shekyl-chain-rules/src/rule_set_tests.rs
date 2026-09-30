@@ -10,7 +10,10 @@
 use shekyl_address::Network;
 use shekyl_types::{BlockCount, BlockHeight};
 
-use super::{well_formed, AdmissionPolicy, AdmissionPolicyId, RuleSchedule, RuleSet, RuleSetId};
+use super::{
+    well_formed, AdmissionPolicy, AdmissionPolicyId, FakechainSchedule, ReorgCapNotInsideEpoch,
+    RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
+};
 use crate::census::{CenRow, RowStatus};
 
 const NETWORKS: [Network; 3] = [Network::Mainnet, Network::Testnet, Network::Stagenet];
@@ -145,7 +148,7 @@ fn genesis_enforces_the_census_minus_held_rows_in_order() {
     assert_eq!(
         format!("{genesis:?}"),
         format!(
-            "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (per-block; held, at-open and by-construction rows excluded), header_major_version: 1, difficulty: Lwma1, mined_money_unlock_window: BlockCount(60), reorg_cap: BlockCount(720), tx_spendable_age: BlockCount(10) }}",
+            "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (per-block; held, at-open and by-construction rows excluded), header_major_version: 1, difficulty: Lwma1, mined_money_unlock_window: BlockCount(60), reorg_cap: BlockCount(720), tx_spendable_age: BlockCount(10), settlement_schedule: SettlementSchedule(10000) }}",
             v = CenRow::ALL.len() - 17,
             n = CenRow::ALL.len()
         )
@@ -230,26 +233,96 @@ fn the_maturity_pair_is_the_wallet_sides_lock_windows() {
 }
 
 // ---- PR #861 review: the reorg cap is rule-set data ----
+// ---- DRS-E4 ARW-15: so is the settlement schedule, and the two are a pair ----
 
-/// `GENESIS` carries `D_MAX`; a Fakechain set names its own cap through
-/// the same witness `Fixed` uses, and the `RuleSetId` caveat covers it:
-/// same id, compared by value. `fakechain(None, D_MAX)` is `GENESIS`.
+/// `GENESIS` carries `D_MAX` and the genesis epoch; a Fakechain set names
+/// its own pair through the same witness `Fixed` uses, and the `RuleSetId`
+/// caveat covers it: same id, compared by value.
+/// `fakechain(None, PRODUCTION)` is `GENESIS`.
 #[test]
-fn the_reorg_cap_is_the_rule_sets_and_fakechain_names_its_own() {
+fn the_schedule_is_the_rule_sets_and_fakechain_names_its_own() {
     use crate::D_MAX;
     assert_eq!(RuleSet::GENESIS.reorg_cap(), D_MAX);
-    assert_eq!(RuleSet::fakechain(None, D_MAX), RuleSet::GENESIS);
-    let short = RuleSet::fakechain(None, BlockCount::from_raw(50));
+    assert_eq!(
+        RuleSet::GENESIS.settlement_schedule(),
+        SettlementSchedule::GENESIS
+    );
+    assert_eq!(
+        RuleSet::fakechain(None, FakechainSchedule::PRODUCTION),
+        RuleSet::GENESIS
+    );
+    let short = RuleSet::fakechain(None, pair(10_000, 50));
     assert_eq!(short.id(), RuleSet::GENESIS.id(), "the caveat: same id");
     assert_ne!(short, RuleSet::GENESIS, "different set, compared by value");
     assert_eq!(short.reorg_cap(), BlockCount::from_raw(50));
+    assert_eq!(
+        short.settlement_schedule(),
+        SettlementSchedule::GENESIS,
+        "the cap moves without the epoch"
+    );
     assert_eq!(
         short.difficulty(),
         RuleSet::GENESIS.difficulty(),
         "the cap moves without the target"
     );
-    // Two Fakechain parameters, one witness.
-    let both = RuleSet::fakechain(core::num::NonZeroU128::new(7), BlockCount::from_raw(50));
-    assert_ne!(both, short);
-    assert_eq!(both.reorg_cap(), short.reorg_cap());
+    // The capture schedule the emission-claim vector runs (512/64).
+    let shortened = RuleSet::fakechain(None, pair(512, 64));
+    assert_eq!(shortened.settlement_schedule().blocks().get(), 512);
+    assert_eq!(shortened.settlement_schedule().epoch_at_height(1025), 2);
+    assert_eq!(shortened.reorg_cap(), BlockCount::from_raw(64));
+    // Three Fakechain parameters, one witness.
+    let all = RuleSet::fakechain(core::num::NonZeroU128::new(7), pair(512, 64));
+    assert_ne!(all, shortened);
+    assert_eq!(all.reorg_cap(), shortened.reorg_cap());
+    assert_eq!(all.settlement_schedule(), shortened.settlement_schedule());
+}
+
+/// SPR-9 at the rule-set site: the pair refuses a cap that is not strictly
+/// inside its epoch — zero, equal, or above — so `fakechain` cannot build
+/// a set whose undo floor would cross the body horizon. Bites if the
+/// constructor turns infallible or the bound goes non-strict.
+#[test]
+fn a_fakechain_schedule_refuses_a_cap_not_inside_its_epoch() {
+    let seb = SettlementEpochBlocks::new(512).expect("non-zero");
+    for cap in [0u64, 512, 513, u64::MAX] {
+        assert_eq!(
+            FakechainSchedule::new(seb, BlockCount::from_raw(cap)),
+            Err(ReorgCapNotInsideEpoch {
+                settlement_epoch: seb,
+                reorg_cap: BlockCount::from_raw(cap),
+            }),
+            "cap {cap} against SEB 512"
+        );
+    }
+    for cap in [1u64, 64, 511] {
+        assert!(
+            FakechainSchedule::new(seb, BlockCount::from_raw(cap)).is_ok(),
+            "cap {cap} against SEB 512"
+        );
+    }
+    assert_eq!(
+        FakechainSchedule::new(
+            SettlementEpochBlocks::new(10_000).expect("non-zero"),
+            crate::D_MAX
+        ),
+        Ok(FakechainSchedule::PRODUCTION),
+        "the production pair is what `new` builds from the production numbers"
+    );
+    assert_eq!(
+        ReorgCapNotInsideEpoch {
+            settlement_epoch: seb,
+            reorg_cap: BlockCount::from_raw(512),
+        }
+        .to_string(),
+        "reorg cap 512 is not strictly inside the settlement epoch (512 blocks/epoch): 0 < cap < SEB is required"
+    );
+}
+
+/// A valid `(SEB, cap)` pair for the tests above.
+fn pair(seb: u64, cap: u64) -> FakechainSchedule {
+    FakechainSchedule::new(
+        SettlementEpochBlocks::new(seb).expect("non-zero"),
+        BlockCount::from_raw(cap),
+    )
+    .expect("a valid pair")
 }

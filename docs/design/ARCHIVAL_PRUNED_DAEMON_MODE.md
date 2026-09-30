@@ -242,7 +242,9 @@ const-asserted at `D_max`'s home, on the production constants**
 configuration on every nettype** (rule 71: nettype selects data; the data
 satisfies the same invariant). The cap is **rule-set data** —
 `RuleSet::reorg_cap`, `GENESIS` carrying `D_MAX`, a Fakechain set naming
-its own through `RuleSet::fakechain(fixed, cap)` (SPR-8) — and the regtest
+its own through `RuleSet::fakechain(fixed, schedule)` (SPR-8; since DRS-E4
+`ARW-15` the schedule is a `FakechainSchedule` pair, the epoch travelling
+with the cap) — and the regtest
 conforms through **a parse that refuses**: `SHEKYL_SETTLEMENT_EPOCH_BLOCKS`
 is parsed against the cap in force and admits only
 `max(cap + 1, 2)..=SEB` (`settlement_epoch_override_floor`,

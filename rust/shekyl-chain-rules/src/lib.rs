@@ -159,7 +159,8 @@ pub use fault::{
 };
 pub use reorg::{journal_horizon, journal_horizon_under, D_MAX};
 pub use rule_set::{
-    AdmissionPolicy, AdmissionPolicyId, DifficultyRule, RuleSchedule, RuleSet, RuleSetId,
+    AdmissionPolicy, AdmissionPolicyId, DifficultyRule, FakechainSchedule, ReorgCapNotInsideEpoch,
+    RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
 };
 pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::block_weight::{effective_median_at, EffectiveMedian, Weights};

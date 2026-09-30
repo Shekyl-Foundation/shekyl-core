@@ -191,6 +191,7 @@ pub struct Scenario<P> {
 /// subject stays the chain, not the search.
 pub const RULES: ChainRules = ChainRules::Regtest {
     fixed_difficulty: Some(std::num::NonZeroU128::MIN),
+    schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
 };
 
 impl Scenario<FreeHash> {

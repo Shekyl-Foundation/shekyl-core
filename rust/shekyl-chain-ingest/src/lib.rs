@@ -125,7 +125,7 @@ pub use pipeline::{
     run, Checkpoint, Disagreement, PipelineConfig, PipelineFault, RunReport, Switch,
 };
 #[cfg(feature = "pipeline")]
-pub use schedule::{Chain, ChainRules, FixedDifficultyRefused};
+pub use schedule::{Chain, ChainRules, RegtestLever, RegtestLeverRefused};
 #[cfg(feature = "pipeline")]
 pub use seed::{SeedClaim, SeedLedger};
 #[cfg(feature = "pipeline")]

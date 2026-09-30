@@ -473,6 +473,49 @@ impl BadInterval {
     }
 }
 
+/// Blocks per settlement epoch — the one number the epoch geometry is a
+/// function of (`floor(height / SEB)` and its inverses).
+///
+/// Three readers, one word (moved here at DRS-E4 `ARW-15`; the fifth
+/// instance of the module's placement argument): the daemon store **pins**
+/// it in its header at create and refuses a session under another value
+/// (S-CHAIN-W SCW-2); the rule set **carries** it — the genesis constant on
+/// every issued set, the regtest lever's value on a Fakechain set — so the
+/// validator derives epochs, closes and slash deadlines from the rules in
+/// force and never from a process's environment (rule 71: nettype selects
+/// data, never control flow); and `shekyl-archival-retention` **computes**
+/// with it (`SettlementSchedule`, the one home of the geometry). The store
+/// compares its pin to the in-force set's at every connect, which is what
+/// makes the two readers one schedule and not two.
+///
+/// `0` is not a schedule: the C++ used it as "unpinned", and a file the
+/// store writes is never unpinned, so the type cannot spell it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SettlementEpochBlocks(core::num::NonZeroU64);
+
+impl SettlementEpochBlocks {
+    /// `blocks` per epoch; `None` for zero, which names no schedule.
+    #[must_use]
+    pub const fn new(blocks: u64) -> Option<Self> {
+        match core::num::NonZeroU64::new(blocks) {
+            Some(n) => Some(Self(n)),
+            None => None,
+        }
+    }
+
+    /// The schedule, in blocks.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+impl core::fmt::Display for SettlementEpochBlocks {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{} blocks/epoch", self.0)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The persisted bond record (DRS-E1 S-ARCH `SAR-Q3`; moved here by DRS-E4
 // `ARW-Q8`) — shapes only. The `Canonical` codec is `shekyl-store-codec`'s.

@@ -49,8 +49,8 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use shekyl_chain_rules::harness::MockSubstrate;
-use shekyl_chain_rules::{ReleaseAnchors, Substrate};
-use shekyl_types::BlockHeight;
+use shekyl_chain_rules::{FakechainSchedule, ReleaseAnchors, SettlementEpochBlocks, Substrate};
+use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::corpus::CorpusReader;
 use crate::metrics::Metrics;
@@ -60,11 +60,11 @@ use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::substrate::ProductionSubstrate;
 use crate::test_support::h;
-use crate::test_support::{cleanup, open_store, tmp};
+use crate::test_support::{cleanup, open_store_under, tmp};
 use crate::trace::Trace;
 use shekyl_chain_rules::Candidate;
 use shekyl_pow_randomx::CacheStore;
-/// `manifest.json`, as the capture writes it (format 2).
+/// `manifest.json`, as the capture writes it (format 3).
 #[derive(Deserialize, Debug)]
 struct Manifest {
     format_version: u32,
@@ -74,6 +74,14 @@ struct Manifest {
     block_count: u64,
     spend_txid: Option<String>,
     fixed_difficulty: u128,
+    /// The `(SEB, cap)` pair the daemon mined this chain under — the
+    /// regtest schedule levers when the generator pulled them, the genesis
+    /// pair otherwise. The replay judges the chain under a Fakechain rule
+    /// set naming exactly this pair and opens its store under the same
+    /// (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-15`): a 512-block epoch judged
+    /// under the production one refuses the first block past height 511.
+    settlement_epoch_blocks: u64,
+    reorg_cap_blocks: u64,
     /// The hash of block 0 as the daemon reported it — the operand that
     /// decides what these chains are valid against (§5.2).
     genesis_hash: String,
@@ -136,7 +144,7 @@ fn captured_chains() -> Vec<(PathBuf, Manifest)> {
                 .unwrap_or_else(|e| panic!("{}: manifest does not parse: {e}", p.display()));
             assert_eq!(
                 manifest.format_version,
-                2,
+                3,
                 "{}: capture format {} is not the one this test reads",
                 p.display(),
                 manifest.format_version
@@ -187,18 +195,34 @@ where
     let mut source =
         CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
     let trace = Arc::new(Trace::read(std::io::Cursor::new(trace.as_slice())).expect("read trace"));
+    let schedule = FakechainSchedule::new(
+        SettlementEpochBlocks::new(manifest.settlement_epoch_blocks)
+            .expect("a captured chain's epoch is non-zero"),
+        BlockCount::from_raw(manifest.reorg_cap_blocks),
+    )
+    .unwrap_or_else(|e| {
+        panic!(
+            "{}: the manifest's pair is not a schedule: {e}",
+            manifest.shape
+        )
+    });
     let rules = ChainRules::Regtest {
         fixed_difficulty: Some(
             NonZeroU128::new(manifest.fixed_difficulty).expect("a regtest difficulty is non-zero"),
         ),
+        schedule,
     };
     let path = tmp(&format!("vectors-{}", manifest.shape));
+    // The store runs the pair the chain was mined under, read off the same
+    // rule set `connect` judges by — not the production epoch the other
+    // tests' stores pin, which `connect` would refuse at block 0.
+    let store = open_store_under(&path, &rules.in_force(BlockHeight::from_raw(0)));
     let report = run(
         &mut source,
         substrate,
         Arc::new(Metrics::new()),
         rules,
-        open_store(&path),
+        store,
         trace,
         PipelineConfig {
             window: NonZeroUsize::new(64).expect("non-zero"),

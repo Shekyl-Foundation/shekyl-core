@@ -920,6 +920,21 @@ pub fn open_store(path: &std::path::Path) -> ChainStore {
     ChainStore::create(path, EPOCH).expect("create")
 }
 
+/// A store under the `(SEB, cap)` pair of the rule set that will judge its
+/// blocks — a chain mined on a levered regtest schedule opens its store
+/// the way the daemon did (`Horizons::under`), or `connect` refuses the
+/// first block for naming another epoch (`ARW-15`).
+pub fn open_store_under(path: &std::path::Path, in_force: &RuleSet) -> ChainStore {
+    let horizons = shekyl_chain_store::store::Horizons::under(in_force)
+        .expect("a well-formed rule set's pair is a store schedule");
+    ChainStore::with_horizons(
+        path,
+        shekyl_chain_store::apply_policy::ApplyPolicy::default(),
+        horizons,
+    )
+    .expect("create")
+}
+
 /// A connector whose task the test holds, so that stopping it can wait until
 /// the actor — and the [`ChainStore`] it owns — has been dropped.
 ///

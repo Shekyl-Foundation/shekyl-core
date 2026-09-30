@@ -142,6 +142,12 @@ pub(super) struct RegtestDaemon {
     /// asked for. `None` for the ordinary spawn, so no existing test grows a
     /// listener it did not ask for.
     restricted_url: Option<String>,
+    /// The schedule levers this daemon was spawned under, if any — recorded
+    /// so a captured chain's manifest states the `(SEB, cap)` its blocks
+    /// were mined under (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-15`: the replay
+    /// judges the chain under a rule set naming that pair, not the
+    /// production one).
+    schedule: Option<RegtestSchedule>,
     /// Held for the daemon's lifetime to serialize e2e tests; released on drop.
     _serial: OwnedMutexGuard<()>,
 }
@@ -368,6 +374,7 @@ impl RegtestDaemon {
             rpc_port,
             rpc,
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
+            schedule,
             _serial: serial,
         };
         daemon.await_ready().await;
@@ -4855,8 +4862,21 @@ async fn maybe_capture_chain_vector(
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
         .unwrap_or_else(|| "unknown".to_owned());
 
+    // The schedule the chain was mined under — the daemon's levers when the
+    // harness pulled them, the genesis pair otherwise. The replay opens
+    // its store and judges every block under a rule set naming exactly
+    // this pair (`ARW-15`); recorded, not remembered, like the difficulty.
+    let production = shekyl_chain_rules::FakechainSchedule::PRODUCTION;
+    let (settlement_epoch_blocks, reorg_cap_blocks) = match daemon.schedule {
+        Some(levers) => (levers.seb, levers.reorg_cap),
+        None => (
+            production.settlement().blocks().get(),
+            production.reorg_cap().to_raw(),
+        ),
+    };
+
     let manifest = json!({
-        "format_version": 2,
+        "format_version": 3,
         "tx_count": tx_count,
         "genesis_hash": genesis_hash,
         "built_at_dev_sha": built_at_dev_sha,
@@ -4883,6 +4903,12 @@ async fn maybe_capture_chain_vector(
         // the value this harness spawned the daemon with, recorded rather
         // than remembered.
         "fixed_difficulty": 1,
+        // The `(SEB, cap)` pair the daemon ran — `SHEKYL_SETTLEMENT_EPOCH_BLOCKS`
+        // and `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` when levered, the genesis
+        // pair when not. What `replay --chain regtest --settlement-epoch-blocks
+        // n --reorg-cap m` must be given.
+        "settlement_epoch_blocks": settlement_epoch_blocks,
+        "reorg_cap_blocks": reorg_cap_blocks,
     });
     std::fs::write(
         root.join("manifest.json"),

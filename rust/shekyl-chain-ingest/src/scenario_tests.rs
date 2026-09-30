@@ -200,8 +200,9 @@ fn the_scenario_rules_are_regtest_at_difficulty_one() {
     assert!(matches!(
         RULES,
         crate::schedule::ChainRules::Regtest {
-            fixed_difficulty: Some(d)
-        } if d.get() == 1
+            fixed_difficulty: Some(d),
+            schedule,
+        } if d.get() == 1 && schedule.is_production()
     ));
 }
 
