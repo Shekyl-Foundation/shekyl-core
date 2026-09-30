@@ -593,15 +593,42 @@ run by keeping the Tor warm and restarting the daemon instead. Kept as
 the local-rendezvous datapoint (median 410 ms, below the distant 615 ms,
 as a shorter circuit should be).
 
+## Tor relay leg (D-5 stem hop) — attempted, blocked on relay across the link
+
+The D-5 per-hop stem latency over Tor (`DAEMON_RELAY_PRIVACY.md` §D-5)
+was set up on the same rig as the inbound distant run — floor per-boot
+onion responder, the off-site seed as the stem originator over the warm
+Tor link — and could not be measured, because a transaction does not
+cross the link on this build. Two independent reasons, both observed:
+
+- **The seed's relay lane reports `local_height=1, eligible=0` while
+  its chain is at height 52.** The seed (the dialer daemon) was mined to
+  52 with a wallet built for it (`shekyl-wallet-rpc`, address from
+  `get_primary_address`, `start_mining` to it). Its relay filter, logged
+  each pass, stayed at `local_height=1 rule=state_normal eligible=0` at
+  chain height 52 — the recorded-height behaviour this record documents
+  above, now shown to zero relay eligibility outright on a mined chain.
+  A submitted transaction would find no eligible relay candidate, so it
+  never enters a stem. The stem cannot be produced, let alone timed.
+- **Block sync does not pull across the two-node Tor link.** The floor's
+  connection object reported the peer at height 52 while the floor
+  itself stayed at height 1, and the connection churned on `PeerClosed`
+  at the ~60–90 s `COMMAND_TIMED_SYNC` cadence — the same timed-sync
+  close seen on the clearnet LAN leg, here re-opening every cycle before
+  the chain is fetched.
+
+So D-5 is blocked on relay/sync actually crossing the two-node Tor link,
+which it does not on this build; the block is upstream of anything the
+distant circuit could measure. The transport half of a hop is bounded by
+the Tor gap distributions (outbound 1.26 s p99; inbound 1.221 s p99),
+so the missing piece is the stem's *eligibility and propagation*, not
+its transport latency. The reopening criterion is a build on which a
+mined chain relays and syncs across the link — i.e. the relay-lane
+recorded-height behaviour advances with the chain and the timed-sync
+connection holds over Tor — after which the stem hop is one run on this
+same rig.
+
 ## Not this run
 
-The Tor relay leg — the D-5 per-hop stem latency over Tor
-(`DAEMON_RELAY_PRIVACY.md` §D-5) — was not run: its reopening trigger
-is "the first testnet with representative geography measures real
-inter-node relay latency," which needs a stemmed transaction over a
-geographically distributed Tor link. On this fixed-difficulty testnet
-that means mining to a wallet and building a transaction first; the
-transport half of the hop is already bounded by the Tor gap figures
-(outbound 1.26 s p99, inbound above). The thread-budget legs (D5
-conditions pinned 2026-09-30) are not in this record and are blocked on
-the thread-ledger move-and-print row.
+The thread-budget legs (D5 conditions pinned 2026-09-30) are not in this
+record and are blocked on the thread-ledger move-and-print row.
