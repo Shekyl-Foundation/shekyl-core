@@ -23,19 +23,22 @@ pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
 pub use engine::MultisigSignerV2;
 pub use engine::{
     Capability, CapabilityInput, ChangePasswordError, CollectOutcome, CollectUnstakedError,
-    Credentials, DaemonClient, DaemonExpectation, DaemonOp, DiagnosticSink, DrainBalanceReadError,
-    DrainOutcome, DrainToPrincipalError, Engine, EngineCreateParams, EngineSignerKind,
-    FakechainPolicy, FeePriority, FeeTierQuote, FirstStakeError, FirstStakeOutcome, InputCount,
-    IoError, KeyError, LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError,
-    OpenedEngine, OutputCount, PScanHandle, PScanStartError, PendingTx, PendingTxError,
-    PersistenceError, ProtocolErrorKind, RefreshDiagnostic, RefreshError, RefreshHandle,
-    RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
-    ReservationId, ScannableBlock, SendError, SoloSigner, StakeInError, StakePosture,
-    StakedBalance, StakedOutput, StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome,
-    SuppressedClass, TracingDiagnosticSink, TxError, TxHash, TxRecipient, TxRecipientSummary,
-    TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial,
+    Credentials, CurveTreeIngestFault, DaemonClient, DaemonExpectation, DaemonOp, DiagnosticSink,
+    DrainBalanceReadError, DrainOutcome, DrainToPrincipalError, Engine, EngineCreateParams,
+    EngineSignerKind, FakechainPolicy, FeePriority, FeeTierQuote, FirstStakeError,
+    FirstStakeOutcome, InputCount, IoError, KeyError, LocalRefresh, MalformedKind, Network,
+    NoopDiagnosticSink, OpenError, OpenedEngine, OutputCount, PScanHandle, PScanStartError,
+    PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind, RefreshDiagnostic,
+    RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent,
+    RefreshSummary, ReservationId, ScannableBlock, SendError, SoloSigner, StakeInError,
+    StakePosture, StakedBalance, StakedOutput, StakingReadError, StakingReadView, StateWrapKey,
+    SubmitOutcome, SuppressedClass, TracingDiagnosticSink, TxError, TxHash, TxRecipient,
+    TxRecipientSummary, TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial,
 };
 pub use outbound_label::{label_plaintext_for_recipient, RidNotEncodable};
+// The fault [`IoError::CurveTreeStore`] carries, re-exported so a consumer can
+// name it without depending on `shekyl-curve-tree`.
+pub use shekyl_curve_tree::StoreOpenFault;
 // The exclusive upper bound of `stake_in`'s system-drawn cover
 // (`Engine::stake_in` sends `amount + cover`, `cover ~ U[1, bound)`).
 // Re-exported so the RPC/CLI disclosure copy renders the bound from the

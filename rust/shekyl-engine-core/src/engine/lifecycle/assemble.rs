@@ -238,17 +238,18 @@ impl Engine<SoloSigner> {
         // `.wallet.keys` pair; `open_and_spawn` resumes from its contents with
         // no genesis replay (R1-Q2). It requires the same ambient runtime the
         // `KeyEngineHandle::spawn` above already asserts, so it is grouped here
-        // with the other actor spawn. A store-open failure is a wallet-file
-        // boundary failure (the store is a wallet companion file), so it maps to
-        // `IoError::WalletFile` with a curve-tree-store detail prefix rather than
-        // a new error variant (which would force a downstream RPC-tier match).
+        // with the other actor spawn. A store-open failure keeps its meaning:
+        // the store classifies it (`ClientError::open_fault` — locked by
+        // another process, corrupt, unsupported, I/O), so the RPC names that
+        // remedy instead of reporting every open failure as one fault.
         let curve_tree = {
             let store_path =
                 shekyl_engine_file::paths::curve_tree_store_path_from(file.base_path());
             crate::engine::curve_tree_actor::CurveTreeHandle::open_and_spawn(&store_path).map_err(
                 |e| {
-                    OpenError::Io(IoError::WalletFile {
-                        detail: format!("curve-tree store open failed: {e:?}"),
+                    OpenError::Io(IoError::CurveTreeStore {
+                        fault: e.open_fault(),
+                        detail: format!("{e:?}"),
                     })
                 },
             )?

@@ -58,7 +58,7 @@ fn assert_open_state_aead_failure(err: OpenError) {
         OpenError::Persistence(PersistenceError::WalletFile(WalletFileError::Envelope(
             WalletEnvelopeError::InvalidPasswordOrCorrupt,
         )))
-        | OpenError::Io(IoError::WalletFile { .. }) => {}
+        | OpenError::Io(IoError::WalletFile(_)) => {}
         other => panic!("expected state AEAD failure on reopen, got {other:?}"),
     }
 }

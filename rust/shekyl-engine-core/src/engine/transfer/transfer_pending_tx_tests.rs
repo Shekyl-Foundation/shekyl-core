@@ -1049,7 +1049,7 @@ async fn build_without_curve_tree_is_refused() {
         .await
         .expect_err("a build with no curve tree must be refused");
     assert!(
-        matches!(err, SendError::CannotSign { reason } if reason.contains("curve tree")),
+        matches!(err, SendError::BuildInvariant { reason } if reason.contains("curve tree")),
         "no-tree build must be refused with a curve-tree reason: {err:?}"
     );
 }
@@ -1877,7 +1877,7 @@ async fn build_refuses_when_a_selected_input_is_spent_during_signing() {
     assert!(
         matches!(
             err,
-            SendError::CannotSign {
+            SendError::BuildInvariant {
                 reason: "a selected input was spent elsewhere during assembly"
             }
         ),
@@ -3453,8 +3453,8 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
             fee_directive,
         )
     });
-    let Err(SendError::CannotSign { reason }) = err else {
-        panic!("expected CannotSign for missing key_image, got {err:?}");
+    let Err(SendError::BuildInvariant { reason }) = err else {
+        panic!("expected BuildInvariant for missing key_image, got {err:?}");
     };
     assert!(
         reason.contains("key_image"),

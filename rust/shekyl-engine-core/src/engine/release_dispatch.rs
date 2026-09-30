@@ -103,6 +103,7 @@ use super::curve_tree_actor::CurveTreeHandleError;
 use super::daemon::synced_chain_facts::TimelineBreak;
 use super::emission_source::{fetch_claim_source_for, ClaimSourceFor, EmissionSourceError};
 use super::fee_policy::FeeEstimatorError;
+use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::prpc::PersonaIsolatedTransport;
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
@@ -394,7 +395,7 @@ where
             daemon
                 .get_fee_estimates()
                 .await
-                .map_err(|_| ReleaseRequestError::Fee(FeeEstimatorError::DaemonUnreachable))?,
+                .map_err(|e| ReleaseRequestError::Fee(map_daemon_engine_fee_error(e)))?,
         )?;
 
         // Two independent reads, joined: the persona canonical id (a pure
@@ -901,6 +902,10 @@ mod tests {
             (TimelineBreak::DaemonSyncing, true),
             (TimelineBreak::FactsUnreadable, false),
             (TimelineBreak::DaemonUnreachable, false),
+            (
+                TimelineBreak::IdentityRefused(shekyl_rpc_types::IdentityMismatch::unreadable()),
+                false,
+            ),
             (TimelineBreak::WitnessBlockReplaced, false),
         ] {
             let fetched = ClaimSourceFor::for_test_with_vouching(

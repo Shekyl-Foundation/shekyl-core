@@ -917,10 +917,10 @@ pub(crate) async fn stake(
                 // fragmentation) nor an internal fault (the funding is
                 // intact): its own code, rule 82.
                 E::FundingFragmented { max } => WalletRpcError::StakeFundingFragmented { max },
-                // Daemon-side fee failure: the build-path code whose remedy
-                // (check the daemon, retry) actually matches — never the
-                // "fund and retry" misdiagnosis (rule 82).
-                E::FeeEstimate(_) => WalletRpcError::FeeEstimationFailed,
+                // A failed fee query: the build path's mapping, so the same
+                // cause answers the same code — never the "fund and retry"
+                // misdiagnosis (rule 82).
+                E::FeeEstimate(e) => e.into(),
                 // The daemon ANSWERED and the wallet refused the answer. The
                 // same -29102/-29109 split the send path draws, for the same
                 // reason: "check the connection and retry" is the wrong

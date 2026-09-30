@@ -105,6 +105,14 @@ pub enum WalletFileError {
     #[error("internal bug: non-rotation save path attempted to rewrite {path}")]
     KeysFileWriteOnceViolation { path: PathBuf },
 
+    /// `create` was pointed at a directory that does not exist. Checked
+    /// before anything is written, so the cause is named here rather than
+    /// surfacing as the `NotFound` of whichever write happened to run
+    /// first — which reads as "the wallet file is missing" on a path that
+    /// looks nothing up.
+    #[error("wallet directory {dir} does not exist")]
+    DirectoryMissing { dir: PathBuf },
+
     /// Another process (or another handle in this process) holds the
     /// advisory lock on the keys file. We do not block — the wallet UI
     /// should surface this as "the wallet is already open elsewhere".

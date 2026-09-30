@@ -482,6 +482,10 @@ pub(crate) enum TimelineBreak {
     FactsUnreadable,
     /// The daemon could not be reached at all.
     DaemonUnreachable,
+    /// The daemon is not one this wallet can use (`VC-4`): another RPC
+    /// contract, rule set, network or chain. Retrying the same daemon cannot
+    /// clear it; the remedy is a different daemon or a matching build.
+    IdentityRefused(shekyl_rpc_types::IdentityMismatch),
     /// The record came back **below** the witness that preceded it: the
     /// chain rolled back between the two reads, under a `synchronized` flag
     /// that is sticky and therefore still says otherwise.
@@ -504,14 +508,23 @@ pub(crate) enum TimelineBreak {
 }
 
 impl TimelineBreak {
-    /// Classify a failed chain-facts read.
+    /// Classify a failed chain-facts read by its [`DaemonFault`].
     ///
-    /// The one place the `InvalidNode`-versus-transport distinction is drawn,
-    /// so every consumer inherits the same reading of the same error.
+    /// The one place the contract-versus-transport distinction is drawn for
+    /// chain facts, so every consumer inherits the same reading of the same
+    /// error. A fault on this side of the connection (a request this wallet
+    /// could not form) reads as unreadable, not unreachable: it repeats on
+    /// every retry, which is the contract class's behaviour.
+    ///
+    /// [`DaemonFault`]: shekyl_rpc_client::DaemonFault
     pub(crate) fn from_facts_error(err: &RpcError) -> Self {
-        match err {
-            RpcError::InvalidNode(_) => Self::FactsUnreadable,
-            _ => Self::DaemonUnreachable,
+        use shekyl_rpc_client::DaemonFault;
+        match err.fault() {
+            DaemonFault::Unreachable => Self::DaemonUnreachable,
+            DaemonFault::Identity(mismatch) => Self::IdentityRefused(mismatch),
+            DaemonFault::Protocol | DaemonFault::FeeResponse | DaemonFault::Internal => {
+                Self::FactsUnreadable
+            }
         }
     }
 }

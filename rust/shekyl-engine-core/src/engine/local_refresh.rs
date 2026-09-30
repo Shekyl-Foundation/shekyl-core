@@ -35,7 +35,8 @@
 //!    method entry, before the daemon-tip read.
 //! 2. **Daemon tip read** — [`DaemonEngine::get_height`] for the
 //!    attempt's scan ceiling. RPC failure surfaces as
-//!    [`LocalRefreshError::Io`]; the
+//!    [`LocalRefreshError::DaemonUnreachable`] or
+//!    [`LocalRefreshError::DaemonProtocol`]; the
 //!    [`RefreshDiagnostic::DaemonProtocolError`] classification at
 //!    this site lands at C5 alongside the `RpcError → ProtocolErrorKind`
 //!    classifier (per §7.X C5 "Producer-side `RpcError`
@@ -157,7 +158,6 @@
 use std::time::Duration;
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
-use shekyl_rpc_client::RpcError;
 use shekyl_scanner::{ScanError, ScanOutcome, ScannableBlock, Scanner, ViewPair, MAX_OUTPUTS};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId};
 use shekyl_wire::Input;
@@ -169,10 +169,7 @@ use tracing::{debug, error, warn};
 use zeroize::Zeroizing;
 
 use super::curve_tree_decode;
-use super::diagnostics::{
-    DiagnosticSink, MalformedKind, ProtocolErrorKind, RefreshDiagnostic, SuppressedClass,
-};
-use super::error::{IoError, RefreshError};
+use super::diagnostics::{DiagnosticSink, MalformedKind, RefreshDiagnostic, SuppressedClass};
 use super::refresh::{LedgerSnapshot, RefreshOptions, RefreshPhase, RefreshProgress};
 use super::traits::daemon::DaemonEngine;
 use super::traits::refresh::RefreshEngine;
@@ -387,93 +384,12 @@ impl LocalRefresh {
     }
 }
 
-// ============================================================================
-// LocalRefreshError (unit-variant-only)
-// ============================================================================
-
-/// Producer-side error type for [`LocalRefresh::produce_scan_result`].
-///
-/// **Unit-variant-only** per the §2.3 + §5.4.7 R6 two-channel
-/// reframe binding pinned at
-/// [`RefreshEngine::Error`](super::traits::refresh::RefreshEngine::Error)'s
-/// rustdoc. Per-event detail (height, RPC payload, scanner
-/// rejection class) flows through the [`DiagnosticSink`] channel;
-/// the terminal error carries only the discriminant the
-/// orchestrator branches on.
-///
-/// # Variant set
-///
-/// - [`Cancelled`](Self::Cancelled) — observed at cancellation
-///   checkpoints 2, 3, or 5. Producer returns immediately with
-///   no further scan work.
-/// - [`Io`](Self::Io) — daemon-side I/O failure (block-fetch
-///   retry budget exhausted; daemon-tip RPC failure).
-///   Producer-side classification via
-///   [`RefreshDiagnostic::DaemonProtocolError`] lands at C5
-///   alongside the `RpcError → ProtocolErrorKind` classifier.
-/// - [`Malformed`](Self::Malformed) — daemon delivered a
-///   structurally-malformed block (either the producer's
-///   excessive-outputs pre-pass tripped, or the scanner's own
-///   structural validation rejected the block). The
-///   `MalformedKind` discriminant is reported through
-///   [`DiagnosticSink`] at the emit site.
-/// - [`Internal`](Self::Internal) — structural invariant
-///   violation that is not reachable from adversarial input
-///   (e.g., scanner construction from validated view-material
-///   fails). Reported to the orchestrator as
-///   [`RefreshError::InternalInvariantViolation`] with a
-///   `&'static str` context label.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum LocalRefreshError {
-    /// Cancellation observed at checkpoint 2, 3, or 5.
-    #[error("scan cancelled before completing the requested range")]
-    Cancelled,
-
-    /// Daemon-side I/O failure (block-fetch retry budget exhausted
-    /// or daemon-tip RPC failure).
-    #[error("daemon I/O failure during refresh")]
-    Io,
-
-    /// Daemon returned a structurally-malformed block (producer's
-    /// pre-pass or scanner-side structural validation tripped).
-    #[error("daemon returned a structurally malformed block")]
-    Malformed,
-
-    /// A further reorg was detected after the per-attempt rewind budget
-    /// (`MAX_REORG_REWINDS_PER_ATTEMPT`) was spent. The attempt aborts
-    /// rather than scanning on with detection disarmed — see the budget
-    /// constant's docs for why merging a blind region is unsound for the
-    /// bond watch's monotone adoptions.
-    #[error("reorg storm: rewind budget exhausted and the chain diverged again")]
-    ReorgStorm,
-
-    /// Internal invariant violation; not reachable from
-    /// adversarial input.
-    #[error("internal invariant violation during refresh")]
-    Internal,
-}
-
-impl From<LocalRefreshError> for RefreshError {
-    fn from(e: LocalRefreshError) -> Self {
-        match e {
-            LocalRefreshError::Cancelled => RefreshError::Cancelled,
-            LocalRefreshError::Io => RefreshError::Io(IoError::Daemon {
-                detail: "LocalRefresh: daemon I/O failure during refresh".to_string(),
-            }),
-            LocalRefreshError::Malformed => RefreshError::Io(IoError::Scanner {
-                detail: "LocalRefresh: daemon returned a structurally malformed block".to_string(),
-            }),
-            LocalRefreshError::ReorgStorm => RefreshError::Io(IoError::Daemon {
-                detail: "LocalRefresh: reorg storm — the chain served by the daemon diverged \
-                         again after the per-attempt rewind budget; retry when it stabilizes"
-                    .to_string(),
-            }),
-            LocalRefreshError::Internal => RefreshError::InternalInvariantViolation {
-                context: "LocalRefresh: scanner construction failed against view material",
-            },
-        }
-    }
-}
+// The producer's error vocabulary (unit-variant-only; §5.4.7 R6) and the
+// bounded `RpcError` classification for the diagnostic stream.
+#[path = "local_refresh_error.rs"]
+mod producer_error;
+use producer_error::classify_rpc_error;
+pub(crate) use producer_error::LocalRefreshError;
 
 // ============================================================================
 // EmitState — per-attempt per-class emission budget (§5.4.8 #5 + F13-S)
@@ -641,7 +557,7 @@ impl RefreshEngine for LocalRefresh {
                             kind: classify_rpc_error(&e),
                         },
                     );
-                    return Err(LocalRefreshError::Io);
+                    return Err(LocalRefreshError::from_daemon_fault(e.fault()));
                 }
             };
 
@@ -1100,83 +1016,6 @@ const fn scanner_error_to_malformed_kind(_err: &ScanError) -> MalformedKind {
     MalformedKind::InvalidBlockStructure
 }
 
-/// Classify an upstream [`RpcError`] into the bounded
-/// [`ProtocolErrorKind`] tag without propagating the underlying
-/// `String` payload.
-///
-/// Per [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §4 Phase 0e
-/// and §5.4.7 R6 memory-amplifier closure (binding): the
-/// producer's observability stream MUST carry only the bounded
-/// variant-tag classification of `RpcError`; the `String` payload
-/// that `InternalError(String)` / `ConnectionError(String)` /
-/// `InvalidNode(String)` carry is dropped at this boundary so an
-/// adversarial daemon cannot drive memory amplification into the
-/// wallet's diagnostic stream.
-///
-/// # Refresh-reachable mapping
-///
-/// Refresh issues `get_height` and `fetch_scannable_block`, the
-/// latter composing the `Rpc` transport primitives `get_block` /
-/// `get_transactions` / `get_o_indexes` (the §8 step-4 `shekyl-wire`
-/// migration replaced the single-call `get_scannable_block_by_number`
-/// the Round 4 audit was written against). The refresh-reachable
-/// upstream variants and their tags:
-///
-/// - [`RpcError::ConnectionError`] → [`ProtocolErrorKind::ConnectionError`]
-/// - [`RpcError::InternalError`] → [`ProtocolErrorKind::InternalError`]
-/// - [`RpcError::InvalidNode`] → [`ProtocolErrorKind::InvalidNode`]
-/// - [`RpcError::InvalidTransaction`] → [`ProtocolErrorKind::InvalidTransaction`]
-/// - [`RpcError::PrunedTransaction`] → [`ProtocolErrorKind::PrunedTransaction`]
-/// - [`RpcError::TransactionsNotFound`] → [`ProtocolErrorKind::InvalidNode`]
-///   (reachable via the `get_transactions` leg of the block fetch: a
-///   daemon that names transaction hashes in a block and then reports
-///   them missing is internally inconsistent, which from the refresh
-///   path is the "unexpected envelope" `InvalidNode` signal).
-///
-/// # Defensive mapping for non-refresh-reachable variants
-///
-/// `RpcError::InvalidFee` / `RpcError::InvalidPriority` are not
-/// reachable from refresh — they belong to the future
-/// `PendingTxEngine` send-tx path. If they nonetheless surface from
-/// this site (e.g., upstream RPC client behavior change), the
-/// defensive classification is [`ProtocolErrorKind::InvalidNode`] —
-/// "the daemon returned an envelope the producer did not expect from
-/// this RPC method." [`ProtocolErrorKind`] is `#[non_exhaustive]`;
-/// PR 5's `PendingTxEngine` extraction may grow the variant set
-/// additively.
-///
-/// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
-//
-// `clippy::match_same_arms` would have us merge the
-// `InvalidNode(_)` arm with the
-// `TransactionsNotFound | InvalidFee | InvalidPriority` arm
-// because both map to `ProtocolErrorKind::InvalidNode`. Keeping
-// them separate preserves the rustdoc's reachability boundary:
-// the grouped arm carries `TransactionsNotFound` (refresh-reachable
-// via the block fetch's `get_transactions` leg — an inconsistent
-// daemon, mapped to `InvalidNode`) alongside the genuinely
-// non-refresh-reachable `InvalidFee` / `InvalidPriority` defensive
-// fallbacks (send-tx path). Merging would lose that boundary, which
-// future maintainers need when PR 5's `PendingTxEngine` extraction
-// reaches this site.
-#[allow(clippy::match_same_arms)]
-const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
-    match err {
-        RpcError::ConnectionError(_) => ProtocolErrorKind::ConnectionError,
-        RpcError::InternalError(_) => ProtocolErrorKind::InternalError,
-        RpcError::InvalidNode(_) => ProtocolErrorKind::InvalidNode,
-        RpcError::InvalidTransaction(_) => ProtocolErrorKind::InvalidTransaction,
-        RpcError::PrunedTransaction => ProtocolErrorKind::PrunedTransaction,
-        // All map to `InvalidNode`: `TransactionsNotFound` is
-        // refresh-reachable (block fetch's `get_transactions` leg;
-        // inconsistent daemon), while `InvalidFee` / `InvalidPriority`
-        // are non-refresh-reachable defensive fallbacks. See rustdoc.
-        RpcError::TransactionsNotFound(_) | RpcError::InvalidFee | RpcError::InvalidPriority => {
-            ProtocolErrorKind::InvalidNode
-        }
-    }
-}
-
 /// Walk backwards from `from_height` to find the highest height
 /// at which the daemon's reported block hash matches the
 /// wallet's snapshot. Returns `(matching_height + 1)` so the
@@ -1254,7 +1093,7 @@ async fn fetch_block_with_retry<R: DaemonEngine>(
 
         match rpc.fetch_scannable_block(height_usize).await {
             Ok(b) => return Ok(b),
-            Err(e) if attempt + 1 < MAX_BLOCK_FETCH_RETRIES => {
+            Err(e) if e.fault().is_retryable() && attempt + 1 < MAX_BLOCK_FETCH_RETRIES => {
                 warn!(
                     height = height.to_raw(),
                     attempt = attempt + 1,
@@ -1277,9 +1116,9 @@ async fn fetch_block_with_retry<R: DaemonEngine>(
             Err(e) => {
                 error!(
                     height = height.to_raw(),
+                    attempts = attempt + 1,
                     error = %e,
-                    "LocalRefresh::fetch_block_with_retry: block fetch failed after {} attempts",
-                    MAX_BLOCK_FETCH_RETRIES,
+                    "LocalRefresh::fetch_block_with_retry: block fetch failed",
                 );
                 emit_state.try_emit(
                     diagnostics,
@@ -1287,7 +1126,7 @@ async fn fetch_block_with_retry<R: DaemonEngine>(
                         kind: classify_rpc_error(&e),
                     },
                 );
-                return Err(LocalRefreshError::Io);
+                return Err(LocalRefreshError::from_daemon_fault(e.fault()));
             }
         }
     }
