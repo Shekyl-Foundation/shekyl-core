@@ -192,7 +192,8 @@ keyed by seed. `record-goldens` writes that scope
 version line, the parity fields, and nothing else. Events are omitted.
 A send-over suffix past the script's handshake response is omitted.
 The six deferred invariants are not transcript fields, so they are
-not in the files. Recorded at `88a202195`. Then the epee host is
+not in the files. Recorded at `88a202195`. Option-off goldens;
+re-recorded at the flip per §Goldens. Then the epee host is
 deleted with the rest of epee.
 
 After cutover, in CI, the same peer runs every seed against the Rust
