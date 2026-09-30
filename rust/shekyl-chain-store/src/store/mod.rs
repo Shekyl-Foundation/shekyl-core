@@ -113,7 +113,7 @@ mod write;
 pub use alt_reads::AltEntry;
 pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
-pub use connect::{ConnectFacts, Connected, DeletedBy, Fact, Origin};
+pub use connect::Connected;
 pub use error::{
     AltCannot, CellFault, EngineError, ErrorClass, LeafCountFault, LeafDensity, PoolCannot,
     StoreCannot, StoreError, StoreInvariant, UndoFault,

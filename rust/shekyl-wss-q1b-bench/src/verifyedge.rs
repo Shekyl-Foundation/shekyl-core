@@ -26,10 +26,11 @@
 //!
 //! # This measurement carries no threshold, and that is deliberate
 //!
-//! `CT-6 Q4` is **PENDING AS DERIVATION** — its budget is pre-registered but
-//! its field is owed a re-point, and in any case Q4 grades the *amortized*
-//! form's advance. This is the **naive** cost the amortized form would
-//! replace. So the record reports [`VerifyEdgeRecord::grading`] as prose and
+//! `CT-6 Q4` is **PENDING AS DERIVATION**. Its budget is pre-registered, and
+//! the field it grades is the measured advance (`CT6_PROVING_STATE.md`
+//! §10.4); the pinned-rig grade is increment 6's. This module is the
+//! **naive** cost that advance replaces. So the record reports
+//! [`VerifyEdgeRecord::grading`] as prose and
 //! emits **no `Verdict`**: reusing [`crate::report::Verdict::Ungraded`] — whose
 //! meaning is *"measured off the pinned rig"* — for *"no ruled threshold
 //! exists"* would be one value standing in for two meanings, which is the
@@ -61,7 +62,7 @@ use shekyl_curve_tree::{
 use crate::corpus::LeafRate;
 use crate::timing::Series;
 
-/// Leaves written per `append_drained` call while building the population.
+/// Leaves written per `append_block_deltas` call while building the population.
 ///
 /// One block's worth would make the write pattern realistic and the build
 /// unusably slow at 730 blocks; one batch would make it fast and unlike
@@ -141,10 +142,12 @@ pub fn build_population(
             // read are monotonic, as they are in production.
             batch.push(entry(p, leaf_bytes(p), p / rate.leaves_per_block));
         }
-        // `append_block_deltas` is the **production** ingest path;
-        // `append_drained` is a `#[cfg(test)]` wrapper and not reachable here,
-        // which is the right constraint: a baseline taken through a test-only
-        // door would not describe what refresh actually does.
+        // Leaf and pending bytes, and no ring row. The timed read is
+        // `root_at_count`, which does not consult `frontier_snapshots`, so a
+        // snapshot here would be a write this baseline does not describe.
+        // `append_block_deltas` is that leaf write. Production ingest is
+        // `append_block_with_snapshot`, and `append_drained` is a
+        // `#[cfg(test)]` wrapper, so neither is the door for this population.
         //
         // The tip trails the written height, so no segment is ever
         // burial-eligible during the build even if something consulted it.

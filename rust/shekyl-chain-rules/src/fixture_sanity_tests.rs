@@ -17,7 +17,7 @@
 //! below as the shapes are listed into blocks.
 
 use super::fixture::{
-    anchored_on, candidate, candidate_on, coinbase, listed_on, spendable_chain, TxShape,
+    anchored_on, candidate, candidate_on, coinbase, listed_on, repriced, spendable_chain, TxShape,
 };
 use super::{formed, formed_on, judged, MockChain};
 use crate::census::{CenRow, RowStatus};
@@ -43,7 +43,10 @@ fn judge_at(shape: TxShape, slot: TxSlot, tx: &Transaction) {
     chain.with_view(|view| {
         let mut candidate = candidate_on(&chain, Vec::new());
         match slot {
-            TxSlot::Miner => candidate.block.miner_transaction = tx.clone(),
+            TxSlot::Miner => {
+                candidate.block.miner_transaction = tx.clone();
+                candidate = repriced(&chain, candidate);
+            }
             TxSlot::Listed(_) | TxSlot::Lone => {
                 candidate = candidate_on(&chain, vec![anchored_on(&chain, tx.clone())]);
             }

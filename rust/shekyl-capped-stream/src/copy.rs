@@ -52,9 +52,12 @@ where
                 return CloseCause::new(CloseKind::SendQueueFull);
             }
             next = outbound.pop() => {
-                let Some(bytes) = next else {
-                    shutdown(write).await;
-                    return CloseCause::new(CloseKind::LocalClose);
+                let bytes = match next {
+                    Ok(bytes) => bytes,
+                    Err(closed) => {
+                        shutdown(write).await;
+                        return CloseCause::new(closed.kind());
+                    }
                 };
                 let n = bytes.len();
                 let wire = match encode(&bytes) {
@@ -152,7 +155,7 @@ mod tests {
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
     use super::{read_capped, write_capped};
-    use crate::queue::{ByteQueue, Overfull};
+    use crate::queue::{ByteQueue, Overfull, PushError};
     use crate::UNREAD_FRAMES;
 
     struct StuckWrite {
@@ -211,9 +214,9 @@ mod tests {
     async fn a_full_queue_cancels_a_blocked_write() {
         let entered = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&entered);
-        let overfull = Arc::new(Overfull::new());
-        let trip = Arc::clone(&overfull);
         let queue = ByteQueue::new(8);
+        let sender = queue.clone();
+        let overfull = queue.overfull();
         queue.try_push(b"abcdefgh".to_vec()).expect("queue");
         let task = tokio::spawn(async move {
             let mut write = StuckWrite { entered: flag };
@@ -223,12 +226,59 @@ mod tests {
             .await
         });
         until_entered(&entered).await;
-        trip.trip();
+        // The eight bytes are still counted while the write is stuck.
+        assert_eq!(sender.try_push(b"x".to_vec()), Err(PushError::Full));
         let cause = tokio::time::timeout(Duration::from_secs(2), task)
             .await
             .expect("writer finished")
             .expect("joined");
         assert_eq!(cause.kind(), CloseKind::SendQueueFull);
+    }
+
+    /// A writer waiting on an empty queue reports the overflow that
+    /// closes it, not a local close: it reads the queue's reason, set with
+    /// the close.
+    #[tokio::test]
+    async fn a_writer_waiting_on_an_empty_queue_reports_the_overflow() {
+        let queue = ByteQueue::new(0);
+        let sender = queue.clone();
+        let overfull = queue.overfull();
+        let task = tokio::spawn(async move {
+            let mut sink = tokio::io::sink();
+            write_capped(&mut sink, &queue, &overfull, |plain| {
+                Ok(std::borrow::Cow::Borrowed(plain))
+            })
+            .await
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(sender.try_push(b"x".to_vec()), Err(PushError::Full));
+        let cause = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("writer finished")
+            .expect("joined");
+        assert_eq!(cause.kind(), CloseKind::SendQueueFull);
+    }
+
+    /// Closing from an end is a local close.
+    #[tokio::test]
+    async fn a_writer_waiting_on_a_closed_queue_reports_a_local_close() {
+        let queue = ByteQueue::new(8);
+        let closer = queue.clone();
+        let overfull = queue.overfull();
+        let task = tokio::spawn(async move {
+            let mut sink = tokio::io::sink();
+            write_capped(&mut sink, &queue, &overfull, |plain| {
+                Ok(std::borrow::Cow::Borrowed(plain))
+            })
+            .await
+        });
+        tokio::task::yield_now().await;
+        closer.close();
+        let cause = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("writer finished")
+            .expect("joined");
+        assert_eq!(cause.kind(), CloseKind::LocalClose);
     }
 
     #[tokio::test]

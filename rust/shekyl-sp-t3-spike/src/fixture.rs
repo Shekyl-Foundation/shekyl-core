@@ -189,19 +189,27 @@ impl std::fmt::Debug for ShardFixture {
 /// carrying a second copy of it that drifts (as it did, until the copy was
 /// deleted).
 pub struct FixtureShardProvider {
-    payload: Arc<[u8]>,
+    /// The served objects, indexed by shard id.
+    objects: Vec<Arc<[u8]>>,
 }
 
 impl FixtureShardProvider {
-    /// Wrap a pre-loaded payload.
+    /// Wrap one pre-loaded payload, served as shard 0.
     #[must_use]
     pub fn new(payload: Arc<[u8]>) -> Self {
-        Self { payload }
+        Self::with_objects(vec![payload])
+    }
+
+    /// Serve several payloads, shard `i` being `objects[i]`. An id past the
+    /// end is the ordinary miss.
+    #[must_use]
+    pub fn with_objects(objects: Vec<Arc<[u8]>>) -> Self {
+        Self { objects }
     }
 }
 
 impl ShardProvider for FixtureShardProvider {
-    fn shard_bytes(&self, _shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
+    fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
         // `flat` refuses a payload that is not a whole number of leaves —
         // the served frame declares a leaf count, so such bytes have no
         // representable header. [`ShardFixture::load`] already enforces
@@ -209,16 +217,46 @@ impl ShardProvider for FixtureShardProvider {
         // payload handed to [`FixtureShardProvider::new`] directly, and it
         // renders the ordinary miss rather than a body no witness could
         // verify.
-        Ok(ShardBody::flat(Arc::clone(&self.payload)))
+        let Some(payload) = usize::try_from(shard_id)
+            .ok()
+            .and_then(|i| self.objects.get(i))
+        else {
+            return Ok(None);
+        };
+        Ok(ShardBody::flat(Arc::clone(payload)))
     }
 }
 
 impl std::fmt::Debug for FixtureShardProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let lens: Vec<usize> = self.objects.iter().map(|o| o.len()).collect();
         f.debug_struct("FixtureShardProvider")
-            .field("len", &self.payload.len())
+            .field("lens", &lens)
             .finish()
     }
+}
+
+/// The multi-size W₂ run's objects (`ARCHIVAL_SHARD_T_DERIVATION.md` §4.1): the real
+/// shard and two sizes derived from **its own bytes**, served as shard ids
+/// `0` (the shard, 1×), `1` (its first half, ½×) and `2` (its first quarter, ¼×) —
+/// a 4× byte span, every size a whole number of leaves.
+///
+/// The shard is the top of the ladder because it is the largest object the
+/// production frame can carry: `ServedFrameHeader::for_segment` refuses a leaf
+/// count past one segment, so a larger object is unservable, not merely unusual
+/// (the client's `max_body_bytes` bound of two segments is headroom for padding,
+/// not a second segment).
+///
+/// Nothing here is synthetic in the sense the honesty gate forbids: every byte
+/// served is a byte of the extracted shard. What varies is only how many of them
+/// are sent, and a Tor transit of opaque, uncompressed bytes does not depend on
+/// their values — so the size is the one variable the ladder moves.
+#[must_use]
+pub fn size_ladder(fixture: &ShardFixture) -> Vec<Arc<[u8]>> {
+    let one = fixture.bytes();
+    let half: Arc<[u8]> = Arc::from(&one[..one.len() / 2]);
+    let quarter: Arc<[u8]> = Arc::from(&one[..one.len() / 4]);
+    vec![one, half, quarter]
 }
 
 #[cfg(test)]
@@ -288,5 +326,60 @@ mod tests {
         assert!(!fixture.is_empty());
         // Shared, not copied: two handles to one buffer.
         assert!(Arc::ptr_eq(&fixture.bytes(), &fixture.bytes()));
+    }
+
+    fn patterned_fixture() -> ShardFixture {
+        let mut f = tempfile::NamedTempFile::new().expect("tempfile");
+        let bytes: Vec<u8> = (0..SHARD_BYTES)
+            .map(|i| u8::try_from(i % 251).expect("below 251"))
+            .collect();
+        f.write_all(&bytes).expect("write");
+        ShardFixture::load(f.path()).expect("an exact-size fixture loads")
+    }
+
+    /// The ladder is 1×, ½×, ¼× of the real shard, a 4× span; every size is a
+    /// whole number of leaves and framable by the production frame, and every
+    /// byte is the shard's.
+    #[test]
+    fn the_size_ladder_is_the_shard_at_one_half_and_quarter() {
+        let fixture = patterned_fixture();
+        let ladder = size_ladder(&fixture);
+        let lens: Vec<usize> = ladder.iter().map(|o| o.len()).collect();
+        assert_eq!(lens, [SHARD_BYTES, SHARD_BYTES / 2, SHARD_BYTES / 4]);
+        for object in &ladder {
+            assert_eq!(
+                object.len() % LEAF_BYTES,
+                0,
+                "{} is not whole leaves",
+                object.len()
+            );
+            assert!(shekyl_p_serve::ShardBody::flat(Arc::clone(object)).is_some());
+        }
+        let one = fixture.bytes();
+        assert!(
+            Arc::ptr_eq(&ladder[0], &one),
+            "shard 0 is the fixture itself"
+        );
+        assert_eq!(&ladder[1][..], &one[..SHARD_BYTES / 2]);
+        assert_eq!(&ladder[2][..], &one[..SHARD_BYTES / 4]);
+        // One leaf past a segment is unservable — why the shard tops the ladder.
+        let past: Arc<[u8]> = vec![0u8; SHARD_BYTES + LEAF_BYTES].into();
+        assert!(shekyl_p_serve::ShardBody::flat(past).is_none());
+    }
+
+    /// Shard `i` is object `i`; past the end is the ordinary miss.
+    #[test]
+    fn the_provider_serves_each_object_by_shard_id() {
+        let objects: Vec<Arc<[u8]>> = vec![
+            vec![1u8; LEAF_BYTES].into(),
+            vec![2u8; 2 * LEAF_BYTES].into(),
+        ];
+        let provider = FixtureShardProvider::with_objects(objects);
+        for (id, leaves) in [(0u64, 1u64), (1, 2)] {
+            let body = provider.shard_bytes(id).expect("ok").expect("served");
+            let payload = leaves * u64::try_from(LEAF_BYTES).expect("fits");
+            assert!(body.header().framed_len() > payload);
+        }
+        assert!(provider.shard_bytes(2).expect("ok").is_none());
     }
 }

@@ -35,9 +35,10 @@
 //!   `unlock_time = h + window` (CEN-F6); `CTTypeNull` with one committed
 //!   base per output (CEN-F3); **one output** above genesis (CEN-F4);
 //!   canonical output key (CEN-F9) and a mask that is not
-//!   `zeroCommit(amount)` (CEN-F10); the amount is exactly the miner's leg
-//!   of the penalised emission plus the miner's share of the listed fees
-//!   (CEN-F18 over CEN-F13/F14/F15/F16/F17/F20's operands). The `extra` is
+//!   `zeroCommit(amount)` (CEN-F10); the amount is exactly what
+//!   [`shekyl_economics::price_emission`] owes the miner — the penalised
+//!   emission's miner leg plus the miner's share of the listed fees
+//!   (CEN-F18), whole at genesis (CEN-G13). The `extra` is
 //!   the coinbase grammar's one layout (CEN-I20): pubkey, nonce, one KEM
 //!   blob, one leaf blob.
 //! - **Body.** `transaction_hashes` are the listed bodies' identities, in
@@ -45,7 +46,8 @@
 //!   is the weight the block carries, coinbase included (CEN-F14's
 //!   operand; connect refuses `!=`, CEN-F14b) — the assembly is a fixed
 //!   point in the coinbase's own size, sought in at most
-//!   [`MAX_REPRICING_PASSES`] passes. Below the effective median the
+//!   [`MAX_REPRICING_PASSES`] passes ([`shekyl_economics::REPRICING_PASSES`]).
+//!   Below the effective median the
 //!   reward is weight-independent and the second pass settles it. In the
 //!   penalty zone the only variable is the amount's varint (one to ten
 //!   bytes): each pass moves the weight by at most nine bytes, so it
@@ -82,13 +84,11 @@
 //! # How it is tested, by design
 //!
 //! The validator is the falsifier. `tests` builds a template on a harness
-//! chain and passes it through `form → validate`; every landed 4.F/4.B/4.C
-//! row is a row the template can fail, and the coverage record says which
-//! rows judged it. What the validator has not landed (CEN-F18 waits on
-//! CEN-G6's median, slice 7) the tests state as the identity it will
-//! falsify — the amount equals the owners' split on the same operands —
-//! so the claim is written down where the row's landing will contradict
-//! it if the template drifts. Byte-parity with `create_block_template` is
+//! chain and passes it through `form → validate`; every landed row the
+//! template can fail is a row the coverage record must show. The coinbase
+//! amount is [`shekyl_economics::price_emission`]'s owed figure on the
+//! template's own operands, so the producer and the validator's derived
+//! arm share one composition. Byte-parity with `create_block_template` is
 //! a separate witness (`CHAIN_RULES_SLICE_6.md` §5.3), not this file's.
 
 use core::fmt;
@@ -99,8 +99,8 @@ use shekyl_crypto_pq::output::construct_output;
 use shekyl_crypto_pq::CryptoError;
 use shekyl_difficulty::is_timestamp_below_ftl;
 use shekyl_economics::{
-    compute_emission_split, compute_fee_burn, paid_block_reward, CirculatingSupply, EconomicParams,
-    EmissionError, FrozenSegmentCount, SupplyInvariantViolation, TxVolume,
+    price_emission, CirculatingSupply, EconomicParams, EmissionError, EmissionInputs,
+    FrozenSegmentCount, RewardArithmetic, SupplyInvariantViolation, TxVolume, REPRICING_PASSES,
 };
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, Timestamp, TxHash,
@@ -275,6 +275,10 @@ pub enum TemplateError {
     /// `miner_emission + miner_fee_income` overflows.
     #[error("coinbase amount overflows u64")]
     AmountOverflow,
+    /// `staker_emission + staker_pool_amount` overflows. The template
+    /// refuses to build a block CEN-G11 would refuse.
+    #[error("staker accrual overflows u64")]
+    AccrualOverflow,
     /// The block weight (bodies plus coinbase) does not fit `u64`.
     #[error("block weight overflows u64")]
     WeightOverflow,
@@ -324,11 +328,11 @@ pub enum TemplateError {
     },
 }
 
-/// The re-pricing budget: the C++ `try_count != 10` (`blockchain.cpp:1830`).
-/// Pinned to the same figure so the one reachable non-convergence — a
-/// varint-boundary two-cycle — is refused by both producers, never
-/// produced by one and declined by the other.
-pub const MAX_REPRICING_PASSES: usize = 10;
+/// The re-pricing budget, [`REPRICING_PASSES`]: the C++ `try_count != 10`
+/// (`blockchain.cpp:1830`). One number, defined beside the reward kernel,
+/// so a varint-boundary two-cycle is refused by both producers at the
+/// same budget.
+pub const MAX_REPRICING_PASSES: usize = REPRICING_PASSES;
 
 /// Build the template for `cx`. See the crate documentation for what the
 /// result satisfies by construction.
@@ -479,49 +483,50 @@ struct Paid {
     fees_burned: AtomicUnits,
 }
 
+/// Where [`RewardArithmetic`] lands on this crate's errors. The weight
+/// bound and the paid-reward overflow stay [`TemplateError::Emission`], the
+/// type callers already match; the coinbase sum is [`TemplateError::AmountOverflow`].
+fn reward_error(err: RewardArithmetic) -> TemplateError {
+    match err {
+        RewardArithmetic::BlockTooBig => TemplateError::Emission(EmissionError::BlockTooBig),
+        RewardArithmetic::RewardOverflow => TemplateError::Emission(EmissionError::Overflow),
+        RewardArithmetic::OwedOverflow => TemplateError::AmountOverflow,
+        RewardArithmetic::AccrualOverflow => TemplateError::AccrualOverflow,
+    }
+}
+
 /// Price the reward at `block_weight` and pay it in a coinbase.
+///
+/// The fee sum and the circulating supply are the caller's, computed
+/// before this runs: a `Null` body is not listable here, and a burned fold
+/// above the recorded emission is [`TemplateError::Supply`].
 fn price_and_pay(
     cx: &TemplateContext<'_>,
     block_weight: u64,
     total_fees: AtomicUnits,
 ) -> Result<Paid, TemplateError> {
     let e = &cx.emission;
-    // CEN-F13/F14/F15/F20: the penalised gross emission at this weight.
-    let block_reward = paid_block_reward(
-        e.median_weight,
-        block_weight,
-        e.already_generated_coins.to_raw(),
-        e.tx_volume,
-        cx.params,
-    )?;
-    // CEN-F16/F21: the miner's leg of the split.
-    let split = compute_emission_split(
-        block_reward,
-        cx.height.to_raw(),
-        e.emission_split_epoch.to_raw(),
-    );
-    // CEN-F17: the miner's share of the fees after the burn.
     let supply = CirculatingSupply::derive(e.already_generated_coins, e.total_burned)?;
-    let burn = compute_fee_burn(
-        total_fees.to_raw(),
-        e.tx_volume,
+    let priced = price_emission(&EmissionInputs {
+        height: cx.height.to_raw(),
+        median_weight: e.median_weight,
+        block_weight,
+        already_generated: e.already_generated_coins.to_raw(),
+        tx_volume: e.tx_volume,
+        total_fees: total_fees.to_raw(),
         supply,
-        e.frozen_segments,
-        cx.params,
-    );
-    // CEN-F18: the coinbase pays exactly this.
-    let amount = split
-        .miner_emission
-        .checked_add(burn.miner_fee_income)
-        .ok_or(TemplateError::AmountOverflow)?;
-
-    let coinbase = coinbase(cx, amount)?;
+        frozen_segments: e.frozen_segments,
+        split_epoch: e.emission_split_epoch.to_raw(),
+        params: cx.params,
+    })
+    .map_err(reward_error)?;
+    let coinbase = coinbase(cx, priced.owed.to_raw())?;
     Ok(Paid {
         coinbase,
-        block_reward: AtomicUnits::from_raw(block_reward),
-        miner_emission: AtomicUnits::from_raw(split.miner_emission),
-        miner_fee_income: AtomicUnits::from_raw(burn.miner_fee_income),
-        fees_burned: AtomicUnits::from_raw(burn.actually_destroyed),
+        block_reward: priced.paid,
+        miner_emission: AtomicUnits::from_raw(priced.split.miner_emission),
+        miner_fee_income: AtomicUnits::from_raw(priced.fee_burn.miner_fee_income),
+        fees_burned: priced.burned(),
     })
 }
 

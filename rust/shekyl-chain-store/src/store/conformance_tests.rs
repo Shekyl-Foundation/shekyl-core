@@ -50,7 +50,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, T
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{
-    candidate, facts, judge, spend, spend_at, FixtureSubstrate, FIRST_SPEND_HEIGHT,
+    candidate, judge, priced, spend, spend_at, FixtureSubstrate, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -189,22 +189,26 @@ fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Cand
     let mut previous = BlockHash::NULL;
     let mut blocks = Vec::new();
     for h in 0..len {
-        let cand = candidate(h, previous, Vec::new());
-        previous = cand.block.hash();
-        blocks.push(cand.clone());
+        // Priced against the store's view (the coinbase F18 owes, from
+        // height 1) before it is judged, so the candidate the mock records
+        // and the block the store connected are one object.
         let derived: Result<_, TestErr> = store.write(|batch| {
             let view = batch.chain_view();
+            let cand = priced(&view, candidate(h, previous, Vec::new()))?;
             let valid = judge(&view, cand.clone())?;
             let derived = (
+                cand,
                 valid.block().cumulative_difficulty(),
                 valid.block().root_after(),
                 *valid.block().weights(),
                 valid.block().emission().coins_generated,
             );
-            batch.connect(valid, facts(0), RuleSet::GENESIS)?;
+            batch.connect(valid, RuleSet::GENESIS)?;
             Ok(derived)
         });
-        let (work, root_after, weights, coins_generated) = derived.expect("connects");
+        let (cand, work, root_after, weights, coins_generated) = derived.expect("connects");
+        previous = cand.block.hash();
+        blocks.push(cand.clone());
         mock = mock
             .push_weighing(
                 RecordedBlock {
@@ -255,12 +259,16 @@ fn both(
 
 /// The shapes every landed view-bound rule can refuse or pass, each built
 /// on a chain of `len` blocks. Names are the row each shape exercises.
-fn shapes(len: u64, blocks: &[Candidate]) -> Vec<(&'static str, Candidate, Env)> {
+fn shapes(len: u64, blocks: &[Candidate], mock: &MockChain) -> Vec<(&'static str, Candidate, Env)> {
     let tip = blocks
         .last()
         .map(|b| b.block.hash())
         .unwrap_or(BlockHash::NULL);
-    let well_formed = candidate(len, tip, Vec::new());
+    // Priced over the **mock** (CEN-F18's coinbase): the store's view then
+    // judges a coinbase the mock priced, so the reads F17/F18 depend on —
+    // the accumulator, the burned fold, the leaf count, the medians — are
+    // reconciled by this comparison too, not only by the reads below.
+    let well_formed = fixture::repriced(mock, candidate(len, tip, Vec::new()));
     let mut out = vec![("well-formed", well_formed.clone(), Env::FIXTURE)];
 
     // A2: previous is not the tip.
@@ -340,7 +348,7 @@ fn every_landed_rule_judges_identically_over_batch_view_and_the_mock() {
             .unwrap_or(BlockHash::NULL);
         let seed = seed_for(len, genesis);
         let mut checked = 0;
-        for (name, cand, env) in shapes(len, &blocks) {
+        for (name, cand, env) in shapes(len, &blocks, &mock) {
             let (real, mocked) = both(&store, &mock, cand, &env, seed);
             // `Valid` carries the row list, so a drift in *which* rows ran
             // fails here even when the verdict matches.
@@ -407,7 +415,9 @@ fn a_drifted_mock_is_caught_by_the_comparison() {
             late_root,
         );
     }
-    let cand = candidate(3, blocks[2].block.hash(), Vec::new());
+    // Priced over the faithful mock (F18): the store must pass it, and the
+    // drifted mock refuses it on B5 before the reward chain runs.
+    let cand = fixture::repriced(&mock, candidate(3, blocks[2].block.hash(), Vec::new()));
     let seed = seed_for(3, blocks[0].block.hash());
     let (real, mocked) = both(&store, &drifted, cand, &Env::FIXTURE, seed);
     assert!(matches!(real, Outcome::Valid { .. }), "{real:?}");
@@ -650,7 +660,7 @@ fn the_harness_fixtures_are_the_same_shape_the_store_fixtures_build() {
     // `candidate_on` and the store's `candidate` drifting into different
     // header conventions that would make the comparison above vacuous.
     let (store, path, mock, blocks) = twin_chains(2);
-    let from_store = candidate(2, blocks[1].block.hash(), Vec::new());
+    let from_store = fixture::repriced(&mock, candidate(2, blocks[1].block.hash(), Vec::new()));
     let from_harness = fixture::candidate_on(&mock, Vec::new());
     assert_eq!(
         from_store.block.header.previous,

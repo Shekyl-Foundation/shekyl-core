@@ -8,9 +8,10 @@
 //!
 //! The port of `BlockchainDB::add_block` (`blockchain_db.cpp:435`) and the
 //! LMDB helpers it reaches, as one method on the batch that takes a
-//! [`ChainValid`] the validator alone can mint (C2-R8 Q3) and the
-//! consensus-visible values the store records and never derives (Q4,
-//! [`ConnectFacts`]). Every write is a declared verb through a handle bound
+//! [`ChainValid`] the validator alone can mint (C2-R8 Q3) — every
+//! consensus-visible value it records is the verdict's, and it derives
+//! none (Q4; the last handed-in fact left with E6 slice 7 wave B). Every
+//! write is a declared verb through a handle bound
 //! to its `SI-` row (§7.3), every write is journaled for `pop` (Q5), and the
 //! phases run in the C++ funnel's order so E3 (curve tree) and E4
 //! (archival) attach at the same points without re-opening this contract:
@@ -43,13 +44,14 @@
 //!
 //! Between the belts and the writes, `connect` widens the file's
 //! [`Provenance`](crate::provenance::Provenance) inside this batch's own
-//! transaction with two things a parity claim must know: the census rows
+//! transaction with what a parity claim must know: the census rows
 //! `in_force` enforces that the verdict's coverage did **not** evaluate
-//! (C2-R8 §9.4), and the [`ConnectFacts`] fields that were passed through
-//! rather than derived (SCW-1). Both are unions that never narrow; an
-//! aborted batch leaves no taint. A file with either non-empty is not
-//! parity evidence, and says which rows or fields have to land for it to
-//! become so.
+//! (C2-R8 §9.4). A union that never narrows; an aborted batch leaves no
+//! taint. A file with it non-empty is not parity evidence, and says which
+//! rows have to land for it to become so. (A second set — the fields the
+//! caller passed through rather than the validator derived, SCW-1 — was
+//! stamped beside it until E6 slice 7 wave B derived the last one; the
+//! cell and its vocabulary left the layout then, `SCHEMA_VERSION` 17.)
 //!
 //! # What the store keys by itself
 //!
@@ -75,21 +77,23 @@
 //! is SI-9, never a verdict.
 
 use shekyl_chain_rules::{ChainValid, RuleSet, TxIdentity};
-use shekyl_types::{BlockHash, BlockHeight, CommitmentBytes, OneTimePubkey, OutputIndexInTx};
+use shekyl_types::{
+    ArchivalLength, BlockHash, BlockHeight, CommitmentBytes, OneTimePubkey, OutputIndexInTx,
+};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::codec::{
-    stored_timelock, BlockBody, BlockInfo, Canonical, Coded, CoverageGaps, OutKey, OutTx,
-    PassedThroughFacts, Present, PropertyCell, Raw, RuleSetInForce, TotalBurnedCell, TxIndex,
-    TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
+    stored_timelock, BlockBody, BlockInfo, Canonical, Coded, CoverageGaps, OutKey, OutTx, Present,
+    PropertyCell, Raw, RuleSetInForce, TotalBurnedCell, TxIndex, TxOutputIndices,
+    TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
 };
 use crate::ids::{AmountIndex, OutputSlot, OutputStorageId, TxStorageId};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
     BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
-    OUTPUT_TXS, SPENT_KEYS, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE, TXS_PRUNABLE_HASH,
-    TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
+    OUTPUT_TXS, SPENT_KEYS, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE,
+    TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
 };
 
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
@@ -99,142 +103,17 @@ use super::prune::Pruned;
 use super::view::BatchView;
 use super::write::WriteBatch;
 
-/// Where a consensus-visible value came from (SCW-1).
-///
-/// The same mechanism as the validator's `RuleCoverage` (rows actually
-/// checked) and the file's `Provenance` (families actually applied), a
-/// third time: the store records what it is handed and stamps how it got
-/// it. When every field of [`ConnectFacts`] is `Derived`, this type and
-/// [`Fact`] are deleted, not left as a permanent `Derived` (rule 15).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Origin {
-    /// The validator derived it under the census row that defines it.
-    Derived,
-    /// The driver passed it through from another source — under DRS-E2's
-    /// parity replay, the LMDB `block_info` row of the block being
-    /// replayed. Not parity evidence for the field it carries.
-    PassedThrough,
-}
-
-/// One asserted value with its origin.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Fact<T> {
-    /// The value the store records.
-    pub value: T,
-    /// How the caller came by it.
-    pub origin: Origin,
-}
-
-impl<T> Fact<T> {
-    /// A value the validator derived.
-    pub const fn derived(value: T) -> Self {
-        Self {
-            value,
-            origin: Origin::Derived,
-        }
-    }
-
-    /// A value passed through from a non-validator source.
-    pub const fn passed_through(value: T) -> Self {
-        Self {
-            value,
-            origin: Origin::PassedThrough,
-        }
-    }
-}
-
-/// Which census rows derive a fact — and so delete its [`Fact`] wrapper.
-///
-/// Named on the type, so the store shows its own E6 dependency rather than
-/// only E6's plan showing it (`DRS_E1_SCHAIN_W.md` §3.2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DeletedBy {
-    /// The `ConnectFacts` field.
-    pub field: &'static str,
-    /// The census rows whose landing makes the field `Derived`.
-    pub rows: &'static [&'static str],
-    /// The DRS §7.5.2 E6 slice those rows arrive in.
-    pub slice: &'static str,
-}
-
-/// The consensus-visible values the store records and never derives
-/// (C2-R8 Q4) — exactly what `Blockchain` hands `BlockchainDB::add_block`
-/// today (`blockchain_db.cpp:435`–`:440`, `:664`; `blockchain.cpp:6157`),
-/// minus E4's `archival_budget_accrual`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ConnectFacts {
-    // `weight`, `long_term_weight` and `long_term_effective_median` left
-    // this struct 2026-09-28 (E6 slice 7 commit 5, CEN-G6/G6b): `validate`
-    // derives the medians and the block's weights and the verdict carries
-    // them (`ValidatedBlock::weights`), so `connect` reads them there.
-    // `coins_generated` left with them (CEN-F14b / G12: the paid reward
-    // and the advanced accumulator ride on `ValidatedBlock::emission`).
-    // `cumulative_difficulty` had gone first, 2026-09-19 (E6 slice 2,
-    // CEN-D4), then `root_after` (DRS-E3, `CTW-Q1`) — each the row or the
-    // writer that derives it deleting the pass-through, which is what
-    // `DELETED_BY` always said would happen.
-    /// This block's destroyed amount. `0` (and genesis, whatever its amount)
-    /// writes no `block_burn` row and no `total_burned` fold — LMDB's
-    /// absent-reads-as-0 convention and the `blockchain.cpp:6148` guard,
-    /// kept so the digest domain and the undo row match.
-    pub burned: Fact<AtomicUnits>,
-}
-
-impl ConnectFacts {
-    /// The fields, each with the rows that will derive it, in declaration
-    /// order. The table `DRS_E1_SCHAIN_W.md` §3.2 carries, as data — one
-    /// row left of seven.
-    pub const DELETED_BY: [DeletedBy; 1] = [
-        // `weight`, `long_term_weight`, `long_term_effective_median` —
-        // deleted by CEN-G6/G6b, slice 7 commit 4–5 (2026-09-28).
-        // `coins_generated` — deleted by CEN-F14b / G12 the same commit;
-        // the entry named CEN-F13/F14/F14b, and the accumulator's advance
-        // is G12's definition over F14b's paid reward.
-        // `cumulative_difficulty` — deleted by CEN-D4, slice 2, 2026-09-19.
-        // `root_after` — deleted by DRS-E3 (`CTW-Q1`), 2026-09-26.
-        DeletedBy {
-            field: "burned",
-            rows: &["CEN-F17", "CEN-G11"],
-            slice: "7 wave B (4.F / 4.G)",
-        },
-    ];
-
-    const fn origins(&self) -> [Origin; 1] {
-        [self.burned.origin]
-    }
-
-    /// The fields still passed through, each with the rows that will
-    /// delete it. Empty when every field is derived — the moment `Fact`
-    /// and `Origin` themselves are deleted.
-    ///
-    /// `count()` is **the set of facts the store does not derive**, not a
-    /// progress bar: it grows as facts are discovered (S-CHAIN-R added
-    /// `long_term_effective_median`, so it rose from six to seven when that
-    /// landed — `DRS_E1_SCHAIN_R.md` §3.6) and shrinks as the rows or the
-    /// writers that derive them land (E6 slice 2 deleted
-    /// `cumulative_difficulty`, seven back to six; DRS-E3 deleted
-    /// `root_after`, six to five; E6 slice 7 deleted the two weights, the
-    /// median and `coins_generated`, five to one). An increase is not a
-    /// regression; the items are the critical path.
-    pub fn passed_through(&self) -> impl Iterator<Item = DeletedBy> + '_ {
-        Self::DELETED_BY
-            .into_iter()
-            .zip(self.origins())
-            .filter(|(_, origin)| *origin == Origin::PassedThrough)
-            .map(|(field, _)| field)
-    }
-
-    /// The passed-through fields as the file records them (§3.8).
-    fn passed_through_set(&self) -> PassedThroughFacts {
-        PassedThroughFacts::of_positions(
-            self.origins()
-                .into_iter()
-                .enumerate()
-                .filter(|(_, origin)| *origin == Origin::PassedThrough)
-                .map(|(i, _)| i),
-        )
-    }
-}
+// `ConnectFacts`, `Fact`, `Origin` and `DeletedBy` lived here from S-CHAIN-W
+// commit 6 (2026-09-13) to E6 slice 7 wave B (2026-09-29): the
+// consensus-visible values the store recorded and never derived (C2-R8 Q4),
+// each stamped `Derived` or `PassedThrough` (SCW-1) and each named with the
+// census rows whose landing would delete it (`DRS_E1_SCHAIN_W.md` §3.2's
+// table, as data). Seven fields at the peak; `cumulative_difficulty` left
+// with CEN-D4 (slice 2), `root_after` with DRS-E3, the two weights, the
+// median and `coins_generated` with slice 7 commits 4–5, and `burned` — the
+// last — with CEN-F17 / G11. `connect` reads every one off the verdict now,
+// and the types went with their last field, as their own docs said they
+// would rather than survive as a permanent `Derived` (rule 15).
 
 /// What `connect` recorded. Nothing consensus-visible.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -283,7 +162,6 @@ impl<'id> WriteBatch<'_, 'id> {
     pub fn connect(
         &self,
         valid: ChainValid<'id, BatchView<'_, 'id>>,
-        facts: ConnectFacts,
         in_force: RuleSet,
     ) -> Result<Connected, StoreError> {
         // ---- 1. belts -------------------------------------------------
@@ -291,14 +169,16 @@ impl<'id> WriteBatch<'_, 'id> {
         // noted **before** any belt can fire: a violation here must halt
         // the writer at this height (§3.6.2), and the halt reads the noted
         // height — a belt that poisoned first would leave the writer live.
-        // The parent's `cumulative_tx_count` rides out of the same decoded
-        // tip row (§3.6): genesis has no parent and starts the count at 0.
-        let (height, parent_tx_count) = {
+        // The parent's `cumulative_tx_count` and `cumulative_archival_len`
+        // ride out of the same decoded tip row (§3.6): genesis has no parent
+        // and starts both at 0.
+        let (height, parent_tx_count, parent_archival_len) = {
             let tip = self.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?;
             let last = tip.last()?;
             let height = last.as_ref().map_or(0, |(h, _)| h.value() + 1);
             self.journal().note_height(height);
             let mut parent_tx_count = 0;
+            let mut parent_archival_len = ArchivalLength::ZERO;
             if let Some((_, info)) = last {
                 let info = info.value().decode().map_err(|cause| {
                     self.poison().arm(StoreInvariant::CellCorrupt {
@@ -310,8 +190,9 @@ impl<'id> WriteBatch<'_, 'id> {
                     return Err(self.poison().arm(StoreInvariant::TipMismatch));
                 }
                 parent_tx_count = info.cumulative_tx_count;
+                parent_archival_len = info.cumulative_archival_len;
             }
-            (height, parent_tx_count)
+            (height, parent_tx_count, parent_archival_len)
         };
         // Compared by **value** (d6ba4d98f; RD-Q10): Fakechain `Fixed`
         // reuses `RuleSetId::GENESIS`, so an id-only check would accept
@@ -352,18 +233,28 @@ impl<'id> WriteBatch<'_, 'id> {
             ),
         )
         .map_err(|e| self.arm_if_invariant(e))?;
-        header::widen_passed_through(self.txn(), facts.passed_through_set())
-            .map_err(|e| self.arm_if_invariant(e))?;
 
         let block = valid.block();
         let recording = self.record_undo(height);
 
         // ---- 2. transactions -------------------------------------------
+        // Each transaction's archival length folds onto the parent's in
+        // recording order — the order storage ids are issued — so the running
+        // value before a transaction is the offset it starts from (SHT-Q2).
         let (miner_identity, miner_tx) = block.miner_tx();
-        let mut rct_outputs = self.record_tx(height, miner_identity, miner_tx, true)?;
+        let miner = self.record_tx(height, miner_identity, miner_tx, true)?;
+        let mut rct_outputs = miner.rct;
+        let mut archival_len = parent_archival_len.checked_add(miner.archival_len);
         for (identity, tx) in block.transactions() {
-            rct_outputs += self.record_tx(height, *identity, tx, false)?;
+            let recorded = self.record_tx(height, *identity, tx, false)?;
+            rct_outputs += recorded.rct;
+            archival_len = archival_len.and_then(|len| len.checked_add(recorded.archival_len));
         }
+        let cumulative_archival_len = archival_len
+            .ok_or(StoreInvariant::FoldOverflow {
+                cell: "block_info.cumulative_archival_len",
+            })
+            .map_err(|row| self.poison().arm(row))?;
 
         // ---- 3. tree (DRS-E3; `grow.rs`) --------------------------------
         self.record_drain(height, &valid)?;
@@ -422,6 +313,8 @@ impl<'id> WriteBatch<'_, 'id> {
             // carry no other: `Medians::derive` reads the window that ends
             // at the connecting height.
             long_term_effective_median: weights.medians.long_term_effective_median,
+            // Store-derived running total (SHT-Q2), folded above under SI-8.
+            cumulative_archival_len,
         };
         self.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?
             .insert(height, info.encoded().as_encoded())?;
@@ -438,11 +331,13 @@ impl<'id> WriteBatch<'_, 'id> {
             .insert(height, RuleSetInForce(in_force.id()).encoded().as_encoded())?;
 
         // ---- 8. burn ---------------------------------------------------
-        // Conditional as a whole, exactly as `blockchain.cpp:6148`
-        // (`new_height > 0 && block_burn_amount > 0`): a zero-burn block and
-        // genesis write neither row nor a `total_burned` pre-image, so the
-        // declared write set and the undo row are the C++'s.
-        let burned = facts.burned.value;
+        // The verdict's (CEN-F17 / G11: the fee split the validator priced
+        // over its own parent-state reads; E6 slice 7 wave B). Conditional
+        // as a whole, exactly as `blockchain.cpp:6148` (`new_height > 0 &&
+        // block_burn_amount > 0`): a zero-burn block and genesis write
+        // neither row nor a `total_burned` pre-image, so the declared write
+        // set and the undo row are the C++'s.
+        let burned = block.emission().burned();
         if height > 0 && burned != AtomicUnits::ZERO {
             self.open_insert_table(BLOCK_BURN, StoreInvariant::TipMismatch)?
                 .insert(height, burned.encoded().as_encoded())?;
@@ -474,15 +369,16 @@ impl<'id> WriteBatch<'_, 'id> {
     }
 
     /// One transaction's rows (`add_transaction` / `add_transaction_data` /
-    /// `add_output` / `add_tx_amount_output_indices`). Returns how many of
-    /// its outputs count toward `block_info.rct_outputs`.
+    /// `add_output` / `add_tx_amount_output_indices`), plus its archival
+    /// length row. Returns what the block row folds: how many of its outputs
+    /// count toward `block_info.rct_outputs`, and its archival length.
     fn record_tx(
         &self,
         height: u64,
         identity: TxIdentity,
         tx: &Transaction,
         miner: bool,
-    ) -> Result<u64, StoreError> {
+    ) -> Result<RecordedTx, StoreError> {
         let tx_hash = identity.hash;
         let emission = tx
             .prefix
@@ -559,6 +455,16 @@ impl<'id> WriteBatch<'_, 'id> {
             self.open_insert_table(TXS_PQC_AUTH_HASH, StoreInvariant::IdNotFresh)?
                 .insert(tx_id.to_raw(), pqc_auth_hash.encoded().as_encoded())?;
         }
+        // The archival length (SHT-Q2): measured on the two segments just
+        // written, so the row and the bytes a prune discards are one
+        // serialization. Sparse — present ⇔ `> 0` ⇔ the transaction carries
+        // archival good (pinned class by class in `shekyl-chain-rules`'
+        // `tx_domain_tests`) — and permanent: a prune never deletes it.
+        let archival_len = segments.archival_len();
+        if archival_len > ArchivalLength::ZERO {
+            self.open_insert_table(TXS_ARCHIVAL_LEN, StoreInvariant::IdNotFresh)?
+                .insert(tx_id.to_raw(), archival_len.encoded().as_encoded())?;
+        }
 
         // Outputs: `output_txs` by global id, `output_amounts` under
         // `(amount, amount_index)` with the amount zeroed for miner /
@@ -623,8 +529,16 @@ impl<'id> WriteBatch<'_, 'id> {
                 tx_id.to_raw(),
                 TxOutputIndices(indices).encoded().as_encoded(),
             )?;
-        Ok(rct)
+        Ok(RecordedTx { rct, archival_len })
     }
+}
+
+/// What one transaction's rows contribute to its block's `block_info` row.
+struct RecordedTx {
+    /// Outputs counted toward `block_info.rct_outputs`.
+    rct: u64,
+    /// Its archival length, folded into `block_info.cumulative_archival_len`.
+    archival_len: ArchivalLength,
 }
 
 /// Next store-derived id for a unique-key primary. Dense iff the table is

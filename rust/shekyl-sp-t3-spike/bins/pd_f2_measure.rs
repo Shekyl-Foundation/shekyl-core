@@ -63,7 +63,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use shekyl_p_fetch::max_body_bytes;
-use shekyl_sp_t3_spike::fixture::ShardFixture;
+use shekyl_sp_t3_spike::fixture::{size_ladder, ShardFixture};
 use shekyl_sp_t3_spike::harness::Apparatus;
 use shekyl_sp_t3_spike::measure::{
     attempts_within_budget, churn_table, l_verdict, p99, summarize, sweep_round_indices,
@@ -263,6 +263,11 @@ fn report(arm: &str, obs: &[Observation]) {
     }
 }
 
+/// How many objects the arms rotate across.
+fn objects_len(shard_count: u64) -> usize {
+    usize::try_from(shard_count).expect("object count fits usize")
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tor = env_path("SHEKYL_SPIKE_TOR")
@@ -274,6 +279,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let warm_n = env_usize("SHEKYL_SPIKE_WARM", 100);
     let conc_n = env_usize("SHEKYL_SPIKE_CONC", 50);
     let hours = env_usize("SHEKYL_SPIKE_HOURS", 0);
+    // The multi-size W₂ run (ARCHIVAL_SHARD_T_DERIVATION.md §4.1): serve the
+    // shard at 1×, ½× and ¼× and rotate the cold and soak arms across them, so
+    // every size meets the same Tor conditions over the same hours.
+    let ladder = env_usize("SHEKYL_SPIKE_SIZE_LADDER", 0) != 0;
 
     // Loud, first: no synthetic fallback exists, so a missing fixture stops the
     // run here rather than producing a number about the wrong payload.
@@ -285,24 +294,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "bringing up a client tor and {personas} personas, each behind its own tor ({} bootstraps, in parallel)...",
         personas + 1
     );
+    let objects = if ladder {
+        size_ladder(&fixture)
+    } else {
+        vec![fixture.bytes()]
+    };
+    let object_bytes: Vec<usize> = objects.iter().map(|o| o.len()).collect();
+    let shard_count = u64::try_from(objects.len())?;
     let app = Arc::new(
-        Apparatus::bring_up(
+        Apparatus::bring_up_objects(
             tor,
             dir.path().join("tor-data"),
             u32::try_from(personas)?,
-            fixture.bytes(),
+            objects,
         )
         .await?,
     );
+    // Rows name the arm, and in ladder mode the object's byte count with it;
+    // still no timestamp, ordinal, persona or circuit (module doc).
+    let label = |arm: &str, shard: u64| -> String {
+        if ladder {
+            let bytes = object_bytes[usize::try_from(shard).expect("shard fits usize")];
+            format!("{arm}@{bytes}")
+        } else {
+            arm.to_owned()
+        }
+    };
 
     // The expected body length is the apparatus's to know, not this binary's
     // to pass: it is derived from the payload through the production serving
     // contract (RF-D4's frame included), so no caller here can hand in a
     // number that the wire has since moved away from.
-    println!(
-        "served body: {} bytes (frame + shard)",
-        app.expected_body_len()
-    );
+    for shard in 0..shard_count {
+        println!(
+            "served body, shard {shard}: {} bytes (frame + object)",
+            app.expected_body_len_of(shard).expect("a served shard")
+        );
+    }
     let publish = app.await_reachable().await?;
     println!(
         "personas cold-reachable after {:.1} s (publication + HSDir propagation — EXCLUDED from every arm)",
@@ -320,15 +348,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // (§6.2). This is the faithful model of a drawn miner dialling a `P` it has
     // never dialled, and is expected to dominate the tail. The ten-second
     // NEWNYM spacing is paid *outside* the clock.
-    let mut cold = Vec::new();
-    for i in 0..cold_n {
+    // In ladder mode the arm rotates across the objects, `cold_n` fetches of
+    // each; `cold` below keeps shard 0's rows, which the `L` verdict reads.
+    let mut cold_by_shard: Vec<Vec<Observation>> = (0..shard_count).map(|_| Vec::new()).collect();
+    for i in 0..cold_n * objects_len(shard_count) {
+        let shard = u64::try_from(i).expect("index fits u64") % shard_count;
         app.rotate_client_circuits().await?;
-        cold.push(app.timed_fetch(0).await);
+        let obs = app.timed_fetch_shard(0, shard).await;
+        append_rows(&mut out, &label("cold", shard), std::slice::from_ref(&obs));
+        cold_by_shard[usize::try_from(shard).expect("shard fits usize")].push(obs);
         if (i + 1) % 10 == 0 {
-            println!("  cold {}/{cold_n}", i + 1);
+            println!("  cold {}/{}", i + 1, cold_n * objects_len(shard_count));
         }
     }
-    append_rows(&mut out, "cold", &cold);
+    for (shard, obs) in cold_by_shard.iter().enumerate().skip(1) {
+        report(
+            &format!(
+                "cold (NEWNYM before each), {}",
+                label("object", shard as u64)
+            ),
+            obs,
+        );
+    }
+    let cold = cold_by_shard.swap_remove(0);
     report("cold (NEWNYM before each), single stream", &cold);
     let cold_summary = summarize(&cold);
 
@@ -406,22 +448,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if hours > 0 {
         println!("\nsoak arm: {hours} h of spaced cold fetches...");
         let until = Instant::now() + Duration::from_secs(hours as u64 * 3600);
-        let mut soak = Vec::new();
+        let mut soak_by_shard: Vec<Vec<Observation>> =
+            (0..shard_count).map(|_| Vec::new()).collect();
+        let mut n: u64 = 0;
         while Instant::now() < until {
+            let shard = n % shard_count;
+            n += 1;
             app.rotate_client_circuits().await?;
-            soak.push(app.timed_fetch(0).await);
+            let obs = app.timed_fetch_shard(0, shard).await;
             // Flush EVERY observation, not every 25th. A 24 h run on a dev box is
             // a run that gets killed, and the doc comment on `append_rows`
             // promises a killed run still leaves what it earned -- a 25-row
             // buffer would make that promise false by up to 24 observations plus
             // the whole summary.
-            append_rows(&mut out, "soak", &soak[soak.len() - 1..]);
-            if soak.len() % 25 == 0 {
-                println!("  soak n={}", soak.len());
+            append_rows(&mut out, &label("soak", shard), std::slice::from_ref(&obs));
+            soak_by_shard[usize::try_from(shard).expect("shard fits usize")].push(obs);
+            if n.is_multiple_of(25) {
+                println!("  soak n={n}");
             }
             tokio::time::sleep(Duration::from_secs(30)).await;
         }
-        report("soak (>=24h target)", &soak);
+        for (shard, obs) in soak_by_shard.iter().enumerate() {
+            report(
+                &format!("soak (>=24h target), {}", label("object", shard as u64)),
+                obs,
+            );
+        }
     }
 
     // Apparatus cross-check: the endpoints must have served what the client leg

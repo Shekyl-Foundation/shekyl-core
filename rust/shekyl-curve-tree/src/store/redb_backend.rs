@@ -11,13 +11,17 @@ use std::sync::Arc;
 use redb::backends::InMemoryBackend;
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
-use crate::segment::{leaves_per_segment, segment_freeze_eligible, SegmentId, LEAF_BYTES};
+use crate::segment::{
+    leaves_per_segment, segment_freeze_eligible, SegmentId, LEAF_BYTES,
+    SEGMENT_FREEZE_REORG_MARGIN_BLOCKS,
+};
 use crate::served_frame::ServedFrameHeader;
 use crate::store::ops::{
     full_build_root, mixed_composition_root, recompute_segment_r_k, MixedRootError,
 };
 use crate::types::{
-    BlockHeight, Gindex, GindexKey, LeafEntry, TargetKind, TreePosition, TreePositionKey,
+    BlockHeight, BlockHeightKey, Gindex, GindexKey, LeafEntry, TargetKind, TreePosition,
+    TreePositionKey,
 };
 use shekyl_fcmp::tree::{hash_grow_selene, selene_hash_init, SCALARS_PER_LEAF};
 
@@ -37,6 +41,33 @@ const PINNED_SEGMENTS_TABLE: TableDefinition<SegmentId, u32> =
 // re-encoding. Rows enter on block ingest, leave on drain
 // (`append_block_deltas`) or on the rollback creation-height filter.
 const PENDING_TABLE: TableDefinition<GindexKey, &[u8; 320]> = TableDefinition::new("pending");
+// CT-6 increment 4's snapshot ring: the curve-tree frontier as it stood
+// after each ingested block, keyed by that block's height. Variable-width —
+// a frontier is its partial chunks, which are shorter than their capacities
+// until they fold — so the value is `&[u8]` rather than a fixed array, and
+// `Frontier::max_encoded_len` is the bound rather than the size.
+//
+// The ring is TOTAL over `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` and bounded by
+// it: `append_block_with_snapshot` writes the height it ingests and, in the
+// same transaction, removes what has fallen out of the horizon. There is no
+// eviction policy to hold, because the write and the removal are one step
+// (CT-6 Q1, RULED 2026-09-28). The run it keeps is `[h - horizon, h]` —
+// closed at the bottom, because the deepest legal reorg's FORK sits at
+// `h - horizon` and that is the row a rewind restores from
+// (`write_frontier_snapshot_in_txn`).
+//
+// A store that has none of these rows — a freshly re-synced one — needs no
+// migration: the ring is a cache (C8), a missing row falls through to
+// `root_at_count`, and the ring refills as blocks arrive.
+//
+// That is not backward compatibility. A pre-ring (≤5) store is **refused at
+// open** and re-synced; `SCHEMA_VERSION` is 6 precisely so it is, because a
+// pre-ring **writer** cannot see this table and can roll back and replay
+// while leaving rows above the new tip in place, where a stale row can hold
+// the expected leaf count over the abandoned branch's root. A binding
+// replaces a check only per direction.
+const FRONTIER_SNAPSHOTS_TABLE: TableDefinition<BlockHeightKey, &[u8]> =
+    TableDefinition::new("frontier_snapshots");
 // `META_TABLE` is a heterogeneous `&str`-keyed counter store; its `u64`
 // values convert to `BlockHeight`/counts at the API boundary. This is the
 // one legitimate raw-`u64` value site in the store.
@@ -80,7 +111,27 @@ const META_PRUNE_DISABLED: &str = "prune_disabled";
 /// would resume into a baffling root mismatch. Pre-genesis disposition for
 /// any mismatch: delete the store and re-sync (`15-deletion-and-debt.mdc` —
 /// no in-Shekyl migration code).
-const SCHEMA_VERSION: u64 = 5;
+///
+/// **6** adds the CT-6 increment-4 frontier snapshot ring. **A ≤5 store is
+/// refused at open and must be re-synced** — [`Self::check_schema_version`]
+/// runs before `init_tables`, so no ≤5 store ever reaches the code that would
+/// create this table. That is C8's `refuse-and-resync`, and it is the whole
+/// upgrade path; there is no one-way migration and none is wanted pre-genesis
+/// (rule 15).
+///
+/// What the ring being a **cache** buys is not compatibility but the *absence
+/// of migration code*: after the resync the table starts empty, every height
+/// falls through to `root_at_count`, and the ring refills as blocks arrive. No
+/// row has to be reconstructed from anything.
+///
+/// The bump exists to stop a ≤5 **writer**: a pre-ring binary does not know
+/// [`FRONTIER_SNAPSHOTS_TABLE`], so it can roll back and replay without
+/// truncating it, and a stale row left at a replayed height can carry the
+/// expected leaf count while composing the abandoned branch's root. Nothing
+/// in-band can stop a writer that cannot see the table, so the version cell
+/// is the only mechanism that closes it, and refusing the store is exactly
+/// C8's `refuse-and-resync`.
+const SCHEMA_VERSION: u64 = 6;
 
 /// The CT-3a layout version: same byte layout as [`SCHEMA_VERSION`] 3 but
 /// without the maintained-pending-table contract. Test-only — production
@@ -564,6 +615,23 @@ pub enum StoreError {
         /// Version this build reads and writes.
         expected: u64,
     },
+    /// A frontier snapshot was offered for a height strictly below the store's
+    /// `sync_tip`.
+    ///
+    /// [`LeafStore::append_block_deltas`] tolerates a non-monotonic
+    /// `tip_height` for the freeze clock (`effective_tip` takes the max).
+    /// A snapshot does not: [`LeafStore::append_block_with_snapshot`] refuses
+    /// `tip_height < sync_tip`. Equality stays legal because the cell is
+    /// born at `0`, and block 0 is a real first capture — `<=` would refuse
+    /// genesis. A height below the tip would land under the retention floor
+    /// and still widen `frontier_snapshot_span`. Refused rather than evicted
+    /// around: eviction would hide the caller bug that produced the row.
+    SnapshotBelowSyncTip {
+        /// The height the snapshot was offered for.
+        tip: u64,
+        /// The store's current sync tip.
+        sync_tip: u64,
+    },
 }
 
 impl StoreError {
@@ -682,6 +750,7 @@ impl LeafStore {
         txn.open_table(OWNED_IDENTITIES_TABLE)?;
         txn.open_table(PINNED_SEGMENTS_TABLE)?;
         txn.open_table(PENDING_TABLE)?;
+        txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
             if meta.get(META_LEAF_COUNT)?.is_none() {
@@ -714,6 +783,9 @@ impl LeafStore {
         // A missed table here leaves stale pending rows that would corrupt
         // a subsequent `from_blocks` rebuild — pinned by the clear test.
         txn.delete_table(PENDING_TABLE)?;
+        // The ring is derived from the leaves being wiped here; a surviving
+        // row would answer a height the rebuilt chain has not reached.
+        txn.delete_table(FRONTIER_SNAPSHOTS_TABLE)?;
         txn.delete_table(META_TABLE)?;
         txn.commit()?;
         self.init_tables()
@@ -986,12 +1058,65 @@ impl LeafStore {
     ///
     /// All-empty deltas still advance the tip and freeze clock, exactly
     /// like the empty [`Self::append_drained`] of CT-1/CT-2.
+    ///
+    /// This write does not touch the snapshot ring. Production ingest, which
+    /// captures a frontier at every height, uses
+    /// [`Self::append_block_with_snapshot`]. A caller that passed an optional
+    /// snapshot here could omit it and leave a hole the ring's totality
+    /// depends on not existing.
     pub fn append_block_deltas(
         &self,
         drained: &[LeafEntry],
         pending_added: &[LeafEntry],
         pending_removed: &[Gindex],
         tip_height: BlockHeight,
+    ) -> Result<(), StoreError> {
+        self.write_block_deltas(drained, pending_added, pending_removed, tip_height, None)
+    }
+
+    /// [`Self::append_block_deltas`] plus one frontier snapshot, in the same
+    /// transaction.
+    ///
+    /// `frontier_snapshot` is required. The height this method commits is a
+    /// height the ring covers. Callers that populate only the segment tier
+    /// — the verify-edge baseline, the segment-freeze tests — stay on
+    /// [`Self::append_block_deltas`], which cannot write a ring row.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::SnapshotBelowSyncTip`] when `tip_height` is strictly
+    /// below the store's sync tip, plus every error of
+    /// [`Self::append_block_deltas`]. The refusal happens before any write.
+    pub fn append_block_with_snapshot(
+        &self,
+        drained: &[LeafEntry],
+        pending_added: &[LeafEntry],
+        pending_removed: &[Gindex],
+        tip_height: BlockHeight,
+        frontier_snapshot: &[u8],
+    ) -> Result<(), StoreError> {
+        self.write_block_deltas(
+            drained,
+            pending_added,
+            pending_removed,
+            tip_height,
+            Some(frontier_snapshot),
+        )
+    }
+
+    /// Shared body of [`Self::append_block_deltas`] and
+    /// [`Self::append_block_with_snapshot`].
+    ///
+    /// `frontier_snapshot` is `Some` only on the snapshot method, whose
+    /// argument is required. The leaf and pending writes are one
+    /// implementation so the two doors cannot drift.
+    fn write_block_deltas(
+        &self,
+        drained: &[LeafEntry],
+        pending_added: &[LeafEntry],
+        pending_removed: &[Gindex],
+        tip_height: BlockHeight,
+        frontier_snapshot: Option<&[u8]>,
     ) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         let mut leaf_count = {
@@ -1035,15 +1160,29 @@ impl LeafStore {
                 pending.insert(GindexKey::from(entry.gindex), &encode_pending(entry))?;
             }
         }
-        let effective_tip = {
+        let (sync_tip, effective_tip) = {
             let meta = txn.open_table(META_TABLE)?;
             let sync_tip = meta.get(META_SYNC_TIP)?.map(|v| v.value()).unwrap_or(0);
-            tip_height.to_raw().max(sync_tip)
+            (sync_tip, tip_height.to_raw().max(sync_tip))
         };
+        // The ring is keyed by the height it captures, so a snapshot offered
+        // below the tip would land under the retention floor and still widen
+        // the span. Checked before anything is written, so the refusal leaves
+        // the store untouched.
+        if frontier_snapshot.is_some() && tip_height.to_raw() < sync_tip {
+            return Err(StoreError::SnapshotBelowSyncTip {
+                tip: tip_height.to_raw(),
+                sync_tip,
+            });
+        }
+
         {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_LEAF_COUNT, &leaf_count)?;
             meta.insert(META_SYNC_TIP, &effective_tip)?;
+        }
+        if let Some(bytes) = frontier_snapshot {
+            Self::write_frontier_snapshot_in_txn(&txn, tip_height, bytes)?;
         }
         let next_freeze_seg = Self::maybe_freeze_segments_in_txn(&txn, effective_tip, leaf_count)?;
         {
@@ -1052,6 +1191,121 @@ impl LeafStore {
         }
         txn.commit()?;
         Ok(())
+    }
+
+    /// Write `height`'s frontier snapshot and drop everything that has
+    /// fallen below the horizon, inside the caller's transaction.
+    ///
+    /// The horizon **is** [`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`] — read from
+    /// the one JSON authority through the constant, never restated (C4). The
+    /// removal is the whole of the ring's bound: after writing `h`, the rows
+    /// present are exactly `[h - horizon, h]`, so the row count is a
+    /// consequence of this pair of statements rather than of a policy
+    /// something else has to enforce.
+    ///
+    /// **Why the run is closed at the bottom, and it is not an off-by-one to
+    /// tidy away.** A reorg of depth `horizon` *replaces* that many blocks,
+    /// so its fork height is `h - horizon` — the block the replaced ones
+    /// build on — and `rollback_to_fork` restores the live frontier from the
+    /// row **at** the fork. A half-open `(h - horizon, h]` drops exactly that
+    /// row, and the deepest legal rewind — the one case the bound exists for
+    /// — would take the fold path instead. So the covered run is one height
+    /// per replaceable block *plus* the one they fork from.
+    ///
+    /// A range delete rather than a single `remove` of `h - horizon - 1`,
+    /// because exactly one row leaves only when the ring was already full and
+    /// contiguous. After a rollback the tip re-advances over heights whose
+    /// rows this call overwrites, and after a resume onto a store written by
+    /// a build without the table there is no row at all — in both cases a
+    /// point delete would leave rows the horizon no longer covers.
+    fn write_frontier_snapshot_in_txn(
+        txn: &redb::WriteTransaction,
+        height: BlockHeight,
+        bytes: &[u8],
+    ) -> Result<(), StoreError> {
+        let mut ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+        ring.insert(BlockHeightKey::from(height), bytes)?;
+        let Some(first_covered) = height
+            .to_raw()
+            .checked_sub(SEGMENT_FREEZE_REORG_MARGIN_BLOCKS)
+        else {
+            return Ok(());
+        };
+        // `first_covered` is `h - horizon`, the deepest legal reorg's fork
+        // height — kept. The delete is strictly below it.
+        ring.retain_in(
+            ..BlockHeightKey::from(BlockHeight::from_raw(first_covered)),
+            |_, _| false,
+        )?;
+        Ok(())
+    }
+
+    /// The frontier snapshot the ring holds for `height`, if the ring covers
+    /// it.
+    ///
+    /// `None` is "outside the ring", never "the tier failed": a store error
+    /// stays an error. The caller decides what an uncovered height falls
+    /// through to; this method does not fall back, because a fallback here
+    /// would make a ring that never captured anything indistinguishable from
+    /// one that is working.
+    pub fn frontier_snapshot_at(&self, height: BlockHeight) -> Result<Option<Vec<u8>>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+        Ok(ring
+            .get(BlockHeightKey::from(height))?
+            .map(|v| v.value().to_vec()))
+    }
+
+    /// Replace one ring row, or remove it when `bytes` is `None`.
+    ///
+    /// The discriminator CT-6 increment 4's consumer tests need: correct
+    /// capture and correct restore produce the same bytes either way, so
+    /// only a row the test *changed* can show which one a reader used.
+    /// Test-only, and not behind a feature: nothing outside this crate's own
+    /// test build can reach it.
+    #[cfg(test)]
+    pub(crate) fn test_set_frontier_snapshot(
+        &self,
+        height: BlockHeight,
+        bytes: Option<&[u8]>,
+    ) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+            match bytes {
+                Some(bytes) => {
+                    ring.insert(BlockHeightKey::from(height), bytes)?;
+                }
+                None => {
+                    ring.remove(BlockHeightKey::from(height))?;
+                }
+            }
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Heights the ring currently covers, as `(lowest, highest)`, or `None`
+    /// when it holds no rows.
+    ///
+    /// The span is read off the rows rather than computed from the tip, so a
+    /// caller that asks whether the ring covers a height is answered by what
+    /// the ring **has**. Deriving the span from `sync_tip - horizon` would
+    /// claim coverage for every height in the window including the ones a
+    /// pre-ring store never wrote.
+    pub fn frontier_snapshot_span(&self) -> Result<Option<(BlockHeight, BlockHeight)>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+        let Some(first) = ring.first()? else {
+            return Ok(None);
+        };
+        let last = ring
+            .last()?
+            .ok_or(StoreError::CorruptMeta("ring has a first row but no last"))?;
+        Ok(Some((
+            BlockHeight::from(first.0.value()),
+            BlockHeight::from(last.0.value()),
+        )))
     }
 
     /// All pending (not yet drained) leaves, in gindex order — the resume
@@ -1271,6 +1525,16 @@ impl LeafStore {
     pub fn truncate_from_tree_position(&self, pos: TreePosition) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         Self::truncate_internals(&txn, pos, BlockHeight::from_raw(0))?;
+        {
+            // This entry point resets the tip to 0 while leaving `pos`
+            // leaves in place, so even the row at height 0 would describe a
+            // leaf count the store no longer has. The ring goes entirely,
+            // rather than down to the new tip: sync is invalidated here, and
+            // a ring that survived it would answer heights this store can no
+            // longer place on a chain.
+            let mut ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+            ring.retain(|_, _| false)?;
+        }
         txn.commit()?;
         Ok(())
     }
@@ -1360,6 +1624,21 @@ impl LeafStore {
                     ))?;
                 }
             }
+        }
+        {
+            // Every snapshot above the new tip describes a tree state this
+            // truncation has just removed. They go in the SAME transaction,
+            // so no committed store ever holds a ring row for a height it
+            // has rolled back past.
+            let mut ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+            let above = BlockHeightKey::from(new_tip);
+            ring.retain_in(
+                (
+                    core::ops::Bound::Excluded(above),
+                    core::ops::Bound::Unbounded,
+                ),
+                |_, _| false,
+            )?;
         }
         let next_freeze_seg = recompute_next_freeze_seg(txn, pos)?;
         {
@@ -2404,6 +2683,50 @@ mod tests {
         assert_eq!(pending_gindexes(&store), vec![4]);
         assert_eq!(store.leaf_count().unwrap(), 1);
         assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(70));
+    }
+
+    #[test]
+    fn a_snapshot_below_the_sync_tip_is_refused_and_leaves_the_ring_alone() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        let snapshot = b"a frontier's bytes".as_slice();
+        store
+            .append_block_with_snapshot(&[], &[], &[], BlockHeight::from_raw(100), snapshot)
+            .unwrap();
+        assert_eq!(
+            store.frontier_snapshot_span().unwrap(),
+            Some((BlockHeight::from_raw(100), BlockHeight::from_raw(100))),
+            "the control write must land, or the refusal below proves nothing"
+        );
+
+        // A non-monotonic append is tolerated for the freeze clock, so this
+        // call would otherwise succeed and insert a row at height 90 —
+        // widening the span downward past what the ring's own bound placed.
+        let err = store
+            .append_block_with_snapshot(&[], &[], &[], BlockHeight::from_raw(90), snapshot)
+            .expect_err("a snapshot below the sync tip is a caller bug");
+        assert!(
+            matches!(
+                err,
+                StoreError::SnapshotBelowSyncTip {
+                    tip: 90,
+                    sync_tip: 100
+                }
+            ),
+            "expected SnapshotBelowSyncTip(tip=90, sync_tip=100), got: {err:?}"
+        );
+        assert_eq!(
+            store.frontier_snapshot_span().unwrap(),
+            Some((BlockHeight::from_raw(100), BlockHeight::from_raw(100))),
+            "the refusal must leave the ring exactly as it was"
+        );
+
+        // The same stale height WITHOUT a snapshot still works: the freeze
+        // clock's tolerance is untouched, so this refusal is scoped to the
+        // ring rather than narrowing the append contract.
+        store
+            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(90))
+            .expect("a snapshot-free stale append is still legal");
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(100));
     }
 
     #[test]

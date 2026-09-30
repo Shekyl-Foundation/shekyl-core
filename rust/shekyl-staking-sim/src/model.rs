@@ -211,11 +211,19 @@ impl EraShape {
     }
 }
 
+/// `T = 200`, the transaction-count partition the composition model was
+/// registered under (L19a–L19j, `STAKER_ARCHIVAL_SIM.md`). `SHT-Q2` (RULED
+/// 2026-09-29) retired it: shards are cut by archival length, so a shard's
+/// bytes are `W` to within one transaction and the per-shard size dispersion
+/// this axis models is no longer a property of the protocol (F34 closes by
+/// dissolution). Held here rather than read from the protocol so the
+/// registered runs reproduce byte for byte.
+const REGISTERED_SHARD_TX_COUNT: f64 = 200.0;
+
 impl CompositionParams {
-    /// `T`, read from the partition constant rather than duplicated
-    /// (`shekyl_types::SHARD_TX_COUNT`).
+    /// `T` as the registered runs read it ([`REGISTERED_SHARD_TX_COUNT`]).
     fn shard_tx_count() -> f64 {
-        shekyl_types::SHARD_TX_COUNT as f64
+        REGISTERED_SHARD_TX_COUNT
     }
 
     /// Neither axis is on.

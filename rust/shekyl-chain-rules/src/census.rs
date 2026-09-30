@@ -388,25 +388,41 @@ census_rows! {
         F14b implemented(crate::rules::reward::F14b),
         F15 implemented(crate::rules::miner::F15),
         F16 implemented(crate::rules::reward::F16),
-        F17 pending,
-        F18 pending,
+        F17 implemented(crate::rules::reward::F17),
+        F18 implemented(crate::rules::reward::F18),
         F19 by_construction(crate::view::ChainView, "doctest:validate"),
         F20 implemented(crate::rules::miner::F20),
         F21 by_construction(crate::rules::miner::EMISSION_SPLIT_EPOCH, "the_emission_split_epoch_is_the_hardfork_tables_first_row"),
         // 4.G Block body (per-tx and block-level, main-chain connect)
-        G1 pending,
-        G2 pending,
-        G3 pending,
-        G4 pending,
-        G5 pending,
+        G1 implemented(crate::rules::body::G1),
+        G2 implemented(crate::rules::body::G2),
+        /// `validate` runs `tx_form` on **every** listed body, whatever door
+        /// the ingest brought it through; there is no pool path into
+        /// `validate` and no "already verified" set, so a body failing an H
+        /// row refuses the block (slice 7 §5 row 8). Falsified through
+        /// `validate` on a listed body with no inputs.
+        G3 by_construction(crate::validate::validate, "h4_a_listed_transaction_with_no_inputs_is_refused"),
+        /// `tx_against` on every slot, unconditionally. The C++'s hash-gated
+        /// skip of the FCMP re-verify for admission-verified bytes (CEN-M8)
+        /// is a *cost* behaviour — a proof re-verified over identical bytes
+        /// has the same verdict — not a rule; **do not build a cache to
+        /// match it** (slice 7 §3.2). Falsified through `validate` on a
+        /// listed spend of a spent image.
+        G4 by_construction(crate::validate::validate, "i7_at_a_listed_slot_the_refusal_names_the_slot"),
+        /// A pruned body has no weight; the C++ refuses the block. In Rust the
+        /// storage-pruned form cannot reach a block rule: `Transaction` is
+        /// the full form, and a body missing its prunable region is refused
+        /// by `tx_form` at both sites — on **H18**, the balance whose
+        /// pseudo-outs went with the region (slice 7 §3.3, measured).
+        G5 by_construction(shekyl_wire::Transaction, "g5_the_storage_pruned_spend_is_refused_before_any_block_rule_sees_it"),
         G6 implemented(crate::rules::block_weight::G6),
         G6b implemented(crate::rules::block_weight::G6b),
-        G7 pending,
-        G9 pending,
-        G10 pending,
-        G11 pending,
+        G7 implemented(crate::rules::body::G7),
+        G9 implemented(crate::rules::body::G9),
+        G10 implemented(crate::rules::body::G10),
+        G11 implemented(crate::rules::reward::G11),
         G12 implemented(crate::rules::reward::G12),
-        G13 pending,
+        G13 implemented(crate::rules::reward::G13),
         // 4.H Transaction: non-input consensus, semantics, outputs
         H1 implemented(crate::rules::tx::H1),
         H2 by_construction(shekyl_wire::transaction::TX_VERSION, "f2_the_wire_admits_one_transaction_version"),

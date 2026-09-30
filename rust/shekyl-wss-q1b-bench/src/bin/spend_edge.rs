@@ -18,6 +18,8 @@
 use std::process::ExitCode;
 
 use clap::Parser;
+use shekyl_curve_tree::SEGMENT_FREEZE_REORG_MARGIN_BLOCKS;
+use shekyl_wss_q1b_bench::advance::AdvanceRig;
 use shekyl_wss_q1b_bench::corpus;
 use shekyl_wss_q1b_bench::corpus::{
     worst_case_leaves_per_block, CANONICAL_INPUTS, CANONICAL_OUTPUTS, HELD_BUFFER_BLOCKS,
@@ -28,7 +30,8 @@ use shekyl_wss_q1b_bench::fixture::{
     synth_sparse_path, ControlExperiment, Path,
 };
 use shekyl_wss_q1b_bench::report::{
-    emit, ProverPin, SpendBudget, SpendCorpus, SpendEdgeRecord, Verdict, SCHEMA_VERSION,
+    emit, LoadControl, ProverPin, SpendBudget, SpendCorpus, SpendEdgeRecord, Verdict,
+    BLOCK_TARGET_S, SCHEMA_VERSION,
 };
 use shekyl_wss_q1b_bench::rig::{self, Environment, StorageAttestation};
 use shekyl_wss_q1b_bench::timing::{
@@ -59,6 +62,16 @@ struct Args {
     /// which is the reason the sparse path exists at all.
     #[arg(long = "control-depth", default_values_t = [4u8, 5u8])]
     control_depths: Vec<u8>,
+
+    /// Directory the advance rig's ring store is created in.
+    ///
+    /// The ring commit is an fsync'd disk write, so on the pinned rig this
+    /// has to land on the attested storage rather than wherever `TMPDIR`
+    /// points — which on a Pi is the OS microSD or a tmpfs, neither of which
+    /// is what §6.3.4's storage pin is about. Defaults to the system
+    /// temporary directory, which is correct off-rig and wrong on it.
+    #[arg(long)]
+    advance_store_dir: Option<std::path::PathBuf>,
 
     /// Leaves to replay. Defaults to the worst-case window at `--depth`.
     #[arg(long)]
@@ -170,6 +183,18 @@ fn main() -> ExitCode {
     let window_leaves = args
         .window_leaves
         .unwrap_or(leaf_rate.leaves_per_block * REPLAY_WINDOW_BLOCKS);
+    // Before any series, and before the rig's own assert. A window under one
+    // block makes `replayed_blocks` zero and the retired quotient meaningless;
+    // clamping the denominator would report a corpus the run did not have.
+    if window_leaves < leaf_rate.leaves_per_block {
+        eprintln!(
+            "refusing: the corpus holds {window_leaves} leaves, shorter than one worst-case \
+             block ({}). The retired quotient divides by the blocks that corpus covers, and a \
+             window under one block is not one.",
+            leaf_rate.leaves_per_block
+        );
+        return ExitCode::from(2);
+    }
 
     let mut controls: Vec<ControlExperiment> = Vec::new();
     for depth in &args.control_depths {
@@ -197,6 +222,23 @@ fn main() -> ExitCode {
     // ratio -- it is a depth dependence, which is exactly what would make the
     // extrapolation to the grading depth unsafe.
     let sparse_licensed = !controls.is_empty() && controls.iter().all(|c| c.sparse_equals_dense);
+    // The same controls, read for a second question. Both arms do identical
+    // work, so their divergence is the board rather than the workload — and
+    // the advance is load-sensitive in a way this harness learned the
+    // expensive way (a superseded record whose model term was 63 % slower for
+    // the same work). Zero controls is not quiet: a run with no control has
+    // not measured its board.
+    let load_control = LoadControl::over(
+        controls.iter().map(|c| (c.divergence_pct, c.converged)),
+        CONTROL_TOLERANCE_PCT,
+    );
+    if !load_control.quiet {
+        eprintln!(
+            "   [BOARD NOT QUIET — controls diverge up to {:+.1} % against a {:.1} % bound over \
+             {} control(s); the advance figure is load-sensitive and cannot be graded]",
+            load_control.max_divergence_pct, load_control.tolerance_pct, load_control.controls
+        );
+    }
     let deepest_control = controls.iter().map(|c| c.tree_depth).max().unwrap_or(0);
     // Flatness across adjacent rungs licenses THE NEXT ONE, and no further --
     // and *flatness* needs two rungs to exist. A single control shows the
@@ -248,6 +290,79 @@ fn main() -> ExitCode {
             std::hint::black_box(replay(&corpus));
         },
     );
+
+    // ── CT-6 Q4: the ADVANCE, measured rather than modelled ─────────────
+    // One iteration is one worst-case block through the built advance. The
+    // series sits beside the replay series because they share this run's
+    // board. The measured advance is the quantity a later run may compare.
+    // The ratio of the two is a printed observation of this run; it is not
+    // an extrapolation input, and an off-rig ratio does not speak for the
+    // pinned rig.
+    // The storage attestation names a device; this names the path the ring is
+    // actually written to. `rig::decide` can only check the attestation's
+    // *value*, so without this the two are unbound: a graded run could attest
+    // `usb-ssd` while the ring's `fsync` landed on the microSD or tmpfs that
+    // `TMPDIR` resolves to on the pinned board — a label keying a gate must be
+    // bound to the mechanism it claims.
+    if !rig::storage_attestation_is_bound(rig_verdict.grading, args.advance_store_dir.as_deref()) {
+        eprintln!(
+            "refusing to grade: --advance-store-dir is required, because the ring commit is an \
+             fsync and the storage attestation cannot bind itself to a path it was not given"
+        );
+        return ExitCode::from(3);
+    }
+    let mut advance_rig = AdvanceRig::new(
+        &corpus,
+        leaf_rate.leaves_per_block,
+        args.advance_store_dir.as_deref(),
+    );
+    // Untimed, and before the series: an advance that has not filled the
+    // ring evicts nothing, so a run started from empty grades a regime the
+    // steady state never occupies. Outside `MAX_WALL_SECONDS` because the
+    // budget guards the measurement, not its setup.
+    eprintln!(
+        "── CT-6 Q4: filling the ring to steady state ({} blocks, untimed) ──",
+        SEGMENT_FREEZE_REORG_MARGIN_BLOCKS + 1
+    );
+    advance_rig.prefill_to_steady_state();
+    let advance_series = sustained_within_conditioned(
+        args.warmup,
+        DEFAULT_TOLERANCE_PCT,
+        MAX_WALL_SECONDS,
+        args.min_conditioning_s,
+        || advance_rig.advance_one_block(),
+    );
+    // **Printed here, before anything downstream can refuse.** The refusals
+    // below the advance -- an unlicensed sparse path, a dense fallback at the
+    // wrong depth -- are about the spend-edge BUDGET, whose denominator this
+    // figure does not depend on, and they return before `emit`. A run that
+    // took the advance measurement and then discarded it because the prover
+    // arm could not be graded would lose the one quantity `CT-6 Q4` asks for.
+    eprintln!(
+        "── CT-6 Q4 advance: {:.2} ms/block over {} blocks at {} leaves/block \
+         (converged: {}, {}) ──",
+        advance_series.graded_s() * 1000.0,
+        advance_rig.blocks_advanced(),
+        leaf_rate.leaves_per_block,
+        advance_series.converged,
+        advance_series.stopped_because
+    );
+    // Rule 47: the series is only evidence if the rig advanced. A closure
+    // that had silently done nothing would produce a fast, converged,
+    // meaningless median.
+    if advance_rig.blocks_advanced() == 0
+        || advance_rig.timed_leaves_folded()
+            != advance_rig.blocks_advanced() * leaf_rate.leaves_per_block
+    {
+        eprintln!(
+            "the advance rig folded {} timed leaves over {} blocks at {} leaves/block; refusing \
+             the record",
+            advance_rig.timed_leaves_folded(),
+            advance_rig.blocks_advanced(),
+            leaf_rate.leaves_per_block
+        );
+        return ExitCode::from(3);
+    }
 
     // ── delta, part 2: path read-off and `Path` construction ────────────
     let layers = replay(&corpus);
@@ -327,11 +442,41 @@ fn main() -> ExitCode {
     }
 
     let replay_median = replay_series.graded_s();
+    // Blocks the replayed corpus actually covers. Divided in floating point:
+    // `--window-leaves` takes arbitrary values, and integer division would
+    // discard a partial final block from the denominator — reporting 1.5
+    // blocks of replay as 1 and inflating the per-block quotient by half.
+    // A window shorter than one block was refused before any series started,
+    // so this denominator is at least 1.
+    let replayed_blocks = window_leaves as f64 / leaf_rate.leaves_per_block as f64;
+    // The retired model, printed beside the measurement for this run only.
+    // The measured advance is what a later run may compare; this quotient is
+    // an observation of the replay on this board.
+    eprintln!(
+        "── CT-6 Q4 retired model: {:.2} ms/block (replay {:.3} s over {replayed_blocks} \
+         blocks) -> measured is {:.2}x ──",
+        replay_median / replayed_blocks * 1000.0,
+        replay_median,
+        advance_series.graded_s() / (replay_median / replayed_blocks)
+    );
     let delta_s = replay_median + path_series.graded_s();
     // §5.2's contract: an unconverged series is REPORTED, never substituted for
     // a converged one. Grading an unconverged median would do exactly the
     // substitution the `stopped_because` field exists to make visible.
     let all_converged = replay_series.converged && path_series.converged && prove_series.converged;
+    // A grade asserts the figure is a property of the work. The controls are
+    // the run's own evidence for or against that, and a busy board biases the
+    // advance rather than merely widening it — so this refuses where the claim
+    // is made, and only there. Armed before its subject exists: the graded run
+    // is increment 6's.
+    if rig_verdict.grading && !load_control.quiet {
+        eprintln!(
+            "refusing to grade: the run's controls diverge up to {:+.1} % against a {:.1} % \
+             bound, so the advance figure cannot be claimed as a property of the work",
+            load_control.max_divergence_pct, load_control.tolerance_pct
+        );
+        return ExitCode::from(3);
+    }
     if rig_verdict.grading && !all_converged {
         eprintln!(
             "not grading: a timing series did not converge (replay: {}, path: {}, proving: {})",
@@ -381,9 +526,25 @@ fn main() -> ExitCode {
         path_construction: path_series,
         proving: prove_series,
         budget,
-        // The replay term alone over the window it covers -- path construction
-        // is not per-block work and would inflate it.
-        per_block_advance_worst_case_s: replay_median / REPLAY_WINDOW_BLOCKS as f64,
+        // CT-6 Q4: the MEASURED advance, not a share of the replay. The
+        // retired quotient rides beside it so the two are comparable on this
+        // machine; see `SCHEMA_VERSION`'s v3 note.
+        per_block_advance_worst_case_s: advance_series.graded_s(),
+        per_block_advance: advance_series.clone(),
+        // The denominator is the blocks THIS corpus covers, not the constant.
+        // At the default window the two are the same number by construction
+        // (`worst_case_window_leaves` is `leaves_per_block * REPLAY_WINDOW_BLOCKS`).
+        // They part company under `--window-leaves`, and the constant form
+        // then divided a shrunken replay by the full window — a quotient
+        // smaller than the corpus supports, emitted under a worst-case name.
+        per_block_advance_retired_quotient_s: replay_median / replayed_blocks,
+        per_block_advance_provenance:
+            "measured: frontier fold + snapshot encode + ring commit, per worst-case block \
+             (CT-6 increment 4). NOT replay_median / replayed_blocks \
+             (window_leaves / leaves_per_block), which rides as \
+             per_block_advance_retired_quotient_s",
+        per_block_advance_load_control: load_control,
+        per_block_advance_cadence_fraction: advance_series.graded_s() / BLOCK_TARGET_S,
         controls: controls.clone(),
         paths_verified: paths_verified && controls.iter().all(|c| c.both_verified),
         proxy_note: "replay proxy: leaf-layer hashing exact (dominant ~38x); \
@@ -507,8 +668,21 @@ fn summarize(record: &SpendEdgeRecord, controls: &[ControlExperiment]) {
     );
     eprintln!("  DELTA          {:.3} s", b.delta_s);
     eprintln!(
-        "  per block      {:.0} ms  (amortized frontier advance, worst case)",
-        record.per_block_advance_worst_case_s * 1000.0
+        "  per block      {:.1} ms  (MEASURED advance: fold + capture + ring commit; \
+         converged: {})",
+        record.per_block_advance_worst_case_s * 1000.0,
+        record.per_block_advance.converged
+    );
+    eprintln!(
+        "                 {:.1} ms  (retired model: replay / window) -> measured is \
+         {:.2}x the model",
+        record.per_block_advance_retired_quotient_s * 1000.0,
+        record.per_block_advance_worst_case_s / record.per_block_advance_retired_quotient_s
+    );
+    eprintln!(
+        "                 {:.2} % of a {:.0} s block",
+        record.per_block_advance_cadence_fraction * 100.0,
+        BLOCK_TARGET_S
     );
     eprintln!(
         "  proving        {:.3} s (converged: {})",

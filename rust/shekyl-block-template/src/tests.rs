@@ -18,12 +18,13 @@ use shekyl_chain_rules::harness::{
 };
 use shekyl_chain_rules::{
     form, validate, Candidate, CenRow, ChainView, FormAttempt, Locus, RuleSet, Trust,
+    EMISSION_SPLIT_EPOCH,
 };
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_difficulty::{CumulativeDifficulty, FTL_SECONDS, GENESIS_DIFFICULTY};
 use shekyl_economics::{
-    compute_emission_split, compute_fee_burn, paid_block_reward, CirculatingSupply, EconomicParams,
-    FrozenSegmentCount, TxVolume, FULL_REWARD_ZONE,
+    price_emission, CirculatingSupply, EconomicParams, EmissionInputs, FrozenSegmentCount,
+    TxVolume, FULL_REWARD_ZONE,
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, Timestamp};
 use shekyl_units::AtomicUnits;
@@ -114,7 +115,7 @@ fn genesis_era_emission() -> EmissionOperands {
         median_weight: FULL_REWARD_ZONE,
         tx_volume: TxVolume::ZERO,
         frozen_segments: FrozenSegmentCount::ZERO,
-        emission_split_epoch: BlockHeight::from_raw(1),
+        emission_split_epoch: EMISSION_SPLIT_EPOCH,
     }
 }
 
@@ -181,14 +182,15 @@ fn admitted(chain: &MockChain, template: Template) -> Vec<CenRow> {
 
 /// The 4.F rows the validator has landed: every one of them judged the
 /// template, and none refused it. F14, F14b and F16 landed with slice 7
-/// commit 5 (the reward chain after the medians) and judge every template,
-/// the genesis one included — its arm records them as evaluated. The rows
-/// this list still omits (F17, F18) are wave B's and are held by
-/// construction below until they land; when they land they belong here.
-/// The 4.G rows that judge a template (G6, G6b, G12) are the validator's
-/// chain-side definitions, held to the corpus by the ingest's oracles, not
-/// miner rows — this list is the producer/validator ratchet on 4.F.
-const LANDED_MINER_ROWS: [CenRow; 11] = [
+/// commit 5 (the reward chain after the medians); F17 and F18 with slice 7
+/// wave B (2026-09-29) — every template is now held by the validator to
+/// the exact payout it priced, the genesis one included (its arm records
+/// F17/F18 as evaluated: nothing listed, nothing owed beyond the
+/// configured amount). The 4.G rows that judge a template (G6, G6b, G11,
+/// G12, G13) are the validator's chain-side definitions, held to the
+/// corpus by the ingest's oracles, not miner rows — this list is the
+/// producer/validator ratchet on 4.F.
+const LANDED_MINER_ROWS: [CenRow; 13] = [
     CenRow::F1,
     CenRow::F3,
     CenRow::F4,
@@ -200,6 +202,8 @@ const LANDED_MINER_ROWS: [CenRow; 11] = [
     CenRow::F14,
     CenRow::F14b,
     CenRow::F16,
+    CenRow::F17,
+    CenRow::F18,
 ];
 
 #[test]
@@ -215,6 +219,35 @@ fn the_genesis_template_is_admitted_and_judged_by_every_landed_miner_row() {
             "{row} did not judge the genesis template"
         );
     }
+}
+
+/// CEN-G13 on the producer's side: the genesis template pays the whole
+/// priced reward — no staker leg is split off at height 0, because the
+/// validator accrues none (F11 takes the configured coinbase entire). The
+/// same operands one block later split; the pair is asserted together so
+/// the arm cannot quietly widen to height 1 or narrow to nothing. Found by
+/// slice 7 commit 5 (a driver-built genesis paid only the miner leg of a
+/// share nobody accrued), closed by wave B.
+#[test]
+fn the_genesis_template_pays_the_reward_whole_and_the_next_height_splits_it() {
+    let params = EconomicParams::default();
+    let miner = miner();
+    let genesis = build(&context(&MockChain::default(), &params, &miner, &[])).expect("builds");
+    assert_eq!(
+        genesis.miner_emission, genesis.block_reward,
+        "G13: no staker leg at genesis"
+    );
+    assert_eq!(
+        genesis.block.miner_transaction.prefix.outputs[0].amount,
+        genesis.block_reward.to_raw()
+    );
+    let next = build(&context(&chain_of(1), &params, &miner, &[])).expect("builds");
+    assert!(
+        next.miner_emission < next.block_reward,
+        "from height 1 the staker share is split off: {} of {}",
+        next.miner_emission.to_raw(),
+        next.block_reward.to_raw()
+    );
 }
 
 #[test]
@@ -283,10 +316,9 @@ fn the_coinbase_has_one_gen_input_at_the_connecting_height_and_one_output() {
 
 #[test]
 fn the_coinbase_pays_exactly_the_miners_leg_of_the_split_plus_its_fee_share() {
-    // CEN-F18 over F13/F14/F15/F16/F17/F20. The validator's row is pending
-    // on G6 (slice 7); until it lands, this is the identity it will
-    // falsify, computed here from the owners on the template's own
-    // operands — including the weight the template reports it priced at.
+    // CEN-F18: the coinbase and every figure the template publishes are
+    // `price_emission` on the template's own operands, including the weight
+    // it reports it priced at. `admitted` above is the validator's half.
     let params = EconomicParams::default();
     let miner = miner();
     let chain = chain_of(2);
@@ -301,39 +333,41 @@ fn the_coinbase_pays_exactly_the_miners_leg_of_the_split_plus_its_fee_share() {
             Ct::Null(_) => unreachable!("fixture spends carry a fee"),
         })
         .sum();
-    let reward = paid_block_reward(
-        cx.emission.median_weight,
-        template.block_weight,
-        cx.emission.already_generated_coins.to_raw(),
-        cx.emission.tx_volume,
-        &params,
+    let supply = CirculatingSupply::derive(
+        cx.emission.already_generated_coins,
+        cx.emission.total_burned,
     )
-    .expect("priceable");
-    let split = compute_emission_split(reward, cx.height.to_raw(), 1);
-    let supply =
-        CirculatingSupply::derive(AtomicUnits::ZERO, AtomicUnits::ZERO).expect("consistent");
-    let burn = compute_fee_burn(
-        fees,
-        cx.emission.tx_volume,
+    .expect("the context's supply is consistent");
+    let priced = price_emission(&EmissionInputs {
+        height: cx.height.to_raw(),
+        median_weight: cx.emission.median_weight,
+        block_weight: template.block_weight,
+        already_generated: cx.emission.already_generated_coins.to_raw(),
+        tx_volume: cx.emission.tx_volume,
+        total_fees: fees,
         supply,
-        FrozenSegmentCount::ZERO,
-        &params,
-    );
+        frozen_segments: cx.emission.frozen_segments,
+        split_epoch: cx.emission.emission_split_epoch.to_raw(),
+        params: &params,
+    })
+    .expect("the kernel prices the template's operands");
 
-    let paid = template.block.miner_transaction.prefix.outputs[0].amount;
     assert_eq!(
-        paid,
-        split.miner_emission + burn.miner_fee_income,
+        template.block.miner_transaction.prefix.outputs[0].amount,
+        priced.owed.to_raw(),
         "CEN-F18"
     );
     assert_eq!(template.total_fees.to_raw(), fees);
+    assert_eq!(template.block_reward, priced.paid);
     assert_eq!(
-        template.block_reward.to_raw(),
-        reward,
-        "CEN-F13's generation figure"
+        template.miner_emission.to_raw(),
+        priced.split.miner_emission
     );
-    assert_eq!(template.miner_emission.to_raw(), split.miner_emission);
-    assert_eq!(template.miner_fee_income.to_raw(), burn.miner_fee_income);
+    assert_eq!(
+        template.miner_fee_income.to_raw(),
+        priced.fee_burn.miner_fee_income
+    );
+    assert_eq!(template.fees_burned, priced.burned());
 }
 
 #[test]
@@ -576,24 +610,33 @@ fn bodies_weighing_over(target: u64) -> Vec<Transaction> {
     (0..count).map(|k| spend(point_at(1_000 + k), 16)).collect()
 }
 
-/// The coinbase amount the template pays at `block_weight` with
-/// `already_generated` — the owners' composition on the test's operands
-/// (zero fees, zero volume, genesis-era split).
+/// The coinbase amount [`price_emission`] owes at `block_weight` with
+/// `already_generated` — the kernel, on this test's operands (zero fees,
+/// zero volume, the shipped split epoch).
 fn amount_at(
     block_weight: u64,
     already_generated: u64,
     height: u64,
     params: &EconomicParams,
 ) -> u64 {
-    let reward = paid_block_reward(
-        FULL_REWARD_ZONE,
+    let supply =
+        CirculatingSupply::derive(AtomicUnits::from_raw(already_generated), AtomicUnits::ZERO)
+            .expect("zero burn does not exceed the emission");
+    price_emission(&EmissionInputs {
+        height,
+        median_weight: FULL_REWARD_ZONE,
         block_weight,
         already_generated,
-        TxVolume::ZERO,
+        tx_volume: TxVolume::ZERO,
+        total_fees: 0,
+        supply,
+        frozen_segments: FrozenSegmentCount::ZERO,
+        split_epoch: EMISSION_SPLIT_EPOCH.to_raw(),
         params,
-    )
-    .expect("in the penalty zone, below twice the median");
-    compute_emission_split(reward, height, 1).miner_emission
+    })
+    .expect("in the penalty zone, below twice the median")
+    .owed
+    .to_raw()
 }
 
 #[test]

@@ -54,7 +54,7 @@ use shekyl_types::BlockHeight;
 
 use crate::corpus::CorpusReader;
 use crate::metrics::Metrics;
-use crate::mutation::{Environment, Mutation, Unmutable};
+use crate::mutation::{ArchivalKind, Before, Environment, Mutation, Unmutable};
 use crate::pipeline::{run, PipelineConfig, RunReport};
 use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
@@ -64,8 +64,6 @@ use crate::test_support::{cleanup, open_store, tmp};
 use crate::trace::Trace;
 use shekyl_chain_rules::Candidate;
 use shekyl_pow_randomx::CacheStore;
-use shekyl_wire::Input;
-
 /// `manifest.json`, as the capture writes it (format 2).
 #[derive(Deserialize, Debug)]
 struct Manifest {
@@ -291,11 +289,16 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // The expected value is Shekyl's ratified composition (FL-R12′: the
     // release-modulated, tail-floored emission under C2-R2 Q4's penalty,
     // `paid_block_reward`), which the C++ marshals; the C++ is the oracle
-    // only insofar as it agrees with that.
+    // only insofar as it agrees with that. CEN-F17 / G11 (wave B): the
+    // verdict's burn against the C++'s `block_burn` at the same heights —
+    // the fee split over the FL-R16c supply and the escalation operand,
+    // held wherever a captured block carries a fee. And every one of these
+    // coinbases connected under CEN-F18: the C++ paid exactly what the
+    // Rust derives it owed.
     assert_eq!(
         report.emission.compared(),
         manifest.block_count,
-        "{}: {} of {} heights had a recorded accumulator to compare against",
+        "{}: {} of {} heights had a recorded accumulator and burn to compare against",
         manifest.shape,
         report.emission.compared(),
         manifest.block_count
@@ -303,9 +306,9 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     let diverged: Vec<_> = report.emission.diverged().collect();
     assert!(
         diverged.is_empty(),
-        "{} ({}): the derived accumulator differs from the daemon's at {} height(s), first at \
-         {:?} — a FINDING about CEN-F14b / G12's derivation, adjudicated against the ratified \
-         composition, never a fixture problem",
+        "{} ({}): the derived accumulator or burn differs from the daemon's at {} height(s), \
+         first at {:?} — a FINDING about CEN-F14b / G12 or CEN-F17 / G11's derivation, \
+         adjudicated against the ratified composition, never a fixture problem",
         manifest.shape,
         manifest.generator,
         diverged.len(),
@@ -421,7 +424,8 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
         hold(&dir, &manifest, &report);
         eprintln!(
             "{}: {} blocks connected, digest MATCH at {}, roots MATCH at all {} heights, weights \
-             MATCH at all {} heights, accumulator MATCH at all {} heights, rows exercised: {}",
+             MATCH at all {} heights, accumulator and burn MATCH at all {} heights, rows \
+             exercised: {}",
             manifest.shape,
             report.connected.len(),
             manifest.tip_height,
@@ -467,49 +471,37 @@ fn note(causes: &mut Vec<Unmutable>, cause: Unmutable) {
         causes.push(cause);
     }
 }
-
-/// The key images a candidate's listed bodies spend.
-fn key_images_of(candidate: &Candidate) -> impl Iterator<Item = [u8; 32]> + '_ {
-    candidate
-        .transactions
-        .iter()
-        .flat_map(|tx| tx.prefix.inputs.iter())
-        .filter_map(|input| match input {
-            Input::ToKey { key_image, .. } => Some(*key_image),
-            _ => None,
-        })
-}
-
-/// Every candidate of one captured chain in connect order, with the key
-/// images spent strictly below it — the two operands `Mutation::apply`
-/// takes. A `Rewind` truncates, as the pipeline would, and the spent set
-/// after it is the retained tip's **post-block** state: its `spent_before`
-/// plus its own images (the first cut took `spent_before` alone, which
-/// would have called a `DoubleSpend` of the retained tip's image
-/// `NothingSpentBefore` — Copilot on #880; no captured chain rewinds, so
-/// the census's answer did not move).
-fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Vec<[u8; 32]>)> {
+/// Every candidate of one captured chain in connect order, with what the
+/// chain strictly below it established (`Before`: the key images spent,
+/// the first listed body) — the operands `Mutation::apply` takes. A
+/// `Rewind` truncates, as the pipeline would, and the state after it is
+/// the retained tip's **post-block** state: its `before` plus its own
+/// contribution (the first cut took `spent_before` alone, which would have
+/// called a `DoubleSpend` of the retained tip's image `NothingSpentBefore`
+/// — Copilot on #880; no captured chain rewinds, so the census's answer
+/// did not move).
+fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let mut reader =
         CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
     let mut height = reader.first_height().to_raw();
-    let mut chain: Vec<(u64, Candidate, Vec<[u8; 32]>)> = Vec::new();
-    let mut spent: Vec<[u8; 32]> = Vec::new();
+    let mut chain: Vec<(u64, Candidate, Before)> = Vec::new();
+    let mut below = Before::default();
     while let Some(event) = reader.next().expect("corpus reads") {
         match event.event {
             IngestEvent::Extend(candidate) => {
-                let before = spent.clone();
-                spent.extend(key_images_of(&candidate));
+                let before = below.clone();
+                below.remember(&candidate);
                 chain.push((height, *candidate, before));
                 height += 1;
             }
             IngestEvent::Rewind { to } => {
                 chain.truncate(usize::try_from(to.to_raw() + 1).expect("small"));
-                spent = match chain.last() {
-                    None => Vec::new(),
+                below = match chain.last() {
+                    None => Before::default(),
                     Some((_, tip, before)) => {
                         let mut after = before.clone();
-                        after.extend(key_images_of(tip));
+                        after.remember(tip);
                         after
                     }
                 };
@@ -536,9 +528,14 @@ fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Vec<[u8; 32]>)> {
 #[test]
 fn the_family_over_the_corpus_names_what_it_cannot_reach() {
     let chains = captured_chains();
+    // A corpus chain brings no spare bodies and no twins, and the bound
+    // is the validator's: the weight and the two signed-twin mutations
+    // are `Unmutable` here by construction, and the census says so below.
     let env = Environment {
         clock: MockSubstrate::CLOCK,
         pow: None,
+        overweight: None,
+        twins: &[],
     };
     // Per mutation (by its position in `Mutation::ALL`): `Some(causes)`
     // while it has been unreachable on every chain so far, `None` once one
@@ -556,8 +553,8 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
         for (i, mutation) in Mutation::ALL.into_iter().enumerate() {
             let mut causes = Vec::new();
             let mut reach = None;
-            for (height, candidate, spent_before) in &candidates {
-                match mutation.apply(candidate.clone(), &env, spent_before, h(*height)) {
+            for (height, candidate, before) in &candidates {
+                match mutation.apply(candidate.clone(), &env, before, h(*height)) {
                     Ok(_) => {
                         reach = Some(Reach::Applies { first: *height });
                         break;
@@ -595,22 +592,52 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
         .zip(everywhere_unmutable)
         .filter_map(|(m, causes)| causes.map(|c| (m, c)))
         .collect();
-    // One entry, and the census says whose. `PowUnderWrongSeed` is the
-    // environment's: this census carries no PoW leg. `ReorderedBodies` was
-    // the corpus's until 2026-09-28 — every captured block listed at most
-    // one body (slice 6 §5 row 8 measured it; slice 7 §3.7 names the class)
-    // — and is reachable since the `median-full` capture (slice 7 commit
-    // 4 (c)): its block 211 lists 23 bodies, so the one mutation that needs
-    // two has a corpus witness there, first at 211, and `DoubleSpend` a
-    // witness at 212 on a chain whose spends are its subject. A change here
-    // is a change in the corpus's shape or in the family, and §3.7 moves
-    // with it.
+    // Five entries, and the census says whose — the environment's or the
+    // corpus's, never the family's. `PowUnderWrongSeed`: this census
+    // carries no PoW leg. `OverweightBlock`: no body supply — the corpus
+    // census judges captured blocks as they are. `DuplicateClaim` and
+    // `DuplicateBondPost`: this census supplies no twins, and the *other*
+    // cause on each — `NoArchivalBodyToDuplicate` — is the heights that
+    // carry no claim or no post, which is a reading of the corpus: the
+    // emission-claim and bond-post captures do carry the bodies, so a twin
+    // supply would reach both. `DuplicateServeCredit` needs no supply (its
+    // twin is the body itself) and is unreachable on the corpus alone: no
+    // captured chain carries a serve credit. `ReorderedBodies` was the
+    // corpus's until 2026-09-28 — every captured block listed at most one
+    // body (slice 6 §5 row 8 measured it; slice 7 §3.7 names the class) —
+    // and is reachable since the `median-full` capture (slice 7 commit
+    // 4 (c)): its block 211 lists 23 bodies, so the mutations that need two
+    // have a corpus witness there. A change here is a change in the
+    // corpus's shape or in the family, and §3.7 moves with it.
+    let supplied_twin = |kind: ArchivalKind| {
+        vec![
+            Unmutable::NoArchivalBodyToDuplicate { kind },
+            Unmutable::NoTwinSupplied { kind },
+        ]
+    };
     assert_eq!(
         unreachable,
-        vec![(
-            Mutation::PowUnderWrongSeed,
-            vec![Unmutable::NoPowEnvironment]
-        )],
+        vec![
+            (
+                Mutation::PowUnderWrongSeed,
+                vec![Unmutable::NoPowEnvironment]
+            ),
+            (
+                Mutation::DuplicateServeCredit,
+                vec![Unmutable::NoArchivalBodyToDuplicate {
+                    kind: ArchivalKind::ServeCredit
+                }]
+            ),
+            (
+                Mutation::DuplicateClaim,
+                supplied_twin(ArchivalKind::EmissionClaim)
+            ),
+            (
+                Mutation::DuplicateBondPost,
+                supplied_twin(ArchivalKind::BondPost)
+            ),
+            (Mutation::OverweightBlock, vec![Unmutable::NoBodySupply]),
+        ],
         "the mutations no captured chain can carry, with why"
     );
 }

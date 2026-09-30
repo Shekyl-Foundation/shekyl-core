@@ -116,19 +116,19 @@ use crate::schema;
 use super::{
     post_image, AltBlock, AltBlockFacts, ArrivedPhase, BlockInfo, BlockRef, BondRecord, Canonical,
     Coded, CoverageGaps, CurveTreeState, FirstPayingHeight, HeldShard, Holdings, LayerHash,
-    LeafCount, OriginatedPhase, OutKey, OutTx, PassedThroughFacts, PoolRecord, ProbeCell,
-    PropertyCell, RMarket, Readiness, RelayState, Responsibility, RuleSetInForce, SchemaVersion,
-    SettlementEpochBlocks, SigmaWorkMilli, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog,
-    FACT_FIELDS, PROPERTY_CELLS, SCHEMA_VERSION,
+    LeafCount, OriginatedPhase, OutKey, OutTx, PoolRecord, ProbeCell, PropertyCell, RMarket,
+    Readiness, RelayState, Responsibility, RuleSetInForce, SchemaVersion, SettlementEpochBlocks,
+    SigmaWorkMilli, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS,
+    SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
 use shekyl_chain_rules::{CenRow, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
-    BadInterval, BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot,
-    GlobalOutputIndex, LongTermWeight, OneTimePubkey, OutputIndexInTx, PqcAuthHash, PrunableHash,
-    SettlementEpoch, ShardId, Timestamp, TreeLeaf, TreePosition, TxHash,
+    ArchivalLength, BadInterval, BlockHash, BlockHeight, BlockWeight, CommitmentBytes,
+    CurveTreeRoot, GlobalOutputIndex, LongTermWeight, OneTimePubkey, OutputIndexInTx, PqcAuthHash,
+    PrunableHash, SettlementEpoch, ShardId, Timestamp, TreeLeaf, TreePosition, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -323,23 +323,10 @@ impl Fixtures for CoverageGaps {
     }
 }
 
-impl Fixtures for PassedThroughFacts {
-    fn fixtures() -> Vec<(&'static str, Self)> {
-        vec![
-            ("none", PassedThroughFacts::NONE),
-            // `burned` is position 0 and the whole vocabulary since E6 slice
-            // 7 (SCHEMA_VERSION 16) — `cumulative_difficulty` left at 7,
-            // `root_after` at 15, the two weights, the median and
-            // `coins_generated` at 16. "burned" and "all" are one fixture
-            // now; both names are kept so the `.snap` shows the collapse.
-            ("burned", PassedThroughFacts::of_positions([0])),
-            (
-                "all",
-                PassedThroughFacts::of_positions(0..FACT_FIELDS.len()),
-            ),
-        ]
-    }
-}
+// `PassedThroughFacts`' fixtures (`none`, `burned`, `all`) and its `.snap`
+// left with the type at SCHEMA_VERSION 17 (E6 slice 7 wave B): the
+// vocabulary had shrunk to one name at 16, and the last field became the
+// verdict's.
 
 impl Fixtures for BlockHeight {
     fn fixtures() -> Vec<(&'static str, Self)> {
@@ -683,6 +670,14 @@ impl Fixtures for ShardId {
         ]
     }
 }
+impl Fixtures for ArchivalLength {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", ArchivalLength::ZERO),
+            ("distinct", ArchivalLength::from_raw(0x0102_0304_0506_0708)),
+        ]
+    }
+}
 impl Fixtures for CurveTreeRoot {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![
@@ -712,6 +707,7 @@ impl Fixtures for BlockInfo {
                     long_term_weight: LongTermWeight::from_raw(0),
                     cumulative_tx_count: 0,
                     long_term_effective_median: LongTermWeight::from_raw(0),
+                    cumulative_archival_len: ArchivalLength::ZERO,
                 },
             ),
             // Every field distinct, difficulty straddling the lo/hi split so
@@ -728,6 +724,7 @@ impl Fixtures for BlockInfo {
                     long_term_weight: LongTermWeight::from_raw(7),
                     cumulative_tx_count: 8,
                     long_term_effective_median: LongTermWeight::from_raw(9),
+                    cumulative_archival_len: ArchivalLength::from_raw(10),
                 },
             ),
         ]
@@ -1221,7 +1218,6 @@ snapshotted_codecs! {
     UndoLog => codec_snapshot_undo_log,
     SettlementEpochBlocks => codec_snapshot_settlement_epoch_blocks,
     CoverageGaps => codec_snapshot_rule_coverage_gaps,
-    PassedThroughFacts => codec_snapshot_passed_through_facts,
     CurveTreeRoot => codec_snapshot_curve_root,
     BlockHeight => codec_snapshot_block_height,
     RuleSetInForce => codec_snapshot_rule_set_id,
@@ -1244,6 +1240,7 @@ snapshotted_codecs! {
     SigmaWorkMilli => codec_snapshot_sigma_work_milli,
     SettlementEpoch => codec_snapshot_settlement_epoch,
     ShardId => codec_snapshot_shard_id,
+    ArchivalLength => codec_snapshot_archival_length,
     PoolRecord => codec_snapshot_pool_record,
     AltBlock => codec_snapshot_alt_block,
 }

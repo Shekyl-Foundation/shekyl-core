@@ -82,11 +82,29 @@ use crate::timing::Series;
 ///   (raise the cap, rather than: the machine has no steady state). The bump
 ///   is what stops a corrected reader from misreading an uncorrected record.
 ///
+/// **v3 (CT-6 increment 4)** re-derives `per_block_advance_worst_case_s` and
+/// carries `per_block_advance_load_control` beside it.
+///   In `v1`/`v2` it was `replay_median / REPLAY_WINDOW_BLOCKS` — a share of
+///   the spend replay, which is a pre-build *model* of an advance that did
+///   not exist yet. In `v3` it is the median of a measured series over the
+///   built advance: frontier fold, snapshot encode, ring commit
+///   ([`crate::advance::AdvanceRig`]). **The field name did not change and
+///   the meaning did**, which is exactly the shape `CT-6 Q4` was left open to
+///   catch, so the bump is what stops a `v2` figure and a `v3` figure being
+///   read off the same axis. A `v2` record's value is not wrong for what it
+///   was — it is a model estimate — but it is not the graded quantity, and
+///   `per_block_advance_provenance` now says which one a record carries.
+///   The retired quotient beside the measurement divides by `replayed_blocks`
+///   — the blocks the corpus covers, `window_leaves / leaves_per_block` — and
+///   not by `REPLAY_WINDOW_BLOCKS`. At the default window the two denominators
+///   match; under `--window-leaves` they do not. The quotient is an observation
+///   of that run. The measured advance is what a later run may compare.
+///
 /// **No CI arm enforces this constant** — the `schema-snapshot` workflow's
 /// version-bump job covers `shekyl-chain-store`'s persisted schema, not this
 /// record. Bumping it is a reviewer obligation, which is why the history
 /// above is kept here rather than only in the changelog.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The spend-edge budget's absolute floor, in seconds (§6.3.4 row 2).
 pub const SPEND_DELTA_FLOOR_S: f64 = 2.0;
@@ -176,6 +194,67 @@ pub struct OpenBudget {
 }
 
 /// A complete spend-edge run.
+/// What the run's own controls say about the board the advance was timed on.
+///
+/// Carried in the record rather than only printed, so a contaminated run
+/// cannot be read later as a clean one. This exists because a 2026-09-28
+/// advance record was superseded on 2026-09-29 partly for having been taken
+/// on a loaded box: its model term was 63 % slower for identical work, and
+/// the ratio between the two terms moved 0.69x -> 0.95x. Load does not cancel
+/// between a memory-bandwidth-bound replay and an `fsync`-bound advance.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct LoadControl {
+    /// Largest absolute dense-vs-sparse divergence across the run's controls,
+    /// in percent. The two arms do identical work, so this is the board
+    /// talking, not the workload.
+    pub max_divergence_pct: f64,
+    /// The bound `max_divergence_pct` is judged against.
+    pub tolerance_pct: f64,
+    /// Whether every control stayed inside the bound **and** converged.
+    ///
+    /// `false` does not invalidate the median on its own — it says the run
+    /// cannot claim its figure is a property of the work rather than of the
+    /// machine, which is precisely the claim a grade would make.
+    pub quiet: bool,
+    /// Controls the verdict was taken over. Zero is not quiet: a run with no
+    /// control has not measured its board, and absence of a signal is first
+    /// evidence the subject is absent (rule 47).
+    pub controls: usize,
+}
+
+impl LoadControl {
+    /// Judge the board from a run's controls, each `(divergence_pct,
+    /// converged)`.
+    ///
+    /// The pair is the whole input: a run maps the experiments it already
+    /// holds, and a test hands the pairs. The rest of a control experiment
+    /// is not an input to the bound, and the pass does not collect the pairs
+    /// into a second list.
+    #[must_use]
+    pub fn over<I>(controls: I, tolerance_pct: f64) -> Self
+    where
+        I: IntoIterator<Item = (f64, bool)>,
+    {
+        let mut max_divergence_pct = 0.0_f64;
+        let mut count = 0_usize;
+        let mut every_arm_quiet = true;
+        for (divergence, converged) in controls {
+            let magnitude = divergence.abs();
+            max_divergence_pct = max_divergence_pct.max(magnitude);
+            every_arm_quiet &= converged && magnitude <= tolerance_pct;
+            count += 1;
+        }
+        // Zero controls is not quiet. No reading is an unmeasured board,
+        // and absence of the signal is first evidence the subject is absent.
+        Self {
+            max_divergence_pct,
+            tolerance_pct,
+            quiet: count > 0 && every_arm_quiet,
+            controls: count,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct SpendEdgeRecord {
     /// [`SCHEMA_VERSION`].
@@ -198,17 +277,57 @@ pub struct SpendEdgeRecord {
     pub proving: Series,
     /// The graded budget.
     pub budget: SpendBudget,
-    /// **The amortized form's refresh-side cost**: worst-case replay seconds
-    /// divided by the blocks replayed.
+    /// **The amortized form's refresh-side cost**, `CT-6 Q4`'s subject: the
+    /// median of [`SpendEdgeRecord::per_block_advance`], a series over the
+    /// **built** advance — frontier fold, snapshot encode, ring commit.
     ///
     /// Derived rather than left to a reader with a calculator, because it is
     /// the number that decides what a miss on the spend edge *means*. A delta
     /// that misses by 48× as a spend-time copy-and-replay is not the same
     /// finding as one whose amortized form costs a fraction of a block
     /// interval — the first kills the design, the second moves the work.
-    /// Compare it against the block cadence: at 120 s, this figure over 1.2 s
-    /// is a 1 % duty cycle.
+    /// Compare it against [`BLOCK_TARGET_S`]; `Q4` pre-registers 10 % of it.
+    ///
+    /// Through schema `v2` this was
+    /// `per_block_advance_retired_quotient_s` under this name. See
+    /// [`SCHEMA_VERSION`].
     pub per_block_advance_worst_case_s: f64,
+    /// The measured advance series behind the figure above — so a reader can
+    /// see whether it converged before treating it as a grade.
+    pub per_block_advance: Series,
+    /// **The retired derivation, kept beside its replacement**:
+    /// `replay_median / replayed_blocks`, where `replayed_blocks` is the blocks
+    /// the corpus covers (`window_leaves / leaves_per_block`). At the default
+    /// window that denominator matches `REPLAY_WINDOW_BLOCKS`; under
+    /// `--window-leaves` it does not.
+    ///
+    /// Emitted in the same record as the measured advance so the two can be
+    /// compared within the run that produced them. The measured advance is
+    /// what a later run may compare. This quotient is an observation of one
+    /// run's replay; it is not an extrapolation input, and it does not speak
+    /// for the pinned rig.
+    pub per_block_advance_retired_quotient_s: f64,
+    /// Which derivation `per_block_advance_worst_case_s` carries.
+    ///
+    /// A record whose field changed derivation under an unchanged name is the
+    /// defect `Q4` names; this string is the field saying which one it is,
+    /// for a reader who has only the JSON.
+    pub per_block_advance_provenance: &'static str,
+    /// Whether the run's own controls say the board was quiet enough for
+    /// `per_block_advance_worst_case_s` to mean anything.
+    ///
+    /// The advance is **load-sensitive**, and a contaminated run does not
+    /// merely widen its spread — it biases it. The controls already measure
+    /// the board (a dense/sparse pair doing identical work), so the signal
+    /// exists in every run; it was simply never read on this side, because
+    /// when the advance was added the controls only licensed the *sparse
+    /// denominator*, which the advance does not depend on.
+    pub per_block_advance_load_control: LoadControl,
+    /// `per_block_advance_worst_case_s` as a fraction of [`BLOCK_TARGET_S`].
+    /// Reported, never graded here: `Q4`'s threshold is graded on the pinned
+    /// rig by increment 6, and a fraction computed anywhere else is a
+    /// property of the machine that computed it.
+    pub per_block_advance_cadence_fraction: f64,
     /// The sparse-versus-dense control, one arm per depth. The record carries
     /// these because the denominator's path provenance depends on them: a
     /// reader who does not see the control cannot tell whether the sparse path

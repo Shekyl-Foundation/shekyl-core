@@ -17,8 +17,8 @@
 //! leaf count. [`TierCoverage::OutsideSpan`] is the only way to say a tier
 //! does not cover a height — a tier that failed to answer has no variant
 //! here, so the caller handles that error before building a
-//! [`HeightAnswers`]. Increment 4 builds those answers from the segment
-//! tier and the snapshot tier; this function does not change.
+//! [`HeightAnswers`]. Increment 4 builds those answers in `ring`, from the
+//! segment tier and the snapshot tier; this function does not change.
 
 use super::tests::{coinbase_raw, ingest_outputs_at};
 use super::{BlockLeaves, CurveTreeClient, TxLeafInputs};
@@ -705,3 +705,8 @@ fn a_root_mismatch_refuses_the_whole_batch() {
         "expected RootMismatch, got {err:?}"
     );
 }
+
+// Increment 4 grades the real tiers through the examiner above. The passes
+// live in `ring` so this file stays the examiner and the injected-tier proof
+// that its three verdicts fire.
+mod ring;

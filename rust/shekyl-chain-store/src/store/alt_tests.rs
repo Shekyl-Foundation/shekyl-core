@@ -12,8 +12,7 @@ use shekyl_types::{BlockHash, BlockHeight, BlockWeight};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
-    at, candidate, connect_chain, facts, judge, spend, spend_at, spendable_prefix,
-    FIRST_SPEND_HEIGHT,
+    at, candidate, connect_chain, judge, spend, spend_at, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -335,10 +334,25 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         &store,
         &spendable_prefix(&[vec![spend(9, 2)], vec![spend(10, 2)]]),
     );
-    let main_top_bytes = candidate(top, main[at(s)], vec![spend_at(&main, top, 10, 2)])
-        .block
-        .serialize();
-    let alt_cand = candidate(top, main[at(s)], vec![spend_at(&main, top, 11, 2)]);
+    // The main top's bytes **as connected** — its coinbase priced by the
+    // connect (CEN-F18), so the demoted block's bytes are the recorded ones.
+    let main_top = {
+        let snap = store.begin_read().expect("read");
+        match snap.block(BlockHeight::from_raw(top)).expect("block") {
+            shekyl_chain_rules::AtHeight::Recorded(body) => body.block,
+            shekyl_chain_rules::AtHeight::AboveTip => panic!("top is connected"),
+        }
+    };
+    let main_top_bytes = main_top.serialize();
+    // The competitor is priced by construction: it shares the main top's
+    // parent state (the accumulator, the burned fold, the windows, the leaf
+    // count at `top`) and its one listed body has the main top's weight and
+    // fee, so F18 owes both coinbases the same amount — the connected
+    // block's. Its identity is needed before the switch (it is held as an
+    // alt), so it cannot wait for the batch that prices it.
+    let mut alt_cand = candidate(top, main[at(s)], vec![spend_at(&main, top, 11, 2)]);
+    alt_cand.block.miner_transaction.prefix.outputs[0].amount =
+        main_top.miner_transaction.prefix.outputs[0].amount;
     let alt_top = alt_cand.block.hash();
     let alt_witness = vec![0x5A; 40];
     let out: Result<(), TestErr> = store.write(|batch| {
@@ -357,7 +371,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         let popped = batch.pop()?;
         assert_eq!(popped.height, BlockHeight::from_raw(top));
         batch.insert_alt_block(&main[at(top)], &alt(top, &main_top_bytes, None))?;
-        batch.connect(judge(&view, alt_cand.clone())?, facts(0), RuleSet::GENESIS)?;
+        batch.connect(judge(&view, alt_cand.clone())?, RuleSet::GENESIS)?;
         batch.remove_alt_block(&alt_top)?;
         Ok(promoted.attestation_witness().expect("witness").to_vec())
     });
@@ -391,7 +405,6 @@ fn a_switch_is_one_transaction_or_none_of_it() {
                 &view,
                 candidate(top, main[at(s)], vec![spend_at(&main, top, 10, 2)]),
             )?,
-            facts(0),
             RuleSet::GENESIS,
         )?;
         batch.remove_alt_block(&main[at(top)])?;

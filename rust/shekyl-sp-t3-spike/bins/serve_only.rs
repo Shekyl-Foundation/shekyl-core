@@ -98,9 +98,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The apparatus also launches a client tor, used here only for the
     // reachability probe; the readers this binary exists for are elsewhere.
     eprintln!("bringing up 1 persona (conformant shape) behind its own tor, plus a probe tor...");
-    let app =
-        Apparatus::bring_up_with_pow(tor, dir.path().join("tor-data"), 1, fixture.bytes(), pow)
-            .await?;
+    let app = Apparatus::bring_up_with_pow(
+        tor,
+        dir.path().join("tor-data"),
+        1,
+        vec![fixture.bytes()],
+        pow,
+    )
+    .await?;
 
     let publish = app.await_reachable().await?;
     let persona = &app.personas[0];

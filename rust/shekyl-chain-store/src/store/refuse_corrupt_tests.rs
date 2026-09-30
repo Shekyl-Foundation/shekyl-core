@@ -10,7 +10,7 @@
 use shekyl_chain_rules::{ChainView, FrontierFault, LeafInput, RuleSet};
 use shekyl_types::{BlockHeight, GlobalOutputIndex};
 
-use super::connect_fixtures::{candidate, connect_chain, facts, judge};
+use super::connect_fixtures::{candidate, connect_chain, judge};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 
@@ -56,7 +56,7 @@ fn a_corrupt_seen_by_the_validator_poisons_the_batch_and_halts_the_writer() {
         let view = batch.chain_view();
         let tip = ChainView::tip(&view)?.expect("two blocks").hash;
         let cand = candidate(2, tip, Vec::new());
-        Ok(batch.connect(judge(&view, cand)?, facts(0), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, cand)?, RuleSet::GENESIS)?)
     });
     assert!(again.is_err(), "the writer stays halted: {again:?}");
     cleanup(&path);
@@ -191,7 +191,7 @@ fn a_hole_below_the_tip_seen_by_the_validator_is_si7_and_halts_the_writer() {
         let view = batch.chain_view();
         let tip = ChainView::tip(&view)?.expect("two blocks").hash;
         let cand = candidate(2, tip, Vec::new());
-        Ok(batch.connect(judge(&view, cand)?, facts(0), RuleSet::GENESIS)?)
+        Ok(batch.connect(judge(&view, cand)?, RuleSet::GENESIS)?)
     });
     assert!(again.is_err(), "the writer stays halted: {again:?}");
     cleanup(&path);

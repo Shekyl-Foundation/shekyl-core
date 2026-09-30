@@ -18,8 +18,8 @@ use shekyl_chain_rules::{AtHeight, ChainView, RuleSet};
 use shekyl_types::{BlockHeight, CurveTreeRoot, GlobalOutputIndex};
 
 use super::connect_fixtures::{
-    candidate, candidate_over, connect_chain, facts, judge, root_going_into, spend,
-    spendable_prefix, FIRST_SPEND_HEIGHT,
+    candidate, candidate_over, connect_chain, judge, root_going_into, spend, spendable_prefix,
+    FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, LeafCountFault, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
@@ -243,7 +243,7 @@ fn a_leaf_count_row_that_does_not_chain_to_the_summary_halts_the_next_connect() 
                 Vec::new(),
             ),
         )?;
-        Ok(batch.connect(valid, facts(0), RuleSet::GENESIS)?)
+        Ok(batch.connect(valid, RuleSet::GENESIS)?)
     });
     assert_eq!(
         out,

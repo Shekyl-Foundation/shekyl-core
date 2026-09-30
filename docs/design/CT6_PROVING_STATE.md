@@ -6,6 +6,10 @@
 dependency; `Q4` PENDING AS DERIVATION** on the re-pointed advance field.
 **`Q1` was ruled 2026-09-28 by the derivation §9 records — and the derivation
 deleted the geometry it was asked to size.**
+**Increment 4 is built (§10): one dense ring over the reorg horizon, the
+armed examiner grading the two real tiers, and `Q4`'s field re-derived from
+the measured advance. `Q4`'s threshold is still not graded — that needs the
+pinned rig, and increment 6 is its seat.**
 A derivation whose inputs are named and unmeasured is not a ruling, and the
 banner says so rather than letting the map run ahead of the territory.
 Opened and pinned at `dev@91705e5882` (2026-09-20); disposed against
@@ -273,10 +277,10 @@ DEPENDENCY** (owned elsewhere, not scheduled here), **PENDING AS DERIVATION**
 
 | # | Question | Disposition |
 | --- | --- | --- |
-| **CT-6 Q1** | **Snapshot geometry.** Dense span, sparse spacing `s`, eviction. `s` bounds the worst rewind | **RULED 2026-09-28 — by derivation, and the derivation deletes the geometry it was asked to size.** `s = ⌊budget / rate⌋ = ⌊2.000 / 0.53759⌋ = **3 blocks** (§9). At `s = 3` a sparse tier holds 240 snapshots against a dense ring's 720 — **4.64 MB** bought at the price of a spacing constant, an eviction policy, a dense/sparse boundary and the reader logic across it, on an 8 GB rig. **Ruled: one dense ring over the reorg horizon; the tier geometry, the spacing constant, the eviction policy and the dense/sparse reader logic are deleted from the design.** A rule-21 reopening of this row's own Round-1 shape on its derivation's substrate — the measurement did not fill the constant in, it removed the structure the constant was for. **Scope:** the collapse deletes **`Q1`'s intra-ring geometry only**. `Q2`'s seam and its armed examiner are unaffected — frozen segments remain the landed tier, the ring remains the unfrozen tail's answerer, and the examiner grades exactly as armed at #838 |
+| **CT-6 Q1** | **Snapshot geometry.** Dense span, sparse spacing `s`, eviction. `s` bounds the worst rewind | **RULED 2026-09-28 — by derivation, and the derivation deletes the geometry it was asked to size.** `s = ⌊budget / rate⌋ = ⌊2.000 / 0.53759⌋ = **3 blocks** (§9). At `s = 3` a sparse tier holds 241 snapshots against a dense ring's 721 — **4.25 MB** bought at the price of a spacing constant, an eviction policy, a dense/sparse boundary and the reader logic across it, on an 8 GB rig. **Ruled: one dense ring over the reorg horizon; the tier geometry, the spacing constant, the eviction policy and the dense/sparse reader logic are deleted from the design.** A rule-21 reopening of this row's own Round-1 shape on its derivation's substrate — the measurement did not fill the constant in, it removed the structure the constant was for. **Scope:** the collapse deletes **`Q1`'s intra-ring geometry only**. `Q2`'s seam and its armed examiner are unaffected — frozen segments remain the landed tier, the ring remains the unfrozen tail's answerer, and the examiner grades exactly as armed at #838 |
 | **CT-6 Q2** | **Alignment.** CT-1 segments are leaf-count-aligned and freeze on burial; snapshots are height-keyed. Do they stay two mechanisms, or does the snapshot subsume the unfrozen-segment recompute (F3a)? | **RULED 2026-09-22 — two mechanisms, one reader**, as proposed. Segments keep the frozen tier; snapshots cover the unfrozen tail; `root_at_count` reads whichever covers the height. Subsuming would rewrite a landed consensus-adjacent boundary to fix a cache, and C4 already forbids the second literal. **The invariant is `total, and identical where both answer` — not `total and non-overlapping`.** The freeze boundary is a *burial condition* (`SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`, `segment.rs:69`) that advances as blocks arrive, and it joins two coordinate systems — leaf-count-aligned segments against height-keyed snapshots. **Demanding non-overlap would force eviction (Q1's subject) to track freezing (this row's boundary) in lockstep, re-welding the two mechanisms this ruling separates.** Permitting overlap and requiring agreement keeps them independent, and C1's oracle already supplies the agreement test. Increment 2's red-bite states it in this form |
 | **CT-6 Q3** | **Persistence.** What rides which file, and at which save points | **RULED 2026-09-22, scoped.** Snapshots and the buffer ride the **ledger**; path sets ride the sealed file at existing save points; crash ⇒ rebuild from last save + refetch (C8). **The scope is part of the ruling:** it governs the wallet's **single proving state**, which is what Q5's dissolution establishes there is. **The reason the scope is stated rather than assumed:** C6's `identity-free` is a claim about *bytes*, not *access* (C6 as amended). Public content does not make the file it rides shared, so under a second proving consumer this default would have forced either a read of another identity's sealed file — `WSS-13` relocated, the defect §6.3.3 exists to foreclose — or a duplicate of the public state. Neither was stated, and the default read as though C6 licensed the first. Q5's dissolution removes the second consumer, so the question does not arise; **this row records why the scope is load-bearing rather than incidental** |
-| **CT-6 Q4** | **The advance budget** — the amortized form's own graded quantity: worst-case per-block advance as a fraction of block cadence, on the floor | **PENDING AS DERIVATION — pre-registered at ≤ 10 % of cadence, gated on a re-point.** Pre-registration ahead of the cost is methodologically what §6.3.4 rows 2 and 3 already are, and it carries their rule-21 reopener. **But the field it pre-registers against does not yet measure the quantity it names.** `per_block_advance_worst_case_s` is computed as `replay_median / REPLAY_WINDOW_BLOCKS` (`spend_edge.rs:386`) — a **quotient of the spend replay**, which is a legitimate *pre-build model estimate* (uniform hashing over the window) and an **illegitimate grade afterwards**, because the built advance does work the replay never did: snapshot writes and path capture. **So the pre-registration carries its own condition: increment 4 re-derives the field from the actual advance before anything is graded against this threshold**, rather than inheriting the quotient. A name that matches with a derivation that does not is the defect this catches one increment before it ships |
+| **CT-6 Q4** | **The advance budget** — the amortized form's own graded quantity: worst-case per-block advance as a fraction of block cadence, on the floor | **PENDING AS DERIVATION — pre-registered at ≤ 10 % of cadence, gated on a re-point.** Pre-registration ahead of the cost is methodologically what §6.3.4 rows 2 and 3 already are, and it carries their rule-21 reopener. **But the field it pre-registers against does not yet measure the quantity it names.** `per_block_advance_worst_case_s` was computed as `replay_median / REPLAY_WINDOW_BLOCKS` — a **quotient of the spend replay**, which is a legitimate *pre-build model estimate* (uniform hashing over the window) and an **illegitimate grade afterwards**, because the built advance does work the replay never did: snapshot writes and path capture. **So the pre-registration carries its own condition: increment 4 re-derives the field from the actual advance before anything is graded against this threshold**, rather than inheriting the quotient. A name that matches with a derivation that does not is the defect this catches one increment before it ships. **The re-point is built (increment 4, §10.4):** the field is now the median of a measured series `AdvanceRig` takes over the built advance — frontier fold, snapshot encode, ring commit — and the retired quotient rides beside it as `per_block_advance_retired_quotient_s` so the two are comparable within one run. Record `schema_version` bumps 2 → 3, because the field changed derivation under an unchanged name, which is this row's own defect class. **Still PENDING:** the threshold is graded on the pinned rig, and increment 4 did not run there. Increment 6 is that seat |
 | **CT-6 Q5** | **Does `P` prove its own outputs?** F5 shows the two-consumer advance is assumed, not established | **CLOSED 2026-09-22 — by dissolution, not by ruling.** `P` proves nothing as a distinct actor; the proving state is **identity-blind**; there is **no second capture side**. The question therefore has **no subject**, and C6's second capture side is not built. **This is recorded as a dissolution rather than a negative ruling** because nothing was weighed: the premise F5 flagged as *assumed* is simply absent. **Rule-21 reopener, attached here to the dissolution itself rather than left as a live question:** this reopens only if a design gives `P` membership paths for proving — a substrate change, not a preference. Until then increment 5 builds one capture side and §6's graph carries no gate on this row |
 | **CT-6 Q6** | **`.curvetree` retirement sequencing.** The end state deletes the file (`WSS-18`'s closure), but `P`'s pins move out via the Tier-2 P-store lane | **NAMED DEPENDENCY.** Unchanged: name the dependency, do not race it. CT-6's last increment is gated on the P-store lane's unwind of `WSS-13`; this round does not schedule it. **That lane is itself daemon-gated** (the `b_*` partition on S-PRUNE's forward pass, and `WSS-22`'s bond-add answer), which is why increment 7 sits outside this round's daemon-independent envelope while increments 1–6 sit inside it |
 
@@ -301,9 +305,9 @@ have re-imported the dependency this round exists outside of.
 | **1** | **Registration + this document.** The `CT-1…CT-5` family row is **amended to `CT-1…CT-6`** (rule 94 §1) — not a new row, per §1.1; `CURVE_TREE_CLIENT.md` re-point | — | **Tripped 2026-09-22** by Q2 and Q3's rulings together with Q5's dissolution and Q6's named dependency: a complete Round-1 disposition, with Q1 and Q4 pending **as derivations with named inputs** rather than as open judgments |
 | **2** | **The C1 oracle, height-keyed.** At every fixture height `h`, root, depth, and drained-leaf count equal `assemble_leaf_stream` + `root_from_scalars` over the leaves drained through `h - 1`. That cutoff is written in the test, not read from `drained_through`. Depth is graded at the two leaf counts where `layer_count_for_leaves` steps (`0`, and `SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH`). **Q2 examiner armed here, graded at increment 4:** `examine_tier_readings` compares a `TierReading` (root and depth) per tier. `TierCoverage::OutsideSpan` is the only non-answer; a tier error has no variant to hide in. Agreeing overlap is success, a root or depth mismatch is `Disagree`, and a height in neither `HeightSpan` is `Uncovered`. The 2026-09-23 decision-log row records why the examiner is armed before its tiers exist | §6.3.4 row 4; Q2 | Q2 (**ruled**); Q1's *shape* only — its constants are not inputs to the oracle |
 | **3** | **Per-transaction reconstruction reuse.** `drained`/`layers` once per tx, `gindex → drain-position` index | **Closeout (a)** — F3b | 2 |
-| **4** | **The snapshot ring + advance.** **One dense ring over the reorg horizon, total by construction** (`Q1` RULED 2026-09-28, §9) — no tiers, no spacing, no eviction. Frontier advance inside ingest; snapshot ring; `root_at_count` reads it for unfrozen heights. **Re-derives `per_block_advance_worst_case_s` from the actual advance** before anything is graded against Q4's threshold (Q4). Grades the increment-2 examiner: the segment tier and the snapshot tier are passed to `examine_tier_readings` | **Closeout (b)** — F3a | 2, 3; Q2, Q3 (**ruled**); **`Q1` RULED by derivation (§9); `Q4` pre-registered with its re-point as a landing condition** — the gate is open |
+| **4** | **The snapshot ring + advance — BUILT (§10).** One dense ring over the reorg horizon, total by construction (`Q1` RULED 2026-09-28, §9) — no tiers, no spacing, no eviction. `shekyl_curve_tree::frontier::Frontier` advances inside `ingest_block`; the ring is the `frontier_snapshots` table of the wallet's own `LeafStore`, written and evicted in the block's own transaction; `root_and_depth_at` reads it for in-horizon heights and falls through to `root_at_count` elsewhere. `per_block_advance_worst_case_s` is **re-derived from the built advance** (Q4). The increment-2 examiner grades the real segment tier against the real snapshot tier, **unmodified** | **Closeout (b)** — F3a | 2, 3; Q2, Q3 (**ruled**); **`Q1` RULED by derivation (§9); `Q4` pre-registered with its re-point as a landing condition** — the gate is open |
 | **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy | §6.3.3; C7 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
-| **6** | **Re-grade rows 2 and 3** on the amortized form, same harness, same rig | §6.3.4 | 4 |
+| **6** | **Re-grade rows 2 and 3** on the amortized form, same harness, same rig — **and it is also `Q4`'s only seat.** Increment 4 re-derived the advance field and measured it off-rig; a fraction of cadence computed anywhere but the pinned Pi 4 is a property of the machine that computed it (rule 76). The blocker is the board, not the code | §6.3.4; Q4 | 4 |
 | **7** | **`.curvetree` retirement** | `WSS-18` | **P-store lane** (Q6) |
 
 ---
@@ -321,7 +325,8 @@ have re-imported the dependency this round exists outside of.
 | 2026-09-22 | **`Q3` RULED, scoped to the wallet's single proving state** | C6's `identity-free` is a claim about bytes, not access. The unscoped default would have forced a read of another identity's sealed file (`WSS-13` relocated) or a duplicate of the public state |
 | 2026-09-22 | **`Q5` CLOSED by dissolution; the rule-21 reopener attaches to the dissolution, not to a live question** | `P` proves nothing as a distinct actor; the proving state is identity-blind; no second capture side exists, so the question has no subject. Recorded as a dissolution because nothing was weighed |
 | 2026-09-22 | **`Q1` and `Q4` are PENDING AS DERIVATIONS, and the banner says so per row** | `s` is derivable from §6.3.4 row 2's already-ruled budget once the rig supplies two terms; `Q4`'s threshold needs its field re-pointed from the replay quotient to the built advance. A banner reading "ruled" over either would put the map ahead of the territory |
-| 2026-09-28 | **`Q1` RULED by derivation, and the derivation deletes the geometry** — one dense ring over the reorg horizon; tier, spacing, eviction and dense/sparse reader logic removed | §9. `s = ⌊2.000 / 0.53759⌋ = 3`; at `s = 3` the tier buys 4.64 MB and costs four moving parts. Rule-21 reopening of the row's own Round-1 shape on its derivation's substrate. Scope: `Q1`'s intra-ring geometry only — `Q2`'s seam and examiner unaffected |
+| 2026-09-28 | **`Q1` RULED by derivation, and the derivation deletes the geometry** — one dense ring over the reorg horizon; tier, spacing, eviction and dense/sparse reader logic removed | §9. `s = ⌊2.000 / 0.53759⌋ = 3`; at `s = 3` the tier buys 4.64 MB and costs four moving parts (**that figure was corrected to 4.25 MB on 2026-09-29** — §9.4's dated note; the row keeps what the 2026-09-28 derivation computed, and the ruling is unchanged either way). Rule-21 reopening of the row's own Round-1 shape on its derivation's substrate. Scope: `Q1`'s intra-ring geometry only — `Q2`'s seam and examiner unaffected |
+| 2026-09-28 | **Increment 4 built: one dense ring, the examiner unmodified, `Q4`'s field re-derived** | §10. The ring is a store table rather than a RAM structure because Q3 rules snapshots ride the ledger and because a rollback then deletes ring rows in the same transaction that truncates the leaves. The examiner is graded in **two passes** — one where the segment tier answers the whole chain (the pass that can `Disagree`) and one where it answers nothing, which is what this fixture's freeze cursor actually is (the only pass in which a hole reaches `Uncovered`) |
 | 2026-09-23 | **`Q2`'s red-bite is armed at increment 2 against an injected subject, not deferred and not placeholdered** | Both offered shapes were defective: a placeholder is green by construction, and deferring it makes the subject's author write its own examiner. The armed examiner is `examine_tier_readings`. Each tier contributes a `TierReading` (root and depth together — C3) or `TierCoverage::OutsideSpan` where its `HeightSpan` does not cover the height. Agreeing overlap is success; a root mismatch and a depth mismatch are both `Disagree`; a height in neither span is `Uncovered`. A tier that errors does not fit `TierCoverage`, so a failure cannot be recorded as a gap. Increment 4 passes the segment tier and the snapshot tier through this function |
 | 2026-09-22 | **The `Q3`←`Q5` graph inversion is recorded, not merely fixed** | Q3 fed increment 4 while Q5 gated increment 5, yet Q3's answer depended on Q5's. Waiting on Q5 would have re-imported the daemon dependency this round sits outside of |
 
@@ -382,17 +387,36 @@ measured:
 
 ### 9.4 What that licenses — the structure, not the constant
 
-At `s = 3` over the reorg horizon, the frontier measuring **9.44 KB**
-(38 × 128 B leaf chunk + 3 × 1 216 B Selene + 2 × 576 B Helios, §6.3.2 row 4):
+At `s = 3` over the reorg horizon, the frontier encoding to **8 840 B**
+(the leaf count, then one partial chunk per layer, each one child short of folding —
+§10.1 derives it):
 
 | | Snapshots | Size |
 | --- | --- | --- |
-| Sparse at `s = 3` | 240 | **2.32 MB** |
-| Dense over the horizon | 720 | **6.96 MB** |
+| Sparse at `s = 3` | 241 | **2.13 MB** |
+| Dense over the horizon | 721 | **6.37 MB** |
 
-The two-tier structure buys **4.64 MB** on an 8 GB rig, and costs a spacing
+The two-tier structure buys **4.24 MB** on an 8 GB rig, and costs a spacing
 constant, an eviction policy, a dense/sparse boundary, and the reader logic that
 chooses across it.
+
+> **Corrected 2026-09-29.** This section was written on 2026-09-28 reading
+> **9.44 KB** / 2.32 MB / 6.96 MB. That per-snapshot figure was a transcription
+> of §6.3.2 row 4 that **inverted its Selene and Helios counts** above the leaf
+> chunk — three 1 216 B chunks where the widths give three 576 B — and counted
+> every chunk at capacity. Row 4 is correct as written: **9 024 B for a path**.
+> A frontier is not a path; it holds each partial chunk one child short of
+> folding. The same day's first correction encoded that to **8 848 B** / 6.38 MB
+> / a **4.25 MB** delta, counting an 11 B header and a width byte per partial
+> layer, and moved the row counts for a second reason: the retained run
+> `[h - horizon, h]` is **closed**, so the ring holds `horizon + 1` = 721 rows,
+> not 720. Those header and width bytes restated `expected_shape`, so they left
+> before schema 6 froze. The encoding that ships is the 8 B leaf count plus the
+> scalars and nodes that count implies: **8 840 B**, a dense ring of **6.37 MB**,
+> and a delta of **4.24 MB** (8 840 × (721 − 241)).
+> **The ruling does not move** — each correction makes the dense ring cheaper
+> than the figure it was ruled against, so the argument it was ruled on only
+> strengthens.
 
 **RULED 2026-09-28: one dense ring over the reorg horizon**
 (`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`, cited and never restated — C4). The tier
@@ -426,12 +450,292 @@ the examiner guards lapses here.
 - **`Q4` is unchanged.** `per_block_advance_worst_case_s` — of which `537.59 ms`
   is now the rig-measured **pre-build bound** — is **re-derived from the actual
   advance** before anything is graded against `Q4`'s threshold.
+  **Discharged as a derivation by increment 4 (§10.4); still owed as a grade,
+  which is increment 6's.**
 - **Reopeners.** A material prover-pin move re-grades the denominator (the
   existing §6.3.4 clause). A change to the leaf-hash path re-measures the rate.
-  The ring's 6.96 MB is bounded by construction and carries no reopener.
+  The ring's 6.37 MB is bounded by construction and carries no reopener.
 
 ### 9.7 Effect
 
 Increment 4's gate opens on a **simpler subject than the round planned for**:
 one ring, total over the horizon, one seam — and that seam is the one already
 guarded by an examiner armed before its subject existed.
+
+---
+
+## 10 — Increment 4 as built
+
+**Status:** BUILT 2026-09-28. Every row below states what **is** in the tree,
+not what was planned. The one thing this section does **not** carry is a grade
+against `Q4`'s threshold — see §10.4.
+
+### 10.1 The ring
+
+`rust/shekyl-curve-tree/src/frontier.rs`. A `Frontier` is the partial chunks of
+an append-only curve tree: the leaf scalars not yet hashed into a layer-0 node,
+and at each layer `k` the layer-`k` nodes not yet hashed into their layer-`k+1`
+parent. Its `leaf_count` is **intrinsic** — advanced by `push_leaf`, and the
+number `depth()` is taken from — so a frontier cannot be paired with someone
+else's `n` (C3).
+
+**It is not a second composition.** Every fold is a call into the canonical
+primitives: `hash_grow_selene` for a leaf chunk, `try_promote_to_layer` for one
+layer step, and `try_build_upper_layers` for the close — which is where the
+*"single node at layer ≥ 1"* stop condition comes from rather than from a
+second copy of it. The pair is nonetheless a *reachable* disagreement, so it is
+graded against `build_layers` at every count through two leaf-chunk folds and
+at the first cascade, and height by height by the `Q2` examiner.
+
+**Capacity is the parent layer's width**, `chunk_width(k + 1)` — the off-by-one
+this design offers, and the subject of its own assertion.
+
+**Size, derived and not restated.** A production-depth frontier whose every
+partial chunk is one child short of folding encodes to
+`8 + (LEAF_CHUNK_SCALARS − 1)·32 + Σ_{k<5} ((chunk_width(k+1) − 1)·32)`
+= **8 840 B**. §6.3.2 row 4 states **9 024 B**, and is correct — but it sizes a
+**path**, and a frontier is not a path: it holds each partial chunk one child
+short of folding and carries an 8 B leaf count, so the two differ by 184 B. Row 4's
+one overreach is the sentence that follows its arithmetic, “the frontier is the
+same size”; it is corrected there. The **9 664 B** §9.4 first carried was neither
+figure but a transcription of row 4 that inverted its Selene and Helios counts,
+corrected and dated in place. Over the horizon — a **closed** run, so
+`horizon + 1` rows — this is **6.37 MB**.
+
+**Corrected 2026-09-29, twice.** The first pass quoted **8 848 B** / 176 B /
+6.38 MB, which still stored a scalar count, a layer count, and a width byte on
+each partial layer. Those fields restated `Frontier::expected_shape` and left
+before schema 6 froze. No clause of the ruling moves.
+
+### 10.2 Where it persists (`Q3`)
+
+The `frontier_snapshots` table of the wallet's **own** `LeafStore` — the public,
+identity-free proving state, which is what `Q3` ruled rides the ledger. One row
+per height, keyed by a `BlockHeightKey` whose distinct redb `TypeName` is what
+stops a tree position or a gindex indexing it.
+
+**The bound is the write, not a policy.** `append_block_with_snapshot` inserts the
+height it ingests and, in the same statement, removes everything *below*
+`height − SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` — so there is no eviction policy
+for anything to hold (`Q1` RULED 2026-09-28). `append_block_deltas` performs the
+leaf, pending, and tip writes and cannot insert a ring row. An optional snapshot
+on that path would let a caller omit the row the ring's totality depends on.
+
+**The run is closed at the bottom, and the fencepost is derived rather than
+chosen.** A reorg of depth `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` *replaces* that
+many blocks, so its **fork** sits at `tip − horizon` — the block the replaced
+ones build on — and §10.3's rewind restores from the row **at** the fork. A
+half-open `(tip − horizon, tip]` would drop exactly that row and send the
+deepest legal rewind down the fold path, which is the one case the bound exists
+for. So the ring holds `[tip − horizon, tip]`: one height per replaceable block
+plus the one they fork from. The wrap test takes its expected span from that
+sentence and not from the delete's own bound, which would have asserted the
+implementation back at itself.
+
+**`SCHEMA_VERSION` 5 → 6, and the reason is C8.** **A pre-ring (≤5) store is
+refused at open and re-synced.** `check_schema_version` runs before
+`init_tables`, so a ≤5 store never reaches the code that would create
+`frontier_snapshots`; there is no one-way upgrade and none is wanted
+pre-genesis (rule 15). That refusal *is* the upgrade path.
+
+What the ring being a **cache** buys is therefore not compatibility but the
+absence of migration code: after the re-sync the table starts empty, every
+height falls through to `root_at_count`, and the ring refills as blocks
+arrive. Nothing has to be reconstructed.
+
+**Corrected 2026-09-29.** This paragraph read "*Reading* a pre-ring store
+needs no migration", which described a path the exact-version guard makes
+unreachable — the store is refused before any read of it happens. The bump's
+*motivation* was stated correctly and its *consequence* was not.
+
+The motivation is a pre-ring **writer**: it cannot see
+`frontier_snapshots`, so it can roll back and replay while leaving rows above
+the new tip untouched, and a stale row can carry the leaf count §10.3's C3
+check expects while composing the abandoned branch's root. Nothing in-band
+stops a writer that cannot see the table, so the version cell is the only
+mechanism that closes it — and refusing the store is precisely what C8 already
+prescribes: *recovery is refuse-and-resync, never a migration*.
+
+**Corrected 2026-09-29.** This section read "no store schema-version bump, and
+the reason is C8" until the review round. That inverted C8: a bump costs a
+resync, and a resync is the recovery C8 names.
+
+**The horizon is inherited, not owned — and the inheritance should be recorded
+as one.** `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` is
+`ARCHIVAL_REORG_DEPTH_BLOCKS` (`segment.rs`), which makes the ring the third
+reader of that config key. But the ring's retention is justified here as *"the
+deepest legal reorg"*, and that is the **reorg cap's** job — which #861 moved
+onto `RuleSet::reorg_cap`. The two are equal today at 720, so the ring is
+correct; they are equal by inheritance rather than by identity, and
+`SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` is an armed FAKECHAIN override, so a
+network that moves its cap through the rule set would not move the ring's
+horizon with it.
+
+**Nothing changes here.** Re-homing this reader belongs to #861's split, not to
+an increment whose subject is the ring — the named blocker is that the split
+has not landed its re-homing pass. Recorded so the ring appears on the list of
+readers when it does, rather than being found by the first divergence.
+
+### 10.3 Serving and rewinding
+
+`root_and_depth_at` reads the ring first. A hit checks the snapshot's **own**
+leaf count against the drain index's and **refuses** on a mismatch — root and
+depth are both read off that count, so a snapshot over the wrong `n` would be
+self-consistent and wrong. A miss falls through to `root_at_count`, unchanged.
+
+**The frozen tier is untouched.** `root_at_count` is not modified and
+`reference.rs` is not touched (F1).
+
+**Why the dispatch is one level above §6's wording.** §6's increment-4 row says
+*"`root_at_count` reads it"*. `root_at_count` is **count**-keyed and the ring is
+**height**-keyed, and C3 pins root and depth to one `n` *at a height*; putting
+the dispatch inside `root_at_count` would mean threading a height through a
+count-keyed API, which is the same seam one level lower and one type worse. The
+reader §6 names is `root_and_depth_at`, and `root_at` already delegates to it,
+so both production read paths go through the one dispatcher.
+
+**A reorg deeper than the horizon is not refused here, and that is C7's
+seat, not this increment's.** A `rollback_to_fork` below `tip − horizon`
+succeeds today by folding the whole drained prefix: correct, slow, and loud
+about nothing. Increment 5 owns C7's refusal and its rule-82 copy; what
+increment 4 owes it is the seam, which is the ring's span.
+
+**Rewind.** `truncate_internals` — the shared core under both
+`rollback_to_fork` and `truncate_from_tree_position` — deletes every ring row
+above the new tip **inside the caller's transaction**, so no committed store
+holds a row for a height it has rolled back past. The live frontier is then
+restored from the ring's row at the fork: an `O(depth)` decode, which is what
+makes an in-horizon rewind *the fork's snapshot plus the replay forward* rather
+than a fold over the whole drained prefix. The fold remains, and is the path
+for a store the ring does not cover.
+
+### 10.4 `Q4`'s field, re-derived
+
+`per_block_advance_worst_case_s` is now the median of a **measured** series over
+the built advance — frontier fold, snapshot encode, ring commit — through the
+harness's existing `sustained_within_conditioned`
+(`shekyl-wss-q1b-bench/src/advance.rs`). The retired quotient rides beside it as
+`per_block_advance_retired_quotient_s` so the two are comparable **within the
+run that produced them**. The measured advance is what a later run may compare.
+The quotient is an observation of that run's replay; it does not speak for the
+pinned rig. Record `schema_version` bumps **2 → 3**: the field changed derivation
+under an unchanged name, which is `Q4`'s own defect class.
+
+**A second defect the re-point surfaced.** The retired quotient divided by
+`REPLAY_WINDOW_BLOCKS` — the constant — while the corpus size is a `--window-leaves`
+flag. At the default window the two agree by construction; under an override the
+field divided a shrunken replay by the full window and emitted the result under
+a worst-case name. The denominator is now `replayed_blocks`, the blocks the
+corpus actually covers (`window_leaves / leaves_per_block`).
+
+**What is measured and what is not.** One iteration is one worst-case block's
+advance. It does **not** include the leaf and pending table writes, block decode
+or leaf collection: those are unchanged by this increment, and the quantity
+`Q4` pre-registers is the advance the amortization adds and removes — the same
+scope `537.59 ms` was modelled at, which also counted no table writes.
+
+**The grade is not here.** `Q4`'s threshold is a fraction of block cadence on
+rule 76's floor. Increment 4 ran off-rig, so the record carries the figure, the
+ratio and `rig.grading: false`; **increment 6 is the seat for the graded run**,
+and the blocker is the board rather than the code.
+
+**What the off-rig run says, and what it does not.** One run on an otherwise
+idle x86_64 box (`--window-leaves 105600`, 1 056 leaves/block at depth 6, 586
+timed blocks after a 721-block untimed prefill —
+`docs/benchmarks/wss-q1b/spend_edge_20260929T133841Z.json`). The board is
+attested by the run's **own** controls rather than by the operator: two
+dense/sparse pairs doing identical work, diverging at most **1.6 %** against a
+10 % bound (`per_block_advance_load_control`).
+
+| Term, same run | Value |
+| --- | --- |
+| Measured advance | **102.75 ms/block**, converged |
+| Retired model, same run | **102.03 ms/block** |
+| Measured ÷ model | **1.01×** |
+
+> **Two records superseded here, and the second one retires a claim of mine.**
+>
+> The **2026-09-28** record read 124.72 / 180.63 / **0.69×**. Its ring was never
+> full — the first row cannot fall out until block 721 and it converged at 479 —
+> *and* its model term was 63 % slower than this one's for identical work, which
+> is a loaded board. Both grounds, not just the first.
+>
+> A **2026-09-29** replacement read 105.11 / 110.95 / **0.95×** and narrowed
+> §10.4's old claim that the ratio "is a property of the work and not of the
+> machine" to: *the ratio travels from a quiet board.* **That narrowed claim is
+> now refuted too.** Both of those runs were quiet by this section's own test,
+> and their ratios are **6.3 % apart** (0.95 vs 1.01), because the model term
+> kept moving between them — 110.95 → 102.03 — while the advance barely did.
+>
+> **So the ratio is retired as a travelling quantity, not narrowed again.** What
+> reproduces is the *measured advance*: 105.29 / 105.11 / 102.75 across three
+> runs, a **2.5 %** spread, against a model term that moved 77 % across the same
+> three. The advance is `fsync`-bound and stable; the replay is
+> memory-bandwidth-bound and is not, and no mechanism for its residual drift
+> between two quiet runs is offered here because none has been measured. Any
+> future statement of the form "the ratio shows X" needs its own evidence; this
+> section no longer supplies it.
+>
+> The superseded figures are kept above as what was measured. A third
+> narrowing would be the wrong move: the claim has now failed twice, and the
+> quantity that keeps surviving is the one the increment actually built.
+
+**The direction the harness predicted no longer holds, and that is worth
+saying plainly.** `replay`'s own `proxy_note` says the model is *"net an upper
+bound, since `build_layers` rehashes every upper node where a frontier advance
+touches one per layer"*. At **1.01×** the built advance sits *fractionally
+above* it, so the model is **not** an upper bound on this run — the earlier
+0.69× reading that appeared to confirm the note came from the loaded board.
+The gap is 0.7 %, well inside the drift the model term shows between quiet
+runs, so this is **not** a claim that the note is wrong either: it is a claim
+that a 0.7 % ordering across two quantities of differing stability establishes
+nothing in either direction, and the note should be re-tested on the rig rather
+than treated as confirmed.
+
+**No Pi figure is derived**, and now for two reasons rather than one: the
+advance has an `fsync`'d ring commit in it, which does not scale with the A72
+the way curve hashing does, *and* the ratio such an extrapolation would use has
+been retired above. `537.59 ms × <ratio>` was always an arithmetic with one
+term that does not travel; it is now an arithmetic with two. The pre-build
+bound stands until the rig re-runs it.
+
+**A contamination lesson that is now a gate.** Every figure this section has
+had to retire was retired for board state, so the controls are read on this
+side too: `LoadControl` carries the worst dense/sparse divergence into the
+record, and a **graded** run whose board is not quiet is refused rather than
+reported (armed here; increment 6 is the run it grades). A run can no longer be
+read as clean after the fact — the evidence rides with it. The first off-rig
+attempt had the depth-5 sparse/dense control diverge **111 %** and refuse the
+sparse path; a
+second run on a quiet box gave **−1.0 %** on the same arm. The first was taken
+while this worktree was building. A timing harness measures the box it is on,
+including whatever else is on it.
+
+### 10.5 The examiner
+
+`examine_tier_readings`, `TierReading`, `TierCoverage`, `TierFault` and
+`HeightSpan` are **unmodified**. What increment 4 replaced is the *source* of
+the rows: `InjectedTier` gives way to the landed `root_at_count` composition on
+one side and the ring on the other. The injected-tier tests stay — they are the
+proof the examiner's three verdicts fire, and a real tier cannot prove that,
+because a real tier that disagrees is a defect being shipped.
+
+**Two passes, because one of them cannot see a hole.**
+
+| Pass | Segment tier | What it can catch |
+| --- | --- | --- |
+| Agreement | the landed `root_at_count` over the whole ingested chain | `Disagree` — the ring's root or depth against the composition's, at every height |
+| Totality | `OutsideSpan` at every height, which is what this fixture's freeze cursor **is** (asserted, not assumed) | `Uncovered` — with the segment tier answering, the store masks every hole |
+
+Neither tier is read through `root_and_depth_at`. That is the *dispatcher*: it
+picks one tier and returns it, so feeding it to both columns would compare the
+picked tier to itself.
+
+### 10.6 The one axis a real-data red-bite cannot reach
+
+On the production read, C3 forces the snapshot's leaf count and the client's to
+be equal, so a depth taken from the wrong one is **invisible there**. The tier
+reader the examiner consumes has no such check, and the weld is asserted against
+directly — a snapshot over a count on the far side of a layer step must report
+that count's depth. Recorded here rather than left as a green that proves less
+than it looks like it does.

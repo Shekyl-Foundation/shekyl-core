@@ -89,6 +89,7 @@ use shekyl_chain_rules::{
     AtHeight, BlockOutputs, ChainView, RecordedBlock, RecordedWeights, Tip, TreeFrontier,
 };
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, TxHash};
+use shekyl_units::AtomicUnits;
 
 use crate::codec::BlockInfo;
 
@@ -242,5 +243,18 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
 
     fn has_transaction(&self, hash: &TxHash) -> Result<bool, StoreError> {
         tx_reads::has_transaction(self.batch.txn(), hash).map_err(|f| self.arm(f))
+    }
+
+    /// The E6 slice 7 wave-B read: the `total_burned` register as this
+    /// batch holds it — the fold `connect` maintains under SI-8, before
+    /// this block's own burn is folded in ([`WriteBatch::total_burned`],
+    /// the same body the batch's other callers use). CEN-F17 nets it off
+    /// the parent's accumulator; the validator, not the store, judges the
+    /// pair (`Corrupt::BurnExceedsEmission` → [`WriteBatch::refuse_corrupt`]).
+    ///
+    /// [`WriteBatch::total_burned`]: super::write::WriteBatch::total_burned
+    /// [`WriteBatch::refuse_corrupt`]: super::write::WriteBatch::refuse_corrupt
+    fn total_burned(&self) -> Result<AtomicUnits, StoreError> {
+        self.batch.total_burned()
     }
 }

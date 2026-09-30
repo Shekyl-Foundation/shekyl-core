@@ -62,8 +62,11 @@ impl Dial for Loopback {
         let id = open.id();
         let ends = StreamEnds::open(self.send_cap);
         let writer_queue = ends.writer_queue.clone();
+        // The drain stops on either close reason and records neither: a
+        // full send is recorded as `SendQueueFull` by the hub at the send
+        // (`Hub::send`), and retirement drops the hold, a local close.
         let writer = thread::spawn(move || {
-            while let Some(bytes) = writer_queue.pop_blocking() {
+            while let Ok(bytes) = writer_queue.pop_blocking() {
                 writer_queue.release(bytes.len());
             }
         });

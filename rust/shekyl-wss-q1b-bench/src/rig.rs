@@ -301,3 +301,22 @@ fn read_cpu_model() -> Option<String> {
 #[cfg(test)]
 #[path = "rig_tests.rs"]
 mod tests;
+
+/// Whether a run may grade given where its measured writes actually land.
+///
+/// [`decide`] can check that a storage attestation was *made*; it cannot check
+/// that the attestation describes the device the run wrote to, because the
+/// path belongs to the caller. An attestation naming a device while the
+/// measured `fsync` lands somewhere else is not a weaker claim than no
+/// attestation — it is a false one, and it is false in the flattering
+/// direction, since `TMPDIR` on the pinned board resolves to microSD or tmpfs
+/// rather than to the attested SSD.
+///
+/// So the rule is not "prefer a path" but "a graded run must name one". This
+/// cannot verify that the named path *is* the attested device — nothing
+/// portable can — and it does not pretend to: it closes the case where the
+/// attestation had no path to be about at all.
+#[must_use]
+pub fn storage_attestation_is_bound(grading: bool, store_dir: Option<&std::path::Path>) -> bool {
+    !grading || store_dir.is_some()
+}
