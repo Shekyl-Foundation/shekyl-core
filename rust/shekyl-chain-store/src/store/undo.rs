@@ -247,6 +247,7 @@ where
             UndoEntry::Replaced {
                 key, prior, post, ..
             } => (key, prior.as_deref(), post),
+            UndoEntry::Removed { key, prior, .. } => return undo_removed(self, txn, key, prior),
         };
         if let Err(reason) = K::well_formed(key) {
             return Ok(Undone::Malformed(reason));
@@ -281,6 +282,39 @@ where
             Some(_) => Undone::PostImageMismatch,
         })
     }
+}
+
+/// The inverse of a journaling delete ([`UndoEntry::Removed`]): the write
+/// left the key absent, so `prior` goes back and the insert must displace
+/// nothing. A value found under the key is the mismatch the keyed arms read
+/// off the post-image — there is no digest of an absence to compare
+/// against, and none is needed: absence is one state.
+fn undo_removed<K, V>(
+    def: &TableDefinition<'static, K, V>,
+    txn: &WriteTransaction,
+    key: &[u8],
+    prior: &[u8],
+) -> Result<Undone, StoreError>
+where
+    K: Key + Restorable + 'static,
+    V: Value + Restorable + 'static,
+{
+    if let Err(reason) = K::well_formed(key) {
+        return Ok(Undone::Malformed(reason));
+    }
+    if let Err(reason) = V::well_formed(prior) {
+        return Ok(Undone::Malformed(reason));
+    }
+    let mut table = txn.open_table(*def).map_err(EngineError::Table)?;
+    let displaced = table
+        .insert(K::from_bytes(key), V::from_bytes(prior))
+        .map_err(EngineError::Storage)?
+        .is_some();
+    Ok(if displaced {
+        Undone::TargetMismatch
+    } else {
+        Undone::Reversed
+    })
 }
 
 /// The batch's journal slot: at most one live [`Recording`].

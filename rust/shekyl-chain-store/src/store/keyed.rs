@@ -5,9 +5,10 @@
 
 //! Keyed-table write handles: one verb per handle (C2-R8 §7.3).
 //!
-//! A [`WriteBatch`](super::WriteBatch) opens a keyed table as either an
+//! A [`WriteBatch`](super::WriteBatch) opens a keyed table as one of an
 //! [`InsertTable`] (fatal on a present key; the `SI-` belt is bound at
-//! open) or an [`UpsertTable`] (overwrite, declared). redb admits one
+//! open), an [`UpsertTable`] (overwrite, declared) or a [`RemoveTable`]
+//! (fatal on an absent key; the belt is bound at open). redb admits one
 //! handle per table per transaction, so the verb is chosen when the table
 //! is opened — not per call, and not as a flag on a common type. A
 //! hard-fork that reclassifies a table from a set to a register opens the
@@ -17,10 +18,17 @@
 //! inherent methods returning [`StoreError`]; the engine's `ReadableTable`
 //! is not implemented, so a write closure can `?` a lookup.
 //!
-//! Both verbs **journal** themselves: while the batch is recording a pop
-//! journal (`store::undo`), a successful `insert` records the key it added
-//! and a successful `upsert` records the value it displaced, so `pop` can
-//! reverse either without knowing which surface made the write.
+//! Every verb **journals** itself: while the batch is recording a pop
+//! journal (`store::undo`), a successful `insert` records the key it
+//! added, a successful `upsert` the value it displaced, and a successful
+//! `remove` the value it took out, so `pop` can reverse any of them
+//! without knowing which surface made the write.
+//!
+//! The delete verb has one caller: DRS-E4's epoch close removes
+//! `archival_budget_accruing[E]` in the transaction that writes
+//! `archival_budget[E]` (`ARW-Q3`, SI-23). The keyed-handle module refused
+//! to pre-provision a deleter until a drain named the row it enforces;
+//! that is the row.
 
 use core::borrow::Borrow;
 use core::ops::RangeBounds;
@@ -44,17 +52,21 @@ pub struct InsertOnce {
 /// This handle's value writes are declared overwrite.
 pub struct Overwrite;
 
+/// This handle's writes are journaling deletes of present keys, enforcing
+/// `row` on an absent one.
+pub struct RemoveOnce {
+    row: StoreInvariant,
+}
+
 /// A keyed table opened for writing inside one
 /// [`WriteBatch`](super::WriteBatch).
 ///
-/// `W` is the write verb: [`InsertOnce`] or [`Overwrite`]. Reads are on
-/// both. Call sites name the aliases [`InsertTable`] and [`UpsertTable`].
+/// `W` is the write verb: [`InsertOnce`], [`Overwrite`] or [`RemoveOnce`].
+/// Reads are on all three. Call sites name the aliases [`InsertTable`],
+/// [`UpsertTable`] and [`RemoveTable`].
 ///
 /// Borrows the batch for `'txn`, so it cannot outlive the closure that
-/// opened it. Deletion is not a value write and is not offered here: the
-/// only deleter in the store is the pop journal's replay (`store::undo`),
-/// and S-CURVE names a journaling delete verb — with the row it enforces —
-/// when the drain needs one, rather than this handle pre-provisioning it.
+/// opened it.
 #[must_use = "a keyed-table handle is a loan on the batch; dropping it writes nothing"]
 pub struct KeyedTable<'txn, K: Key + 'static, V: Value + 'static, W> {
     inner: Table<'txn, K, V>,
@@ -117,6 +129,9 @@ pub type InsertTable<'txn, K, V> = KeyedTable<'txn, K, V, InsertOnce>;
 
 /// Overwrite keyed table: a present key is replaced, and the verb says so.
 pub type UpsertTable<'txn, K, V> = KeyedTable<'txn, K, V, Overwrite>;
+
+/// Remove-once keyed table: an absent key is the belt bound at open.
+pub type RemoveTable<'txn, K, V> = KeyedTable<'txn, K, V, RemoveOnce>;
 
 /// One stored pair, as [`KeyedTable::first`] / [`KeyedTable::last`] return it.
 pub type TablePair<'a, K, V> = (AccessGuard<'a, K>, AccessGuard<'a, V>);
@@ -229,6 +244,51 @@ impl<'txn, K: Key + Restorable + 'static, V: Restorable + 'static> UpsertTable<'
             });
         }
         Ok(displaced)
+    }
+}
+
+impl<'txn, K: Key + Restorable + 'static, V: Restorable + 'static> RemoveTable<'txn, K, V> {
+    pub(super) const fn new_remove(
+        inner: Table<'txn, K, V>,
+        batch: Handles<'txn>,
+        row: StoreInvariant,
+    ) -> Self {
+        Self {
+            inner,
+            batch,
+            write: RemoveOnce { row },
+        }
+    }
+
+    /// Take `key` out, where `key` must be present.
+    ///
+    /// An absent key is a violation of the `SI-` row this handle was
+    /// opened with (SI-23 for `archival_budget_accruing`: the close deletes
+    /// the row the epoch accrued into, and finding none is a close that
+    /// did not accrue). The table is left untouched, this call returns the
+    /// violation, and the batch is **poisoned** as [`InsertTable::insert`]
+    /// poisons it.
+    ///
+    /// While the batch is recording a pop journal, a successful remove
+    /// records the value it took out so `pop` can put it back.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::InvariantViolated`] for the bound row if `key` was
+    /// absent; [`EngineError::Storage`] if the engine refused the write.
+    pub fn remove<'k>(&mut self, key: impl Borrow<K::SelfType<'k>>) -> Result<(), StoreError> {
+        check_row::<K>(self.batch.table_name(), key.borrow())?;
+        let row = self.write.row;
+        let key_bytes = self.batch.capture(K::as_bytes(key.borrow()));
+        let Some(removed) = self.inner.remove(key).map_err(EngineError::Storage)? else {
+            return Err(self.batch.poison.arm(row));
+        };
+        if let Some(key) = key_bytes {
+            let prior = Box::<[u8]>::from(V::as_bytes(&removed.value()).as_ref());
+            self.batch
+                .journal(|table| UndoEntry::Removed { table, key, prior });
+        }
+        Ok(())
     }
 }
 

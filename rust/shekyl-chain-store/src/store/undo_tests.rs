@@ -533,3 +533,138 @@ fn a_probe_table_writes_freely_while_no_recording_is_live() {
     assert!(ordinal_of(redb::TableHandle::name(&PROPERTIES)).is_some());
     cleanup(&path);
 }
+
+/// A row under `hf_versions[5]`, written outside any recording, for the
+/// delete-verb tests to take out.
+fn seed_hf5(store: &ChainStore) {
+    let seeded: Result<(), TestErr> = store.write(|batch| {
+        batch.open_upsert_table(HF_VERSIONS)?.upsert(
+            5,
+            RuleSetInForce(RuleSetId::from_raw(7))
+                .encoded()
+                .as_encoded(),
+        )?;
+        Ok(())
+    });
+    seeded.expect("seed");
+}
+
+fn hf5(store: &ChainStore) -> Option<RuleSetInForce> {
+    let snap = store.begin_read().expect("read");
+    snap.open_table(HF_VERSIONS)
+        .expect("t")
+        .get(5)
+        .expect("g")
+        .map(|g| g.value().decode().expect("decodes"))
+}
+
+/// The third verb (DRS-E4 commit 5): a `remove` journals the value it took
+/// out as a `Removed` entry, the row is gone after the batch, and replay
+/// puts the prior back — the delete is as pop-able as the two value verbs.
+#[test]
+fn a_remove_journals_its_prior_and_replay_restores_it() {
+    let path = tmp("undo-remove");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    seed_hf5(&store);
+    let out: Result<usize, TestErr> = store.write(|batch| {
+        let recording = batch.record_undo(1);
+        batch.open_remove_table(HF_VERSIONS, PROBE_ROW)?.remove(5)?;
+        Ok(recording.seal()?)
+    });
+    assert_eq!(out, Ok(1));
+    assert_eq!(hf5(&store), None, "the row is gone");
+    assert_eq!(
+        undo_row(&store, 1).expect("row written").0,
+        vec![UndoEntry::Removed {
+            table: ordinal_of("hf_versions").expect("catalogued"),
+            key: Box::new(5u64.to_le_bytes()),
+            prior: Box::new([7]),
+        }]
+    );
+
+    let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(1)?));
+    assert_eq!(popped, Ok(Replayed::Entries(1)));
+    assert_eq!(
+        hf5(&store),
+        Some(RuleSetInForce(RuleSetId::from_raw(7))),
+        "the prior is back"
+    );
+    assert!(undo_row(&store, 1).is_none(), "the row is consumed");
+    cleanup(&path);
+}
+
+/// An absent key is the belt the remove handle was opened with: refused,
+/// and the batch is armed so nothing it wrote lands.
+#[test]
+fn removing_an_absent_key_is_the_bound_row_and_arms_the_batch() {
+    let path = tmp("undo-remove-absent");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let recording = batch.record_undo(1);
+        batch.upsert_property::<ProbeCell>(&9)?;
+        let refused = batch.open_remove_table(HF_VERSIONS, PROBE_ROW)?.remove(5);
+        assert!(
+            matches!(refused, Err(StoreError::InvariantViolated(ref row)) if *row == PROBE_ROW),
+            "{refused:?}"
+        );
+        recording.seal()?;
+        Ok(())
+    });
+    assert!(out.is_err(), "an armed batch does not commit");
+    let snap = store.begin_read().expect("read");
+    assert_eq!(
+        snap.get_property::<ProbeCell>().expect("cell"),
+        None,
+        "nothing landed"
+    );
+    drop(snap);
+    assert!(undo_row(&store, 1).is_none());
+    cleanup(&path);
+}
+
+/// SI-6 for the delete: replay of a `Removed` entry must find the key
+/// absent. A value written around the journal after the remove is the
+/// state the entry does not describe, so the pop refuses rather than
+/// overwriting it with `prior`.
+#[test]
+fn a_key_present_at_the_undo_of_a_remove_is_si6_not_an_overwrite() {
+    let path = tmp("undo-remove-around");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    seed_hf5(&store);
+    let removed: Result<usize, TestErr> = store.write(|batch| {
+        let recording = batch.record_undo(1);
+        batch.open_remove_table(HF_VERSIONS, PROBE_ROW)?.remove(5)?;
+        Ok(recording.seal()?)
+    });
+    assert_eq!(removed, Ok(1));
+    // Write around the journal.
+    let around: Result<(), TestErr> = store.write(|batch| {
+        batch.open_upsert_table(HF_VERSIONS)?.upsert(
+            5,
+            RuleSetInForce(RuleSetId::from_raw(3))
+                .encoded()
+                .as_encoded(),
+        )?;
+        Ok(())
+    });
+    around.expect("the unjournaled write lands");
+
+    let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(1)?));
+    assert_eq!(
+        popped,
+        Err(TestErr::Store(
+            StoreError::from(StoreInvariant::UndoLogIncoherent {
+                height: 1,
+                fault: UndoFault::EntryNotReversible { index: 0 },
+            })
+            .to_string()
+        ))
+    );
+    assert_eq!(
+        hf5(&store),
+        Some(RuleSetInForce(RuleSetId::from_raw(3))),
+        "the around-write is intact; nothing was repaired"
+    );
+    assert!(undo_row(&store, 1).is_some(), "the row is not consumed");
+    cleanup(&path);
+}

@@ -46,11 +46,13 @@
 //! **throws** only when a non-batch `m_write_txn` is live (`:4108`). This
 //! store refuses with a typed error and never spins — DRS-W17.
 //!
-//! # Two verbs, and a violation poisons the batch (C2-R8 §7.3, Q2)
+//! # Three verbs, and a violation poisons the batch (C2-R8 §7.3, Q2)
 //!
 //! Keyed tables open through the batch as an [`InsertTable`] (fatal on a
-//! present key; the `SI-` row is bound at open) or an [`UpsertTable`]
-//! (overwrite, declared). Typed `properties` cells are registers and go
+//! present key; the `SI-` row is bound at open), an [`UpsertTable`]
+//! (overwrite, declared) or a [`RemoveTable`] (a journaling delete, fatal
+//! on an absent key; DRS-E4's close is its one caller). Typed `properties`
+//! cells are registers and go
 //! through [`upsert_property`](WriteBatch::upsert_property). Any invariant
 //! violation seen through the batch — a refused `insert`, a cell that will
 //! not decode — arms a latch `complete` checks on **both** the `Ok` and
@@ -115,11 +117,13 @@ pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
 pub use connect::Connected;
 pub use error::{
-    AltCannot, CellFault, EngineError, ErrorClass, LeafCountFault, LeafDensity, PoolCannot,
-    StoreCannot, StoreError, StoreInvariant, UndoFault,
+    AccrualFault, AltCannot, CellFault, EngineError, ErrorClass, LeafCountFault, LeafDensity,
+    PoolCannot, StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
-pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
+pub use keyed::{
+    InsertOnce, InsertTable, KeyedTable, Overwrite, RemoveOnce, RemoveTable, UpsertTable,
+};
 pub use output_reads::RecordedOutput;
 pub use pop::Popped;
 pub use prune::{Horizons, Pruned};

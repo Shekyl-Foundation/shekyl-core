@@ -32,12 +32,14 @@
 //!
 //! # The verbs
 //!
-//! Keyed tables open as one of two handles — [`InsertTable`] (fatal on a
-//! present key; the `SI-` row is bound at open) or [`UpsertTable`]
-//! (overwrite, declared) — never as a raw `redb::Table` (C2-R8 §7.3).
-//! The verb is the handle: a set table cannot upsert, a register cannot
-//! insert, and a hard-fork that reclassifies a table opens the other
-//! handle. Typed `properties` cells are registers and are written
+//! Keyed tables open as one of three handles — [`InsertTable`] (fatal on a
+//! present key; the `SI-` row is bound at open), [`UpsertTable`]
+//! (overwrite, declared) or [`RemoveTable`] (a journaling delete, fatal on
+//! an absent key; the row is bound at open) — never as a raw
+//! `redb::Table` (C2-R8 §7.3). The verb is the handle: a set table cannot
+//! upsert, a register cannot insert, and a hard-fork that reclassifies a
+//! table opens the other handle. Typed `properties` cells are registers
+//! and are written
 //! through [`upsert_property`](WriteBatch::upsert_property). There is no
 //! multimap opener: the catalogue has had no multimap since S-OUT-KI's
 //! layout commit made `output_amounts` a keyed `(amount, amount_index)`
@@ -82,7 +84,7 @@ use shekyl_units::AtomicUnits;
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
 use super::header;
-use super::keyed::{Handles, InsertTable, UpsertTable};
+use super::keyed::{Handles, InsertTable, RemoveTable, UpsertTable};
 use super::shared::Shared;
 use super::undo::{self, Journal, Recording, Replayed, Restorable};
 use super::view::BatchView;
@@ -565,6 +567,50 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         self.txn()
             .open_table(definition)
             .map(|table| UpsertTable::new_upsert(table, handles))
+            .map_err(|e| EngineError::Table(e).into())
+    }
+
+    /// Open a keyed table for journaling deletes of present keys; an
+    /// absent key is a violation of `row`.
+    ///
+    /// Neither value verb compiles on the returned type:
+    ///
+    /// ```compile_fail,E0599
+    /// use redb::TableDefinition;
+    /// use shekyl_chain_store::store::{ChainStore, StoreError, StoreInvariant};
+    /// use shekyl_chain_store::codec::SettlementEpochBlocks;
+    /// const T: TableDefinition<&str, u64> = TableDefinition::new("t");
+    /// const ROW: StoreInvariant = StoreInvariant::AccruingNotSingular {
+    ///     observed: shekyl_chain_store::store::AccrualFault::AbsentAtClose,
+    /// };
+    /// let epoch = SettlementEpochBlocks::new(10_000).unwrap();
+    /// let store = ChainStore::create("never-opened.redb", epoch).unwrap();
+    /// store.write(|batch| -> Result<(), StoreError> {
+    ///     batch.open_remove_table(T, ROW)?.upsert("k", &1)?;
+    ///     Ok(())
+    /// });
+    /// ```
+    ///
+    /// Same by-name refusals as [`open_insert_table`](Self::open_insert_table).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreCannot::FamilyStubbed`], [`StoreCannot::PropertiesAreTyped`]
+    /// or [`EngineError::Table`].
+    pub fn open_remove_table<'txn, K, V>(
+        &'txn self,
+        definition: TableDefinition<'_, K, V>,
+        row: StoreInvariant,
+    ) -> Result<RemoveTable<'txn, K, V>, StoreError>
+    where
+        K: Key + Restorable + 'static,
+        V: Restorable + 'static,
+    {
+        self.admit(definition.name())?;
+        let handles = self.handles(definition.name());
+        self.txn()
+            .open_table(definition)
+            .map(|table| RemoveTable::new_remove(table, handles, row))
             .map_err(|e| EngineError::Table(e).into())
     }
 

@@ -269,6 +269,14 @@ impl Fixtures for UndoLog {
                 }]),
             ),
             (
+                "removed",
+                UndoLog(vec![UndoEntry::Removed {
+                    table: TableOrdinal::from_index(36),
+                    key: Box::new(3u64.to_le_bytes()),
+                    prior: Box::new(500u64.to_le_bytes()),
+                }]),
+            ),
+            (
                 "three_in_write_order",
                 UndoLog(vec![
                     UndoEntry::Inserted {

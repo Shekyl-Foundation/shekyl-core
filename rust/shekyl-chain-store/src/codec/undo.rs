@@ -28,6 +28,7 @@
 //!                          at layout v6 with the catalogue's only multimap,
 //!                          S-OUT-KI SOK-1 — the tag is not reused, rule 23)
 //!   tag 3  Replaced       payload = (0x00 | 0x01 prior:bytes), post:[u8; 32]
+//!   tag 4  Removed        payload = prior:bytes
 //! bytes     := len:u32 LE, len raw bytes
 //! post      := cSHAKE256-32(POST_IMAGE_DST, value the write left under key)
 //! ```
@@ -38,10 +39,14 @@
 //! restores `prior`; both would also "succeed" against a key whose value is
 //! not what the connect wrote — something wrote around the journal, or the
 //! file is corrupt — and pop would report `Reversed` while quietly moving
-//! the store to a state no journal describes. So every keyed entry carries
-//! a 32-byte digest of the value the write **left** under the key, and
-//! replay compares it against the value it displaces before counting the
-//! entry reversed; a mismatch is SI-6 (`UndoLogIncoherent`). The digest is
+//! the store to a state no journal describes. So every keyed entry whose
+//! write **left a value** carries a 32-byte digest of it, and replay
+//! compares the digest against the value it displaces before counting the
+//! entry reversed; a mismatch is SI-6 (`UndoLogIncoherent`). A `Removed`
+//! entry's write left **nothing** under the key, and absence needs no
+//! digest: replay re-inserts `prior` and the insert must displace nothing,
+//! which is the same check with the same fault (DRS-E4 commit 5, the first
+//! journaling delete — `ARW-Q3`'s second half needed one). The digest is
 //! domain-separated
 //! ([`POST_IMAGE_DST`]) so a value's digest cannot be confused with any
 //! other 32-byte quantity the store hashes (rule 30).
@@ -99,6 +104,18 @@ pub enum UndoEntry {
         /// [`post_image`] of the value the overwrite wrote.
         post: [u8; 32],
     },
+    /// A journaling delete (`remove`) took `prior` out from under a present
+    /// key. Undo **re-inserts** `prior`; the key must be absent when it
+    /// does — the write left nothing there, so a value found under the key
+    /// is the mismatch a post-image would have caught.
+    Removed {
+        /// The table, by declaration ordinal.
+        table: TableOrdinal,
+        /// The key's redb bytes.
+        key: Box<[u8]>,
+        /// The removed value's redb bytes.
+        prior: Box<[u8]>,
+    },
 }
 
 impl UndoEntry {
@@ -106,19 +123,22 @@ impl UndoEntry {
     #[must_use]
     pub const fn table(&self) -> TableOrdinal {
         match self {
-            Self::Inserted { table, .. } | Self::Replaced { table, .. } => *table,
+            Self::Inserted { table, .. }
+            | Self::Replaced { table, .. }
+            | Self::Removed { table, .. } => *table,
         }
     }
 
     const TAG_INSERTED: u8 = 1;
     // Tag 2 is RESERVED (module docs): the retired multimap member.
     const TAG_REPLACED: u8 = 3;
+    const TAG_REMOVED: u8 = 4;
 
     /// The fewest bytes any entry can occupy: tag, table, an empty key's
-    /// length prefix, and the shortest payload (an `Inserted` post-image).
-    /// Bounds how many entries a row's bytes can hold, so a corrupt count
-    /// never drives an allocation.
-    const MIN_ENTRY_LEN: usize = 1 + 4 + 4 + 32;
+    /// length prefix, and the shortest payload (a `Removed` entry's empty
+    /// `prior` — its length prefix alone). Bounds how many entries a row's
+    /// bytes can hold, so a corrupt count never drives an allocation.
+    const MIN_ENTRY_LEN: usize = 1 + 4 + 4 + 4;
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         match self {
@@ -146,6 +166,12 @@ impl UndoEntry {
                 }
                 out.extend_from_slice(post);
             }
+            Self::Removed { table, key, prior } => {
+                out.push(Self::TAG_REMOVED);
+                out.extend_from_slice(&table.index().to_le_bytes());
+                put_bytes(out, key);
+                put_bytes(out, prior);
+            }
         }
     }
 
@@ -171,6 +197,10 @@ impl UndoEntry {
                     prior,
                     post,
                 })
+            }
+            Self::TAG_REMOVED => {
+                let prior = Box::from(r.bytes()?);
+                Ok(Self::Removed { table, key, prior })
             }
             _ => Err(r.invalid("entry tag names no variant")),
         }
@@ -247,7 +277,30 @@ mod tests {
                 prior: None,
                 post: post_image(&[]),
             },
+            UndoEntry::Removed {
+                table: TableOrdinal::from_index(7),
+                key: Box::new([0xE4]),
+                prior: Box::new(11u64.to_le_bytes()),
+            },
         ]
+    }
+
+    #[test]
+    fn a_removed_entry_is_the_shortest_and_the_bound_is_exact() {
+        // `MIN_ENTRY_LEN` is the layout's floor: an entry with an empty key
+        // and an empty `prior` encodes to exactly that many bytes, so the
+        // count bound in `decode` admits every well-formed row and no
+        // shorter one.
+        let shortest = UndoEntry::Removed {
+            table: TableOrdinal::from_index(0),
+            key: Box::new([]),
+            prior: Box::new([]),
+        };
+        let mut out = Vec::new();
+        shortest.encode_into(&mut out);
+        assert_eq!(out.len(), UndoEntry::MIN_ENTRY_LEN);
+        let log = UndoLog(vec![shortest]);
+        assert_eq!(UndoLog::decode(&log.encode()), Ok(log));
     }
 
     #[test]
@@ -335,7 +388,7 @@ mod tests {
             Err(invalid("entry tag names no variant"))
         );
 
-        let mut replaced = UndoLog(entries()[2..].to_vec()).encode();
+        let mut replaced = UndoLog(entries()[2..3].to_vec()).encode();
         let flag = replaced.len() - 1 - 32; // `prior: None`'s flag byte precedes the post-image
         assert_eq!(replaced[flag], 0);
         replaced[flag] = 2;
@@ -347,7 +400,7 @@ mod tests {
 
     #[test]
     fn table_accessor_names_each_entry_s_target() {
-        for (entry, want) in entries().iter().zip([0, 19, 19]) {
+        for (entry, want) in entries().iter().zip([0, 19, 19, 7]) {
             assert_eq!(entry.table().index(), want);
         }
     }
