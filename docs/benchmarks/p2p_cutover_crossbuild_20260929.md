@@ -512,8 +512,62 @@ respective deadline, re-derived from the larger run — including a link
 whose RTT exceeds this one's, which is the factor of two made to fail
 rather than assumed to hold.
 
+## Tor inbound distribution, floor device responder (2026-09-30 UTC)
+
+The Tor connector's inbound side. Raw samples:
+[`p2p_tor_inbound_floor_20260930.tsv`](p2p_tor_inbound_floor_20260930.tsv).
+On Tor inbound the daemon does no Noise work (D10.3), so the span is the
+gap timer alone (D10.5): channel established to session established, the
+Levin `COMMAND_HANDSHAKE` over the inbound circuit. There is no dial or
+handshake span on our side to derive here — the gap is the whole of it.
+
+Conditions, per D9:
+
+- Responder: the floor device (Pi-4, aarch64, 4 cores), daemon
+  `2f9565f71`, publishing its default ephemeral per-boot PoW onion
+  through the pinned `16.0a12` Tor managed beside it. Miner off.
+- Dialer: a second daemon on the same floor device, at `2f9565f71`,
+  dialing that onion through its own pinned Tor client, restarted per
+  sample so each inbound connection is a fresh rendezvous circuit
+  (cached consensus, 3–4 s re-bootstrap). Both daemons and both Tor
+  processes shared the floor's four cores; the idle regtest daemon was
+  also resident.
+- Link: the live Tor network, a self-dial — both circuit ends on the
+  floor, real rendezvous through public relays. This is **not** a
+  geographically distributed circuit set; the distant-circuit inbound
+  gap is owed (see below). The outbound gap to a South-America onion is
+  the earlier Tor dial distribution's 1.26 s p99.
+- n = 66, one timeout. The clean rate was reachability-limited: the
+  floor's *ephemeral* onion does not propagate a descriptor as reliably
+  as a durable one, and one `DialFailed` marks the onion recently-failed
+  for 240 s (`P2P_ANON_FAILED_ADDR_FORGET_SECONDS`), so a lost circuit
+  costs four minutes. A 15-minute wall cap took 66 clean samples; a
+  full n ≥ 100 needs a durable onion (`--anonymous-inbound`, stable
+  descriptor), which is the follow-up.
+
+| span | p50 | p90 | p95 | p99 | max | 2 × p99 |
+| --- | --- | --- | --- | --- | --- | --- |
+| inbound gap (`gap_ns`, floor responder) | 410 ms | 685 ms | 720 ms | 1.82 s | 1.82 s | 3.65 s (provisional) |
+
+61 of 66 samples are under 700 ms and 64 under 1 s; the tail is two
+outliers (1.03 s, 1.82 s). At n = 66 the p99 rank is the maximum itself
+— exactly the one-sample fragility D9 warns of — so **the 3.65 s the
+formula gives is provisional**, resting on a single observation. The
+robust figure is p95 = 720 ms. The Tor connector has one gap timer for
+both directions (D10.5); its deadline is the maximum over the inbound
+and outbound gap distributions, and both the single-sample p99 here and
+the missing distant-circuit inbound run are why that deadline is not
+fixed in this record.
+
 ## Not this run
 
-Tor relay and the floor device's inbound Tor distribution were not
-run. The thread-budget legs (D5 conditions pinned 2026-09-30) are not
-in this record.
+The Tor relay leg — the D-5 per-hop stem latency over Tor
+(`DAEMON_RELAY_PRIVACY.md` §D-5) — was not run: its reopening trigger
+is "the first testnet with representative geography measures real
+inter-node relay latency," which needs a stemmed transaction over a
+geographically distributed Tor link. On this fixed-difficulty testnet
+that means mining to a wallet and building a transaction first; the
+transport half of the hop is already bounded by the Tor gap figures
+(outbound 1.26 s p99, inbound above). The thread-budget legs (D5
+conditions pinned 2026-09-30) are not in this record and are blocked on
+the thread-ledger move-and-print row.
