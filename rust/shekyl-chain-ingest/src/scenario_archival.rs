@@ -29,15 +29,16 @@
 //! are a marker, not a signature. When J10 lands, [`Persona::serve_credit`]
 //! is where the signer goes.
 //!
-//! The vin-to-wire mapping ([`bond_post_input`]) is `shekyl-engine-core`'s
-//! `wire_bond_post_input`, `pub(crate)` there. Two lanes now need it; the
-//! shared home is a `docs/FOLLOWUPS.md` row ("The bond-post vin → wire
-//! `Input` mapping has two copies"), not a copy left silent.
+//! The vin-to-wire mapping is
+//! [`shekyl_archival_bond_builder::bond_post_input`]: every
+//! [`shekyl_archival_retention::BondKind`] has one image there, and this
+//! driver calls it. The wallet's `wire_bond_post_input` is the producer
+//! policy over that same function.
 
-use shekyl_archival_bond_builder::{build_join_market_vin, build_release_vin};
+use shekyl_archival_bond_builder::{bond_post_input, build_join_market_vin, build_release_vin};
 use shekyl_archival_retention::{
-    p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, ArchivalServeCreditResponse, BondKind,
-    BondPostKind as RetentionBondPostKind, HoldingsDescriptor, HoldingsKind,
+    p_canonical_id_from_hybrid_pubkey, ArchivalServeCreditResponse, HoldingsDescriptor,
+    HoldingsKind,
 };
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
@@ -46,7 +47,7 @@ use shekyl_crypto_pq::signature::{
 };
 use shekyl_tx_builder::{InputTerm, OutputTerm};
 use shekyl_types::{PCanonicalId, SigningPayloadHash};
-use shekyl_wire::transaction::{BondPost, BondPostKind, Holdings, TxPrefix};
+use shekyl_wire::transaction::{BondPost, TxPrefix};
 use shekyl_wire::{Ct, CtBase, Input, Transaction};
 
 /// The driver's persona master seed. Any 64 bytes; fixed so the personas
@@ -239,33 +240,4 @@ pub fn complete_tree() -> HoldingsDescriptor {
         kind: HoldingsKind::CompleteTree,
         shard_ids: shekyl_archival_retention::ShardSet::new(Vec::new()).expect("empty"),
     }
-}
-
-/// Map a retention vin onto the consensus wire — `shekyl-engine-core`'s
-/// `wire_bond_post_input`, field for field (module docs on why it is here).
-pub fn bond_post_input(vin: &ArchivalBondPostVin) -> Input {
-    let kind = match &vin.kind {
-        BondKind::JoinMarket {
-            bond_spend_pk,
-            endpoint,
-        } => BondPostKind::JoinMarket {
-            bond_spend_pk: bond_spend_pk.clone(),
-            endpoint: *endpoint,
-        },
-        BondKind::Release => BondPostKind::Other(RetentionBondPostKind::Release as u8),
-        BondKind::Reinstate => BondPostKind::Other(RetentionBondPostKind::Reinstate as u8),
-    };
-    let holdings = match vin.holdings.kind {
-        HoldingsKind::ShardSetCompact => Holdings::ShardSetCompact(vin.holdings.shard_ids.to_vec()),
-        HoldingsKind::CompleteTree => Holdings::CompleteTree,
-    };
-    Input::BondPost(Box::new(BondPost {
-        hybrid_public_key: vin.hybrid_public_key.clone(),
-        p_canonical_id: PCanonicalId::from_bytes(vin.p_canonical_id),
-        kind,
-        holdings,
-        bonded_total_atomic: vin.bonded_total_atomic,
-        bond_credit: vin.bond_credit,
-        bond_debit: vin.bond_debit,
-    }))
 }

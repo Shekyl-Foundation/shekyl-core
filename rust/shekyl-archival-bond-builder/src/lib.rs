@@ -27,6 +27,10 @@
 //! 3. The two amount-level funding rules, as separate functions because the
 //!    side is genesis-frozen: [`verify_credit_funding`] (credit is a sink) and
 //!    [`verify_debit_funding`] (debit is a source).
+//! 4. [`bond_post_input`]: the one map from an [`ArchivalBondPostVin`] onto
+//!    the consensus [`Input::BondPost`](shekyl_wire::Input::BondPost). Every
+//!    [`shekyl_archival_retention::BondKind`] has an image, Reinstate included. A wallet that has no
+//!    producer for a kind refuses that kind before it calls the map.
 //!
 //! ## What this crate does NOT do
 //!
@@ -49,8 +53,10 @@
 #![deny(unsafe_code)]
 
 mod error;
+mod wire_input;
 
 pub use error::BondBuildError;
+pub use wire_input::bond_post_input;
 
 use shekyl_archival_retention::{
     bond_floor, p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, HoldingsDescriptor,

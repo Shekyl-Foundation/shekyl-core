@@ -3745,7 +3745,9 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-crypto-pq",
  "shekyl-ct-balance",
+ "shekyl-types",
  "shekyl-units",
+ "shekyl-wire",
  "thiserror",
 ]
 
