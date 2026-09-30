@@ -342,7 +342,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     use super::inode::socket_descriptors;
     use super::{
-        channel_choice, listen, ChannelChoice, ChoiceError, ClearnetOption, Config, Listener,
+        channel_choice, listen, ChannelChoice, ClearnetOption, Config, Listener,
     };
 
     const ID: [u8; 16] = [0x11; 16];

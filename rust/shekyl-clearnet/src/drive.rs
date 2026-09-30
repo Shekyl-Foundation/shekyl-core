@@ -814,7 +814,7 @@ impl TcpProbe {
         #[cfg(target_os = "linux")]
         let counts = tcp_counts(&self.fd);
         #[cfg(not(target_os = "linux"))]
-        let counts = None;
+        let counts: Option<(u32, u32)> = None;
         let Some((total_retrans, retransmits)) = counts else {
             return;
         };
