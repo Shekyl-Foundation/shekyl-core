@@ -649,6 +649,15 @@ name the same function. The overflow of the id total is
 `Corrupt::StorageIdsOverflow` → SI-8's class (`FoldOverflow`), a validator
 belt on a store invariant, not a new row.
 
+The defect was not new to the tree. S-PRUNE met it at build and recorded
+the correction in a ratified charter (`DRS_E1_SPRUNE.md` SPR-1, 2026-09-25,
+`first_tx_id(h) = storage_ids_through(cumulative_tx_count(h−1), h−1)`);
+this pre-flight, four days later, read the C++ and the census and re-derived
+the frontier without it. A recorded formula did not reach the next author;
+a function every site must call does. Stated as the general form in
+`05-system-thinking.mdc` ("A formula two lanes need is a function, not a
+row"; "The C++ is a template, not a source").
+
 **What commit 3 did not delete, and why (rule 22).** The §6 row scheduled
 `segment_leaf_count` out of the JSON and the consensus-side
 `leaves_per_segment` readers deleted. As landed, the Rust consensus closure
