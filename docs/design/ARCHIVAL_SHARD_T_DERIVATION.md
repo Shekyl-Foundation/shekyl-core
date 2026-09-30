@@ -53,9 +53,9 @@ Pin `b72aac2fc`. Every row read at source before anything was proposed.
 | Fact | Value | Source |
 |---|---|---|
 | `T`, the constant | `archival_shard_tx_count = 200`, PROVISIONAL | `config/consensus_constants.json:37`, comment `:36` |
-| Its one home | `shekyl_types::SHARD_TX_COUNT` | `rust/shekyl-types/src/archival.rs:94` |
+| Its one home | `shekyl_types::SHARD_TX_COUNT` | `rust/shekyl-types/src/archival/mod.rs:94` |
 | How it is sourced | the leaf crate's own `build.rs` reads the JSON and emits `ARCHIVAL_SHARD_TX_COUNT` | `rust/shekyl-types/build.rs:60`, `:70` |
-| Its only assertion | `SHARD_TX_COUNT > 0` | `rust/shekyl-types/src/archival.rs:101` |
+| Its only assertion | `SHARD_TX_COUNT > 0` | `rust/shekyl-types/src/archival/mod.rs:101` |
 | **Sole production consumer** | `shekyl-chain-store`'s prune: the discard range `shards.start·T .. shards.end·T`, the id→shard map `⌊id / T⌋`, the last-closed-shard id | `rust/shekyl-chain-store/src/store/prune.rs:267`, `:415-416`, `:490`, `:493` |
 | Other mentions | the consensus-constants digest, the `shekyl-types` re-export, `prune_tests.rs` | `rust/shekyl-rpc-types/build.rs:88`; `rust/shekyl-types/src/lib.rs:908` |
 | JSON membership | `T` passes both membership tests (a different value is a different chain; a network could legitimately name it differently) | `config/consensus_constants.json:2` |
@@ -73,7 +73,7 @@ Numerics this round must reason against, all read at source:
 | `CRB` | `challenge_resolution_blocks = 10000` in the JSON; the **response** deadline is `CHALLENGE_RESPONSE_BLOCKS = SEB / 20 = 500` blocks | `:31`; [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md):1991, [`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md):1266 |
 | `L` | `archival_attestation_anchor_lag = 4` blocks, of which **two blocks are the fetch-plus-retry span** | `config/consensus_constants.json:33`; [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1074-1090 |
 | `N` | in-flight fetch cap `8` (`shekyl_p_fetch::MAX_INFLIGHT`) | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):6, `:796` |
-| holdings cap | `MAX_HOLDINGS_SHARDS = 4096`, over `ShardSet(Vec<u64>)` | `rust/shekyl-types/src/archival.rs:73`, `:205` |
+| holdings cap | `MAX_HOLDINGS_SHARDS = 4096`, over `ShardSet(Vec<u64>)` | `rust/shekyl-types/src/archival/mod.rs:73`, `:205` |
 | transport figure (the one `L`'s span was sized on) | **a burst floor near 180 KB/s** — "a floor from a null result, not a sustained figure", quoted as "~20 s for 3.33 MB" | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1079 |
 | **transport figure, MEASURED** | **W₂, 2026-09-16, single-attempt, PR #746: cold p99 = 48.27 s, soak p99 = 86.06 s** for a 3.33 MB shard — i.e. **69.0 / 38.7 KB/s effective**, 2.4–4.3× worse than the 20 s premise on the same page | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1091-1095 |
 | good per spend | ~16.7 KB/tx = ~6.1 KB prunable + ~10.6 KB `pqc_auths` of a ~17–18 KB 2-in/2-out | [`ARCHIVAL_PRUNED_DAEMON_MODE_ROUND.md`](../completed/ARCHIVAL_PRUNED_DAEMON_MODE_ROUND.md):525 |
@@ -256,7 +256,7 @@ are stated against them.
 - **(B) The non-coinbase ordinal.** `k = ⌊ordinal / T⌋` with
   `ordinal = storage_id − (height + 1)` — the inverse of
   `storage_ids_through(listed, h) = listed + h + 1`
-  (`rust/shekyl-types/src/archival.rs:103-111`). Derivable from retained
+  (`rust/shekyl-types/src/archival/mod.rs:103-111`). Derivable from retained
   headers with **zero new data**, exactly as (A) is.
 
 ### Precondition, re-verified at source
@@ -384,7 +384,7 @@ whose implied bound exceeds the chosen `T`.
 
 **`L2` — bookkeeping and per-shard state.** A bond record carries
 `ShardSet(Vec<u64>)` capped at `MAX_HOLDINGS_SHARDS = 4096`
-(`rust/shekyl-types/src/archival.rs:73`, `:205`). A holder wanting more shards
+(`rust/shekyl-types/src/archival/mod.rs:73`, `:205`). A holder wanting more shards
 than that posts more bond records, each behind its own persona with the gate-6
 firewall cost. So for a holder covering a fraction `f` of a corpus of `X`
 storage ids:
@@ -669,7 +669,7 @@ quantities — not a value for `T`. (*`L2`'s ruling was the third until
    where the cap bounds an *operator* rather than a list.
 5. A second home for `T` appears, or a shard boundary is derived from anything
    but `cumulative_tx_count` and `T` — inherited from the landed row
-   (`rust/shekyl-types/src/archival.rs:88-101`).
+   (`rust/shekyl-types/src/archival/mod.rs:88-101`).
 
 ---
 
