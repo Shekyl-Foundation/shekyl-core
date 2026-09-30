@@ -589,10 +589,16 @@ both flights are one segment under one MSS, and the responder's
 message 2 is its first send, so Nagle does not hold it. The delayed-ACK
 timer does not make a 676 ms stall.
 
-What closes it is the span already owed: the responder's message-2
-write, split into the wait before `write_all` and the `write_all`
-itself. Time before the write is the runtime on a loaded host. Time
-inside `write_all` is the socket.
+What closes it is one line, `clearnet responder message2`, logged when
+the peer's first byte arrives, which is after message 2 has been
+delivered. `wait_before_write_ns` is the writer task's delay after the
+flight is handed off. `write_ns` is only `write_all`, and that returns
+when the kernel accepts the segment, lost or not. `total_retrans` is
+`TCP_INFO` at that moment (`tcpi_total_retrans`); `retransmits` is the
+in-flight count. A wait with `total_retrans` 0 is the runtime on a
+loaded host. `total_retrans` 2 with a write near 0 is a segment loss,
+and the factor of two covers it. Both zero while the floor is still
+waiting is a cause this split has not named.
 
 ## Tor inbound distribution, floor device responder (2026-09-30 UTC)
 

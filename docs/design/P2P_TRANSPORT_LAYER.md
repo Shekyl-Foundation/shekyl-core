@@ -1577,10 +1577,12 @@ responder), and the quiet South America responder has no such tail.
 Using the median is defensible while the tail is unattributed. It is
 not yet a number to write. A 676 ms stall on the 700 ms ceiling lands
 near 1.38 s against the 1.426 s that 2 × (700 + 12.6) rounds up to,
-about 50 ms of headroom, and the span that says whether the stall is
-the responder's writer or the socket is the message-2 write, still
-unlogged. The factor of two is jitter and congestion on the ceiling
-link. Twice the p99 of a shorter honest path is not a deadline: every
+about 50 ms of headroom. `write_all` returns when the kernel accepts
+the segment, so the attribution is `TCP_INFO` on the responder's
+socket once the peer has answered (`clearnet responder message2`:
+`wait_before_write_ns`, `write_ns`, `total_retrans`). That line is
+logged and not yet collected. The factor of two is jitter and
+congestion on the ceiling link. Twice the p99 of a shorter honest path is not a deadline: every
 dial on a longer honest path fails, and a failed clearnet dial marks
 the address for up to `P2P_FAILED_ADDR_FORGET_SECONDS` (1 h). Rounded
 up to 1 ms, once that span has attributed the tail: connect 1.415 s,

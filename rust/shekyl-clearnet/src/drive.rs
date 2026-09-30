@@ -337,8 +337,8 @@ where
         conn,
     )
     .await;
-    let (mut writer, recv) = match opened {
-        Ok(pair) => pair,
+    let (mut writer, recv, message2) = match opened {
+        Ok(opened) => opened,
         Err(kind) => {
             drop(hold);
             let cause = CloseCause::new(kind);
@@ -372,7 +372,7 @@ where
         drop(writer.await);
         return CloseCause::new(CloseKind::LocalClose);
     }
-    let read_fut = read_half(read, recv, inbound, Arc::clone(&overfull), conn);
+    let read_fut = read_half(read, recv, inbound, Arc::clone(&overfull), conn, message2);
     tokio::pin!(read_fut);
     tokio::select! {
         read_cause = &mut read_fut => {
@@ -404,7 +404,14 @@ async fn open_channel<C>(
     outbound: ByteQueue,
     overfull: Arc<Overfull>,
     conn: u64,
-) -> Result<(tokio::task::JoinHandle<Option<CloseCause>>, SeamRecv), CloseKind>
+) -> Result<
+    (
+        tokio::task::JoinHandle<Option<CloseCause>>,
+        SeamRecv,
+        Option<Arc<Message2Note>>,
+    ),
+    CloseKind,
+>
 where
     C: Clock + Clone + Send + 'static,
 {
@@ -420,11 +427,12 @@ where
     let opened = match (kind, role) {
         (ChannelChoice::Plain, _) => {
             let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
-            let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull, conn));
+            let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull, conn, None));
             drop(setup_tx.send(Setup::Plain));
-            Ok((writer, SeamRecv::Plain))
+            Ok((writer, SeamRecv::Plain, None))
         }
         (ChannelChoice::Noise, Role::Responder) => {
+            let note = Arc::new(Message2Note::default());
             let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
             let writer = tokio::spawn(write_half(
                 write,
@@ -432,6 +440,7 @@ where
                 outbound,
                 Arc::clone(&overfull),
                 conn,
+                Some(Arc::clone(&note)),
             ));
             let mut setup_tx = Some(setup_tx);
             match noise_handshake(
@@ -445,7 +454,7 @@ where
             )
             .await
             {
-                Ok(recv) => Ok((writer, recv)),
+                Ok(recv) => Ok((writer, recv, Some(note))),
                 Err(kind) => {
                     drop(setup_tx);
                     drop(writer.await);
@@ -465,17 +474,18 @@ where
             )
             .await?;
             let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
-            let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull, conn));
+            let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull, conn, None));
             if setup_tx
                 .send(Setup::Noise {
                     flight: Vec::new(),
                     send,
+                    handed_off: Instant::now(),
                 })
                 .is_err()
             {
                 return Err(CloseKind::LocalClose);
             }
-            Ok((writer, recv))
+            Ok((writer, recv, None))
         }
     };
     if opened.is_ok() {
@@ -492,7 +502,33 @@ where
 
 enum Setup {
     Plain,
-    Noise { flight: Vec<u8>, send: SendHalf },
+    Noise {
+        flight: Vec<u8>,
+        send: SendHalf,
+        /// When the flight was handed to this task. The wait until the
+        /// task runs is the runtime; `write_all` itself is not.
+        handed_off: Instant,
+    },
+}
+
+/// The responder's message-2 write, filled by the writer and read once
+/// the peer has answered — by then a lost segment has been retransmitted
+/// or it has not. `write_all` cannot tell those apart: it returns when
+/// the kernel accepts the segment.
+struct Message2Note {
+    wait_ns: AtomicU64,
+    write_ns: AtomicU64,
+    ready: AtomicBool,
+}
+
+impl Default for Message2Note {
+    fn default() -> Self {
+        Self {
+            wait_ns: AtomicU64::new(0),
+            write_ns: AtomicU64::new(0),
+            ready: AtomicBool::new(false),
+        }
+    }
 }
 
 async fn write_half(
@@ -501,13 +537,26 @@ async fn write_half(
     outbound: ByteQueue,
     overfull: Arc<Overfull>,
     conn: u64,
+    message2: Option<Arc<Message2Note>>,
 ) -> Option<CloseCause> {
     let setup = setup.await.ok()?;
     let mut seam = match setup {
         Setup::Plain => SeamSend::Plain,
-        Setup::Noise { flight, send } => {
-            if !write_budgeted(&mut write, conn, &flight).await {
-                return Some(CloseCause::new(CloseKind::IoError));
+        Setup::Noise {
+            flight,
+            send,
+            handed_off,
+        } => {
+            if !flight.is_empty() {
+                let wait_ns = span_ns(handed_off.elapsed());
+                let Some(write_ns) = write_timed(&mut write, conn, &flight).await else {
+                    return Some(CloseCause::new(CloseKind::IoError));
+                };
+                if let Some(note) = &message2 {
+                    note.wait_ns.store(wait_ns, Ordering::Release);
+                    note.write_ns.store(write_ns, Ordering::Release);
+                    note.ready.store(true, Ordering::Release);
+                }
             }
             SeamSend::Noise(send)
         }
@@ -526,6 +575,34 @@ async fn write_half(
     )
     .await;
     Some(cause)
+}
+
+/// Write `bytes` under the up bucket. The returned time is only
+/// `write_all`: the kernel accepting the bytes, not the bucket wait
+/// and not a later retransmission.
+async fn write_timed(write: &mut OwnedWriteHalf, conn: u64, bytes: &[u8]) -> Option<u64> {
+    let gate = node_gate();
+    let mut off = 0usize;
+    let mut write_ns = 0u64;
+    while off < bytes.len() {
+        let room = bytes.len() - off;
+        let grant = gate
+            .acquire(LinkDirection::Up, conn, MessageClass::Session, room as u64)
+            .await;
+        let grant = usize::try_from(grant).unwrap_or(room).min(room);
+        if grant == 0 {
+            continue;
+        }
+        let end = off + grant;
+        let started = Instant::now();
+        if write.write_all(&bytes[off..end]).await.is_err() {
+            gate.refund(LinkDirection::Up, conn, grant as u64, true);
+            return None;
+        }
+        write_ns = write_ns.saturating_add(span_ns(started.elapsed()));
+        off = end;
+    }
+    Some(write_ns)
 }
 
 /// Write `bytes` under the up bucket, one grant at a time.
@@ -557,11 +634,104 @@ async fn read_half(
     inbound: mpsc::Sender<Vec<u8>>,
     overfull: Arc<Overfull>,
     conn: u64,
+    message2: Option<Arc<Message2Note>>,
 ) -> CloseCause {
+    // `read_capped` holds `read` for the whole copy, so the probe is a
+    // duplicate of the fd. The first decoded chunk is the peer's answer,
+    // which cannot arrive before message 2 did: `TCP_INFO` then includes
+    // any retransmission of that segment.
+    let mut probe = message2.and_then(|note| TcpProbe::from_socket(&read, note));
     read_capped(&mut read, inbound, &overfull, &node_gate(), conn, |chunk| {
+        if let Some(probe) = &mut probe {
+            probe.log_once(conn);
+        }
         seam.push(chunk).map_err(|_| CloseKind::RecordRejected)
     })
     .await
+}
+
+/// One read of the responder's message-2 counters, after the peer has
+/// answered. The duplicate fd outlives the copy's borrow of the socket.
+struct TcpProbe {
+    note: Arc<Message2Note>,
+    logged: bool,
+    #[cfg(target_os = "linux")]
+    fd: std::os::fd::OwnedFd,
+}
+
+impl TcpProbe {
+    fn from_socket(read: &OwnedReadHalf, note: Arc<Message2Note>) -> Option<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            Some(Self {
+                note,
+                logged: false,
+                fd: duplicate_fd(read)?,
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (read, note);
+            None
+        }
+    }
+
+    fn log_once(&mut self, conn: u64) {
+        if self.logged || !self.note.ready.load(Ordering::Acquire) {
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        let counts = tcp_counts(&self.fd);
+        #[cfg(not(target_os = "linux"))]
+        let counts = None;
+        let Some((total_retrans, retransmits)) = counts else {
+            return;
+        };
+        self.logged = true;
+        tracing::info!(
+            conn,
+            wait_before_write_ns = self.note.wait_ns.load(Ordering::Acquire),
+            write_ns = self.note.write_ns.load(Ordering::Acquire),
+            total_retrans,
+            retransmits,
+            "clearnet responder message2"
+        );
+    }
+}
+
+/// `dup` so the copy can borrow the socket while this still names it.
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn duplicate_fd(read: &OwnedReadHalf) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let duped = unsafe { libc::dup(read.as_ref().as_raw_fd()) };
+    if duped < 0 {
+        return None;
+    }
+    Some(unsafe { std::os::fd::OwnedFd::from_raw_fd(duped) })
+}
+
+/// `tcpi_total_retrans` is the connection's count. `tcpi_retransmits` is
+/// how many copies of the current segment are still unacknowledged.
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn tcp_counts(fd: &std::os::fd::OwnedFd) -> Option<(u32, u32)> {
+    use std::os::fd::AsRawFd;
+    let mut info = unsafe { std::mem::zeroed::<libc::tcp_info>() };
+    let mut len = u32::try_from(std::mem::size_of::<libc::tcp_info>()).ok()? as libc::socklen_t;
+    let rc = unsafe {
+        libc::getsockopt(
+            fd.as_raw_fd(),
+            libc::IPPROTO_TCP,
+            libc::TCP_INFO,
+            std::ptr::from_mut(&mut info).cast::<libc::c_void>(),
+            std::ptr::from_mut(&mut len),
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    Some((info.tcpi_total_retrans, u32::from(info.tcpi_retransmits)))
 }
 
 async fn noise_handshake<C>(
@@ -645,7 +815,15 @@ where
     let Some(setup) = setup.take() else {
         return Err(CloseKind::LocalClose);
     };
-    if setup.send(Setup::Noise { flight, send }).is_err() {
+    let handed_off = Instant::now();
+    if setup
+        .send(Setup::Noise {
+            flight,
+            send,
+            handed_off,
+        })
+        .is_err()
+    {
         return Err(CloseKind::LocalClose);
     }
     Ok(recv)

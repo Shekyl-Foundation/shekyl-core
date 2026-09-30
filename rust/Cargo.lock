@@ -3905,6 +3905,7 @@ dependencies = [
 name = "shekyl-clearnet"
 version = "3.1.0"
 dependencies = [
+ "libc",
  "shekyl-capped-stream",
  "shekyl-net-address",
  "shekyl-p2p-transport",
