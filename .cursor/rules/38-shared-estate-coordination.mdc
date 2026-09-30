@@ -44,7 +44,8 @@ In `shekyl-dev`, `infrastructure/`:
    session by its name) or Rick. A claim past its end with nothing running
    goes to Rick; it is not a deletion.
 6. **Address hosts by ssh alias or IP, never by the hostname a host reports.**
-   Reported names are not unique in the estate.
+   The alias is the estate's record; a reported name is whatever the host was
+   last set to, and two once collided.
 
 This binds any agent that uses a Foundation host, whichever repository it is
 working in.
