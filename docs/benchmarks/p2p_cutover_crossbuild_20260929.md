@@ -593,40 +593,51 @@ run by keeping the Tor warm and restarting the daemon instead. Kept as
 the local-rendezvous datapoint (median 410 ms, below the distant 615 ms,
 as a shorter circuit should be).
 
-## Tor relay leg (D-5 stem hop) — attempted, blocked on relay across the link
+## Tor relay leg (D-5 stem hop) — not measured; the previous reasons were a misread
 
 The D-5 per-hop stem latency over Tor (`DAEMON_RELAY_PRIVACY.md` §D-5)
-was set up on the same rig as the inbound distant run — floor per-boot
-onion responder, the off-site seed as the stem originator over the warm
-Tor link — and could not be measured, because a transaction does not
-cross the link on this build. Two independent reasons, both observed:
+was set up on the inbound rig and not completed. The two reasons given
+for that in the previous revision of this section do not survive the
+log line or a height check on the two seed daemons.
 
-- **The seed's relay lane reports `local_height=1, eligible=0` while
-  its chain is at height 52.** The seed (the dialer daemon) was mined to
-  52 with a wallet built for it (`shekyl-wallet-rpc`, address from
-  `get_primary_address`, `start_mining` to it). Its relay filter, logged
-  each pass, stayed at `local_height=1 rule=state_normal eligible=0` at
-  chain height 52 — the recorded-height behaviour this record documents
-  above, now shown to zero relay eligibility outright on a mined chain.
-  A submitted transaction would find no eligible relay candidate, so it
-  never enters a stem. The stem cannot be produced, let alone timed.
-- **Block sync does not pull across the two-node Tor link.** The floor's
-  connection object reported the peer at height 52 while the floor
-  itself stayed at height 1, and the connection churned on `PeerClosed`
-  at the ~60–90 s `COMMAND_TIMED_SYNC` cadence — the same timed-sync
-  close seen on the clearnet LAN leg, here re-opening every cycle before
-  the chain is fetched.
+- **`local_height=1 eligible=0` is the daemon at height 1, and the
+  filter does not read recorded height.** `get_out_connections` keeps
+  an outbound session only when `m_state == state_normal`
+  (`levin_notify.cpp`). `recorded_height` is printed on the candidate
+  line and decides nothing. `local_height` is that process's own chain
+  height (`get_current_blockchain_height`). The measurement log has
+  exactly two filter lines, both `local_height=1 rule=state_normal
+  eligible=0`, both in the same second the process logged
+  `Setting m_height to: 1` — before the wallet process existed and
+  before `start_mining`. `eligible=0` means no outbound session was in
+  `state_normal` yet. It is not a chain at height 52 with a stale relay
+  height, and it does not touch the recorded-height follow-on.
+- **Mining stayed on the measurement daemon.** Checked after the fact:
+  the production daemon's chain height was 13434; the measurement
+  daemon, the one started with fixed difficulty and the one
+  `start_mining` was sent to, is the process whose height moved
+  1 → 19 → 52. The production chain was not that private chain.
+- **A Tor-only peer staying at height 1 is an inherited early return,
+  and it is not the rule.** On a non-public address the handshake sets
+  `state_normal` and returns without asking for the chain
+  (`cryptonote_protocol_handler.inl`). A peer syncs on the network it
+  is connected to, Tor the same as clearnet; that early return is the
+  leftover that skips the sync, and it is deleted with the rest of the
+  protocol's zone switch after this cutover. The stem hop does not wait
+  on that deletion: both ends are mined, so each holds a chain, and the
+  hop is one transaction from the measurement daemon whose only
+  outbound is the Tor session.
 
-So D-5 is blocked on relay/sync actually crossing the two-node Tor link,
-which it does not on this build; the block is upstream of anything the
-distant circuit could measure. The transport half of a hop is bounded by
-the Tor gap distributions (outbound 1.26 s p99; inbound 1.221 s p99),
-so the missing piece is the stem's *eligibility and propagation*, not
-its transport latency. The reopening criterion is a build on which a
-mined chain relays and syncs across the link — i.e. the relay-lane
-recorded-height behaviour advances with the chain and the timed-sync
-connection holds over Tor — after which the stem hop is one run on this
-same rig.
+One session that the sampler did not restart handshaked, completed a
+timed sync, and the dialer then recorded `PeerClosed` 39 s later. The
+responder did not close that connection; its object stayed until the
+responder process was stopped, about three minutes on. The `PeerClosed`
+lines during the inbound distribution are the sampler restarting the
+dialer. Whether a session left up stays up is watched on the rerun. One
+drop, with the other end still holding the object, is not a timer.
+
+The transport half of a hop is the Tor gap distributions (outbound
+1.26 s p99; inbound 1.221 s p99). The hop itself is the rerun.
 
 ## Not this run
 
