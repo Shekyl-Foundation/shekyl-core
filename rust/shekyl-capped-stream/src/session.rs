@@ -39,6 +39,17 @@ impl SendHalf {
             Err(PushError::Closed) => Err(CloseKind::IoError),
         }
     }
+
+    /// Close the queue. Queued bytes still drain; the writer then finishes,
+    /// and the connection task drops the socket.
+    ///
+    /// This is how a close that started on the caller's side reaches the
+    /// wire. Without it the socket stays open until the peer next sends:
+    /// the [`Session`] whose drop would close the queue is held by the
+    /// inbound drive, parked in [`Session::recv`] waiting for that frame.
+    pub fn close(&self) {
+        self.queue.close();
+    }
 }
 
 /// Decoded frames waiting on [`Session::recv`].

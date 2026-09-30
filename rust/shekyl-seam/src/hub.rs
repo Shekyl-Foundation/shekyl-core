@@ -667,7 +667,7 @@ impl Hub {
     fn record(&self, id: SocketId, cause: CloseCause) -> CloseResult {
         let poster = Arc::clone(&self.post);
         let dial = self.current_dial();
-        let open = {
+        let (open, send) = {
             let mut inner = self.lock();
             let Some(conn) = inner.conns.get_mut(&id) else {
                 return CloseResult::AlreadyClosed;
@@ -678,6 +678,7 @@ impl Hub {
             conn.cause = Some(cause);
             conn.phase = Phase::Closed;
             let open = conn.open.take();
+            let send = conn.send.take();
             let connector = conn.connector;
             poster(Post::Closed {
                 id,
@@ -686,10 +687,21 @@ impl Hub {
             });
             Self::wake_row(conn);
             self.wake();
-            open
+            (open, send)
         };
         if let Some(open) = open {
             let _ = open.close(cause);
+        }
+        // The cause is recorded whichever side it came from; the socket
+        // has to follow. Closing the send queue ends the connector's
+        // writer, which ends its connection task, which drops the socket.
+        // Measured before this (clearnet, LAN, 2026-09-30): after a local
+        // close the socket stayed open until the peer's next frame arrived,
+        // 54 s later on the timed-sync cadence. Nothing else here reaches
+        // the wire: `open.close` releases the admission slot, and the
+        // session whose drop closes the queue is parked in the inbound drive.
+        if let Some(send) = send {
+            send.close();
         }
         if let Some(dial) = dial {
             dial.reader_stopped(id);
@@ -714,6 +726,7 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::{Arc, Mutex};
     use std::thread;
+    use std::time::Duration;
 
     use shekyl_capped_stream::{FrameSender, StreamEnds};
     use shekyl_peer_policy::InboundCeiling;
@@ -1149,6 +1162,36 @@ mod tests {
         assert!(!waiter.join().expect("waiter"));
         assert_eq!(
             rig.hub.cause(id).map(CloseCause::kind),
+            Some(CloseKind::LocalClose)
+        );
+    }
+
+    /// A close that starts on the caller's side reaches the connector's
+    /// writer: its next pop returns `None` once the queue drains, so the
+    /// connection task ends and the socket is dropped. Before this the
+    /// writer parked until the peer sent a frame; on the wire the socket
+    /// stayed open for the whole interval.
+    #[test]
+    fn a_local_close_ends_the_writer() {
+        let rig = rig();
+        let opened = adopt(&rig, Direction::Outbound, 32);
+        service(&rig, true);
+        assert!(rig.hub.send(opened.id, b"reply".to_vec()));
+        rig.hub.close(opened.id);
+        let writer = opened.writer.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let drained = writer.pop_blocking();
+            let ended = writer.pop_blocking();
+            drop(done_tx.send((drained, ended)));
+        });
+        let (drained, ended) = done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("writer still parked after a local close");
+        assert_eq!(drained.as_deref(), Some(&b"reply"[..]));
+        assert!(ended.is_none(), "queue open after a local close");
+        assert_eq!(
+            rig.hub.cause(opened.id).map(CloseCause::kind),
             Some(CloseKind::LocalClose)
         );
     }
