@@ -1728,8 +1728,9 @@ round can reject them.
   directions. The loopback harness is one build. The claim that
   cutover is not a flag day is about two builds talking to each
   other. UPDATE 2026-09-30: the clearnet pair, the Tor dial and inbound
-  distributions, the three clearnet deadlines and the Tor gap timer,
-  and one Tor stem hop are in
+  distributions, the South America clearnet figures (recorded, not
+  wired; a high-RTT leg is owed before a clearnet deadline is written)
+  and the Tor gap timer, and one Tor stem hop are in
   [`p2p_cutover_crossbuild_20260929.md`](../benchmarks/p2p_cutover_crossbuild_20260929.md).
   The epee-to-epee stem still did not cross in the first cross-build.
   The thread-budget legs are not in it; they wait on the ledger row.

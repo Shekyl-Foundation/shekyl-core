@@ -494,23 +494,31 @@ is the 170 ms link, not the Pi-4. This is why the deadline is derived
 here and not on the LAN: the LAN leg measured the floor's compute with
 the network term near zero; this leg measures the term that dominates.
 
-**The three clearnet deadlines** the transport-deadline commit wires,
-each p99 × 2 rounded up per D9:
+**Not a shipped deadline.** Each of these is p99 × 2 of one fibre path,
+a home LAN to a host in South America, TCP RTT about 170 ms, and each
+p99 is one round trip of that path (connect 174 ms, handshake 183 ms,
+gap 179 ms). Twice that RTT is the honest-failure rate D9 defines for
+links near 170 ms. An honest link whose RTT is above about 340 ms —
+a satellite path, congested mobile, a long transpacific route — fails
+every dial, not one in a hundred. A failed clearnet dial then marks
+the address for up to `P2P_FAILED_ADDR_FORGET_SECONDS` (1 h,
+`cryptonote_config.h`). A node on that link forgets each peer it
+tries, for an hour, and does the same to the next: it eclipses itself
+by geography. The factor of two covers up to twice this path. The
+reopen would catch a longer path only after a node on it had been
+shipped a deadline it cannot use.
 
-- clearnet dial (TCP connect): **349 ms** (p99 174.074 ms).
-- clearnet initiator handshake: **366 ms** (p99 182.560 ms).
-- clearnet channel-to-session gap: **359 ms** (p99 179.337 ms).
-
-These replace the placeholders the cutover ships with: `transport_spans`'
-5 s invoke-timeout stand-in for the handshake, and clearnet `dial_one`'s
-missing dial deadline (a filtered port hung the dial ~2 min on the first
-LAN attempt; **349 ms** is the bound it lacked).
+The deadline commit does not write 349 / 366 / 359 ms. It waits on one
+more clearnet distribution, the floor dialing a seed in a New York
+datacenter, a link by name from the class the factor of two is being
+asked to cover. The commit states which link each deadline was derived
+on. The Tor gap timer is not in this hold: 2.6 s is the maximum of two
+distant-circuit distributions, one each direction.
 
 A later distribution under these conditions whose p99 exceeds 174.07 ms
 (connect), 182.56 ms (handshake) or 179.34 ms (gap) reopens the
-respective deadline, re-derived from the larger run — including a link
-whose RTT exceeds this one's, which is the factor of two made to fail
-rather than assumed to hold.
+respective figure for *this* path. It does not by itself adopt a
+deadline.
 
 ## Tor inbound distribution, floor device responder (2026-09-30 UTC)
 
