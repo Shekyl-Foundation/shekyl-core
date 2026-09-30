@@ -29,7 +29,8 @@ In `shekyl-dev`, `infrastructure/`:
 ## The rule
 
 1. **Before any work on a Foundation host, read `USAGE.md`.** That includes a
-   probe: on some hosts a login is not read-only (the inventory says which).
+   probe: a login is not always read-only, and the inventory's findings record
+   any host where it is not.
 2. **The ledger is the claim; the host is the truth.** Check what is actually
    running before you start, and record anything the ledger does not list.
 3. **Claim before you start, release when you finish.** Put your own row in
