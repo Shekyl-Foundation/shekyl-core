@@ -381,7 +381,7 @@ pub trait ChainView<'id> {
     fn total_burned(&self) -> Result<AtomicUnits, Self::Fault>;
 
     // -----------------------------------------------------------------------
-    // The archival reads (DRS-E4 §2.3; DRS-E1 S-ARCH A1–A9)
+    // The archival reads (DRS-E4 §2.3; DRS-E1 S-ARCH A1–A9, A11–A13)
     //
     // Recorded archival *state*, for the 4.J rows E6 slice 8 lands and the
     // E4 fold that derives a bond post's transition: a record is state, the
@@ -389,6 +389,13 @@ pub trait ChainView<'id> {
     // Each is a by-key read, so `Option` / empty and not `AtHeight`:
     // absence has one meaning per read, spelled on the read. All are
     // parent-state reads (F19's brand) — there is no height to key them by.
+    //
+    // A view whose archival answers are one policy implements all of them
+    // with [`archival_reads!`](crate::archival_reads): `empty` (no bonds),
+    // `fault` (every read fails), or `delegate` (forward to an inner view).
+    // The real store projection answers from its rows and does not use the
+    // macro. Adding a method here without adding it there leaves those
+    // impls short of the trait, so the omission fails at compile time.
     // -----------------------------------------------------------------------
 
     /// **A1.** `persona`'s bond record as recorded, or `None` for a persona
@@ -496,4 +503,128 @@ pub trait ChainView<'id> {
     /// closed epoch whose row the close deleted. The accrual adds this
     /// block's inflow to it; the close freezes it as `budget(E)` (A8).
     fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Self::Fault>;
+}
+
+/// Implement every archival [`ChainView`] read (A1–A9, A11–A13) as one policy.
+///
+/// Three policies, one method list. A new archival read is added here, once;
+/// every view that expands the macro then implements it. A view that answers
+/// from real rows (the store's `BatchView`) writes its own methods and
+/// does not expand this.
+///
+/// * `archival_reads!(empty)` — no bonds: `None`, empty, `PassCount::ZERO`,
+///   `false`. The `Ok` is any `Self::Fault`, including [`Infallible`](core::convert::Infallible).
+/// * `archival_reads!(fault <expr>)` — every read returns `Err(<expr>)`.
+///   The expression is pasted into each method, so it is a unit constructor
+///   or another value that is cheap to repeat.
+/// * `archival_reads!(delegate <field>)` — each read is `self.<field>.the_method(...)`.
+///   `<field>` names the inner view; the expansion writes `self` inside each method.
+///
+/// Paths are absolute so the expansion compiles in this crate and in a
+/// downstream test view (`shekyl-chain-ingest`'s grown tree) without matching
+/// imports.
+#[macro_export]
+macro_rules! archival_reads {
+    (empty) => {
+        $crate::archival_reads!(@methods {empty});
+    };
+    (fault $err:expr) => {
+        $crate::archival_reads!(@methods {fault $err});
+    };
+    (delegate $inner:ident) => {
+        $crate::archival_reads!(@methods {delegate $inner});
+    };
+    (@methods $policy:tt) => {
+        // One signature list. `@emit` writes the whole method, receiver and
+        // body together: a nested macro may not name `self`.
+        $crate::archival_reads!(@emit $policy; bond_record;
+            (persona: &shekyl_types::PCanonicalId);
+            (::core::option::Option<shekyl_types::archival::BondRecord>);
+            (persona);
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; slash_log_after;
+            (persona: &shekyl_types::PCanonicalId, height: shekyl_types::BlockHeight);
+            (::std::vec::Vec<shekyl_types::archival::SlashLogEntry>);
+            (persona, height);
+            (::std::vec::Vec::new()));
+        $crate::archival_reads!(@emit $policy; last_served_epoch;
+            (persona: &shekyl_types::PCanonicalId, shard: shekyl_types::ShardId);
+            (::core::option::Option<shekyl_types::SettlementEpoch>);
+            (persona, shard);
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; served_shards;
+            (persona: &shekyl_types::PCanonicalId);
+            (::std::vec::Vec<shekyl_types::archival::ServedShard>);
+            (persona);
+            (::std::vec::Vec::new()));
+        $crate::archival_reads!(@emit $policy; pass_count;
+            (
+                persona: &shekyl_types::PCanonicalId,
+                shard: shekyl_types::ShardId,
+                epoch: shekyl_types::SettlementEpoch
+            );
+            (shekyl_types::archival::PassCount);
+            (persona, shard, epoch);
+            (shekyl_types::archival::PassCount::ZERO));
+        $crate::archival_reads!(@emit $policy; r_market;
+            (shard: shekyl_types::ShardId, epoch: shekyl_types::SettlementEpoch);
+            (::core::option::Option<shekyl_types::archival::RMarket>);
+            (shard, epoch);
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; sigma_work;
+            (epoch: shekyl_types::SettlementEpoch);
+            (::core::option::Option<shekyl_types::archival::SigmaWorkMilli>);
+            (epoch);
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; budget;
+            (epoch: shekyl_types::SettlementEpoch);
+            (::core::option::Option<shekyl_units::AtomicUnits>);
+            (epoch);
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; last_settled_slash_epoch;
+            ();
+            (::core::option::Option<shekyl_types::SettlementEpoch>);
+            ();
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; bond_records;
+            ();
+            (::std::vec::Vec<(shekyl_types::PCanonicalId, shekyl_types::archival::BondRecord)>);
+            ();
+            (::std::vec::Vec::new()));
+        $crate::archival_reads!(@emit $policy; slash_applied;
+            (
+                persona: &shekyl_types::PCanonicalId,
+                shard: shekyl_types::ShardId,
+                epoch: shekyl_types::SettlementEpoch
+            );
+            (bool);
+            (persona, shard, epoch);
+            (false));
+        $crate::archival_reads!(@emit $policy; budget_accruing;
+            (epoch: shekyl_types::SettlementEpoch);
+            (::core::option::Option<shekyl_units::AtomicUnits>);
+            (epoch);
+            (::core::option::Option::None));
+    };
+    (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            $crate::archival_reads!(@touch $($arg),*);
+            ::core::result::Result::Ok($empty)
+        }
+    };
+    (@emit {fault $err:expr}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            $crate::archival_reads!(@touch $($arg),*);
+            ::core::result::Result::Err($err)
+        }
+    };
+    (@emit {delegate $inner:ident}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            self.$inner.$name($($arg),*)
+        }
+    };
+    (@touch) => {};
+    (@touch $($arg:expr),+) => {
+        let _ = ($($arg,)*);
+    };
 }

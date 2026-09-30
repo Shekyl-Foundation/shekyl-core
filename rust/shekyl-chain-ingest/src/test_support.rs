@@ -55,13 +55,9 @@ use shekyl_chain_store::codec::SettlementEpochBlocks;
 use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::archival::{
-    BondRecord, PassCount, RMarket, ServedShard, SigmaWorkMilli, SlashLogEntry,
-};
 use shekyl_types::{
     ArchivalLength, AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight,
-    CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight, PCanonicalId, SettlementEpoch,
-    ShardId, TxHash,
+    CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::tx_extra::{admitted_leaf_blob, parse, pqc_leaf_entries_per_output};
@@ -420,74 +416,8 @@ impl<'id> ChainView<'id> for GrownTree {
         Ok(self.total_burned)
     }
 
-    // The archival reads: a grown tree posts no bond, so every answer is
-    // the honest empty (`DRS_E4_ARCHIVAL_WRITER.md` §5.2).
-
-    fn bond_record(&self, _: &PCanonicalId) -> Result<Option<BondRecord>, Infallible> {
-        Ok(None)
-    }
-
-    fn slash_log_after(
-        &self,
-        _: &PCanonicalId,
-        _: BlockHeight,
-    ) -> Result<Vec<SlashLogEntry>, Infallible> {
-        Ok(Vec::new())
-    }
-
-    fn last_served_epoch(
-        &self,
-        _: &PCanonicalId,
-        _: ShardId,
-    ) -> Result<Option<SettlementEpoch>, Infallible> {
-        Ok(None)
-    }
-
-    fn served_shards(&self, _: &PCanonicalId) -> Result<Vec<ServedShard>, Infallible> {
-        Ok(Vec::new())
-    }
-
-    fn pass_count(
-        &self,
-        _: &PCanonicalId,
-        _: ShardId,
-        _: SettlementEpoch,
-    ) -> Result<PassCount, Infallible> {
-        Ok(PassCount::ZERO)
-    }
-
-    fn r_market(&self, _: ShardId, _: SettlementEpoch) -> Result<Option<RMarket>, Infallible> {
-        Ok(None)
-    }
-
-    fn sigma_work(&self, _: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Infallible> {
-        Ok(None)
-    }
-
-    fn budget(&self, _: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
-        Ok(None)
-    }
-
-    fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
-        Ok(None)
-    }
-
-    fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, Infallible> {
-        Ok(Vec::new())
-    }
-
-    fn slash_applied(
-        &self,
-        _: &PCanonicalId,
-        _: ShardId,
-        _: SettlementEpoch,
-    ) -> Result<bool, Infallible> {
-        Ok(false)
-    }
-
-    fn budget_accruing(&self, _: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
-        Ok(None)
-    }
+    // A grown tree posts no bond (`DRS_E4_ARCHIVAL_WRITER.md` §5.2).
+    shekyl_chain_rules::archival_reads!(empty);
 }
 
 /// The miner transaction for `height`: the rules harness's, which since
