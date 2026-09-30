@@ -16,7 +16,7 @@
 //! SHEKYL_SPIKE_PERSONAS=P \
 //! SHEKYL_SPIKE_COLD=N SHEKYL_SPIKE_WARM=N SHEKYL_SPIKE_CONC=N \
 //! SHEKYL_SPIKE_HOURS=H \
-//! SHEKYL_SPIKE_POW=off|on|tuned:<rate>:<burst> \
+//! SHEKYL_SPIKE_POW=off|on|tuned:<rate>:<burst>[,…] \
 //!   cargo run -p shekyl-sp-t3-spike --release --bin pd-f2-measure
 //! ```
 //!
@@ -59,18 +59,19 @@
 //! synthetic fallback anywhere in this crate, because a measurement that quietly
 //! substituted its payload would be worse than no measurement.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use shekyl_p_fetch::max_body_bytes;
 use shekyl_sp_t3_spike::fixture::{size_ladder, ShardFixture};
-use shekyl_sp_t3_spike::harness::{pow_from_env, Apparatus};
+use shekyl_sp_t3_spike::harness::{posture_tag, postures_from_env, Apparatus};
 use shekyl_sp_t3_spike::measure::{
     attempts_within_budget, churn_table, format_row, l_verdict, p99, summarize,
     sweep_round_indices, warmup_drift, DStar, LVerdict, Observation, Summary, SweepPoint,
     L_BUDGET_TOO_GENEROUS_ABOVE, L_DROP_BELOW, Q_RISK_STAR, ROW_HEADER,
 };
+use shekyl_tor_control_client::control::onion::OnionPow;
 
 fn env_path(key: &str) -> Option<PathBuf> {
     std::env::var_os(key).map(PathBuf::from)
@@ -83,16 +84,53 @@ fn env_usize(key: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-/// One arm's rows, appended as they are produced so a run killed mid-flight
-/// still leaves the observations it earned.
-fn append_rows(out: &mut Option<std::fs::File>, arm: &str, obs: &[Observation]) {
-    use std::io::Write as _;
-    let Some(f) = out.as_mut() else { return };
-    for o in obs {
-        // arm, elapsed_ms, outcome. Nothing else — see the module doc.
-        writeln!(f, "{}", format_row(arm, o)).ok();
+/// The observation files: **one per posture**. A run with one posture writes
+/// `SHEKYL_SPIKE_OUT` itself. A run that interleaves postures writes
+/// `<stem>.<posture>.tsv` beside it for each, so every file holds one
+/// posture's observations and `pd-f2-diff` compares two of them directly —
+/// a row itself carries no posture, as it carries no other context (§6.4).
+struct Outputs {
+    /// One per distinct posture, in first-appearance order.
+    files: Vec<Option<std::fs::File>>,
+    /// Persona `i` writes to `files[of_persona[i]]`.
+    of_persona: Vec<usize>,
+}
+
+impl Outputs {
+    fn open(base: Option<&Path>, distinct: &[OnionPow], of_persona: Vec<usize>) -> Self {
+        use std::io::Write as _;
+        let files = distinct
+            .iter()
+            .map(|&pow| {
+                let path = base.map(|b| {
+                    if distinct.len() == 1 {
+                        b.to_path_buf()
+                    } else {
+                        b.with_extension(format!("{}.tsv", posture_tag(pow)))
+                    }
+                })?;
+                let mut f = std::fs::File::create(&path).ok()?;
+                writeln!(f, "{ROW_HEADER}").ok();
+                println!("observations for {}: {}", posture_tag(pow), path.display());
+                Some(f)
+            })
+            .collect();
+        Self { files, of_persona }
     }
-    f.flush().ok();
+
+    /// One arm's rows from `persona`, appended as they are produced so a run
+    /// killed mid-flight still leaves the observations it earned.
+    fn append(&mut self, persona: usize, arm: &str, obs: &[Observation]) {
+        use std::io::Write as _;
+        let Some(f) = self.files[self.of_persona[persona]].as_mut() else {
+            return;
+        };
+        for o in obs {
+            // arm, elapsed_ms, outcome. Nothing else — see the module doc.
+            writeln!(f, "{}", format_row(arm, o)).ok();
+        }
+        f.flush().ok();
+    }
 }
 
 /// The widths the sweep visits: powers of two up to `personas`, plus
@@ -277,11 +315,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // shard at 1×, ½× and ¼× and rotate the cold and soak arms across them, so
     // every size meets the same Tor conditions over the same hours.
     let ladder = env_usize("SHEKYL_SPIKE_SIZE_LADDER", 0) != 0;
-    // The personas' onion PoW posture. The run log names it: the observations
-    // file carries no run-level context (§6.4), so the log is what says which
-    // posture a file was measured under.
-    let pow = pow_from_env()?;
-    println!("onion PoW posture: {pow:?}");
+    // The personas' onion PoW postures, cycled across the personas: persona
+    // `i` publishes with `postures[i % len]`. Every posture gets as many
+    // personas, so no posture is measured through fewer onions' circuit
+    // placement than another. The run log names each persona's posture; the
+    // observations files carry no run-level context (§6.4).
+    let postures = postures_from_env()?;
+    if !personas.is_multiple_of(postures.len()) {
+        return Err(format!(
+            "SHEKYL_SPIKE_PERSONAS={personas} is not a multiple of the {} postures in \
+             SHEKYL_SPIKE_POW, so the postures would have unequal personas",
+            postures.len()
+        )
+        .into());
+    }
+    let persona_postures: Vec<OnionPow> = (0..personas)
+        .map(|i| postures[i % postures.len()])
+        .collect();
+    let mut distinct: Vec<OnionPow> = Vec::new();
+    for &pow in &persona_postures {
+        if !distinct.contains(&pow) {
+            distinct.push(pow);
+        }
+    }
+    if distinct.len() > 1 && conc_n > 0 {
+        return Err(
+            "the concurrency sweep mixes personas, so it cannot separate postures: \
+                    run it with one posture (SHEKYL_SPIKE_CONC=0 to interleave)"
+                .into(),
+        );
+    }
+    for (i, pow) in persona_postures.iter().enumerate() {
+        println!("persona {i}: onion PoW {}", posture_tag(*pow));
+    }
 
     // Loud, first: no synthetic fallback exists, so a missing fixture stops the
     // run here rather than producing a number about the wrong payload.
@@ -301,12 +367,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let object_bytes: Vec<usize> = objects.iter().map(|o| o.len()).collect();
     let shard_count = u64::try_from(objects.len())?;
     let app = Arc::new(
-        Apparatus::bring_up_with_pow(
+        Apparatus::bring_up_with_postures(
             tor,
             dir.path().join("tor-data"),
-            u32::try_from(personas)?,
             objects,
-            pow,
+            &persona_postures,
         )
         .await?,
     );
@@ -337,11 +402,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         publish.as_secs_f64()
     );
 
-    let mut out = env_path("SHEKYL_SPIKE_OUT").and_then(|p| std::fs::File::create(p).ok());
-    if let Some(f) = out.as_mut() {
-        use std::io::Write as _;
-        writeln!(f, "{ROW_HEADER}").ok();
-    }
+    let of_persona = persona_postures
+        .iter()
+        .map(|pow| distinct.iter().position(|d| d == pow).expect("listed"))
+        .collect();
+    let mut out = Outputs::open(
+        env_path("SHEKYL_SPIKE_OUT").as_deref(),
+        &distinct,
+        of_persona,
+    );
 
     // --- Arm 1: cold, single stream. `NEWNYM` to the client tor before each
     // fetch, so descriptor fetch + intro + rendezvous are inside the timed path
@@ -355,7 +424,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let shard = u64::try_from(i).expect("index fits u64") % shard_count;
         app.rotate_client_circuits_retrying().await?;
         let obs = app.timed_fetch_shard(0, shard).await;
-        append_rows(&mut out, &label("cold", shard), std::slice::from_ref(&obs));
+        out.append(0, &label("cold", shard), std::slice::from_ref(&obs));
         cold_by_shard[usize::try_from(shard).expect("shard fits usize")].push(obs);
         if (i + 1) % 10 == 0 {
             println!("  cold {}/{}", i + 1, cold_n * objects_len(shard_count));
@@ -385,7 +454,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  warm {}/{warm_n}", i + 1);
         }
     }
-    append_rows(&mut out, "warm", &warm);
+    out.append(0, "warm", &warm);
     report("warm (reused circuit), single stream", &warm);
 
     // --- Arm 3: the concurrency sweep. At each width, `NEWNYM` once, then
@@ -425,7 +494,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  width {width}: round {}/{conc_n}", i + 1);
             }
         }
-        append_rows(&mut out, &format!("conc{width}"), &at_width);
+        // One posture when the sweep runs (checked at start): persona 0's
+        // file is every persona's.
+        out.append(0, &format!("conc{width}"), &at_width);
         report(&format!("{width} in flight, cold client"), &at_width);
         let cap_refusals = app.refused_total() - refused_before;
         if cap_refusals != 0 {
@@ -444,35 +515,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Arm 4: the dispersion soak. Circuit-latency dispersion is the
     // load-bearing parameter (§8.3) and it is *time-varying*, so a one-hour
     // sample understates the tail. Runs for SHEKYL_SPIKE_HOURS wall-clock,
-    // cold-circuit, spaced out.
+    // cold-circuit, spaced out. Fetch `n` goes to persona `n mod P`, then the
+    // object advances every `P` fetches: with interleaved postures the posture
+    // alternates fetch by fetch, so every posture meets the same hours.
     if hours > 0 {
         println!("\nsoak arm: {hours} h of spaced cold fetches...");
         let until = Instant::now() + Duration::from_secs(hours as u64 * 3600);
-        let mut soak_by_shard: Vec<Vec<Observation>> =
-            (0..shard_count).map(|_| Vec::new()).collect();
+        let persona_count = u64::try_from(personas)?;
+        let mut soak_by: Vec<Vec<Vec<Observation>>> = distinct
+            .iter()
+            .map(|_| (0..shard_count).map(|_| Vec::new()).collect())
+            .collect();
         let mut n: u64 = 0;
         while Instant::now() < until {
-            let shard = n % shard_count;
+            let persona = usize::try_from(n % persona_count)?;
+            let shard = (n / persona_count) % shard_count;
             n += 1;
             app.rotate_client_circuits_retrying().await?;
-            let obs = app.timed_fetch_shard(0, shard).await;
+            let obs = app.timed_fetch_shard(persona, shard).await;
             // Flush EVERY observation, not every 25th. A 24 h run on a dev box is
             // a run that gets killed, and the doc comment on `append_rows`
             // promises a killed run still leaves what it earned -- a 25-row
             // buffer would make that promise false by up to 24 observations plus
             // the whole summary.
-            append_rows(&mut out, &label("soak", shard), std::slice::from_ref(&obs));
-            soak_by_shard[usize::try_from(shard).expect("shard fits usize")].push(obs);
+            out.append(persona, &label("soak", shard), std::slice::from_ref(&obs));
+            soak_by[out.of_persona[persona]][usize::try_from(shard).expect("shard fits usize")]
+                .push(obs);
             if n.is_multiple_of(25) {
                 println!("  soak n={n}");
             }
             tokio::time::sleep(Duration::from_secs(30)).await;
         }
-        for (shard, obs) in soak_by_shard.iter().enumerate() {
-            report(
-                &format!("soak (>=24h target), {}", label("object", shard as u64)),
-                obs,
-            );
+        for (pow, by_shard) in distinct.iter().zip(&soak_by) {
+            for (shard, obs) in by_shard.iter().enumerate() {
+                report(
+                    &format!(
+                        "soak (>=24h target), {}, {}",
+                        posture_tag(*pow),
+                        label("object", shard as u64)
+                    ),
+                    obs,
+                );
+            }
         }
     }
 

@@ -37,7 +37,8 @@ use std::time::Duration;
 
 use shekyl_sp_t3_spike::fixture::ShardFixture;
 use shekyl_sp_t3_spike::harness::{
-    pow_from_env, Apparatus, APPARATUS_ANCHOR_HASH, APPARATUS_ANCHOR_HEIGHT, APPARATUS_OWN_HEIGHT,
+    postures_from_env, Apparatus, APPARATUS_ANCHOR_HASH, APPARATUS_ANCHOR_HEIGHT,
+    APPARATUS_OWN_HEIGHT,
 };
 
 fn env_path(key: &str) -> Option<PathBuf> {
@@ -57,7 +58,14 @@ fn hex(bytes: &[u8]) -> String {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tor = env_path("SHEKYL_SPIKE_TOR").ok_or("SHEKYL_SPIKE_TOR must be set")?;
     let shard = env_path("SHEKYL_SPIKE_SHARD").ok_or("SHEKYL_SPIKE_SHARD must be set")?;
-    let pow = pow_from_env()?;
+    let pow = match postures_from_env()?.as_slice() {
+        [one] => *one,
+        _ => {
+            return Err(
+                "serve-only publishes one persona posture; give SHEKYL_SPIKE_POW one value".into(),
+            )
+        }
+    };
 
     // No synthetic fallback, same as the measurement binary.
     let fixture = ShardFixture::load(&shard)?;

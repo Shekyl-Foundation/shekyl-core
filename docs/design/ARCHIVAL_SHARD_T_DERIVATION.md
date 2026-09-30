@@ -754,6 +754,46 @@ observation exists.
     depend on the session that started it. The host line above still holds, the idle
     wallet-RPC process included (checked at the restart).
   - The fit below reads the restart's soak.
+- **The PoW comparison — pre-registered 2026-09-30, before any PoW-on observation
+  exists.** Serving personas publish with onion PoW **on** (the TJ-H ruling), and every
+  W₂ run so far measured it **off** (SPIKE-F-15). Without an attack, PoW effort stays
+  at zero, so the two should agree. This run checks that.
+  - **Why interleaved, not a second day.** Two PoW-off windows a day apart already
+    differ by more than the margins below. The aborted soak against the restart's first
+    hour, about 47 and 34 observations per object, read by `pd-f2-diff`:
+    - 3.33 MB object: p90 went from 22.6 s to 66.1 s, material;
+    - 1.66 MB object: p50 went from 17.9 s to 50.6 s and p90 from 49.8 s to 88.9 s,
+      both material.
+
+    A PoW-on day diffed against a PoW-off day would carry that drift, so the postures
+    are compared **inside one window**.
+  - **Run.** It starts when the restart's soak ends, on the same node, bundle and
+    objects. It is the soak arm alone, 24 h, `NEWNYM` before every fetch, 30 s spacing.
+    - **Four personas, `SHEKYL_SPIKE_POW=off,on`**, so personas 0 and 2 are off and 1
+      and 3 are on, each behind its own tor. Each posture is averaged over two onions'
+      circuit placement.
+    - Fetch `n` goes to persona `n mod 4`, and the object advances every four fetches,
+      so the posture alternates fetch by fetch and both postures meet the same hours.
+    - Each posture writes its own observations file.
+    - About 1,400 fetches, so about **230 per posture per object**.
+  - **Analysis: `pd-f2-diff`** (`shekyl-sp-t3-spike`), PoW-off file as the baseline and
+    PoW-on as the treatment, per object.
+    - **Judged statistics:** completion rate, p50 and p90. p99 is shown and not judged,
+      because at about 230 observations it rests on two or three.
+    - **Interval:** bootstrap of treatment − baseline, 2,000 resamples, fixed seed,
+      2.5–97.5 %.
+    - **Margins, fixed now:** 3 percentage points on completion, and 10 % of the
+      PoW-off value on a percentile.
+    - **Verdicts:** an interval wholly inside the margin is *immaterial*. One wholly
+      beyond it, on one side, is *material*. Anything else is *inconclusive*.
+    - At this sample size, resampling noise on p90 is about as wide as its margin, so
+      *inconclusive* is a likely p90 outcome, stated now rather than explained later.
+  - **Secondary, for the record:** the restart's soak against the interleaved run's
+    PoW-off file, two PoW-off windows a day apart. That is a drift reading, reported
+    and not attributed to anything.
+  - **What it feeds.** The PoW comparison does not enter `W`'s fit, which reads the
+    restart's soak. A *material* PoW cost on a judged statistic goes to Rick as a
+    SPIKE-F-15 finding, alongside the fit.
 - **Fit.** Per percentile (p50, p90, p99), over the **soak** arm: least squares of
   `t = t_fixed + bytes / v` over the three sizes. The cold arm is fitted and reported,
   not used to select.

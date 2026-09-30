@@ -617,6 +617,21 @@ impl Apparatus {
         objects: Vec<Arc<[u8]>>,
         pow: OnionPow,
     ) -> Result<Self, ApparatusError> {
+        let postures = (0..persona_count).map(|_| pow).collect::<Vec<_>>();
+        Self::bring_up_with_postures(tor_binary, data_dir, objects, &postures).await
+    }
+
+    /// [`Self::bring_up_with_pow`] with a posture **per persona**: persona
+    /// `i` is published with `postures[i]`. The PoW comparison interleaves
+    /// postures within one window (`ARCHIVAL_SHARD_T_DERIVATION.md` §4.1a), so
+    /// the network conditions both postures meet are the same conditions.
+    pub async fn bring_up_with_postures(
+        tor_binary: PathBuf,
+        data_dir: PathBuf,
+        objects: Vec<Arc<[u8]>>,
+        postures: &[OnionPow],
+    ) -> Result<Self, ApparatusError> {
+        let persona_count = u32::try_from(postures.len()).map_err(|_| ApparatusError::Bootstrap)?;
         // Each object's expected body length, derived through the production
         // contract BEFORE any tor is launched: the same `ShardBody::flat` the
         // fixture provider will call per request, so what the probes compare
@@ -706,7 +721,7 @@ impl Apparatus {
             // one client hold many streams on a rendezvous circuit.
             let request = AddOnion::new(identity.mint_onion_key(), port, 8)
                 .with_flags(OnionFlags { discard_pk: true })
-                .with_pow(pow);
+                .with_pow(postures[usize::try_from(slot.to_raw()).expect("slot fits usize")]);
             let reply = tor
                 .control
                 .ask(Command::AddOnion(request))
@@ -1057,15 +1072,16 @@ async fn probe_once(
     }
 }
 
-/// The environment variable a run's onion PoW posture is read from:
-/// `off`, `on`, or `tuned:<rate>:<burst>`.
+/// The environment variable a run's onion PoW postures are read from: one
+/// posture (`off`, `on`, `tuned:<rate>:<burst>`) for every persona, or a
+/// comma-separated list cycled across the personas.
 pub const POW_ENV: &str = "SHEKYL_SPIKE_POW";
 
-/// Parse a PoW posture: `off`, `on`, or `tuned:<rate>:<burst>`.
+/// Parse one PoW posture: `off`, `on`, or `tuned:<rate>:<burst>`.
 ///
 /// An unrecognised value is a hard error rather than a silent fall-back to
-/// `off`: the PoW and no-PoW runs are compared, and a typo that quietly
-/// disabled the defense would produce a labelled-wrong dataset.
+/// `off`: the PoW and no-PoW observations are compared, and a typo that
+/// quietly disabled the defense would produce a labelled-wrong dataset.
 ///
 /// # Errors
 ///
@@ -1093,14 +1109,37 @@ pub fn parse_pow(raw: &str) -> Result<OnionPow, String> {
     }
 }
 
-/// The run's PoW posture from [`POW_ENV`]; `off` when unset, which is what
-/// every run before the PoW diff was measured under.
+/// Parse a posture list: one posture, or several separated by commas.
 ///
 /// # Errors
 ///
-/// As [`parse_pow`].
-pub fn pow_from_env() -> Result<OnionPow, String> {
-    parse_pow(&std::env::var(POW_ENV).unwrap_or_else(|_| "off".to_owned()))
+/// As [`parse_pow`], for the first entry that fails.
+pub fn parse_postures(raw: &str) -> Result<Vec<OnionPow>, String> {
+    raw.split(',').map(parse_pow).collect()
+}
+
+/// The run's postures from [`POW_ENV`]; `off` when unset, which is what
+/// every run before the PoW comparison was measured under.
+///
+/// # Errors
+///
+/// As [`parse_postures`].
+pub fn postures_from_env() -> Result<Vec<OnionPow>, String> {
+    parse_postures(&std::env::var(POW_ENV).unwrap_or_else(|_| "off".to_owned()))
+}
+
+/// A posture's name in file names and reports: `pow-off`, `pow-on`,
+/// `pow-tuned-<rate>-<burst>`.
+#[must_use]
+pub fn posture_tag(pow: OnionPow) -> String {
+    match pow {
+        OnionPow::Disabled => "pow-off".to_owned(),
+        OnionPow::Enabled => "pow-on".to_owned(),
+        OnionPow::EnabledTuned {
+            queue_rate,
+            queue_burst,
+        } => format!("pow-tuned-{queue_rate}-{queue_burst}"),
+    }
 }
 
 /// Run `attempt` until it succeeds, retrying only
@@ -1168,6 +1207,31 @@ mod tests {
         for bad in ["", "On", "true", "tuned:1", "tuned:x:2", "tuned:1:2:3"] {
             assert!(parse_pow(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_posture_list_is_one_posture_or_several_and_each_is_checked() {
+        assert_eq!(parse_postures("off"), Ok(vec![OnionPow::Disabled]));
+        assert_eq!(
+            parse_postures("off,on,off,on"),
+            Ok(vec![
+                OnionPow::Disabled,
+                OnionPow::Enabled,
+                OnionPow::Disabled,
+                OnionPow::Enabled
+            ])
+        );
+        assert!(parse_postures("off,,on").is_err(), "an empty entry");
+        assert!(parse_postures("off,onn").is_err(), "a typo in any entry");
+        assert_eq!(posture_tag(OnionPow::Disabled), "pow-off");
+        assert_eq!(posture_tag(OnionPow::Enabled), "pow-on");
+        assert_eq!(
+            posture_tag(OnionPow::EnabledTuned {
+                queue_rate: 250,
+                queue_burst: 2500
+            }),
+            "pow-tuned-250-2500"
+        );
     }
 
     #[tokio::test]
