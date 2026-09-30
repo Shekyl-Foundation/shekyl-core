@@ -77,6 +77,10 @@ name = "pd-f2-measure"
 path = "bins/pd_f2_measure.rs"
 
 [[bin]]
+name = "pd-f2-diff"
+path = "bins/pd_f2_diff.rs"
+
+[[bin]]
 name = "serve-only"
 path = "bins/serve_only.rs"
 
