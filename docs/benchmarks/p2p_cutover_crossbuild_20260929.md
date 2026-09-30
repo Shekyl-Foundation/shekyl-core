@@ -514,61 +514,84 @@ rather than assumed to hold.
 
 ## Tor inbound distribution, floor device responder (2026-09-30 UTC)
 
-The Tor connector's inbound side. Raw samples:
-[`p2p_tor_inbound_floor_20260930.tsv`](p2p_tor_inbound_floor_20260930.tsv).
-On Tor inbound the daemon does no Noise work (D10.3), so the span is the
-gap timer alone (D10.5): channel established to session established, the
-Levin `COMMAND_HANDSHAKE` over the inbound circuit. There is no dial or
-handshake span on our side to derive here — the gap is the whole of it.
+The Tor connector's inbound side. On Tor inbound the daemon does no
+Noise work (D10.3), so the span is the gap timer alone (D10.5): channel
+established to session established, the Levin `COMMAND_HANDSHAKE` over
+the inbound circuit. There is no dial or handshake span on our side to
+derive here — the gap is the whole of it.
+
+Two runs. The distant-circuit run below is the authoritative one for
+the deadline; the earlier self-dial run is the preliminary that motivated
+it and is kept as a local-circuit datapoint.
+
+### Distant circuit, warm Tor both ends (authoritative)
+
+Raw samples:
+[`p2p_tor_inbound_floor_distant_20260930.tsv`](p2p_tor_inbound_floor_distant_20260930.tsv).
 
 Conditions, per D9:
 
 - Responder: the floor device (Pi-4, aarch64, 4 cores), daemon
   `2f9565f71`, publishing its default ephemeral per-boot PoW onion
-  through the pinned `16.0a12` Tor managed beside it. Miner off. This is
-  the shipping posture, pinned for this exact distribution by
-  `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` ("a managed ephemeral Tor with
-  onion-service proof-of-work on"); the operator-provisioned durable
-  `--anonymous-inbound` onion and an attached distro Tor are, in that
-  doc's words, "a different posture" and are not what the deadline
-  guards.
-- Dialer: a second daemon on the same floor device, at `2f9565f71`,
-  dialing that onion through its own pinned Tor client. Both daemons and
-  both Tor processes shared the floor's four cores; the idle regtest
-  daemon was also resident.
-- Link: the live Tor network, a self-dial — both circuit ends on the
-  floor, real rendezvous through public relays. This is **not** a
-  geographically distributed circuit set; the distant-circuit inbound
-  gap is owed (see below). The outbound gap to a South-America onion is
-  the earlier Tor dial distribution's 1.26 s p99.
-- n = 66, one timeout, over a 15-minute wall cap. What capped the clean
-  rate is a production property, not the onion mechanism: one
-  `DialFailed` marks the onion recently-failed for 240 s
-  (`P2P_ANON_FAILED_ADDR_FORGET_SECONDS`), which is correct — a node
-  that cannot reach a peer tries others rather than hammering it — and
-  it only rate-limits *because this rig dials one onion repeatedly*. The
-  harness compounded it: it restarted the client Tor between samples to
-  force a fresh circuit, which drops the cached onion descriptor and
-  re-fetches it each time. A real peer keeps its Tor warm and fetches
-  the descriptor once. So the n is a property of measuring one onion
-  under the shipping backoff, and a firmer n comes from a
-  production-representative rig (a warm client Tor, a longer window, or
-  several peers) over a distant circuit — **not** from switching to the
-  non-default durable onion, which would measure the wrong posture.
+  through the pinned `16.0a12` Tor (`0.4.9.12`) managed beside it. Miner
+  off. This is the shipping posture, pinned for this exact distribution
+  by `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` ("a managed ephemeral Tor with
+  onion-service proof-of-work on").
+- Dialer: the off-site Foundation seed host (x86_64, 4 cores) dialing
+  the floor's onion through a warm client Tor (`0.4.9.11`, expert
+  bundle 15.0.17) kept up for the whole run — the descriptor is fetched
+  once and cached. The seed's production testnet daemon was resident.
+- Link: the live Tor network, a geographically distributed circuit
+  (home LAN in North America to a host in South America), fresh
+  rendezvous each sample. This is the representative-geography link the
+  self-dial run below lacked.
+- Method: each sample restarts the *dialer daemon* (not the Tor) to
+  force a fresh dial over the warm Tor — an exclusive connection is
+  sticky, so `out_peers` churn does not re-dial it. The gap is the
+  floor responder's `outbound=false` session span.
+- n = 109 clean, 1 timeout over 110 attempts.
 
 | span | p50 | p90 | p95 | p99 | max | 2 × p99 |
 | --- | --- | --- | --- | --- | --- | --- |
-| inbound gap (`gap_ns`, floor responder) | 410 ms | 685 ms | 720 ms | 1.82 s | 1.82 s | 3.65 s (provisional) |
+| inbound gap (`gap_ns`, floor responder) | 615 ms | 745 ms | 792 ms | 1.221 s | 1.322 s | **2.5 s** |
 
-61 of 66 samples are under 700 ms and 64 under 1 s; the tail is two
-outliers (1.03 s, 1.82 s). At n = 66 the p99 rank is the maximum itself
-— exactly the one-sample fragility D9 warns of — so **the 3.65 s the
-formula gives is provisional**, resting on a single observation. The
-robust figure is p95 = 720 ms. The Tor connector has one gap timer for
-both directions (D10.5); its deadline is the maximum over the inbound
-and outbound gap distributions, and both the single-sample p99 here and
-the missing distant-circuit inbound run are why that deadline is not
-fixed in this record.
+106 of 109 under 1 s. At n = 109 the p99 is the 108th of 109 sorted —
+one below the max, a real rank rather than the max itself — so the
+figure is derivable, unlike the self-dial run. 2 × p99 = 2.443 s, 2.5 s
+at 0.1 s.
+
+**The Tor connector gap timer is now derivable (D10.5).** One timer
+covers both directions; its deadline is the maximum of the two gap
+distributions: inbound 2.5 s (here) and outbound 2.6 s (2 × the Tor
+dial distribution's 1.26 s p99). The **outbound direction governs at
+2.6 s**; the inbound is below it. Both directions are now n ≈ 100 over
+distant circuits, so this is the value for the deadline commit — and
+the earlier n = 66 self-dial's 3.65 s does not appear there.
+
+**First-contact availability.** Across 110 attempts, one timed out, and
+it was the one attempt whose fresh daemon logged a `DialFailed` — a
+single transient, not a fraction. With the Tor warm the descriptor is
+cached and every reconnect succeeded, so the warm-dialer rig did not
+reproduce the cold-first-contact shape the ruling asked about (a peer
+learning a just-booted onion from the peerlist and missing on first
+try). That question is neither confirmed nor refuted here — it needs a
+cold descriptor per attempt, which this rig deliberately does not have —
+so no FOLLOWUPS row is opened on it.
+
+### Self-dial, local rendezvous (preliminary, superseded)
+
+Raw samples:
+[`p2p_tor_inbound_floor_20260930.tsv`](p2p_tor_inbound_floor_20260930.tsv).
+A second floor daemon dialed the floor's own onion, both circuit ends on
+the floor, the client Tor restarted per sample. n = 66, one timeout:
+gap p50 410 ms, p95 720 ms, p99 = max = 1.82 s (the one-sample fragility
+D9 names, which is why it is superseded, not used). The per-sample Tor
+restart dropped the cached descriptor and re-fetched it, and the 240 s
+recently-failed backoff (`P2P_ANON_FAILED_ADDR_FORGET_SECONDS`) then
+rate-limited the run — both artifacts of the rig, fixed in the distant
+run by keeping the Tor warm and restarting the daemon instead. Kept as
+the local-rendezvous datapoint (median 410 ms, below the distant 615 ms,
+as a shorter circuit should be).
 
 ## Not this run
 
