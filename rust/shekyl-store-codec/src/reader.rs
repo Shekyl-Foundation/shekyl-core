@@ -17,8 +17,8 @@
 
 use crate::CodecError;
 
-/// The cursor. `codec` is the [`Canonical::NAME`](shekyl_store_codec::Canonical::NAME)
-/// every fault it raises is filed under.
+/// The cursor. `codec` is the [`Canonical::NAME`](crate::Canonical::NAME) every
+/// fault it raises is filed under.
 pub struct Reader<'a> {
     codec: &'static str,
     buf: &'a [u8],
