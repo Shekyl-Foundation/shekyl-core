@@ -640,9 +640,8 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
 pub struct ShekylArchivalEmissionEpochSnapshot {
     pub settlement_epoch: u64,
     /// The close-processing height `(E+1) × SEB` the gather froze at (shard-age
-    /// operand; must equal the height the close ran at). NOT `H_close(E)` =
-    /// `shekyl_archival_epoch_close_height(E)` = the epoch's last block =
-    /// `(E+1) × SEB − 1`, one block lower.
+    /// operand; must equal the height the close ran at). One above the epoch's
+    /// last block, `shekyl_archival_epoch_last_block(E)` = `(E+1) × SEB − 1`.
     pub close_block_height: u64,
     /// Persisted finalized `Σwork(E)` milli — the stored denominator.
     pub sigma_work_milli: u64,

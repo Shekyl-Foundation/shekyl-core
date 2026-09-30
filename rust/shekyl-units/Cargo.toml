@@ -9,8 +9,15 @@ description = "Foundational monetary-amount newtype (AtomicUnits) with checked-o
 build = "build.rs"
 
 [dependencies]
-zeroize = { workspace = true }
-serde = { workspace = true }
+# `default-features = false`, direct pins rather than `workspace = true`, for
+# the reason `shekyl-types` gives: this crate is `#![no_std]` + `alloc` so the
+# vocabulary crate can carry an `AtomicUnits` field (`BondRecord.bonded_total`,
+# DRS-E4 `ARW-Q8`) without losing its own `no_std` posture — Cargo ignores
+# `default-features = false` on a workspace dep whose workspace entry enables
+# defaults, and the workspace's serde/zeroize enable `std`. `alloc` on serde
+# is for `String` on the wire form; `derive` on both is all the newtype needs.
+zeroize = { version = "1.5", default-features = false, features = ["derive"] }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 # `postcard_schema::Schema` is opt-in (mirrors `shekyl-types`): only crates that
 # persist `AtomicUnits` inside a schema-snapshotted block (e.g. the P-scan
 # accruals in `shekyl-engine-state`) enable the `schema` feature. Same `0.2` pin

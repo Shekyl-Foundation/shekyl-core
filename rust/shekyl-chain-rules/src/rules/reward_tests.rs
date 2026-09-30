@@ -371,7 +371,7 @@ fn f17_and_g11_split_the_listed_fees_with_the_one_owner() {
         fee,
         emission.tx_volume(),
         burn.supply,
-        burn.frozen_segments,
+        burn.closed_shards,
         economics(),
     );
     let paid = judge_candidate(&chain, &with_fee).expect("priced with the fee");

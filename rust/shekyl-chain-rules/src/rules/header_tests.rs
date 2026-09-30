@@ -277,6 +277,8 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
         fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Self::Fault> {
             Ok(shekyl_units::AtomicUnits::ZERO)
         }
+        // No bonds: the honest empty archival state (DRS-E4 §5.2).
+        crate::archival_reads!(empty);
     }
     let genesis = formed(candidate(Vec::new()));
     let verdict = infallible(B5::check(

@@ -28,6 +28,12 @@ serde = { version = "1", default-features = false, features = ["derive"] }
 # containers (e.g. `TransferDetails`), matching `AtomicUnits`. Non-secret
 # data, but the wipe must compile where the container wipes structurally.
 zeroize = { version = "1.5", default-features = false, features = ["derive"] }
+# The persisted bond record's amount (`archival::BondRecord.bonded_total`,
+# DRS-E4 `ARW-Q8`, 2026-09-29). `shekyl-units` is `no_std` + `alloc` as this
+# crate is, so the edge adds no `std` to a consumer; it is the edge S-ARCH's
+# `SAR-Q2` left undecided until a second reader of the record existed, and
+# `ChainView` is that reader.
+shekyl-units = { path = "../shekyl-units", default-features = false }
 # `postcard_schema::Schema` is opt-in: only crates that persist these
 # newtypes into snapshot-checked blocks (today `shekyl-engine-state`) need
 # the derive. Foundational consumers (difficulty, consensus, economics)

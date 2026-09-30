@@ -6,14 +6,19 @@
 //! Bond-post block-connect state transitions (gate-4 §4.3/§4.5/§5;
 //! `PHASE_2B_FSM_RETOOL.md` P2B-8 implementation locus).
 //!
-//! The C++ connect site owns the LMDB write transaction and marshals the
-//! record's current state in; this module is the **single implementation** of
-//! what the connect writes — the post-connect record fields, the interval-log
-//! append, and the `total_bonded_atomic` movement are all *outputs* of the
-//! fold here, so no consensus arithmetic lives in C++ (`20-rust-vs-cpp-policy`).
-//! Every connect fold has a pop twin (gate-4 §5 all-types-atomic pop); the pop
-//! restores the record from the connect's pre-image journal (C++ byte-copy) and
-//! this module owns the counter re-credit plus the state-consistency checks.
+//! The connect site — the Rust validator's archival transition
+//! (`shekyl-chain-rules::archival`, DRS-E4 `ARW-Q1`) and, until cutover, the
+//! C++ connect that marshals the record's current state across the FFI —
+//! calls this module as the **single implementation** of what the connect
+//! writes: the post-connect record fields and the interval-log append are
+//! *outputs* of the fold here, so no consensus arithmetic lives in C++
+//! (`20-rust-vs-cpp-policy`). The folds are functions of the **record**; the
+//! global bonded total is a view over the records (`ARW-Q9`), and the C++
+//! store that still maintains one debits the fold's `refund_atomic` at the
+//! FFI edge. Every connect fold has a pop twin (gate-4 §5 all-types-atomic
+//! pop); the pop restores the record from the connect's pre-image journal
+//! (C++ byte-copy) and this module owns the counter re-credit plus the
+//! state-consistency checks.
 //!
 //! Errors here are **connect-time invariant breaches** — conditions the §3.5
 //! verify (plus the block-level per-`P` pass) already rejected. The C++ caller
@@ -120,10 +125,6 @@ pub enum ReleaseConnectError {
     /// (gate-4 §3.2) does not hold — record corruption, not a tx fault.
     #[error("record bonded_total != bond_floor(record holdings)")]
     RecordFloorInvariantBroken,
-    /// `total_bonded_atomic` would underflow — the global counter disagrees
-    /// with the per-record balance it aggregates (§4.5 audit scalar).
-    #[error("total_bonded_atomic underflow on Release debit")]
-    TotalBondedUnderflow,
     /// The interval log is at `MAX_BOND_BAD_INTERVALS`; the clean close cannot
     /// append. Verify's `IntervalLogFull` arm forecloses this at tx admission.
     #[error("interval log full; clean interval-close cannot append")]
@@ -132,13 +133,19 @@ pub enum ReleaseConnectError {
 
 /// The full `Release` connect effect (gate-4 §4.3 "On confirm").
 ///
-/// The C++ connect arm writes **exactly** these fields: the record becomes
+/// The connect writes **exactly** these fields: the record becomes
 /// `post_bonded_total` / `post_holdings` with `interval_close` appended to its
-/// interval log, and the global counter becomes `new_total_bonded_atomic`.
-/// `refund_atomic` is the released balance the tx's `bond_debit` source term
-/// returns to circulation — it is CT-balance-enforced on the wire
-/// (`verify_bond_post_ct_balance`), not written by the connect; it is exposed
-/// so tests pin the §4.3 identity `refund == debit == bond_floor(current)`.
+/// interval log. `refund_atomic` is the released balance the tx's
+/// `bond_debit` source term returns to circulation — it is CT-balance-enforced
+/// on the wire (`verify_bond_post_ct_balance`), not written by the connect; it
+/// is exposed so tests pin the §4.3 identity `refund == debit ==
+/// bond_floor(current)`, and so a store that still maintains a bonded total
+/// (the C++ `total_bonded_atomic`, until cutover) debits exactly this.
+///
+/// The fold is a function of the **record**: the global bonded total is a
+/// view over the records (DRS-E4 `ARW-Q9`), not this fold's operand, so a
+/// caller that reads one counter for a multi-post block cannot clobber
+/// itself — there is no absolute post-value to thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseConnect {
     /// Always `0` — full release (§4.3 step "zero `bonded_total_atomic`").
@@ -148,25 +155,13 @@ pub struct ReleaseConnect {
     pub post_holdings: HoldingsDescriptor,
     /// The clean interval-close to append (F3): `[E_release, E_release)`.
     pub interval_close: BadInterval,
-    /// `total_bonded_atomic − bond_debit` (§4.5 release row).
-    ///
-    /// **Absolute post-value — thread it per post.** The caller must read the
-    /// live counter immediately before *each* fold (`get → release_connect →
-    /// set`, the JoinMarket arm's inline `get → set(get + credit)` shape,
-    /// `blockchain_db.cpp`). A dispatch that hoists one counter read out of a
-    /// multi-bond-post block and applies each fold's absolute would compute
-    /// every debit from the same block-start total and clobber all but the
-    /// last write. The per-`P` block pass does NOT cover this: different-`P`
-    /// posts in one block are legitimate and still share the global counter.
-    pub new_total_bonded_atomic: u64,
     /// `== bond_debit == bond_floor(record's current holdings)` (§4.3).
     pub refund_atomic: u64,
 }
 
 /// Fold the `Release` connect (gate-4 §4.3): given the record's **current**
 /// state, the vin's `bond_debit`, and the connecting block's settlement epoch,
-/// produce the post-connect record state, the interval-log append, and the
-/// `total_bonded_atomic` movement.
+/// produce the post-connect record state and the interval-log append.
 ///
 /// The record's holdings arrive as `(kind, shard count)` — the floor invariant
 /// never reads shard-id values ([`bond_floor_of`]), so the caller marshals the
@@ -180,7 +175,6 @@ pub fn release_connect(
     record_held_shard_count: usize,
     record_bad_interval_count: usize,
     vin_bond_debit: u64,
-    total_bonded_atomic: u64,
     release_settlement_epoch: u64,
 ) -> Result<ReleaseConnect, ReleaseConnectError> {
     if vin_bond_debit == 0 {
@@ -197,9 +191,6 @@ pub fn release_connect(
     if record_bad_interval_count >= MAX_BOND_BAD_INTERVALS {
         return Err(ReleaseConnectError::IntervalLogFull);
     }
-    let new_total_bonded_atomic = total_bonded_atomic
-        .checked_sub(vin_bond_debit)
-        .ok_or(ReleaseConnectError::TotalBondedUnderflow)?;
 
     Ok(ReleaseConnect {
         post_bonded_total: 0,
@@ -208,7 +199,6 @@ pub fn release_connect(
             shard_ids: ShardSet::empty(),
         },
         interval_close: clean_interval_close(release_settlement_epoch),
-        new_total_bonded_atomic,
         refund_atomic: vin_bond_debit,
     })
 }

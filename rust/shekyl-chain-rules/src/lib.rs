@@ -120,6 +120,7 @@
 #![deny(unsafe_code)]
 
 mod anchors;
+mod archival;
 mod block;
 mod census;
 mod coverage;
@@ -150,22 +151,30 @@ mod view;
 pub mod harness;
 
 pub use anchors::{Anchor, ReleaseAnchors};
+pub use archival::{
+    shard_close_height, Accrual, ArchivalDelta, EpochClose, RecordWrite, RecordWriteKind,
+    ServeCreditKey, Slash,
+};
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use drain::{tree_after, Drain, DrainedOutput};
 pub use fault::{
-    Corrupt, Fault, FormAttempt, PerHeightRecord, Retry, Stale, ViewRead, MAX_FORM_ATTEMPTS,
+    Corrupt, Fault, FormAttempt, PerHeightRecord, RecordInvariant, Retry, Stale, ViewRead,
+    MAX_FORM_ATTEMPTS,
 };
 pub use reorg::{journal_horizon, journal_horizon_under, D_MAX};
 pub use rule_set::{
-    AdmissionPolicy, AdmissionPolicyId, DifficultyRule, RuleSchedule, RuleSet, RuleSetId,
+    AdmissionPolicy, AdmissionPolicyId, DifficultyRule, FakechainSchedule, ReorgCapNotInsideEpoch,
+    RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
 };
 pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::block_weight::{effective_median_at, EffectiveMedian, Weights};
 pub use rules::body::ArchivalKey;
 pub use rules::difficulty::Target;
-pub use rules::miner::{frozen_segments_at, tx_volume_window, EMISSION_SPLIT_EPOCH};
+pub use rules::miner::{
+    closed_shards_before, closed_shards_through, tx_volume_window, EMISSION_SPLIT_EPOCH,
+};
 pub use rules::recorded;
 pub use rules::reward::{quote_emission, PaidEmission};
 pub use rules::seed_height;

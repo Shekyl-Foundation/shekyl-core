@@ -217,8 +217,14 @@ pub struct EconomicParams {
     pub emission_speed_factor_per_minute: u64,
     pub final_subsidy_per_minute: u64,
     pub daa_target_seconds: u64,
-    /// `frozen_segment_count` at which the D2 escalation saturates. Shape frozen,
-    /// **number provisional-until-testnet** (§11.4 ceremony).
+    /// `closed_shard_count` at which the D2 escalation saturates. Shape frozen,
+    /// **number provisional-until-testnet** (§11.4 ceremony). The literal was
+    /// swept in J-segments before the operand was re-keyed to closed
+    /// `T`-transaction shards (PDM-Q6 item 4); it is re-derived, not
+    /// converted, when the Stage-2 sweep re-runs on the shard operand
+    /// (`docs/FOLLOWUPS.md`, the D2 operand row). Behaviour-neutral until
+    /// then: the shipped asymptote equals `staker_pool_share`, so the map
+    /// is flat at every `n`.
     pub escalation_knee_n: u64,
     /// Staker share at and beyond the knee. **Number provisional**; the genesis
     /// value equals `staker_pool_share`, which makes the escalation flat and the
@@ -428,14 +434,14 @@ mod escalation_param_tests {
 
     #[test]
     fn the_neutral_genesis_parameterization_is_accepted_and_flat() {
-        use crate::escalation::{staker_pool_share_at, FrozenSegmentCount};
+        use crate::escalation::{staker_pool_share_at, ClosedShardCount};
 
         let p: EconomicParams =
             serde_json::from_str(&valid_json(250_000, 250_000)).expect("neutral params are valid");
         let esc = p.escalation();
         for n in [0u64, 1, 50_000, 100_000, u64::MAX] {
             assert_eq!(
-                staker_pool_share_at(FrozenSegmentCount::new(n), &esc).to_raw(),
+                staker_pool_share_at(ClosedShardCount::new(n), &esc).to_raw(),
                 250_000,
                 "the pre-ceremony default must be bit-identical to the flat share"
             );

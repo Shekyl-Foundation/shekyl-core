@@ -19,21 +19,20 @@
 //!   pop removes it with the rest of the block.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHeight, LongTermWeight};
 
 use super::connect_fixtures::{
-    candidate, connect_chain, connect_chain_anchored, judge, spend, spend_at, spendable_prefix,
-    FIRST_SPEND_HEIGHT,
+    candidate, connect_chain, connect_chain_anchored, credited, judge, spend, spend_at,
+    spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::{BlockInfo, Canonical, CurveTreeState};
 use crate::schema::{
-    self, ARCHIVAL_BUDGET_ACCRUAL, BLOCKS, BLOCK_BURN, BLOCK_INFO, CURVE_TREE_LEAVES,
-    CURVE_TREE_META, TXS_PQC_AUTH_HASH, UNDO_LOG,
+    self, ARCHIVAL_SETTLEMENT, BLOCKS, BLOCK_BURN, BLOCK_INFO, CURVE_TREE_LEAVES, CURVE_TREE_META,
+    TXS_PQC_AUTH_HASH, UNDO_LOG,
 };
 
 fn block_info(store: &ChainStore, height: u64) -> Option<BlockInfo> {
@@ -180,8 +179,8 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
     // presence for, and creating them would make "no writer yet" a fact the
     // file could not tell from "empty".
     assert!(
-        snap.open_table(ARCHIVAL_BUDGET_ACCRUAL).is_err(),
-        "archival_budget_accrual is Unshaped and not sealed"
+        snap.open_table(ARCHIVAL_SETTLEMENT).is_err(),
+        "archival_settlement is Unshaped and not sealed"
     );
     // S-CURVE's shaped curve tables are sealed; the summary is a **written**
     // row, not an empty table (`SCU-Q1`, SCU-1).
@@ -220,7 +219,15 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
     // index, two were the C++'s pop journals, the checkpoint is a view of
     // the meta row — `DRS_E3_CURVE_WRITER.md` §3.7) and **shaped** the two
     // position maps (`Coded<TreePosition>` / `Coded<GlobalOutputIndex>`).
-    assert_eq!(unshaped, 12, "the §11.1(f) count at this layout");
+    // 12 → 3 at layout 18: DRS-E4 commit 1 **did not port** seven archival
+    // tables (`NOT_PORTED`: five pop journals and the close log are views of
+    // the undo log, the per-height accrual rows a view of the emission
+    // split, the freeze registry retired — `DRS_E4_ARCHIVAL_WRITER.md`
+    // §3.3, §3.4) and **shaped** `archival_slash_log` and
+    // `archival_slash_applied`. What remains `Unshaped` is the two dead
+    // tables (`txs`, `hf_starting_heights`) and `archival_settlement`, held
+    // for SO-D8's cutover with its blocker named.
+    assert_eq!(unshaped, 3, "the §11.1(f) count at this layout");
     cleanup(&path);
 }
 
@@ -329,26 +336,28 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     let path = tmp("a3-row-iff-4-part");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     // Every spend carries per-input auths (the wire reads `nvin` of them),
-    // so a spend is 4-part; the 3-part non-coinbase transaction is the
-    // serve-credit-only shape, whose `pqc_auths` are empty by rule (CEN-H20)
-    // — its countersignature is over the pass record (CEN-J10).
-    let four_part = spend(9, 2);
-    let three_part = fixture::serve_credit_only([0x5f; 32]);
+    // so a spend is 4-part — here the join-market post, a spend that opens
+    // the record the 3-part body needs; the 3-part non-coinbase transaction
+    // is the serve-credit-only shape, whose `pqc_auths` are empty by rule
+    // (CEN-H20) — its countersignature is over the pass record (CEN-J10) —
+    // and which connects only behind its join (CEN-L7, DRS-E4 commit 4).
+    let [four_part, three_part] = credited(9, [0x5f; 32]);
+    assert!(four_part.txid_parts().pqc_auth_hash.is_some());
     assert!(three_part.txid_parts().pqc_auth_hash.is_none());
-    // The first spend block lists the 4-part spend then the 3-part one:
+    // The first spend block lists the 4-part join then the 3-part credit:
     // tx_ids 0..=FIRST_SPEND_HEIGHT are the coinbases (one per block through
     // that one), then four_part, then three_part. The expectation is read
-    // off the spend **as connected**: anchoring signs every auth slot, and
+    // off the join **as connected**: anchoring signs every auth slot, and
     // the third component is over the auths.
     let (_, connected) =
         connect_chain_anchored(&store, &spendable_prefix(&[vec![four_part, three_part]]));
     let expected = connected
         .last()
         .and_then(|block| block.first())
-        .expect("the spend block lists the spend first")
+        .expect("the spend block lists the join first")
         .txid_parts()
         .pqc_auth_hash
-        .expect("one pqc_auth makes the txid 4-part");
+        .expect("a pqc_auth per input makes the txid 4-part");
     let four_part_id = FIRST_SPEND_HEIGHT + 1;
     let three_part_id = four_part_id + 1;
     let snap = store.begin_read().expect("read");
@@ -404,20 +413,23 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
         catalogue_len,
         "txs_archival_len is the final catalogue slot"
     );
-    // 40 LMDB mirrors plus the three Rust-only tables
-    // (`curve_tree_leaf_counts`, `undo_log`, `txs_pqc_auth_hash`) at
-    // SCHEMA_VERSION 15 — 47 mirrors until S-POOL moved `txpool_meta` /
-    // `txpool_blob` to the pool file (layout 12, `schema::MIRRORED_ELSEWHERE`),
-    // 45 until S-ALT folded `archival_alt_attestation_witness` into
-    // `alt_blocks` (layout 13, `schema::FOLDED_INTO`), 44 until DRS-E3 did
-    // not port four tree-side tables (layout 15, `schema::NOT_PORTED`) and
-    // added `curve_tree_leaf_counts`; 44 since `SHT-Q2` added
-    // `txs_archival_len` (layout 18).
-    assert_eq!(catalogue_len, 44);
+    // 33 LMDB mirrors plus the five Rust-only tables
+    // (`archival_budget_accruing`, `curve_tree_leaf_counts`, `undo_log`,
+    // `txs_pqc_auth_hash`, `txs_archival_len`) at SCHEMA_VERSION 19 — 47
+    // mirrors until S-POOL moved `txpool_meta` / `txpool_blob` to the pool
+    // file (layout 12, `schema::MIRRORED_ELSEWHERE`), 45 until S-ALT folded
+    // `archival_alt_attestation_witness` into `alt_blocks` (layout 13,
+    // `schema::FOLDED_INTO`), 44 until DRS-E3 did not port four tree-side
+    // tables (layout 15, `schema::NOT_PORTED`) and added
+    // `curve_tree_leaf_counts`; 44 when `SHT-Q2` added `txs_archival_len`
+    // (layout 18); 38 since DRS-E4 did not port seven archival tables and
+    // added `archival_budget_accruing` (layout 19).
+    assert_eq!(catalogue_len, 38);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names,
         [
+            "archival_budget_accruing",
             "curve_tree_leaf_counts",
             "undo_log",
             "txs_pqc_auth_hash",

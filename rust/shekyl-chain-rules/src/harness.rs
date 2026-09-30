@@ -308,6 +308,12 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
             AtHeight::AboveTip => AtHeight::AboveTip,
         })
     }
+
+    // No bonds. Archival state is derived from connected posts and settled
+    // epochs; a constructed record would test the construction (DRS-E4
+    // §5.2, *No `Mock*` archival state*). The witness for a 4.J rule over a
+    // held shard is a real chain that posted the bond, through `connect`.
+    crate::archival_reads!(empty);
 }
 
 /// The fault a [`FaultingView`] raises.
@@ -368,6 +374,8 @@ impl<'id> ChainView<'id> for FaultingView<'id> {
     fn tip(&self) -> Result<Option<Tip>, Faulted> {
         Err(Faulted)
     }
+
+    crate::archival_reads!(fault Faulted);
 }
 
 /// The one per-height read a [`WithholdingView`] answers `AboveTip` for.
@@ -475,6 +483,8 @@ impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
     fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
         self.inner.outputs_at(height)
     }
+
+    crate::archival_reads!(delegate inner);
 }
 
 /// The environment a fixture is judged in: a fixed clock and a longhash

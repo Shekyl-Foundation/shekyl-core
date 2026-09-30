@@ -42,6 +42,7 @@ use crate::test_support::{
 /// Regtest without a fixed target: the genesis rules at every height.
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
     fixed_difficulty: None,
+    schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
 };
 
 fn nz(n: usize) -> NonZeroUsize {
@@ -833,6 +834,7 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
     let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
     let rules = ChainRules::Regtest {
         fixed_difficulty: std::num::NonZeroU128::new(7),
+        schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
     };
     let report = run(
         &mut source,

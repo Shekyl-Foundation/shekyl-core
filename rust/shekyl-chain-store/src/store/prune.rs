@@ -167,13 +167,15 @@ const FIRST_PRUNING_EPOCH: u64 = 2;
 /// S-CHAIN-W SCW-7 — below it a legal reorg meets `PopBelowFloor`) and
 /// **strictly inside the epoch** (`DRS_E1_SPRUNE.md` §3, §12 — the pop
 /// floor sits above the body horizon *because* `retention < SEB`, SPR-7).
-/// Both are checked at construction and refused at open; the cap is
-/// re-checked by `connect` against the set in force at every height, so a
-/// schedule step that raises the cap is refused at the block it applies
-/// to. The store holds no rule set and no schedule (rule 71): the caller
-/// hands the cap here as it hands the set to `connect`. Production runs
-/// `D_max` on both sides; a regtest under a shortened epoch runs a
-/// Fakechain rule set whose cap fits inside it.
+/// Both are checked at construction and refused at open; `connect`
+/// re-checks the cap **and the epoch** against the set in force at every
+/// height ([`Self::check_against`]), so a schedule step that raises the
+/// cap or moves the epoch is refused at the block it applies to. The
+/// store holds no rule set and no schedule (rule 71): the caller hands the
+/// pair here as it hands the set to `connect`, and the set carries the
+/// same pair (`RuleSet::settlement_schedule`, `RuleSet::reorg_cap`).
+/// Production runs `D_max` on both sides; a regtest under a shortened
+/// epoch runs a Fakechain rule set naming that epoch and a cap inside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Horizons {
     epoch: SettlementEpochBlocks,
@@ -225,18 +227,51 @@ impl Horizons {
         Self::new(epoch, cap, cap)
     }
 
-    /// Whether this retention covers `in_force`'s reorg cap (SCW-7) —
-    /// `connect`'s per-height belt.
+    /// The horizons a store runs under a given rule set: that set's
+    /// settlement epoch, and an undo retention of exactly its reorg cap —
+    /// the least retention `connect` accepts under it
+    /// ([`Self::check_against`]). `under(&RuleSet::GENESIS)` is
+    /// [`production`](Self::production) at the genesis epoch; a Fakechain
+    /// set under a shortened schedule gets the horizons that schedule
+    /// implies, so a replay driver and a test open a store the same way a
+    /// daemon does — off the set, not off a second copy of its numbers.
     ///
     /// # Errors
     ///
-    /// [`StoreCannot::RetentionBelowReorgCap`] if it does not.
-    pub(super) fn check_covers(&self, in_force: &RuleSet) -> Result<(), StoreCannot> {
+    /// As [`new`](Self::new); a well-formed set's pair
+    /// (`FakechainSchedule` holds `0 < cap < SEB`) does not fail it.
+    pub fn under(in_force: &RuleSet) -> Result<Self, StoreCannot> {
+        let cap = in_force.reorg_cap();
+        Self::new(in_force.settlement_schedule().blocks(), cap, cap)
+    }
+
+    /// Whether these horizons fit the set in force — `connect`'s
+    /// per-height belt, both halves of the schedule: the retention covers
+    /// `in_force`'s reorg cap (SCW-7), and the pinned epoch **is**
+    /// `in_force`'s settlement epoch (SCW-2). The file's join epochs and
+    /// serve-credit windows were written under the pinned geometry; a
+    /// verdict judged under another would carry rows the file mislabels,
+    /// so it is refused at the block it applies to rather than found by a
+    /// later read.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreCannot::RetentionBelowReorgCap`] if the retention is under
+    /// the cap; [`StoreCannot::SettlementEpochMismatch`] if the epochs
+    /// differ.
+    pub(super) fn check_against(&self, in_force: &RuleSet) -> Result<(), StoreCannot> {
         let reorg_cap = in_force.reorg_cap();
         if self.undo_retention.to_raw() < reorg_cap.to_raw() {
             return Err(StoreCannot::RetentionBelowReorgCap {
                 retention: self.undo_retention,
                 reorg_cap,
+            });
+        }
+        let session = in_force.settlement_schedule().blocks();
+        if self.epoch != session {
+            return Err(StoreCannot::SettlementEpochMismatch {
+                pinned: self.epoch,
+                session,
             });
         }
         Ok(())

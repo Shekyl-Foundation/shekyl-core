@@ -18,7 +18,7 @@
 //!   `shekyl_economics::compute_fee_burn` (the one owner: the zero-fee arm,
 //!   the percentage, the D2-escalated share) over the listed bodies' fees
 //!   (`Σ ct.fee`, the C++'s `fee_summary` at `blockchain.cpp:5653`), the
-//!   volume window (F20), the circulating supply and the frozen-segment
+//!   volume window (F20), the circulating supply and the closed-shard
 //!   count read at parent state (`rules::miner::BurnOperands`). The
 //!   coinbase may pay only `miner_fee_income`. A fee sum the arithmetic
 //!   cannot form refuses on this row at `Locus::Block` — unreachable by a
@@ -262,7 +262,7 @@ pub(crate) fn price(
                 tx_volume: emission.tx_volume(),
                 total_fees,
                 supply: burn.supply,
-                frozen_segments: burn.frozen_segments,
+                closed_shards: burn.closed_shards,
                 split_epoch: EMISSION_SPLIT_EPOCH.to_raw(),
                 params: economics(),
             };

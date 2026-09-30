@@ -49,7 +49,7 @@ use shekyl_wire::Block;
 
 use crate::codec::{
     ArchivalLastSlashEpochCell, BlockInfo, BondRecord, CurveTreeState, OutTx, PropertyCell,
-    RMarket, SigmaWorkMilli, TotalBurnedCell, TxOutputIndices,
+    RMarket, SigmaWorkMilli, SlashLogEntry, TotalBurnedCell, TxOutputIndices,
 };
 use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
@@ -900,6 +900,18 @@ impl ReadSnapshot<'_> {
         archival_reads::bond_record(&self.txn, persona).map_err(chain_reads::ReadFault::into_plain)
     }
 
+    /// **A2.** Every slash logged against `persona` strictly above `height`,
+    /// in log order — the history half of the as-of-height holdings fold
+    /// (`shekyl-archival-retention::holds_shard_at`). Empty when none.
+    pub fn slash_log_after(
+        &self,
+        persona: &PCanonicalId,
+        height: BlockHeight,
+    ) -> Result<Vec<SlashLogEntry>, StoreError> {
+        archival_reads::slash_log_after(&self.txn, persona, height)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
     /// **A3.** Latest epoch `persona` served `shard`, one reverse seek.
     /// `None` is never-served. SI-15 when rows exist and the persona has no
     /// bond record.
@@ -968,6 +980,34 @@ impl ReadSnapshot<'_> {
         height: BlockHeight,
     ) -> Result<AtHeight<Option<Vec<u8>>>, StoreError> {
         archival_reads::attestation_witness_at(&self.txn, height)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A11.** Every bond record with its persona, in key order. Empty
+    /// when the chain has no bonds. An undecodable row is SI-7.
+    pub fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, StoreError> {
+        archival_reads::bond_records(&self.txn).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A12.** Whether the slash for `(persona, shard, epoch)` has been
+    /// applied.
+    pub fn slash_applied(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<bool, StoreError> {
+        archival_reads::slash_applied(&self.txn, persona, shard, epoch)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A13.** The open epoch's accrued staker inflow. `None` before the
+    /// first accrual and after the close (SI-23).
+    pub fn budget_accruing(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<AtomicUnits>, StoreError> {
+        archival_reads::budget_accruing(&self.txn, epoch)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 }

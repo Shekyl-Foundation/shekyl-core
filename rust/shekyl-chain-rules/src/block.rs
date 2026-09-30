@@ -14,10 +14,11 @@ use shekyl_types::{
     BlockHash, CurveTreeRoot, PowHash, PqcAuthHash, PrunableHash, Timestamp, TxHash,
 };
 
-use crate::drain::Drain;
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
+use crate::archival::ArchivalDelta;
 use crate::coverage::RuleCoverage;
+use crate::drain::Drain;
 use crate::fault::FormAttempt;
 use crate::rule_set::{RuleSet, RuleSetId};
 use crate::rules::block_weight::Weights;
@@ -308,7 +309,7 @@ impl fmt::Debug for StructurallyValid {
 /// Constructed only by `validate`. The fields are private and there is no
 /// public constructor: a `ValidatedBlock` in hand was judged (G5).
 ///
-/// ```compile_fail
+/// ```compile_fail,E0451
 /// use shekyl_chain_rules::ValidatedBlock;
 /// let forged = ValidatedBlock {
 ///     hash: todo!(),
@@ -317,6 +318,11 @@ impl fmt::Debug for StructurallyValid {
 ///     transactions: todo!(),
 ///     target: todo!(),
 ///     cumulative_difficulty: todo!(),
+///     root_after: todo!(),
+///     drain: todo!(),
+///     weights: todo!(),
+///     emission: todo!(),
+///     archival: todo!(),
 /// };
 /// ```
 #[derive(Debug, PartialEq, Eq)]
@@ -351,11 +357,17 @@ pub struct ValidatedBlock {
     /// records `coins_generated` from here; the paid reward is F18's and
     /// G11's operand (wave B).
     emission: PaidEmission,
+    /// What this block does to the archival state — record post-images,
+    /// serve-credit keys, slashes, the accrual, the epoch close (DRS-E4
+    /// §3.1, `ARW-Q1`). On the verdict because every value has reach into
+    /// future validity and the store computes none of it: `connect` writes
+    /// each part through its handle.
+    archival: ArchivalDelta,
 }
 
 /// What `validate` derived for a block beyond its bytes — the values a
 /// [`ValidatedBlock`] carries that no candidate declares. One struct so the
-/// assembly names each by field rather than by position (six of the same
+/// assembly names each by field rather than by position (seven of the same
 /// few types would otherwise be transposable at the call).
 pub(crate) struct Derived {
     /// CEN-D4's target.
@@ -370,6 +382,8 @@ pub(crate) struct Derived {
     pub(crate) weights: Weights,
     /// CEN-F14b / F16 / G12's paid emission.
     pub(crate) emission: PaidEmission,
+    /// The archival transition (DRS-E4, CEN-L7).
+    pub(crate) archival: ArchivalDelta,
 }
 
 impl ValidatedBlock {
@@ -384,8 +398,10 @@ impl ValidatedBlock {
     /// derived here, once; the target and the cumulative work are CEN-D4's
     /// derivation, recorded where it ran; the weights are CEN-G6/G6b's,
     /// derived once every transaction was judged, and the paid emission
-    /// is the reward chain's (F14b, F16, G12) over them — all six arrive as
-    /// one [`Derived`], named field by field at the call site.
+    /// is the reward chain's (F14b, F16, G12) over them, and the archival
+    /// transition (DRS-E4, L7) is the last derivation over the judged
+    /// block — all seven arrive as one [`Derived`], named field by field at
+    /// the call site.
     pub(crate) fn derive(candidate: Candidate, hash: BlockHash, derived: Derived) -> Self {
         let Candidate {
             block,
@@ -398,6 +414,7 @@ impl ValidatedBlock {
             drain,
             weights,
             emission,
+            archival,
         } = derived;
         Self {
             hash,
@@ -413,6 +430,7 @@ impl ValidatedBlock {
             drain,
             weights,
             emission,
+            archival,
         }
     }
 
@@ -421,6 +439,13 @@ impl ValidatedBlock {
     #[must_use]
     pub const fn weights(&self) -> &Weights {
         &self.weights
+    }
+
+    /// What this block does to the archival state (DRS-E4; the field's
+    /// docs). `connect` writes it part by part in the delta's order.
+    #[must_use]
+    pub const fn archival(&self) -> &ArchivalDelta {
+        &self.archival
     }
 
     /// The paid reward, its split and the gross emission through this

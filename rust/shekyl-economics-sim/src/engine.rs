@@ -3,7 +3,7 @@ use shekyl_economics::{
     burn::{calc_burn_pct_from_activity, compute_burn_split_at},
     calc_burn_pct, calc_effective_emission_share, calc_release_multiplier, effective_emission,
     params::{calc_stake_ratio, EconomicParams, SCALE},
-    split_block_emission, FrozenSegmentCount, TxVolume,
+    split_block_emission, ClosedShardCount, TxVolume,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -259,7 +259,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         // to the flat floor at every n, and after the ceremony this is the honest
         // "no burden yet" baseline (stage2 threads real n via burden::frozen_shards).
         let fee_split =
-            compute_burn_split_at(total_fees, burn_pct, FrozenSegmentCount::ZERO, &economic);
+            compute_burn_split_at(total_fees, burn_pct, ClosedShardCount::ZERO, &economic);
 
         already_generated += u128::from(effective_reward);
         total_burned += fee_split.actually_destroyed as u128;

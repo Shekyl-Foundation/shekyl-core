@@ -41,7 +41,17 @@
 //! (test assertions in `src/tests.rs` hardcode expected values, as tests
 //! should).
 
-use std::fmt;
+#![no_std]
+
+// `alloc`, not `std` (the `shekyl-types` posture, adopted 2026-09-29 so that
+// crate can depend on this one): the SKL string forms need `String`; nothing
+// here needs `std`. Tests take `std` explicitly.
+extern crate alloc;
+#[cfg(test)]
+extern crate std;
+
+use alloc::string::String;
+use core::fmt;
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -148,7 +158,7 @@ impl AtomicUnits {
         let whole = self.0 / ATOMIC_UNITS_PER_SKL;
         let frac = self.0 % ATOMIC_UNITS_PER_SKL;
         let width = usize::from(DISPLAY_DECIMAL_POINT);
-        format!("{whole}.{frac:0width$}")
+        alloc::format!("{whole}.{frac:0width$}")
     }
 
     /// Parse a SKL decimal string into atomic units.
@@ -279,7 +289,7 @@ impl fmt::Display for ParseAmountError {
     }
 }
 
-impl std::error::Error for ParseAmountError {}
+impl core::error::Error for ParseAmountError {}
 
 pub mod banded_pl;
 pub mod wire;

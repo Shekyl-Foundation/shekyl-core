@@ -27,10 +27,10 @@
 //! ```
 //!
 //! **Consensus entry:** [`compute_burn_split_at`] — maps parent-state
-//! [`FrozenSegmentCount`] through the D2 escalation and splits. Prefer it over
+//! [`ClosedShardCount`] through the D2 escalation and splits. Prefer it over
 //! composing [`compute_burn_split`] with a hand-picked share.
 
-use crate::escalation::{staker_pool_share_at, FrozenSegmentCount, ScaledShare};
+use crate::escalation::{staker_pool_share_at, ClosedShardCount, ScaledShare};
 use crate::params::{clamp, isqrt, mul_scale, EconomicParams, SCALE};
 use crate::supply::CirculatingSupply;
 use crate::volume::TxVolume;
@@ -171,7 +171,7 @@ pub fn compute_fee_burn(
     total_fees: u64,
     tx_volume: TxVolume,
     supply: CirculatingSupply,
-    n: FrozenSegmentCount,
+    n: ClosedShardCount,
     params: &EconomicParams,
 ) -> BurnSplit {
     let burn_pct = calc_burn_pct_at(tx_volume, supply, params);
@@ -180,7 +180,7 @@ pub fn compute_fee_burn(
 
 /// **Canonical consensus burn split:** fees × burn% × D2-escalated share at `n`.
 ///
-/// `n` is parent-block [`FrozenSegmentCount`]. The share is derived from
+/// `n` is parent-block [`ClosedShardCount`]. The share is derived from
 /// `params` via [`staker_pool_share_at`] — numerics never need to cross FFI as
 /// a free parameter. Consensus paths reach this through
 /// [`compute_fee_burn`], which owns the percentage and this split.
@@ -188,7 +188,7 @@ pub fn compute_fee_burn(
 pub fn compute_burn_split_at(
     total_fees: u64,
     burn_pct: u64,
-    n: FrozenSegmentCount,
+    n: ClosedShardCount,
     params: &EconomicParams,
 ) -> BurnSplit {
     let share = staker_pool_share_at(n, &params.escalation());
@@ -209,7 +209,7 @@ mod tests {
     fn zero_fees_burn_nothing_and_pay_nothing() {
         let p = EconomicParams::default();
         let v = TxVolume::per_block(p.tx_volume_baseline);
-        let split = compute_fee_burn(0, v, supply(1_000_000), FrozenSegmentCount::new(0), &p);
+        let split = compute_fee_burn(0, v, supply(1_000_000), ClosedShardCount::new(0), &p);
         assert_eq!(
             split,
             BurnSplit {
@@ -228,12 +228,12 @@ mod tests {
         let v = TxVolume::per_block(p.tx_volume_baseline);
         let net = supply(p.emission_curve_asymptote / 2);
         let fees = 1_000_000_000;
-        let split = compute_fee_burn(fees, v, net, FrozenSegmentCount::new(0), &p);
+        let split = compute_fee_burn(fees, v, net, ClosedShardCount::new(0), &p);
         let pct = calc_burn_pct_at(v, net, &p);
         assert!(pct > 0, "baseline volume at half the cap burns something");
         assert_eq!(
             split,
-            compute_burn_split_at(fees, pct, FrozenSegmentCount::new(0), &p)
+            compute_burn_split_at(fees, pct, ClosedShardCount::new(0), &p)
         );
         assert_eq!(
             split.miner_fee_income + split.staker_pool_amount + split.actually_destroyed,
@@ -376,7 +376,7 @@ mod tests {
             ScaledShare::from_raw(params.staker_pool_share),
         );
         for n in [0u64, 1, 100_000, u64::MAX] {
-            let esc = compute_burn_split_at(fees, burn_pct, FrozenSegmentCount::new(n), &params);
+            let esc = compute_burn_split_at(fees, burn_pct, ClosedShardCount::new(n), &params);
             assert_eq!(esc, flat, "n={n}");
         }
     }

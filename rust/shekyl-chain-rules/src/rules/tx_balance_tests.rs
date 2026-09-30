@@ -11,8 +11,8 @@ use super::{emission, refused_listed, refused_lone, with_inputs, KI};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::harness::fixture::{
-    anchored_on, balanced_bond_post, balanced_emission, candidate_on, coinbase, listed,
-    mask_committing, multiple_of_g, point, serve_credit_only, spendable_chain, G, TWO_G,
+    anchored_on, balanced_emission, candidate_on, coinbase, join_market, listed, mask_committing,
+    multiple_of_g, point, serve_credit_only, spendable_chain, G, TWO_G,
 };
 use crate::harness::{assert_refused, formed_on, judged};
 use crate::rule_set::RuleSet;
@@ -25,24 +25,14 @@ use shekyl_wire::{Ct, Input, Transaction};
 
 // ---- the adopted crypto rows: H7, H17, H18, H21, H22 --------------------
 
-/// A **balanced bond post** with `credit` — the harness's
-/// [`balanced_bond_post`] on `KI`, the bond's own bytes the type's minimum
+/// A **balanced bond post** — the harness's [`join_market`] on `KI`
 /// (slice 7 commit 7 moved the shape into the harness so the ingest's
-/// mutation family can build the pair CEN-G10 refuses).
-fn bond_post_tx(credit: u64) -> Transaction {
-    use shekyl_wire::{BondPost, BondPostKind, Holdings};
-    balanced_bond_post(
-        KI,
-        BondPost {
-            hybrid_public_key: Vec::new(),
-            p_canonical_id: shekyl_types::PCanonicalId::from_bytes([0xB0; 32]),
-            kind: BondPostKind::Other(2),
-            holdings: Holdings::CompleteTree,
-            bonded_total_atomic: 0,
-            bond_credit: credit,
-            bond_debit: 0,
-        },
-    )
+/// mutation family can build the pair CEN-G10 refuses; DRS-E4 commit 4
+/// made it the join, the one post that connects with no record to fold
+/// over — CEN-L7 refuses a release or reinstate for a persona it does not
+/// know). Its credit is the bond floor.
+fn bond_post_tx() -> Transaction {
+    join_market(KI, [0xB0; 32])
 }
 
 /// A **balanced emission** paying `reward` — the harness's
@@ -60,14 +50,20 @@ fn emission_tx(reward: u64) -> Transaction {
 /// `tx_form` on an emission: it asserts its loud case on `H14::check`
 /// alone because the whole form needs the balance fixtured here. Narrowing
 /// this test narrows that one.
+///
+/// The join connects; the emission's form passes and its connect is not
+/// judged here: a claim needs the claimant's record and a **settled**
+/// epoch (CEN-L7 re-runs claimability at the connect), which no chain
+/// short enough for a unit test carries — the connected claim is the
+/// scenario driver's (`DRS_E4_ARCHIVAL_WRITER.md` §5.2, commit 5).
 #[test]
 fn balanced_bond_post_and_emission_fixtures_pass() {
-    for tx in [bond_post_tx(1_000), emission_tx(5)] {
+    for tx in [bond_post_tx(), emission_tx(5)] {
         let form = tx_form(&tx, TxSlot::Lone, &RuleSet::GENESIS)
             .unwrap_or_else(|r| panic!("the balanced fixture passes: {r}"));
         assert!(form.contains(CenRow::H21) && form.contains(CenRow::H22));
-        refused_listed_never(&tx);
     }
+    refused_listed_never(&bond_post_tx());
 }
 
 /// The transaction, listed first, connects — on the youngest chain that
@@ -273,7 +269,7 @@ fn h18_the_balance_is_over_the_hidden_amounts_not_only_the_blindings() {
 /// pseudo-out does not cover.
 #[test]
 fn h21_every_departure_from_the_bond_post_shape_or_balance_is_refused() {
-    let base = || bond_post_tx(1_000);
+    let base = bond_post_tx;
     let mut one_auth = base();
     if let Ct::Fcmp { pqc_auths, .. } = &mut one_auth.ct {
         pqc_auths.pop();

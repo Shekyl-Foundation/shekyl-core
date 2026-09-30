@@ -538,10 +538,9 @@ struct ArchivalEmissionEpochSnapshot
 {
   uint64_t settlement_epoch = 0;
   /// The close-processing height (E+1)·SEB the close ran at (the shard-age
-  /// operand). NOT H_close(E): that is `shekyl_archival_epoch_close_height(E)`
-  /// = the epoch's last block / credit deadline = (E+1)·SEB − 1, one block
-  /// lower. Source this from `shekyl_archival_epoch_close_processing_height`,
-  /// never the lookalike `shekyl_archival_epoch_close_height`.
+  /// operand), sourced from `shekyl_archival_epoch_close_processing_height`.
+  /// One above the epoch's last block / credit deadline `H_close(E)` =
+  /// `shekyl_archival_epoch_last_block(E)` = (E+1)·SEB − 1.
   uint64_t close_block_height = 0;
   /// Persisted finalized Σwork(E) milli (0 when the epoch closed empty or
   /// was M1-gated) — the stored denominator, never a recompute.

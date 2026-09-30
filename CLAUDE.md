@@ -60,6 +60,8 @@ Foundations & process
 - [`06-branching`](.cursor/rules/06-branching.mdc) — branch policy (always applies): `main`=stable, `dev`=integration; short-lived branches off `dev`; each push is separately authorized
 - [`07-consensus-atomic-cutovers`](.cursor/rules/07-consensus-atomic-cutovers.mdc) — named, opt-in exception to `06` for consensus-boundary PRs
 - [`08-worktree-hygiene`](.cursor/rules/08-worktree-hygiene.mdc) — the tested tree is the shipped tree (always applies): stage explicit paths, never `-A`/`-a`; verify from a fresh checkout of the pushed SHA
+- [`37-internal-information-boundary`](.cursor/rules/37-internal-information-boundary.mdc) — `shekyl-core` is public (always applies): write the role, never the host; host identities, operational state and local paths live in `shekyl-dev`
+- [`38-shared-estate-coordination`](.cursor/rules/38-shared-estate-coordination.mdc) — Foundation hosts are shared (always applies): read and claim in `shekyl-dev`'s `infrastructure/USAGE.md` before using one; a long-running test is a `quiet` claim nobody else disturbs
 - [`90-commits`](.cursor/rules/90-commits.mdc) — commit message & PR discipline
 - [`91-documentation-after-plans`](.cursor/rules/91-documentation-after-plans.mdc) — docs update is the final task of a plan
 - [`94-tracking-index`](.cursor/rules/94-tracking-index.mdc) — `docs/design/IMPLEMENTATION_INDEX.md` is load-bearing; identifier families register at birth; Phase 3+ / Stage 3+ items start with an index row

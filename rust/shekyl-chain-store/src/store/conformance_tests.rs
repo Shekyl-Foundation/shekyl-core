@@ -46,7 +46,9 @@ use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, CenRow, ChainView, Corrupt, Fault, FormAttempt, Locus,
     RecordedBlock, RecordedWeights, RuleSet, Stale, Substrate, Trust, TxSlot, Verdict,
 };
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp, TxHash};
+use shekyl_types::{
+    ArchivalLength, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp, TxHash,
+};
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{
@@ -221,6 +223,7 @@ fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Cand
                     // transaction.
                     coins_generated,
                     cumulative_tx_count: 0,
+                    cumulative_archival_len: ArchivalLength::ZERO,
                 },
                 root_after,
                 // The two weights the store recorded for `h` — the
@@ -411,6 +414,7 @@ fn a_drifted_mock_is_caught_by_the_comparison() {
                 cumulative_difficulty: work,
                 coins_generated,
                 cumulative_tx_count: 0,
+                cumulative_archival_len: ArchivalLength::ZERO,
             },
             late_root,
         );
@@ -648,8 +652,92 @@ fn the_mock_view_and_the_batch_view_answer_the_same_reads() {
     });
     assert_eq!(real_present, mocked_present);
     assert_eq!(real_present, vec![true, true, true, true, true, false]);
+
+    // The archival reads (DRS-E4 commit 2): a chain that posted no bond has
+    // no archival state, and both views say so in the same shape — `None`,
+    // empty, `PassCount::ZERO` — which is the only archival answer the mock
+    // gives (§5.2: no `Mock*` archival state; a chain with a bond is
+    // witnessed against the real store alone). What is held here is that
+    // the store's empty state and the mock's empty state are the *same*
+    // empties, so a rule tested over the mock reads the absences the store
+    // reads.
+    //
+    // Read this block's greenness for what it is: agreement about absence,
+    // not coverage of the reads. Until E4 commit 4 writes a row, absence is
+    // the only thing the two views have to agree on, and every read's
+    // *present* arm is witnessed by `archival_read_tests` against the store
+    // alone. When the writer lands, the chain here gains a bond and this
+    // comparison starts holding the present arms too — its strength grows
+    // with the writer, and nothing here should be read as having it yet.
+    let real_archival: Result<ArchivalReads, TestErr> =
+        store.write(|batch| Ok(ArchivalReads::of(&batch.chain_view())?));
+    let mocked_archival = mock.with_view(|view| match ArchivalReads::of(&view) {
+        Ok(reads) => reads,
+        Err(never) => match never {},
+    });
+    assert_eq!(real_archival.expect("reads"), mocked_archival);
+    assert_eq!(mocked_archival, ArchivalReads::EMPTY);
     drop(store);
     cleanup(&path);
+}
+
+/// Every archival read, asked once, at one persona / shard / epoch / height
+/// — the projection both views are compared on.
+#[derive(Debug, PartialEq, Eq)]
+struct ArchivalReads {
+    bond: Option<shekyl_types::archival::BondRecord>,
+    slashes: Vec<shekyl_types::archival::SlashLogEntry>,
+    last_served: Option<shekyl_types::SettlementEpoch>,
+    served: Vec<shekyl_types::archival::ServedShard>,
+    passes: shekyl_types::archival::PassCount,
+    r_market: Option<shekyl_types::archival::RMarket>,
+    sigma_work: Option<shekyl_types::archival::SigmaWorkMilli>,
+    budget: Option<shekyl_units::AtomicUnits>,
+    watermark: Option<shekyl_types::SettlementEpoch>,
+    records: Vec<(
+        shekyl_types::PCanonicalId,
+        shekyl_types::archival::BondRecord,
+    )>,
+    slash_applied: bool,
+    accruing: Option<shekyl_units::AtomicUnits>,
+}
+
+impl ArchivalReads {
+    /// What a chain with no bonds answers.
+    const EMPTY: Self = Self {
+        bond: None,
+        slashes: Vec::new(),
+        last_served: None,
+        served: Vec::new(),
+        passes: shekyl_types::archival::PassCount::ZERO,
+        r_market: None,
+        sigma_work: None,
+        budget: None,
+        watermark: None,
+        records: Vec::new(),
+        slash_applied: false,
+        accruing: None,
+    };
+
+    fn of<'id, V: ChainView<'id>>(view: &V) -> Result<Self, V::Fault> {
+        let persona = shekyl_types::PCanonicalId::from_bytes([0x5a; 32]);
+        let shard = shekyl_types::ShardId::from_raw(7);
+        let epoch = shekyl_types::SettlementEpoch::from_raw(3);
+        Ok(Self {
+            bond: view.bond_record(&persona)?,
+            slashes: view.slash_log_after(&persona, BlockHeight::ZERO)?,
+            last_served: view.last_served_epoch(&persona, shard)?,
+            served: view.served_shards(&persona)?,
+            passes: view.pass_count(&persona, shard, epoch)?,
+            r_market: view.r_market(shard, epoch)?,
+            sigma_work: view.sigma_work(epoch)?,
+            budget: view.budget(epoch)?,
+            watermark: view.last_settled_slash_epoch()?,
+            records: view.bond_records()?,
+            slash_applied: view.slash_applied(&persona, shard, epoch)?,
+            accruing: view.budget_accruing(epoch)?,
+        })
+    }
 }
 
 #[test]

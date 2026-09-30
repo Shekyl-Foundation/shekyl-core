@@ -132,7 +132,8 @@ pub struct AdmissionShard {
 /// and a release in the *same* block could be sequenced to catch a transient `r`.
 /// Reading parent state makes ordering irrelevant and makes every validator
 /// compute an identical verdict — the same discipline as the
-/// `frozen_segment_count` frontier-read and the M3-1 cached-counter drift ruling.
+/// CEN-F17 `closed_shards_before` parent-state read and the M3-1 cached-counter
+/// drift ruling.
 ///
 /// The read-point lives in the **type name** rather than a comment so a tip-state
 /// gather is a visible lie at the call site instead of a silent default. Note the

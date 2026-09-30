@@ -3745,7 +3745,9 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-crypto-pq",
  "shekyl-ct-balance",
+ "shekyl-types",
  "shekyl-units",
+ "shekyl-wire",
  "thiserror",
 ]
 
@@ -3838,6 +3840,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-address",
+ "shekyl-archival-bond-builder",
  "shekyl-archival-retention",
  "shekyl-block-template",
  "shekyl-bulletproofs",
@@ -4982,6 +4985,7 @@ dependencies = [
  "postcard-schema",
  "serde",
  "serde_json",
+ "shekyl-units",
  "zeroize",
 ]
 

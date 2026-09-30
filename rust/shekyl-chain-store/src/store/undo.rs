@@ -98,6 +98,11 @@ impl Restorable for (u8, u64) {}
 // `ServeCreditKey`): 32 and 56 fixed bytes, the tuple's derived width.
 impl Restorable for [u8; 32] {}
 impl Restorable for ([u8; 32], u64, u64, u64) {}
+// `archival_slash_applied`'s `(persona, shard, epoch)` and
+// `archival_slash_log`'s `(height, seq)` (DRS-E4 `SlashAppliedKey`,
+// `SlashLogKey`): 48 and 12 fixed bytes, the tuples' derived widths.
+impl Restorable for ([u8; 32], u64, u64) {}
+impl Restorable for (u64, u32) {}
 // `curve_tree_meta`'s unit key (S-CURVE `SCU-Q1`): the one-row table.
 impl Restorable for () {}
 impl Restorable for LmdbHashKey {}

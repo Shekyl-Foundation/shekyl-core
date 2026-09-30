@@ -32,6 +32,7 @@ use crate::test_support::{
 
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
     fixed_difficulty: None,
+    schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
 };
 
 /// D1's target for the mined chain: half of all hashes pass.
@@ -49,6 +50,7 @@ const WRONG_SEED: [u8; 32] = [0xbb; 32];
 fn mined_rules() -> ChainRules {
     ChainRules::Regtest {
         fixed_difficulty: Some(NonZeroU128::new(MINED_DIFFICULTY).expect("non-zero")),
+        schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
     }
 }
 
