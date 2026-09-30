@@ -130,10 +130,12 @@ pub use claimed_epochs::{
 pub use consensus_state::{
     as_of_e_served_work, credited_work_milli, epoch_close_compute, epoch_close_due_at_height,
     epoch_close_height, good_through, last_settled_epoch_as_of_parent, market_member_at_epoch,
-    prune_below_epoch_at_height, r_market_count, settlement_epoch_at_height, shard_age_milli,
-    shard_contribution_micro, shard_work_micro, sigma_work_milli, BadInterval,
-    CreditIndexOutOfRange, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseResult,
-    EpochCloseShard, ServeCreditRow, ServedWork, FOUNDATION_EXCLUDED_FROM_MARKET,
+    prune_below_epoch_at_height, r_market_count, settlement_epoch_at_height,
+    settlement_epoch_last_block, settlement_epoch_open_height,
+    settlement_epoch_slash_deadline_height, shard_age_milli, shard_contribution_micro,
+    shard_work_micro, sigma_work_milli, BadInterval, CreditIndexOutOfRange, CreditPair,
+    EpochCloseBond, EpochCloseInputs, EpochCloseResult, EpochCloseShard, ServeCreditRow,
+    ServedWork, FOUNDATION_EXCLUDED_FROM_MARKET,
 };
 pub use conservation::{verify_conservation_snapshot, ConservationError, ConservationSnapshot};
 pub use constants::{

@@ -5,27 +5,19 @@
 
 //! Settlement-epoch schedule and challenge-timing FFI.
 
+// The epoch geometry (`H_open` / `H_close` / `H_slash_deadline`) has one
+// home, `shekyl_archival_retention::consensus_state`; this module marshals
+// it across the C edge and computes none of it.
 use shekyl_archival_retention::{
     challenge_fire_height, challenge_leaf_chunk_bounds, challenge_seal_height,
-    challenge_seal_on_chain, effective_settlement_epoch_blocks, empty_attestation_root,
-    epoch_close_height, frozen_segment_count, p_canonical_id_from_hybrid_pubkey,
-    ATTESTATION_HEADER_LEN, CHALLENGE_RESOLUTION_BLOCKS, MAX_ATTESTATION_RECORDS,
-    MAX_ATTESTATION_WITNESS_BYTES,
+    challenge_seal_on_chain, empty_attestation_root, epoch_close_height, frozen_segment_count,
+    p_canonical_id_from_hybrid_pubkey, ATTESTATION_HEADER_LEN, CHALLENGE_RESOLUTION_BLOCKS,
+    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES,
 };
-
-pub fn settlement_epoch_open_height(e: u64) -> u64 {
-    e.saturating_mul(effective_settlement_epoch_blocks())
-}
-
-#[must_use]
-pub fn settlement_epoch_last_block(e: u64) -> u64 {
-    settlement_epoch_open_height(e.saturating_add(1)).saturating_sub(1)
-}
-
-#[must_use]
-pub fn settlement_epoch_slash_deadline_height(e: u64) -> u64 {
-    settlement_epoch_last_block(e).saturating_add(CHALLENGE_RESOLUTION_BLOCKS)
-}
+pub use shekyl_archival_retention::{
+    settlement_epoch_last_block, settlement_epoch_open_height,
+    settlement_epoch_slash_deadline_height,
+};
 
 /// Recompute `P_canonical_id` from hybrid pubkey bytes (gate-4 §3.4 / emission §6.1).
 ///

@@ -7,7 +7,9 @@
 //! own (`20-rust-vs-cpp-policy.mdc` §4; `40-ffi-discipline.mdc` coarse-call rule).
 
 use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
-use crate::constants::{effective_settlement_epoch_blocks, SETTLEMENT_EPOCH_BLOCKS};
+use crate::constants::{
+    effective_settlement_epoch_blocks, CHALLENGE_RESOLUTION_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
+};
 use crate::reward_arithmetic::{
     mul_div_floor, scarcity_micro, work_milli_from_micro, WORK_MILLI_SCALE,
 };
@@ -68,6 +70,37 @@ pub fn epoch_close_height(epoch: u64) -> Option<u64> {
     epoch
         .checked_add(1)
         .and_then(|next| next.checked_mul(effective_settlement_epoch_blocks()))
+}
+
+/// First height of settlement epoch `epoch` — `E·SEB`, the challenge's
+/// `H_open` (`ARCHIVAL_CONSENSUS_STATE.md` §3.4). Saturates on an
+/// impossible epoch.
+///
+/// One home for the epoch geometry (`05-system-thinking.mdc`: a formula
+/// two lanes need is a function): the serve-credit gate, the slash scan and
+/// the FFI's schedule entry points all read `H_open` / `H_close` /
+/// `H_slash_deadline` here, so no consumer can re-derive one with a
+/// boundary off by one.
+#[must_use]
+pub fn settlement_epoch_open_height(epoch: u64) -> u64 {
+    epoch.saturating_mul(effective_settlement_epoch_blocks())
+}
+
+/// Last height of settlement epoch `epoch` — `(E+1)·SEB − 1`, the
+/// challenge's `H_close`. The height *before* [`epoch_close_height`], which
+/// is where the close is processed.
+#[must_use]
+pub fn settlement_epoch_last_block(epoch: u64) -> u64 {
+    settlement_epoch_open_height(epoch.saturating_add(1)).saturating_sub(1)
+}
+
+/// The slash deadline for settlement epoch `epoch` —
+/// `H_close(E) + CHALLENGE_RESOLUTION_BLOCKS`. A block connecting strictly
+/// above it folds `E`'s unanswered challenges into slashes
+/// (`constants::CHALLENGE_RESOLUTION_BLOCKS`).
+#[must_use]
+pub fn settlement_epoch_slash_deadline_height(epoch: u64) -> u64 {
+    settlement_epoch_last_block(epoch).saturating_add(CHALLENGE_RESOLUTION_BLOCKS)
 }
 
 /// Prune horizon at `block_height`: epochs strictly below the returned value
