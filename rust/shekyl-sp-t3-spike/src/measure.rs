@@ -184,6 +184,81 @@ pub fn q_at(observations: &[Observation], d: Duration) -> f64 {
 /// than silenced with an `allow(clippy::cast_precision_loss)`, because the lint
 /// is asking a real question (is this conversion exact?) and the answer belongs
 /// in one place with its reasoning.
+impl FailureKind {
+    /// Every class, in the order reports list them.
+    pub const ALL: [Self; 4] = [Self::Timeout, Self::Circuit, Self::Truncated, Self::Refused];
+}
+
+/// The observations file's header: `arm`, `elapsed_ms`, `outcome` — and
+/// nothing else (§6.4; the module docs, *Aggregates only*).
+pub const ROW_HEADER: &str = "arm\telapsed_ms\toutcome";
+
+/// The `outcome` column's word for a success.
+const OUTCOME_OK: &str = "ok";
+
+/// The `outcome` column's word for a failure class.
+const fn failure_word(kind: FailureKind) -> &'static str {
+    match kind {
+        FailureKind::Timeout => "timeout",
+        FailureKind::Circuit => "circuit",
+        FailureKind::Truncated => "truncated",
+        FailureKind::Refused => "refused",
+    }
+}
+
+/// One observation as a row of the observations file. The writer and every
+/// reader go through this and [`parse_row`], so the file has one format.
+#[must_use]
+pub fn format_row(arm: &str, observation: &Observation) -> String {
+    let outcome = observation.failure.map_or(OUTCOME_OK, failure_word);
+    format!("{arm}\t{}\t{outcome}", observation.elapsed.as_millis())
+}
+
+/// A row of the observations file that does not parse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowError {
+    /// The offending line.
+    pub line: String,
+}
+
+impl std::fmt::Display for RowError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "not an observation row: {:?}", self.line)
+    }
+}
+
+impl std::error::Error for RowError {}
+
+/// Read one row back into its arm and observation. The header is not a row
+/// ([`ROW_HEADER`]); a reader skips it before calling this. A malformed row
+/// is an error, never skipped: a reader that dropped rows it did not
+/// understand would bias whatever it summarized.
+///
+/// # Errors
+///
+/// [`RowError`] unless the row is `arm \t elapsed_ms \t outcome` with a
+/// known outcome word.
+pub fn parse_row(line: &str) -> Result<(&str, Observation), RowError> {
+    let error = || RowError {
+        line: line.to_owned(),
+    };
+    let mut cells = line.split('\t');
+    let (Some(arm), Some(ms), Some(outcome), None) =
+        (cells.next(), cells.next(), cells.next(), cells.next())
+    else {
+        return Err(error());
+    };
+    let elapsed = Duration::from_millis(ms.parse().map_err(|_| error())?);
+    if outcome == OUTCOME_OK {
+        return Ok((arm, Observation::success(elapsed)));
+    }
+    FailureKind::ALL
+        .into_iter()
+        .find(|&kind| failure_word(kind) == outcome)
+        .map(|kind| (arm, Observation::failure(elapsed, kind)))
+        .ok_or_else(error)
+}
+
 fn ratio(numer: usize, denom: usize) -> f64 {
     if denom == 0 {
         return 0.0;
@@ -236,7 +311,7 @@ pub fn invert(observations: &[Observation], q_star: f64) -> DStar {
 /// The percentile of a sorted slice by nearest-rank (the conservative choice for
 /// a tail statistic: it returns an *observed* value, never an interpolation
 /// between two, so a reported p90 is a latency that actually happened).
-fn nearest_rank(sorted: &[Duration], p: u8) -> Option<Duration> {
+pub(crate) fn nearest_rank(sorted: &[Duration], p: u8) -> Option<Duration> {
     if sorted.is_empty() {
         return None;
     }
@@ -301,6 +376,9 @@ pub fn warmup_drift(observations: &[Observation]) -> Option<(Duration, Duration)
     Some((first, last))
 }
 
+/// The success-latency percentiles every [`Summary`] reports.
+pub const REPORTED_PERCENTILES: [u8; 5] = [50, 75, 90, 95, 99];
+
 /// Summarize one arm.
 #[must_use]
 pub fn summarize(observations: &[Observation]) -> Summary {
@@ -312,12 +390,7 @@ pub fn summarize(observations: &[Observation]) -> Summary {
     successes.sort_unstable();
 
     let mut failures: Vec<(FailureKind, usize)> = Vec::new();
-    for kind in [
-        FailureKind::Timeout,
-        FailureKind::Circuit,
-        FailureKind::Truncated,
-        FailureKind::Refused,
-    ] {
+    for kind in FailureKind::ALL {
         let c = observations
             .iter()
             .filter(|o| o.failure == Some(kind))
@@ -327,7 +400,7 @@ pub fn summarize(observations: &[Observation]) -> Summary {
         }
     }
 
-    let percentiles = [50u8, 75, 90, 95, 99]
+    let percentiles = REPORTED_PERCENTILES
         .iter()
         .filter_map(|&p| nearest_rank(&successes, p).map(|v| (p, v)))
         .collect();
@@ -557,6 +630,41 @@ pub fn sweep_round_indices(round: usize, width: usize, personas: usize) -> Vec<u
     }
     let width = width.min(personas);
     (0..width).map(|k| (round + k) % personas).collect()
+}
+
+#[cfg(test)]
+mod row_tests {
+    use super::*;
+
+    #[test]
+    fn every_outcome_survives_the_file() {
+        let d = Duration::from_millis(12_345);
+        let mut observations = vec![Observation::success(d)];
+        observations.extend(FailureKind::ALL.map(|k| Observation::failure(d, k)));
+        for o in observations {
+            let row = format_row("soak@831744", &o);
+            let (arm, back) = parse_row(&row).expect("parses");
+            assert_eq!(arm, "soak@831744");
+            assert_eq!(
+                (back.elapsed, back.failure),
+                (o.elapsed, o.failure),
+                "{row}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_header_and_a_malformed_row_are_not_observations() {
+        for bad in [
+            ROW_HEADER,
+            "soak\t12\tlate",
+            "soak\t12",
+            "soak\t12\tok\textra",
+            "soak\tx\tok",
+        ] {
+            assert!(parse_row(bad).is_err(), "{bad:?}");
+        }
+    }
 }
 
 #[cfg(test)]

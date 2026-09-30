@@ -16,6 +16,7 @@
 //! SHEKYL_SPIKE_PERSONAS=P \
 //! SHEKYL_SPIKE_COLD=N SHEKYL_SPIKE_WARM=N SHEKYL_SPIKE_CONC=N \
 //! SHEKYL_SPIKE_HOURS=H \
+//! SHEKYL_SPIKE_POW=off|on|tuned:<rate>:<burst> \
 //!   cargo run -p shekyl-sp-t3-spike --release --bin pd-f2-measure
 //! ```
 //!
@@ -64,11 +65,11 @@ use std::time::{Duration, Instant};
 
 use shekyl_p_fetch::max_body_bytes;
 use shekyl_sp_t3_spike::fixture::{size_ladder, ShardFixture};
-use shekyl_sp_t3_spike::harness::Apparatus;
+use shekyl_sp_t3_spike::harness::{pow_from_env, Apparatus};
 use shekyl_sp_t3_spike::measure::{
-    attempts_within_budget, churn_table, l_verdict, p99, summarize, sweep_round_indices,
-    warmup_drift, DStar, FailureKind, LVerdict, Observation, Summary, SweepPoint,
-    L_BUDGET_TOO_GENEROUS_ABOVE, L_DROP_BELOW, Q_RISK_STAR,
+    attempts_within_budget, churn_table, format_row, l_verdict, p99, summarize,
+    sweep_round_indices, warmup_drift, DStar, LVerdict, Observation, Summary, SweepPoint,
+    L_BUDGET_TOO_GENEROUS_ABOVE, L_DROP_BELOW, Q_RISK_STAR, ROW_HEADER,
 };
 
 fn env_path(key: &str) -> Option<PathBuf> {
@@ -88,15 +89,8 @@ fn append_rows(out: &mut Option<std::fs::File>, arm: &str, obs: &[Observation]) 
     use std::io::Write as _;
     let Some(f) = out.as_mut() else { return };
     for o in obs {
-        let outcome = match o.failure {
-            None => "ok",
-            Some(FailureKind::Timeout) => "timeout",
-            Some(FailureKind::Circuit) => "circuit",
-            Some(FailureKind::Truncated) => "truncated",
-            Some(FailureKind::Refused) => "refused",
-        };
         // arm, elapsed_ms, outcome. Nothing else — see the module doc.
-        writeln!(f, "{arm}\t{}\t{outcome}", o.elapsed.as_millis()).ok();
+        writeln!(f, "{}", format_row(arm, o)).ok();
     }
     f.flush().ok();
 }
@@ -283,6 +277,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // shard at 1×, ½× and ¼× and rotate the cold and soak arms across them, so
     // every size meets the same Tor conditions over the same hours.
     let ladder = env_usize("SHEKYL_SPIKE_SIZE_LADDER", 0) != 0;
+    // The personas' onion PoW posture. The run log names it: the observations
+    // file carries no run-level context (§6.4), so the log is what says which
+    // posture a file was measured under.
+    let pow = pow_from_env()?;
+    println!("onion PoW posture: {pow:?}");
 
     // Loud, first: no synthetic fallback exists, so a missing fixture stops the
     // run here rather than producing a number about the wrong payload.
@@ -302,11 +301,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let object_bytes: Vec<usize> = objects.iter().map(|o| o.len()).collect();
     let shard_count = u64::try_from(objects.len())?;
     let app = Arc::new(
-        Apparatus::bring_up_objects(
+        Apparatus::bring_up_with_pow(
             tor,
             dir.path().join("tor-data"),
             u32::try_from(personas)?,
             objects,
+            pow,
         )
         .await?,
     );
@@ -340,7 +340,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut out = env_path("SHEKYL_SPIKE_OUT").and_then(|p| std::fs::File::create(p).ok());
     if let Some(f) = out.as_mut() {
         use std::io::Write as _;
-        writeln!(f, "arm\telapsed_ms\toutcome").ok();
+        writeln!(f, "{ROW_HEADER}").ok();
     }
 
     // --- Arm 1: cold, single stream. `NEWNYM` to the client tor before each

@@ -603,24 +603,6 @@ impl Apparatus {
         .await
     }
 
-    /// [`Self::bring_up`] serving several objects, shard `i` being `objects[i]` —
-    /// the multi-size W₂ run's size ladder ([`crate::fixture::size_ladder`]).
-    pub async fn bring_up_objects(
-        tor_binary: PathBuf,
-        data_dir: PathBuf,
-        persona_count: u32,
-        objects: Vec<Arc<[u8]>>,
-    ) -> Result<Self, ApparatusError> {
-        Self::bring_up_with_pow(
-            tor_binary,
-            data_dir,
-            persona_count,
-            objects,
-            OnionPow::Disabled,
-        )
-        .await
-    }
-
     /// [`Self::bring_up`] with the onions' PoW defenses selected.
     ///
     /// Split out for SPIKE-F-11's two arms: the same apparatus is measured with
@@ -1075,6 +1057,52 @@ async fn probe_once(
     }
 }
 
+/// The environment variable a run's onion PoW posture is read from:
+/// `off`, `on`, or `tuned:<rate>:<burst>`.
+pub const POW_ENV: &str = "SHEKYL_SPIKE_POW";
+
+/// Parse a PoW posture: `off`, `on`, or `tuned:<rate>:<burst>`.
+///
+/// An unrecognised value is a hard error rather than a silent fall-back to
+/// `off`: the PoW and no-PoW runs are compared, and a typo that quietly
+/// disabled the defense would produce a labelled-wrong dataset.
+///
+/// # Errors
+///
+/// The value, named, when it is none of the three forms.
+pub fn parse_pow(raw: &str) -> Result<OnionPow, String> {
+    match raw {
+        "off" => Ok(OnionPow::Disabled),
+        "on" => Ok(OnionPow::Enabled),
+        other => {
+            let mut parts = other.split(':');
+            match (parts.next(), parts.next(), parts.next(), parts.next()) {
+                (Some("tuned"), Some(r), Some(b), None) => {
+                    let queue_rate = r.parse().map_err(|_| format!("bad rate {r:?}"))?;
+                    let queue_burst = b.parse().map_err(|_| format!("bad burst {b:?}"))?;
+                    Ok(OnionPow::EnabledTuned {
+                        queue_rate,
+                        queue_burst,
+                    })
+                }
+                _ => Err(format!(
+                    "{POW_ENV}={other:?} is not off | on | tuned:<rate>:<burst>"
+                )),
+            }
+        }
+    }
+}
+
+/// The run's PoW posture from [`POW_ENV`]; `off` when unset, which is what
+/// every run before the PoW diff was measured under.
+///
+/// # Errors
+///
+/// As [`parse_pow`].
+pub fn pow_from_env() -> Result<OnionPow, String> {
+    parse_pow(&std::env::var(POW_ENV).unwrap_or_else(|_| "off".to_owned()))
+}
+
 /// Run `attempt` until it succeeds, retrying only
 /// [`ApparatusError::NewnymUnanswered`] after `pause`, and giving up on the
 /// `limit`-th in a row. Returns how many went unanswered before one was
@@ -1124,6 +1152,22 @@ mod tests {
             std::future::ready(errors.next().map_or(Ok(()), Err))
         };
         (calls, attempt)
+    }
+
+    #[test]
+    fn pow_posture_parses_its_three_forms_and_nothing_else() {
+        assert!(matches!(parse_pow("off"), Ok(OnionPow::Disabled)));
+        assert!(matches!(parse_pow("on"), Ok(OnionPow::Enabled)));
+        assert!(matches!(
+            parse_pow("tuned:250:2500"),
+            Ok(OnionPow::EnabledTuned {
+                queue_rate: 250,
+                queue_burst: 2500
+            })
+        ));
+        for bad in ["", "On", "true", "tuned:1", "tuned:x:2", "tuned:1:2:3"] {
+            assert!(parse_pow(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[tokio::test]

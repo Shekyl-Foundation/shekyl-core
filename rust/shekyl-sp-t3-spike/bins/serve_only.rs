@@ -37,9 +37,8 @@ use std::time::Duration;
 
 use shekyl_sp_t3_spike::fixture::ShardFixture;
 use shekyl_sp_t3_spike::harness::{
-    Apparatus, APPARATUS_ANCHOR_HASH, APPARATUS_ANCHOR_HEIGHT, APPARATUS_OWN_HEIGHT,
+    pow_from_env, Apparatus, APPARATUS_ANCHOR_HASH, APPARATUS_ANCHOR_HEIGHT, APPARATUS_OWN_HEIGHT,
 };
-use shekyl_tor_control_client::control::onion::OnionPow;
 
 fn env_path(key: &str) -> Option<PathBuf> {
     std::env::var_os(key).map(PathBuf::from)
@@ -54,39 +53,11 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Parse `SHEKYL_SPIKE_POW`: `off`, `on`, or `tuned:<rate>:<burst>`.
-///
-/// An unrecognised value is a hard error rather than a silent fall-back to
-/// `off` — the PoW arm and the no-PoW arm are the whole point of this run, and a
-/// typo that quietly disabled the defense would produce a labelled-wrong dataset.
-fn parse_pow(raw: &str) -> Result<OnionPow, String> {
-    match raw {
-        "off" => Ok(OnionPow::Disabled),
-        "on" => Ok(OnionPow::Enabled),
-        other => {
-            let mut parts = other.split(':');
-            match (parts.next(), parts.next(), parts.next(), parts.next()) {
-                (Some("tuned"), Some(r), Some(b), None) => {
-                    let queue_rate = r.parse().map_err(|_| format!("bad rate {r:?}"))?;
-                    let queue_burst = b.parse().map_err(|_| format!("bad burst {b:?}"))?;
-                    Ok(OnionPow::EnabledTuned {
-                        queue_rate,
-                        queue_burst,
-                    })
-                }
-                _ => Err(format!(
-                    "SHEKYL_SPIKE_POW={other:?} is not off | on | tuned:<rate>:<burst>"
-                )),
-            }
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tor = env_path("SHEKYL_SPIKE_TOR").ok_or("SHEKYL_SPIKE_TOR must be set")?;
     let shard = env_path("SHEKYL_SPIKE_SHARD").ok_or("SHEKYL_SPIKE_SHARD must be set")?;
-    let pow = parse_pow(&std::env::var("SHEKYL_SPIKE_POW").unwrap_or_else(|_| "off".to_owned()))?;
+    let pow = pow_from_env()?;
 
     // No synthetic fallback, same as the measurement binary.
     let fixture = ShardFixture::load(&shard)?;
