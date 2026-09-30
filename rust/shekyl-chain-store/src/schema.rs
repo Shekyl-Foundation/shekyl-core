@@ -275,52 +275,60 @@ pub const FOLDED_INTO: &[(&str, &str, &str)] = &[(
 /// a view of facts the store already holds?*). Read by
 /// `check_redb_schema_bijection.py`: every entry must be in the X-macro,
 /// must **not** have a definition in this file, must not also be mirrored
-/// or folded, and carries a sentence naming what does its job now. The
-/// class table (`accumulator/class.rs`) is the LMDB inventory and keeps a
-/// row for each. This is not a deletion register — the C++ tables live
-/// until cutover — it is the record that the Rust store answered the
-/// requirement without the table, and why.
+/// or folded, and carries a sentence naming what does its job now **and
+/// where a reader finds what the table held**. One direction covers two
+/// relationships that the gate cannot tell apart and a reader must: a
+/// journal whose function `undo_log` performs (the data is there, as
+/// pre-images) and a table retired by ruling (the data is nowhere, and
+/// nothing was lost). Each reason leads with which. The class table
+/// (`accumulator/class.rs`) is the LMDB inventory and keeps a row for each.
+/// This is not a deletion register — the C++ tables live until cutover — it
+/// is the record that the Rust store answered the requirement without the
+/// table, and why.
 pub const NOT_PORTED: &[(&str, &str)] = &[
     (
         "archival_emission_claim_log",
-        "the C++ pop journal for an emission claim's record update (db_lmdb.cpp:6080, restores \
-         the claimed set and first_paying): a reversal-only journal is a materialised view of the \
-         undo log, which holds the record's pre-image (DRS-E4 ARW-2, ARW-Q2)",
+        "held by `undo_log`, as the record's pre-image: the C++ pop journal for an emission \
+         claim's record update (db_lmdb.cpp:6080, restores the claimed set and first_paying) \
+         was a reversal-only journal, a materialised view of that log (DRS-E4 ARW-2, ARW-Q2)",
     ),
     (
         "archival_bond_unbond_log",
-        "the C++ pop journal for a Release (db_lmdb.cpp:6198, `release_pop` reconstructs the \
-         pre-image): the undo log holds the record's and the total's pre-images, and the pop \
-         fold has no caller (DRS-E4 ARW-2, ARW-Q2)",
+        "held by `undo_log`, as the record's and the total's pre-images: the C++ pop journal \
+         for a Release (db_lmdb.cpp:6198, `release_pop` reconstructs the pre-image) rebuilt \
+         what the log stores outright, and the pop fold has no caller (DRS-E4 ARW-2, ARW-Q2)",
     ),
     (
         "archival_bond_holdings_update_log",
-        "HoldingsUpdate is REJECTED (immutable bond, 2026-09-20): its appliers are no-ops and its \
-         revert a named no-op (db_lmdb.cpp:6270, blockchain_db.cpp:773); the table was empty by \
-         construction (DRS-E4 ARW-14)",
+        "held nowhere, and nothing was lost — the table was empty by construction: \
+         HoldingsUpdate is REJECTED (immutable bond, 2026-09-20), its appliers are no-ops and \
+         its revert a named no-op (db_lmdb.cpp:6270, blockchain_db.cpp:773) (DRS-E4 ARW-14)",
     ),
     (
         "archival_bond_reinstate_log",
-        "the C++ pop journal for a Reinstate (db_lmdb.cpp:6342, `reinstate_pop`): the undo log \
-         holds the record's pre-image (DRS-E4 ARW-2, ARW-Q2)",
+        "held by `undo_log`, as the record's pre-image: the C++ pop journal for a Reinstate \
+         (db_lmdb.cpp:6342, `reinstate_pop`) was a view of that log (DRS-E4 ARW-2, ARW-Q2)",
     ),
     (
         "archival_epoch_close_log",
-        "the C++ pop journal naming which epoch a height closed so the revert can find the rows \
-         to delete (db_lmdb.cpp:7888): the undo log holds the close's rows as pre-images and pop \
-         restores them without a lookup (DRS-E4 ARW-2, ARW-Q2)",
+        "held by `undo_log`, as the closed epoch's rows in pre-image: the C++ journal named \
+         which epoch a height closed so the revert could find the rows to delete \
+         (db_lmdb.cpp:7888); pop restores them from the log without a lookup (DRS-E4 ARW-2, \
+         ARW-Q2)",
     ),
     (
         "archival_budget_accrual",
-        "per-height accrual rows read once, by the close's range-sum (db_lmdb.cpp:7830), and \
-         deleted per block on pop: a view of the emission split the verdict carries; the job is \
-         `archival_budget_accruing`'s one row per open epoch (DRS-E4 ARW-5, ARW-Q3)",
+        "held nowhere per height — the running sum is `archival_budget_accruing`'s one row per \
+         open epoch, and a height's own figure is recomputed from its block (the emission \
+         split the verdict carries): the C++ per-height rows were read once, by the close's \
+         range-sum (db_lmdb.cpp:7830), and deleted per block on pop (DRS-E4 ARW-5, ARW-Q3)",
     ),
     (
         "archival_shard_segment",
-        "the segment-freeze registry, retired by ruling (PDM-Q12, 2026-09-18) and never a fact \
-         of this store: shards are fixed-cardinality T over cumulative_tx_count (PDM-Q6 item 5); \
-         the C++ table and its writer live until cutover (DRS-E4 ARW-4, SAR-5)",
+        "held nowhere; retired by ruling (PDM-Q12, 2026-09-18), never a fact of this store, \
+         nothing migrated: shards are fixed-cardinality T over cumulative_tx_count (PDM-Q6 \
+         item 5), so a freeze registry has no job; the C++ table and its writer live until \
+         cutover (DRS-E4 ARW-4, SAR-5)",
     ),
     (
         "pending_tree_leaves",
