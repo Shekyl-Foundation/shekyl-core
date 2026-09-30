@@ -105,6 +105,20 @@ pub enum DaemonFault {
     Internal,
 }
 
+impl core::fmt::Display for DaemonFault {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Unreachable => f.write_str("the daemon did not answer"),
+            Self::Identity(mismatch) => {
+                write!(f, "the daemon was refused on its {}", mismatch.axis())
+            }
+            Self::Protocol => f.write_str("the daemon's reply broke the RPC contract"),
+            Self::FeeResponse => f.write_str("the daemon's fee estimate was unusable"),
+            Self::Internal => f.write_str("the request failed on this side of the connection"),
+        }
+    }
+}
+
 impl DaemonFault {
     /// Whether retrying against the same daemon can succeed. An identity
     /// refusal is cached by the client and repeats on every request.

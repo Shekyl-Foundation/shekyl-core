@@ -298,7 +298,9 @@
 #   -32700, -32600..-32603   JSON-RPC 2.0 protocol errors (spec-standard)
 #   -29000..-29099           wallet lifecycle (create/open/close/password)
 #   -29100..-29199           send / build / submit / discard
-#   -29200..-29299           refresh / rescan
+#   -29200..-29299           refresh / rescan, and the daemon itself
+#                            (-29201 and -29205..-29209 answer any
+#                            operation that reaches the daemon)
 #   -29300..-29399           proofs (RESERVED range)
 #   -29400..-29499           transfers / history queries
 #   -29500..-29599           staking (-29500..-29506 and -29512 live on

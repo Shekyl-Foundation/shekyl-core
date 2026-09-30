@@ -154,7 +154,7 @@ pub enum FeeEstimatorError {
     /// The daemon query the estimator depends on failed. The fault says
     /// how: no answer, a daemon this wallet cannot use, or a reply that
     /// broke the contract.
-    #[error("fee estimator: daemon query failed ({0:?})")]
+    #[error("fee estimator: daemon query failed ({0})")]
     Daemon(shekyl_rpc_client::DaemonFault),
 
     /// The daemon's snapshot arrived and the estimator could not use it.
