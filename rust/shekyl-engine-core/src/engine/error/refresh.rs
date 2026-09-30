@@ -192,12 +192,14 @@ pub enum RefreshError {
     /// is no. A proving state that can be silently wrong is worse than one
     /// that is large.
     ///
-    /// **Rule 82: the remedy is a full re-sync**, which is C8's
-    /// refuse-and-resync rather than a retry — a resume reproduces the same
-    /// fork depth against the same store.
+    /// **Rule 82: the remedy is to discard the curve-tree store**, which is
+    /// C8's refuse-and-resync rather than a retry — a resume reproduces the
+    /// same fork depth against the same state. Specifically the `.curvetree`
+    /// file, **not** `rescan_blockchain`: a rescan leaves the tree untouched
+    /// by design (`engine::rescan`), so it would not repair what refused.
     #[error(
         "chain reorged {} blocks, deeper than the {finality_depth}-block finality window; \
-         a full re-sync is required",
+         the curve-tree store must be discarded and re-synced",
         tip.saturating_sub(*fork_height)
     )]
     ReorgDeeperThanFinality {

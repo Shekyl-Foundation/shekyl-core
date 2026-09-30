@@ -44,9 +44,15 @@ pub const SPENDABLE_AGE_BLOCKS: u64 = DEFAULT_LOCK_WINDOW as u64;
 /// A segment freezes once it is this old ([`segment_freeze_eligible`]), so a
 /// reorg **shallower** than `W` never touches frozen state and needs no undo
 /// log (`WALLET_SIDE_STORE.md` §6.3.2 row 2), while a reorg **deeper** than
-/// `W` would have to unmake something already sealed — which is why
-/// [`crate::LeafStore::rollback_to_fork`] refuses there rather than repairing
-/// (`CT-6` C7).
+/// `W` would have to unmake something already sealed.
+///
+/// **The refusal is not here.** [`crate::LeafStore::rollback_to_fork`]
+/// deliberately *permits* a deep truncation — F9 requires it to drop the
+/// freeze records correctly, and the replica generator forks arbitrarily deep
+/// on purpose. `CT-6` C7 is a policy about whether a **wallet refresh** may
+/// ask for one, and it is enforced in the engine
+/// (`engine::merge::validate_reorg_within_finality`). The store must do it
+/// right; the wallet must never ask.
 ///
 /// Summed from its two owners rather than written as `730`, and named here
 /// because three places needed the sum: the freeze gate below, the C7 refusal,

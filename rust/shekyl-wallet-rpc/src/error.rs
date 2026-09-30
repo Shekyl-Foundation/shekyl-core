@@ -363,15 +363,25 @@ pub enum WalletRpcError {
     )]
     RescanIncomplete,
     /// The chain reorged deeper than the wallet's finality window `W`, so its
-    /// proving state cannot be repaired in place (`CT-6` C7, rule 82).
+    /// curve-tree store cannot be repaired in place (`CT-6` C7, rule 82).
+    ///
+    /// **The remedy names the curve-tree store, not `rescan_blockchain`.** A
+    /// rescan deliberately leaves the tree untouched — it is chain-global
+    /// material built from public data that no wallet event invalidates, and
+    /// `engine::rescan`'s "the curve tree is not touched" section says so — so
+    /// telling a client to rescan would name an action that provably does not
+    /// repair what refused. Removing the store is safe for the same reason it
+    /// is necessary: it holds no wallet secret, so a rebuild from genesis
+    /// costs time and loses nothing.
     ///
     /// The depths ride the message because the remedy is drastic and the user
     /// is entitled to the reason: a bare "re-sync" gives them nothing to
     /// judge, and nothing to report if the depth looks impossible.
     #[error(
         "the chain reorged {depth} blocks, deeper than the {finality_depth}-block window this \
-         wallet treats as final; its proving state cannot be repaired in place — a full re-sync \
-         is required"
+         wallet treats as final; its curve-tree store cannot be repaired in place. Remove the \
+         wallet's .curvetree file so it rebuilds from genesis — rescan_blockchain does not \
+         repair it, because a rescan leaves the curve tree untouched by design"
     )]
     ResyncRequired {
         /// How far back the reorg reached.
@@ -1513,9 +1523,18 @@ mod tests {
         assert_eq!(WalletRpcErrorCode::ResyncRequired as i32, -29204);
 
         let message = err.to_string();
+        // The remedy must name the action that actually repairs the tree...
         assert!(
-            message.contains("re-sync"),
-            "the remedy must be in the message the caller reads: {message}"
+            message.contains(".curvetree") && message.contains("rebuilds from genesis"),
+            "the remedy must name the store to remove: {message}"
+        );
+        // ...and rule out the one the user would otherwise reach for. A rescan
+        // leaves the curve tree untouched by design (`engine::rescan`), so a
+        // message that merely said "re-sync" would send them to an RPC that
+        // provably does not fix what refused.
+        assert!(
+            message.contains("rescan_blockchain does not repair it"),
+            "the message must rule out the rescan: {message}"
         );
         // The depth travels too: a bare remedy gives the user nothing to judge
         // and nothing to report if 1 000 blocks looks impossible to them.

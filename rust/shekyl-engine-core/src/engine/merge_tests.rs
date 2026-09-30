@@ -1400,4 +1400,8 @@ fn a_reorg_within_finality_passes_and_one_block_deeper_refuses() {
         err.to_string().contains("re-sync"),
         "the message must name the remedy: {err}"
     );
+    assert!(
+        err.to_string().contains("curve-tree store"),
+        "the remedy must name what is discarded, not just that something is: {err}"
+    );
 }
