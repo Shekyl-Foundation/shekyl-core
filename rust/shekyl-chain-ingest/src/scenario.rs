@@ -54,8 +54,8 @@ use shekyl_block_template::{
     build, EmissionOperands, MinerKeys, Template, TemplateContext, TemplateError,
 };
 use shekyl_chain_rules::{
-    form, frozen_segments_at, seed_height, Candidate, CenRow, FormAttempt, InvalidBlock, RuleSet,
-    Substrate, EMISSION_SPLIT_EPOCH,
+    form, seed_height, Candidate, CenRow, FormAttempt, InvalidBlock, RuleSet, Substrate,
+    EMISSION_SPLIT_EPOCH,
 };
 use shekyl_crypto_pq::kem::{HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation};
 use shekyl_economics::EconomicParams;
@@ -375,11 +375,11 @@ where
                 // this block's weight against, read on the same view.
                 median_weight: facts.medians.effective_median.to_raw(),
                 tx_volume: facts.tx_volume,
-                // CEN-F17's `n`, as the validator reads it: the
-                // frozen-segment count of the leaf count at `connecting`,
-                // through the one owner. (Zero until a scenario chain grows
-                // past a segment; it was a literal zero until wave B.)
-                frozen_segments: frozen_segments_at(facts.leaf_count),
+                // CEN-F17's `n`, as the validator reads it: the shards the
+                // parent chain has closed, read on the same view by the
+                // validator's own definition. (Zero until a scenario chain
+                // issues `T` ids; it was a literal zero until wave B.)
+                closed_shards: facts.closed_shards,
                 emission_split_epoch: EMISSION_SPLIT_EPOCH,
             },
             params: &self.params,

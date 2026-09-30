@@ -285,11 +285,14 @@ ShekylBurnSplit shekyl_compute_burn_split(
 
 // D2 escalation (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §6.1). The staker
 // share is no longer a constant: it is a pure map of the burden operand
-// n = frozen_segment_count. Rust derives it from the shipped EconomicParams, so
+// n = closed_shard_count — the transaction shards the parent chain has
+// closed, shekyl_archival_closed_shard_count(get_tx_count()) at parent state
+// (DRS-E4 commit 3 re-keyed it from the frozen J-segment count; PDM-Q6
+// item 4). Rust derives it from the shipped EconomicParams, so
 // the escalation numerics never cross this boundary and C++ cannot be handed a
 // parameterization that differs from the one consensus pays on.
 //
-// frozen_segment_count MUST be read at PARENT-BLOCK state -- the same
+// closed_shard_count MUST be read at PARENT-BLOCK state -- the same
 // read-point discipline as the archival admission gate (M3-1 cached-counter
 // drift class). Reading tip would let the block under validation move its own
 // split.
@@ -307,12 +310,12 @@ ShekylBurnSplit shekyl_compute_burn_split(
 ShekylBurnSplit shekyl_compute_burn_split_escalated(
     uint64_t total_fees,
     uint64_t burn_pct,
-    uint64_t frozen_segment_count);
+    uint64_t closed_shard_count);
 
-/// The D2-escalated staker share at frozen_segment_count, fixed-point SCALE.
+/// The D2-escalated staker share at closed_shard_count, fixed-point SCALE.
 /// Observability / callers needing the share without a split. Same parent-state
 /// read-point obligation as shekyl_compute_burn_split_escalated.
-uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
+uint64_t shekyl_staker_pool_share_at(uint64_t closed_shard_count);
 
 // --- the composed owners (E6 slice 4 precursor, CHAIN_RULES_SLICE_4.md §3.1) --
 //
@@ -336,7 +339,7 @@ uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
 /// PARENT's already_generated_coins and total_burned the destroyed-fee fold
 /// at the same state; Rust derives circulating_supply = coins_generated −
 /// total_burned (checked), the percentage from the shipped EconomicParams,
-/// the D2-escalated split at frozen_segment_count, and the zero-fee arm.
+/// the D2-escalated split at closed_shard_count, and the zero-fee arm.
 /// Same parent-state read-point obligation for all three facts.
 int32_t shekyl_compute_fee_burn(
     uint64_t total_fees,
@@ -344,7 +347,7 @@ int32_t shekyl_compute_fee_burn(
     uint64_t window_blocks,
     uint64_t coins_generated,
     uint64_t total_burned,
-    uint64_t frozen_segment_count,
+    uint64_t closed_shard_count,
     ShekylBurnSplit *out);
 
 /// The burn percentage the info RPC reports, from the same two store facts
@@ -2468,8 +2471,19 @@ uint8_t shekyl_archival_serve_credit_epoch_ok(
 // (division-one-site tripwire, pipeline doc §8).
 
 /// Frozen-segment count at a curve-tree leaf count:
-/// floor(leaf_count / SEGMENT_LEAF_COUNT).
+/// floor(leaf_count / SEGMENT_LEAF_COUNT). Serves the freeze pipeline and
+/// the coverage RPC until the cutover deletes them (DRS_E4_ARCHIVAL_WRITER.md
+/// §3.9); NOT the escalation operand since DRS-E4 commit 3.
 uint64_t shekyl_archival_frozen_segment_count(uint64_t leaf_count);
+
+/// Transaction shards closed once `storage_ids` ids have been issued:
+/// floor(storage_ids / T), T = shekyl_types::SHARD_TX_COUNT from
+/// config/consensus_constants.json `archival_shard_tx_count` — the one
+/// closure frontier (shekyl_types::closed_shards; ARCHIVAL_PRUNED_DAEMON_MODE.md
+/// PDM-Q6 item 5). CEN-F17's escalation operand n:
+/// Blockchain::parent_closed_shard_count passes get_tx_count() at parent
+/// state. C++ has no copy of T and never divides by it inline.
+uint64_t shekyl_archival_closed_shard_count(uint64_t storage_ids);
 
 /// Leaf-layer chunk backing challenged index `leaf_index_in_segment` of
 /// frozen shard `shard_id`, as a global position range over the daemon's

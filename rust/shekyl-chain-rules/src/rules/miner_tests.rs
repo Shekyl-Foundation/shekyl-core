@@ -33,7 +33,7 @@ use crate::verdict::{ChainValid, Locus, TxSlot, Verdict};
 use crate::view::{RecordedBlock, Tip};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_economics::{
-    base_block_reward, effective_emission, CirculatingSupply, FrozenSegmentCount, TxVolume,
+    base_block_reward, effective_emission, CirculatingSupply, ClosedShardCount, TxVolume,
 };
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_units::AtomicUnits;
@@ -454,14 +454,14 @@ fn cen_f13_f15_price_the_parents_accumulator() {
     // F17's two chain operands, read at the same parent state: the supply
     // is `coins_generated − total_burned` (FL-R16c; the mock burned
     // nothing here, so the supply is the accumulator), and `n` is the
-    // frozen-segment count of the leaf count at the connecting height —
-    // the mock's tree is empty, so zero.
+    // shards the parent chain closed — one block of forty listed
+    // transactions is forty-one ids, below `T`, so zero.
     assert_eq!(
         burn.supply,
         CirculatingSupply::derive(AtomicUnits::from_raw(ag), AtomicUnits::ZERO)
             .expect("nothing burned")
     );
-    assert_eq!(burn.frozen_segments, FrozenSegmentCount::ZERO);
+    assert_eq!(burn.closed_shards, ClosedShardCount::ZERO);
 }
 
 /// F17's supply operand nets the planted burn off the accumulator — the
@@ -506,6 +506,65 @@ fn cen_f17_reads_the_supply_net_of_burn_and_halts_when_the_burn_exceeds_the_emis
             total_burned: over,
         })
     );
+}
+
+/// F17's escalation operand `n` is the transaction shards the **parent**
+/// chain has closed, counting the one coinbase per block that the recorded
+/// listed count omits: a genesis block listing `T − 1` transactions has
+/// issued `T` ids and closed shard 0, where `⌊cumulative_tx_count / T⌋`
+/// (the plans' shorthand) says none. Genesis itself has no parent and no
+/// operand. An id total that does not fit is the corrupt view, never a
+/// wrapped count.
+#[test]
+fn cen_f17_counts_the_shards_the_parent_closed_coinbases_included() {
+    let t = shekyl_types::SHARD_TX_COUNT;
+    let params = economics();
+    let ag = params.emission_curve_asymptote / 3;
+    let chain = MockChain::default().push(
+        recorded_with_emission(1_000, ag, t - 1),
+        crate::harness::fixture::root(1),
+    );
+    let Subsidy::Derived { burn, .. } = emission_on(&chain).subsidy else {
+        panic!("height 1 derives");
+    };
+    assert_eq!(burn.closed_shards, ClosedShardCount::new(1));
+    // One listed fewer and the parent's ids stop one short of the shard.
+    let chain = MockChain::default().push(
+        recorded_with_emission(1_000, ag, t - 2),
+        crate::harness::fixture::root(1),
+    );
+    let Subsidy::Derived { burn, .. } = emission_on(&chain).subsidy else {
+        panic!("height 1 derives");
+    };
+    assert_eq!(burn.closed_shards, ClosedShardCount::ZERO);
+    // The definitions the producer reads agree, and genesis has none.
+    chain.with_view(|view| {
+        assert_eq!(
+            closed_shards_before(&view, BlockHeight::from_raw(1)),
+            Ok(ClosedShardCount::ZERO)
+        );
+        assert_eq!(
+            closed_shards_through(&view, BlockHeight::from_raw(0)),
+            Ok(ClosedShardCount::ZERO)
+        );
+        assert_eq!(
+            closed_shards_before(&view, BlockHeight::from_raw(0)),
+            Ok(ClosedShardCount::ZERO)
+        );
+    });
+
+    let chain = MockChain::default().push(
+        recorded_with_emission(1_000, ag, u64::MAX),
+        crate::harness::fixture::root(1),
+    );
+    chain.with_view(|view| {
+        assert_eq!(
+            closed_shards_before(&view, BlockHeight::from_raw(1)),
+            Err(ViewRead::Corrupt(Corrupt::StorageIdsOverflow {
+                at: BlockHeight::from_raw(0),
+            }))
+        );
+    });
 }
 
 /// F13's floor: a past-asymptote accumulator is a legitimate perpetual-tail

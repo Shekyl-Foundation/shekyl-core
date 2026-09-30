@@ -175,6 +175,17 @@ pub enum Corrupt {
         /// The upper height of the pair whose prefix sum is below the lower's.
         at: BlockHeight,
     },
+    /// The recorded `cumulative_tx_count` at a height plus that height's
+    /// coinbases does not fit `u64` — `shekyl_types::storage_ids_through`
+    /// refused it, so CEN-F17's operand (the shards that total closes)
+    /// could not be taken. The listed count is bounded by the ids the
+    /// store has issued, which are bounded by what fits its tables, so a
+    /// total that overflows is a fold that ran ahead of the chain (SI-8's
+    /// class), not a large chain.
+    StorageIdsOverflow {
+        /// The height whose id total overflowed.
+        at: BlockHeight,
+    },
     /// The recorded `total_burned` exceeds the parent's `coins_generated`
     /// (CEN-F17's two operands). Burn destroys issued coins, so the fold
     /// is bounded by the accumulator on every conforming store; a view
@@ -364,6 +375,10 @@ impl fmt::Display for Corrupt {
             Self::TxCountNotMonotone { at } => write!(
                 f,
                 "cumulative transaction count decreases at height {at:?} (SI-13)"
+            ),
+            Self::StorageIdsOverflow { at } => write!(
+                f,
+                "cumulative transaction count plus coinbases overflows at height {at:?} (SI-8)"
             ),
             Self::BurnExceedsEmission {
                 coins_generated,

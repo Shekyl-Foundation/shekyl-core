@@ -88,7 +88,7 @@ use core::ops::Range;
 
 use redb::{ReadableTable, WriteTransaction};
 use shekyl_chain_rules::RuleSet;
-use shekyl_types::{storage_ids_through, BlockCount, BlockHeight, SHARD_TX_COUNT};
+use shekyl_types::{closed_shards, storage_ids_through, BlockCount, BlockHeight, SHARD_TX_COUNT};
 
 use crate::codec::{BlockInfo, SettlementEpochBlocks, UndoLogFloorCell};
 use crate::schema::{BLOCK_INFO, PROPERTIES, TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG};
@@ -411,10 +411,10 @@ fn discard_set<T: ReadTables>(
     let lo_id = first_tx_id(lo_height, lo_listed)?;
     let hi_id = first_tx_id(hi_height, hi_listed)?;
     // The last id of shard `k` is `(k+1)·T − 1`. It is `≥ lo_id` iff
-    // `k ≥ ⌊lo_id / T⌋`, and `< hi_id` iff `k < ⌊hi_id / T⌋`.
-    let start = lo_id / SHARD_TX_COUNT;
-    let end = hi_id / SHARD_TX_COUNT;
-    Ok(start..end)
+    // `k ≥ ⌊lo_id / T⌋`, and `< hi_id` iff `k < ⌊hi_id / T⌋` — the shards
+    // closed by `hi_id` less those already closed by `lo_id`, both read at
+    // the one closure frontier.
+    Ok(closed_shards(lo_id)..closed_shards(hi_id))
 }
 
 /// Listed (non-coinbase) transactions recorded **before** height `h`: the
@@ -487,7 +487,7 @@ pub(super) fn h_scarce<T: ReadTables>(
     // `close_epoch + 2 ≤ E`; the last of them is `⌊hi_id / T⌋ − 1`.
     let hi_height = horizons.first_height_of(e - 1);
     let hi_id = first_tx_id(hi_height, listed_before(txn, hi_height)?)?;
-    let Some(last_closed) = (hi_id / SHARD_TX_COUNT).checked_sub(1) else {
+    let Some(last_closed) = closed_shards(hi_id).checked_sub(1) else {
         return Ok(None);
     };
     let last_tx_id = (last_closed + 1) * SHARD_TX_COUNT - 1;

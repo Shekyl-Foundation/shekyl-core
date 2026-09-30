@@ -218,10 +218,30 @@ pub unsafe extern "C" fn shekyl_attestation_root_empty(out_ptr: *mut u8) -> bool
 ///
 /// Both daemon hooks (the `add_block` freeze processor and the
 /// `pop_block` revert) call this; C++ never performs the boundary
-/// division inline (division-one-site tripwire, pipeline doc §8).
+/// division inline (division-one-site tripwire, pipeline doc §8). **Not**
+/// CEN-F17's operand since DRS-E4 commit 3 — that is
+/// [`shekyl_archival_closed_shard_count`]; this entry serves the C++
+/// freeze pipeline and the coverage RPC until the cutover deletes them
+/// (E4 §3.9).
 #[no_mangle]
 pub extern "C" fn shekyl_archival_frozen_segment_count(leaf_count: u64) -> u64 {
     frozen_segment_count(leaf_count)
+}
+
+/// Transaction shards closed once `storage_ids` ids have been issued —
+/// `shekyl_types::closed_shards`, the one closure frontier
+/// (`ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q6 item 5; DRS-E4 `ARW-Q6`).
+///
+/// CEN-F17's escalation operand `n` on the C++ side:
+/// `Blockchain::parent_closed_shard_count` passes `get_tx_count()` at
+/// parent state — the ids the store has issued, one per coinbase and one
+/// per listed transaction — and the Rust validator reads the same figure
+/// from its recorded `cumulative_tx_count` plus the coinbases
+/// (`shekyl_chain_rules::closed_shards_before`). C++ never divides by `T`
+/// inline; the frontier is taken here or nowhere.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_closed_shard_count(storage_ids: u64) -> u64 {
+    shekyl_types::closed_shards(storage_ids)
 }
 
 /// Leaf-layer chunk backing challenged index `leaf_index_in_segment` of

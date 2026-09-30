@@ -1780,7 +1780,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     use shekyl_chain_rules::{RuleSet, EMISSION_SPLIT_EPOCH};
     use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
     use shekyl_economics::params::TX_VOLUME_WINDOW;
-    use shekyl_economics::{EconomicParams, EmissionError, FrozenSegmentCount, TxVolume};
+    use shekyl_economics::{ClosedShardCount, EconomicParams, EmissionError, TxVolume};
     use shekyl_rpc_types::{GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse};
     use shekyl_types::{AttestationRoot, BlockCount, BlockHeight, Timestamp};
     use shekyl_wire::{Block, Transaction};
@@ -1907,7 +1907,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
                 total_burned: shekyl_units::AtomicUnits::from_raw(total_burned),
                 median_weight: median,
                 tx_volume,
-                frozen_segments: FrozenSegmentCount::ZERO,
+                closed_shards: ClosedShardCount::ZERO,
                 emission_split_epoch: EMISSION_SPLIT_EPOCH,
             },
             params: &params,

@@ -1408,16 +1408,18 @@ namespace cryptonote
     bool prevalidate_miner_transaction(const block& b, uint64_t height, uint8_t hf_version);
 
     /**
-     * @brief reads the D2 escalation operand n = frozen_segment_count at parent-block state
+     * @brief reads the D2 escalation operand n = closed_shard_count at parent-block state
      *
      * The staker-share escalation (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
-     * §6.2) is a pure map of the frozen-segment count derived from the curve
-     * tree's leaf count, and the count MUST be the parent block's: reading tip
-     * state after the tree has grown would let a block move its own split.
-     * add_block advances the chain height and grows the tree in one write txn,
-     * and pop_block trims both in one write txn, so
-     * m_db->height() == block_height is equivalent to "the tree has not yet
-     * grown for this block" — the check proves the read is parent-state.
+     * §6.2) is a pure map of the closed transaction-shard count derived from
+     * the storage ids issued (get_tx_count(), one per coinbase and one per
+     * listed transaction; shekyl_archival_closed_shard_count takes the
+     * frontier), and the count MUST be the parent block's: reading tip state
+     * after this block's ids were issued would let a block move its own split.
+     * add_block advances the chain height and issues the block's ids in one
+     * write txn, and pop_block trims both in one write txn, so
+     * m_db->height() == block_height is equivalent to "this block's ids have
+     * not yet been issued" — the check proves the read is parent-state.
      *
      * Throws (rather than logging) on violation: template and connect must
      * price the coinbase against the same n, and a divergence produces blocks
@@ -1430,9 +1432,9 @@ namespace cryptonote
      *   check into a permanent tautology while looking correct and passing
      *   every test.
      *
-     * @return frozen_segment_count at the parent of block_height
+     * @return closed_shard_count at the parent of block_height
      */
-    uint64_t parent_frozen_segment_count(uint64_t block_height) const;
+    uint64_t parent_closed_shard_count(uint64_t block_height) const;
 
     /**
      * @brief validates a miner (coinbase) transaction
@@ -1446,14 +1448,14 @@ namespace cryptonote
      * @param base_reward return-by-reference the new block's generated coins
      * @param already_generated_coins the amount of currency generated prior to this block
      * @param version hard fork version for that transaction
-     * @param frozen_segment_count D2 escalation operand n, read at parent state via parent_frozen_segment_count
+     * @param closed_shard_count D2 escalation operand n, read at parent state via parent_closed_shard_count
      * @param total_burned the destroyed-fee fold at PARENT state (the same read the accrual uses):
      *        circulating_supply = already_generated_coins − total_burned is derived in Rust (FL-R16c),
      *        never defined here
      *
      * @return false if anything is found wrong with the miner transaction, otherwise true
      */
-    bool validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count, uint64_t total_burned);
+    bool validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t closed_shard_count, uint64_t total_burned);
 
     /**
      * @brief reverts the blockchain to its previous state following a failed switch

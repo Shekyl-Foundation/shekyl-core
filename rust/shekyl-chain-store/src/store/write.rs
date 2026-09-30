@@ -287,6 +287,14 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
                 cell: "block_info.cumulative_tx_count",
                 height: at.to_raw(),
             },
+            // CEN-F17 added the coinbases to the recorded listed count and
+            // the storage-id total did not fit (DRS-E4 commit 3). The
+            // listed fold is bounded by the ids the store issued, so a
+            // total that wraps is SI-8's class read from the rule side:
+            // the fold ran ahead of the chain, on the same cell SI-13 reads.
+            Corrupt::StorageIdsOverflow { at: _ } => StoreInvariant::FoldOverflow {
+                cell: "block_info.cumulative_tx_count",
+            },
             // CEN-F17 read the `total_burned` register above the parent's
             // `coins_generated` (E6 slice 7 wave B). Burn destroys issued
             // coins, so the fold is bounded by the accumulator on every

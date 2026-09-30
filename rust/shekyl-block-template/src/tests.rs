@@ -23,8 +23,8 @@ use shekyl_chain_rules::{
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_difficulty::{CumulativeDifficulty, FTL_SECONDS, GENESIS_DIFFICULTY};
 use shekyl_economics::{
-    price_emission, CirculatingSupply, EconomicParams, EmissionInputs, FrozenSegmentCount,
-    TxVolume, FULL_REWARD_ZONE,
+    price_emission, CirculatingSupply, ClosedShardCount, EconomicParams, EmissionInputs, TxVolume,
+    FULL_REWARD_ZONE,
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, Timestamp};
 use shekyl_units::AtomicUnits;
@@ -114,7 +114,7 @@ fn genesis_era_emission() -> EmissionOperands {
         total_burned: AtomicUnits::ZERO,
         median_weight: FULL_REWARD_ZONE,
         tx_volume: TxVolume::ZERO,
-        frozen_segments: FrozenSegmentCount::ZERO,
+        closed_shards: ClosedShardCount::ZERO,
         emission_split_epoch: EMISSION_SPLIT_EPOCH,
     }
 }
@@ -346,7 +346,7 @@ fn the_coinbase_pays_exactly_the_miners_leg_of_the_split_plus_its_fee_share() {
         tx_volume: cx.emission.tx_volume,
         total_fees: fees,
         supply,
-        frozen_segments: cx.emission.frozen_segments,
+        closed_shards: cx.emission.closed_shards,
         split_epoch: cx.emission.emission_split_epoch.to_raw(),
         params: &params,
     })
@@ -630,7 +630,7 @@ fn amount_at(
         tx_volume: TxVolume::ZERO,
         total_fees: 0,
         supply,
-        frozen_segments: FrozenSegmentCount::ZERO,
+        closed_shards: ClosedShardCount::ZERO,
         split_epoch: EMISSION_SPLIT_EPOCH.to_raw(),
         params,
     })

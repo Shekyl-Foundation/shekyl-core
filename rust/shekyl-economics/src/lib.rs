@@ -46,7 +46,7 @@ pub use emission_share::{
     calc_effective_emission_share, compute_emission_split, split_block_emission, EmissionSplit,
 };
 pub use escalation::{
-    staker_pool_share_at, EscalationParams, EscalationShapeError, FrozenSegmentCount, ScaledShare,
+    staker_pool_share_at, ClosedShardCount, EscalationParams, EscalationShapeError, ScaledShare,
 };
 pub use fee::{
     checked_corrected_fee_ladder, checked_relay_fee_floor, corrected_fee_ladder, fee_correction,

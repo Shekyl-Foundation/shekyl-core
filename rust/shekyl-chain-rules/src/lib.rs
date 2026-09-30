@@ -165,7 +165,9 @@ pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::block_weight::{effective_median_at, EffectiveMedian, Weights};
 pub use rules::body::ArchivalKey;
 pub use rules::difficulty::Target;
-pub use rules::miner::{frozen_segments_at, tx_volume_window, EMISSION_SPLIT_EPOCH};
+pub use rules::miner::{
+    closed_shards_before, closed_shards_through, tx_volume_window, EMISSION_SPLIT_EPOCH,
+};
 pub use rules::recorded;
 pub use rules::reward::{quote_emission, PaidEmission};
 pub use rules::seed_height;

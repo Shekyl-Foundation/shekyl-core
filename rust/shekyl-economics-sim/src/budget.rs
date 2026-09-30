@@ -54,7 +54,7 @@ use shekyl_economics::{
     burn::compute_burn_split_at,
     calc_burn_pct, calc_effective_emission_share, calc_release_multiplier, effective_emission,
     params::{EconomicParams, SCALE},
-    split_block_emission, FrozenSegmentCount, TxVolume,
+    split_block_emission, ClosedShardCount, TxVolume,
 };
 
 use crate::engine::SimParams;
@@ -246,7 +246,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         // Canonical escalated entry; n = 0 (no corpus trajectory in this arm —
         // see engine.rs). Genesis-neutral asymptote ⇒ bit-identical to flat.
         let fee_split =
-            compute_burn_split_at(total_fees, burn_pct, FrozenSegmentCount::ZERO, &economic);
+            compute_burn_split_at(total_fees, burn_pct, ClosedShardCount::ZERO, &economic);
 
         // Accumulate.
         emission_a_acc += staker_emission_a as u128;

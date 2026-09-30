@@ -96,10 +96,11 @@ pub const MAX_HOLDINGS_SHARDS: usize = ARCHIVAL_MAX_HOLDINGS_SHARDS;
 /// chosen so a typical shard at ~16.7 KB/tx lands near 3.33 MB. Sourced
 /// from `config/consensus_constants.json` (`archival_shard_tx_count`, via
 /// this crate's `build.rs`) like the gate's other numerics, and exposed
-/// here, the shard vocabulary's home, so the store's discard (`⌊id / T⌋`)
-/// and the archiver's holdings name one `T`. A second home for `T` — a
-/// literal in a shipped crate, or a shard boundary derived from anything
-/// but `cumulative_tx_count` and this — is the FOLLOWUPS row's falsifier.
+/// here, the shard vocabulary's home, so the store's discard, CEN-F17's
+/// escalation operand and the archiver's holdings name one `T` — and one
+/// closure frontier, [`closed_shards`]. A second home for `T` — a literal
+/// in a shipped crate, or a shard boundary derived from anything but
+/// `cumulative_tx_count` and this — is the FOLLOWUPS row's falsifier.
 pub const SHARD_TX_COUNT: u64 = ARCHIVAL_SHARD_TX_COUNT;
 
 include!(concat!(
@@ -132,6 +133,40 @@ pub const fn storage_ids_through(listed: u64, height: u64) -> Option<u64> {
         return None;
     };
     listed.checked_add(blocks)
+}
+
+/// Shards closed once `storage_ids` transaction ids have been issued:
+/// `⌊storage_ids / T⌋` — every `k` whose last id `(k+1)·T − 1` is below
+/// the total, so the closed shards are exactly `0..closed_shards(ids)`.
+///
+/// **The one home of the closure frontier** (`PDM-Q6` item 5; E4
+/// `ARW-Q6`). The store's discard, the slash scan's shard universe and
+/// CEN-F17's escalation operand `n` all read it here, never a division of
+/// their own — two sites computing one boundary predicate is the
+/// off-by-one-drift shape (`SHARD_TX_COUNT`'s falsifier). The operand is
+/// a storage-id total, not `cumulative_tx_count`: see
+/// [`closed_shards_through`] for the form that starts from the recorded
+/// field.
+#[must_use]
+pub const fn closed_shards(storage_ids: u64) -> u64 {
+    storage_ids / SHARD_TX_COUNT
+}
+
+/// [`closed_shards`] through `height`, from `cumulative_tx_count` at that
+/// height — [`storage_ids_through`] adds the one coinbase per block that
+/// the listed count omits, then the frontier is taken. `None` when the id
+/// total overflows.
+///
+/// The coinbase term is load-bearing: `⌊cumulative_tx_count / T⌋` is the
+/// shorthand the plans write and it is off by `⌊(height + 1) / T⌋` shards
+/// on any chain with blocks — a block's coinbase is a storage id, and the
+/// shard it lands in is the shard the C++ store's `tx_id` names.
+#[must_use]
+pub const fn closed_shards_through(listed: u64, height: u64) -> Option<u64> {
+    match storage_ids_through(listed, height) {
+        Some(ids) => Some(closed_shards(ids)),
+        None => None,
+    }
 }
 
 /// Upper bound on a bond record's standing-log entries. **Genesis-frozen
@@ -883,6 +918,34 @@ mod tests {
         // coinbases — 201 ids issued, so the first id at height 200 is 201.
         assert_eq!(storage_ids_through(1, 199), Some(201));
         assert_eq!(storage_ids_through(u64::MAX, 0), None);
+    }
+
+    #[test]
+    fn the_closure_frontier_is_the_floor_of_the_id_total_over_t() {
+        let t = SHARD_TX_COUNT;
+        // Shard `k` closes when its last id `(k+1)·T − 1` has been issued,
+        // i.e. once `(k+1)·T` ids exist — one short leaves it open.
+        assert_eq!(closed_shards(0), 0);
+        assert_eq!(closed_shards(t - 1), 0);
+        assert_eq!(closed_shards(t), 1);
+        assert_eq!(closed_shards(2 * t - 1), 1);
+        assert_eq!(closed_shards(2 * t), 2);
+        assert_eq!(closed_shards(u64::MAX), u64::MAX / t);
+    }
+
+    #[test]
+    fn the_frontier_through_a_height_counts_the_coinbases() {
+        let t = SHARD_TX_COUNT;
+        // Height 0 with `T − 1` listed transactions: the genesis coinbase
+        // makes `T` ids, and the first shard is closed — the listed count
+        // alone would say it is not.
+        assert_eq!(closed_shards_through(t - 1, 0), Some(1));
+        assert_eq!(closed_shards_through(t - 2, 0), Some(0));
+        // Blocks with nothing listed still issue ids: `T` empty blocks
+        // (heights `0..T`) close one shard.
+        assert_eq!(closed_shards_through(0, t - 1), Some(1));
+        assert_eq!(closed_shards_through(0, t - 2), Some(0));
+        assert_eq!(closed_shards_through(u64::MAX, 0), None);
     }
 
     #[test]

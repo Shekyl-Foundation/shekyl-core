@@ -82,8 +82,8 @@ async fn a_mined_chain_is_admitted_block_by_block_and_the_record_is_the_owners()
     assert_eq!(facts.parent_coins_generated.to_raw(), priced);
     // CEN-F18 held every one of them: each coinbase paid exactly the miner
     // legs the template priced, and the validator's F17 split (over the
-    // leaf count the facts carry, `frozen_segments_at`) agreed with the
-    // producer's — zero fees, the split at zero.
+    // closed-shard count the facts carry, `closed_shards_before`) agreed
+    // with the producer's — zero fees, the split at zero.
     for m in &mined {
         assert!(
             m.judged_by.contains(&CenRow::F18),

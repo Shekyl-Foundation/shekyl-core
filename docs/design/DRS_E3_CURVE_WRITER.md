@@ -629,8 +629,10 @@ schedule, `shekyl-curve-tree`'s wallet-side store and served frame,
 widths E3 writes with; E3 did not touch it: the drain is `f(height,
 is_miner)`, growth is `grow(frontier, leaves)`, no segment boundary, no
 freeze step, no read of either geometry or of `T` (§7's row). Its deletion is
-each consumer's lane's — E4 / S-ARCH for escalation, coverage and pop
-revert; p-fetch for sizing (`N × MAX_TX_SIZE`, SF-D7); DRS-D3c for the
+each consumer's lane's — E4 / S-ARCH for escalation (**done 2026-09-30, E4
+commit 3:** the operand is `shekyl_types::closed_shards_through`, the
+frozen-segment count's last Rust consensus consumer gone), coverage and pop
+revert (the C++ callers, at E4's cutover); p-fetch for sizing (`N × MAX_TX_SIZE`, SF-D7); DRS-D3c for the
 wallet-side partition; the sim's — and `segment_leaf_count` leaves the JSON
 with it (§3.9). The `CTW-1` hook comment named the freeze; it was corrected in
 commit 5, the commit that landed the body it stood in for.
@@ -647,7 +649,7 @@ commit 5, the commit that landed the body it stood in for.
 | DRS-D3c | named in its FOLLOWUPS row (`:221`) — the wallet-side client and the store agree at every header root over a 72-block scenario (commit 7's oracle) |
 | `placeholder_root_after` | `rg placeholder_root_after rust/` → nothing — **HOLDS 2026-09-26**; **re-held 2026-09-27**: #880 (cut before #878 landed) had kept a second root in two fixtures — `placeholder_root_after` in the G2 trace, a height-keyed hash in the weights bench — so `dev` at `9fb8fb3f9` did not compile either test target. Both now take the derived root and cannot name another: the trace through `trace_with` (the root is the replayed chain's `GrownTree`; the caller supplies economics only), the bench through `batch_root_going_into` (the store's in-batch `root_at`, shared with `connect_chain` and the prune builder) |
 | `root_after`'s origin | **`Provenance::passed_through` decomposes from six (four composed, two no-source-yet) to five (four composed, one no-source-yet: `long_term_effective_median`, waiting on G6)** — the number the increment's record states, the way slice 6's §5.1 stated its commit count — **HOLDS 2026-09-26** (`FACT_FIELDS` 5; the grader reports CEN-B5's component real with no harness change) |
-| The tree's structure stays uncoupled from the archival partition (§6.1) | `rg 'leaves_per_segment\|SEGMENT_LAYER_J\|frozen_segment_count' rust/shekyl-chain-rules rust/shekyl-chain-store` → nothing, and `rg SHARD_TX_COUNT rust/shekyl-chain-store/src rust/shekyl-chain-rules/src` → `prune.rs` only — **HOLDS 2026-09-26**. The deletion lanes' falsifier is separate: `rg segment_leaf_count config/consensus_constants.json` → nothing, lifting when E4 / S-ARCH, p-fetch and DRS-D3c re-key their consumers |
+| The tree's structure stays uncoupled from the archival partition (§6.1) | `rg 'leaves_per_segment\|SEGMENT_LAYER_J\|frozen_segment_count' rust/shekyl-chain-rules rust/shekyl-chain-store` → nothing, and `rg SHARD_TX_COUNT rust/shekyl-chain-store/src rust/shekyl-chain-rules/src` → `prune.rs` only — **HOLDS 2026-09-26**; **re-checked 2026-09-30 (E4 commit 3)**: still nothing on the first, and the closure frontier itself moved to `shekyl_types::closed_shards`, so the second now returns `prune.rs` for the shard-*bounds* multiplications only, with `rust/shekyl-chain-ingest` added to the first sweep's paths and also empty. The deletion lanes' falsifier is separate: `rg segment_leaf_count config/consensus_constants.json` → nothing, lifting when E4 / S-ARCH, p-fetch and DRS-D3c re-key their consumers |
 
 Denominator at the pin: `cargo test -p shekyl-chain-store --lib` 360,
 `-p shekyl-chain-rules --lib` 241, `-p shekyl-chain-ingest` 82; **at

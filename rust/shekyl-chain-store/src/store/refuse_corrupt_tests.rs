@@ -150,6 +150,38 @@ fn a_decreasing_tx_count_is_the_fold_belt_observed_by_the_validator() {
     cleanup(&path);
 }
 
+/// CEN-F17's operand fault — the recorded `cumulative_tx_count` plus its
+/// coinbases past `u64` (`Corrupt::StorageIdsOverflow`, DRS-E4 commit 3) —
+/// is SI-8 on the same cell SI-13 reads: the fold ran ahead of the chain,
+/// observed by the validator, halting the writer at the connecting height.
+#[test]
+fn an_overflowing_id_total_is_the_fold_overflow_belt_observed_by_the_validator() {
+    let path = tmp("connect-refuse-corrupt-id-total");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[Vec::new()]);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::StorageIdsOverflow {
+                at: BlockHeight::from_raw(0),
+            })
+            .into())
+    });
+    let row = StoreInvariant::FoldOverflow {
+        cell: "block_info.cumulative_tx_count",
+    };
+    expect_row(&out, row);
+    assert_eq!(row.row(), 8);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(1),
+            row,
+        }
+    );
+    cleanup(&path);
+}
+
 /// A rule's parent-side read answered `AboveTip` below the connecting
 /// height (`Corrupt::HoleBelowTip`, E6 slice 6) is SI-7 — the same
 /// `CellCorrupt { block_info, Absent }` row `chain_reads::absent` arms when

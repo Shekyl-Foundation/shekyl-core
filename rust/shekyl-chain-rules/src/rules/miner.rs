@@ -47,16 +47,15 @@
 //! F14/F14b (the weight penalty), F16 (the split) and G12 (the supply)
 //! are `rules::reward`'s — the definition chain after the medians (slice 7
 //! commit 5). F18 (the exact payout) needs F17's `miner_fee_income` and is
-//! wave B's. F17 needs its
-//! operand `n` ruled: the C++ read `frozen_segment_count(leaf_count)`, a
-//! partition of tree leaves the retired freeze pipeline defined (`PDM-Q12`);
-//! the tree and its per-height count are written and readable since DRS-E3
-//! (`ChainView::leaf_count_at`), but whether D2's `n` counts leaf segments
-//! or closed `T`-shards is the shard re-key's question (E4 / S-ARCH,
-//! `ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q6 item 4) — §3.2, FOLLOWUPS. The
+//! wave B's. F17's operand `n` is the **closed transaction-shard count**
+//! at parent state ([`closed_shards_before`]): the C++ read the frozen
+//! J-segment count, a partition of tree leaves the retired freeze
+//! pipeline defined (`PDM-Q12`), until the shard re-key
+//! moved the archival unit to the `T`-transaction shard
+//! (`ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q6 item 4; DRS-E4 `ARW-Q6`,
+//! commit 3) and both validators re-keyed `n` in one change. The
 //! arithmetic bodies for all of them are Rust already (`shekyl-economics`,
-//! adopted by the slice-4 precursor); what waits is the operand, not the
-//! function.
+//! adopted by the slice-4 precursor).
 //!
 //! # The economic parameters
 //!
@@ -69,12 +68,11 @@
 
 use std::sync::OnceLock;
 
-use shekyl_archival_retention::frozen_segment_count;
 use shekyl_ct_balance::{check_commitment_masks, check_output_keys, MaskSubject};
 use shekyl_economics::params::TX_VOLUME_WINDOW;
 use shekyl_economics::{
     base_block_reward, effective_emission, tail_subsidy_per_block, CirculatingSupply,
-    EconomicParams, FrozenSegmentCount, TxVolume,
+    ClosedShardCount, EconomicParams, TxVolume,
 };
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
@@ -82,10 +80,9 @@ use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::{Corrupt, Fault, PerHeightRecord, ViewRead};
+use crate::fault::{Corrupt, Fault, ViewRead};
 use crate::rules::{recorded, BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
-use crate::view::AtHeight;
 use crate::view::ChainView;
 
 /// The refusal locus of every 4.F predicate: the miner transaction.
@@ -438,16 +435,15 @@ pub(crate) struct BurnOperands {
     /// one owner; `total_burned > coins_generated` is
     /// [`Corrupt::BurnExceedsEmission`], never a zero).
     pub(crate) supply: CirculatingSupply,
-    /// The D2 escalation operand `n`: `frozen_segment_count` of the
-    /// curve-tree leaf count **at** the connecting height — the count after
-    /// the parent drained, [`ChainView::leaf_count_at`] — through the one
-    /// owner (`shekyl_archival_retention::frozen_segment_count`, the
-    /// function the C++ marshals as `shekyl_archival_frozen_segment_count`
-    /// at `:1504`). What `n` *counts* is the shard re-key's open question
-    /// (`docs/FOLLOWUPS.md`, the segment-keyed `n` row; behaviour-neutral
-    /// while the escalation ships flat); this is the operand the C++ reads
-    /// today, adopted so the two validators price one figure.
-    pub(crate) frozen_segments: FrozenSegmentCount,
+    /// The D2 escalation operand `n`: the transaction shards the **parent**
+    /// chain has closed, [`closed_shards_before`] the connecting height —
+    /// the storage ids issued through the parent (its recorded
+    /// `cumulative_tx_count` plus one coinbase per block) over `T`, at the
+    /// one closure frontier `shekyl_types::closed_shards`. The C++ reads
+    /// the same figure as `shekyl_archival_closed_shard_count` of its
+    /// `get_tx_count()` at parent state (`Blockchain::parent_closed_shard_count`),
+    /// so the two validators price one operand.
+    pub(crate) closed_shards: ClosedShardCount,
 }
 
 impl Emission {
@@ -520,32 +516,74 @@ impl Emission {
     }
 }
 
-/// CEN-F17's escalation operand `n` from the curve-tree leaf count at the
-/// connecting height: `frozen_segment_count` through the one owner
-/// (`shekyl_archival_retention`), the function the C++ marshals as
-/// `shekyl_archival_frozen_segment_count` at `blockchain.cpp:1504`.
+/// The transaction shards closed **through** `height`: the storage ids
+/// issued by then — the recorded `cumulative_tx_count` plus one coinbase
+/// per block, `shekyl_types::storage_ids_through` — over `T`, at the one
+/// closure frontier `shekyl_types::closed_shards`. Shard `k` is closed once
+/// its last id `(k+1)·T − 1` has been issued, so the closed shards are
+/// exactly `0..n`.
+///
+/// This is the read the archival surface shares: the slash scan's universe
+/// (E4 §3.7) and CEN-F17's operand ([`closed_shards_before`]) are this
+/// function at two heights, and the store's discard is the same frontier
+/// over the same id total. Height `h` is a per-height record any height
+/// `≤ tip` has, so `AboveTip` is [`Corrupt::HoleBelowTip`]; an id total
+/// that does not fit is [`Corrupt::StorageIdsOverflow`].
+///
+/// # Errors
+///
+/// [`ViewRead::View`] on a view fault; [`ViewRead::Corrupt`] when `height`
+/// is not recorded or its id total overflows.
+pub fn closed_shards_through<'id, V: ChainView<'id>>(
+    view: &V,
+    height: BlockHeight,
+) -> Result<ClosedShardCount, ViewRead<V::Fault>> {
+    let listed = recorded(view, height)?.cumulative_tx_count;
+    shekyl_types::closed_shards_through(listed, height.to_raw())
+        .map(ClosedShardCount::new)
+        .ok_or(ViewRead::Corrupt(Corrupt::StorageIdsOverflow {
+            at: height,
+        }))
+}
+
+/// CEN-F17's escalation operand `n` for a block connecting at `connecting`:
+/// [`closed_shards_through`] the **parent**, `connecting − 1` — the shards
+/// the chain had closed before this block issued an id. Genesis has no
+/// parent and no ids before it: [`ClosedShardCount::ZERO`].
+///
+/// Parent state by construction, not by assertion: the read is keyed by
+/// the height the candidate names, never by the tip after it connected,
+/// so the block cannot move its own split (the C++ read-point's throwing
+/// `db_height == block_height` check guards the same property on a store
+/// whose count is not height-indexed).
 ///
 /// **Public for the one reason [`tx_volume_window`] and
 /// [`effective_median_at`](crate::effective_median_at) are**: the block
 /// producer prices its coinbase at the operand the validator judges it by
-/// (`shekyl-block-template` takes `frozen_segments` as a context field, and
+/// (`shekyl-block-template` takes `closed_shards` as a context field, and
 /// the caller composing that context reads it *here*), never from a second
-/// copy of the definition. What `n` counts is the shard re-key's open
-/// question (`docs/FOLLOWUPS.md`, the segment-keyed `n` row); this is the
-/// operand both validators read today.
-#[must_use]
-pub fn frozen_segments_at(leaf_count: u64) -> FrozenSegmentCount {
-    FrozenSegmentCount::new(frozen_segment_count(leaf_count))
+/// copy of the definition.
+///
+/// # Errors
+///
+/// As [`closed_shards_through`], at the parent.
+pub fn closed_shards_before<'id, V: ChainView<'id>>(
+    view: &V,
+    connecting: BlockHeight,
+) -> Result<ClosedShardCount, ViewRead<V::Fault>> {
+    match connecting.to_raw().checked_sub(1) {
+        None => Ok(ClosedShardCount::ZERO),
+        Some(parent) => closed_shards_through(view, BlockHeight::from_raw(parent)),
+    }
 }
 
 impl BurnOperands {
     /// The two reads, at parent state, for a candidate connecting at
     /// `connecting` whose parent's accumulator is `parent_coins`.
     ///
-    /// The leaf count at `connecting` is a per-height record a conforming
-    /// view has for `tip + 1` (E3 records it as the parent connects), so
-    /// `AboveTip` there is [`Corrupt::HoleBelowTip`]; a burned fold above
-    /// the accumulator is [`Corrupt::BurnExceedsEmission`].
+    /// A burned fold above the accumulator is
+    /// [`Corrupt::BurnExceedsEmission`]; the operand's own faults are
+    /// [`closed_shards_before`]'s.
     fn read<'id, V: ChainView<'id>>(
         view: &V,
         connecting: BlockHeight,
@@ -558,18 +596,9 @@ impl BurnOperands {
                 total_burned,
             })
         })?;
-        let leaf_count = match view.leaf_count_at(connecting).map_err(ViewRead::View)? {
-            AtHeight::Recorded(count) => count,
-            AtHeight::AboveTip => {
-                return Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
-                    at: connecting,
-                    record: PerHeightRecord::LeafCount,
-                }))
-            }
-        };
         Ok(Self {
             supply,
-            frozen_segments: frozen_segments_at(leaf_count),
+            closed_shards: closed_shards_before(view, connecting)?,
         })
     }
 }

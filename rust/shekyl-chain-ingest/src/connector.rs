@@ -257,12 +257,14 @@ pub struct ChainFacts {
     pub parent_coins_generated: shekyl_units::AtomicUnits,
     /// Everything burned through the tip.
     pub total_burned: shekyl_units::AtomicUnits,
-    /// The curve-tree leaf count at `connecting` — CEN-F17's `n` is its
-    /// frozen-segment count, through the one owner
-    /// (`shekyl_archival_retention::frozen_segment_count`), so the producer
-    /// prices the fee split at the operand the validator reads
-    /// (`rules::miner::BurnOperands`; E6 slice 7 wave B).
-    pub leaf_count: u64,
+    /// CEN-F17's `n` at `connecting`: the transaction shards the parent
+    /// chain has closed, read through the validator's own definition
+    /// (`shekyl_chain_rules::closed_shards_before`, one owner of the
+    /// frontier in `shekyl_types::closed_shards`), so the producer prices
+    /// the fee split at the operand the validator reads
+    /// (`rules::miner::BurnOperands`; E6 slice 7 wave B, re-keyed from the
+    /// leaf count's frozen-segment count by DRS-E4 commit 3).
+    pub closed_shards: shekyl_economics::ClosedShardCount,
     /// CEN-F20's window at `connecting`.
     pub tx_volume: shekyl_economics::TxVolume,
     /// CEN-C2's median at `connecting`; `None` at genesis.
@@ -509,11 +511,9 @@ impl Message<TemplateFacts> for Connector {
                 None => shekyl_units::AtomicUnits::ZERO,
                 Some(t) => definition(batch, recorded(&view, t.height))?.coins_generated,
             };
-            let leaf_count = present(
+            let closed_shards = definition(
                 batch,
-                connecting,
-                PerHeightRecord::LeafCount,
-                view.leaf_count_at(connecting),
+                shekyl_chain_rules::closed_shards_before(&view, connecting),
             )?;
             let tx_volume = definition(
                 batch,
@@ -531,7 +531,7 @@ impl Message<TemplateFacts> for Connector {
                 curve_tree_root,
                 parent_coins_generated,
                 total_burned,
-                leaf_count,
+                closed_shards,
                 tx_volume,
                 median_timestamp,
                 medians,

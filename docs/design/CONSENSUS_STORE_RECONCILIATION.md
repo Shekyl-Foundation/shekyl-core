@@ -33,7 +33,7 @@ registered family under alphabetic-until-digit: distinct from `CB-`, `CEN-`,
 | Program | Document | Family | What it cuts by |
 | --- | --- | --- | --- |
 | All-Rust consensus rewrite | [`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) | `CEN-` | **rule** (171 behavioral statements) |
-| Daemon chain store | [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) | `DRS-` | **DB call surface** (95 store methods → S-TXN…S-PRUNE) |
+| Daemon chain store | [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) | `DRS-` | **DB call surface** (94 store methods → S-TXN…S-PRUNE) |
 
 **This document rules nothing about consensus content.** It establishes where
 the two programs overlap, records the countermand, and lists the decisions each
@@ -118,7 +118,7 @@ files as their subject:
 
 | File | CEN rows enforcing here | DRS treatment |
 | --- | --- | --- |
-| `cryptonote_core/blockchain.cpp` | **92** | the god object; DRS-C partitions its 95 store methods |
+| `cryptonote_core/blockchain.cpp` | **92** | the god object; DRS-C partitions its 94 store methods |
 | `blockchain_db/lmdb/db_lmdb.cpp` | **14** | the store; DRS-E1 replaces it |
 | `cryptonote_core/tx_pool.cpp` | **11** | DRS-C surface **S-POOL** |
 | `cryptonote_core/cryptonote_core.cpp` | **12** | connect caller; DRS-B consumer |
@@ -557,9 +557,9 @@ operand derivations (`get_tx_volume_avg` `:2170`,
 | CEN-F14 | **CHECKED-CONFORMANT** | Same boundary. `SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG` maps to the reject at `:1793–1795`; the recorded divergence comment at `cryptonote_basic_impl.cpp:122–135` remains accurate as read |
 | CEN-F15 | **CHECKED-CONFORMANT** | Same boundary — the release-rate clamp lives in `shekyl-economics/src/release.rs`, reached through the same single FFI call; nothing recomputed C++-side |
 | CEN-F16 | **CHECKED-CONFORMANT** | `compute_emission_split` (`economics.h:95`) is a pure FFI shim over `shekyl_calc_emission_share` + `shekyl_split_block_emission` (`:1797`) |
-| CEN-F17 | **CHECKED-CONFORMANT** | `compute_fee_burn` (`economics.h:63`) is a pure FFI shim over `shekyl_calc_burn_pct` + `shekyl_compute_burn_split_escalated` (`:1804`) |
+| CEN-F17 | **CHECKED-CONFORMANT** | `compute_fee_burn` (`economics.h:63`) is a pure FFI shim over `shekyl_calc_burn_pct` + `shekyl_compute_burn_split_escalated` (`:1804`). **UPDATE 2026-09-30 (DRS-E4 commit 3, operand re-keyed in one change on both sides):** `n` is the **closed transaction-shard count at parent state** — C++ `Blockchain::parent_closed_shard_count` = `shekyl_archival_closed_shard_count(get_tx_count())`, Rust `shekyl_chain_rules::closed_shards_before` = `shekyl_types::closed_shards_through(cumulative_tx_count, parent)`, both `⌊(listed + coinbases) / T⌋` through the one `shekyl_types` home; was the frozen J-segment count of the leaf count. Behaviour-neutral while the escalation ships flat (`economics_params.json` asymptote = floor); the two definitions are held equal by the digest at every captured chain's tip |
 | CEN-F18 | **CHECKED-CONFORMANT** | W-MT. **Both directions**: overpay rejects (`money_in_use > reward`, `:1809`) and inexactness rejects (`!=`, `:1815`) — exact-equality confirmed, not `≤` |
-| CEN-F19 | **CHECKED-CONFORMANT** | `parent_frozen_segment_count` asserts `db_height == block_height` (THROW) before reading the leaf count (`:1750–1756`), so the count is the **parent's by construction**. **REWRITE-NOTE *(records-was; realized E6 slice 4, 2026-09-22)*:** the in-code warning is itself load-bearing — the check's teeth depend on the *operand* being a pre-`add_block` snapshot, and "simplifying" the call to read the live height makes it a **permanent tautology** that still passes every test. The port made the read-point structural, as this note once said it should: F19 is `by_construction` on `ChainView` in the rules crate's census registry — `validate` runs inside the write transaction over a view whose tip is the pre-connect state, with a `compile_fail` doctest as the falsifier |
+| CEN-F19 | **CHECKED-CONFORMANT** | `parent_frozen_segment_count` (*renamed `parent_closed_shard_count` 2026-09-30, E4 commit 3; it now reads `get_tx_count()` under the same assert*) asserts `db_height == block_height` (THROW) before reading the operand (`:1750–1756` at review), so the count is the **parent's by construction**. **REWRITE-NOTE *(records-was; realized E6 slice 4, 2026-09-22)*:** the in-code warning is itself load-bearing — the check's teeth depend on the *operand* being a pre-`add_block` snapshot, and "simplifying" the call to read the live height makes it a **permanent tautology** that still passes every test. The port made the read-point structural, as this note once said it should: F19 is `by_construction` on `ChainView` in the rules crate's census registry — `validate` runs inside the write transaction over a view whose tip is the pre-connect state, with a `compile_fail` doctest as the falsifier |
 | CEN-F20 | **CHECKED-CONFORMANT** | `get_tx_volume_avg` (`:2170`) computes the integer mean of `tx_hashes.size()` over the prior `SHEKYL_TX_VOLUME_WINDOW` blocks exactly as the rule states, with the short-chain clamp arms read. **REWRITE-NOTE:** this is a **second implementation** — `shekyl-economics/src/activity.rs` maintains the same 720-block rolling mean; the rewrite collapses to one, and the census's own wart (window constant not in `config/`) rides along |
 | CEN-F21 | **CHECKED-CONFORMANT** | Pinned end-to-end: `HF_VERSION_SHEKYL_NG = 1` (`cryptonote_config.h:289`) → the sole mainnet fork entry `{version 1, height 1}` (`hardforks.cpp:35–37`) → `get_earliest_ideal_height_for_version` returns **1** (`cryptonote_basic/hardfork.cpp:383–394`) → consumed at `:1796` |
 

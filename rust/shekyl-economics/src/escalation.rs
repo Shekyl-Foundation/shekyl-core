@@ -6,9 +6,16 @@
 //! **D2 staker-share escalation — the frozen shape.**
 //!
 //! Replaces the flat `staker_pool_share` constant with a pure map of the burden
-//! operand `n = frozen_segment_count` ([`FrozenSegmentCount`]). Shape is
+//! operand `n = closed_shard_count` ([`ClosedShardCount`]). Shape is
 //! genesis-frozen (§6.1); the asymptote **numeric** is provisional-until-testnet
 //! (§11.4). See `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`.
+//!
+//! `n` was re-keyed from the curve tree's frozen J-segment count to the
+//! closed transaction-shard count when the archival unit became the
+//! `T`-transaction shard (`ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q6 item 4;
+//! DRS E4 `ARW-Q6`). The shape did not move; the knee's **literal** is the
+//! J-segment sweep's and is re-derived when the Stage-2 sweep re-runs on
+//! the shard operand (`docs/FOLLOWUPS.md`, the D2 operand row).
 //!
 //! # Frozen constraints (§6.1)
 //!
@@ -29,26 +36,31 @@ use shekyl_units::banded_pl::{curve_milli, mul_div_floor, BandedCurveParams};
 
 use crate::params::SCALE;
 
-/// D2 burden operand: `n = frozen_segment_count` at **parent-block** state.
+/// D2 burden operand: `n = closed_shard_count` at **parent-block** state —
+/// the transaction shards (`shekyl_types::SHARD_TX_COUNT` ids each) whose
+/// last id the parent chain has issued, `shekyl_types::closed_shards` of
+/// the parent's storage-id total.
 ///
 /// State-shaped (chain progression owns the value). Callers read it once per
-/// template/connect via the asserting C++ read-point and pass the typed count
-/// through the burn split — never a bare height, never tip-after-`add_block`.
+/// template/connect and pass the typed count through the burn split — never
+/// a bare height, never a listed-transaction count, never tip-after-connect.
 ///
 /// **Scope of the guarantee: type-confusion, not provenance.** This type stops
-/// a block height or leaf count being passed where `n` is expected — real
-/// value, since the FFI marshals a raw `u64` and the wrapping site is the
-/// single audit point. It does **not** certify that a value was read at parent
-/// state: [`Self::new`] is a public const wrapper, so anything can be wrapped.
-/// The read-point discipline lives entirely in the C++
-/// `Blockchain::parent_frozen_segment_count` and its throwing assert — do not
-/// read this type as satisfying it by construction.
+/// a block height, a leaf count or a raw transaction total being passed where
+/// `n` is expected — real value, since the FFI marshals a raw `u64` and the
+/// wrapping site is the single audit point. It does **not** certify that a
+/// value was read at parent state: [`Self::new`] is a public const wrapper,
+/// so anything can be wrapped. The read-point discipline lives in the readers
+/// — `shekyl_chain_rules`'s `closed_shards_before(connecting)` on the Rust
+/// side, the C++ `Blockchain::parent_closed_shard_count` and its throwing
+/// assert until cutover — do not read this type as satisfying it by
+/// construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
-pub struct FrozenSegmentCount(u64);
+pub struct ClosedShardCount(u64);
 
-impl FrozenSegmentCount {
-    /// Zero frozen segments (genesis / empty tree).
+impl ClosedShardCount {
+    /// No shard closed yet (genesis; fewer than `T` ids issued).
     pub const ZERO: Self = Self(0);
 
     /// Wrap a raw count.
@@ -64,14 +76,14 @@ impl FrozenSegmentCount {
     }
 }
 
-impl From<u64> for FrozenSegmentCount {
+impl From<u64> for ClosedShardCount {
     fn from(n: u64) -> Self {
         Self::new(n)
     }
 }
 
-impl From<FrozenSegmentCount> for u64 {
-    fn from(n: FrozenSegmentCount) -> Self {
+impl From<ClosedShardCount> for u64 {
+    fn from(n: ClosedShardCount) -> Self {
         n.get()
     }
 }
@@ -242,7 +254,7 @@ impl EscalationParams {
         self.floor_share
     }
 
-    /// `frozen_segment_count` at which the share saturates.
+    /// `closed_shard_count` at which the share saturates.
     #[must_use]
     pub const fn knee_n(self) -> u64 {
         self.knee_n
@@ -266,7 +278,7 @@ impl EscalationParams {
 ///
 /// **`params` is well-formed by type** — no fail-closed branch.
 #[must_use]
-pub fn staker_pool_share_at(n: FrozenSegmentCount, params: &EscalationParams) -> ScaledShare {
+pub fn staker_pool_share_at(n: ClosedShardCount, params: &EscalationParams) -> ScaledShare {
     let floor = params.floor_share.to_raw();
     let asymptote = params.asymptote_share.to_raw();
     let span = asymptote - floor;
@@ -304,7 +316,7 @@ mod tests {
     }
 
     fn share_at(n: u64, p: &EscalationParams) -> u64 {
-        staker_pool_share_at(FrozenSegmentCount::new(n), p).to_raw()
+        staker_pool_share_at(ClosedShardCount::new(n), p).to_raw()
     }
 
     #[test]
@@ -540,11 +552,11 @@ mod tests {
     }
 
     #[test]
-    fn frozen_segment_count_newtype_round_trip() {
-        let n = FrozenSegmentCount::new(42);
+    fn closed_shard_count_newtype_round_trip() {
+        let n = ClosedShardCount::new(42);
         assert_eq!(n.get(), 42);
         assert_eq!(u64::from(n), 42);
-        assert_eq!(FrozenSegmentCount::from(7u64).get(), 7);
-        assert_eq!(FrozenSegmentCount::ZERO.get(), 0);
+        assert_eq!(ClosedShardCount::from(7u64).get(), 7);
+        assert_eq!(ClosedShardCount::ZERO.get(), 0);
     }
 }

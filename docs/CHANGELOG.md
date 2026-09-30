@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Consensus — CEN-F17's escalation operand `n` is the closed transaction-shard count (DRS-E4 commit 3)
+
+- The D2 staker-share escalation's operand `n` (`staker_pool_share_at`) is
+  re-keyed from the curve tree's frozen J-segment count — the partition the
+  retired freeze pipeline defined (`PDM-Q12`) — to the number of `T`-shards
+  the parent chain has closed: `⌊storage_ids / T⌋`, storage ids being the
+  listed transactions plus one coinbase per block, `T =
+  archival_shard_tx_count`. One atomic C++/Rust change: `Blockchain::
+  parent_closed_shard_count` (was `parent_frozen_segment_count`) reads
+  `get_tx_count()` through the new `shekyl_archival_closed_shard_count`;
+  the Rust validator reads `shekyl_chain_rules::closed_shards_before`; both
+  resolve to `shekyl_types::closed_shards`, the closure frontier's one home.
+  **Behaviour-neutral on every shipped parameterization**: the escalation is
+  flat (asymptote = floor), so the burn split is bit-identical before and
+  after. `escalation_knee_n` is carried unchanged and is re-derived in the
+  new unit before the ceremony raises the asymptote (FOLLOWUPS' D2 row).
+  `FrozenSegmentCount` → `ClosedShardCount` across `shekyl-economics` and
+  its callers; the FFI parameters named `frozen_segment_count` are now
+  `closed_shard_count`. `shekyl_archival_frozen_segment_count` stays for the
+  C++ freeze pipeline and coverage RPC until the cutover deletes them.
+  (`DRS_E4_ARCHIVAL_WRITER.md` §3.7, ARW-Q6.)
+
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 
 - `shekyl_engine_core::TxRecipient` carries `rid: Option<PaymentRequestId>`,
