@@ -28,14 +28,15 @@
 //!   exercised has no verdict evidence. A **consumer** of a borrowed fact
 //!   (B5's equality against the recorded root) is a real check whose oracle
 //!   happens to be borrowed — its verdict counts.
-//! - [`ComponentEvidence`] — *the digest component the rule feeds grades
-//!   not-evidence while the fact it produces is passed through*. The
-//!   **producers** — the rows `ConnectFacts::DELETED_BY` names for each
-//!   passed-through field — are read from the store's own declaration, so
-//!   when a slice derives a fact and deletes its `Fact` wrapper the rows
-//!   flip to real evidence here **with no harness change** (RD-Q6). Every
-//!   other row's component evidence is the digest identity at the
-//!   checkpoint, or nothing when no checkpoint was compared.
+//! - [`ComponentEvidence`] — *the digest component the rule feeds*: the
+//!   digest identity at the checkpoint, or nothing when no checkpoint was
+//!   compared. Until E6 slice 7 wave B a third arm, `Borrowed`, graded a
+//!   **producer** of a passed-through fact not-evidence — the rows
+//!   `ConnectFacts::DELETED_BY` named, read from the store's own
+//!   declaration so a slice deriving a fact flipped its rows to real
+//!   evidence with no harness change (RD-Q6). The last fact derived on
+//!   2026-09-29 and the arm went with the declaration: every row's
+//!   component is real replay output now (`shekyl_e2_grade_v2`).
 //!
 //! # The grader's law and the adjudication sentence (§1.3)
 //!
@@ -75,13 +76,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use shekyl_chain_rules::CenRow;
 use shekyl_chain_store::conformance::{grade, Acceptance, ConformanceState, FailureReason};
-use shekyl_chain_store::store::ConnectFacts;
 use shekyl_types::BlockHeight;
 
 /// The JSON the extractor emits.
 pub const REGISTER_SCHEMA: &str = "shekyl_e2_register_v1";
 /// The JSON this module emits.
-pub const GRADE_SCHEMA: &str = "shekyl_e2_grade_v1";
+pub const GRADE_SCHEMA: &str = "shekyl_e2_grade_v2";
 
 /// One register row as extracted.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -259,12 +259,6 @@ pub enum ComponentEvidence {
         /// Digest identity at the checkpoint(s).
         identical: bool,
     },
-    /// The rule produces a passed-through fact; the component is LMDB's
-    /// value copied back (RD-F7) and grades not-evidence.
-    Borrowed {
-        /// The `ConnectFacts` field it produces.
-        field: &'static str,
-    },
     /// No checkpoint was compared in this run.
     NotCompared,
 }
@@ -381,8 +375,6 @@ pub struct GradedRun {
     /// Rows with a verdict clause that accepted as correct — **progress is
     /// this count** (RD-Q6).
     pub derived_and_conformant: usize,
-    /// Rows whose component is borrowed (producers of passed-through facts).
-    pub borrowed: usize,
     /// Rows no connected block exercised.
     pub not_exercised: usize,
     /// Open census adjudications (§1.3). The run also fails when
@@ -411,28 +403,15 @@ impl GradedRun {
     }
 }
 
-/// The producers of passed-through facts, read from the store's own
-/// declaration: `field` for each row `ConnectFacts::DELETED_BY` names.
-fn producers() -> BTreeMap<&'static str, &'static str> {
-    let mut m = BTreeMap::new();
-    for d in &ConnectFacts::DELETED_BY {
-        for row in d.rows {
-            m.entry(*row).or_insert(d.field);
-        }
-    }
-    m
-}
-
 /// Grade a run against the register (module docs).
 #[must_use]
 pub fn grade_run(register: &Register, obs: &Observations) -> GradedRun {
     let recorded: BTreeSet<&str> = register.rows.iter().map(|r| r.id.as_str()).collect();
     let states = register.states();
-    let producers = producers();
     let mut rows = Vec::new();
     let mut unadjudicated = Vec::new();
     let mut owed = Vec::new();
-    let (mut derived_and_conformant, mut borrowed, mut not_exercised) = (0, 0, 0);
+    let (mut derived_and_conformant, mut not_exercised) = (0, 0);
 
     // ---- the refusal, graded once whether or not the register has its row
     let refusal = obs.refused.map(|(id, height)| {
@@ -476,23 +455,19 @@ pub fn grade_run(register: &Register, obs: &Observations) -> GradedRun {
             VerdictEvidence::NotExercised => None,
         };
         // ---- clause (2): the component --------------------------------
-        let component = match (producers.get(id.as_str()), obs.digest_identical) {
-            (Some(field), _) => ComponentEvidence::Borrowed { field },
-            (None, Some(identical)) => ComponentEvidence::Real { identical },
-            (None, None) => ComponentEvidence::NotCompared,
+        let component = match obs.digest_identical {
+            Some(identical) => ComponentEvidence::Real { identical },
+            None => ComponentEvidence::NotCompared,
         };
         let component_acceptance = match component {
             ComponentEvidence::Real { identical } => {
                 Some(GradedAcceptance::from(grade(state, identical)))
             }
-            ComponentEvidence::Borrowed { .. } | ComponentEvidence::NotCompared => None,
+            ComponentEvidence::NotCompared => None,
         };
         // ---- tallies ---------------------------------------------------
         if verdict_acceptance == Some(GradedAcceptance::AcceptedAsCorrect) {
             derived_and_conformant += 1;
-        }
-        if matches!(component, ComponentEvidence::Borrowed { .. }) {
-            borrowed += 1;
         }
         if verdict == VerdictEvidence::NotExercised {
             not_exercised += 1;
@@ -535,7 +510,6 @@ pub fn grade_run(register: &Register, obs: &Observations) -> GradedRun {
         refusal,
         root_oracle: obs.roots.clone(),
         derived_and_conformant,
-        borrowed,
         not_exercised,
         unadjudicated,
         owed_reviewed_divergence: owed,
@@ -568,23 +542,30 @@ mod tests {
     }
 
     #[test]
-    fn a_matching_run_grades_exercised_conformant_rows_correct_borrows_the_producers_and_inverts_divergent(
-    ) {
+    fn a_matching_run_grades_exercised_conformant_rows_correct_and_inverts_divergent() {
         let mut obs = Observations::default();
         obs.exercised_rows([CenRow::A1, CenRow::B5]);
         obs.checkpoint(true);
         let g = grade_run(&register(), &obs);
-        // The inversion, live: Z9 is DIVERGENT and not a producer, so the
-        // digest *matching* on it is the port reproducing the defect — the
-        // one open adjudication in an otherwise clean run. Today's real
-        // register has no such row (its DIVERGENT rows are producers).
+        // The inversion, live: Z9 and F17 are DIVERGENT, so the digest
+        // *matching* on them is the port reproducing the defect — the open
+        // adjudications in an otherwise clean run. (F17 was a *producer*
+        // until wave B and graded borrowed, not-evidence; the store
+        // declares no producers now, so it is graded like every row.)
         assert_eq!(
             g.unadjudicated,
-            vec![Unadjudicated {
-                id: "CEN-Z9".to_owned(),
-                clause: Clause::Component,
-                acceptance: GradedAcceptance::FailedReproducedDefect,
-            }]
+            vec![
+                Unadjudicated {
+                    id: "CEN-F17".to_owned(),
+                    clause: Clause::Component,
+                    acceptance: GradedAcceptance::FailedReproducedDefect,
+                },
+                Unadjudicated {
+                    id: "CEN-Z9".to_owned(),
+                    clause: Clause::Component,
+                    acceptance: GradedAcceptance::FailedReproducedDefect,
+                }
+            ]
         );
         // A1: exercised and agreed, component real and identical.
         let a1 = row(&g, "CEN-A1");
@@ -611,14 +592,14 @@ mod tests {
             b5.component_acceptance,
             Some(GradedAcceptance::AcceptedAsCorrect)
         );
-        // F17: DIVERGENT producer (the burn's, per DELETED_BY — the one
-        // passed-through fact left after E6 slice 7), not exercised:
-        // nothing graded, nothing owed. Until slice 7 this fixture row was
-        // CEN-G6, a producer of the weights; the medians are the verdict's
-        // now and G6 is graded like any landed row.
+        // F17: DIVERGENT and not exercised — no verdict clause; its
+        // component is real (the checkpoint matched) and so the inversion
+        // above. Until wave B it was the burn's producer per DELETED_BY and
+        // graded borrowed; until slice 7 this fixture row was CEN-G6, a
+        // producer of the weights.
         let f17 = row(&g, "CEN-F17");
         assert_eq!(f17.verdict, VerdictEvidence::NotExercised);
-        assert!(matches!(f17.component, ComponentEvidence::Borrowed { .. }));
+        assert_eq!(f17.component, ComponentEvidence::Real { identical: true });
         // X1: unrecorded → UNREVIEWED by absence; component real but grants nothing.
         let x1 = row(&g, "CEN-X1");
         assert!(!x1.recorded);
@@ -628,10 +609,6 @@ mod tests {
             Some(GradedAcceptance::RegressionSignalOnly)
         );
         assert_eq!(g.derived_and_conformant, 2);
-        assert_eq!(
-            g.borrowed, 1,
-            "F17 remains; B5 stopped borrowing with DRS-E3, G6 with E6 slice 7"
-        );
         assert_eq!(g.not_exercised, 4);
     }
 
@@ -734,8 +711,8 @@ mod tests {
         let g = grade_run(&register(), &obs);
         assert!(g.owed_reviewed_divergence.contains(&"CEN-Z9".to_owned()));
         assert!(
-            !g.owed_reviewed_divergence.contains(&"CEN-F17".to_owned()),
-            "borrowed: not graded"
+            g.owed_reviewed_divergence.contains(&"CEN-F17".to_owned()),
+            "graded like every row since wave B (it borrowed until then)"
         );
         assert!(g
             .unadjudicated
@@ -781,10 +758,10 @@ mod tests {
     fn no_checkpoint_means_no_component_evidence_and_the_schema_is_checked() {
         let obs = Observations::default();
         let g = grade_run(&register(), &obs);
-        assert!(g.rows.iter().all(|r| matches!(
-            r.component,
-            ComponentEvidence::NotCompared | ComponentEvidence::Borrowed { .. }
-        )));
+        assert!(g
+            .rows
+            .iter()
+            .all(|r| matches!(r.component, ComponentEvidence::NotCompared)));
         assert!(g.passes(), "nothing compared, nothing disagreed");
         let json = g.to_json().expect("json");
         assert!(json.contains(GRADE_SCHEMA));
@@ -817,22 +794,6 @@ mod tests {
         assert!(
             register.states().contains_key("CEN-A1"),
             "the first ratified row is in the register"
-        );
-    }
-
-    #[test]
-    fn the_producer_set_is_the_stores_declaration() {
-        let p = producers();
-        for d in &ConnectFacts::DELETED_BY {
-            for row in d.rows {
-                assert!(p.contains_key(row), "{row} from {}", d.field);
-            }
-        }
-        assert_eq!(p.get("CEN-F17"), Some(&"burned"));
-        assert_eq!(
-            p.len(),
-            2,
-            "F17 and G11, the burn's: every other producer row landed and left DELETED_BY"
         );
     }
 }

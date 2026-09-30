@@ -7,6 +7,7 @@
   "format_version": 2,
   "generator": "e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx",
   "genesis_hash": "16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3",
+  "out_of_band_writes": [],
   "shape": "limit-full",
   "spend_txid": null,
   "tip_height": 213,

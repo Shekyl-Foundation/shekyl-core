@@ -281,7 +281,10 @@ measurement names it. `shekyl-capped-stream` is that cap and the socket
 copy. Clearnet and Tor both call it. A connector passes framing in;
 this crate does not know which connector it is. A send that does not
 fit is not stored, and a write already in progress is cancelled with
-`SendQueueFull`. The inbound reader awaits space instead of closing:
+`SendQueueFull`. The queue records why it closed in the same step as
+the close, under its lock — overfull, or closed by an end — so a
+writer that finds it closed reports `SendQueueFull` or `LocalClose`
+from one read, and the first reason stands. The inbound reader awaits space instead of closing:
 a slow consumer on this side stops reading, and TCP pushes back on
 the peer. Dropping the connection's queue hold closes the cap even
 when the caller still holds the session.

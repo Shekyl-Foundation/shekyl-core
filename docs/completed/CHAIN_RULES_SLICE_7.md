@@ -1,11 +1,32 @@
 # `shekyl-chain-rules` slice 7 — census 4.G, the block body, and the four 4.F rows that waited on it (DRS-E6 increment 8)
 
-**Status:** OPEN — **Round 0 pre-flight, written 2026-09-26 against `dev` @
+**Status:** CLOSED-as-record — **implementation LANDED 2026-09-29**: §5
+commits 1–2 merged as #877 / #880, commits 3–5 as #889 (`cac2dadbe`),
+commits 6–10 as **#907 (`5ade4952f`)**, the last carrying the reviewer's
+paid-reward kernel (`shekyl_economics::price_emission`, §5 row 9 (c)).
+Record: `implemented 93 / validator-enforced 152`, `by-construction 14`;
+`SCHEMA_VERSION` 16 → 17; `ConnectFacts` deleted with its last member;
+E2's family twenty, no pending row; six captured chains at 2 408 / 2 408
+on roots, weights, accumulator and burn (the burn's non-zero population is
+three heights — a FOLLOWUPS row). **Open residue lives in FOLLOWUPS, not
+here** (the burn population, owner DRS_E2 §3.10; §3.9/§3.10's two rows,
+owner the census §10 R2; §3.11's core_tests fakechain-table row, re-homed
+to the census's CEN-F21 at this closeout — the owner gate refused a
+`completed/` owner, which is the gate doing rule 95's residue check). Do
+not implement from this file; the living
+contracts are `CHAIN_RULES_CRATE.md` §4 and the census's 4.G cells.
+*Records-was, the banner as it stood while the slice was open:* OPEN —
+**Round 0 pre-flight, written 2026-09-26 against `dev` @
 `ad557ac5a` (post-#874, slice 6 closed out; post-#873, DRS-E3's curve-writer
 pre-flight).** **Round 0 CLOSED — Q1, Q3–Q8 ruled and Q9 re-ruled at
 parity 2026-09-26; Q2 ruled (b) 2026-09-27 by the floor bench (§5.1, §8,
 each line-local). Commit 1 landed as #877 (merged `ece3aa4fb`); commit 2,
-the four measurements, is #880.** Registered before implementation (rule
+the four measurements, is #880.** **UPDATE 2026-09-29: §5 commits 3–5
+merged as #889; commits 6–10 LANDED on the branch (§5's table carries each
+row's record; §5.1 the cost against the estimate). Wave B absorbed — the
+slice has no named successor; nothing reaches `connect` the validator did
+not derive (`ConnectFacts` deleted, schema 17). Open: closeout after the PR
+lands (archive-or-contract, rule 95) — this closeout.** Registered before implementation (rule
 94 §5); process per
 `26-sub-pr-design-discipline.mdc` (cited here as the pre-flight's shape:
 substrate re-read at the pin, artifact execution before a budget becomes a
@@ -15,15 +36,15 @@ Branch commits are named by PR and subject, never by SHA (slice 6's rule at
 its head, inherited). A `dev` SHA is an era; every line number in this file
 is read at `ad557ac5a` unless its sentence says otherwise.
 
-Parent: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §4.6 (`validate`,
-the `BlockRule` class), [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.5
+Parent: [`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) §4.6 (`validate`,
+the `BlockRule` class), [`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) §7.5
 (DRS-E6; ordering-table row *4.G Block body — slice 7 — aggregates
 4.F/4.H/4.I (weights, fees, listed-tx uniqueness)*). Census:
-[`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §4.G, **13** live rows
+[`CONSENSUS_RULE_CENSUS.md`](../design/CONSENSUS_RULE_CENSUS.md) §4.G, **13** live rows
 (CEN-G1–G7, G6b, G9–G13; G8 retired by C2-R1a). Predecessors:
-[`CHAIN_RULES_SLICE_4.md`](CHAIN_RULES_SLICE_4.md), whose Q1 (RULED (a),
+[`CHAIN_RULES_SLICE_4.md`](../design/CHAIN_RULES_SLICE_4.md), whose Q1 (RULED (a),
 2026-09-22) sent **F14, F14b, F16, F18** here to land *with the weights
-machinery*; [`CHAIN_RULES_SLICE_6.md`](CHAIN_RULES_SLICE_6.md), whose §5.1
+machinery*; [`CHAIN_RULES_SLICE_6.md`](../design/CHAIN_RULES_SLICE_6.md), whose §5.1
 predicted this slice's fixture class should be smaller than its own —
 falsifiable here (§5.1).
 
@@ -57,8 +78,8 @@ Two things make 4.G unlike 4.I:
   its cells say the C++ still ships the ×50. **Read at the line, it does
   not** (§3.8): since `1c8594049` (2026-09-12) both C++ sites call the Rust
   clamp, so G6 lands at **parity**, and the divergence this slice carries
-  is in two census cells and two register rows, corrected in commit 10.
-  Slice 4 Q1 ruled that G6 lands in *its own* slice, in the PR that owns
+  is in two census cells and two register rows — corrected with commit 5
+  (§3.8 (iii)), earlier than the commit 10 first planned. Slice 4 Q1 ruled that G6 lands in *its own* slice, in the PR that owns
   the weights — this is that PR; what it owns turned out to be a record
   correction rather than a rule change, which is the better outcome and
   was found by reading the subject instead of the question.
@@ -189,7 +210,8 @@ function's signature is shaped for two readers, not one (Q4).
 
 Bucket and class from the census; the C++ site re-read at this pin (the
 census's line numbers are its own era's — `5936–5941` for G1 is `5516–5522`
-today — and are **not** corrected here; the census re-pin is commit 10's).
+today — and are **not** corrected here; the census re-pin is commit 10's;
+the G6/G6b cells' *status* was corrected with commit 5, §3.8 (iii)).
 
 | row | b | what the C++ does at `ad557ac5a` | Rust body today | proposed disposition |
 | --- | --- | --- | --- | --- |
@@ -554,6 +576,21 @@ captured-chain witness with ≥ 2 listed bodies in one block. §5 row 7's
 driver-built two-spend chain is still owed for the *mutation* rows' own
 fixtures; what it is no longer owed for is a corpus witness.
 
+**UPDATE 2026-09-29 (commit 7 (b)) — the family grew by eight; the census
+names four more, none the corpus's shape.** With §3.10's rows built the
+all-chains `Unmutable` set is five, and each says whose it is:
+`PowUnderWrongSeed` (environment, as before); `OverweightBlock`
+(`NoBodySupply` — the corpus census judges captured blocks as they are);
+`DuplicateClaim` and `DuplicateBondPost` (`NoTwinSupplied` on the heights
+that carry a claim or a post, `NoArchivalBodyToDuplicate` on the heights
+that do not — the emission-claim and bond-post captures carry the bodies,
+so a twin supply would reach both); `DuplicateServeCredit`
+(`NoArchivalBodyToDuplicate` everywhere: **no captured chain carries a
+serve credit**, the one reading of the corpus's shape this round added).
+The six rows the corpus *can* carry — `MissingBody`, `SubstitutedBody`,
+`RelistedTransaction`, `DoubledListing` and the two of §3.10 that need a
+second body — apply on it.
+
 ### 3.8 The ×50 is gone from the C++; the census and the register did not notice (read 2026-09-26)
 
 The census G6 and G6b cells (`CONSENSUS_RULE_CENSUS.md:410–411`) say *"the
@@ -758,11 +795,11 @@ when an operand is absent. Wave B extends the sequence in place.
 | 3 | **LANDED 2026-09-27 (cost 1).** `ChainView::weights_window(end, at_most) -> AtHeight<Vec<RecordedWeights>>` — the up-to-`at_most` recorded blocks strictly below `end`, `AboveTip` past `tip + 1`, a hole inside the window SI-7 and never a shorter vector — and `ChainView::has_transaction(&TxHash) -> bool`; **no default bodies** (a default that answered "no weights" or "no such transaction" would make G6 and G1 silently vacuous on a mock, the opposite of E3's derived `depth_at`), so all nine implementors carry both. The store's body is one range cursor over `block_info` (`chain_reads::weights_below`, the shape the floor chose) and `tx_indices` membership (`tx_reads::has_transaction`), each shared by `BatchView` and `ReadSnapshot` so the validator and the pool/template read one answer. `MockChain` records weights per pushed block — `push` names the zone for both, `push_weighing` names them — and a transaction set (`with_transaction`); **no existing fixture moved** (§5.1's tally: still 0). The store's conformance test holds both reads to the store's over every `end` × `at_most` shape, the hole test holds the SI-7 arm the mock cannot reach, and `RecordedWeights` is a named projection, not a tuple, so the two columns cannot be swapped by position. Built on `dev` after #884 repaired E3's two breaks of commit 2 (§1.2) | commit 2 (c) |
 | 4 | **LANDED 2026-09-28 (cost 3 against 2 — over; the falsifier fires, and the reason is the third part).** Three commits. **(a) Q6:** `block_weight_long_term_window_blocks` / `block_weight_short_term_window_blocks` into `consensus_constants.json` under both membership tests; `shekyl_economics::params::{BLOCK_WEIGHT_LONG_TERM_WINDOW, BLOCK_WEIGHT_SHORT_TERM_WINDOW}` generated; the two C++ `#define`s expand to the generated macros; `DYNAMIC_FEE_PER_KB_BASE_FEE_V5` deleted; `blocks_to_surge_saturation`'s local `100` reads the window; the rpc-types digest re-pinned. **(b) G6 / G6b** in `rules/block_weight.rs`: `Medians::derive` before the slot loop (one `weights_window` read over `W_long`, the short window its suffix), `Weights::derive` after it (the block's weight and its long-term clamp); values on `ValidatedBlock::weights` (Q5); `effective_median_at` public and read by the ingest's `ChainFacts` for the producer (Q4) — the scenario driver prices against it, not the zone constant. **The median's even-count arm is the C++'s** (`get_mid`: floor of the two middles' mean), pinned against a sorted reference over both parities — a lower-middle median would agree on every odd window and disagree on every even one, and the short window is 100. The clamps at their boundaries; the short window's suffix at exactly `W_short` by a mean neither half carries; **the early-chain arm pinned deliberately** — block 0's weight moves a seven-block median (nothing aged out), and a young, light chain reads the zone on both medians, which is the arm every `chain_of(n)` fixture exercises. **Parity over the corpus:** the replay compares the verdict's `weight`, `long_term_weight` and `long_term_effective_median` against the trace's at every connected height (`RunReport::weights`, E3's oracle shape, rewind-retracting) — **2 194 / 2 194 heights match** across the five captured chains (1 979 on the four that existed before (c), 215 on `median-full`, its over-median block included); a negative control plants a wrong median at one height and the report names it. The synthetic harness's `TraceEconomics` can no longer name the three values: `GrownTree` derives them as it grows (the `trace_with` move, one row over). **(c) The parity capture (§3.5, Q9 (iii)):** `e2e_cxx_template_fills_to_its_median` overfills a regtest pool with 50 daemon-accepted spends (13 235 bytes each, I4's shape at one input) and mines one block — the C++ producer's fullest, at its economic bound one body past `M` (§3.5): 305 738 bytes, 23 spends, 27 left in the pool, against `M = 300 000` and a limit of 600 000, held by the daemon's own account (under the limit; the pool not dry; within two spends past the median). Captured as the fifth vector, **`median-full`**: the first captured block over the median (the penalty is live on it — F14b, F18), and the first captured chain with more than one listed body per block — §3.7's shape hole closes on the corpus, and `ReorderedBodies` gains a corpus witness. A block at the *limit* is a Rust-producer-built object and is F14's live-lane test, row 5. The third commit is the overrun: a live-lane capture is a build of the daemon and both E2 tools before the first spend, and the estimate priced the definitions, not the capture | commit 3 |
 | 5 | **LANDED 2026-09-28 (cost 4 against 2 — over; the overrun is a finding and its fix).** **F14, F14b, F16, G12** — the sequence completed through the paid reward; `ConnectFacts.{weight, long_term_weight, long_term_effective_median, coins_generated}` read off the verdict, the ingest's four composed lines deleted (`Provenance::passed_through` re-counted with E3's). Four commits. **(a)** `rules/reward.rs`: `judge_emission(connecting, &Emission, &Weights, miner_tx, coverage) → Verdict<PaidEmission { paid, split, coins_generated }>`; `shekyl_economics::paid_block_reward` the one owner (`BlockTooBig` → F14 at `Locus::Block`, `Overflow` → F14b), `compute_emission_split` at `EMISSION_SPLIT_EPOCH` (F16), `advance_already_generated` (G12); the genesis arm pays what the configured coinbase pays (F11's shape). Boundary fixtures: exactly `2·M` admitted at zero subsidy, one over refused; the penalty at the clamps. **(b)** `ConnectFacts { burned }` alone (`SCHEMA_VERSION 16`, `FACT_FIELDS` one entry, the snapshot regenerated); the ingest's `EmissionComparisons` oracle (E3's shape, rewind-retracting) holds the verdict's accumulator to the trace's `coins_generated` at every connected height — **2 194 / 2 194** on the five chains as captured; a negative control plants a wrong accumulator and the report names the height. `GrownTree` derives weights, medians and coins; `TraceEconomics` shrinks to `{ burned, cumulative_difficulty }`. Two store-test pins to handed facts rewritten to derived values. Found on the way: `shekyl-block-template`'s genesis coinbase pays only the miner leg while the validator records what was paid (F11) — disclosed for wave B's G13. **(c) The live-lane test (§3.5, §3.11):** `e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx` — the Rust producer builds against the C++'s own state (its template header, `get_miner_data`, the pool's bodies, the F20 window from the headers) the heaviest block it will price; the producer refuses one more body (`TemplateError::Emission(BlockTooBig)`, F14 on the producing side); the C++ refuses the same block naming one more hash for its weight and accepts the block at the bound — 596 908 bytes, 45 bodies, penalty live. Written as *the C++ agrees with Shekyl's ratified bound* (`CONSENSUS_C2_R2_WEIGHT_FEES.md` `:214–215`, `:347–366`), `2·M` read from `get_info`, the `blockchain.cpp:6099` relationship in the doc and never the figure. Captured as the sixth vector, **`limit-full`**. **Its first run found §3.11**: the C++ *regtest* decayed F21's share from height 0 (the regtest hard-fork table, `[(1, 0)]` after `add_fork`'s guard ate the second row) while the issued networks and `EMISSION_SPLIT_EPOCH` use 1 — the block at the bound refused for a coinbase one share-unit off; ≈ 125 of the corpus's 2 194 coinbases carried the same offset unseen, because nothing green read the split. **(d)** the C++ table fixed in `cryptonote_core.cpp` and `shekyl_e2_trace_export.cpp` (one row of nettype data, rule 71's remedy; maintainer's disposition over ratifying the divergence), all six vectors re-captured under it, the three oracles re-run — roots, weights and accumulator at **2 408 / 2 408** heights, six tip digests matching. `median-full` and `limit-full` added to `vectors_tests`' enumerated `CAPTURED_SHAPES` — 4 (c) had left the corpus discovered where the file says enumerated. Slice 6 §3.4's *"one nettype-conditional behaviour remains"* refuted as a claim about behaviour (a table, not a branch); CTW-5 bounded to roots; the census asked the fifth sweep ground | commit 4 |
-| 6 | **G2** as a `FormRule` in `form`; E2's `ReorderedBodies` flips from pinned-connects to refusing at `Locus::Tx { slot: Listed(0) }`; `MissingBody` (→ `Locus::Block`) and `SubstitutedBody` (→ `Listed(i)`) join it | commit 2 (a) |
-| 7 | **G1** as a `BlockRule` **before** the slot loop, **G7, G9, G10** after it beside L1 (§4); the order pinned by a test in which a re-listed spend is refused on G1, not I7; G9's admitted pair as a positive fixture; the driver gains `RelistedTransaction` and `DoubledListing` (→ G1, `Locus::Tx { slot: Listed(second) }`), `DuplicateServeCredit`, `DuplicateClaim`, `DuplicateBondPost` (→ `Locus::Input` at the second occurrence), `OverweightBlock` (→ F14, `Locus::Block`) — **written spec-first in `DRS_E2_REPLAY_DRIVER.md` §3.10 at commit 2**, each row's locus derived from the refusal's own evidence (Q8), so the rows carry the distinguishing work before there is code to check them against; **and a driver-built spend chain with two spends in two blocks, so `DoubleSpend` has a witness on a chain named for spends** (§3.7) | commit 3 |
-| 8 | **G3, G4, G5** registry entries, `by_construction` with their falsifiers named; conformance re-check (the register's G rows, `:640–646`, re-read against the crate) | commit 7 |
-| 9 | **Wave B — F17, F18, G11, G13 — ABSORBED (2026-09-27): E3 landed `leaf_count_at` with `BatchView`'s impl (#878), the condition this row named, so the deferral is not taken.** Lands after row 5 as one commit extending `judge_emission` — F17's `frozen_segment_count` from the leaf count at the parent state (F19's single-read discipline), F18's exact-pay over F16's and F17's legs, G11's accrual and burn as definitions, G13 as G11's height-0 arm — and `WrongReward` flips from pinned to refusing at `Locus::Tx { slot: Miner }`. *Records-was:* the row as written — wave B a named successor, falsifier `rg 'fn leaf_count_at\|fn depth_at' rust/shekyl-chain-rules/src/view.rs` → present with `BatchView`'s impl; the falsifier fired the day after it was written | commit 5 |
-| 10 | **Docs:** census 4.G re-pinned at the landing tree, **G6/G6b's *"shipped ×50 … until the port"* clauses corrected** (§3.8); the register's CEN-G6/G6b rows **re-reviewed at the landing tree** (DIVERGENT → CHECKED-CONFORMANT if the read holds; tally derived from `check_conformance_coverage.py`, not by hand); `CHAIN_RULES_CRATE.md` §4.3 (the two reads), §4.6 (`judge_emission`, the verdict's seven values and Q5's test); `DAEMON_REDB_STORE.md` §7.5; index; FOLLOWUPS (the F14-family residue closed; the wave-B row if deferred; the two rows §3.9/§3.10 opened); CHANGELOG — G2 (Q7, one line), and if the tally is 127 / 1 / 5, that CEN-I4 is the register's only recorded divergence | — |
+| 6 | **LANDED 2026-09-29 (cost 1, as estimated).** **G2** as a `FormRule` in `form` (`rules/body.rs`), after the header rows and before the coinbase's — the declared list judged before anything reads a body *as* its declared hash; length at `Locus::Block`, the **first** mismatching index at `Locus::Tx { slot: Listed(i) }`, length before index so the index arm never reads past the shorter list (Q8's first test, both arms). Fixtures: both arms at their loci; the first mismatch and only it (index 0 agreeing, 1 the locus; two disagreeing, still 1); length judged before index; the refusal in `form` before the identity is derived; the agreeing and the empty list recorded. E2's `ReorderedBodies` flips from pinned-connects to refusing at `Listed(0)` and names its place; `MissingBody` (→ `Block`) and `SubstitutedBody` (→ `Listed(0)`, the body's `unlock_time` moved so it parses and hashes differently) join the family — `Mutation::ALL` 14, F18 the family's one pending row. `body_pairing_tests` hold what commit 2 measured as records-was and now assert the refusal at each locus **and an empty output table**: the drain-order hazard (two honest nodes holding different output tables for one block) is closed at `form`, before a write, not narrowed. Coverage `81 → 82`. The living contract's §4.3 corrected in the same commit (the two slice-7 reads, E3's three, `RecordedBlock`'s five fields — two of which two prior docs commits had left off), per review: a living contract scheduled to become true is a design doc. Noted, not changed: `ValidatedBlock::derive` still recomputes each listed body's identity, which G2 has now established equals the declared hash — a redundancy, not a defect; E3's to fold if it wants the hash once | commit 2 (a) |
+| 7 | **LANDED 2026-09-29 (cost 2, as estimated; two commits — (a) the rules, (b) the mutations).** The ordering pin asserts the *row* at both altitudes: `body_tests::cen_g1_refuses_a_relisted_spend_before_i7_can` (its control lists a different body spending the same image and gets I7) and the family's `RelistedTransaction`, whose `ExpectedPlace` is `Listed`. `ArchivalKey` (the crate's own reading of `(P, shard, E)` / `(P, E)` / `P`) is what G7/G9/G10 and the driver's `ArchivalKind` both key on; unparseable archival vins are skipped by the rules, pending CEN-J1's rows. The balanced archival shapes moved from the H21/H22 tests into the harness (`balanced_bond_post`, `balanced_emission`) so the twins pass `tx_form`. The two-spend witness for `DoubleSpend` came from commit 4 (c)'s `median-full` capture (§3.7), so no separate driver-built chain was owed; the family's own fixtures are the driver's. The corpus census now names four more all-chains gaps, none the family's (§3.7). Estimate held. — **G1** as a `BlockRule` **before** the slot loop, **G7, G9, G10** after it beside L1 (§4); the order pinned by a test in which a re-listed spend is refused on G1, not I7; G9's admitted pair as a positive fixture; the driver gains `RelistedTransaction` and `DoubledListing` (→ G1, `Locus::Tx { slot: Listed(second) }`), `DuplicateServeCredit`, `DuplicateClaim`, `DuplicateBondPost` (→ `Locus::Input` at the second occurrence), `OverweightBlock` (→ F14, `Locus::Block`) — **written spec-first in `DRS_E2_REPLAY_DRIVER.md` §3.10 — *owed at commit 2, found absent 2026-09-29 and written then, before this commit's code* (Q8's UPDATE)**, each row's locus derived from the refusal's own evidence (Q8), so the rows carry the distinguishing work before there is code to check them against; **and a driver-built spend chain with two spends in two blocks, so `DoubleSpend` has a witness on a chain named for spends** (§3.7) | commit 3 |
+| 8 | **LANDED 2026-09-29 (cost 1, as estimated).** G3 and G4 on `crate::validate::validate` (the slot loop is the property: every listed body through `tx_form` and `tx_against`, no pool door, no skip), falsified through `validate` by `h4_a_listed_transaction_with_no_inputs_is_refused` and `i7_at_a_listed_slot_the_refusal_names_the_slot`; G5 on `shekyl_wire::Transaction`, falsified by commit 2 (b)'s `g5_the_storage_pruned_spend_…` (§3.3). By-construction 11 → 14; coverage 86 → 89. The register's G4/G7/G9/G10 rows carry a dated Rust re-read: G7's one difference of *site* named — the Rust G7 skips an unparseable vin where the C++ refuses, and the refusal is CEN-J1's, pending, so J1's row carries the gap, not G7's. The census G3/G4/G5 cells carry the F2/F8-shaped addendum; 4.G's line numbers re-pin at commit 10. — **G3, G4, G5** registry entries, `by_construction` with their falsifiers named; conformance re-check (the register's G rows, `:640–646`, re-read against the crate) | commit 7 |
+| 9 | **LANDED 2026-09-29 (cost 3 against 2 — over by one; two commits, (a) the rows, (b) the pass-through deletion they retire).** (a) `judge_emission` extended in place: `price` (F14, F14b, F16, **F17**, **G11**, **G13**, G12 — everything the block determines about the coinbase, without reading it) then **F18** against the miner transaction at `Locus::Tx { slot: Miner }`, both directions. F17's operands read at parent state beside the accumulator (`rules::miner::BurnOperands`): `ChainView::total_burned()` — **a new view read, the store's R9 register, no default body** — and `leaf_count_at(connecting)` through `frozen_segments_at` (public, the producer's read too: the scenario's `frozen_segments` was a literal zero until now); `total_burned > coins_generated` is `Corrupt::BurnExceedsEmission`, the store halting on the register as SI-7. **The oracle:** the verdict's burn joins the accumulator in the replay's emission comparison — **2 408 / 2 408 heights** across the six captured chains match the C++'s `block_burn`, and every one of those 2 408 C++ coinbases connected under the Rust F18. `WrongReward` flips, the family's pinned-gap arm goes with its last member, **`Mutation::ALL` names no pending row**. Commit 5's genesis miner-leg finding closed here: the template pays the priced reward **whole** at height 0 (G13's producer side; `the_genesis_template_pays_the_reward_whole_and_the_next_height_splits_it`), the scenario test that pinned the defect now pins the fix. **The cost that overran:** F18 refuses every fixture coinbase paying zero above genesis, so every chain builder in three crates prices its coinbase through one harness function (`harness::price::priced_at` — landed in `fixture.rs`, moved to its own module by (c) — the template's settle loop) — the store's fixtures judge-then-hash (a block's identity is the priced block's), the ingest's builders take a `reward` from `GrownTree`. Found on the way: the store's SI-3 test had been red since commit 7 (a) (G1 refuses the re-listed body before the belt; the store suite was not run when G1 landed) — rewritten to plant the row under a judged token, the SI-1 shape, and disclosed here. The store's SI-8 fold test re-keyed: F17 now observes a seeded `u64::MAX` register before the fold can wrap. **(b) The pass-through deletion:** `burned` was `ConnectFacts`' last member, so the type went with it — `connect(valid, in_force)` takes the verdict alone; `Fact`/`Origin`/`DeletedBy`, `PassedThroughFacts`, its header cell and `widen_passed_through` are deleted (`Provenance` has two components; `properties.snap` seven cells; **schema 16 → 17**); the ingest's `facts.rs` is deleted, `Connector` is no longer generic over a facts source and `RunFault::NoFacts` has nothing to name; the grader's `Borrowed` arm and `producers()` go with the last borrowed value (`shekyl_e2_grade_v2`); the trace's six facts are read through `Trace::borrow` as oracle inputs only. **What the burn oracle actually saw:** of the 2 408 heights, three carry a non-zero recorded burn — one in `limit-full`, two in `median-full` (the fee-bearing spends the near-full bodies carry; the other four chains burn nothing at every height) — and all three match; the remaining 2 405 are zero against zero. Thin, and stated: the non-zero arm's coverage on captured chains is those three heights plus the crate's own F17 fixtures. **(c) The paid-reward kernel (review of #907, `d6be91a2d`, maintainer):** after (a) the validator's `price` and the template's settle loop each composed `paid_block_reward → compute_emission_split → compute_fee_burn → advance_already_generated` for themselves — two orderings of one computation, held equal by the oracle rather than by construction. The composition moved to `shekyl_economics::price_emission` (`reward.rs`), which owns the order; the validator's derived arm and the template both call it, `configured_emission` is the validator's genesis arm where the coinbase sum stands (F11), and `REPRICING_PASSES` is the one settle budget the template's `MAX_REPRICING_PASSES` aliases. The harness pricer moved to `harness/price.rs` (`priced_at`, `priced`, `repriced`, quoting through `quote_emission`); `candidate_on` leaves a corrupt-view coinbase as built so `validate` reports the planted fault; the archival body builders moved to the ingest's `mutation_bodies.rs`. `PaidEmission` is the economics crate's type, re-exported. The §0 principle — one derivation, two consumers — applied to the composition, not only to the median. *Records-was:* **ABSORBED (2026-09-27): E3 landed `leaf_count_at` with `BatchView`'s impl (#878), the condition this row named, so the deferral is not taken.** Lands after row 5 as one commit extending `judge_emission` — F17's `frozen_segment_count` from the leaf count at the parent state (F19's single-read discipline), F18's exact-pay over F16's and F17's legs, G11's accrual and burn as definitions, G13 as G11's height-0 arm — and `WrongReward` flips from pinned to refusing at `Locus::Tx { slot: Miner }`. *Records-was:* the row as written — wave B a named successor, falsifier `rg 'fn leaf_count_at\|fn depth_at' rust/shekyl-chain-rules/src/view.rs` → present with `BatchView`'s impl; the falsifier fired the day after it was written | commit 5 |
+| 10 | **LANDED 2026-09-29 (cost 1, as estimated).** Census 4.G: every landed row carries a `Rust (E6 slice 7 row n, date)` clause naming its site, its locus and its falsifier (G6/G6b's ×50 clauses were corrected on #889, §3.8); the register's CEN-G6/G6b rows were re-reviewed on #889 (tally 128 / 154 ratified, derived by the gate); `CHAIN_RULES_CRATE.md` §4.3 (`total_burned`), §4.4 (`ValidatedBlock`'s ten fields — the increment-1 sketch had stood at four), §4.6 (`price` / `judge_emission`, the four `Corrupt` arms, G2 in `form`); `DAEMON_REDB_STORE.md` DRS-E6 row (slice 7 landed; `implemented 75 → 93`); index rows for this file and `DRS_E2_REPLAY_DRIVER.md` (the family is twenty, no pending row); FOLLOWUPS — the CEN-F17 row was deleted with commit 9 (a), the §3.9/§3.10 rows were opened with commits 2 and 6, no wave-B deferral row exists because wave B landed; CHANGELOG — the Unreleased entry covers commits 3–9 (G2 its one line; schema 17; grade v2). *Records-was, the row as planned:* **Docs:** census 4.G re-pinned at the landing tree, **G6/G6b's *"shipped ×50 … until the port"* clauses corrected** (§3.8); the register's CEN-G6/G6b rows **re-reviewed at the landing tree** (DIVERGENT → CHECKED-CONFORMANT if the read holds; tally derived from `check_conformance_coverage.py`, not by hand); `CHAIN_RULES_CRATE.md` §4.3 (the two reads), §4.6 (`judge_emission`, the verdict's seven values and Q5's test); `DAEMON_REDB_STORE.md` §7.5; index; FOLLOWUPS (the F14-family residue closed; the wave-B row if deferred; the two rows §3.9/§3.10 opened); CHANGELOG — G2 (Q7, one line), and if the tally is 127 / 1 / 5, that CEN-I4 is the register's only recorded divergence | — |
 
 Ten commits is the rule-06 ceiling; commit 9 is the one that may leave.
 
@@ -782,11 +819,11 @@ bench exists to catch). Its cell below says so.
 | 3 | `ChainView::{weights_window, has_transaction}` — trait, `BatchView`, `MockChain`, the store's conformance test, one commit both sides. **Landed at 1 (2026-09-27)**, carrying two repairs E3's landing owed #880's tests (§1.2) | 1 | yes |
 | 4 | G6 / G6b in `judge_emission`; the two windows generated; boundary and low-height fixtures. **Landed at 3 (2026-09-28)** — the third is the parity capture (§5 row 4 (c)), which the estimate did not price | 2 | yes |
 | 5 | F14, F14b, F16, G12 through the paid reward; four `ConnectFacts` fields read off the verdict; four composed lines deleted. **Landed at 4 (2026-09-28)** — the third is the live-lane test the row always carried (a Rust block at the bound, judged by the C++), the fourth is what its first run found: the C++ regtest's F21 epoch (§3.11), fixed in one row of nettype data and six re-captures. The estimate priced the rules and the store fields; it did not price a live-lane test as its own commit (the same miss as row 4's third), nor could it have priced the finding | 2 | yes |
-| 6 | G2 as a `FormRule`; `ReorderedBodies` flips; `MissingBody`, `SubstitutedBody` | 1 | yes |
-| 7 | G1 before the loop, G7/G9/G10 after; the order pinned; seven mutations | 2 | yes |
-| 8 | G3/G4/G5 by construction; conformance re-check | 1 | yes |
-| 9 | wave B — **absorbed**, E3 landed (`leaf_count_at`) on 2026-09-27; F17, F18, G11, G13 as one commit after row 5 | 2 | yes |
-| 10 | docs: census 4.G re-pin and the G6/G6b correction; the register's two rows re-reviewed; crate contract; index; FOLLOWUPS; CHANGELOG | 1 | yes |
+| 6 | G2 as a `FormRule`; `ReorderedBodies` flips; `MissingBody`, `SubstitutedBody`. **Landed at 1 (2026-09-29)** — the §3.10 rows written first (their own docs commit, owed since commit 2) | 1 | yes |
+| 7 | G1 before the loop, G7/G9/G10 after; the order pinned; six mutations (the seventh, `OverweightBlock`, keyed to commit 5's F14 and built here). **Landed at 2 (2026-09-29)** | 2 | yes |
+| 8 | G3/G4/G5 by construction; conformance re-check. **Landed at 1 (2026-09-29)** | 1 | yes |
+| 9 | wave B — **absorbed**, E3 landed (`leaf_count_at`) on 2026-09-27; F17, F18, G11, G13 as one commit after row 5. **Landed at 3 (2026-09-29)** — the third is the fixture cost F18 carries: every chain builder in three crates prices its coinbase, which the estimate did not price | 2 | yes |
+| 10 | docs: census 4.G re-pin and the G6/G6b correction; the register's two rows re-reviewed; crate contract; index; FOLLOWUPS; CHANGELOG. **Landed at 1 (2026-09-29)** | 1 | yes |
 
 **Expectation: fifteen commits, fourteen if wave B defers.** Registry
 `implemented 75 → 86` after wave A (`→ 90` with B), `by-construction 11 →
@@ -794,6 +831,30 @@ bench exists to catch). Its cell below says so.
 flipped from pinned to refusing. **The signal:** more than **eighteen**
 commits *excluding wave B* means the substrate was not as finished as this
 table claims — the answerable form, as slice 6 wrote it.
+
+**Outcome (2026-09-29): estimate missed, signal held — two facts, not
+one.** The rows' *Landed at* cells sum to 18 (1 + 1 + 1 + 3 + 4 + 1 + 2 +
+1 + 3 + 1) against fifteen expected — twenty percent over the number that
+was written down. The signal (more than eighteen excluding wave B) was set
+twenty percent above that number and did not fire: fifteen excluding wave
+B's three. So the silence says the *ceiling* held, not the estimate; slice
+6's estimate genuinely held (eight against nine-or-ten) and this one did
+not, and the next table calibrates on the written estimate, not on what
+was allowed. The three over are each named in their rows: row 4's parity
+capture, row 5's live-lane test and the F21 finding it surfaced, row 9's
+fixture cost (every chain builder pricing its coinbase) — two of the three
+are the first attempt at something the driver had never done, the cost
+slice 6 §5.3.3 named and this table priced once (row 2) rather than per
+row. Registry landed at `implemented 93` against the table's 90 —
+the same fifteen rows (`81 → 93` from #889's tree: F17, F18, G1, G2, G7,
+G9, G10, G11, G13 as rules, G3/G4/G5 by construction); the table's figure
+left the three by-construction rows out of `implemented`, which the gate's
+figure includes (`by-construction 14` held). E2's family at **20** (the table said 19;
+`OverweightBlock` was keyed to commit 5's F14 and built in commit 7).
+Slice 6's prediction held: **one** fixture commit (row 9's third — every
+chain builder pricing its coinbase, the cost F18 carries), against the
+≤ 2 predicted; Q2 took (b), so `RecordedBlock`'s ten construction sites
+did not move for this slice's rules.
 
 **Slice 6's prediction, held here as the thing this slice can falsify:**
 *the fixture class should be smaller* (slice 6 §5.1 — seven fixture
@@ -1098,7 +1159,10 @@ not).
   one and not the others; `Locus::Input` carries G7/G9/G10 beside L1, I7
   and I18, each keyed to a different input variant, so one body cannot
   trip two. The seven mutation rows (§5 row 7) are written spec-first at
-  commit 2 from these loci.
+  commit 2 from these loci. **UPDATE 2026-09-29: they were not** — commit 2
+  landed without them and nothing checked the claim; written on 2026-09-29,
+  still before commits 6–7's code, from these loci (`DRS_E2_REPLAY_DRIVER.md`
+  §3.10, the dated amendment beneath its table).
 - **Q9 — the divergence going live. RE-RULED 2026-09-26: G6 lands at
   parity; the divergence is in the record, not the code.** *Records-was,
   the question as asked:* with G6 the Rust validator would refuse a block
@@ -1109,9 +1173,10 @@ not).
   cites and never read `blockchain.cpp`; §3.8 has the read. **Ruled:** (i)
   no rule change — both languages compute `S = 4` from one key since
   `1c8594049`; (ii) the census G6/G6b cells and the register's two
-  DIVERGENT rows are corrected in commit 10, re-reviewed at the landing
-  tree, and if the gate derives 127 / 1 / 5 the CHANGELOG says plainly
-  that CEN-I4 is the register's only recorded divergence; (iii) the
+  DIVERGENT rows are corrected — *done with commit 5 rather than 10*,
+  §3.8 (iii): re-reviewed at `dev` `9bc062036`, the gate derives
+  127 / 1 / 5, and the CHANGELOG says CEN-I4 is the register's only
+  recorded divergence; (iii) the
   live-lane test is a **parity capture in I17's KAT shape** (§3.5) — the
   fullest block the C++ producer builds, accepted by the Rust validator on
   G6 while both implementations exist (**amended 2026-09-28, commit 4 (c):**

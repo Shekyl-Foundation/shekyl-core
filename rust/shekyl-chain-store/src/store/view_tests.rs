@@ -15,12 +15,14 @@ use shekyl_chain_rules::{validate, AtHeight, Candidate, ChainView, Fault, RuleSe
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
-use super::connect_fixtures::formed;
+use super::connect_fixtures::{formed, priced};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE_ROW};
 use super::*;
-use crate::codec::{forged, BlockBody, BlockInfo, Canonical, CodecError, Present, Raw};
+use crate::codec::{forged, BlockBody, BlockInfo, Canonical, CodecError, LeafCount, Present, Raw};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{BLOCKS, BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG};
+use crate::schema::{
+    BLOCKS, BLOCK_INFO, CURVE_TREE_LEAF_COUNTS, CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG,
+};
 
 /// The store's fault is the only outer arm these tests expect; the
 /// validation crate's own arms are fixture bugs here, named as such.
@@ -76,6 +78,7 @@ fn record_block(batch: &WriteBatch<'_, '_>, height: u64, blk: &Block) -> Result<
         long_term_weight: shekyl_types::LongTermWeight::ZERO,
         cumulative_tx_count: 0,
         long_term_effective_median: shekyl_types::LongTermWeight::ZERO,
+        cumulative_archival_len: shekyl_types::ArchivalLength::ZERO,
     };
     batch
         .open_insert_table(BLOCK_INFO, PROBE_ROW)?
@@ -93,6 +96,15 @@ fn record_root(batch: &WriteBatch<'_, '_>, key: u64, byte: u8) -> Result<(), Sto
             key,
             CurveTreeRoot::from_bytes([byte; 32]).encoded().as_encoded(),
         )
+}
+
+/// Write the leaf-count row `leaf_count_at` reads at `key` — the empty
+/// tree's — as a connect will (CEN-F17 reads it at the connecting height
+/// since E6 slice 7 wave B, so a hand-recorded chain carries it too).
+fn record_leaf_count(batch: &WriteBatch<'_, '_>, key: u64) -> Result<(), StoreError> {
+    batch
+        .open_insert_table(CURVE_TREE_LEAF_COUNTS, PROBE_ROW)?
+        .insert(key, LeafCount::from_raw(0).encoded().as_encoded())
 }
 
 #[test]
@@ -311,6 +323,7 @@ fn a_block_blob_that_does_not_hash_to_block_info_is_si7() {
             long_term_weight: shekyl_types::LongTermWeight::ZERO,
             cumulative_tx_count: 0,
             long_term_effective_median: shekyl_types::LongTermWeight::ZERO,
+            cumulative_archival_len: shekyl_types::ArchivalLength::ZERO,
         };
         batch
             .open_insert_table(BLOCK_INFO, PROBE_ROW)?
@@ -364,6 +377,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
     let out: Result<(), TestErr> = store.write(|batch| {
         record_block(batch, 0, &genesis)?;
         record_root(batch, 1, 0xaa)?;
+        record_leaf_count(batch, 1)?;
         let view = batch.chain_view();
         // A verdict minted against this batch's view, over a view that
         // already contains block 0. Since E6 slice 1 the rules READ the view:
@@ -371,11 +385,14 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         // root to be `root_at(1)` — the row recorded above — so block 1
         // passes only if the projection shows it block 0 and the root block
         // 0 left. The title's claim is now the verdict, not just the type.
+        // Since wave B the coinbase must also pay what the block owes
+        // (CEN-F18), priced against the same view.
         let mut b1 = block(1, 1_060);
         b1.header.previous = genesis.hash();
         b1.header.curve_tree_root = CurveTreeRoot::from_bytes([0xaa; 32]);
+        let b1 = priced(&view, Candidate::new(b1, Vec::new()))?;
         let valid = validate(
-            formed(&view, Candidate::new(b1, Vec::new()))?,
+            formed(&view, b1)?,
             &view,
             &RuleSet::GENESIS,
             &Trust::UNANCHORED,
@@ -417,7 +434,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
 /// commit even when the closure swallows the fault. Planted on the surface
 /// where a corrupt row is still **representable**: a `blocks` blob that does
 /// not parse. It used to be planted as a 3-byte `block_info` row; under
-/// §11.1(f) `block_info` is `Coded<BlockInfo>`, fixed-width 104, and the
+/// §11.1(f) `block_info` is `Coded<BlockInfo>`, fixed-width 112, and the
 /// crate refuses a wrong width before redb would assert it — a wrong-width
 /// `block_info` row cannot reach
 /// the file (`a_wrong_width_row_is_refused_before_it_can_reach_a_coded_table` below), so its
@@ -494,6 +511,7 @@ fn a_block_info_row_with_no_blocks_row_is_si7() {
             long_term_weight: shekyl_types::LongTermWeight::ZERO,
             cumulative_tx_count: 0,
             long_term_effective_median: shekyl_types::LongTermWeight::ZERO,
+            cumulative_archival_len: shekyl_types::ArchivalLength::ZERO,
         };
         batch
             .open_insert_table(BLOCK_INFO, PROBE_ROW)?
@@ -649,7 +667,7 @@ fn the_read_transaction_body_classifies_holes_and_bad_blobs_as_si7() {
 /// case) — has **no representable instance**: the bytes never reach the
 /// file. The tightening it motivated stands (`chain_reads` module docs, *The
 /// tip is one decoded read*); what changed is that `BlockInfo`, whose codec
-/// checks only width (now 104 bytes), can no longer be undecodable in a file
+/// checks only width (now 112 bytes), can no longer be undecodable in a file
 /// redb accepted.
 ///
 /// This test pins what replaced the scenario: the wrong-width write is

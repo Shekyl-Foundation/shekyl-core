@@ -40,6 +40,67 @@
   normal state. An explicit `--in-peers` is enforced at accept, and a
   cap above the descriptor ceiling is refused at startup.
 
+### Crypto — vendored FCMP++ subtree resynced to `2485a176`
+
+- Helios/Selene `from_bytes` still accepts the canonical identity (`x == 0`
+  with the sign bit clear) and rejects the sign-set encoding of that point.
+  `to_bytes` clears that sign for every `x == 0` representative, including one
+  whose `z` still inverts, and stays constant-time (upstream `b4dd1c99`, Least
+  Authority). Generalized Bulletproofs isolates each Pedersen commitment by the
+  combined weight of its row, so `V(i) + V(i)` and `2·V(i)` are the same
+  constraint, and still rejects a full-rank system with no isolating row
+  (upstream `31c26d96`, corrected on the fork). Helios/Selene zeroizes
+  sampling, wide reduction, and invert intermediates (upstream `77788c36`).
+  Pin: `chore/crypto-resync-from-tip` @ `3378433c` (the merge of fork PR #6;
+  same crypto tree as its tip `2485a176`). The `fcmps` crate is Shekyl's
+  PL-D3 fork and is not mirrored from the pin
+  (`SHEKYL_OXIDE_VENDORING.md` §"What the pin covers"); upstream shipped no
+  `fcmps` logic change, so it is unchanged. Q6 re-vetted: an honest on-curve
+  proof's content, length, and framing are unchanged
+  (`GENESIS_TX_WIRE_FORMAT.md` Q6).
+
+### Chain store — shards are cut by archival length (`SHT-Q2`, Rust half)
+
+- Shards are cut by **archival length**, not transaction count: shard `k`
+  holds the transactions whose cumulative archival length before them lies
+  in `[k·W, (k+1)·W)` (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.6, RULED
+  2026-09-29). A transaction's archival length is `|prunable| +
+  |pqc_auths|` — the two segments a prune discards
+  (`TxSegments::archival_len`, `Transaction::archival_len`). `W =
+  3,000,000` bytes, PROVISIONAL: `archival_shard_length_bytes` in
+  `consensus_constants.json`, generated into `shekyl_types::SHARD_LENGTH`;
+  `archival_shard_tx_count` / `SHARD_TX_COUNT` are deleted, and the
+  consensus-constants digest re-pinned. `shard_of`, `shard_start` and
+  `shard_floor` are the one definition of the boundary; the static relation
+  `max_tx_weight() < W` is const-asserted beside CEN-H3.
+- Contract: the chain store gains `txs_archival_len` (Rust-only, ordinal
+  43; present ⇔ length `> 0` ⇔ the transaction carries archival good, so
+  the coinbase writes none; never pruned) and `block_info` widens 104 →
+  112 bytes with `cumulative_archival_len`. `SCHEMA_VERSION` 17 → 18,
+  snapshots regenerated; pre-genesis, rebuild-never-migrate. SI-24
+  (`ArchivalLengthsDisagree`; SI-19…23 are the E4 plan's) is minted: a
+  block's length rows sum from its parent's cell to its own. SI-13 covers
+  the new fold.
+- The retention prune names `D(E)` as `⌊C(lo)/W⌋ .. ⌊C(hi)/W⌋` and finds a
+  shard's first storage id by a descent that walks each block's length
+  rows — permanent skeleton data, so a pruned node and an archival node
+  place every boundary alike. The descent checks every block it passes
+  against its parent, SI-13 and SI-24, before anything is discarded: a
+  discard cannot be undone, a binary search accepts a run of cells shifted
+  together, and monotonicity alone accepts a shift that persists from one
+  block upward. `h_scarce` uses the same descent. Tested at an exact multiple of `W`, with the largest
+  transaction CEN-H3 admits straddling a boundary, with two shards in one
+  batch, across a reorg that pops back over a boundary, against a model
+  computed from the lengths the fixture asked for, and against a shifted
+  run of cells.
+- The C++ LMDB archival path is frozen (row 3 = (b)): LMDB keeps its
+  segment partition, and CEN-L10 is re-graded DIVERGENT in the CSR-3a
+  register as the ruled, intended difference. The staking sim holds the
+  retired `T = 200` locally so its registered runs reproduce.
+- Not yet in this change: the txid mixer's length term and the C++
+  `calculate_transaction_hash` FFI call, which wait on how pruned forms
+  supply the length.
+
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 
 - `shekyl_engine_core::TxRecipient` carries `rid: Option<PaymentRequestId>`,
@@ -98,6 +159,100 @@
   drifts; this is its single home, so the GUI's `get_balance` can adopt the
   contract's shape by consuming it (its own increment, in its own repo).
 
+### `CT-6` increment 4 — the dense snapshot ring
+
+- **`shekyl_curve_tree::frontier::Frontier`** is the wallet's incremental
+  curve-tree accumulator: the leaf scalars not yet hashed into a layer-0
+  node, and at each layer the nodes not yet hashed into their parent, with
+  an intrinsic leaf count. Every fold calls the canonical composition
+  primitives (`hash_grow_selene`, `try_promote_to_layer`,
+  `try_build_upper_layers`), so the stateful and batch halves cannot drift
+  into two transcriptions of one rule; agreement with `build_layers` is
+  graded at every count through two leaf-chunk folds and the first cascade.
+- **A per-height snapshot ring, total over `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`.**
+  `LeafStore` gains a `frontier_snapshots` table. `append_block_with_snapshot`
+  writes the height it ingests and removes everything below
+  `height − SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` in the *same statement*, so
+  the ring's bound is the write rather than an eviction policy.
+  `append_block_deltas` is that leaf and pending write with no ring row, so
+  the totality of the ring is not a caller's choice to pass nothing. The run is
+  closed at the bottom because a reorg of that depth has its **fork** at
+  `tip − horizon`, and a rewind restores from the row at the fork. `CurveTreeClient::root_and_depth_at` answers
+  in-horizon heights from it and falls through to `root_at_count` elsewhere;
+  the frozen segment tier is unchanged. **Why:** `root_at_count` inside the
+  unfrozen zone recomputes every complete-but-unfrozen segment on every
+  call — measured at 53.667 s nominal and 393.944 s worst case per call on
+  the pinned Pi 4 (`WSS_Q1B_BENCH_SPEC.md` §7.3.3). The ring replaces that
+  with an `O(depth)` close.
+- **Reorg.** The store's shared truncation core deletes every ring row above
+  the new tip inside the caller's transaction, and the live frontier is
+  restored from the fork height's snapshot — so an in-horizon rewind is that
+  snapshot plus the replay forward, not a fold over the whole drained prefix.
+  A snapshot whose own leaf count is not the store's is **refused**, never
+  repaired: the ring and the leaf tables are written together, so a
+  disagreement is corruption and the answer to corruption is resync.
+- **Store `SCHEMA_VERSION` 5 → 6 — existing stores are refused and must be
+  re-synced.** `check_schema_version` runs before `init_tables`, so a ≤5 store
+  never reaches the code that creates `frontier_snapshots`; there is no one-way
+  upgrade, which is C8's `refuse-and-resync` and rule 15's no-migration-code.
+  The ring being a cache buys the *absence of migration code*, not
+  compatibility: after a re-sync the table starts empty, every height falls
+  through to `root_at_count`, and the ring refills as blocks arrive. The bump
+  exists to stop a pre-ring **writer**, which cannot see `frontier_snapshots`
+  and so rolls back
+  and replays while leaving rows above the new tip in place; a stale row can
+  carry the leaf count the C3 check expects over the abandoned branch's root.
+  Nothing in-band stops a writer that cannot see the table, so the version cell
+  is the mechanism — and refusing the store is what C8 already prescribes:
+  *recovery is refuse-and-resync, never a migration*.
+- **The frontier's encoded body is the shape its leaf count implies.**
+  Eight bytes of `leaf_count`, then exactly the scalars and nodes
+  `Frontier::expected_shape` determines. A scalar count, a layer count, and a
+  width byte per partial layer restated that function, so they are not stored:
+  schema 6 has not shipped, and a second copy of the shape is not a check.
+  A count whose implied length is not the body is `FrontierError::Malformed`.
+  Content that decodes is graded by the Q2 examiner, which is what catches a
+  flipped node the framing could not. A production-depth frontier encodes to
+  **8 840 B** (the same shape with the redundant framing was 8 848 B); the
+  dense ring of 721 rows is **6.37 MB**.
+- **A frontier snapshot strictly below `sync_tip` is refused**
+  (`StoreError::SnapshotBelowSyncTip`), and only `append_block_with_snapshot`
+  can offer one. The meta cell is born at 0 and block 0 is a real first
+  capture, so equality at the tip stays legal — `<=` would refuse genesis.
+  `append_block_deltas` tolerates a non-monotonic tip for the freeze clock and
+  writes no ring row. Production ingest only moves forward, and
+  `rollback_to_fork` lowers the tip and truncates the ring in one transaction,
+  so a stale-tip snapshot is a caller bug rather than a state to accommodate.
+  Evicting around it would have made the bug work silently.
+- **`shekyl-wss-q1b-bench` record `schema_version` 2 → 3.**
+  `per_block_advance_worst_case_s` was `replay_median / REPLAY_WINDOW_BLOCKS` —
+  a share of the spend replay, which is a pre-build *model* of an advance
+  that did not exist. It is now the median of a measured series over the
+  built advance (fold, capture, ring commit), with the retired quotient
+  emitted beside it as `per_block_advance_retired_quotient_s`. The field
+  changed derivation under an unchanged name, which is what the version
+  exists to make visible. The rig now **prefills past the retention
+  horizon untimed** before the series starts: eviction cannot fire until block
+  721, so a run from an empty ring grades a regime the steady state never
+  occupies. Off-rig on a board the run's own
+  controls attest quiet (max 1.6 % dense-vs-sparse against a 10 % bound), the
+  built advance is **102.75 ms/block**, converged, against the same run's model
+  at **102.03 ms/block**. This supersedes a 124.72 / 180.63 record whose ring
+  was never full *and* whose board was loaded. **The ratio between the two
+  terms is retired as a travelling quantity:** it read 0.69× / 0.95× / 1.01×
+  across three runs and moved 6.3 % between two *quiet* ones, because the
+  model term is memory-bandwidth-bound and drifts where the `fsync`-bound
+  advance does not. What reproduces is the advance itself — 2.5 % across three
+  runs. The pinned-rig grade is increment 6's.
+- **The harness refuses to grade a board its own controls say was busy.**
+  `LoadControl` reads the dense/sparse controls a second time — they do
+  identical work, so their divergence is the machine — and carries the verdict
+  *in the record*, so a contaminated run cannot later be read as a clean one. A
+  graded run whose board is not quiet is refused. Zero controls is not quiet:
+  an unmeasured board is not a still one. The retired quotient's denominator is now the
+  blocks the corpus covers rather than the constant, which under
+  `--window-leaves` had divided a shrunken replay by the full window.
+
 ### `CT-6 Q1` ruled by derivation — and the derivation deletes the geometry
 
 - **`s = ⌊2.000 / 0.53759⌋ = 3 blocks.`** Budget from a ruled product judgment
@@ -115,9 +270,12 @@
   one that could have sampled a cool board — came in *fastest*, which a
   cool-board bias cannot produce.
 - **RULED: one dense ring over the reorg horizon.** At `s = 3` a sparse tier
-  holds 240 snapshots against a dense ring's 720 — **4.64 MB** bought for a
-  spacing constant, an eviction policy, a dense/sparse boundary and the reader
-  logic across it, on an 8 GB rig. The tier geometry is **deleted**; `s` ceases
+  holds 241 snapshots against a dense ring's 721. The delta the ruling was
+  taken against was **4.25 MB** (8 848 B snapshots). Dropping the redundant
+  framing moved the same arithmetic to **4.24 MB** (8 840 B). Either figure
+  was bought for a spacing constant, an eviction policy, a dense/sparse
+  boundary and the reader logic across it, on an 8 GB rig. The tier geometry
+  is **deleted**; `s` ceases
   to exist as a quantity the round carries. A rule-21 reopening of `Q1`'s own
   Round-1 shape on its derivation's substrate — the measurement did not fill the
   constant in, it removed the structure the constant was for.
@@ -272,18 +430,61 @@
   hidden startup flag. Unbounded disk, no reward. The password is not
   kept after that call.
 
-### Consensus validator — census 4.G's medians and the paid reward (DRS-E6 slice 7, commits 3–5)
+### Consensus validator — census 4.G, the whole coinbase (DRS-E6 slice 7, commits 3–10; #889, #907)
 
-- **The Rust validator derives the block-weight medians and the paid
-  reward.** CEN-G6/G6b (`Medians::derive`, `Weights::derive` over the two
-  windows, now one key each in `consensus_constants.json`) and
-  CEN-F14/F14b/F16/G12 (`judge_emission`: a block over twice the effective
-  median is refused; the penalised reward, its miner/staker split and the
-  supply accumulator are the verdict's). `ConnectFacts` carries only
-  `burned`; the store schema is 16. Held to six daemon-built chains at every
-  height on roots, weights and accumulator (2 408 / 2 408), and to the C++
-  daemon live: a Rust-built block at the consensus bound is accepted, one
-  body over refused (`CHAIN_RULES_SLICE_7.md` §3.5, §3.11).
+- **One paid-reward composition for producer and validator.**
+  `shekyl_economics::price_emission` owns the order
+  `paid_block_reward → compute_emission_split → compute_fee_burn →
+  advance_already_generated`; the validator's derived arm and the block
+  template both call it, so a template and the validator judging its block
+  cannot price two figures. `configured_emission` is the validator's
+  genesis arm (the coinbase sum stands, CEN-F11); `REPRICING_PASSES` is
+  the one settle budget. Before this the two composed the four steps
+  separately and were held equal by the replay oracle rather than by
+  construction.
+- **The Rust validator derives the block-weight medians and everything the
+  block determines about its coinbase.** CEN-G6/G6b (`Medians::derive`,
+  `Weights::derive` over the two windows, now one key each in
+  `consensus_constants.json`); CEN-F14/F14b/F16/G12 (a block over twice the
+  effective median is refused; the penalised reward, its miner/staker split
+  and the supply accumulator are the verdict's); CEN-F17/G11/G13 (the fee
+  split and its burn from the parent's burned fold and frozen-segment
+  count; the staker accrual; genesis pays the miner whole); and CEN-F18
+  (the miner transaction pays exactly what it is owed, refused at the miner
+  slot in both directions). **Nothing reaches `connect` that the validator
+  did not derive — and the scaffold that tracked which values it did not
+  derive retired because its purpose completed.** `ConnectFacts`,
+  `Fact<T>`, `Origin::{Derived, PassedThrough}`, `DeletedBy` and the
+  file's `passed_through_facts` provenance cell were built (S-CHAIN-W,
+  2026-09-16) to record, per value, whether the store received it from
+  the C++ trace or computed it, so that no file fed by a partly ported
+  validator could pass as parity evidence. Every member `ConnectFacts`
+  carried at S-CHAIN-W — seven at that point, six by #785 after
+  `cumulative_difficulty` left — has since flipped to derived:
+  `cumulative_difficulty` (slice 2), `root_after` (E3), the weights, the
+  median and the accumulator (slice 7 commits 4–5), `burned` (this
+  entry). A mechanism with no subject
+  deletes rather than staying as a permanently-empty cell that can no
+  longer fail. `connect` takes the verdict alone; `Provenance` has two
+  components (stubbed applies, coverage gaps), and the NOT-PARITY-EVIDENCE
+  limit stands on coverage gaps only. **Store schema 17 — rebuild the
+  datadir.** Held to six daemon-built chains at every height on roots,
+  weights, accumulator and burn (2 408 / 2 408 — a root-and-weight claim
+  with a **3 / 3** burn claim inside it: three heights carry a non-zero
+  recorded burn, all matched; the burn population is a FOLLOWUPS row),
+  every C++ coinbase
+  accepted under the Rust F18, and to the C++ daemon live: a Rust-built
+  block at the consensus bound is accepted, one body over refused
+  (`CHAIN_RULES_SLICE_7.md` §3.5, §3.11). The replay's graded artifact is
+  `shekyl_e2_grade_v2`: the `Borrowed` component arm is gone with the last
+  borrowed fact.
+- **The listed body is judged before it is read as its hash.** CEN-G2 in
+  `form` (a declared list whose length or hashes disagree with the bodies
+  is refused at the block, the first mismatching slot named); CEN-G1
+  (a transaction already on the chain is refused at its slot **before** the
+  slot loop, so the row is G1 and not the double-spend's I7); CEN-G7/G9/G10
+  (the archival body pairings) beside L1; CEN-G3/G4/G5 pinned on the slot
+  loop and the wire type.
 - **The conformance register's CEN-G6/G6b rows are CHECKED-CONFORMANT.**
   Both were graded DIVERGENT on 2026-09-11 for the shipped ×50 surge factor;
   the factor became the ratified 4 on 2026-09-12 and the rows were not
@@ -542,9 +743,10 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
 - **Rule 47 before any timing:** zero frozen segments at the start, a leaf count
   equal to the derived rate, and at least one complete segment — a population
   that froze by accident makes every number cheap and green. Ingest goes
-  through `append_block_deltas`, the production path, because `append_drained`
-  is a `#[cfg(test)]` wrapper and a baseline taken through a test-only door
-  would not describe refresh.
+  through `append_block_deltas`: the timed call is `root_at_count`, which does
+  not read the snapshot ring, so the builder writes no ring row.
+  `append_drained` is a `#[cfg(test)]` wrapper, and production ingest is
+  `append_block_with_snapshot`.
 
 ### `CT-6` Round 1 disposed — the proving-state round's questions get terminal statuses, per row
 
@@ -576,10 +778,11 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   `s` is not a stated judgment: it is the largest spacing whose worst-case
   rewind fits the budget already ruled at `WSS` §6.3.4 row 2, and two of its
   three terms fall out of the bench's per-iteration series. `Q4`'s threshold is
-  pre-registered but its field measures a **quotient of the spend replay**
-  (`spend_edge.rs:386`), a legitimate pre-build estimate and an illegitimate
-  grade afterwards — so the pre-registration carries its own condition that
-  increment 4 re-derives the field from the built advance first. **A banner
+  pre-registered. Its field was a **quotient of the spend replay**
+  (`replay_median / REPLAY_WINDOW_BLOCKS`), a legitimate pre-build estimate
+  and an illegitimate grade afterwards. Increment 4 discharges that condition:
+  `per_block_advance_worst_case_s` is now the median `AdvanceRig` measures,
+  and the grade on the pinned rig remains increment 6's. **A banner
   reading "ruled" over either row would put the map ahead of the territory.**
 - **Index:** the `CT-1…CT-5` family row is **amended** to `CT-1…CT-6` (rule 94
   §1) rather than added beside — `check_index_prefix_uniqueness` holds one row

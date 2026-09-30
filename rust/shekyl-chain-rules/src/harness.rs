@@ -30,7 +30,8 @@ use shekyl_wire::tx_extra::{
     self, conforming_pqc_leaf_blob, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES,
 };
 use shekyl_wire::{
-    Block, BlockHeader, BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix,
+    Block, BlockHeader, BondPost, BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable,
+    Transaction, TxPrefix,
 };
 
 use crate::block::{Candidate, StructurallyValid};
@@ -106,6 +107,11 @@ pub struct MockChain {
     /// the view, G13), so a fixture that lists a recorded transaction
     /// records its hash here, as the store's `tx_indices` would hold it.
     transactions: BTreeSet<TxHash>,
+    /// The chain's destroyed fold — CEN-F17's `total_burned` read. Zero
+    /// unless a fixture names one ([`with_total_burned`](Self::with_total_burned));
+    /// the mock's recorded blocks burn nothing, so a value here is a
+    /// planted fold, the way a planted key image is a planted spend.
+    total_burned: AtomicUnits,
 }
 
 impl Default for MockChain {
@@ -116,11 +122,21 @@ impl Default for MockChain {
             weights: Vec::new(),
             key_images: BTreeSet::new(),
             transactions: BTreeSet::new(),
+            total_burned: AtomicUnits::ZERO,
         }
     }
 }
 
 impl MockChain {
+    /// Plant the chain's `total_burned` fold — what CEN-F17's supply
+    /// operand reads beside the parent's accumulator. A fold above the
+    /// accumulator is the corrupt view F17 halts on.
+    #[must_use]
+    pub const fn with_total_burned(mut self, total_burned: AtomicUnits) -> Self {
+        self.total_burned = total_burned;
+        self
+    }
+
     /// Append a block at `tip + 1` and the tree state **after** it — what
     /// `root_at(tip + 2)` will return, and what the header of the block
     /// after it must carry (CEN-B5). The block's weights are the
@@ -211,6 +227,10 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
 
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
         Ok(self.chain.key_images.contains(key_image))
+    }
+
+    fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
+        Ok(self.chain.total_burned)
     }
 
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
@@ -305,6 +325,10 @@ impl<'id> ChainView<'id> for FaultingView<'id> {
         Err(Faulted)
     }
 
+    fn total_burned(&self) -> Result<AtomicUnits, Faulted> {
+        Err(Faulted)
+    }
+
     fn tree_frontier(&self) -> Result<TreeFrontier, Faulted> {
         Err(Faulted)
     }
@@ -391,6 +415,10 @@ impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
 
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
         self.inner.has_key_image(key_image)
+    }
+
+    fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
+        self.inner.total_burned()
     }
 
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
@@ -641,6 +669,7 @@ pub fn boundary_pair<T: Debug, V>(
 }
 
 pub mod fixture;
+mod price;
 
 #[cfg(test)]
 #[path = "harness_probe_tests.rs"]

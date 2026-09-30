@@ -53,9 +53,7 @@ use shekyl_units::AtomicUnits;
 
 use crate::family_set::FamilySet;
 
-use super::{
-    BlobKind, Canonical, CoverageGaps, PassedThroughFacts, SchemaVersion, SettlementEpochBlocks,
-};
+use super::{BlobKind, Canonical, CoverageGaps, SchemaVersion, SettlementEpochBlocks};
 
 /// The value shape of the `properties` table (`shape` module docs).
 ///
@@ -262,16 +260,10 @@ property_cells! {
     /// evidence.
     CoverageGapsCell { key: "rule_coverage_gaps", scope: EngineLocal, value: CoverageGaps },
 
-    /// `passed_through_facts` — `ConnectFacts` fields some committed
-    /// `connect` recorded as passed through rather than derived (SCW-1).
-    /// The third provenance component; same discipline as the second.
-    /// `block_info`'s diff rows are not parity evidence while this is
-    /// non-empty, and it names which E6 rows make them so.
-    PassedThroughFactsCell {
-        key: "passed_through_facts",
-        scope: EngineLocal,
-        value: PassedThroughFacts
-    },
+    // `passed_through_facts` — the third provenance component (SCW-1) —
+    // sat here from S-CHAIN-W commit 6b to E6 slice 7 wave B (2026-09-29),
+    // when the last `ConnectFacts` field became the verdict's and the cell
+    // left the layout (SCHEMA_VERSION 17).
 
     /// `total_burned` — the chain's destroyed-fee fold (C++
     /// `set_total_burned`; `LMDB_SCHEMA.md` `properties`).
@@ -395,11 +387,6 @@ mod tests {
                     key: CoverageGapsCell::KEY,
                     scope: CoverageGapsCell::SCOPE,
                     value: CoverageGaps::NAME,
-                },
-                PropertyCellSpec {
-                    key: PassedThroughFactsCell::KEY,
-                    scope: PassedThroughFactsCell::SCOPE,
-                    value: PassedThroughFacts::NAME,
                 },
                 PropertyCellSpec {
                     key: TotalBurnedCell::KEY,

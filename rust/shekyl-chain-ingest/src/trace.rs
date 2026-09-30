@@ -31,12 +31,15 @@
 //! A trace is read through exactly two typed doors, and the types are the
 //! grader's law:
 //!
-//! - [`Trace::borrow`] yields [`Borrowed<Facts>`], which converts into
-//!   [`ConnectFacts`] with every `Fact::origin` **`PassedThrough`** — by
-//!   construction: the conversion is the only way out of a `Borrowed`, and
-//!   it cannot mint a `Derived`. `connect` records the borrow honestly and
-//!   the file's `Provenance` stays NOT-PARITY-EVIDENCE for as long as any
-//!   fact comes this way (§5).
+//! - [`Trace::borrow`] yields [`Borrowed<Facts>`] — the recorded values as
+//!   **comparison inputs** for the replay's oracles (roots, weights, the
+//!   accumulator and the burn), never as anything `connect` is handed.
+//!   Until E6 slice 7 wave B the `Borrowed` converted into the store's
+//!   `ConnectFacts` with every origin `PassedThrough` — the one door for a
+//!   fact Rust did not yet derive, and the file's `Provenance` stayed
+//!   NOT-PARITY-EVIDENCE while any came this way (§5). The last such fact
+//!   became the verdict's on 2026-09-29, and the conversion went with the
+//!   type; `borrow` feeds the oracles alone.
 //! - [`Trace::expect`] yields [`Expected<Digest>`] for the **grader
 //!   only**: the LMDB side's logical-state digest at a checkpoint. It is
 //!   deliberately not convertible into anything `connect` accepts.
@@ -68,7 +71,6 @@ use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::ops::RangeInclusive;
 
-use shekyl_chain_store::store::{ConnectFacts, Fact};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight};
 use shekyl_units::AtomicUnits;
@@ -227,8 +229,8 @@ pub struct Facts {
     /// The long-term effective median in force for the block (S-CHAIN-R
     /// A1, SCR-19). LMDB stores no such row: the exporter re-derives it
     /// over the recorded long-term weights with the daemon's own rolling
-    /// median, exactly as `add_block` did, and it is passed through until a
-    /// Rust rule derives it and deletes this field (`ConnectFacts::DELETED_BY`).
+    /// median, exactly as `add_block` did; the weights oracle compares the
+    /// verdict's (CEN-G6) against it.
     pub long_term_effective_median: LongTermWeight,
     /// `block_info.bi_diff` — the accumulator D4 reads; recorded so the
     /// SI-10 observer has the LMDB value to compare against.
@@ -282,20 +284,6 @@ impl<T> Borrowed<T> {
     #[must_use]
     pub const fn value(&self) -> &T {
         &self.0
-    }
-}
-
-impl From<Borrowed<Facts>> for ConnectFacts {
-    /// The one way a borrowed fact reaches `connect`: every origin is
-    /// `PassedThrough`. Only the burn is a connect fact now — the verdict
-    /// carries `cumulative_difficulty` (since #785), `root_after` (DRS-E3),
-    /// the two weights and the median (CEN-G6/G6b) and `coins_generated`
-    /// (CEN-F14b / G12); the trace keeps recording each as the oracle's
-    /// comparison input, and this door mints no fact from them.
-    fn from(b: Borrowed<Facts>) -> Self {
-        Self {
-            burned: Fact::passed_through(b.0.burned),
-        }
     }
 }
 

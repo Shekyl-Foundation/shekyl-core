@@ -65,6 +65,9 @@ impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> ChainView<'id> for Outpu
     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> {
         Ok(false)
     }
+    fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
+        Ok(shekyl_units::AtomicUnits::ZERO)
+    }
     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
         Ok(AtHeight::AboveTip)
     }

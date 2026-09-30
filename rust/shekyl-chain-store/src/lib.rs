@@ -42,18 +42,19 @@
 //! - **DRS-E1 increment 3 (S-CHAIN-W)** — the connect/pop write set
 //!   (`docs/completed/DRS_E1_SCHAIN_W.md`). [`store::WriteBatch::connect`]
 //!   takes the validator's `ChainValid` (brand-bound to the batch and to
-//!   [`store::BatchView`], the `ChainView` projected from it) plus
-//!   [`store::ConnectFacts`] — the consensus-visible values the store
-//!   records and never derives, each stamped `Derived` or `PassedThrough`
-//!   — and writes the 17-table set in the C++ funnel's phase order, every
+//!   [`store::BatchView`], the `ChainView` projected from it) — every
+//!   consensus-visible value it records is the verdict's; the handed-in
+//!   `ConnectFacts`, each stamped `Derived` or `PassedThrough`, shrank as
+//!   the E6 rows landed and left with the last one (E6 slice 7 wave B) —
+//!   and writes the 17-table set in the C++ funnel's phase order, every
 //!   write a declared verb bound to its `SI-` row and journaled.
 //!   [`store::WriteBatch::pop`] is the reverse replay of one
 //!   [`schema::UNDO_LOG`] row (the first table with no LMDB twin, named
 //!   with its reason in [`schema::RUST_ONLY_TABLES`]; tables are named by
 //!   declaration ordinal, so a reorder or removal is a layout bump).
-//!   [`provenance::Provenance`] has three monotone components — stubbed
-//!   applies, [`codec::CoverageGaps`], [`codec::PassedThroughFacts`] — all
-//!   empty ⇔ parity evidence. A store invariant on connect or pop halts
+//!   [`provenance::Provenance`] has two monotone components — stubbed
+//!   applies and [`codec::CoverageGaps`] — both empty ⇔ parity evidence.
+//!   A store invariant on connect or pop halts
 //!   the writer ([`store::ChainStore::connect_state`]). The settlement
 //!   -epoch schedule is pinned in the header at create and refused on
 //!   mismatch at every open.

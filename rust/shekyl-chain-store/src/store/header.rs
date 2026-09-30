@@ -21,14 +21,15 @@
 //!   schedule the file was built under (SCW-2): sealed from the creating
 //!   session's value, compared at every open, refused on mismatch. Never
 //!   widened or rewritten — a datadir has one schedule for its whole life.
-//! - `rule_coverage_gaps` ([`CoverageGapsCell`]) and `passed_through_facts`
-//!   ([`PassedThroughFactsCell`]) — the other two [`Provenance`] components
-//!   (S-CHAIN-W §3.8, §3.2): sealed empty, [widened](widen_gaps) by
+//! - `rule_coverage_gaps` ([`CoverageGapsCell`]) — the other [`Provenance`]
+//!   component (S-CHAIN-W §3.8): sealed empty, [widened](widen_gaps) by
 //!   `connect` inside its own batch, read back with `apply_policy` at
-//!   every open and every commit.
+//!   every open and every commit. (`passed_through_facts` sat beside it
+//!   until E6 slice 7 wave B derived the last handed-in fact; the cell left
+//!   the layout at `SCHEMA_VERSION` 17.)
 //!
-//! No public write path reaches any of them. [`seal`], [`widen`],
-//! [`widen_gaps`] and [`widen_passed_through`] are their only writers;
+//! No public write path reaches any of them. [`seal`], [`widen`] and
+//! [`widen_gaps`] are their only writers;
 //! [`put`] is `pub(super)` and its public caller,
 //! `WriteBatch::upsert_property`, is bounded to chain-state cells.
 //! Store-owned header writes are `put`, not `upsert`: they are not
@@ -38,9 +39,9 @@ use redb::{ReadTransaction, ReadableTable, WriteTransaction};
 
 use crate::apply_policy::ApplyPolicy;
 use crate::codec::{
-    ApplyPolicyCell, Blob, Canonical, CoverageGaps, CoverageGapsCell, CurveTreeState,
-    PassedThroughFacts, PassedThroughFactsCell, PropertyCell, PropertyCellBytes, Raw,
-    SchemaVersionCell, SettlementEpochBlocks, SettlementEpochBlocksCell, SCHEMA_VERSION,
+    ApplyPolicyCell, Blob, Canonical, CoverageGaps, CoverageGapsCell, CurveTreeState, PropertyCell,
+    PropertyCellBytes, Raw, SchemaVersionCell, SettlementEpochBlocks, SettlementEpochBlocksCell,
+    SCHEMA_VERSION,
 };
 use crate::provenance::Provenance;
 use crate::schema::{self, PROPERTIES};
@@ -50,7 +51,7 @@ use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvaria
 /// Write the header cells into a fresh store.
 ///
 /// The provenance a fresh file starts with is the creating session's own
-/// stubbed set (and no gaps, no pass-through — nothing has been connected):
+/// stubbed set (and no gaps — nothing has been connected):
 /// a store *created* under a stubbed policy has been written under it from
 /// its first byte. The schedule pin is the session's value, and is never
 /// written again.
@@ -64,7 +65,6 @@ pub(super) fn seal(
     put::<ApplyPolicyCell>(txn, &provenance.stubbed())?;
     put::<SettlementEpochBlocksCell>(txn, &epoch)?;
     put::<CoverageGapsCell>(txn, &CoverageGaps::NONE)?;
-    put::<PassedThroughFactsCell>(txn, &PassedThroughFacts::NONE)?;
     // Amendment A2 (SCR-17): every table with a writer exists from the
     // first commit, so no reader ever has to read *absent table* as *empty
     // table*. The set is the catalogue's, filtered by value shape.
@@ -97,15 +97,14 @@ fn verify_sealed_tables(txn: &ReadTransaction) -> Result<(), StoreError> {
     Ok(())
 }
 
-/// Read the three provenance components from an open `properties` table.
+/// Read the two provenance components from an open `properties` table.
 /// Each is sealed at create, so absence is corruption, not "fresh".
 fn provenance_of(
     table: &impl ReadableTable<&'static str, Blob<PropertyCellBytes>>,
 ) -> Result<Provenance, StoreError> {
     let stubbed = get::<ApplyPolicyCell>(table)?.ok_or(absent::<ApplyPolicyCell>())?;
     let gaps = get::<CoverageGapsCell>(table)?.ok_or(absent::<CoverageGapsCell>())?;
-    let passed = get::<PassedThroughFactsCell>(table)?.ok_or(absent::<PassedThroughFactsCell>())?;
-    Ok(Provenance::of_parts(stubbed, gaps, passed))
+    Ok(Provenance::of_parts(stubbed, gaps))
 }
 
 /// Check an existing store's layout version and schedule pin, and read its
@@ -197,27 +196,6 @@ pub(super) fn widen_gaps(txn: &WriteTransaction, gaps: CoverageGaps) -> Result<(
     let after = current.union(gaps);
     if after != current {
         put::<CoverageGapsCell>(txn, &after)?;
-    }
-    Ok(())
-}
-
-/// Widen the `passed_through_facts` cell by `facts`, in `txn` (a connect
-/// that recorded them without the validator deriving them). Empty is a
-/// no-op that does not touch the cell.
-pub(super) fn widen_passed_through(
-    txn: &WriteTransaction,
-    facts: PassedThroughFacts,
-) -> Result<(), StoreError> {
-    if facts.is_empty() {
-        return Ok(());
-    }
-    let current = {
-        let table = txn.open_table(PROPERTIES).map_err(EngineError::Table)?;
-        get::<PassedThroughFactsCell>(&table)?.ok_or(absent::<PassedThroughFactsCell>())?
-    };
-    let after = current.union(facts);
-    if after != current {
-        put::<PassedThroughFactsCell>(txn, &after)?;
     }
     Ok(())
 }

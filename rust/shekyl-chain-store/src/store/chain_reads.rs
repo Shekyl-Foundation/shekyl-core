@@ -39,7 +39,7 @@
 //! reader — `ChainView::tip()` needs the hash, the snapshot's tip needs the
 //! hash, and a second key-only path would be two readings of one row, the
 //! which-key ambiguity SCW-19 closed for `curve_tree_roots`. The cost is
-//! one 104-byte decode per read. The test that first pinned the tightening
+//! one 112-byte decode per read. The test that first pinned the tightening
 //! planted an undecodable tip row; under §11.1(f) that row cannot reach
 //! the file (the engine holds `block_info`'s width and the crate refuses
 //! first), so what is pinned now is the refusal —

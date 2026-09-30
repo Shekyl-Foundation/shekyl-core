@@ -1149,6 +1149,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
         &format!("spend-1in-{outputs}out"),
         "e2e_fcmp_spend_accepted_by_daemon",
         Some(accepted),
+        &[],
     )
     .await;
 }
@@ -1590,6 +1591,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
         "spend-depth3",
         "e2e_fcmp_spend_over_depth3_tree",
         Some(accepted),
+        &[],
     )
     .await;
 }
@@ -2018,6 +2020,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
         "limit-full",
         "e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx",
         None,
+        &[],
     )
     .await;
 }
@@ -2125,6 +2128,7 @@ async fn e2e_cxx_template_fills_to_its_median() {
         "median-full",
         "e2e_cxx_template_fills_to_its_median",
         None,
+        &[],
     )
     .await;
 }
@@ -3126,6 +3130,7 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
         "bond-post",
         "e2e_staker_bond_post_accepted_and_applied",
         None,
+        &[],
     )
     .await;
 }
@@ -3528,6 +3533,19 @@ async fn e2e_emission_claim_accepted_and_applied() {
         "emission-claim",
         "e2e_emission_claim_accepted_and_applied",
         None,
+        // The one row in this chain no block produced (A2 above): the
+        // serve credit the claim is priced on. `DRS_E4_ARCHIVAL_WRITER.md`
+        // ARW-1 — a block-driven replay cannot reach it.
+        &[format!(
+            "archival_serve_credit row (persona {}, shard {SHARD_ID}, epoch {TARGET_EPOCH}) \
+             injected at height {inject_height} through regtest_inject_archival_serve_credit \
+             (blockchain.cpp: db_wtxn_guard + set_archival_serve_credit_bit under the \
+             blockchain lock, outside any block's write batch). State no block produced: a \
+             block-driven replay cannot reproduce it, and an archival digest over this chain \
+             diverges by construction unless the injection is replayed as an event \
+             (DRS_E4_ARCHIVAL_WRITER.md ARW-1, ARW-Q5).",
+            hex::encode(fixture.persona_id.to_bytes()),
+        )],
     )
     .await;
     let claim_mined_by_height = daemon.height().await;
@@ -4677,6 +4695,17 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
 /// `spend_txid` is recorded when the generator knows it; the archival
 /// shapes are located by their vin class at load, so it is `None` there.
 ///
+/// `out_of_band_writes` is **every row in the daemon's state that no block
+/// produced** — a regtest injector's direct LMDB write, made under the
+/// blockchain lock outside any block's write batch. Empty for a chain whose
+/// state is wholly block-derived, and the manifest says so positively rather
+/// than by omission, because the corpus travels and the inference is drawn
+/// where the data is: a block-driven replay cannot reach such a row, so an
+/// archival digest over the chain diverges *by construction*, at exactly the
+/// height a writer bug would produce one (`DRS_E4_ARCHIVAL_WRITER.md` ARW-1;
+/// the replay's `IngestEvent` for it is `ARW-Q5`'s). A generator that injects
+/// and does not list it here has mislabelled its corpus.
+///
 /// **Why the manifest stamps `genesis_hash` and `built_at_dev_sha`.** These
 /// blobs are consensus-pinned test data: valid against one genesis and one
 /// rule set, and a change of TXE-Q6′'s class (a grammar closure, a constant
@@ -4694,6 +4723,7 @@ async fn maybe_capture_chain_vector(
     shape: &str,
     generator: &str,
     spend_txid: Option<TxHash>,
+    out_of_band_writes: &[String],
 ) {
     if std::env::var_os("SHEKYL_CAPTURE_CHAIN_VECTORS").is_none() {
         return;
@@ -4846,6 +4876,9 @@ async fn maybe_capture_chain_vector(
         "tip_height": tip,
         "block_count": count,
         "spend_txid": spend_txid.map(|h| h.to_string()),
+        // Rows no block produced (see the doc comment). Empty is the
+        // positive claim "wholly block-derived"; absent would be silence.
+        "out_of_band_writes": out_of_band_writes,
         // What `replay --chain regtest --fixed-difficulty n` must be given:
         // the value this harness spawned the daemon with, recorded rather
         // than remembered.

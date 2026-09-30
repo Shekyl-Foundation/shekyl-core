@@ -12,8 +12,7 @@ use shekyl_types::{BlockHash, BlockHeight, KeyImage};
 use shekyl_chain_rules::RuleSet;
 
 use super::connect_fixtures::{
-    at, candidate, connect_chain, facts, judge, spend, spend_at, spendable_prefix,
-    FIRST_SPEND_HEIGHT,
+    at, candidate, connect_chain, judge, spend, spend_at, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::error::{StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
@@ -169,7 +168,7 @@ fn a_snapshot_sees_one_committed_state_across_a_concurrent_connect() {
     );
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        batch.connect(judge(&view, cand)?, facts(0), RuleSet::GENESIS)?;
+        batch.connect(judge(&view, cand)?, RuleSet::GENESIS)?;
         Ok(())
     });
     out.expect("connect");

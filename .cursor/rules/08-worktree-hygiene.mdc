@@ -141,6 +141,22 @@ exactly the content the verification existed to remove.
    clone is the fix; the cold build it costs is the isolation being real.
    Check `echo ${CARGO_TARGET_DIR:-unset}` before trusting a clone result.
 
+   **A merge commit that resolved a real conflict is the commit that needs
+   this most, not least.** A conflict resolution is new code that neither
+   parent contains, so neither parent's green says anything about it — and
+   it is exactly the commit the reflex skips, because "both sides were
+   already verified". Observed 2026-09-29 (`wt-e7-c6`, PR #907): the
+   branch tip had been verified from a fresh clone; `origin/dev` then
+   moved, the merge resolved a generic-versus-non-generic conflict in a
+   test helper by hand (`JoinedConnector<F>` against a `Connector` that had
+   lost its parameter), a one-line docs fix followed, and the report's
+   verified SHA was two commits behind the tip. Worktree-tested only,
+   caught in review by comparing the tip against the reported SHA; closed
+   by re-running the clone against the tip. So: **the verified SHA is the
+   tip you are asking to merge**, re-run the clone after any merge that
+   resolved a conflict, and state the SHA the run covered rather than the
+   one the table happens to end at.
+
 ## The edit form that notices
 
 The fourteenth instance is worth more than the count, because the

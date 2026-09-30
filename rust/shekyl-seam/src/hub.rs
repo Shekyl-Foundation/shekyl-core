@@ -694,7 +694,7 @@ impl Hub {
         }
         // The cause is recorded whichever side it came from; the socket
         // has to follow. Discarding the send queue ends the connector's
-        // writer (its next `pop` returns `None`), which ends its connection
+        // writer (its next `pop` is the close reason), which ends its connection
         // task, which drops the socket. Measured before this (clearnet, LAN,
         // 2026-09-30): after a local close the socket stayed open until the
         // peer's next frame arrived, 54 s later on the timed-sync cadence.
@@ -1170,8 +1170,8 @@ mod tests {
     }
 
     /// A close that starts on the caller's side reaches the connector's
-    /// writer: its next pop returns `None` at once — the queued tail is
-    /// discarded, not drained — so the connection task ends and the socket
+    /// writer: its next pop is the local-close reason at once — the queued
+    /// tail is discarded, not drained — so the connection task ends and the socket
     /// is dropped. Before this the writer parked until the peer sent a
     /// frame; on the wire the socket stayed open for the whole interval.
     #[test]
@@ -1190,8 +1190,8 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("writer still parked after a local close");
         assert!(
-            ended.is_none(),
-            "queued tail not discarded on a local close"
+            matches!(ended, Err(shekyl_capped_stream::CloseReason::Local)),
+            "queued tail not discarded on a local close: {ended:?}"
         );
         assert_eq!(
             rig.hub.cause(opened.id).map(CloseCause::kind),

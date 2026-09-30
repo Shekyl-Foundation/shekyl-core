@@ -73,6 +73,7 @@
 
 pub(crate) mod anchors;
 pub(crate) mod block_weight;
+pub(crate) mod body;
 pub(crate) mod difficulty;
 pub(crate) mod header;
 pub(crate) mod miner;

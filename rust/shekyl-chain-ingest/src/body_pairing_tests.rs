@@ -3,40 +3,45 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! E6 slice 7 commit 2 (a): **the G2 measurement**, taken through the
-//! driver before any 4.G rule exists (`CHAIN_RULES_SLICE_7.md` §3.1, §5 row
-//! 2). CEN-G2 is the pairing of a block's listed bodies to the hashes its
-//! header declares. Nothing in the validator holds it today: the merkle
-//! over the declared list is an input to the identity (B6), the bodies
-//! arrive positionally, and `ValidatedBlock::derive` recomputes each
-//! identity from the body. These tests build the first two-body block the
-//! driver has ever listed, replay it three ways through the production
-//! pipeline against three fresh stores, and record what each does.
+//! CEN-G2 through the production pipeline (`CHAIN_RULES_SLICE_7.md` §3.1,
+//! §5 rows 2 and 6). CEN-G2 is the pairing of a block's listed bodies to
+//! the hashes its header declares. These tests build the first two-body
+//! block the driver ever listed, replay it three ways through the pipeline
+//! against three fresh stores, and hold what each does.
 //!
-//! **They pin today's gap.** When commit 6 lands G2 as a `FormRule`, the
-//! reorder and the substitution refuse at their loci and these assertions
-//! flip — the same shape as the E2 family's `assert_pinned_gap`: a refusal
-//! here before then means the row landed early, and the census flips, not
-//! this file.
+//! **What commit 2 measured, before the rule existed (2026-09-26,
+//! records-was):** the merkle over the declared list is an input to the
+//! identity (B6), the bodies arrive positionally, and nothing compared a
+//! body to the hash it came in under — so (2) the same block with its
+//! bodies **swapped** connected, and the store assigned the two
+//! transactions' outputs **in body order**: two honest nodes handed the same
+//! block with bodies in different orders disagreed on every global output
+//! index in it, which is the curve tree's drain order (`GlobalOutputIndex`'s
+//! doc; E3 §3.3) — why G2 is a precondition for E3's correctness rather
+//! than a tidiness rule; and (3) the same block with one body
+//! **substituted** by a transaction the header never listed connected, and
+//! the unlisted body's outputs were recorded under a block whose identity
+//! did not cover them.
 //!
-//! What is measured, not asserted from the plan:
+//! **What commit 6 holds, with G2 a `FormRule` (slice 7 Q7):**
 //!
-//! 1. Two bodies through `mine_listing` connect (the driver's first).
-//! 2. The same block with its bodies **swapped** connects, and the store
-//!    assigns the two transactions' outputs **in body order** — so two
-//!    honest nodes handed the same block with bodies in different orders
-//!    disagree on every global output index in it. That order is the curve
-//!    tree's drain order (`GlobalOutputIndex`'s doc; E3 §3.3), which is why
-//!    G2 is a precondition for E3's correctness.
-//! 3. The same block with one body **substituted** by a transaction the
-//!    header never listed connects, and the unlisted body's outputs are
-//!    recorded under a block whose identity does not cover them.
+//! 1. Two bodies through `mine_listing` connect, as before.
+//! 2. The swap is refused at `Locus::Tx { slot: Listed(0) }` — the first
+//!    index whose body is not the declared hash — before any body reaches
+//!    the store: the output table holds neither transaction.
+//! 3. The substitution is refused at `Listed(1)`: index 0 still agrees, so
+//!    the locus is the rule's evidence, not "a mismatch somewhere". Nothing
+//!    of the block is recorded.
+//!
+//! The refusal is `form`'s, so the pipeline never opened a write for the
+//! block; the empty output table is what makes the drain-order hazard
+//! closed rather than narrowed.
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use shekyl_chain_rules::harness::MockSubstrate;
-use shekyl_chain_rules::Candidate;
+use shekyl_chain_rules::{Candidate, CenRow, Locus, TxSlot};
 use shekyl_chain_store::store::{AtIndex, ChainStore, Horizons};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, GlobalOutputIndex, Timestamp, TxHash};
@@ -100,8 +105,7 @@ impl Driven {
         }
         // The trace's accumulator is the tree's derivation (slice 7 commit
         // 5), not a fold over the driver's priced rewards: the replay then
-        // holds the validator's paid reward to the ratified composition,
-        // and `Priced` no longer carries a reward to fold.
+        // holds the validator's paid reward to the ratified composition.
         trace_with(
             chain,
             |height| {
@@ -197,11 +201,38 @@ fn output_origins(path: &std::path::Path) -> Vec<TxHash> {
     origins
 }
 
+/// The refusal is G2's, at `locus`, on the two-body block — and the run
+/// connected exactly the blocks before it.
+fn refused_on_g2(report: &RunReport, name: &str, locus: Locus) {
+    let (at, refused) = report
+        .refused
+        .as_ref()
+        .unwrap_or_else(|| panic!("{name}: G2 refuses this shape; the run connected it"));
+    assert_eq!(
+        *at,
+        BlockHeight::from_raw(FIRST_SPEND_HEIGHT),
+        "{name}: refused at the two-body block"
+    );
+    assert_eq!(
+        refused.rule,
+        CenRow::G2,
+        "{name}: the row is G2, not a neighbour"
+    );
+    assert_eq!(
+        refused.locus, locus,
+        "{name}: the locus is the rule's evidence"
+    );
+    assert_eq!(
+        report.connected.len(),
+        usize::try_from(FIRST_SPEND_HEIGHT).expect("small"),
+        "{name}: every block before the refusal connected, and nothing after"
+    );
+}
+
 fn connected_through(report: &RunReport, chain: &Chain, name: &str) {
     assert!(
         report.refused.is_none(),
-        "{name}: G2 is Pending, so the block connects today; a refusal here means the row \
-         landed — flip the census and this file, in that order: {:?}",
+        "{name}: a well-paired block connects: {:?}",
         report.refused
     );
     assert_eq!(
@@ -226,11 +257,11 @@ fn connected_through(report: &RunReport, chain: &Chain, name: &str) {
     );
 }
 
-/// (1) and (2): the driver's two-body block connects; the same block with
-/// its bodies swapped connects too, and the two stores assign the two
-/// transactions' outputs in opposite orders.
+/// (1) and (2): the driver's two-body block connects and records a's
+/// outputs before b's; the same block with its bodies swapped is refused on
+/// G2 at `Listed(0)`, and the second store records neither.
 #[tokio::test]
-async fn a_reordered_two_body_block_connects_and_two_stores_disagree_on_output_order() {
+async fn a_reordered_two_body_block_is_refused_on_g2_and_records_no_output() {
     let driven = two_body_chain("g2-reorder-driver").await;
     let (chain, a, b) = (driven.chain(), &driven.a, &driven.b);
     let at = usize::try_from(FIRST_SPEND_HEIGHT).expect("small");
@@ -246,14 +277,18 @@ async fn a_reordered_two_body_block_connects_and_two_stores_disagree_on_output_o
         "the header still declares [a, b]; only the bodies moved"
     );
     let (reordered, swapped_path) = replay("swapped", &swapped, driven.trace(&swapped)).await;
-    connected_through(&reordered, &swapped, "swapped");
-    assert_eq!(
-        as_listed.connected, reordered.connected,
-        "both runs connect the same block identities — the identity is over the declared list"
+    refused_on_g2(
+        &reordered,
+        "swapped",
+        Locus::Tx {
+            slot: TxSlot::Listed(0),
+        },
     );
 
-    // The measurement: the store's output order follows the bodies, not the
-    // header. Under [a, b] a's outputs precede b's; under [b, a] they follow.
+    // As listed, the store's output order is the declared order: a's
+    // outputs take the lower global indices. Swapped, the block never
+    // reached the store — the hazard commit 2 measured (two honest nodes
+    // holding different output tables for one block) is closed at `form`.
     let listed_order = output_origins(&listed_path);
     let swapped_order = output_origins(&swapped_path);
     cleanup(&listed_path);
@@ -269,22 +304,16 @@ async fn a_reordered_two_body_block_connects_and_two_stores_disagree_on_output_o
         "as listed: a's outputs take the lower global indices"
     );
     assert!(
-        position(&swapped_order, b) < position(&swapped_order, a),
-        "swapped: b's outputs take the lower global indices — the same block, a different \
-         output order, and (E3 §3.3) a different leaf order"
-    );
-    assert_ne!(
-        listed_order, swapped_order,
-        "two honest nodes handed the same block in different body orders now hold different \
-         output tables"
+        !swapped_order.contains(&a.hash()) && !swapped_order.contains(&b.hash()),
+        "swapped: neither body's outputs are recorded — the refusal is form's, before a write"
     );
 }
 
-/// (3): a body the header never listed connects in place of one it did,
-/// and its outputs are recorded under a block whose identity does not
-/// cover it.
+/// (3): a body the header never listed, in place of one it did, is refused
+/// on G2 at `Listed(1)` — index 0 agrees — and nothing of the block is
+/// recorded.
 #[tokio::test]
-async fn a_substituted_body_the_header_never_listed_connects() {
+async fn a_substituted_body_the_header_never_listed_is_refused_on_g2() {
     let driven = two_body_chain("g2-substitute-driver").await;
     let (chain, a, b) = (driven.chain(), &driven.a, &driven.b);
     let at = usize::try_from(FIRST_SPEND_HEIGHT).expect("small");
@@ -306,16 +335,18 @@ async fn a_substituted_body_the_header_never_listed_connects() {
         "the header still declares b"
     );
     let (report, path) = replay("substituted", &substituted, driven.trace(&substituted)).await;
-    connected_through(&report, &substituted, "substituted");
+    refused_on_g2(
+        &report,
+        "substituted",
+        Locus::Tx {
+            slot: TxSlot::Listed(1),
+        },
+    );
 
     let order = output_origins(&path);
     cleanup(&path);
     assert!(
-        order.contains(&c.hash()),
-        "the unlisted body's outputs are recorded — under a block whose identity never named it"
-    );
-    assert!(
-        !order.contains(&b.hash()),
-        "the declared body was never recorded; the header lists a hash with no body behind it"
+        !order.contains(&c.hash()) && !order.contains(&a.hash()) && !order.contains(&b.hash()),
+        "no body of the refused block is recorded — not the unlisted one, not the listed ones"
     );
 }

@@ -287,6 +287,21 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
                 cell: "block_info.cumulative_tx_count",
                 height: at.to_raw(),
             },
+            // CEN-F17 read the `total_burned` register above the parent's
+            // `coins_generated` (E6 slice 7 wave B). Burn destroys issued
+            // coins, so the fold is bounded by the accumulator on every
+            // conforming store (FL-R16c: a violation, never a zero supply);
+            // a register holding more is a cell whose value the store's
+            // own invariants rule out — SI-7's shape, on the register, with
+            // the reason spelled. The store did not compute the pair; the
+            // validator observed it and this is the halt.
+            Corrupt::BurnExceedsEmission { .. } => StoreInvariant::CellCorrupt {
+                key: "total_burned",
+                fault: CellFault::Undecodable(CodecError::Invalid {
+                    codec: "total_burned",
+                    reason: "the burned fold exceeds the parent's coins_generated (FL-R16c)",
+                }),
+            },
             // A rule read below the connecting height and the view answered
             // `AboveTip`: the same SI-7 row the store arms when it finds a
             // dense-range row missing — observed from the rule side this

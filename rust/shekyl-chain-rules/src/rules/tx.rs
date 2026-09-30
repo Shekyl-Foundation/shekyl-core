@@ -228,6 +228,20 @@ pub(crate) const fn max_tx_weight() -> usize {
     (FULL_REWARD_ZONE / 2) as usize - COINBASE_BLOB_RESERVED
 }
 
+// SHT-Q2's static relation (RULED, Rick 2026-09-29): no transaction's
+// archival length reaches a shard's `W`. The chain is `archival_len ≤
+// serialized_len ≤ weight ≤ max_tx_weight()` for every non-coinbase class —
+// the two archival segments are a sub-slice of the blob, and weight is the
+// blob plus a non-negative clawback — and CEN-H3 bounds the last term for
+// exactly those classes; the coinbase's archival length is zero
+// (`Ct::Null`). So a transaction starting inside shard `k` ends before
+// `(k + 2)·W`, every shard below the current one holds a transaction that
+// starts in it, and the overshoot past `W` is under one transaction.
+const _: () = assert!(
+    (max_tx_weight() as u64) < shekyl_types::SHARD_LENGTH.to_raw(),
+    "the largest transaction's archival length must stay under W (SHT-Q2)"
+);
+
 /// CEN-H16: `unlock_time` values at or above this are timestamps, which
 /// consensus rejects — `CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL`
 /// (`CRYPTONOTE_MAX_BLOCK_NUMBER`).

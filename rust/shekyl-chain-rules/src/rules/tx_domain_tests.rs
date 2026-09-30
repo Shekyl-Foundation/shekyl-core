@@ -242,6 +242,16 @@ fn the_domain_is_every_non_coinbase_class() {
             expected_in_domain,
             "class {class:?} disagrees with the domain invariant"
         );
+        // SHT-Q2's pinned invariant: a transaction has archival length iff
+        // it carries archival good, so the length partition and the domain
+        // are one set. The length is what places a shard boundary; a class
+        // with good and no length (or length and no good) would sit in the
+        // domain without moving the cut, or move it from outside.
+        assert_eq!(
+            tx.archival_len().to_raw() > 0,
+            expected_in_domain,
+            "class {class:?}: archival_len > 0 must be carries_archival_good"
+        );
     }
 }
 

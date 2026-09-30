@@ -105,6 +105,12 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 shekyl-block-template = { path = "../shekyl-block-template" }
 # The driver's miner keys (an Edwards spend key, a hybrid KEM keypair).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# The archival body fixtures (`test_support::{serve_credit_body,
+# emission_claim_body}`, slice 7 commit 7): the kept-half and emission-vin
+# codecs, so the mutation family's duplicates carry keys the validator's
+# parse (`ArchivalKey::of`) reads. Unconditional here; the [dependencies]
+# edge above stays optional for the replay CLI alone.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
 # The driver's coinbase secret is a `Zeroizing<[u8; 32]>`, the type
 # `TemplateContext` takes (rule 35).
