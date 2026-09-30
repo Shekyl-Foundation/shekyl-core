@@ -187,7 +187,13 @@ them.
 At cutover, the epee host's transcripts for the parity scope — wire
 bytes and session outcomes, not a `DeferredInvariant` and not
 `byte-bounds` — are recorded as golden transcripts and committed,
-keyed by seed. Then the epee host is deleted with the rest of epee.
+keyed by seed. `record-goldens` writes that scope
+(`goldens/seed-<n>-peer.txt` and `goldens/seed-<n>-host.txt`): the
+version line, the parity fields, and nothing else. Events are omitted.
+A send-over suffix past the script's handshake response is omitted.
+The six deferred invariants are not transcript fields, so they are
+not in the files. Recorded at `88a202195`. Then the epee host is
+deleted with the rest of epee.
 
 After cutover, in CI, the same peer runs every seed against the Rust
 transport. Each run checks the goldens (the peer still sees the same

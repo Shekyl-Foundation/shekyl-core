@@ -25,8 +25,10 @@ mod script;
 mod seam_host;
 mod transcript;
 
-pub use compare::{diff, run_agrees, run_matches_script, DeferredInvariant, Field, Finding, Run};
-pub use driver::{epee_cli_args, host_wait_ms, run_all};
+pub use compare::{
+    diff, parity_transcript, run_agrees, run_matches_script, DeferredInvariant, Field, Finding, Run,
+};
+pub use driver::{check_goldens, epee_cli_args, host_wait_ms, record_goldens, run_all};
 pub use handshake::{handshake, Handshake};
 pub use peer::run_peer;
 pub use script::{

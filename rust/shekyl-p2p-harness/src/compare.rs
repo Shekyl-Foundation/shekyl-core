@@ -188,6 +188,30 @@ pub fn diff(left: &Run, right: &Run) -> Vec<Finding> {
     findings
 }
 
+/// The transcript a golden keeps.
+///
+/// [`Field::is_parity`] is the scope. Events are not in it. A send-over
+/// suffix past the script's handshake response is [`Field::ByteBounds`]:
+/// the epee host accepted a byte the seam refuses, and that byte is not
+/// a golden. [`DeferredInvariant`] is not in a transcript at all.
+pub fn parity_transcript(transcript: &Transcript, plan: &Script) -> Transcript {
+    let mut out = transcript.clone();
+    out.events.clear();
+    if plan.after != AfterHandshake::SendOver {
+        return out;
+    }
+    let expected = plan.expected_recv();
+    if expected.is_empty() {
+        return out;
+    }
+    match out.role {
+        Role::Host if out.sent.starts_with(&expected) => out.sent.truncate(expected.len()),
+        Role::Peer if out.recv.starts_with(&expected) => out.recv.truncate(expected.len()),
+        Role::Host | Role::Peer => {}
+    }
+    out
+}
+
 /// Seed 32 may carry extra bytes past the seam send queue. That suffix is
 /// [`Field::ByteBounds`] only when both sides still start with the script's
 /// handshake response. A difference inside that prefix stays a parity field.
@@ -283,8 +307,8 @@ pub fn run_matches_script(run: &Run, plan: &Script) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::script::NamedSeed;
-    use crate::transcript::{End, Role, Transcript, TranscriptVersion};
+    use crate::script::{script, NamedSeed};
+    use crate::transcript::{End, Event, Role, Transcript, TranscriptVersion};
 
     fn empty_run(seed: u64, peer_role: Role, host_role: Role) -> Run {
         let transcript = |role: Role| Transcript {
@@ -310,6 +334,31 @@ mod tests {
                 ..transcript(host_role)
             },
         }
+    }
+
+    #[test]
+    fn a_golden_keeps_the_version_and_drops_events_and_the_send_over_suffix() {
+        let plan = script(NamedSeed::SendOver.as_u64()).expect("script");
+        let expected = plan.expected_recv();
+        let mut sent = expected.clone();
+        sent.push(0xff);
+        let transcript = Transcript {
+            version: TranscriptVersion::V2,
+            seed: NamedSeed::SendOver.as_u64(),
+            role: Role::Host,
+            sent,
+            recv: vec![1, 2],
+            end: End::Established,
+            events: vec![Event::Stalled, Event::Resumed],
+        };
+        let golden = parity_transcript(&transcript, &plan);
+        assert_eq!(golden.sent, expected);
+        assert!(golden.events.is_empty());
+        assert_eq!(golden.version, TranscriptVersion::V2);
+        assert_eq!(golden.recv, vec![1, 2]);
+        let encoded = golden.encode();
+        assert!(encoded.starts_with("shekyl-p2p-transcript 2\n"));
+        assert!(!encoded.contains("event "));
     }
 
     #[test]

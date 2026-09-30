@@ -68,6 +68,54 @@ pub fn epee_cli_args(seed: u64, transcript: &Path, plan: &Script) -> Result<Vec<
     Ok(args)
 }
 
+/// Write one golden per seed, peer and host, from the epee run.
+///
+/// Each file is [`parity_transcript`](crate::compare::parity_transcript),
+/// not the raw `epee-host.txt`. The version line stays. Events and a
+/// send-over suffix past the script's handshake response do not.
+pub fn record_goldens(epee_bin: &Path, dir: &Path) -> Result<(), Error> {
+    if !epee_bin.is_file() {
+        return Err(Error::new(format!(
+            "missing epee-host: {}",
+            epee_bin.display()
+        )));
+    }
+    fs::create_dir_all(dir)?;
+    for seed in all_seeds() {
+        let scratch = std::env::temp_dir().join(format!("p2p-golden-{seed}"));
+        fs::create_dir_all(&scratch)?;
+        let run = run_against_epee(epee_bin, seed, &scratch)?;
+        let plan = script(seed)?;
+        let peer = crate::compare::parity_transcript(&run.peer, &plan);
+        let host = crate::compare::parity_transcript(&run.host, &plan);
+        peer.write(&dir.join(format!("seed-{seed}-peer.txt")))?;
+        host.write(&dir.join(format!("seed-{seed}-host.txt")))?;
+        drop(fs::remove_dir_all(&scratch));
+    }
+    Ok(())
+}
+
+/// The seam against goldens already recorded from the epee host.
+///
+/// Compares the parity projection of each side. A send-over suffix and
+/// the event log are not findings here.
+pub fn check_goldens(dir: &Path) -> Result<(), Error> {
+    for seed in all_seeds() {
+        let plan = script(seed)?;
+        let golden_peer = Transcript::read(&dir.join(format!("seed-{seed}-peer.txt")))?;
+        let golden_host = Transcript::read(&dir.join(format!("seed-{seed}-host.txt")))?;
+        let seam = crate::run_seam(seed)?;
+        let peer = crate::compare::parity_transcript(&seam.peer, &plan);
+        let host = crate::compare::parity_transcript(&seam.host, &plan);
+        if peer != golden_peer || host != golden_host {
+            return Err(Error::new(format!(
+                "seed {seed}: seam parity does not match the golden"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Run every seed against both hosts. A mismatch keeps the four transcripts
 /// under `p2p-harness-fail/seed-N/` in the current directory.
 pub fn run_all(epee_bin: &Path) -> Result<(), Error> {
@@ -258,6 +306,12 @@ mod tests {
     fn has_flag(args: &[String], flag: &str, value: &str) -> bool {
         args.windows(2)
             .any(|pair| pair[0] == flag && pair[1] == value)
+    }
+
+    #[test]
+    fn recorded_goldens_match_the_seam_on_the_parity_scope() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("goldens");
+        super::check_goldens(&dir).expect("goldens");
     }
 
     #[test]
