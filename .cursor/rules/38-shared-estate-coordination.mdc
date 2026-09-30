@@ -1,0 +1,57 @@
+---
+description: Foundation hosts are shared by concurrent agents. Claim a host in shekyl-dev's usage ledger before using it, probe it before trusting the ledger, and never disturb another agent's claimed work — a long-running test is a quiet claim.
+alwaysApply: true
+---
+
+# Shared-estate coordination
+
+The Foundation's machines — build and measurement boxes, miners, stakers, the
+floor device, seeds — are used by several agents at once, each in its own
+lane. Lanes do not see each other's terminals. Without a shared record, one
+agent's install, restart or background load lands in the middle of another
+agent's 24-hour measurement. Nothing fails and nothing alerts; the data is just
+wrong. This rule is the shared record's contract.
+
+It is a sibling of [`37-internal-information-boundary`](37-internal-information-boundary.mdc):
+which hosts exist, their addresses and what they run are internal, so the
+record lives in the private `shekyl-dev` repository, not here.
+
+## The two files
+
+In `shekyl-dev`, `infrastructure/`:
+
+- **`INVENTORY.md`** — what exists: every host, how to reach it, its role, what
+  it runs, and known defects. Read it before your first use of a host.
+- **`USAGE.md`** — who holds what, right now: one row per active claim (host,
+  owner, kind, resource, since, until, purpose, where to look). **Its head
+  carries the protocol; follow it as written.**
+
+## The rule
+
+1. **Before any work on a Foundation host, read `USAGE.md`.** That includes a
+   probe: on some hosts a login is not read-only (the inventory says which).
+2. **The ledger is the claim; the host is the truth.** Check what is actually
+   running before you start, and record anything the ledger does not list.
+3. **Claim before you start, release when you finish.** Put your own row in
+   before the work begins. Take it out when the work ends, and say in your
+   report what you left on the host.
+4. **A long-running test is a `quiet` claim.** Other agents' new work on that
+   host waits, however small it looks: no package installs, no service
+   restarts, no extra `tor`, no reboots, no heavy builds.
+5. **Never stop, restart, reconfigure or delete what another owner claimed**,
+   and never edit their row. If you need the host, ask the owner (a Claude
+   session by its name) or Rick. A claim past its end with nothing running
+   goes to Rick; it is not a deletion.
+6. **Address hosts by ssh alias or IP, never by the hostname a host reports.**
+   Reported names are not unique in the estate.
+
+This binds any agent that uses a Foundation host, whichever repository it is
+working in.
+
+## Why a rule and not a habit
+
+"Check before using a shared box" had no surface to check against, so it was
+only as good as each agent's memory, and memory does not carry across
+sessions. A ledger that every lane reads and writes is something a lane can
+follow. A long test that silently absorbs another lane's load is the costliest
+failure here, because it is found only after the numbers have been used.
