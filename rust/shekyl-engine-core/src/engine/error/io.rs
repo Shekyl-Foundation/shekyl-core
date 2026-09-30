@@ -13,8 +13,9 @@
 /// `IoError` is intentionally distinct from [`std::io::Error`] — the
 /// wallet-core layer's IO surface includes daemon RPC and scanner failures,
 /// not just filesystem syscalls. The RPC binary maps each variant to a
-/// stable JSON-RPC error code. The file variants carry their causes typed,
-/// so that mapping is a `match`, never a reading of the message text.
+/// stable JSON-RPC error code. The file, store and daemon variants carry
+/// their causes typed, so that mapping is a `match`, never a reading of the
+/// message text.
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
     /// A failure of the wallet's own files: envelope, payload frame, ledger
@@ -36,11 +37,17 @@ pub enum IoError {
         detail: String,
     },
 
-    /// Daemon RPC call failed at the transport, JSON-decode, or
-    /// daemon-application layer.
+    /// A daemon RPC failed. `fault` is what the failure means for the
+    /// remedy, classified where it was raised ([`RpcError::fault`]);
+    /// `detail` is the failure's own rendering, for the log. It can carry
+    /// text the daemon sent, so it never reaches a wire.
+    ///
+    /// [`RpcError::fault`]: shekyl_rpc_client::RpcError::fault
     #[error("daemon RPC failure: {detail}")]
     Daemon {
-        /// Stringified upstream error.
+        /// What the failure means for whoever has to act on it.
+        fault: shekyl_rpc_client::DaemonFault,
+        /// The failure's own rendering, for the log.
         detail: String,
     },
 
@@ -54,29 +61,13 @@ pub enum IoError {
 }
 
 impl From<shekyl_rpc_client::RpcError> for IoError {
-    /// Map the upstream `shekyl_rpc_client::RpcError` into an
-    /// [`IoError::Daemon`] by stringifying the upstream variant.
-    ///
-    /// This conversion exists so the crate-internal `DaemonEngine`
-    /// trait (in `crate::engine::traits`) can declare
-    /// `type Error: Into<IoError>` and have
-    /// [`Engine`](crate::engine::Engine) orchestration code propagate
-    /// daemon-RPC failures uniformly via `?`. The stringification is
-    /// deliberate: `IoError` is the wallet-core error surface, not
-    /// the upstream's; preserving the upstream's typed shape would
-    /// either leak the upstream type into the wallet-core API or
-    /// require duplicating the upstream's variant taxonomy here.
-    /// Stringification keeps the boundary clean while preserving the
-    /// failure detail for logs and JSON-RPC error responses. The
-    /// upstream type carries a `thiserror`-derived `Display` impl
-    /// whose `#[error("...")]` attributes produce stable, human-
-    /// readable messages (`"connection error (...)"`,
-    /// `"invalid transaction (...)"`, etc.); `Display` is the
-    /// canonical stringification rather than `Debug`, which would
-    /// leak variant names and bracket-quoted field shapes that are
-    /// brittle to upstream refactors.
+    /// Classify the failure where it is raised and keep its rendering for
+    /// the log. The `DaemonEngine` trait declares `type Error: Into<IoError>`,
+    /// so orchestration code propagates daemon failures with `?` and the
+    /// remedy travels with them as a value.
     fn from(err: shekyl_rpc_client::RpcError) -> Self {
         IoError::Daemon {
+            fault: err.fault(),
             detail: err.to_string(),
         }
     }

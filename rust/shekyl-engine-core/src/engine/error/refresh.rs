@@ -77,6 +77,13 @@ pub enum RefreshError {
     #[error("refresh cancelled")]
     Cancelled,
 
+    /// The chain the daemon serves kept reorganizing: a further reorg was
+    /// detected after the attempt's rewind budget was spent, so the attempt
+    /// stopped rather than scan a region it could no longer check. Nothing
+    /// was merged. Retry once the chain settles.
+    #[error("reorg storm: the chain diverged again after the rewind budget was spent")]
+    ReorgStorm,
+
     /// Daemon-side refresh failure: an RPC call into `shekyld` failed,
     /// or the daemon returned data that the scanner / merge logic could
     /// not consume. Carries an [`IoError`] for upstream detail.

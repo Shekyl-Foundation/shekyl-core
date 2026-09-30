@@ -35,7 +35,8 @@
 //!    method entry, before the daemon-tip read.
 //! 2. **Daemon tip read** — [`DaemonEngine::get_height`] for the
 //!    attempt's scan ceiling. RPC failure surfaces as
-//!    [`LocalRefreshError::Io`]; the
+//!    [`LocalRefreshError::DaemonUnreachable`] or
+//!    [`LocalRefreshError::DaemonProtocol`]; the
 //!    [`RefreshDiagnostic::DaemonProtocolError`] classification at
 //!    this site lands at C5 alongside the `RpcError → ProtocolErrorKind`
 //!    classifier (per §7.X C5 "Producer-side `RpcError`
@@ -157,7 +158,7 @@
 use std::time::Duration;
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
-use shekyl_rpc_client::RpcError;
+use shekyl_rpc_client::{DaemonFault, RpcError};
 use shekyl_scanner::{ScanError, ScanOutcome, ScannableBlock, Scanner, ViewPair, MAX_OUTPUTS};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId};
 use shekyl_wire::Input;
@@ -406,11 +407,13 @@ impl LocalRefresh {
 /// - [`Cancelled`](Self::Cancelled) — observed at cancellation
 ///   checkpoints 2, 3, or 5. Producer returns immediately with
 ///   no further scan work.
-/// - [`Io`](Self::Io) — daemon-side I/O failure (block-fetch
-///   retry budget exhausted; daemon-tip RPC failure).
-///   Producer-side classification via
-///   [`RefreshDiagnostic::DaemonProtocolError`] lands at C5
-///   alongside the `RpcError → ProtocolErrorKind` classifier.
+/// - [`DaemonUnreachable`](Self::DaemonUnreachable) /
+///   [`DaemonProtocol`](Self::DaemonProtocol) — a daemon RPC
+///   failed (block-fetch retry budget exhausted; daemon-tip RPC
+///   failure), split by the branch its [`DaemonFault`] class
+///   takes: retry later, or a reply that broke the contract.
+///   Per-event classification flows via
+///   [`RefreshDiagnostic::DaemonProtocolError`].
 /// - [`Malformed`](Self::Malformed) — daemon delivered a
 ///   structurally-malformed block (either the producer's
 ///   excessive-outputs pre-pass tripped, or the scanner's own
@@ -429,10 +432,17 @@ pub(crate) enum LocalRefreshError {
     #[error("scan cancelled before completing the requested range")]
     Cancelled,
 
-    /// Daemon-side I/O failure (block-fetch retry budget exhausted
-    /// or daemon-tip RPC failure).
-    #[error("daemon I/O failure during refresh")]
-    Io,
+    /// The daemon could not be reached, or stopped answering: the
+    /// daemon-tip read failed, or the block-fetch retry budget ran out.
+    /// Retry later, or check the daemon address.
+    #[error("the daemon did not answer during refresh")]
+    DaemonUnreachable,
+
+    /// The daemon answered with something that breaks the RPC contract
+    /// (a malformed, inconsistent or pruned reply). Another daemon may
+    /// answer correctly.
+    #[error("the daemon's reply broke the RPC contract during refresh")]
+    DaemonProtocol,
 
     /// Daemon returned a structurally-malformed block (producer's
     /// pre-pass or scanner-side structural validation tripped).
@@ -453,23 +463,52 @@ pub(crate) enum LocalRefreshError {
     Internal,
 }
 
+impl LocalRefreshError {
+    /// The structural branch a daemon failure takes. Only the fault's
+    /// class crosses: its data stays behind, per the unit-variant binding.
+    ///
+    /// An identity refusal cannot reach the producer — the orchestrator
+    /// settles identity first ([`prepare_refresh`]) and the client caches
+    /// the verdict — and if one did, it is a daemon this wallet must not
+    /// read from, which is the protocol branch.
+    ///
+    /// [`prepare_refresh`]: super::scan_floor::prepare_refresh
+    const fn from_daemon_fault(fault: DaemonFault) -> Self {
+        match fault {
+            DaemonFault::Unreachable => Self::DaemonUnreachable,
+            DaemonFault::Identity(_) | DaemonFault::Protocol | DaemonFault::FeeResponse => {
+                Self::DaemonProtocol
+            }
+            DaemonFault::Internal => Self::Internal,
+        }
+    }
+}
+
 impl From<LocalRefreshError> for RefreshError {
     fn from(e: LocalRefreshError) -> Self {
+        let daemon = |fault, detail: &str| {
+            RefreshError::Io(IoError::Daemon {
+                fault,
+                detail: detail.to_owned(),
+            })
+        };
         match e {
             LocalRefreshError::Cancelled => RefreshError::Cancelled,
-            LocalRefreshError::Io => RefreshError::Io(IoError::Daemon {
-                detail: "LocalRefresh: daemon I/O failure during refresh".to_string(),
-            }),
-            LocalRefreshError::Malformed => RefreshError::Io(IoError::Scanner {
-                detail: "LocalRefresh: daemon returned a structurally malformed block".to_string(),
-            }),
-            LocalRefreshError::ReorgStorm => RefreshError::Io(IoError::Daemon {
-                detail: "LocalRefresh: reorg storm — the chain served by the daemon diverged \
-                         again after the per-attempt rewind budget; retry when it stabilizes"
-                    .to_string(),
-            }),
+            LocalRefreshError::DaemonUnreachable => daemon(
+                DaemonFault::Unreachable,
+                "LocalRefresh: the daemon did not answer within the retry budget",
+            ),
+            LocalRefreshError::DaemonProtocol => daemon(
+                DaemonFault::Protocol,
+                "LocalRefresh: the daemon's reply broke the RPC contract",
+            ),
+            LocalRefreshError::Malformed => daemon(
+                DaemonFault::Protocol,
+                "LocalRefresh: daemon returned a structurally malformed block",
+            ),
+            LocalRefreshError::ReorgStorm => RefreshError::ReorgStorm,
             LocalRefreshError::Internal => RefreshError::InternalInvariantViolation {
-                context: "LocalRefresh: scanner construction failed against view material",
+                context: "LocalRefresh: scanner construction or daemon request encoding failed",
             },
         }
     }
@@ -641,7 +680,7 @@ impl RefreshEngine for LocalRefresh {
                             kind: classify_rpc_error(&e),
                         },
                     );
-                    return Err(LocalRefreshError::Io);
+                    return Err(LocalRefreshError::from_daemon_fault(e.fault()));
                 }
             };
 
@@ -1127,6 +1166,9 @@ const fn scanner_error_to_malformed_kind(_err: &ScanError) -> MalformedKind {
 /// - [`RpcError::InvalidNode`] → [`ProtocolErrorKind::InvalidNode`]
 /// - [`RpcError::InvalidTransaction`] → [`ProtocolErrorKind::InvalidTransaction`]
 /// - [`RpcError::PrunedTransaction`] → [`ProtocolErrorKind::PrunedTransaction`]
+/// - [`RpcError::IdentityMismatch`] → [`ProtocolErrorKind::IdentityMismatch`]
+///   (settled by the orchestrator before the producer runs; tagged on its
+///   own should one ever arrive)
 /// - [`RpcError::TransactionsNotFound`] → [`ProtocolErrorKind::InvalidNode`]
 ///   (reachable via the `get_transactions` leg of the block fetch: a
 ///   daemon that names transaction hashes in a block and then reports
@@ -1174,6 +1216,7 @@ const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
         RpcError::TransactionsNotFound(_) | RpcError::InvalidFee | RpcError::InvalidPriority => {
             ProtocolErrorKind::InvalidNode
         }
+        RpcError::IdentityMismatch(_) => ProtocolErrorKind::IdentityMismatch,
     }
 }
 
@@ -1254,7 +1297,7 @@ async fn fetch_block_with_retry<R: DaemonEngine>(
 
         match rpc.fetch_scannable_block(height_usize).await {
             Ok(b) => return Ok(b),
-            Err(e) if attempt + 1 < MAX_BLOCK_FETCH_RETRIES => {
+            Err(e) if e.fault().is_retryable() && attempt + 1 < MAX_BLOCK_FETCH_RETRIES => {
                 warn!(
                     height = height.to_raw(),
                     attempt = attempt + 1,
@@ -1277,9 +1320,9 @@ async fn fetch_block_with_retry<R: DaemonEngine>(
             Err(e) => {
                 error!(
                     height = height.to_raw(),
+                    attempts = attempt + 1,
                     error = %e,
-                    "LocalRefresh::fetch_block_with_retry: block fetch failed after {} attempts",
-                    MAX_BLOCK_FETCH_RETRIES,
+                    "LocalRefresh::fetch_block_with_retry: block fetch failed",
                 );
                 emit_state.try_emit(
                     diagnostics,
@@ -1287,7 +1330,7 @@ async fn fetch_block_with_retry<R: DaemonEngine>(
                         kind: classify_rpc_error(&e),
                     },
                 );
-                return Err(LocalRefreshError::Io);
+                return Err(LocalRefreshError::from_daemon_fault(e.fault()));
             }
         }
     }

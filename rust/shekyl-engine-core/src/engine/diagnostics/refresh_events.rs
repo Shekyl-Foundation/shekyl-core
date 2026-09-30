@@ -148,6 +148,13 @@ pub enum ProtocolErrorKind {
     /// block has been pruned from the daemon's database and
     /// cannot be served.
     PrunedTransaction,
+
+    /// The daemon answered the identity handshake (`VC-4`) and is not
+    /// one this wallet can use. The orchestrator settles identity before
+    /// the producer runs, so the producer should never see it; tagged on
+    /// its own so a stream that ever shows one reads "wrong daemon", not
+    /// "bad envelope".
+    IdentityMismatch,
 }
 
 /// Bounded enumeration of the [`RefreshDiagnostic`] classes that

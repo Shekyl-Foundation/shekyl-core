@@ -20,7 +20,9 @@ use shekyl_engine_file::{PayloadError, WalletEnvelopeError, WalletFileError};
 use shekyl_engine_prefs::PrefsError;
 use shekyl_engine_state::WalletLedgerError;
 use shekyl_engine_state::{SetNoteError, TxNoteTooLong};
-use shekyl_rpc_client::{RejectCause, SubmitVerdict};
+use shekyl_rpc_client::{
+    DaemonFault, DaemonNetwork, HashHex, IdentityMismatch, RejectCause, SubmitVerdict,
+};
 use thiserror::Error;
 
 /// The Foundation CompleteTree terms, stated to the operator on the path
@@ -183,7 +185,7 @@ wallet_rpc_error_codes! {
     SignerFailed = -29119,
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200,
-    /// Refresh / rescan / proofs: daemon RPC failed.
+    /// Refresh / rescan / proofs / build: the daemon did not answer.
     ///
     /// For `rescan_blockchain` only the **preflight** refusal uses this code
     /// (wallet untouched). A scan that fails *after* the reset is durable
@@ -198,6 +200,23 @@ wallet_rpc_error_codes! {
     RescanIncomplete = -29203,
     /// Refresh: cancelled before it completed (the wallet is closing).
     RefreshCancelled = -29204,
+    /// The daemon speaks another RPC version than this wallet: update the
+    /// older side (`VC-4` wire axis).
+    DaemonVersionMismatch = -29205,
+    /// The daemon was built from other consensus rules than this wallet
+    /// (`VC-4` rules axis).
+    DaemonRulesMismatch = -29206,
+    /// The daemon runs another network than this wallet (`VC-4` network
+    /// axis). Distinct from `-29007`, which is the wallet *file's* network.
+    DaemonNetworkMismatch = -29207,
+    /// The daemon follows another chain than this wallet's: its genesis
+    /// block differs (`VC-4` genesis axis).
+    DaemonChainMismatch = -29208,
+    /// The daemon answered with something that breaks the RPC contract.
+    DaemonProtocolViolation = -29209,
+    /// Refresh: the chain kept reorganizing past the rewind budget; nothing
+    /// was merged.
+    ChainUnstable = -29210,
     /// `check_*`: proof string failed decode / framing / size caps.
     ProofMalformed = -29300,
     /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
@@ -442,8 +461,10 @@ pub enum WalletRpcError {
     /// session — its actor stopped and a respawn did not recover it.
     #[error("the wallet's membership data is unavailable — close and reopen the wallet")]
     CurveTreeUnavailable,
-    /// Daemon RPC unreachable / failed.
-    #[error("daemon unreachable")]
+    /// `-29201`: the daemon did not answer.
+    #[error(
+        "the daemon did not answer — check that it is running and its address is right, then retry"
+    )]
     DaemonUnreachable,
     /// Refresh already in flight (single-flight).
     #[error("refresh already running")]
@@ -471,6 +492,64 @@ pub enum WalletRpcError {
     /// `-29204`: the refresh was cancelled before it completed.
     #[error("the refresh was cancelled before it completed — retry once the wallet is open")]
     RefreshCancelled,
+    /// `-29205`: the daemon speaks another RPC version. `daemon_version` is
+    /// `None` when its reply could not be read at all.
+    #[error("{}", daemon_version_message(*wallet_version, *daemon_version))]
+    DaemonVersionMismatch {
+        /// This wallet's packed RPC version.
+        wallet_version: u32,
+        /// The daemon's packed RPC version, when its reply could be read.
+        daemon_version: Option<u32>,
+    },
+    /// `-29206`: the daemon was built from other consensus rules. The two
+    /// digests are public build facts, so they ride `data`.
+    #[error(
+        "the daemon was built with different consensus rules from this wallet — \
+         connect to a daemon from the same release"
+    )]
+    DaemonRulesMismatch {
+        /// This wallet's consensus-constants digest.
+        wallet_digest: HashHex,
+        /// The daemon's consensus-constants digest.
+        daemon_digest: HashHex,
+    },
+    /// `-29207`: the daemon runs another network. Network names are public,
+    /// so both ride `data`.
+    #[error(
+        "the daemon you connected to runs {daemon}, but this wallet is for {wallet} — \
+         connect to a {wallet} daemon"
+    )]
+    DaemonNetworkMismatch {
+        /// The network this wallet is for.
+        wallet: DaemonNetwork,
+        /// The network the daemon runs.
+        daemon: DaemonNetwork,
+    },
+    /// `-29208`: the daemon's chain starts at another genesis block.
+    #[error(
+        "the daemon you connected to follows a different {network} chain from this \
+         wallet's (their first blocks differ) — connect to a daemon on this wallet's chain"
+    )]
+    DaemonChainMismatch {
+        /// The network whose genesis was compared.
+        network: DaemonNetwork,
+        /// The genesis block this wallet expects.
+        wallet_genesis: HashHex,
+        /// The daemon's genesis block.
+        daemon_genesis: HashHex,
+    },
+    /// `-29209`: the daemon answered with something that breaks the RPC
+    /// contract. What it sent stays in the server log.
+    #[error(
+        "the daemon's reply did not follow the RPC contract — it may be faulty or an \
+         incompatible build; try another daemon"
+    )]
+    DaemonProtocolViolation,
+    /// `-29210`: the chain kept reorganizing during refresh.
+    #[error(
+        "the chain kept reorganizing during refresh and nothing was merged — retry once it settles"
+    )]
+    ChainUnstable,
     /// Build: address parse / network check failed.
     #[error("invalid recipient")]
     InvalidRecipient,
@@ -936,6 +1015,12 @@ impl WalletRpcError {
             Self::RescanBlocked { .. } => WalletRpcErrorCode::RescanBlocked,
             Self::RescanIncomplete => WalletRpcErrorCode::RescanIncomplete,
             Self::RefreshCancelled => WalletRpcErrorCode::RefreshCancelled,
+            Self::DaemonVersionMismatch { .. } => WalletRpcErrorCode::DaemonVersionMismatch,
+            Self::DaemonRulesMismatch { .. } => WalletRpcErrorCode::DaemonRulesMismatch,
+            Self::DaemonNetworkMismatch { .. } => WalletRpcErrorCode::DaemonNetworkMismatch,
+            Self::DaemonChainMismatch { .. } => WalletRpcErrorCode::DaemonChainMismatch,
+            Self::DaemonProtocolViolation => WalletRpcErrorCode::DaemonProtocolViolation,
+            Self::ChainUnstable => WalletRpcErrorCode::ChainUnstable,
             Self::InvalidRecipient => WalletRpcErrorCode::InvalidRecipient,
             Self::InsufficientFunds => WalletRpcErrorCode::InsufficientFunds,
             Self::FeeEstimationFailed => WalletRpcErrorCode::FeeEstimationFailed,
@@ -1045,6 +1130,33 @@ impl WalletRpcError {
                 Some(json!({ "wallet": wallet, "expected": expected }))
             }
             Self::WalletCloseBlocked { count } => Some(json!({ "count": count })),
+            Self::DaemonVersionMismatch {
+                wallet_version,
+                daemon_version,
+            } => Some(json!({
+                "wallet_version": IdentityMismatch::version_display(*wallet_version),
+                "daemon_version": daemon_version.map(IdentityMismatch::version_display),
+                "update": daemon_version.map(|theirs| OlderSide::of(*wallet_version, theirs).as_str()),
+            })),
+            Self::DaemonRulesMismatch {
+                wallet_digest,
+                daemon_digest,
+            } => Some(json!({
+                "wallet_digest": wallet_digest.to_string(),
+                "daemon_digest": daemon_digest.to_string(),
+            })),
+            Self::DaemonNetworkMismatch { wallet, daemon } => {
+                Some(json!({ "wallet": wallet, "daemon": daemon }))
+            }
+            Self::DaemonChainMismatch {
+                network,
+                wallet_genesis,
+                daemon_genesis,
+            } => Some(json!({
+                "network": network,
+                "wallet_genesis": wallet_genesis.to_string(),
+                "daemon_genesis": daemon_genesis.to_string(),
+            })),
             Self::OutputNotYetSpendable { wait_blocks } => {
                 Some(json!({ "wait_blocks": wait_blocks }))
             }
@@ -1101,6 +1213,7 @@ impl WalletRpcError {
                 Self::RescanIncomplete
             }
             RefreshError::Cancelled
+            | RefreshError::ReorgStorm
             | RefreshError::MalformedScanResult { .. }
             | RefreshError::CurveTreeIngest { .. }
             | RefreshError::ConcurrentMutation { .. }
@@ -1123,11 +1236,7 @@ impl From<OpenError> for WalletRpcError {
                 wallet: wallet.to_string(),
                 expected: expected.to_string(),
             },
-            OpenError::Io(IoError::Daemon { .. }) => Self::DaemonUnreachable,
-            OpenError::Io(IoError::Scanner { detail }) => {
-                internal_detail("wallet scanner setup failed", detail)
-            }
-            OpenError::Io(io) => from_storage_io(io),
+            OpenError::Io(io) => from_io_error(io),
             OpenError::Key(e) => from_key_error(&e),
             OpenError::Persistence(e) => e.into(),
         }
@@ -1173,11 +1282,9 @@ impl From<RefreshError> for WalletRpcError {
                 tracing::warn!(detail = %detail, "rescan reset persistence failed");
                 Self::WalletFileIoFailed
             }
-            RefreshError::Io(IoError::Daemon { .. } | IoError::Scanner { .. }) => {
-                Self::DaemonUnreachable
-            }
-            RefreshError::Io(io) => from_storage_io(io),
+            RefreshError::Io(io) => from_io_error(io),
             RefreshError::Cancelled => Self::RefreshCancelled,
+            RefreshError::ReorgStorm => Self::ChainUnstable,
             // The respawn already ran and did not recover the actor: the
             // membership data is gone for this session.
             RefreshError::CurveTreeIngest { context, .. } => {
@@ -1250,7 +1357,10 @@ impl From<ServingStartError> for WalletRpcError {
 impl From<FeeEstimatorError> for WalletRpcError {
     fn from(err: FeeEstimatorError) -> Self {
         match err {
-            FeeEstimatorError::DaemonUnreachable => Self::FeeEstimationFailed,
+            // The fee query's own "no answer" code (`-29102`); every other
+            // daemon fault names its cause.
+            FeeEstimatorError::Daemon(DaemonFault::Unreachable) => Self::FeeEstimationFailed,
+            FeeEstimatorError::Daemon(fault) => from_daemon_fault(fault, "fee query"),
             FeeEstimatorError::DaemonResponseInvalid { reason } => {
                 tracing::warn!(reason = %reason, "daemon fee response invalid");
                 Self::DaemonFeeResponseInvalid
@@ -1283,10 +1393,7 @@ impl From<SendError> for WalletRpcError {
             SendError::InvalidRecipient { .. } => Self::InvalidRecipient,
             SendError::Fee(e) => e.into(),
             SendError::InsufficientFunds { .. } => Self::InsufficientFunds,
-            SendError::Io(IoError::Daemon { .. } | IoError::Scanner { .. }) => {
-                Self::DaemonUnreachable
-            }
-            SendError::Io(io) => from_storage_io(io),
+            SendError::Io(io) => from_io_error(io),
             SendError::Tx(e) => internal_detail("transaction construction", e),
             SendError::NotSynced => Self::WalletNotSynced,
             // No spend-key material in scope: the session's signer is gone,
@@ -1317,18 +1424,138 @@ impl From<SendError> for WalletRpcError {
 }
 
 // ---------------------------------------------------------------------------
+// The daemon: each fault, named where it was raised, to its own code.
+// ---------------------------------------------------------------------------
+
+/// A daemon failure by its [`DaemonFault`]. `detail` is the failure's own
+/// rendering and can carry text the daemon sent, so it goes to the log
+/// only. The "no answer" arm is `-29201`; a caller whose contract names a
+/// narrower "no answer" code (the fee query's `-29102`) matches that arm
+/// before delegating here.
+fn from_daemon_fault(fault: DaemonFault, detail: &str) -> WalletRpcError {
+    match fault {
+        DaemonFault::Unreachable => {
+            tracing::info!(detail, "daemon did not answer");
+            WalletRpcError::DaemonUnreachable
+        }
+        DaemonFault::Identity(mismatch) => {
+            tracing::warn!(axis = %mismatch.axis(), detail, "daemon refused on identity");
+            from_identity_mismatch(mismatch)
+        }
+        DaemonFault::Protocol => {
+            tracing::warn!(detail, "daemon reply broke the RPC contract");
+            WalletRpcError::DaemonProtocolViolation
+        }
+        DaemonFault::FeeResponse => {
+            tracing::warn!(detail, "daemon fee response unusable");
+            WalletRpcError::DaemonFeeResponseInvalid
+        }
+        DaemonFault::Internal => internal_detail("daemon request", detail),
+    }
+}
+
+/// A daemon RPC failure a caller holds untyped by [`IoError`] (the proof
+/// path keeps the upstream error).
+pub(crate) fn from_daemon_rpc_error(err: &shekyl_rpc_client::RpcError) -> WalletRpcError {
+    from_daemon_fault(err.fault(), &err.to_string())
+}
+
+/// One code per identity axis, because each has its own remedy.
+fn from_identity_mismatch(mismatch: IdentityMismatch) -> WalletRpcError {
+    match mismatch {
+        IdentityMismatch::Wire { ours, theirs } => WalletRpcError::DaemonVersionMismatch {
+            wallet_version: ours,
+            daemon_version: Some(theirs),
+        },
+        IdentityMismatch::WireUnreadable { ours } => WalletRpcError::DaemonVersionMismatch {
+            wallet_version: ours,
+            daemon_version: None,
+        },
+        IdentityMismatch::Rules { ours, theirs } => WalletRpcError::DaemonRulesMismatch {
+            wallet_digest: ours,
+            daemon_digest: theirs,
+        },
+        IdentityMismatch::Network { ours, theirs } => WalletRpcError::DaemonNetworkMismatch {
+            wallet: ours,
+            daemon: theirs,
+        },
+        IdentityMismatch::Genesis {
+            ours,
+            theirs,
+            network,
+        } => WalletRpcError::DaemonChainMismatch {
+            network,
+            wallet_genesis: ours,
+            daemon_genesis: theirs,
+        },
+    }
+}
+
+/// Which side of an RPC version mismatch to update: the older one.
+#[derive(Clone, Copy)]
+enum OlderSide {
+    Daemon,
+    Wallet,
+}
+
+impl OlderSide {
+    /// The two versions differ, or there would be no mismatch.
+    const fn of(wallet_version: u32, daemon_version: u32) -> Self {
+        if daemon_version < wallet_version {
+            Self::Daemon
+        } else {
+            Self::Wallet
+        }
+    }
+
+    /// The `data.update` value.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Daemon => "daemon",
+            Self::Wallet => "wallet",
+        }
+    }
+}
+
+/// `-29205`'s message: the remedy is to update whichever side is older, or,
+/// when the daemon's reply could not be read, to run matching releases.
+fn daemon_version_message(wallet_version: u32, daemon_version: Option<u32>) -> String {
+    let ours = IdentityMismatch::version_display(wallet_version);
+    match daemon_version {
+        Some(theirs) => {
+            let (newer_or_older, update) = match OlderSide::of(wallet_version, theirs) {
+                OlderSide::Daemon => ("older", "the daemon"),
+                OlderSide::Wallet => ("newer", "this wallet"),
+            };
+            format!(
+                "the daemon runs a {newer_or_older} RPC version ({}) than this wallet ({ours}) — \
+                 update {update}",
+                IdentityMismatch::version_display(theirs),
+            )
+        }
+        None => format!(
+            "the daemon's version reply could not be read, so it is not the RPC version this \
+             wallet ({ours}) was built for — run matching releases"
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The wallet's storage: typed causes to named codes. Every path, the file
 // store's and the curve-tree store's, stays in the server log.
 // ---------------------------------------------------------------------------
 
-/// An [`IoError`] from the wallet's own storage. The daemon and scanner arms
-/// are the callers' to name — their meaning differs by operation — so they
-/// reach here only from a caller that has no better word for them.
-fn from_storage_io(io: IoError) -> WalletRpcError {
+/// An [`IoError`] by its typed cause. Every arm carries what it means for
+/// the remedy, classified where it was raised, so the same failure answers
+/// the same code whichever operation met it.
+fn from_io_error(io: IoError) -> WalletRpcError {
     match io {
         IoError::WalletFile(e) => from_wallet_file_error(&e),
         IoError::CurveTreeStore { fault, detail } => from_store_open_fault(fault, &detail),
-        IoError::Daemon { .. } => WalletRpcError::DaemonUnreachable,
+        IoError::Daemon { fault, detail } => from_daemon_fault(fault, &detail),
+        // Only this wallet's own view material reaches here as a scanner
+        // failure (a daemon's malformed block is a `Daemon` protocol fault):
+        // a bug, not a state a client can remedy.
         IoError::Scanner { detail } => internal_detail("scanner", detail),
     }
 }
@@ -1530,10 +1757,7 @@ impl From<DrainToPrincipalError> for WalletRpcError {
                 tracing::info!(detail = %detail, "drain payment refused by the planner");
                 Self::InsufficientFunds
             }
-            DrainToPrincipalError::FeeEstimate { detail } => {
-                tracing::warn!(detail = %detail, "drain fee estimate failed");
-                Self::FeeEstimationFailed
-            }
+            DrainToPrincipalError::FeeEstimate(e) => e.into(),
             DrainToPrincipalError::FeeUnreasonable {
                 reason,
                 rate,
@@ -1582,10 +1806,7 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
                 cause: "daemon",
                 detail,
             },
-            E::FeeEstimate { detail } => {
-                tracing::warn!(detail = %detail, "unstake fee estimate failed");
-                Self::FeeEstimationFailed
-            }
+            E::FeeEstimate(e) => e.into(),
             E::FeeUnreasonable {
                 reason,
                 rate,
@@ -1632,10 +1853,7 @@ impl From<shekyl_engine_core::CollectUnstakedError> for WalletRpcError {
             // its own code rather than borrowing one with the wrong text
             // NOT -32603.
             E::DaemonUnreachable { detail } => Self::CollectDaemonUnreachable { detail },
-            E::FeeEstimate { detail } => {
-                tracing::warn!(detail = %detail, "collect_unstaked fee estimate failed");
-                Self::FeeEstimationFailed
-            }
+            E::FeeEstimate(e) => e.into(),
             E::FeeUnreasonable {
                 reason,
                 rate,
@@ -1765,10 +1983,14 @@ impl From<PendingTxError> for WalletRpcError {
             PendingTxError::ChainStateChanged { .. } | PendingTxError::TooOld { .. } => {
                 Self::SnapshotInvalidated
             }
+            // A daemon failure at submit is ambiguous whatever its fault: the
+            // bytes may have gone out. An identity refusal cannot first
+            // appear here — the build's fee query ran the handshake on the
+            // same client, which caches its verdict.
             PendingTxError::DiscardBlockedPendingDaemonAck { .. }
             | PendingTxError::Io(IoError::Daemon { .. }) => Self::SubmitAmbiguous,
             PendingTxError::SubmitAlreadyPending { .. } => Self::SubmitAlreadyPending,
-            PendingTxError::Io(io) => from_storage_io(io),
+            PendingTxError::Io(io) => from_io_error(io),
             // `PendingTxError` is `#[non_exhaustive]` (Phase 0a); every variant
             // is named above, so inside one workspace build this is unreachable.
             other => internal_detail("pending-tx variant unmapped at the RPC boundary", other),
@@ -1820,6 +2042,7 @@ mod tests {
     #[test]
     fn maps_refresh_daemon_io() {
         let err: WalletRpcError = RefreshError::Io(IoError::Daemon {
+            fault: DaemonFault::Unreachable,
             detail: "connection refused".into(),
         })
         .into();
@@ -1831,6 +2054,7 @@ mod tests {
     #[test]
     fn post_reset_daemon_io_is_rescan_incomplete_not_unreachable() {
         let err = WalletRpcError::from_rescan_scan_failure(RefreshError::Io(IoError::Daemon {
+            fault: DaemonFault::Unreachable,
             detail: "/tmp/wallet.keys connection refused".into(),
         }));
         assert_eq!(err.code(), WalletRpcErrorCode::RescanIncomplete);
@@ -2093,9 +2317,7 @@ mod tests {
                 -29101,
             ),
             (
-                E::FeeEstimate {
-                    detail: "connection refused".into(),
-                },
+                E::FeeEstimate(FeeEstimatorError::Daemon(DaemonFault::Unreachable)),
                 -29102,
             ),
             (
@@ -2210,10 +2432,8 @@ mod tests {
             assert_eq!(err.code().as_i32(), *code, "{err}");
             assert_ne!(err.code().as_i32(), -32603, "no fall-through: {err}");
         }
-        let fee_query: WalletRpcError = E::FeeEstimate {
-            detail: "daemon down".into(),
-        }
-        .into();
+        let fee_query: WalletRpcError =
+            E::FeeEstimate(FeeEstimatorError::Daemon(DaemonFault::Unreachable)).into();
         assert_eq!(
             fee_query.code().as_i32(),
             -29102,
@@ -2285,10 +2505,7 @@ mod tests {
                 -29529,
             ),
             (
-                E::FeeEstimate {
-                    detail: "daemon down".into(),
-                }
-                .into(),
+                E::FeeEstimate(FeeEstimatorError::Daemon(DaemonFault::Unreachable)).into(),
                 -29102,
             ),
             (
@@ -2372,10 +2589,9 @@ mod tests {
         assert_eq!(data["rate"], 1_000_000);
         assert_eq!(data["bound"], 500_000);
 
-        let err: WalletRpcError = DrainToPrincipalError::FeeEstimate {
-            detail: "connection refused".into(),
-        }
-        .into();
+        let err: WalletRpcError =
+            DrainToPrincipalError::FeeEstimate(FeeEstimatorError::Daemon(DaemonFault::Unreachable))
+                .into();
         assert_eq!(err.code().as_i32(), -29102);
     }
 
@@ -2594,6 +2810,7 @@ mod tests {
             ),
             (
                 SendError::Io(IoError::Daemon {
+                    fault: DaemonFault::Unreachable,
                     detail: "connection refused".into(),
                 }),
                 WalletRpcErrorCode::DaemonUnreachable,
@@ -2683,6 +2900,184 @@ mod tests {
     /// one set, both directions: a code the server can emit that the contract
     /// does not list is a conformance failure, and a contract code with no
     /// variant is a promise nothing keeps.
+    /// Text a daemon controls, with a path in it: none of it may reach a
+    /// message.
+    const DAEMON_TEXT: &str = "reply from /home/user/.shekyl: missing field `nettype`";
+
+    fn wire(ours: u32, theirs: u32) -> DaemonFault {
+        DaemonFault::Identity(IdentityMismatch::Wire { ours, theirs })
+    }
+
+    /// Every daemon fault, the code it answers, and the `data` it carries.
+    fn every_daemon_fault() -> Vec<(DaemonFault, WalletRpcErrorCode, Option<Value>)> {
+        use WalletRpcErrorCode as C;
+        let digest = |b| HashHex::from_bytes([b; 32]);
+        vec![
+            (DaemonFault::Unreachable, C::DaemonUnreachable, None),
+            (
+                wire(0x0003_001d, 0x0003_001c),
+                C::DaemonVersionMismatch,
+                Some(json!({
+                    "wallet_version": "3.29", "daemon_version": "3.28", "update": "daemon",
+                })),
+            ),
+            (
+                wire(0x0003_001d, 0x0003_001e),
+                C::DaemonVersionMismatch,
+                Some(json!({
+                    "wallet_version": "3.29", "daemon_version": "3.30", "update": "wallet",
+                })),
+            ),
+            (
+                DaemonFault::Identity(IdentityMismatch::WireUnreadable { ours: 0x0003_001d }),
+                C::DaemonVersionMismatch,
+                Some(json!({
+                    "wallet_version": "3.29", "daemon_version": null, "update": null,
+                })),
+            ),
+            (
+                DaemonFault::Identity(IdentityMismatch::Rules {
+                    ours: digest(1),
+                    theirs: digest(2),
+                }),
+                C::DaemonRulesMismatch,
+                Some(json!({
+                    "wallet_digest": digest(1).to_string(),
+                    "daemon_digest": digest(2).to_string(),
+                })),
+            ),
+            (
+                DaemonFault::Identity(IdentityMismatch::Network {
+                    ours: DaemonNetwork::Mainnet,
+                    theirs: DaemonNetwork::Testnet,
+                }),
+                C::DaemonNetworkMismatch,
+                Some(json!({ "wallet": "mainnet", "daemon": "testnet" })),
+            ),
+            (
+                DaemonFault::Identity(IdentityMismatch::Genesis {
+                    ours: digest(3),
+                    theirs: digest(4),
+                    network: DaemonNetwork::Testnet,
+                }),
+                C::DaemonChainMismatch,
+                Some(json!({
+                    "network": "testnet",
+                    "wallet_genesis": digest(3).to_string(),
+                    "daemon_genesis": digest(4).to_string(),
+                })),
+            ),
+            (DaemonFault::Protocol, C::DaemonProtocolViolation, None),
+            (DaemonFault::FeeResponse, C::DaemonFeeResponseInvalid, None),
+            (DaemonFault::Internal, C::InternalError, None),
+        ]
+    }
+
+    /// A daemon fault answers the same code whichever operation met it, and
+    /// none of the daemon's text reaches the message.
+    #[test]
+    fn every_daemon_fault_names_its_remedy_on_every_path() {
+        let io = |fault| IoError::Daemon {
+            fault,
+            detail: DAEMON_TEXT.to_owned(),
+        };
+        for (fault, code, data) in every_daemon_fault() {
+            let paths: [(&str, WalletRpcError); 4] = [
+                ("open", OpenError::Io(io(fault)).into()),
+                ("refresh", RefreshError::Io(io(fault)).into()),
+                ("build", SendError::Io(io(fault)).into()),
+                ("storage", from_io_error(io(fault))),
+            ];
+            for (path, err) in paths {
+                assert_eq!(err.code(), code, "{path}: {fault:?}");
+                assert_eq!(err.data(), data, "{path}: {fault:?}");
+                let message = err.message();
+                assert!(
+                    !message.contains("/home/user") && !message.contains("missing field"),
+                    "{path}: the daemon's text stays in the log: {message}"
+                );
+            }
+        }
+    }
+
+    /// The identity messages name the remedy, not only the disagreement.
+    #[test]
+    fn a_version_mismatch_says_which_side_to_update() {
+        let older: WalletRpcError = from_daemon_fault(wire(0x0003_001d, 0x0003_001c), DAEMON_TEXT);
+        assert!(older.message().contains("update the daemon"), "{older}");
+        let newer: WalletRpcError = from_daemon_fault(wire(0x0003_001d, 0x0003_001e), DAEMON_TEXT);
+        assert!(newer.message().contains("update this wallet"), "{newer}");
+        let network = from_daemon_fault(
+            DaemonFault::Identity(IdentityMismatch::Network {
+                ours: DaemonNetwork::Stagenet,
+                theirs: DaemonNetwork::Mainnet,
+            }),
+            DAEMON_TEXT,
+        );
+        assert!(
+            network
+                .message()
+                .contains("runs mainnet, but this wallet is for stagenet"),
+            "{network}"
+        );
+    }
+
+    /// The fee query keeps its own "no answer" code (`-29102`); every other
+    /// daemon fault behind it names its cause, on the send path and on each
+    /// staking lane that quotes a fee.
+    #[test]
+    fn a_failed_fee_query_names_its_cause() {
+        use shekyl_engine_core::{
+            CollectUnstakedError, DrainToPrincipalError, FirstStakeError, UnstakeError,
+        };
+        let wrong_network = DaemonFault::Identity(IdentityMismatch::Network {
+            ours: DaemonNetwork::Mainnet,
+            theirs: DaemonNetwork::Testnet,
+        });
+        for (fault, code) in [
+            (
+                DaemonFault::Unreachable,
+                WalletRpcErrorCode::FeeEstimationFailed,
+            ),
+            (wrong_network, WalletRpcErrorCode::DaemonNetworkMismatch),
+            (
+                DaemonFault::Protocol,
+                WalletRpcErrorCode::DaemonProtocolViolation,
+            ),
+            (
+                DaemonFault::FeeResponse,
+                WalletRpcErrorCode::DaemonFeeResponseInvalid,
+            ),
+        ] {
+            let fee = FeeEstimatorError::Daemon(fault);
+            let lanes: [(&str, WalletRpcError); 4] = [
+                ("send", SendError::Fee(fee).into()),
+                ("drain", DrainToPrincipalError::FeeEstimate(fee).into()),
+                ("unstake", UnstakeError::FeeEstimate(fee).into()),
+                ("collect", CollectUnstakedError::FeeEstimate(fee).into()),
+            ];
+            for (lane, err) in lanes {
+                assert_eq!(err.code(), code, "{lane}: {fault:?}");
+            }
+            // First-stake maps inside its handler; its payload is the same
+            // typed error the lanes above carry.
+            assert!(matches!(
+                FirstStakeError::FeeEstimate(fee),
+                FirstStakeError::FeeEstimate(FeeEstimatorError::Daemon(f)) if f == fault
+            ));
+        }
+    }
+
+    /// A chain that kept reorganizing is its own remedy — wait for it to
+    /// settle — and after a durable rescan reset it is still "incomplete".
+    #[test]
+    fn a_reorg_storm_is_not_an_outage() {
+        let err: WalletRpcError = RefreshError::ReorgStorm.into();
+        assert_eq!(err.code(), WalletRpcErrorCode::ChainUnstable);
+        let err = WalletRpcError::from_rescan_scan_failure(RefreshError::ReorgStorm);
+        assert_eq!(err.code(), WalletRpcErrorCode::RescanIncomplete);
+    }
+
     #[test]
     fn the_code_table_is_the_contracts() {
         let contract = include_str!("../../../docs/api/wallet_rpc.yaml");

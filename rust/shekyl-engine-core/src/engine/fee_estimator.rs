@@ -223,9 +223,9 @@ pub trait FeeEstimator: Send + Sync + 'static {
     /// Returns the implementor's local `Error` type. The
     /// orchestrator converts via `.into()` to the engine-wide
     /// [`FeeEstimatorError`]. V3.0's [`DaemonFeeEstimator`]
-    /// returns [`FeeEstimatorError::DaemonUnreachable`] on
-    /// network failure, [`FeeEstimatorError::DaemonResponseInvalid`]
-    /// on malformed responses, [`FeeEstimatorError::DaemonFeeUnreasonable`]
+    /// returns [`FeeEstimatorError::Daemon`] when the query fails,
+    /// [`FeeEstimatorError::DaemonResponseInvalid`] on an unusable
+    /// snapshot, [`FeeEstimatorError::DaemonFeeUnreasonable`]
     /// on a non-monotonic or over-cap snapshot, and
     /// [`FeeEstimatorError::CustomFeeOutOfRange`] on a caller-band miss.
     fn estimate_fee(

@@ -119,7 +119,8 @@ async fn start_refresh_propagates_daemon_io_error_via_join() {
 
     let result = handle.join().await;
     match result {
-        Err(RefreshError::Io(IoError::Daemon { detail })) => {
+        Err(RefreshError::Io(IoError::Daemon { fault, detail })) => {
+            assert_eq!(fault, shekyl_rpc_client::DaemonFault::Unreachable);
             assert!(
                 !detail.is_empty(),
                 "Daemon error carries a non-empty detail string"

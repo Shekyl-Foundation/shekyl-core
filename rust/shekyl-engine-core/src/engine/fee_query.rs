@@ -124,7 +124,7 @@ impl<
     ///
     /// # Errors
     ///
-    /// [`FeeEstimatorError::DaemonUnreachable`] /
+    /// [`FeeEstimatorError::Daemon`] /
     /// [`FeeEstimatorError::DaemonResponseInvalid`] when the snapshot cannot
     /// be fetched or is unusable;
     /// [`FeeEstimatorError::DaemonFeeUnreasonable`] when the snapshot

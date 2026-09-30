@@ -672,6 +672,12 @@ components:
         - -29202   # RESCAN_BLOCKED
         - -29203   # RESCAN_INCOMPLETE
         - -29204   # REFRESH_CANCELLED
+        - -29205   # DAEMON_VERSION_MISMATCH
+        - -29206   # DAEMON_RULES_MISMATCH
+        - -29207   # DAEMON_NETWORK_MISMATCH
+        - -29208   # DAEMON_CHAIN_MISMATCH
+        - -29209   # DAEMON_PROTOCOL_VIOLATION
+        - -29210   # CHAIN_UNSTABLE
         - -29300   # PROOF_MALFORMED
         - -29301   # PROOF_TX_SECRET_UNAVAILABLE
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
@@ -872,10 +878,15 @@ components:
                                           (a device error, a remote actor
                                           disconnecting)
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
-          -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs/build: daemon
-                                          RPC failed (proof methods dial the
-                                          daemon for tx bodies / spent-set
-                                          queries; for rescan this code is
+          -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs/build: the
+                                          daemon did not answer — check it
+                                          is running and its address, then
+                                          retry. A daemon that answers and
+                                          is refused is -29205..-29209,
+                                          never this code (proof methods
+                                          dial the daemon for tx bodies /
+                                          spent-set queries; for rescan this
+                                          code is
                                           reserved to the *preflight*
                                           refusal — wallet untouched. A
                                           mid-scan daemon drop after the
@@ -911,6 +922,50 @@ components:
                                           completed (the wallet is closing);
                                           nothing partial was applied — retry
                                           once the wallet is open
+          -29205 DAEMON_VERSION_MISMATCH  any daemon operation: the daemon
+                                          speaks another RPC version (VC-4
+                                          wire axis) — update the older side
+                                          (data: {"wallet_version": "3.29",
+                                          "daemon_version": "3.28" | null,
+                                          "update": "daemon" | "wallet" |
+                                          null}; null when the daemon's
+                                          get_version reply could not be
+                                          read — run matching releases).
+                                          Retrying the same daemon cannot
+                                          clear -29205..-29208
+          -29206 DAEMON_RULES_MISMATCH    any daemon operation: the daemon
+                                          was built from other consensus
+                                          rules (VC-4 rules axis) — connect
+                                          to a daemon from the same release
+                                          (data: {"wallet_digest",
+                                          "daemon_digest"}, hex)
+          -29207 DAEMON_NETWORK_MISMATCH  any daemon operation: the daemon
+                                          runs another network (VC-4 network
+                                          axis) — connect to a daemon on the
+                                          wallet's network (data: {"wallet":
+                                          "stagenet", "daemon": "mainnet"}).
+                                          Distinct from -29007, which is the
+                                          wallet FILE's network
+          -29208 DAEMON_CHAIN_MISMATCH    any daemon operation: the daemon's
+                                          chain starts at another genesis
+                                          block (VC-4 genesis axis) — a
+                                          different chain under the same
+                                          network name (data: {"network",
+                                          "wallet_genesis",
+                                          "daemon_genesis"}, hex)
+          -29209 DAEMON_PROTOCOL_VIOLATION any daemon operation: the daemon
+                                          answered with something that breaks
+                                          the RPC contract (malformed,
+                                          inconsistent or pruned replies, a
+                                          block that does not parse) — try
+                                          another daemon. What it sent stays
+                                          in the server log
+          -29210 CHAIN_UNSTABLE           refresh: the chain kept
+                                          reorganizing past the per-attempt
+                                          rewind budget; nothing was merged —
+                                          retry once it settles. After a
+                                          durable rescan reset the same cause
+                                          is -29203
           -29300 PROOF_MALFORMED          check_*: proof string failed
                                           Bech32m decode, carried the wrong
                                           HRP, its wire framing did not

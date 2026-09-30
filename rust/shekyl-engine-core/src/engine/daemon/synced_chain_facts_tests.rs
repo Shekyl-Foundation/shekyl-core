@@ -287,8 +287,23 @@ fn a_failed_facts_read_is_classified_by_its_cause() {
         TimelineBreak::FactsUnreadable,
     );
     assert_eq!(
-        TimelineBreak::from_facts_error(&RpcError::InternalError("no route".into())),
+        TimelineBreak::from_facts_error(&RpcError::ConnectionError("refused".into())),
         TimelineBreak::DaemonUnreachable,
+    );
+    // A request this wallet could not form repeats on every retry: the
+    // contract class, not the transport one.
+    assert_eq!(
+        TimelineBreak::from_facts_error(&RpcError::InternalError("encode request".into())),
+        TimelineBreak::FactsUnreadable,
+    );
+    let wrong_network = shekyl_rpc_types::IdentityMismatch::Network {
+        ours: shekyl_rpc_types::DaemonNetwork::Mainnet,
+        theirs: shekyl_rpc_types::DaemonNetwork::Testnet,
+    };
+    assert_eq!(
+        TimelineBreak::from_facts_error(&RpcError::IdentityMismatch(wrong_network)),
+        TimelineBreak::IdentityRefused(wrong_network),
+        "a wrong daemon is its own remedy, not an outage"
     );
 }
 

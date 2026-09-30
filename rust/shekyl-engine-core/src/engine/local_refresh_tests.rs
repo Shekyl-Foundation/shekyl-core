@@ -15,6 +15,7 @@ use shekyl_types::BlockHeight;
 
 use super::*;
 use crate::engine::diagnostics::NoopDiagnosticSink;
+use shekyl_rpc_client::DaemonFault;
 
 /// `LocalRefreshError → RefreshError` mapping is total and
 /// preserves the discriminant classes per the §2.3
@@ -26,12 +27,29 @@ fn local_refresh_error_maps_to_refresh_error() {
         RefreshError::Cancelled
     ));
     assert!(matches!(
-        RefreshError::from(LocalRefreshError::Io),
-        RefreshError::Io(IoError::Daemon { .. })
+        RefreshError::from(LocalRefreshError::DaemonUnreachable),
+        RefreshError::Io(IoError::Daemon {
+            fault: DaemonFault::Unreachable,
+            ..
+        })
     ));
+    // A reply that broke the contract, and a block that did, are the same
+    // remedy: not an outage, so not "unreachable".
+    for broken in [
+        LocalRefreshError::DaemonProtocol,
+        LocalRefreshError::Malformed,
+    ] {
+        assert!(matches!(
+            RefreshError::from(broken),
+            RefreshError::Io(IoError::Daemon {
+                fault: DaemonFault::Protocol,
+                ..
+            })
+        ));
+    }
     assert!(matches!(
-        RefreshError::from(LocalRefreshError::Malformed),
-        RefreshError::Io(IoError::Scanner { .. })
+        RefreshError::from(LocalRefreshError::ReorgStorm),
+        RefreshError::ReorgStorm
     ));
     assert!(matches!(
         RefreshError::from(LocalRefreshError::Internal),

@@ -11,7 +11,7 @@
   `WalletFileError` itself, `WalletFile::create` names a missing directory
   before writing anything (`DirectoryMissing`), and the classifier is gone.
   The same create now answers `-29009 WALLET_DIR_MISSING`.
-- 24 codes are allocated in `docs/api/wallet_rpc.yaml`, each for a cause that
+- 30 codes are allocated in `docs/api/wallet_rpc.yaml`, each for a cause that
   previously reached `-32603` or a neighbouring code's text:
   - wallet storage `-29007..-29015` (network mismatch, locked by another
     process, missing directory, access denied, corrupt, unsupported version,
@@ -22,7 +22,32 @@
     pending, re-anchor unavailable, reselection required, unreadable fee
     answer, signer failed);
   - `-29204 REFRESH_CANCELLED`;
+  - the daemon `-29205..-29210` (another RPC version, other consensus rules,
+    another network, another chain, a reply that broke the contract, and a
+    chain that kept reorganizing);
   - a staker's open-time refusals `-29530..-29533`.
+- A daemon that answered and was refused (a wallet pointed at a daemon on
+  another network, version or chain) was reported as `-29201
+  DAEMON_UNREACHABLE`. The identity handshake flattened its typed verdict into
+  `RpcError::InvalidNode(String)`, and `IoError::Daemon` carried only a string.
+  `RpcError::IdentityMismatch` now carries the verdict, `RpcError::fault`
+  classifies every daemon failure by remedy (`DaemonFault`: no answer,
+  identity, protocol violation, unusable fee reply, this side's own fault),
+  and `IoError::Daemon` and `FeeEstimatorError::Daemon` carry that class. The
+  fee path's match on message prefixes is gone. Each identity axis has its own
+  code, with both sides named in `data`.
+- Refresh confirms the daemon's identity before the producer runs
+  (`scan_floor::prepare_refresh`), so the producer's error stays unit-variant
+  (`STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.7 R6). The producer's `Io` is split
+  into `DaemonUnreachable` and `DaemonProtocol`, and an identity refusal is
+  not retried. A malformed block served by the daemon is a protocol fault
+  (`-29209`), not an outage, and a reorg storm is `RefreshError::ReorgStorm`
+  (`-29210`); both used to answer `-29201`.
+- `IdentityMismatch` no longer carries the daemon's unparsed reply text: it is
+  logged where the reply is parsed, and the mismatch is a fixed-size `Copy`
+  value. The drain, unstake, collect and first-stake paths carry a failed fee
+  query as the typed `FeeEstimatorError`, so each cause answers the send
+  path's code rather than `-29102` for all of them.
 - Every wallet-file failure the text classifier did not recognise (a damaged
   file, a lock held by another process, a failed atomic write) answered
   `-32603` with the upstream error's own text as the message. That text names

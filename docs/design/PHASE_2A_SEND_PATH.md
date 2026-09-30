@@ -1682,11 +1682,16 @@ synthetic vectors satisfy that seam without the client existing yet.
 *Amended 2026-09-30: `SendError::CannotSign` was split by meaning — `NotSynced`
 (no block ingested yet), `SignerUnavailable`, `SignerFailed`, and
 `BuildInvariant` for the preconditions only a bug breaks. Each has its own
-wallet-RPC code; the table below uses the new names.*
+wallet-RPC code; the table below uses the new names. Daemon failures carry a
+typed `DaemonFault` (no answer, identity refusal, protocol violation, unusable
+fee reply, or this side's own fault), classified where the RPC error is
+raised: `IoError::Daemon { fault, .. }` on every path and
+`FeeEstimatorError::Daemon(fault)` for the fee query.*
 
 | Failure | Error |
 |---------|-------|
-| Daemon fee RPC down | `SendError::Io` / `FeeEstimatorError::DaemonUnreachable` |
+| Daemon fee RPC down | `SendError::Io` / `FeeEstimatorError::Daemon(DaemonFault::Unreachable)` |
+| Daemon is not one this wallet can use (`VC-4`) | `IoError::Daemon` / `FeeEstimatorError::Daemon` with `DaemonFault::Identity(IdentityMismatch)` — one wallet-RPC code per axis |
 | Absurd priority fee | `SendError::Tx(TxError::DaemonFeeUnreasonable { ... })` |
 | Signer / builder failure | `SendError::Tx` (proof or signature construction), `SendError::SignerUnavailable` (no spend-key material in scope), or `SendError::SignerFailed { reason }` (a downstream signer failure) |
 | Output not yet spendable at reference block (`eligible_height > reference_height`) | `BuildError::OutputNotYetSpendable { eligible_height, reference_block_height, wait_blocks }` (C2, §3.7.5) — clean wait-N-blocks signal, **not** an opaque assembly miss |

@@ -16,7 +16,7 @@
 
 use shekyl_engine_state::{BlockchainTip, LedgerBlock};
 
-use super::error::{IoError, RefreshError};
+use super::error::RefreshError;
 use super::local_ledger::LocalLedger;
 use super::local_refresh::LocalRefresh;
 use super::traits::ledger::LedgerEngine;
@@ -164,17 +164,35 @@ pub(crate) async fn fetch_block_hash_at<D: DaemonEngine>(
         usize::try_from(height.to_raw()).map_err(|_| RefreshError::MalformedScanResult {
             reason: "block height exceeds usize",
         })?;
-    let block = daemon.fetch_scannable_block(number).await.map_err(|e| {
-        RefreshError::Io(IoError::Daemon {
-            detail: e.to_string(),
-        })
-    })?;
+    let block = daemon
+        .fetch_scannable_block(number)
+        .await
+        .map_err(|e| RefreshError::Io(e.into()))?;
     Ok(block.block.hash())
+}
+
+/// The orchestrator's work before a refresh producer runs: confirm the
+/// daemon's identity, then anchor the ledger at the birthday floor.
+///
+/// Identity comes first and here, not in the producer: the producer's error
+/// carries no daemon data (`STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.7 R6), so
+/// a refusal settled here reaches the caller typed, and the client's cached
+/// verdict means the producer cannot meet one afterwards.
+pub(crate) async fn prepare_refresh<D: DaemonEngine>(
+    ledger: &LocalLedger,
+    daemon: &D,
+    scan_start_floor: BlockHeight,
+) -> Result<(), RefreshError> {
+    daemon
+        .verify_identity()
+        .await
+        .map_err(|e| RefreshError::Io(e.into()))?;
+    ensure_birthday_anchor(ledger, daemon, scan_start_floor).await
 }
 
 /// If the wallet's scan floor is above `synced_height + 1`, anchor the
 /// ledger at `floor - 1` using the daemon's block hash.
-pub(crate) async fn ensure_birthday_anchor<D: DaemonEngine>(
+async fn ensure_birthday_anchor<D: DaemonEngine>(
     ledger: &LocalLedger,
     daemon: &D,
     scan_start_floor: BlockHeight,
@@ -186,11 +204,10 @@ pub(crate) async fn ensure_birthday_anchor<D: DaemonEngine>(
 
     // Gate the anchor on the daemon's current count so a floor above the
     // chain end does not request a nonexistent `floor - 1` block.
-    let daemon_height = daemon.get_height().await.map_err(|e| {
-        RefreshError::Io(IoError::Daemon {
-            detail: e.to_string(),
-        })
-    })?;
+    let daemon_height = daemon
+        .get_height()
+        .await
+        .map_err(|e| RefreshError::Io(e.into()))?;
     let Some(anchor) = anchor_target(scan_start_floor, daemon_height) else {
         return Ok(());
     };

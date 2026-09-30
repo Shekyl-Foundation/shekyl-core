@@ -286,7 +286,7 @@ impl<
         runtime: &tokio::runtime::Handle,
     ) -> Result<RefreshSummary, RefreshError> {
         let floor = self.refresh.scan_start_floor();
-        runtime.block_on(crate::engine::scan_floor::ensure_birthday_anchor(
+        runtime.block_on(crate::engine::scan_floor::prepare_refresh(
             &self.ledger,
             &self.daemon,
             floor,
