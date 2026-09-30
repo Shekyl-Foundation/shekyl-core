@@ -270,9 +270,94 @@ The inbound drive's wake was per hub when these samples were taken:
 every strand answer woke every waiting driver. One other session was
 live, so the herd here was two. The wake is per row from `212c3260e`.
 
+## Clearnet LAN distribution, floor device responder (2026-09-30 UTC)
+
+Raw samples:
+[`p2p_clearnet_lan_floor_responder_20260930.tsv`](p2p_clearnet_lan_floor_responder_20260930.tsv).
+
+Conditions, per D9:
+
+- Dialer: this build host (x86_64), daemon `1485e5ae3`, one outbound
+  to the floor device and nothing else; `--clearnet-transport-encrypt`
+  on, ephemeral Tor off, no miner.
+- Responder: the floor device (Pi 4 Model B, aarch64, 4 cores), daemon
+  `1485e5ae3`, `--clearnet-transport-encrypt` on, ephemeral Tor off,
+  inbound cap 16, one inbound live at a time. Sharing its four cores:
+  one idle regtest daemon from an unrelated lane, nothing else. The
+  RandomX miner was off; the mining floor device is its own record.
+- Link: one LAN segment, 0.2 ms RTT.
+- Method: each sample is a fresh TCP connection and a fresh NNhfs
+  handshake. The dialer's outbound cap was set to 0 and back to 12 over
+  RPC; the drop closes the session, and the exclusive-peer redial runs
+  on the next 1 s tick with no cap or recently-failed gate. Spans are
+  matched to their connection id on the side that logged them. The
+  spans are the connector's own (`shekyl_clearnet::drive`), except the
+  gap, which is the dialer's `NEW CONNECTION` to `CONNECTION HANDSHAKED
+  OK`.
+- n = 100, no timeouts.
+
+| span | p50 | p90 | p99 | max | 2 × p99 |
+| --- | --- | --- | --- | --- | --- |
+| TCP connect (`connect_ns`, dialer) | 0.31 ms | 0.38 ms | 0.76 ms | 0.97 ms | 1.6 ms |
+| initiator handshake (`handshake_ns`, dialer: first write to session) | 3.72 ms | 4.17 ms | 7.15 ms | 7.23 ms | **14.3 ms** |
+| responder queue wait (`queue_ns`, floor: handshake job queued to started) | 51 µs | 66 µs | 95 µs | 119 µs | 0.2 ms |
+| responder compute (`compute_ns`, floor: the NNhfs arithmetic) | 2.17 ms | 2.23 ms | 2.31 ms | 2.37 ms | 4.7 ms |
+| responder handshake (`handshake_ns`, floor: first read to session) | 2.73 ms | 2.98 ms | 5.54 ms | 6.23 ms | **11.1 ms** |
+| channel to session (`gap_ns`, dialer) | 1.85 ms | 2.27 ms | 5.31 ms | 8.32 ms | **10.7 ms** |
+
+p99 is the 99th of the 100 sorted samples; precision 0.1 ms; 2 × p99
+rounded up per D9. Two things this distribution bounds and one it does
+not:
+
+- The floor device's responder cost is 2.2 ms of arithmetic with a
+  99th percentile 0.14 ms above the median, and a queue wait under
+  0.1 ms with one handshake at a time. The tail on the handshake spans
+  is not the arithmetic: on samples 55, 58 and 91 the initiator's span
+  and the responder's span are long together (6.1–7.1 ms and 5.1–6.2
+  ms) while `compute_ns` stays at 2.2 ms, so the wait is around the
+  compute — the job's dispatch or the socket — not in it; on sample 56
+  the initiator's span is the max (7.2 ms) with the responder's at its
+  median, a wait on the dialer's side alone.
+- The gap's max (8.3 ms, sample 58) is the same sample. The gap p99
+  here is 5.3 ms against 1.26 s on Tor; the gap deadline stays owned
+  by the Tor distribution.
+- The TCP connect is the LAN's. A connect deadline derived from 0.76
+  ms would refuse every peer past the first router. The clearnet
+  connect and initiator-handshake deadlines are owed to the off-site
+  leg, whose RTT is about 170 ms; this record's 14.3 ms is the LAN
+  bound on the handshake with the network term near zero.
+
+A later run under these conditions whose p99 exceeds 7.15 ms
+(initiator), 5.55 ms (responder) or 5.32 ms (gap) reopens the
+respective figure.
+
+### The defect this leg found
+
+The first attempt at this distribution ran at `a6af6b5ba` with the
+churn on the responder's side (`in_peers 0`, then 16) and produced one
+sample per 60 s. The acceptor logged `LocalClose` and `CLOSE
+CONNECTION` at once; the dialer's log was silent until its own
+timed-sync 54 s later, and `PeerClosed` landed 0.6 ms after that send.
+The responder's local close never reached the wire: `Hub::record`
+posted `Closed` and released the admission slot, but the `Session`
+whose drop closes the outbound queue was parked in the inbound drive
+waiting on the peer, and `ZoneDial` has no `reader_stopped`. The socket
+stayed open until the peer wrote. A peer that never writes would have
+held it for good — a ban, a protocol refusal, `del_in_connections`,
+all of them silent on the wire.
+
+Fixed in `1485e5ae3` (`SendHalf::close`; `record` closes the row's
+send half). Verified on this pair before the sweep: `in_peers 0` on
+the floor, `LocalClose` there and `PeerClosed` on the dialer within
+1 ms of each other. Unit test `a_local_close_ends_the_writer` is red on
+the previous shape.
+
 ## Not this run
 
 Tor relay and the floor device's inbound Tor distribution were not
-run. The clearnet distributions and the thread-budget legs are not in
-this record. The off-site clearnet leg waits on a firewall rule for
-the seed-side daemon's private port.
+run. The clearnet distribution with the floor device as initiator, the
+off-site clearnet leg and the thread-budget legs are not in this
+record. The off-site clearnet leg waits on a firewall rule for the
+seed-side daemon's private port; the floor-as-initiator leg cannot
+target this build host (its firewall admits ssh only, and there is no
+privilege here to open the port) and runs against a LAN VM instead.
