@@ -382,7 +382,7 @@ uint64_t derived_fire_height(const Gate2Substrate& s)
   const crypto::hash p_id = hash_from_hex(s.p_id_hex);
   const crypto::hash seal_hash = hash_from_hex(s.seal_hash_hex);
   const uint64_t h_open = shekyl_archival_epoch_open_height(s.settlement_epoch);
-  const uint64_t h_close = shekyl_archival_epoch_close_height(s.settlement_epoch);
+  const uint64_t h_close = shekyl_archival_epoch_last_block(s.settlement_epoch);
   return shekyl_archival_challenge_fire_height(h_open, h_close,
     reinterpret_cast<const uint8_t*>(seal_hash.data),
     reinterpret_cast<const uint8_t*>(p_id.data),

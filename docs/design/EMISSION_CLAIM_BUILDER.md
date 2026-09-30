@@ -687,7 +687,7 @@ field the landed struct lacks and drops none):
 | Field | Mirrors | Note |
 | --- | --- | --- |
 | `settlement_epoch` | `.settlement_epoch` | echo of the row's `E` |
-| `close_block_height` | `.close_block_height` | the close-**processing** height `(E+1)·SEB`. Carries the landed struct's lookalike hazard verbatim: sourced from `shekyl_archival_epoch_close_processing_height`, **never** `shekyl_archival_epoch_close_height` (= `(E+1)·SEB − 1`). The RPC doc comment must repeat this pin |
+| `close_block_height` | `.close_block_height` | the close-**processing** height `(E+1)·SEB`. Sourced from `shekyl_archival_epoch_close_processing_height`, one above the epoch's last block `shekyl_archival_epoch_last_block` (= `(E+1)·SEB − 1`; named `*_epoch_close_height` until 2026-09-30, when the shared word was retired — `DRS_E4_ARCHIVAL_WRITER.md` §10). The RPC doc comment repeats this pin |
 | `sigma_work_milli` | `.sigma_work_milli` | **persisted** `Σwork(E)` — the stored denominator, never a recompute (M1 gate outcome reaches the wallet only through this value, same as verify) |
 | `budget_atomic` | `.budget_atomic` | frozen close-row `budget(E)` |
 | `has_budget_row` | `.has_budget_row` | absent close row ⇒ wallet treats `E` as unclaimable (mirrors the verify shim's reject); present-and-zero is rejected downstream by wire positivity |

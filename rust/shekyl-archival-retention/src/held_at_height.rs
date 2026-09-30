@@ -150,9 +150,8 @@ mod tests {
     }
 
     /// Epoch `e`'s last block, `(e + 1)·SEB − 1` — the C++ fixture's
-    /// `shekyl_archival_epoch_close_height` (the epoch's last block, one
-    /// below the close-*processing* height `consensus_state::
-    /// epoch_close_height` names).
+    /// `shekyl_archival_epoch_last_block`, one below the close-*processing*
+    /// height `consensus_state::epoch_close_height` names.
     fn last(e: u64) -> BlockHeight {
         h(open(e + 1).to_raw() - 1)
     }

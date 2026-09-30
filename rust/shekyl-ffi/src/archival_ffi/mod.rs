@@ -41,7 +41,7 @@ pub use attestation::{ShekylArchivalAttestationVerifyCtx, ShekylArchivalPidPubke
 pub use codes::*;
 pub use epoch_close::ShekylArchivalEmissionEpochSnapshot;
 pub use schedule::{
-    settlement_epoch_close_height, settlement_epoch_open_height,
+    settlement_epoch_last_block, settlement_epoch_open_height,
     settlement_epoch_slash_deadline_height,
 };
 

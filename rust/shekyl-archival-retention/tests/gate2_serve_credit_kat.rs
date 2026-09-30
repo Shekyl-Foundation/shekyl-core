@@ -103,7 +103,7 @@ fn settlement_epoch_open_height(settlement_epoch: u64) -> u64 {
     settlement_epoch.saturating_mul(SETTLEMENT_EPOCH_BLOCKS)
 }
 
-fn settlement_epoch_close_height(settlement_epoch: u64) -> u64 {
+fn settlement_epoch_last_block(settlement_epoch: u64) -> u64 {
     settlement_epoch_open_height(settlement_epoch)
         .saturating_add(SETTLEMENT_EPOCH_BLOCKS.saturating_sub(1))
 }
@@ -198,7 +198,7 @@ fn build_integration_substrate(
 
     let block_hash_at_seal = [0xABu8; 32];
     let h_open = settlement_epoch_open_height(settlement_epoch);
-    let h_close = settlement_epoch_close_height(settlement_epoch);
+    let h_close = settlement_epoch_last_block(settlement_epoch);
     let h_seal = challenge_seal_height(h_open);
     let h_fire = challenge_fire_height(
         h_open,

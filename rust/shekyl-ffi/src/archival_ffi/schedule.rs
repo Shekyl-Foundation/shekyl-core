@@ -18,13 +18,13 @@ pub fn settlement_epoch_open_height(e: u64) -> u64 {
 }
 
 #[must_use]
-pub fn settlement_epoch_close_height(e: u64) -> u64 {
+pub fn settlement_epoch_last_block(e: u64) -> u64 {
     settlement_epoch_open_height(e.saturating_add(1)).saturating_sub(1)
 }
 
 #[must_use]
 pub fn settlement_epoch_slash_deadline_height(e: u64) -> u64 {
-    settlement_epoch_close_height(e).saturating_add(CHALLENGE_RESOLUTION_BLOCKS)
+    settlement_epoch_last_block(e).saturating_add(CHALLENGE_RESOLUTION_BLOCKS)
 }
 
 /// Recompute `P_canonical_id` from hybrid pubkey bytes (gate-4 §3.4 / emission §6.1).
@@ -126,10 +126,12 @@ pub extern "C" fn shekyl_archival_attestation_witness_max_bytes() -> u64 {
     MAX_ATTESTATION_WITNESS_BYTES as u64
 }
 
-/// Last block of settlement epoch `E` (`H_close`, credit deadline).
+/// Last block of settlement epoch `E` — `(E+1)·SEB − 1`, the credit
+/// deadline `H_close`. One below [`shekyl_archival_epoch_close_processing_height`];
+/// the two were once both named "close height" and were confused for it.
 #[no_mangle]
-pub extern "C" fn shekyl_archival_epoch_close_height(settlement_epoch: u64) -> u64 {
-    settlement_epoch_close_height(settlement_epoch)
+pub extern "C" fn shekyl_archival_epoch_last_block(settlement_epoch: u64) -> u64 {
+    settlement_epoch_last_block(settlement_epoch)
 }
 
 /// The close-**processing** boundary for settlement epoch `E` — `(E+1)·SEB`,
