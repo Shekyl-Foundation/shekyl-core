@@ -759,29 +759,45 @@ what verification changed.
 
 #### 6.3.3 The one interface change, and the firewall answer it needs
 
-`IngestBlock` must learn **which drained leaves are owned, and by which
-identity**. Today the tree has no notion of ownership, and **that neutrality is
-exactly what let one store serve both identities**.
+`IngestBlock` must learn **which drained leaves are owned**. Today the tree has
+no notion of ownership at all, so capture cannot ask it which leaves belong to
+this wallet.
 
-**The risk this creates, named because it is `WSS-13` in a new location:** if
-one ingest path must know both the principal's and `P`'s ownership, a single
-component again sees both identities' material — the defect §6.1 was opened to
-remove, relocated rather than fixed.
+**There is one capture side, not two** (`CT-6 Q5`, **CLOSED by dissolution
+2026-09-22**). `P` proves nothing as a distinct actor and the proving state is
+**identity-blind**, so the ownership the interface must carry is a single
+predicate — *is this leaf this wallet's* — rather than a partition across
+identities.
 
-**The answer is available and should be built in rather than left to
-discipline:** the **frontier advance is public and identity-free**, and **path
-capture is a per-identity filter over the same public stream**.
+**The firewall risk this section was opened for has no subject on this
+surface.** It read: if one ingest path must know both the principal's and
+`P`'s ownership, a single component again sees both identities' material —
+`WSS-13` relocated rather than fixed. That risk needed two proving consumers,
+and the dissolution establishes there is one. It is not answered here, it is
+**absent** here; what remains of `WSS-13` belongs to the P-store lane, which
+`CT-6 Q6` names as a dependency rather than schedules.
 
-**`identity-free` is a claim about the bytes, never about access** (clarified
-2026-09-22, `CT-6` C6). That the frontier's content reveals no ownership does
-not make the *file* carrying it shared: a design that reads public content out
-of another identity's sealed file is `WSS-13` relocated, not this discipline
-satisfied. The distinction is load-bearing wherever persistence is decided —
-see `CT-6 Q3`, whose unscoped default blurred exactly this line. One public
-ingest; two private capture sides, each seeing only its own outputs, each
-writing into its own sealed file. The shared part is then public data only —
-the frontier and the buffer — and the path sets split by identity, which is
-`WSS-Q1`'s ownership rule applied inside the proving side.
+**What does survive, and it is about persistence rather than about sides:**
+`identity-free` is a claim about the **bytes**, never about **access**
+(`CT-6` C6, clarified 2026-09-22). That the frontier's content reveals no
+ownership does not make the *file* carrying it shared — a design that reads
+public content out of another identity's sealed file is `WSS-13` relocated,
+whatever the byte content proves. `CT-6 Q3`'s unscoped default blurred exactly
+that line, which is why its ruling is **scoped** to the wallet's single proving
+state. So: one public, identity-free frontier advance; one capture side
+filtering it to this wallet's own outputs; one path set, in the wallet's own
+sealed file. `WSS-Q1`'s ownership rule still applies inside the proving side —
+it simply has one owner to apply to.
+
+> **Re-derived 2026-09-30.** This section described *"a per-identity filter"*
+> and *"two private capture sides, each seeing only its own outputs, each
+> writing into its own sealed file"*, with the path sets *"split by identity"*.
+> `Q5`'s dissolution removed the second side on 2026-09-22 and this text was
+> not walked with it, so the design of record still taught the architecture the
+> ruling deleted — and it is the document a capture implementer reads first.
+> The paragraph is re-derived rather than word-swapped because the risk framing
+> above it rested on the same premise: with one consumer the firewall question
+> does not get a smaller answer, it stops being asked.
 
 #### 6.3.4 What remains open — four measurements, each with its reopening threshold
 

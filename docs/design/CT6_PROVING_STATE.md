@@ -213,11 +213,13 @@ The brief asked this round to propose an ownership-neutral delta shape because
 bonded serving obligation — not membership paths for proving. **So the
 two-consumer advance is not established.**
 
-This does **not** dissolve the concern, it relocates it: §6.3.3 states the
+This does **not** dissolve the concern, it relocates it: §6.3.3 stated the
 identity-split discipline (*"the frontier advance is public and identity-free;
-path capture is a per-identity filter over the same public stream"*) as the
-answer to `WSS-13`-in-a-new-location. That discipline stands and this round
-inherits it. What F5 left narrower — whether `P` proves its own outputs at
+path capture is a per-identity filter over the same public stream"* — wording
+§6.3.3 carried until it was **re-derived 2026-09-30**, after `Q5` removed its
+premise) as the answer to `WSS-13`-in-a-new-location. The *public,
+identity-free advance* half stands and this round inherits it; the
+*per-identity* half is what the dissolution below took the subject out of. What F5 left narrower — whether `P` proves its own outputs at
 all, and therefore whether a second capture side exists to build — was carried
 as **CT-6 Q5** and is **CLOSED by dissolution (2026-09-22, §5)**: `P` proves
 nothing as a distinct actor, so there is no second capture side and the
@@ -259,7 +261,7 @@ round's fixed points, each inherited from a verified source.
 | **C3** | A snapshot at `h` reproduces `drained_leaf_count_at(drained_through(h))`; root and depth stay pinned to that one `n` | F4; CT-5c Q1 |
 | **C4** | Every horizon **is** `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` read from the JSON authority. No second literal | F2 |
 | **C5** | Reference-height selection is `select_reference_height` / `two_sided_reference_height`, unchanged | F1 |
-| **C6** | The frontier advance is **public and identity-free**; path capture is a per-identity filter over it. No component sees two identities' ownership. **`identity-free` is a claim about the bytes, never about access**: that the content reveals no ownership does not make the file carrying it shared, and a design that reads public content out of another identity's sealed file is `WSS-13` relocated, not C6 satisfied | §6.3.3 |
+| **C6** | The frontier advance is **public and identity-free**; path capture filters it to the wallet's own outputs. **`identity-free` is a claim about the bytes, never about access**: that the content reveals no ownership does not make the file carrying it shared, and a design that reads public content out of another identity's sealed file is `WSS-13` relocated, not C6 satisfied. **Amended 2026-09-30 — the clause read *"a per-identity filter"* and *"no component sees two identities' ownership"*.** `Q5`'s dissolution (2026-09-22) established there is no second proving consumer, and records in its own row that *"C6's second capture side is not built"* — so that half has **no subject**, not a smaller one. The bytes-vs-access half is untouched and is the part that survives, because it governs **persistence** (`Q3`) rather than the number of capture sides | §6.3.3 |
 | **C7** | A reorg deeper than the horizon **refuses**; it never silently produces a wrong tree, and it says so as a rule-82 failure mode (the remedy is a full resync) | §6.3.4 row 1 |
 | **C8** | Everything here is derived-from-canon: recovery is **refuse-and-resync**, never a migration. Persistence is a cache | `WSS` R3 |
 | **C9** | The graded quantity is §6.3.4 rows 2 and 3, on rule 76's floor, by the landed `shekyl-wss-q1b-bench` harness | §6.3.4; `WSS_Q1B_BENCH_SPEC.md` |
