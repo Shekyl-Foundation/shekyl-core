@@ -216,6 +216,7 @@ where
             kind: self.kind,
             network_id: self.network_id,
             dial_within: self.handshake_within,
+            proxied_dial_within: self.handshake_within,
             handshake_within: self.handshake_within,
             gap_within: self.handshake_within,
             tally: Arc::clone(&self.tally),

@@ -3665,7 +3665,10 @@ namespace nodetool
     // measured median of the body), gap 1.430 s (residual 14.7 ms). The
     // ~700 ms handshake tail is not a term in any of these.
     // Tor dial 9.1 s: 2 x p99 (4.54 s) of the floor dial distribution,
-    // South America circuit, proof-of-work on. Tor gap 2.6 s: the outbound
+    // South America circuit, proof-of-work on. A clearnet dial through a
+    // SOCKS proxy uses this clock: the worst measured SOCKS path, pending
+    // its own distribution. The three clearnet legs had no proxy.
+    // Tor gap 2.6 s: the outbound
     // direction, the larger of the two distant-circuit gaps.
     // Shutdown waits out the longest armed deadline, the Tor dial.
     // Send queue: one admitted packet, room for the largest legitimate message.

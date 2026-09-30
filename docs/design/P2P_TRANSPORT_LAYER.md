@@ -93,8 +93,9 @@ The engine-service addendum in
 contract the first line calls. C5 is recorded: the responder handshake
 is 685 µs, one rekey is 5.06 µs, seal and open of a 65,535-byte record
 is 889 µs. The D9 deadlines are written by `transport_spans`:
-clearnet dial 1.415 s, handshake 1.426 s, gap 1.430 s, Tor dial 9.1 s,
-gap 2.6 s. No accept-rate (D10.3), no transport-runtime thread count
+clearnet dial 1.415 s (a SOCKS proxy borrows the Tor dial's 9.1 s),
+handshake 1.426 s, gap 1.430 s, Tor dial 9.1 s, gap 2.6 s. No
+accept-rate (D10.3), no transport-runtime thread count
 (D5), and no every-record rekey (D14 item 4, decided with C9's window)
 is written. The implementation does not invent those numbers.
 
@@ -914,7 +915,7 @@ and the mechanism does not. "Refuse" means it does not survive.
 | Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | **Enforce socket admission at accept, in Rust, with no C++ call.** The ceiling comes from `shekyl-peer-policy`. Ban entries come from the operator and from the session layer's ban call. The transport layer does not own those values and does not score. It does not call into C++ admission. |
 | Ban list | `block_host` at `net_node.inl:256`. The registry sweep that drops live connections is `foreach_connection` at `:302`. RPC callers: `core_rpc_server.cpp:193`, `:997` (`get_blocked_hosts`), `:1101`, `:1103`. Discovery's pre-dial check is `is_remote_host_allowed` at `net_node.inl:1902`. Automatic scoring is `add_host_fail` at `net_node.inl:413` | **Move the list to Rust**, keyed on the observed host, carrying IPv4 subnets and expiry. Two writers, both in durations (corrected 2026-09-28): the operator's RPC (`block_host`, `unblock_host`, `get_blocked_hosts`) and the session layer's call to ban a host for a duration. A ban closes existing sockets to that host directly. It does not sweep the Levin registry. Discovery's pre-dial check reads the same list. A transport close does not write the list. |
 | Outbound dial | `P2P_DEFAULT_CONNECTION_TIMEOUT` = 5 s (`cryptonote_config.h:189`); remote new-connection timer = 10 s (`abstract_tcp_server2.inl:61`) | Carry the dial. Re-derive both clocks (D9). They are not one number. |
-| SOCKS dial clock | A SOCKS dial is the proxy handshake, then the overlay circuit build and rendezvous. `src/net/socks*` has its own timeout | **Its own per-connector clock, derived under D9.** It does not inherit the timeout from `src/net/socks`. |
+| SOCKS dial clock | A SOCKS dial is the proxy handshake, then the overlay circuit build and rendezvous. `src/net/socks*` has its own timeout | **A proxied clearnet dial uses the Tor dial clock (9.1 s): the worst measured SOCKS path, pending its own D9 distribution.** The three clearnet legs had no proxy, and a Tor-exit dial is 3–6 s. It does not inherit the timeout from `src/net/socks`. |
 | SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust through `shekyl-socks`. `shekyl-p-fetch` and `shekyl-rpc-transport` call it with `Isolation::Principal`. `shekyl-p-transport` still enables `ureq/socks-proxy` (`socks` 0.3.4). Moving that HTTP client is a FOLLOWUPS row. |
 | Overlay inbound attribution | `set_default_remote` at `net_node.inl:678` (`--anonymous-inbound`) and `:885` (`tor_address::unknown()`); applied at `abstract_tcp_server2.inl:1905-1908` | **Carry for Tor now, and for I2P when an I2P connector exists (D14 item 2).** Do not attribute from the socket. Inbound arrives on the local router's loopback socket. The observed endpoint is "this zone, no address", never `127.0.0.1`. Attributing from the socket would collapse admission's per-host view into one host. This is where LV-3's OBSERVED endpoint originates. |
 | Tor forward listener | `net_node.inl:863-880` | Carry. Bound to `127.0.0.1` on port 0. The OS-assigned port is read back with `get_binded_port` (`:881`) and handed to Tor control. Bind failure erases the zone (`:878`). |
@@ -1591,8 +1592,11 @@ depends on that event. The three legs, and the New
 York leg that confirms the slope is about 1, are in the benchmark
 record. A measured satellite-class link whose RTT exceeds 700 ms
 reopens the ceiling. These milliseconds, the Tor dial of 9.1 s, and the
-Tor gap of 2.6 s are what `transport_spans` writes. Shutdown waits out
-the longest of them, the Tor dial.
+Tor gap of 2.6 s are what `transport_spans` writes. A clearnet dial
+through a SOCKS proxy uses the Tor dial clock: the three clearnet
+legs had no proxy, a Tor-exit dial is 3–6 s, and a longer deadline
+costs only the dialer. Shutdown waits out the longest of them, the
+Tor dial.
 
 One rekey is 5.06 µs against 889 µs to seal and open a 65,535-byte
 record, under one percent at that size. Fixed windows are smaller than

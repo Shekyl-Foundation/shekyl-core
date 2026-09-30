@@ -75,7 +75,11 @@ pub struct Dial {
     pub sockets: Sockets,
     pub kind: ChannelChoice,
     pub network_id: NetworkId,
+    /// A direct clearnet dial. The three clearnet distributions.
     pub dial_within: Tick,
+    /// A dial through `proxy`. The worst measured SOCKS path until that
+    /// path has its own distribution. A longer deadline costs only the dialer.
+    pub proxied_dial_within: Tick,
     pub handshake_within: Tick,
     pub gap_within: Tick,
     pub tally: Arc<HandshakeTally>,
@@ -188,6 +192,7 @@ where
         kind,
         network_id,
         dial_within,
+        proxied_dial_within,
         handshake_within,
         gap_within,
         tally,
@@ -206,15 +211,26 @@ where
     };
     let dest = SocketAddr::new(ip, port);
     let target = proxy.unwrap_or(dest);
+    // The engine refused. That is the host, not the peer, so it does not
+    // feed the address forget the way DialFailed does.
     let Ok(owner) = engine.register(OwnerClass::Transport) else {
-        on_cause(CloseCause::new(CloseKind::DialFailed));
+        on_cause(CloseCause::new(CloseKind::LocalClose));
         return;
     };
     let now = owner.clock().now();
-    let deadline = Tick::new(now.get().saturating_add(dial_within.get()));
+    // A proxied dial is the SOCKS exchange plus the proxy's path. The
+    // clearnet distributions had no proxy, and a Tor exit is a 3–6 s dial,
+    // so the direct clock would time it out. The proxied clock is the
+    // worst measured SOCKS path, pending its own distribution.
+    let within = if proxy.is_some() {
+        proxied_dial_within
+    } else {
+        dial_within
+    };
+    let deadline = Tick::new(now.get().saturating_add(within.get()));
     if owner.arm(deadline).is_err() {
         ignore(owner.deregister());
-        on_cause(CloseCause::new(CloseKind::DialFailed));
+        on_cause(CloseCause::new(CloseKind::LocalClose));
         return;
     }
     let mut wake = std::pin::pin!(owner.wait_wake_async());

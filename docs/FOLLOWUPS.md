@@ -62,6 +62,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
+- **Measure a proxied clearnet dial and replace the borrowed Tor dial clock.** `--proxy` reaches a clearnet peer through SOCKS. `dial_one` arms the Tor dial clock (9.1 s) on that path, the worst measured SOCKS path, because the three clearnet legs had no proxy and a Tor-exit dial is 3–6 s. The owed leg is the floor through a local Tor SOCKS port to a clearnet seed, n=100. A too-long deadline costs only the dialer, so the borrow holds until that leg. Falsify by that distribution recorded and the proxied clock equal to 2× its p99, rounded up. Reopen if that p99 exceeds 4.55 s.
+  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D9
+  - Target: pre-genesis
+
 - **A stalled in-flight write after a local close holds the fd.** #909's `Hub::record` discards the queued tail on a caused close, so a banned or refused peer no longer holds our connection task through *queued* frames. It does not bound the frame the writer already popped: `write_all` on that frame blocks the task (and the fd) for as long as the peer refuses to read, and `overfull` trips only on queue growth, not on a stalled tail (`capped-stream/src/copy.rs`). The bound is the shape ruled out of #909 in favour of discard (this box, 2026-09-29): an `AfterChannel` stall deadline (the variant exists in `cause.rs`, nothing arms one) derived like the other transport deadlines. Those other deadlines are written by `transport_spans`. This stall arm is the next PR, not #909. Falsify by a test in which a peer stops reading after a local close and the connection task and its fd are released within a bound rather than held.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis

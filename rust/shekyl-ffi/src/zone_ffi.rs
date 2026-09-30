@@ -155,6 +155,10 @@ impl ZoneDial {
             kind: ready.kind,
             network_id: self.host.network_id,
             dial_within: self.host.clearnet_dial_within,
+            // `--proxy` is a SOCKS path the clearnet legs did not measure.
+            // The Tor dial is the worst measured SOCKS path; a longer
+            // deadline costs only the dialer. The owed distribution replaces it.
+            proxied_dial_within: self.host.tor_dial_within,
             handshake_within: self.host.clearnet_handshake_within,
             gap_within: self.host.clearnet_gap_within,
             tally: ready.tally,
