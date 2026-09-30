@@ -104,6 +104,9 @@ impl<F: PrimeField> LinComb<F> {
 impl<F: PrimeField> Add<&LinComb<F>> for LinComb<F> {
     type Output = Self;
 
+    /// This addition is actually a _concatenation_, where the result will use memory equal to
+    /// the sum of its inputs. Conversion to a canonical representation only happens when
+    /// building the final matrices.
     fn add(mut self, constraint: &Self) -> Self {
         self.reconcile_for_merging(constraint);
 
@@ -125,6 +128,9 @@ impl<F: PrimeField> Add<&LinComb<F>> for LinComb<F> {
 impl<F: PrimeField> Sub<&LinComb<F>> for LinComb<F> {
     type Output = Self;
 
+    /// This subtraction is actually a _concatenation_ (with the right-hand side negated), where
+    /// the result will use memory equal to the sum of its inputs. Conversion to a canonical
+    /// representation only happens when building the final matrices.
     fn sub(mut self, constraint: &Self) -> Self {
         self.reconcile_for_merging(constraint);
 
@@ -248,6 +254,36 @@ impl<F: PrimeField> LinComb<F> {
     /// View the current constant `c`.
     pub fn c(&self) -> F {
         self.c
+    }
+
+    /// The Pedersen commitment this constraint isolates, after combining duplicate terms.
+    ///
+    /// `Add` and `Sub` concatenate terms, and `Mul` scales the terms already present, so the same
+    /// linear form can be stored as one entry or as several. This combines those entries with
+    /// [`accumulate_vector`], which is the sum the prover and verifier use, and returns the index
+    /// whose combined weight is the row's only nonzero weight.
+    ///
+    /// Returns `None` when every combined weight is zero, or when two commitments remain nonzero.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a term names an index `>= commitment_count`. The statement constructor rejects that
+    /// index before it asks which commitment is isolated.
+    pub(crate) fn isolated_commitment(&self, commitment_count: usize) -> Option<usize> {
+        let mut weights = ScalarVector::new(commitment_count);
+        accumulate_vector(&mut weights, &self.WV, F::ONE);
+
+        let mut isolated = None;
+        for (index, weight) in weights.0.iter().enumerate() {
+            if bool::from(weight.is_zero()) {
+                continue;
+            }
+            if isolated.is_some() {
+                return None;
+            }
+            isolated = Some(index);
+        }
+        isolated
     }
 }
 

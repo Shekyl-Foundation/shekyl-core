@@ -27,11 +27,32 @@ Upstream tracking reference (the single source of truth for "where fixes go"):
 Vendored snapshot metadata + integrity:
 
 - `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT` — pinned commit
-  (`2753111c50abe04395102e060fb4dc0b57e8d278`, synced 2026-06-24).
+  (`3378433c738970cf757fc766e8ba02b3245646bc` on `chore/crypto-resync-from-tip`,
+  the merge of fork PR #6; its crypto tree is that of the PR tip `2485a176`
+  named in the Q6 re-vet. Synced 2026-09-30.)
 - `rust/shekyl-oxide/CRYPTO_CONTENT_MANIFEST.sha256` — the A1 content gate: the
   vendored crypto subtree is verified byte-for-byte against this manifest on
   push/PR (`scripts/ci/check_vendored_crypto_manifest.sh`), so an in-place edit
   that bypasses the fork workflow fails CI.
+
+## What the pin covers
+
+The pin names the fork commit the subtree was taken from; it is not a claim that
+the subtree is byte-identical to that commit. Verified 2026-09-29 by reformatting
+the fork's `crypto/` at the pin with the workspace `rustfmt.toml` and diffing:
+
+- `helioselene`, `divisors`, `generalized-bulletproofs`, `fcmps/ec-gadgets`,
+  `fcmps/circuit-abstraction` are **mirrors** of the pin. The only differences
+  are the workspace formatting, the dropped `[lints] workspace = true` (these
+  crates are workspace-excluded, so there is no workspace to inherit from), and
+  the Shekyl `A5-12` soundness note appended to the Bulletproofs README.
+- `fcmps` (the crate itself) is **Shekyl's PL-D3 fork**, not a mirror. Its leaf
+  is the `K`-point commitment shape (`output_cm`, `leaves_cm_x`); the fork's
+  `fcmps` still carries the June `EXTRA_LEAF_SCALARS` shape. Upstream `fcmps`
+  fixes are ported by hand into this crate and re-vetted against the Q6 freeze;
+  a wholesale copy from the fork would delete PL-D3. Upstream has shipped no
+  `fcmps` logic change since `0662298` (only the `497f60b` dependency
+  reconciliation), so nothing is pending.
 
 ## Required update workflow
 
