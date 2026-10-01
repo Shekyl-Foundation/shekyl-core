@@ -175,11 +175,13 @@ The choice the Phase 1 stub left open ("newtype everywhere" vs
   yields `ChainCount`; `ChainCount − ChainCount` yields `BlockCount`.
   Both instants share one `instant_span_ops!` family
   (`rust/shekyl-types/src/block_axis.rs`).
-- **C5 Sentinels are not counts.** `target_height == 0` means
-  synchronized, not a genesis-only chain. Decode to
-  `Option<ChainCount>` (`None` = synchronized). The *wire* sentinel
-  deletion stays the daemon-RPC lane's item; inland typing does not
-  wait for that deletion and does not encode 0 as `ChainCount`.
+- **C5 Sentinels are not counts.** A reported `target_height` of `0` is
+  not a chain count and decodes to `Option<ChainCount>` (`None`). On
+  `get_version` and `sync_info` (`CORE_RPC_VERSION` 3.40) that `0` is the
+  core reporting no target; synchronization is a separate fact. `get_info`
+  still writes `0` when the node is synchronized
+  (`core_rpc_server::on_get_info`, `src/rpc/core_rpc_server.cpp:209`).
+  Inland code does not encode `0` as `ChainCount`.
 - **C6 Template height is `ChainCount::next_height()`.**
   `create_block_template` sets `height = m_db->height()`
   (`src/cryptonote_core/blockchain.cpp:1718`). Numerically the count;
@@ -319,8 +321,10 @@ quantity.
   `ChainTip.chain_height` / `BlockHashAt.chain_height` /
   `BlockHeaderAt.chain_height` / `BlockAt.chain_height` are
   `ChainCount`; `ChainTip.target_height` is `Option<ChainCount>`
-  (`None` = sentinel 0, C5). The handler still writes wire `0` when
-  synchronized (`wire_target_height`). Wallet client `Rpc::get_height`
+  (`None` when the core reported no target, C5). `get_version` and
+  `sync_info` forward that count (`0` only when the core reported none).
+  `get_info` still writes `0` when synchronized
+  (`core_rpc_server::on_get_info`). Wallet client `Rpc::get_height`
   returns `ChainCount` (name kept, C7). `ref_age_window` takes
   `ChainCount` vs `BlockHeight` and punches to raw at that one named
   site. Inland handlers bound a requested ordinal with

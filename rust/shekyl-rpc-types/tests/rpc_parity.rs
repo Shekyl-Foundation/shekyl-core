@@ -210,8 +210,10 @@ fn get_height_matches_the_oracle() {
     assert_parity(include_str!("vectors/rpc/get_height_v1.json"), &built);
 }
 
+/// A core-reported target of `0` is an absence, so the field is omitted.
+/// Synchronization is not this field (`CORE_RPC_VERSION` 3.40).
 #[test]
-fn get_version_synced_matches_the_oracle() {
+fn get_version_absent_target_matches_the_oracle() {
     let built = GetVersionResponse {
         status: RpcStatus::ok(),
         version: CORE_RPC_VERSION,
@@ -230,7 +232,7 @@ fn get_version_synced_matches_the_oracle() {
         include_str!("vectors/rpc/get_version_synced_v6.json"),
         &built,
     );
-    // The OPT omission is on the wire, not only in the parse.
+    // Omitted because the core reported no target.
     assert!(!serde_json::to_string(&built)
         .unwrap()
         .contains("target_height"));
@@ -1405,6 +1407,7 @@ fn sync_info_empty_matches_the_oracle() {
     let built = SyncInfoResponse {
         status: RpcStatus::ok(),
         height: 1,
+        // `0` is a core-reported absence, not "synchronized."
         target_height: 0,
         peers: Vec::new(),
         spans: Vec::new(),

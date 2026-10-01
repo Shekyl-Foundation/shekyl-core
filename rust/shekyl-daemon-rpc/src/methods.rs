@@ -29,7 +29,7 @@ use shekyl_rpc_types::{GetTransactionsRequest, GetTransactionsResponse, TxEntry,
 use shekyl_types::{ArchivalLength, BlockHeight, ChainCount};
 use shekyl_wire::{Ct, Transaction};
 
-use crate::chain_facts::{BlockLookup, ChainFacts, ChainTip, FactsFault, P2pFacts};
+use crate::chain_facts::{BlockLookup, ChainFacts, FactsFault, P2pFacts};
 use shekyl_rpc_types::{
     BlockHeaderSlot, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
     GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
@@ -135,7 +135,7 @@ pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFaul
         version: shekyl_rpc_types::CORE_RPC_VERSION,
         release: tip.release_build,
         current_height: tip.chain_height.to_raw(),
-        target_height: wire_target_height(&tip),
+        target_height: tip.target_height.map(ChainCount::to_raw).unwrap_or(0),
         hard_forks,
         // The rules axis is this build's own constant, read here rather than
         // fetched over FFI: it is compiled from `config/` into this image, so
@@ -144,12 +144,6 @@ pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFaul
         nettype: identity.nettype,
         genesis_hash: shekyl_rpc_types::HashHex::from_bytes(identity.genesis_hash.to_bytes()),
     })
-}
-
-/// The core's target height. `None` (a core-reported 0) is `0`.
-/// `synchronized` is a separate fact and is not folded into this count.
-fn wire_target_height(tip: &ChainTip) -> u64 {
-    tip.target_height.map(ChainCount::to_raw).unwrap_or(0)
 }
 
 /// `get_block_count` (alias `getblockcount`): the chain height as `count`.
@@ -1380,7 +1374,7 @@ pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoR
         height,
         // The same count `get_version` reports: the core's target, not a
         // rewrite of it when the node is synchronized.
-        target_height: wire_target_height(&tip),
+        target_height: tip.target_height.map(ChainCount::to_raw).unwrap_or(0),
         peers: connections
             .connections
             .iter()
@@ -3292,7 +3286,7 @@ pub(crate) mod tests {
     /// `sync_info` reads both sources and reports the core's target, synced
     /// or not. Writing 0 for the synced case made the two states one value.
     #[test]
-    fn sync_info_reports_the_core_target_when_synchronized() {
+    fn sync_info_reports_the_core_target() {
         let p2p = FakeP2p {
             spans: Ok(SyncSpansSnapshot {
                 spans: vec![span(100, 10, true)],
