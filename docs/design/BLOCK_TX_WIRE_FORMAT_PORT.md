@@ -86,6 +86,43 @@ framing — to be where Rust and the C++ serializer disagree.
 - Ground truth at runtime: the daemon's `get_block` `blob` and `get_transactions`
   bytes. Treat these as authoritative.
 
+### 4.1 The oracle's serializer can refuse, and two wrappers drop the refusal
+
+`::serialization::serialize` returns `false` when an object's fields disagree
+with each other (a count that does not match its vector, say). It has usually
+written some bytes by then, so the caller holds a **fragment** and a verdict
+that says so. Whether the verdict survives depends on the wrapper:
+
+| Wrapper | Verdict | State |
+|---|---|---|
+| `tx_to_blob(tx, blob)`, `block_to_blob(b, blob)`, `t_serializable_object_to_blob(o, blob)` | returned | the forms to use |
+| `tx_to_blob(tx)` (value-returning) | dropped | **deleted** (2026-10-01, after PR #923's review found it handing a fragment to the txid mixer) |
+| `t_serializable_object_to_blob(o)` (value-returning template; under `get_object_hash`, `get_object_blobsize` and a dozen direct callers) | dropped | open |
+| `block_to_blob(b)` (value-returning; ten callers) | dropped | open |
+
+**Why the two open forms were not closed with the first.** The obvious fix is to
+make the value-returning template throw. It was tried on the transaction form
+and is wrong as a blanket rule: `get_transaction_blob_size`, whose one caller
+is the consensus verifier, went from a rejection to an exception.
+`ver_non_input_consensus` sizes a transaction before its structural checks,
+returns a verdict and never throws, and is handed in-memory bodies the
+serializer refuses. The unit test
+`archival_emission_ct_balance.dispatch_verdict_invariant_under_blob_variation`
+depends on the dispatch check, not the sizing, being what rejects one. That
+function therefore keeps
+reading a fragment's length, with the reason written at the site — the one
+caller that takes the boolean form and does not read it.
+
+So the failure mode is each caller's contract — a verdict, an error code or an
+exception — and closing the two open forms is a walk of some thirty call
+sites, several inside P2P and RPC handlers, in a serializer this port retires.
+A transaction or block parsed from the wire and hashed has already been
+serialized whole (`calculate_transaction_hash` refuses a body that does not
+serialize), so the exposure is in-memory objects built wrong. *What makes the
+walk urgent:* a block or header shape the daemon builds or re-serializes whose
+serializer can return `false` on a path that hashes, stores or sends the
+result.
+
 ## 5. The Rust side (where you implement)
 
 `rust/shekyl-oxide/shekyl-oxide/src/transaction.rs` (`Transaction::read/write`
