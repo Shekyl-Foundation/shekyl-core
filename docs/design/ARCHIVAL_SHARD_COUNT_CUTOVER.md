@@ -277,6 +277,25 @@ which shard an id names:
   `serve_credit_tx_parity`, `live_oracle_spend_v1.json` and the captured chains —
   because every txid moves.
 
+**How a pruned form supplies the length — RULED 2026-10-01 (design owner, relayed by
+Rick): option (iv).** C++ passes full segments to Rust; Rust measures the length and
+computes the txid; the FFI entry has no length parameter. Verified at source, with two
+premises corrected ([`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md)
+§10.3):
+
+- the C++ pruned-txid path (`get_pruned_transaction_hash`, and the `allow_pruned` arm
+  of the P2P block-entry path) is **unreachable** — a pruned entry is refused as a
+  protocol violation first — so this cutover **deletes** it rather than porting it;
+- the one pruned **wire** is the daemon RPC's pruned `get_transactions`. C++ already
+  hands it the full prunable bytes, so the Rust server measures the length at serve
+  time and the reply carries it; the wallet's block fetch and the console supply it to
+  the mixer.
+
+**`g(age)`'s segment-keyed no-segment branch is this cutover's (RULED 2026-10-01,
+`SHT-8`).** It is a row of this census, Rust-side, owned by the design-owner lane; it
+is not part of the family-1 txid change. `escalation_knee_n` stays the sim lane's
+(`SCC-Q2`).
+
 **The C++ LMDB archival path does not move (row 3 = (b), RULED 2026-09-29).** No new
 LMDB tables, cells or archival logic: LMDB's shards stay the frozen leaf segments
 (CEN-L10; `src/cryptonote_core/blockchain.cpp:1494-1505`,

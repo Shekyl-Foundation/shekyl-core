@@ -22,7 +22,11 @@ together with findings `SHT-10`…`SHT-12`, the input-count proposal recorded as
 adopted, and `PDM-Q6` item 5's rejection re-read as one of *stored lengths*, not of
 byte-proportional boundaries; the placement of the length (prefix or txid, §8.5) was
 posed on 2026-09-29 and settled by the same ruling: **txid-bound** — "bound through
-the txid" is §8.5's right-hand column. Identifier families **`SHT-`** (findings) and
+the txid" is §8.5's right-hand column. **Four rulings of 2026-10-01 (§10)** fill the
+inputs the build and the fit were held on: the target witness-miss rate is the failure
+window's `p_attempt`, judged in the soak with PoW on; the 5 % overshoot tolerance is
+confirmed; a pruned form's length is measured at serve time from full segments (option
+(iv)), which lifts the cutover's blocker; and `SHT-8`'s two residues have owners. Identifier families **`SHT-`** (findings) and
 **`SHT-Q`** (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
 (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a) — 105 prefixes
@@ -793,7 +797,8 @@ observation exists.
     and not attributed to anything.
   - **What it feeds.** The PoW comparison does not enter `W`'s fit, which reads the
     restart's soak. A *material* PoW cost on a judged statistic goes to Rick as a
-    SPIKE-F-15 finding, alongside the fit.
+    SPIKE-F-15 finding, alongside the fit. **Superseded 2026-10-01 (§10.1):** the fit
+    reads this run's PoW-**on** file. The comparison itself is unchanged.
 - **Fit.** Per percentile (p50, p90, p99), over the **soak** arm: least squares of
   `t = t_fixed + bytes / v` over the three sizes. The cold arm is fitted and reported,
   not used to select.
@@ -807,7 +812,9 @@ observation exists.
   ceiling needs a different model.
 - **The target witness-miss rate (item 3) is owed by the design owner before the fit.**
   The observations are collected, but no fit is computed until that rate is recorded
-  here.
+  here. **RULED 2026-10-01 (§10.1): it is the failure window's `p_attempt`, and the
+  governing arm is the soak with PoW on.** §10.1 records what that supersedes in this
+  list, and what had been read when it was written.
 - **Decision thresholds, restated in `W`** (item 4). The ceiling is
   `W_max = v · (120 s − t_fixed) − 149,400 B`, at the governing percentile (the soak
   p99, until the miss rate replaces it).
@@ -877,7 +884,7 @@ that gate's bookkeeping:
 | **`SHT-7`** | **`L`'s fetch-span component is justified by a byte count from the retired segment, and its own page already contradicts it.** `L = 4`'s span was sized on "~20 s for 3.33 MB" (`ARCHIVAL_SHARD_FETCH.md`:1074-1090, the 180 KB/s floor); W₂ at `:1091-1095` then measured **48.27 / 86.06 s** for the same object — 2.4–4.3× worse — and `L` stayed 4 on a *different* argument ("seven attempts of the cold p99 fit under six minutes"). So the span text is stale relative to the measurement one paragraph below it, and **deriving `T` from that span would be circular**: it would feed the retired 3.33 MB back into `T`'s own bound, which is exactly what this round was opened to remove. The independent half is `SF-D6`'s retry budget; that is the part to keep. Restate `L`'s span **per byte**, or re-pin `T` and `L` together — but do not call selecting inside the current span "the cheaper option", which the first pass did. | CONFIRMED — owner `SF-`, and it is why §4's rule selects from the lower edge |
 | **`SHT-5`** | `U1b` — an honest server's sustained egress on the rule-76 floor device — **has no authority anywhere in the tree**. The only transport figure (180 KB/s) is requester-side and a burst floor from a null result. This is the one bound that cannot be closed by reasoning. | OPEN — FOLLOWUPS row, measurement owed |
 | **`SHT-6`** | `rust/shekyl-economics-sim/src/burden.rs:33-39`'s `SHARD_BYTES` comment derives 3.33 MB from `SEGMENT_LEAF_COUNT × ~128 B` — the retired **leaf-segment** estimate — while presenting it as the "§2 corpus figure". Corrected in this PR (the only code this round touches). | FIXED here |
-| **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner once the ramp is on, with no economics changed** (it ships flat, so the effect is latent — `SCC-Q2`), and every `T` re-pin thereafter moving when the staker share saturates. **It is a consensus operand, not an economics knob.** `n` reaches consensus through `Blockchain::parent_frozen_segment_count` → `validate_miner_transaction` (`src/cryptonote_core/blockchain.cpp:1494-1508`), derived from `get_curve_tree_leaf_count()` — the **retired leaf geometry** — and read at a pinned parent state with a throwing assert (*"escalation operand read-point violated"*). So the coinbase's fee split depends on it. **CORRECTED 2026-09-27 (`SCC-Q2`'s ruling):** the stronger claim this row first made — *"a wrong re-key changes which coinbases are valid"* — holds only **once the escalation is switched on**. It ships **flat**: `shekyl_escalation_asymptote_share` equals the floor `shekyl_staker_pool_share` (`config/economics_params.json:16-18`, *"the DELIBERATE pre-ceremony NEUTRAL value"*), so the split is 25 % whatever `n` is and a wrong re-key changes no coinbase's validity **today**. The requirement that the re-key be one atomic C++/Rust change is unchanged, and its reason is sharper: the operand is computed on both sides, and a mismatch that is harmless while flat becomes a chain split the moment the GF-7 ceremony raises the asymptote. Likewise the ~65× figure bites only after the ceremony. **Blast radius, otherwise bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so what it clocks is **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table; the re-key specification is **E4 / S-ARCH's**, not this lane's |
+| **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner once the ramp is on, with no economics changed** (it ships flat, so the effect is latent — `SCC-Q2`), and every `T` re-pin thereafter moving when the staker share saturates. **It is a consensus operand, not an economics knob.** `n` reaches consensus through `Blockchain::parent_frozen_segment_count` → `validate_miner_transaction` (`src/cryptonote_core/blockchain.cpp:1494-1508`), derived from `get_curve_tree_leaf_count()` — the **retired leaf geometry** — and read at a pinned parent state with a throwing assert (*"escalation operand read-point violated"*). So the coinbase's fee split depends on it. **CORRECTED 2026-09-27 (`SCC-Q2`'s ruling):** the stronger claim this row first made — *"a wrong re-key changes which coinbases are valid"* — holds only **once the escalation is switched on**. It ships **flat**: `shekyl_escalation_asymptote_share` equals the floor `shekyl_staker_pool_share` (`config/economics_params.json:16-18`, *"the DELIBERATE pre-ceremony NEUTRAL value"*), so the split is 25 % whatever `n` is and a wrong re-key changes no coinbase's validity **today**. The requirement that the re-key be one atomic C++/Rust change is unchanged, and its reason is sharper: the operand is computed on both sides, and a mismatch that is harmless while flat becomes a chain split the moment the GF-7 ceremony raises the asymptote. Likewise the ~65× figure bites only after the ceremony. **Blast radius, otherwise bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so what it clocks is **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table. **Owners RULED 2026-10-01 (§10.4):** `n`'s re-key landed in the Rust validator on 2026-09-30; `g(age)`'s segment-keyed no-segment branch is re-keyed in the **shard-count cutover** ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md)), Rust-side; `escalation_knee_n`'s re-derivation is the **sim lane's**, per `SCC-Q2` |
 | **`SHT-9`** | **A `shekyl-chain-rules` fixture carries a shape consensus refuses.** `harness::fixture::serve_credit_only` builds `prunable: None` with empty `pqc_auths` — the **pre-`RF-D1`** serve-credit form, identified by the *absence* of a prunable region. `RF-D1` inverted that: the region is now present and holds one non-empty pruned pass record per credit vin. Verified empirically rather than read off: `Transaction::validate_context_free_pruned` refuses it — *"serve_credit tx must be fee-only — no outputs, empty `pqc_auths`, no spend-proof material, and exactly one pruned pass record per serve-credit vin (§2.5, RF-D1)"*. It does **not** break `SHT-Q1`'s equivalence (a conforming serve-credit body carries good, and `tx_domain_tests` builds one), but a fixture that consensus would refuse is a false negative waiting for any test that assumes it is valid. | CONFIRMED — found while building the equivalence test; owner the `CHAIN_RULES_SLICE` lane, FOLLOWUPS |
 | **`SHT-10`** | **An FCMP++ proof verifies with trailing bytes.** `Fcmp::read` consumes exactly `proof_size(n, layers)` bytes (`shekyl-oxide/crypto/fcmps/src/lib.rs`), and neither the verifier (`shekyl-fcmp/src/proof.rs`) nor any consensus rule compares `fcmp_proof.len()` with it — the rows check emptiness only (`rules/tx.rs`, `rules/tx_inputs.rs`; C++ `blockchain.cpp`). Probe: a valid proof extended by 1, 64 and 4,096 zero bytes verifies `Ok(true)`. Every hybrid signature binds `prunable_hash`, so only the signer can pad (paying fee), but the good is not a closed function of structure and the encoding is not canonical. Fix: `fcmp_proof.len() == proof_size(n_spend, depth + 1)`. | CONFIRMED by probe — consensus canonical-form gap; **fix directed by the design owner 2026-09-28**, built in PR #899 |
 | **`SHT-11`** | **A serve-credit path verifies with zero scalars appended to a branch layer.** `recompute_subroot` hashes each layer as `hash_grow(init, 0, ZERO, chunk)`, a vector commitment on which a zero scalar contributes nothing (`shekyl-archival-retention/src/path.rs`); widths are bounded only by `MAX_BRANCH_SCALARS = 256`. Probe: the `assembled_path_crosscheck` fixture's Helios layer widened 5 → 6 and 5 → 45 verifies `Ok(())`. The ML-DSA countersignature binds `encode(path)`, so only the bonded signer can pad. Fix: canonical widths for a frozen segment, or refuse trailing zero scalars. | CONFIRMED by probe — consensus canonical-form gap; **fix directed by the design owner 2026-09-28**, built in PR #899 |
@@ -899,7 +906,8 @@ Each is a FOLLOWUPS row, not work for this round:
   specification for the escalation operand `n`.** It belongs beside the segment
   deletion in E4 / S-ARCH's re-key table, not in the `T` lane: this round's job was
   to find that the operand is segment-keyed and that a shard-keyed replacement
-  would price monetary policy off `T`, not to design the replacement.
+  would price monetary policy off `T`, not to design the replacement. *(Since
+  2026-10-01 the residues have named owners — §10.4.)*
 - Any change to channel 1.
 - Composition "attacks" — A4/W9 CLEARED, §12.11.
 - `SHT-5`'s measurement, and `SHT-3`'s stale-text correction in the `SF-` doc.
@@ -1344,6 +1352,10 @@ LMDB/Rust-store partition difference is registered as an intended CSR-3a diverge
 the engine swap completes before genesis, or this is revisited. The census carries both
 (`ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F).
 
+**Build status, 2026-10-01.** The blocker below is **lifted by §10.3's ruling (option
+(iv))**, and the mixer term, the pins and the corpora are being built as the family-1
+cutover (rule 07).
+
 **Build status, 2026-09-29 (PR #910).** Items 2, 4 and 5 are done, and item 1's row and
 cell are built. Item 1's mixer term and item 3's pins and corpora are held on one
 blocker, how a pruned form supplies the length (FOLLOWUPS "Build `SHT-Q2`", where the
@@ -1412,7 +1424,7 @@ length lies in `(W − max, W + max)`, so its relative deviation is at most `max
 
 How much deviation to accept is a **choice**: the overshoot tolerance `τ`, which sets the
 floor `W ≥ 149.4 KB / τ`. The design owner recommends `τ ≤ 5 %`, which gives
-`W ≥ 2.99 MB`.
+`W ≥ 2.99 MB`. **`τ = 5 %` CONFIRMED 2026-10-01 (§10.2).**
 
 ### 9.3 The upper bound, `U1a`, in bytes
 
@@ -1476,7 +1488,8 @@ inside the range, but the rule picks 3 MB, and 3 MB also improves `U1a`'s margin
 (≈ 81 s against ≈ 90 s).
 
 It is re-pinned at the Round-2 gate, like `T` was, by:
-- **the overshoot tolerance `τ`**, Rick's input. It sets the floor;
+- **the overshoot tolerance `τ`**, Rick's input. It sets the floor — **5 %, confirmed
+  2026-10-01 (§10.2)**, so the floor is 2.99 MB and no longer an open input;
 - **the multi-size W₂ run** (§4.1, pre-registered). It separates `t_fixed` from `v`
   and turns the ceiling into one number;
 - **the `U1b` server-egress measurement** (`SHT-5`). It may lower the ceiling.
@@ -1485,3 +1498,134 @@ It is re-pinned at the Round-2 gate, like `T` was, by:
 key), `shekyl_types::SHARD_TX_COUNT` and its generated C++ name become an
 archival-length constant in bytes. The unit is in the name, so the rename is part of the
 cutover (the FOLLOWUPS build row).
+
+---
+
+## 10. Rulings of 2026-10-01
+
+Four rulings from the design-owner lane, relayed by Rick on 2026-10-01 and recorded as
+given. Each premise that names code was checked at source on `dev@931da263e` before it
+was written here. Two of §10.3's premises did not hold as stated; the ruling's
+conclusion does, and the corrected premises are recorded with it.
+
+### 10.1 The target witness-miss rate — RULED
+
+> The target witness-miss rate is the `p_attempt` the failure window ships against. `W`'s
+> ceiling is the largest `W` at which the measured all-cause single-attempt miss, in the
+> governing regime (soak, PoW on), stays ≤ that `p_attempt`. If the measured miss at
+> 3,000,000 B exceeds it, either `W` comes down or the window is recalibrated on the
+> measured `p`. Either way it comes back to the design owner.
+
+**Why it is not a free choice.** The failure window's floor targets were calibrated on
+a per-attempt read failure of `p_attempt = 0.30` with one retry
+(`rust/shekyl-economics-sim/src/mn_feasibility.rs`, `default_sources`), a stand-in
+measured without PoW. A witness miss **is** that per-attempt failure. A ceiling set
+against any other rate would have two derivations disagreeing about one event.
+
+**What this supersedes in §4.1a, and nothing else:**
+
+- **The governing arm.** §4.1a said the fit reads the restart's PoW-off soak, and that
+  the PoW comparison "does not enter `W`'s fit". Serving personas publish with PoW on,
+  so the ruling judges that regime: **the fit reads the interleaved run's PoW-on
+  file.** The restart's soak is fitted the same way and reported beside it as the
+  PoW-off reading.
+- **The governing percentile.** §4.1a named "the soak p99, until the miss rate replaces
+  it". It is replaced: an attempt **misses** when it does not return the whole object
+  within 120 s — any outcome other than `ok`, or an `ok` slower than 120 s. With a
+  target of 0.30, the governing statistic is the time by which 70 % of **all**
+  attempts have completed, a miss counted as never completing.
+
+Everything else in §4.1a stands: the objects, the harness, the host, the margins and
+verdicts of the PoW comparison, the form `t = t_fixed + bytes / v`, and the two
+model-rejection thresholds.
+
+**The analysis, fixed now.** It is written before any PoW-on observation has been read
+(§"What had been read", below).
+
+1. **The decision at the provisional `W`, with no model.** The heaviest shard at
+   `W = 3,000,000 B` is 3,149,400 B, which is smaller than the 1× object
+   (3,326,976 B). Completion within a deadline cannot improve as an object grows, so
+   the 1× object's miss rate bounds the heaviest shard's from above. Read the PoW-on
+   miss rate at the 1× object with its 95 % Wilson interval:
+   - upper bound ≤ 0.30: the provisional `W` stands, and `U1a` does not bind;
+   - lower bound > 0.30: `U1a` binds, and it goes back to the design owner;
+   - otherwise: *inconclusive*, reported with the interval, and nothing is re-pinned.
+2. **The ceiling as a number.** Fit `t₇₀(bytes) = t_fixed + bytes / v` over the three
+   sizes, where `t₇₀` is the 70th percentile of all attempts with a miss counted as
+   infinite. `W_max = v · (120 s − t_fixed) − 149,400 B`. §4.1a's rejection thresholds
+   apply unchanged. If a size's miss rate is already above 0.30, its `t₇₀` is infinite
+   and the model is not fitted: item 1 has then already answered.
+   Above 3,326,976 B the number is an **extrapolation**, because that is the largest
+   object the production frame serves, and it is labelled as one.
+3. **Fixed against size-driven misses**, per size: circuit failures (`circuit`) apart
+   from transfer failures (`timeout`, `truncated`, and an `ok` past 120 s). This is
+   what says whether a smaller `W` would help at all: only the second kind shrinks
+   with the object.
+4. **The stand-in.** The PoW-on miss rate at the 1× object is reported as the measured
+   value the 0.30 stand-in was standing in for. Whether the failure window is
+   recalibrated on it is the design owner's.
+
+**What had been read when this was written (2026-10-01).** The restart's soak ended at
+11:33 UTC with exit 0 and 1,466 observations, and its summary had been read, after the
+ruling arrived and before this text: PoW **off**, miss rates 16.0 %, 16.6 % and 20.0 %
+at the ¼×, ½× and 1× objects (circuit failures about 15 % at every size), and a 1× p99
+of 122 s. No model had been fitted. Of the interleaved run, started one second later,
+only its line counts had been read (about 170 per posture); no PoW-on outcome or timing
+had. So the arm the ruling makes governing was unread when its analysis was fixed, and
+the PoW-off summary above is recorded so a reader can weigh that for themselves.
+
+### 10.2 The overshoot tolerance — CONFIRMED at 5 %
+
+It depends on no measurement. Its one material effect, `U1a` being judged at
+`W + 149,400 B` rather than at `W`, is already in the ceiling (§9.3, §10.1 item 1).
+So §9.2's floor is 2.99 MB and `W = 3,000,000 B` is its output; `W` stays provisional
+only on the ceiling.
+
+### 10.3 How a pruned form supplies its archival length — option (iv), RULED
+
+> Pruned-form length: option (iv). C++ passes full segments to Rust over FFI; Rust
+> measures and computes the txid. No C++ length measurement; the FFI entry has no length
+> parameter.
+
+**The premise that holds, as verified.** The C++ store never discards a transaction's
+prunable or `pqc_auths` rows: the stripe engine and the C++ tx-data prune are deleted
+(`src/blockchain_db/lmdb/db_lmdb.cpp`, the V15 note), and those rows go only when the
+transaction itself is removed (`remove_transaction_data`). So every C++ txid
+computation has the full segments in hand.
+
+**Two premises corrected at source.** The ruling was given with both; neither changes
+its conclusion, and both change what the build touches.
+
+- *"`get_pruned_transaction_hash` survives only in a comment."* It is a defined
+  function (`src/cryptonote_basic/cryptonote_format_utils.cpp`) with one production
+  caller, the P2P block-entry path
+  (`src/cryptonote_protocol/cryptonote_protocol_handler.inl`,
+  `make_block_connect_supplement_from_block_entry`). **That caller is unreachable:**
+  the new-block path passes `allow_pruned = false`, and the sync path passes the
+  entry's own `pruned` flag only for entries that have already passed the response
+  handler's check, which drops a peer for any pruned entry ("Pruned spans are never
+  requested"). So no reachable C++ path computes a pruned txid, which is the claim
+  the ruling needs. **The build therefore deletes the function and the
+  `allow_pruned` arm** (rules 15 and 16) instead of porting them to FFI.
+- *"Pruned forms exist only in the Rust store."* They also cross one wire: the daemon
+  RPC's pruned `get_transactions`, which the wallet's block fetch and the daemon
+  console read, each rebuilding the txid from a pruned body and a supplied prunable
+  digest. C++ already hands that path the pruned body **and** the full prunable bytes
+  (`TxEntryFfi`), so the Rust RPC server measures the length there, at serve time,
+  and the reply carries it as a supplied component beside the digest. That is option
+  (iv) as posed, and it needs no C++ change. A length a daemon lies about yields a
+  txid the block does not list.
+
+**What the build is, with those corrected.** One mixer in Rust takes the length. C++
+`calculate_transaction_hash` becomes one FFI call that passes segments and receives
+32 bytes. The dead pruned-txid function and branch are deleted. The pruned RPC reply
+gains the length; the wallet and the console supply it. The Rust store supplies it
+from `txs_archival_len`. The interim gate `check_archival_len_source.py` is deleted
+with its workflow step, as it was built to be.
+
+### 10.4 `SHT-8`'s residues have owners
+
+- **`g(age)`'s segment-keyed no-segment branch** is re-keyed in the shard-count
+  cutover ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md)), as a
+  Rust-side row.
+- **`escalation_knee_n`** is re-derived by the sim lane, per `SCC-Q2`.
