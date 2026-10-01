@@ -253,9 +253,9 @@ fn serve_credit_txid_has_no_pqc_component() {
     let tx = serve_credit_tx(2);
     assert_eq!(tx.pqc_auth_hash(), None, "serve-credit hashes 3-part");
     assert_eq!(
-        tx.hash_with_supplied_components(None, tx.prunable_hash()),
+        tx.hash_with_supplied_components(None, tx.prunable_hash(), tx.archival_len()),
         tx.hash(),
-        "3-part reconstruction from the stored prunable digest alone"
+        "reconstruction from the stored prunable digest and archival length alone"
     );
 }
 
@@ -356,8 +356,10 @@ fn fcmp_spend_rejects_oversized_pqc_blob() {
 
 #[test]
 fn synthetic_spend_hash_preimage_is_pinned() {
-    // Regression guard for the 4-part FCMP++ spend hash (§11):
-    //   keccak256( H(prefix) ‖ H(base) ‖ H(varint(N)·pqc_auths) ‖ H(prunable) ).
+    // Regression guard for the FCMP++ spend hash (§11; `SHT-Q2`):
+    //   keccak256( H(prefix) ‖ H(base) ‖ H(varint(N)·pqc_auths) ‖ H(prunable) ‖ len ),
+    // where `len` is the archival length as a 32-byte word (the `u64`
+    // little-endian, then zeros).
     // Cross-language parity for this arm is pinned struct-derived in
     // `pruned_tx_hash_parity.rs` (C++ leg: `pruned_tx_hash_parity.cpp`); the
     // daemon-captured sibling is `live_oracle_spend_identity_matches_the_accepted_bytes`
@@ -374,7 +376,7 @@ fn synthetic_spend_hash_preimage_is_pinned() {
         .map(|b| format!("{b:02x}"))
         .collect();
     assert_eq!(
-        h, "687b75959bcc7f1acc261a49213e8a0f47862cb6bffa9d21443437e3ae853b6e",
+        h, "75da682cf46cfb828414f69448c414a0230b57323b093b511ccaa20bf3cd27d6",
         "synthetic FCMP++ spend hash preimage drifted (see the §11 note above)"
     );
 }

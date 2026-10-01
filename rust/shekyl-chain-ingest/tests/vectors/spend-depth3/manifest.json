@@ -1,7 +1,7 @@
 {
   "block_count": 762,
-  "built_at_dev_sha": "8c3e443cf",
-  "captured_by_daemon_version": "3.1.0-f90e187ef (plus the then-uncommitted regtest hard-fork table fix, committed as 1e8d14dc9: a daemon built at f90e187ef measures CEN-F21's decay from height 0 and REFUSES these vectors — see built_at_dev_sha, and CHAIN_RULES_SLICE_7.md section 3.11)",
+  "built_at_dev_sha": "92d56536d",
+  "captured_by_daemon_version": "3.1.0-caf1e1f33",
   "description": "A regtest chain captured whole as the DRS-E2 replay pair. corpus.e2: every block 0..=tip_height with the FULL bytes of every listed transaction (shekyl-chain-replay fetch, RD-F15-verified). trace.e2: the passed-through facts per block and the daemon's logical-state digest at the tip (shekyl-e2-trace-export, one LMDB snapshot). Consumed by replay: shekyl-chain-ingest connects the chain against a real store, so the state the 4.I rules read is derived, not asserted. Regenerate with SHEKYL_CAPTURE_CHAIN_VECTORS=1, SHEKYLD_BIN, SHEKYL_CHAIN_REPLAY_BIN and SHEKYL_E2_TRACE_EXPORT_BIN set, running the named generator --ignored.",
   "fixed_difficulty": 1,
   "format_version": 3,
@@ -11,7 +11,7 @@
   "reorg_cap_blocks": 720,
   "settlement_epoch_blocks": 10000,
   "shape": "spend-depth3",
-  "spend_txid": "3f9836b6cac7ac20d21a6504f276fc67c7b45656de497c9d63eb2d05fb2656c7",
+  "spend_txid": "60bb865c4b287bda60ce817a87e5a996bc69cfa3d4f89debdc2e1e371fabcb69",
   "tip_height": 761,
   "tx_count": 1
 }

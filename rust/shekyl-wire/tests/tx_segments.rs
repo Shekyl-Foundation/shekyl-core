@@ -16,7 +16,7 @@
 use std::path::PathBuf;
 
 use serde_json::Value;
-use shekyl_types::PrunableHash;
+use shekyl_types::{ArchivalLength, PrunableHash};
 use shekyl_wire::{Block, Transaction};
 
 fn hex_bytes(s: &str) -> Vec<u8> {
@@ -95,11 +95,16 @@ fn prunable_hash_is_keccak_of_the_prunable_segment_on_both_shapes() {
         shekyl_crypto_hash::keccak256(&[])
     );
     assert_ne!(miner.prunable_hash().to_bytes(), [0u8; 32]);
-    // And the txid is unchanged by having factored the digest out.
+    // And the txid is unchanged by having factored the digest out: a
+    // coinbase mixes neither a supplied digest nor a supplied length.
+    assert_eq!(miner.archival_len(), ArchivalLength::ZERO);
     assert_eq!(
         miner.hash(),
-        miner.hash_with_supplied_prunable(PrunableHash::from_bytes([0x77; 32])),
-        "a coinbase txid ignores any supplied digest (Null arm)"
+        miner.hash_with_supplied_prunable(
+            PrunableHash::from_bytes([0x77; 32]),
+            ArchivalLength::from_raw(0x7777)
+        ),
+        "a coinbase txid ignores any supplied digest or length (Null arm)"
     );
 }
 

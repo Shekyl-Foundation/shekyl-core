@@ -84,13 +84,12 @@ scalar_u64! {
     /// (`SHT-Q2`, RULED 2026-09-29). Stored as a skeleton row, never
     /// declared or signed. A coinbase's is zero.
     ///
-    /// **The txid binding is pending.** A full body's length is fixed by its
-    /// bytes, which the txid already binds through the prunable hash; a
-    /// pruned form carries that hash but not the bytes, so its length is
-    /// bound by nothing until the txid gains the length term the ruling
-    /// names. That term is held on the ruling for how a pruned form supplies
-    /// the length (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.6, the FOLLOWUPS
-    /// "Build SHT-Q2" row).
+    /// **The txid binds it.** The length is a word of the txid's preimage
+    /// (`shekyl-wire` `transaction/txid.rs`), so a transaction cannot keep its
+    /// id under another length. A full body's is measured from its bytes; a
+    /// pruned form, which holds the hash of those bytes but not the bytes, is
+    /// handed the length — the store's row, or a daemon reply's field — and
+    /// the id recomputed over it is what checks it.
     ///
     /// A distinct type because the partition it drives used to be a
     /// transaction count, and a `u64` would let a count, a storage id and a
