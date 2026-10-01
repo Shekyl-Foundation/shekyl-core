@@ -28,9 +28,10 @@
 //! post-image read back), a second join for a bonded persona refused, and
 //! a reinstate against a record whose only interval is a clean close
 //! refused — the reinstate arm's *positive* witness needs an open interval,
-//! which only a slash writes, and no fixture chain reaches the slash scan
-//! (its deadline sits `CHALLENGE_RESOLUTION_BLOCKS` past an epoch's last
-//! block; `shekyl-chain-store`'s ignored B9 bench is that path's witness).
+//! which only a slash writes, and no fixture chain here reaches the slash
+//! scan (a slash needs `M` epochs of settled misses and one epoch of
+//! grace; `shekyl-chain-store`'s `slash_writes_land_at_the_m_epoch_deadline`
+//! is that path's witness).
 //!
 //! One arm the plan listed as single-block is not. A join and a release
 //! for one persona in one block do not reach L7: **CEN-G10**

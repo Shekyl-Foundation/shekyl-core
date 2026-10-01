@@ -669,9 +669,10 @@ mod archival_read_tests;
 #[path = "archival_write_tests.rs"]
 mod archival_write_tests;
 
-/// DRS-E4 commit 5 (B9): the slash-scan bench (`#[ignore]`d; times the
-/// slashing deadline's connect against an ordinary one on whatever runs
-/// it, and is the one path to the 9b writes).
+/// DRS-E4 commit 5 (B9): the chain to the epoch-`M` slashing deadline —
+/// the 9b slash-writes witness (unit lane) and the slash-scan bench
+/// (`#[ignore]`d; times the slashing deadline's connect against an
+/// ordinary one on whatever runs it) over one builder.
 #[cfg(test)]
 #[path = "slash_scan_bench_tests.rs"]
 mod slash_scan_bench_tests;

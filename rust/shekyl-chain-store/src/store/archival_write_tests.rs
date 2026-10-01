@@ -18,11 +18,12 @@
 //! re-connected after its pop: the journal (SI-19/SI-23) is exercised by
 //! round trip, not by reading the undo rows.
 //!
-//! The slash writes (9b) have no fixture here: the slash deadline is
-//! `last_block(E) + CHALLENGE_RESOLUTION_BLOCKS`, not levered by the
-//! schedule, so no chain shorter than ten thousand blocks reaches them.
-//! `slash_scan_bench_tests.rs` (the B9 measurement, `#[ignore]`d) is that
-//! path's one witness.
+//! The slash writes (9b) have no single-block fixture: a slash needs `M`
+//! epochs of misses settled 2-of-3 and then one epoch of grace
+//! (`SLASH_GRACE_EPOCHS · SEB`), so its witness is a chain, not a block.
+//! `slash_scan_bench_tests.rs` builds it — 1 300 connects at `SEB = 100` —
+//! and `slash_writes_land_at_the_m_epoch_deadline` there is the 9b witness
+//! in the unit lane; the `#[ignore]`d B9 bench shares the chain.
 
 use shekyl_chain_rules::harness::{assert_refused, fixture};
 use shekyl_chain_rules::{
