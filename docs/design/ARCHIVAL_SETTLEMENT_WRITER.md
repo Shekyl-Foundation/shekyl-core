@@ -385,9 +385,11 @@ const _: () = assert!(
 );
 ```
 
-*(The assertion's left side is `SLASH_GRACE_EPOCHS * SETTLEMENT_EPOCH_BLOCKS`
-since 2026-09-30 — the grace is one epoch by construction, the margin and the
-argument unchanged; `CHALLENGE_RESOLUTION_BLOCKS` below is the name it had.)*
+*(Since 2026-09-30 the assertion is `SLASH_GRACE_EPOCHS * W2_EPOCH_DIVISOR >= 1`
+— the grace is `k · SEB` and W₂ is `SEB / 20` on `SettlementSchedule`, both from
+one epoch, so `grace ≥ W₂` holds on every schedule rather than on the production
+pin; the margin and the argument are unchanged, and `CHALLENGE_RESOLUTION_BLOCKS`
+below is the name the grace had.)*
 
 *"or in-flight responses read as misses"* is `SO-D7`'s entire argument, written
 before this round opened, **enforced by a const-assert** rather than left to

@@ -11,6 +11,7 @@
 
 use crate::constants::{
     effective_settlement_epoch_blocks, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
+    W2_EPOCH_DIVISOR,
 };
 use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockHeight, SettlementEpoch};
@@ -187,6 +188,32 @@ impl SettlementSchedule {
     pub const fn slash_deadline_height(self, epoch: u64) -> u64 {
         self.last_block(epoch)
             .saturating_add(self.slash_grace_blocks())
+    }
+
+    /// W₂ under this schedule — blocks after a challenge's issuing block to
+    /// accept its serve-credit response: `SEB / W2_EPOCH_DIVISOR`, one
+    /// twentieth of the epoch (`constants::CHALLENGE_RESPONSE_BLOCKS` is
+    /// this method on [`Self::GENESIS`], and the W₂ ruling's band asserts
+    /// hold there).
+    ///
+    /// Here rather than only as a constant so that W₂ and the slash grace
+    /// are drawn from **one** epoch. The coupling the slash fold relies on —
+    /// the fold for `E` must not run before `E`'s last-issued challenge's
+    /// window closes, `grace ≥ W₂` — is then `k·SEB ≥ SEB/20`, i.e.
+    /// `k · W2_EPOCH_DIVISOR ≥ 1`, which holds on every schedule by
+    /// construction (the const-assert in `constants.rs`). Before this method
+    /// the grace was schedule-derived and W₂ const-derived from the
+    /// production pin, and under a levered `SEB = 100` the inequality the
+    /// production-pin assert "guaranteed" was inverted (grace 100, W₂ 500).
+    ///
+    /// Integer division, as the constant always was: a levered epoch that
+    /// is not a multiple of twenty truncates (the divisibility const-assert
+    /// defends the production pin only), and an epoch below twenty yields
+    /// `0`. W₂ has no consensus consumer yet; one that lands reads this
+    /// method, not the pin, and decides there what a zero window means.
+    #[must_use]
+    pub const fn challenge_response_blocks(self) -> u64 {
+        self.seb() / W2_EPOCH_DIVISOR
     }
 
     /// Prune horizon at `block_height`: epochs strictly below the returned

@@ -1195,4 +1195,38 @@ mod tests {
         assert_eq!(settlement_epoch_at_height(SETTLEMENT_EPOCH_BLOCKS - 1), 0);
         assert_eq!(settlement_epoch_at_height(SETTLEMENT_EPOCH_BLOCKS), 1);
     }
+
+    #[test]
+    fn slash_grace_dominates_w2_on_every_schedule() {
+        // The coupling the slash fold relies on, drawn from one epoch on
+        // both sides. Its predecessor held between the schedule's grace and
+        // the production-pin W₂ and inverted under a lever (grace 100, W₂
+        // 500 at SEB 100); the levered rows below are the ones that failed.
+        use crate::constants::{CHALLENGE_RESPONSE_BLOCKS, W2_EPOCH_DIVISOR};
+        use shekyl_types::archival::SettlementEpochBlocks;
+
+        let genesis = SettlementSchedule::GENESIS;
+        assert_eq!(
+            genesis.challenge_response_blocks(),
+            CHALLENGE_RESPONSE_BLOCKS,
+            "the constant is the schedule's method on the genesis pin"
+        );
+        assert_eq!(genesis.challenge_response_blocks(), 500);
+
+        for seb in [SETTLEMENT_EPOCH_BLOCKS, 2_000, 100, 20, 7, 2] {
+            let s = SettlementSchedule::new(SettlementEpochBlocks::new(seb).expect("nonzero"));
+            assert_eq!(s.challenge_response_blocks(), seb / W2_EPOCH_DIVISOR);
+            assert!(
+                s.slash_grace_blocks() >= s.challenge_response_blocks(),
+                "SEB {seb}: grace {} < W2 {}",
+                s.slash_grace_blocks(),
+                s.challenge_response_blocks()
+            );
+        }
+        // The levered bench regime, spelled out: the grace is the epoch and
+        // W₂ is a twentieth of it — not the production 500.
+        let bench = SettlementSchedule::new(SettlementEpochBlocks::new(100).expect("nonzero"));
+        assert_eq!(bench.slash_grace_blocks(), 100);
+        assert_eq!(bench.challenge_response_blocks(), 5);
+    }
 }
