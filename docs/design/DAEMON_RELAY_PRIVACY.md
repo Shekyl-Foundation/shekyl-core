@@ -1,5 +1,7 @@
 # Daemon Relay Privacy — correcting and porting the Dandelion++ timing layer
 
+**Status:** LIVING — Round 3 dispositioned (scored ledger below the relay-lane acceptance).
+
 **Goal statement (§31, 2026-07-31): NON-ENUMERABILITY.** Dandelion Theorem 2
 floors any policy at `D_OPT ≥ p²`, `R_OPT ≥ p`, so *invisibility against the
 peer adversary was never reachable* — the available residual is that **the

@@ -42,7 +42,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **Run the D5 thread-budget legs once Rick pins the conditions.** The ledger prints before the p2p loop. The conditions (D5, 2026-09-30) are the smallest worker count, blocking cap and executor count that meet each leg's duty, summed against four cores on the floor device with the miner off. The floors now on the ledger (transport and daemon-RPC 2/1, Tor-control 1/1) are unmeasured. The pin is the draft of those conditions, and it comes before any leg. Falsify by one record per leg, each naming its count and the ledger line it was read from.
+- **Run the D5 thread-budget legs once the conditions are pinned.** The ledger prints before the p2p loop. The conditions (D5, 2026-09-30) are the smallest worker count, blocking cap and executor count that meet each leg's duty, summed against four cores on the floor device with the miner off. The floors now on the ledger (transport and daemon-RPC 2/1, Tor-control 1/1) are unmeasured. The pin is the draft of those conditions, and it comes before any leg. Falsify by one record per leg, each naming its count and the ledger line it was read from.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D5
   - Target: pre-genesis
 
