@@ -48,6 +48,7 @@
 #include "cryptonote_core/tx_pool.h"
 #include "net/net_utils_base.h"
 #include "shekyl/shekyl_ffi.h"
+#include "pqc_spend_fixture.h"
 
 using namespace cryptonote;
 
@@ -180,7 +181,7 @@ cryptonote::blobdata make_minimal_tx_blob()
   cryptonote::transaction tx{};
   tx.version = 1;
   tx.unlock_time = 0;
-  return cryptonote::tx_to_blob(tx);
+  return shekyl_test_fixtures::tx_blob(tx);
 }
 
 txpool_tx_meta_t make_meta(uint64_t weight, time_t receive_time)

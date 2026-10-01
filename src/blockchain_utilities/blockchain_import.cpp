@@ -443,7 +443,8 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
           for (const auto &tx: bp.txs)
           {
             txs.push_back({cryptonote::blobdata(), crypto::null_hash});
-            cryptonote::tx_to_blob(tx, txs.back().blob);
+            if (!cryptonote::tx_to_blob(tx, txs.back().blob))
+              throw std::runtime_error("a transaction in the chunk did not serialize");
           }
           block_complete_entry bce;
           bce.pruned = false;
@@ -505,7 +506,10 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
             // because add_block() calls
             // add_transaction(blk_hash, blk.miner_tx) first, and
             // then a for loop for the transactions in txs.
-            txs.push_back(std::make_pair(tx, tx_to_blob(tx)));
+            cryptonote::blobdata tx_blob;
+            if (!cryptonote::tx_to_blob(tx, tx_blob))
+              throw std::runtime_error("a transaction in the chunk did not serialize");
+            txs.push_back(std::make_pair(tx, std::move(tx_blob)));
           }
 
           size_t block_weight;

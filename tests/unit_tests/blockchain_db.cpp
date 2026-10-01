@@ -44,6 +44,7 @@
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
+#include "pqc_spend_fixture.h"
 
 using namespace cryptonote;
 using epee::string_tools::pod_to_hex;
@@ -88,8 +89,8 @@ void print_block(const block& blk, const std::string& prefix = "")
 // from std::string, this might break.
 bool compare_txs(const transaction& a, const transaction& b)
 {
-  auto ab = tx_to_blob(a);
-  auto bb = tx_to_blob(b);
+  auto ab = shekyl_test_fixtures::tx_blob(a);
+  auto bb = shekyl_test_fixtures::tx_blob(b);
 
   return ab == bb;
 }

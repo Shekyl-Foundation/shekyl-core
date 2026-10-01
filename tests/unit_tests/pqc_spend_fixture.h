@@ -25,6 +25,18 @@
 namespace shekyl_test_fixtures
 {
 
+// The bytes of `tx`, or a thrown error when its serializer refuses it. The
+// production form reports refusal through its return value, which a fixture
+// has no use for: a test handed a fragment would be exercising something
+// other than the transaction it built, so here refusal ends the test.
+inline cryptonote::blobdata tx_blob(const cryptonote::transaction& tx)
+{
+  cryptonote::blobdata blob;
+  if (!cryptonote::tx_to_blob(tx, blob))
+    throw std::runtime_error("test fixture: the transaction did not serialize");
+  return blob;
+}
+
 // n*G as a compressed point: canonical, prime-order, non-identity for
 // 1 <= n <= 255. Consensus admission accepts nothing weaker for output keys
 // (check_outs_valid), and for commitment masks it additionally rejects the

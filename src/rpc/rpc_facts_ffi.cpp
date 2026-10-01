@@ -1055,7 +1055,17 @@ int blocks_by_height(cryptonote::Blockchain& bc, const uint64_t* heights, size_t
       std::vector<std::string> blobs;
       blobs.reserve(txs.size());
       for (const cryptonote::transaction& tx : txs)
-        blobs.push_back(cryptonote::tx_to_blob(tx));
+      {
+        // A stored transaction that will not serialize is the store
+        // contradicting itself; a fragment is not a body to hand a client.
+        std::string blob;
+        if (!cryptonote::tx_to_blob(tx, blob))
+        {
+          MERROR("rpc facts: a transaction of block " << heights[i] << " did not serialize");
+          return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+        }
+        blobs.push_back(std::move(blob));
+      }
       owned->txs.push_back(std::move(blobs));
     }
 

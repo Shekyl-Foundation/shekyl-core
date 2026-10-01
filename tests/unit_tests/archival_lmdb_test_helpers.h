@@ -23,6 +23,7 @@
 
 #include <stdexcept>
 #include <string>
+#include "pqc_spend_fixture.h"
 
 namespace archival_test {
 
@@ -159,7 +160,7 @@ inline uint64_t connect_block_with_txs(cryptonote::BlockchainDB& db, const std::
   for (const cryptonote::transaction& tx : txs)
   {
     blk.tx_hashes.push_back(cryptonote::get_transaction_hash(tx));
-    tx_blobs.emplace_back(tx, cryptonote::tx_to_blob(tx));
+    tx_blobs.emplace_back(tx, shekyl_test_fixtures::tx_blob(tx));
   }
 
   db.add_block(std::make_pair(blk, cryptonote::block_to_blob(blk)), 100, 100,

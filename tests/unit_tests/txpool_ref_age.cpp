@@ -36,6 +36,7 @@
 // forward-declares it), needed by init_blockchain's fakechain options.
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_pool.h"
+#include "pqc_spend_fixture.h"
 
 using namespace cryptonote;
 
@@ -189,7 +190,7 @@ cryptonote::blobdata make_minimal_tx_blob()
   cryptonote::transaction tx{};
   tx.version = 1;
   tx.unlock_time = 0;
-  return cryptonote::tx_to_blob(tx);
+  return shekyl_test_fixtures::tx_blob(tx);
 }
 
 // Structurally parseable FCMP++ tx: survives parse_and_validate_tx_from_blob
@@ -386,7 +387,7 @@ struct Leg2Fixture
     EXPECT_TRUE(init_blockchain(bap.bc, db));
 
     shape_tx = make_fcmp_shape_tx();
-    blob = cryptonote::tx_to_blob(shape_tx);
+    blob = shekyl_test_fixtures::tx_blob(shape_tx);
 
     // The blob must survive the template path's full parse; a failure here
     // is a fixture bug, not a product bug.
@@ -515,7 +516,7 @@ struct TakeTxFixture
     EXPECT_TRUE(init_blockchain(bap.bc, db));
 
     shape_tx = make_fcmp_shape_tx();
-    blob = cryptonote::tx_to_blob(shape_tx);
+    blob = shekyl_test_fixtures::tx_blob(shape_tx);
     txid = make_txid(0x77);
     meta = make_meta(blob.size(), time(nullptr));
   }

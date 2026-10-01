@@ -1331,7 +1331,7 @@ TEST(rpc_facts_shims, key_images_spent_maps_chain_pool_and_neither_to_their_slot
   cryptonote::txin_to_key in{};
   in.k_image = pool_ki;
   ptx.vin.push_back(in);
-  const cryptonote::blobdata pblob = cryptonote::tx_to_blob(ptx);
+  const cryptonote::blobdata pblob = shekyl_test_fixtures::tx_blob(ptx);
   cryptonote::txpool_tx_meta_t meta{};
   meta.weight = 1;
   meta.fee = 1000;
@@ -1380,7 +1380,7 @@ TEST(rpc_facts_shims, a_repeated_pool_txid_answers_both_of_its_slots)
   // v1 stand-in would not survive `get_transaction_prunable_hash` (observed:
   // the shim refuses it). v3 is also the only shape a Shekyl pool can hold.
   const cryptonote::transaction ptx = shekyl_test_fixtures::make_pqc_spend();
-  const cryptonote::blobdata pblob = cryptonote::tx_to_blob(ptx);
+  const cryptonote::blobdata pblob = shekyl_test_fixtures::tx_blob(ptx);
   const crypto::hash ptxid = cryptonote::get_transaction_hash(ptx);
   cryptonote::txpool_tx_meta_t meta{};
   meta.weight = 1;

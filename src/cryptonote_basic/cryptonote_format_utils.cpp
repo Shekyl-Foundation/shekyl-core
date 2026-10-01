@@ -390,7 +390,19 @@ namespace cryptonote
   {
     if (!tx.is_blob_size_valid())
     {
-      const cryptonote::blobdata tx_blob = tx_to_blob(tx);
+      // The serializer's verdict is deliberately not read here. This
+      // function's one caller is the consensus verifier
+      // (ver_non_input_consensus), which sizes a transaction BEFORE its
+      // structural checks and returns a verdict, never an exception. It can
+      // be handed an in-memory transaction no wire bytes express -- a
+      // pseudo-out count that disagrees with the inputs, say -- which the
+      // serializer refuses and the verifier's own check rejects by name. For
+      // such a body this is the length of what was written before the
+      // refusal, and the rejection comes from that later check. A transaction
+      // taken from the wire is hashed at intake, and the hash refuses a body
+      // that does not serialize (calculate_transaction_hash).
+      cryptonote::blobdata tx_blob;
+      tx_to_blob(tx, tx_blob);
       tx.set_blob_size(tx_blob.size());
     }
 
@@ -1152,11 +1164,6 @@ namespace cryptonote
   bool block_to_blob(const block& b, blobdata& b_blob)
   {
     return t_serializable_object_to_blob(b, b_blob);
-  }
-  //---------------------------------------------------------------
-  blobdata tx_to_blob(const transaction& tx)
-  {
-    return t_serializable_object_to_blob(tx);
   }
   //---------------------------------------------------------------
   bool tx_to_blob(const transaction& tx, blobdata& b_blob)
