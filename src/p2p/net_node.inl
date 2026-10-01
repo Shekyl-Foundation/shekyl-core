@@ -1636,7 +1636,6 @@ namespace nodetool
       std::memcpy(&socket_id, con->m_connection_id.data + 8, sizeof(socket_id));
       shekyl_zone_session_established(socket_id);
     }
-    zone.m_notifier.new_out_connection();
 
     LOG_DEBUG_CC(*con, "CONNECTION HANDSHAKED OK.");
     return true;

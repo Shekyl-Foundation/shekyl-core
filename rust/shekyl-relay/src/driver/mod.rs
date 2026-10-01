@@ -183,28 +183,19 @@ impl Driver {
 
     /// Run every step due at `now` and return the resulting work.
     ///
-    /// `gather_outbound` yields the caller's current outbound connection set —
-    /// the driver does not reach for it, because the p2p connection table is
-    /// asio's to own (§18.5). It is a **thunk, not a slice**, because the set is
-    /// needed *only* at an epoch boundary, where the stem map is rebuilt; a plain
-    /// fluff-release wake — the common case — must not pay to gather it. So the
-    /// closure is called at most once, and only inside the epoch branch below.
-    /// The branch that decides this is the zone's own `epoch_deadline`, evaluated
-    /// exactly here: the caller never holds a copy of it to decide for itself.
-    pub fn poll<R: RelayRng + ?Sized>(
-        &mut self,
-        now: Millis,
-        gather_outbound: impl FnOnce() -> Vec<ConnectionId>,
-        rng: &mut R,
-    ) -> Vec<Effect> {
+    /// The stem set at an epoch boundary is the zone's established outbound
+    /// sessions. A fluff-release wake does not rebuild it. The branch that
+    /// decides this is the zone's own `epoch_deadline`, evaluated exactly
+    /// here: the caller never holds a copy of it to decide for itself.
+    pub fn poll<R: RelayRng + ?Sized>(&mut self, now: Millis, rng: &mut R) -> Vec<Effect> {
         let mut effects = Vec::new();
 
-        // Epoch first: a rollover re-draws the role and the stem set, and the
-        // fluff release below should observe the new epoch, not the old one.
-        // Only here is `gather_outbound` invoked — a fluff-only wake skips it.
+        // Epoch first: a rollover re-draws the role and the stem set from
+        // the session registry, and the fluff release below should observe
+        // the new epoch, not the old one.
         if now >= self.zone.epoch_deadline() {
             self.zone.start_epoch(now, rng);
-            self.zone.rebuild_stems(gather_outbound(), rng);
+            self.zone.rebuild_stems(rng);
         }
 
         // Stem observations resolve here: a deadline passed with no re-arrival
@@ -261,14 +252,9 @@ impl Driver {
     }
 
     /// Start a new epoch immediately — what `run_epoch()` drives.
-    pub fn force_epoch<R: RelayRng + ?Sized>(
-        &mut self,
-        now: Millis,
-        outbound: &[ConnectionId],
-        rng: &mut R,
-    ) {
+    pub fn force_epoch<R: RelayRng + ?Sized>(&mut self, now: Millis, rng: &mut R) {
         self.zone.start_epoch(now, rng);
-        self.zone.rebuild_stems(outbound.to_vec(), rng);
+        self.zone.rebuild_stems(rng);
     }
 }
 

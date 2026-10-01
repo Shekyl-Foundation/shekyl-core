@@ -160,10 +160,13 @@ namespace
         //! LMDB, so this is the fallible call that runs FIRST in verdict
         //! application — before the recording, before the allocation.
         mutable bool throw_on_pool_check_ = false;
+        //! Origination is refused while this is false. Existing fixtures
+        //! describe a node that may originate, so the default is synchronized.
+        bool synchronized_ = true;
 
         virtual bool is_synchronized() const final
         {
-            return false;
+            return synchronized_;
         }
 
         virtual uint64_t get_current_blockchain_height() const final
@@ -231,6 +234,10 @@ namespace
 
         //! Make the next `pool_has_tx` throw, once.
         void throw_on_next_pool_check() { throw_on_pool_check_ = true; }
+
+        //! An unsynchronised node originates nothing. Forwarded stems are
+        //! unaffected; the gate reads this, not the relay method of a peer.
+        void set_synchronized(bool value) { synchronized_ = value; }
 
         std::size_t relayed_method_size() const noexcept
         {
@@ -488,6 +495,12 @@ namespace
             receiver_.notifier.reset(
               new cryptonote::levin::notify{io_service_, connections_, zone, pad_txs, events_}
             );
+            /* Connections opened before the zone existed never reached
+               `on_session_established` (`on_connection_new` no-ops without a
+               notifier). Adopt them now. An outbound adopt merges the stem
+               map on the strand; the caller's poll is queued after it. */
+            for (const auto& context : contexts_)
+                receiver_.notifier->on_session_established(context.get_id(), context.is_incoming());
             return receiver_.notifier;
         }
 
@@ -712,7 +725,6 @@ namespace
                 EXPECT_FALSE(status.connections_filled);
                 EXPECT_TRUE(status.has_outgoing);
             }
-            notifier.new_out_connection();
             io_service_.poll();
             return notifier_ptr;
         }
@@ -1281,7 +1293,6 @@ TEST_F(levin_notify, fluff_without_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -1320,7 +1331,6 @@ TEST_F(levin_notify, stem_without_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -1394,7 +1404,6 @@ TEST_F(levin_notify, stem_no_outs_without_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_FALSE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -1438,6 +1447,34 @@ TEST_F(levin_notify, stem_no_outs_without_padding)
     }
 }
 
+TEST_F(levin_notify, unsynchronised_node_originates_no_stem)
+{
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
+    auto &notifier = *notifier_ptr;
+
+    for (unsigned count = 0; count < 10; ++count)
+        add_connection(count % 2 == 0);
+    io_service_.poll();
+    ASSERT_EQ(10u, contexts_.size());
+
+    events_.set_synchronized(false);
+
+    std::vector<cryptonote::blobdata> mine(1);
+    mine[0].resize(100, 'f');
+    auto context = contexts_.begin();
+    EXPECT_TRUE(notifier.send_txs(mine, context->get_id(), cryptonote::relay_method::local));
+    io_service_.restart();
+    ASSERT_LT(0u, io_service_.poll());
+    EXPECT_EQ(0u, events_.relayed_method_size());
+    EXPECT_EQ(0u, receiver_.notified_size());
+    for (auto queued = contexts_.begin(); queued != contexts_.end(); ++queued)
+        EXPECT_EQ(0u, queued->process_send_queue());
+    // The forward arm (a relayed transaction while this node is
+    // unsynchronised) is the zone test
+    // `an_unsynchronised_origin_is_withheld_without_touching_the_map`.
+    // `stem_without_padding` runs synchronised, with `relay_method::stem`.
+}
+
 TEST_F(levin_notify, local_without_padding)
 {
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
@@ -1452,7 +1489,6 @@ TEST_F(levin_notify, local_without_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> my_txs(2);
@@ -1563,7 +1599,6 @@ TEST_F(levin_notify, block_without_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -1594,7 +1629,6 @@ TEST_F(levin_notify, none_without_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -1625,7 +1659,6 @@ TEST_F(levin_notify, fluff_with_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -1689,7 +1722,6 @@ TEST_F(levin_notify, padding_survives_the_emit_path)
     for (unsigned count = 0; count < 10; ++count)
         add_connection(count % 2 == 0);
 
-    notifier.new_out_connection();
     io_service_.poll();
 
     // Incompressible bodies, matching the Z-1 measurement of real traffic.
@@ -1766,7 +1798,6 @@ TEST_F(levin_notify, unpadded_messages_still_compress)
     for (unsigned count = 0; count < 10; ++count)
         add_connection(count % 2 == 0);
 
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -1822,7 +1853,6 @@ TEST_F(levin_notify, stem_with_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -1891,7 +1921,6 @@ TEST_F(levin_notify, stem_no_outs_with_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_FALSE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -1949,7 +1978,6 @@ TEST_F(levin_notify, local_with_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> my_txs(2);
@@ -2051,7 +2079,6 @@ TEST_F(levin_notify, block_with_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -2082,7 +2109,6 @@ TEST_F(levin_notify, none_with_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -2113,7 +2139,6 @@ TEST_F(levin_notify, private_fluff_without_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -2170,7 +2195,6 @@ TEST_F(levin_notify, private_block_without_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -2206,7 +2230,6 @@ TEST_F(levin_notify, private_none_without_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -2237,7 +2260,6 @@ TEST_F(levin_notify, private_fluff_with_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -2289,7 +2311,6 @@ TEST_F(levin_notify, private_block_with_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -2320,7 +2341,6 @@ TEST_F(levin_notify, private_none_with_padding)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -2353,7 +2373,6 @@ TEST_F(levin_notify, stem_mappings)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -2478,7 +2497,6 @@ TEST_F(levin_notify, fluff_multiple)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -2591,7 +2609,6 @@ TEST_F(levin_notify, fluff_with_duplicate)
         EXPECT_FALSE(status.connections_filled);
         EXPECT_TRUE(status.has_outgoing);
     }
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(9);
@@ -2654,7 +2671,6 @@ TEST_F(levin_notify, fluff_via_scheduled_drive)
     for (unsigned count = 0; count < 10; ++count)
         add_connection(count % 2 == 0);
 
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(2);
@@ -2765,7 +2781,6 @@ TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
 
     for (unsigned count = 0; count < test_connections_count; ++count)
         add_connection(count % 2 == 0);
-    notifier.new_out_connection();
     io_service_.poll();
 
     /* F-9: the watch keys on CANONICAL tx hashes, parsed at the call sites —
@@ -2885,7 +2900,6 @@ TEST_F(levin_notify, a_failed_stem_is_not_recorded_as_relayed)
 
     for (unsigned count = 0; count < test_connections_count; ++count)
         add_connection(count % 2 == 0);
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> first(1);
@@ -3075,7 +3089,6 @@ TEST_F(levin_notify, the_carrier_emits_levin_frames_through_on_noise)
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
 
-    notifier.new_out_connection();
     io_service_.poll();
 
     const std::size_t sent =
@@ -3164,7 +3177,6 @@ TEST_F(levin_notify, a_real_transaction_rides_the_carrier_and_records_on_arrival
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
 
-    notifier.new_out_connection();
     io_service_.poll();
 
     /* F-9: the carrier keys its pending record on the CANONICAL hash, parsed
@@ -3334,7 +3346,6 @@ TEST_F(levin_notify, a_carried_origin_is_recorded_local_and_observed)
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
-    notifier.new_out_connection();
     io_service_.poll();
 
     cryptonote::transaction tx{};
@@ -3405,7 +3416,6 @@ TEST_F(levin_notify, a_verdict_for_a_transaction_the_pool_dropped_records_nothin
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
-    notifier.new_out_connection();
     io_service_.poll();
 
     cryptonote::transaction tx{};
@@ -3477,7 +3487,6 @@ TEST_F(levin_notify, a_pool_drop_during_recording_arms_no_observation)
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
-    notifier.new_out_connection();
     io_service_.poll();
 
     cryptonote::transaction tx{};
@@ -3554,7 +3563,6 @@ TEST_F(levin_notify, a_thrown_verdict_leaves_no_immortal_pending_entry)
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
-    notifier.new_out_connection();
     io_service_.poll();
 
     cryptonote::transaction tx{};
@@ -3642,7 +3650,6 @@ TEST_F(levin_notify, a_throwing_verdict_does_not_stop_the_relay_strand)
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
-    notifier.new_out_connection();
     io_service_.poll();
 
     cryptonote::transaction tx{};
@@ -3715,7 +3722,6 @@ TEST_F(levin_notify, a_batch_the_carrier_partly_refuses_splits_without_double_co
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
-    notifier.new_out_connection();
     io_service_.poll();
 
     /* Two transactions that both parse (F-9), one of which cannot fit the
@@ -3879,7 +3885,6 @@ TEST_F(levin_notify, a_transaction_already_in_the_carrier_is_not_enqueued_twice)
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(1);
@@ -3996,7 +4001,6 @@ TEST_F(levin_notify, a_discarded_origin_is_left_unrelayed_for_the_short_grid)
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise);
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(1);
@@ -4085,7 +4089,6 @@ TEST_F(levin_notify, a_discarded_forwarded_stem_falls_back_to_fluff)
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise);
-    notifier.new_out_connection();
     io_service_.poll();
 
     std::vector<cryptonote::blobdata> txs(1);

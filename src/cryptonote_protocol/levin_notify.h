@@ -115,9 +115,6 @@ namespace levin
     //! \return Status information for zone selection.
     status get_status() const noexcept;
 
-    //! Probe for new outbound connection - skips if not needed.
-    void new_out_connection();
-
     void on_session_established(const boost::uuids::uuid &id, bool is_income);
     void on_connection_close(const boost::uuids::uuid &id);
 

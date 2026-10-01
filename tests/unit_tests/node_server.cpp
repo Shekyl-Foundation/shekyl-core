@@ -1917,6 +1917,46 @@ TEST(attributable_drop, an_unparseable_announce_still_severs)
   EXPECT_EQ(1u, h.endpoint.dropped.size());
 }
 
+// The ingress gate drops only a session that has not finished the
+// handshake. A peer that is still synchronising, or paused in standby,
+// has completed it, so the batch reaches the core. The node's own sync
+// is a separate refusal and does not depend on that peer state.
+TEST(tx_ingress, a_handshake_complete_peer_is_admitted)
+{
+  const cryptonote::cryptonote_connection_context::state states[] = {
+    cryptonote::cryptonote_connection_context::state_synchronizing,
+    cryptonote::cryptonote_connection_context::state_standby,
+    cryptonote::cryptonote_connection_context::state_normal,
+  };
+  for (const auto state : states)
+  {
+    SCOPED_TRACE(static_cast<int>(state));
+    NotifyHarness h;
+    h.ctx().m_state = state;
+    EXPECT_EQ(1, h.notify_txs());
+    EXPECT_TRUE(h.endpoint.dropped.empty());
+    EXPECT_EQ(2u, h.core.handle_incoming_tx_calls);
+  }
+}
+
+TEST(tx_ingress, a_peer_before_handshake_does_not_reach_the_core)
+{
+  NotifyHarness h;
+  h.ctx().m_state = cryptonote::cryptonote_connection_context::state_before_handshake;
+  EXPECT_EQ(1, h.notify_txs());
+  EXPECT_EQ(0u, h.core.handle_incoming_tx_calls);
+  EXPECT_TRUE(h.endpoint.dropped.empty());
+}
+
+TEST(tx_ingress, an_unsynchronised_node_ignores_the_batch)
+{
+  NotifyHarness h;
+  cryptonote_protocol_handler_test_seam::set_synchronized(h.cprotocol, false);
+  EXPECT_EQ(1, h.notify_txs());
+  EXPECT_EQ(0u, h.core.handle_incoming_tx_calls);
+  EXPECT_TRUE(h.endpoint.dropped.empty());
+}
+
 // The endpoint advertisement is DERIVED: no dedicated flag decides it, so the
 // only witness is the announced value itself. Operator influence remains and is
 // exercised below -- `--in-peers 0` suppresses the announcement BY DERIVATION,
