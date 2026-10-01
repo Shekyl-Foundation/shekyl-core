@@ -304,6 +304,40 @@ pub fn predict_weight(n_in: InputCount, n_out: OutputCount, tree_depth: u8, fee:
     .sum()
 }
 
+/// The **archival length** of the tx the builder would produce from these
+/// counts: `|pqc_auths| + |prunable|` — the two segments a prune discards and
+/// the bytes that count toward a shard's `W`
+/// (`shekyl_wire::TxSegments::archival_len`, SHT-Q2). The partial sum of
+/// [`predict_weight`]'s field list from the per-input PQC auths through
+/// `pseudoOuts`, so a built spend's `Transaction::archival_len()` equals this
+/// without constructing the transaction — pinned beside the weight parity in
+/// this crate's tests and over the builder's whole shape space in
+/// `tests/weight_gate.rs`.
+///
+/// Independent of the fee (the fee varint is in the pruned segment) and of
+/// the Bp+ clawback (a fee-weight term, not bytes). This is the one place the
+/// per-transaction archival length is predicted from a shape; the economics
+/// sim's archival-burden model reads it here rather than carrying a bytes-per-
+/// transaction mean (DQ-2G dep-don't-mirror; `ARCHIVAL_SHARD_COUNT_CUTOVER.md`
+/// §D, the `SHARD_BYTES` row).
+#[must_use]
+pub fn predict_archival_len(n_in: InputCount, n_out: OutputCount, tree_depth: u8) -> usize {
+    let fcmp = fcmp_proof_size(n_in, tree_depth);
+    let bp = bp_plus_weight(n_out);
+    let n_in = n_in.get();
+    [
+        n_in * pqc_auth_weight(),          // the `pqc_auths` segment
+        varint_len(1u64),                  // prunable nbp
+        bp,                                // bulletproof+
+        varint_len(u64::from(tree_depth)), // tree_depth
+        varint_len(fcmp as u64),           // fcmp_proof length prefix
+        fcmp,                              // fcmp_proof body
+        n_in * PSEUDO_OUT_LEN,             // pseudoOuts
+    ]
+    .into_iter()
+    .sum()
+}
+
 /// Serialized byte size **and** fee weight for the tx the builder would produce
 /// from these counts, as one `(size, weight)` pair.
 ///
@@ -521,6 +555,11 @@ mod tests {
                 size,
                 tx.serialized_len(),
                 "predict_size_and_weight size ≠ wire serialized_len for n_in={n_in} n_out={n_out}"
+            );
+            assert_eq!(
+                predict_archival_len(InputCount::clamped(n_in), OutputCount::clamped(n_out), depth),
+                usize::try_from(tx.archival_len().to_raw()).expect("archival length fits usize"),
+                "predict_archival_len ≠ wire archival_len for n_in={n_in} n_out={n_out} depth={depth}"
             );
         }
     }
