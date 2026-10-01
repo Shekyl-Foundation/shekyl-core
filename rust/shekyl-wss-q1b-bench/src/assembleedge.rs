@@ -132,7 +132,7 @@ impl Population {
 /// Which half of the flatness claim an arm supplies evidence for.
 ///
 /// The roles are a family, not a list: [`Self::RungFloor`] pairs with
-/// [`Self::GradedTop`] across `n` at one depth, and with [`Self::RungBelow`]
+/// [`Self::RungTop`] across `n` at one depth, and with [`Self::RungBelow`]
 /// across depth at one `n`. Each arm belongs to exactly one pair per axis, so
 /// neither comparison borrows a point chosen for the other.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -142,10 +142,14 @@ pub enum ArmRole {
     RungBelow,
     /// The fewest leaves that reach the graded top's depth.
     RungFloor,
-    /// The graded worst case, at [`CANONICAL_OWNED_INPUTS`].
-    GradedTop,
-    /// The graded worst case at [`MAX_INPUTS`], so the record shows the `k`
-    /// term beside `n` rather than asserting it is small (`#842`'s `n + k`).
+    /// The rung's upper population, at [`CANONICAL_OWNED_INPUTS`]. In [`plan`]
+    /// this is the graded worst case; in [`plan_at_depth`] it is
+    /// [`SAME_RUNG_SEPARATION`] above the floor. Either way it is the arm the
+    /// floor is compared against across `n`.
+    RungTop,
+    /// [`ArmRole::RungTop`]'s population at [`MAX_INPUTS`], so the record shows
+    /// the `k` term beside `n` rather than asserting it is small (`#842`'s
+    /// `n + k`).
     InputCap,
 }
 
@@ -156,7 +160,7 @@ impl ArmRole {
         match self {
             Self::RungBelow => "rung_below",
             Self::RungFloor => "rung_floor",
-            Self::GradedTop => "graded_top",
+            Self::RungTop => "rung_top",
             Self::InputCap => "input_cap",
         }
     }
@@ -173,7 +177,22 @@ pub struct Arm {
     pub owned_inputs: usize,
 }
 
-/// The arms, derived from the production ladder.
+/// Least separation in `n` a same-rung pair needs to tell a slope from noise.
+///
+/// Below this the pair is powerless: today's cost is linear in `n`, so a
+/// same-rung comparison can only see a slope that clears
+/// [`SAME_RUNG_TOLERANCE_PCT`], and `1.5×` in `n` puts a linear term at `50 %`
+/// — five times the bound. The graded rung's natural separation is checked
+/// against this rather than set by it.
+pub const SAME_RUNG_SEPARATION: f64 = 1.5;
+
+/// The graded arms: the real worst-case window, on its own rung.
+///
+/// This is the plan increment 6 re-grades. Its top population is the chain the
+/// wallet actually has to spend on, so the arms carry absolute seconds a human
+/// waits — which rule 76 pins to the floor device, not to whatever board is
+/// handy. For establishing the *shape* off-rig, [`plan_at_depth`] runs the same
+/// four roles on a cheaper rung.
 ///
 /// Every population comes from a function that owns it:
 /// [`worst_case_window_leaves`] for the graded top, and
@@ -183,19 +202,59 @@ pub struct Arm {
 ///
 /// # Panics
 ///
-/// If the graded top's depth has no rung floor. [`min_leaves_for_depth`]
-/// returns `None` only below depth 2, and the graded worst case is six orders
-/// of magnitude above that; a panic here means the ladder changed shape, which
-/// must stop the run rather than silently re-point an arm.
+/// If the graded top's depth has no rung floor, or if the window does not
+/// clear [`SAME_RUNG_SEPARATION`] above it — either means the ladder changed
+/// shape under the plan, which must stop a run rather than silently leave it
+/// with a comparison that cannot discriminate.
 #[must_use]
 pub fn plan() -> Vec<Arm> {
     let top = Population::at(worst_case_window_leaves(LEAF_RATE_MODEL_DEPTH));
     let floor_leaves =
         min_leaves_for_depth(top.depth).expect("the graded worst case sits on a rung with a floor");
+    assert!(
+        top.leaf_count as f64 >= floor_leaves as f64 * SAME_RUNG_SEPARATION,
+        "the graded window ({} leaves) is less than {SAME_RUNG_SEPARATION}x its rung floor          ({floor_leaves}); the same-rung pair could not tell a slope from noise",
+        top.leaf_count
+    );
+    arms_for(top, floor_leaves)
+}
+
+/// The same four roles on `depth`'s rung, for establishing the shape at a
+/// population that fits in a coffee break.
+///
+/// The claim is about *shape*, and shape is a property of a rung, not of the
+/// graded rung in particular: a cost constant across one rung and stepping by
+/// one layer at its boundary is the same evidence wherever it is measured.
+/// What does **not** travel is the absolute figure, which is why [`plan`]
+/// stays the graded plan and this is explicitly not it.
+///
+/// # Panics
+///
+/// If `depth` has no rung floor, or if its rung is too narrow to hold a
+/// [`SAME_RUNG_SEPARATION`] pair.
+#[must_use]
+pub fn plan_at_depth(depth: u8) -> Vec<Arm> {
+    let floor_leaves =
+        min_leaves_for_depth(depth).unwrap_or_else(|| panic!("depth {depth} has no rung floor"));
+    // Rounded UP, not truncated: the separation is a floor, and truncating
+    // `floor x 1.5` lands just under it (25 993 -> 38 989, a ratio of
+    // 1.49998), so the plan would construct a pair that fails its own bound.
+    #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+    let top_leaves = (floor_leaves as f64 * SAME_RUNG_SEPARATION).ceil() as u64;
+    let top = Population::at(top_leaves);
+    assert_eq!(
+        top.depth, depth,
+        "depth {depth}'s rung is narrower than {SAME_RUNG_SEPARATION}x, so a same-rung pair          does not fit inside it"
+    );
+    arms_for(top, floor_leaves)
+}
+
+/// Assemble the four roles around one rung.
+fn arms_for(top: Population, floor_leaves: u64) -> Vec<Arm> {
     let floor = Population::at(floor_leaves);
     assert_eq!(
         floor.depth, top.depth,
-        "the rung floor must share the graded top's depth; the ladder and \
+        "the rung floor must share the rung top's depth; the ladder and \
          layer_count_for_leaves disagree"
     );
     let below = Population::at(
@@ -221,7 +280,7 @@ pub fn plan() -> Vec<Arm> {
             owned_inputs: CANONICAL_OWNED_INPUTS,
         },
         Arm {
-            role: ArmRole::GradedTop,
+            role: ArmRole::RungTop,
             population: top,
             owned_inputs: CANONICAL_OWNED_INPUTS,
         },
@@ -248,7 +307,7 @@ pub const SAME_RUNG_TOLERANCE_PCT: f64 = 2.0 * DEFAULT_TOLERANCE_PCT;
 /// Pre-registered in the commit that builds the instrument, so "flattened" is
 /// judged against a shape written down in advance rather than one first seen
 /// after capture runs. Both bounds are percentages of the smaller arm.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize)]
 pub struct FlatnessCriterion {
     /// Largest same-rung spread that still reads as flat.
     pub same_rung_tolerance_pct: f64,
@@ -276,7 +335,7 @@ pub fn expected_cross_rung_ratio(shallow_depth: u8, deep_depth: u8) -> f64 {
 }
 
 /// How a measured pair read against [`FlatnessCriterion`].
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize)]
 pub enum FlatnessGrade {
     /// Both halves inside their bounds.
     Flat,

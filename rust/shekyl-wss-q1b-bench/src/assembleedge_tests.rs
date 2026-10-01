@@ -34,7 +34,7 @@ fn plan_derives_four_arms_from_the_ladder() {
     assert_eq!(arms.len(), 4, "the plan is four arms");
     assert_eq!(arms[0].role, ArmRole::RungBelow);
     assert_eq!(arms[1].role, ArmRole::RungFloor);
-    assert_eq!(arms[2].role, ArmRole::GradedTop);
+    assert_eq!(arms[2].role, ArmRole::RungTop);
     assert_eq!(arms[3].role, ArmRole::InputCap);
 }
 
@@ -71,9 +71,9 @@ fn the_same_rung_pair_shares_a_depth_and_separates_enough_to_discriminate() {
     // quietly producing a powerless comparison.
     let separation = top.leaf_count as f64 / floor.leaf_count as f64;
     assert!(
-        separation >= 1.5,
-        "same-rung separation is {separation:.3}x; below 1.5x the pair cannot \
-         tell a slope from noise"
+        separation >= SAME_RUNG_SEPARATION,
+        "same-rung separation is {separation:.3}x; below {SAME_RUNG_SEPARATION}x the pair \
+         cannot tell a slope from noise"
     );
 }
 
@@ -193,7 +193,7 @@ fn spread_is_symmetric_in_its_arguments() {
 #[test]
 fn the_rig_assembles_one_path_per_owned_input() {
     let arm = Arm {
-        role: ArmRole::GradedTop,
+        role: ArmRole::RungTop,
         population: Population::at(TEST_LEAVES),
         owned_inputs: CANONICAL_OWNED_INPUTS,
     };
@@ -207,7 +207,7 @@ fn the_rig_is_repeatable_across_calls() {
     // The timed call must not consume or mutate the rig: a series of samples
     // has to measure the same work every time.
     let arm = Arm {
-        role: ArmRole::GradedTop,
+        role: ArmRole::RungTop,
         population: Population::at(TEST_LEAVES),
         owned_inputs: CANONICAL_OWNED_INPUTS,
     };
@@ -249,5 +249,38 @@ fn the_graded_arms_depth_comes_from_the_population_not_the_rate_model() {
         top.depth,
         layer_count_for_leaves(top.leaf_count),
         "the graded arm's depth must be read from its leaf count"
+    );
+}
+
+#[test]
+fn a_shape_rung_carries_the_same_four_roles_as_the_graded_rung() {
+    let shape = plan_at_depth(4);
+    let graded = plan();
+    let roles: Vec<ArmRole> = shape.iter().map(|a| a.role).collect();
+    let graded_roles: Vec<ArmRole> = graded.iter().map(|a| a.role).collect();
+    assert_eq!(
+        roles, graded_roles,
+        "a shape run must exercise the same comparisons, or it establishes a \
+         different claim than the one it is standing in for"
+    );
+}
+
+#[test]
+fn a_shape_rung_is_cheaper_than_the_graded_one_but_separates_as_much() {
+    let shape = plan_at_depth(4);
+    let graded = plan();
+    assert!(
+        shape[2].population.leaf_count < graded[2].population.leaf_count,
+        "a shape rung that is not cheaper buys nothing"
+    );
+    let separation = shape[2].population.leaf_count as f64 / shape[1].population.leaf_count as f64;
+    assert!(
+        separation >= SAME_RUNG_SEPARATION,
+        "shape separation {separation:.3}x is below {SAME_RUNG_SEPARATION}x"
+    );
+    assert_eq!(
+        shape[0].population.depth + 1,
+        shape[1].population.depth,
+        "the shape rung must still straddle a boundary"
     );
 }

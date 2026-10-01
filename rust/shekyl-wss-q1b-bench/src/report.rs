@@ -520,3 +520,79 @@ pub struct VerifyEdgeRecord {
 #[cfg(test)]
 #[path = "report_tests.rs"]
 mod tests;
+
+/// One arm of the path-assembly cost instrument, as measured.
+///
+/// The role, the population and the depth travel with the series: a cost is
+/// evidence for one half of the flatness claim only once a reader can see
+/// which rung it was measured on.
+#[derive(Clone, Debug, Serialize)]
+pub struct AssembleArmRecord {
+    /// [`crate::assembleedge::ArmRole::as_str`].
+    pub role: &'static str,
+    /// Drained leaves the call assembled against.
+    pub leaf_count: u64,
+    /// Depth that leaf count implies, read from the population and confirmed
+    /// against the client.
+    pub depth: u8,
+    /// Owned outputs assembled per call — the `k` in `n + k`.
+    pub owned_inputs: usize,
+    /// Per-call series.
+    pub series: Series,
+}
+
+/// The path-assembly cost record (`CT-6` increment 5).
+///
+/// Carries the **pre-registered** [`crate::assembleedge::FlatnessCriterion`]
+/// and the grade it yields, so increment 6's re-grade reads the same criterion
+/// this run was written under rather than one chosen after seeing the curve.
+#[derive(Clone, Debug, Serialize)]
+pub struct AssembleEdgeRecord {
+    /// [`SCHEMA_VERSION`].
+    pub schema_version: u32,
+    /// The measurement this record is of.
+    pub measurement: &'static str,
+    /// What the grade means for this era, in words a later reader can act on.
+    pub grading: &'static str,
+    /// The machine.
+    pub environment: Environment,
+    /// What was enforced and what was attested.
+    pub rig: RigVerdict,
+    /// Where the measured call is paid in production.
+    pub call_site: &'static str,
+    /// Which plan ran: the graded rung, or a shallower one measured for shape.
+    ///
+    /// Load-bearing. A shape run's arms carry the same roles and the same
+    /// criterion as the graded run, so without this field a reader cannot tell
+    /// a figure that belongs to the chain from one that belongs to a rung
+    /// chosen to fit in minutes.
+    pub plan: &'static str,
+    /// The criterion, fixed before capture existed.
+    pub criterion: crate::assembleedge::FlatnessCriterion,
+    /// Every arm, in plan order.
+    pub arms: Vec<AssembleArmRecord>,
+    /// Spread across the same-rung pair, in percent of the cheaper arm. The
+    /// half that must go to zero for capture's claim to hold.
+    pub same_rung_spread_pct: f64,
+    /// Measured ratio across the rung boundary.
+    pub cross_rung_ratio: f64,
+    /// Ratio one layer's work predicts across that boundary.
+    pub cross_rung_expected: f64,
+    /// Cost of raising `k` from the canonical count to `MAX_INPUTS` at one
+    /// population, in percent. `#842`'s `n + k` claim, measured.
+    pub input_cap_cost_pct: f64,
+    /// The criterion's reading of this run.
+    pub grade: crate::assembleedge::FlatnessGrade,
+    /// Whether the board stayed quiet across the run.
+    pub load_control: LoadControl,
+    /// The control: [`crate::assembleedge::ArmRole::RungTop`] re-timed at the
+    /// end of the run, on the same client, over identical work.
+    ///
+    /// Two terms with one sensitivity profile, so whatever separates this from
+    /// the arm's own series is the board and not the workload. That is the
+    /// cancellation `CT6_PROVING_STATE.md` §10.4's retired ratio could not
+    /// claim: a memory-bandwidth-bound replay and an `fsync`-bound advance are
+    /// taxed by load at different rates, while two `assemble_paths` calls over
+    /// the same leaves are taxed identically.
+    pub control_series: Series,
+}
