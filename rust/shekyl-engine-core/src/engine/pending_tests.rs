@@ -225,7 +225,7 @@ fn build_rejects_when_no_block_ingested_yet() {
         &standard_request(1),
     )
     .unwrap_err();
-    assert!(matches!(err, SendError::CannotSign { .. }));
+    assert!(matches!(err, SendError::NotSynced), "{err:?}");
 }
 
 #[test]

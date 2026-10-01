@@ -144,7 +144,7 @@ pub use constants::{
     settlement_epoch_blocks_overridden, settlement_epoch_override_floor,
     settlement_epoch_override_ignored, settlement_epoch_override_present,
     SettlementEpochOverrideError, CHALLENGES_PER_PAIR_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS,
-    CHALLENGE_RESOLUTION_BLOCKS, CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
+    CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
 };
 pub use debit_auth::{
     cold_authority_pin, debit_auth_pin, requires_cold_authority, ColdAuthorityError, DebitAuthError,

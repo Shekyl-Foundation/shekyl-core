@@ -73,13 +73,15 @@ pub use reference::{
     REBUILD_AT, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE, REF_ANCHOR_AGE,
 };
 pub use segment::{
-    leaves_per_segment, outputs_per_node, segment_freeze_eligible, SegmentId, LEAF_BYTES,
+    leaves_per_segment, outputs_per_node, segment_freeze_eligible, SegmentId,
+    FINALITY_DEPTH_BLOCKS, LEAF_BYTES, REORG_HASH_WINDOW_BLOCKS,
     SEGMENT_FREEZE_REORG_MARGIN_BLOCKS, SEGMENT_LAYER_J, SPENDABLE_AGE_BLOCKS,
 };
 pub use served_frame::{ServedFrameError, ServedFrameField, ServedFrameHeader};
 pub use store::{
     mixed_composition_root, recompute_segment_r_k, FrozenSegmentBody, FrozenSegmentRecord,
     LeafStore, MixedRootError, PostureDeclaration, SegmentPin, ServingReader, StoreError,
+    StoreOpenFault,
 };
 pub use types::{
     AssembleInput, AssembledPath, BlockHash, BlockHeight, ChunkLeaf, CommitmentBytes,

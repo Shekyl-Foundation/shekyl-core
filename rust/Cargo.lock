@@ -3893,6 +3893,7 @@ version = "3.1.0"
 dependencies = [
  "redb",
  "serde_json",
+ "shekyl-archival-retention",
  "shekyl-chain-rules",
  "shekyl-crypto-hash",
  "shekyl-difficulty",
@@ -3917,6 +3918,7 @@ dependencies = [
  "shekyl-timing-engine",
  "shekyl-transport-layer",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4363,9 +4365,11 @@ dependencies = [
  "shekyl-address",
  "shekyl-archival-retention",
  "shekyl-bulletproofs",
+ "shekyl-capped-stream",
  "shekyl-chacha",
  "shekyl-chain-ingest",
  "shekyl-chain-store",
+ "shekyl-clearnet",
  "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
@@ -4381,20 +4385,25 @@ dependencies = [
  "shekyl-fcmp-proofs",
  "shekyl-levin",
  "shekyl-logging",
+ "shekyl-net-address",
  "shekyl-p2p-transport",
  "shekyl-peer-policy",
  "shekyl-pow-randomx",
  "shekyl-proofs",
  "shekyl-relay",
  "shekyl-relay-privacy",
+ "shekyl-runtime",
  "shekyl-seam",
  "shekyl-thread-ledger",
+ "shekyl-timing-engine",
+ "shekyl-tor",
  "shekyl-tor-control-daemon",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
  "tempfile",
+ "tokio",
  "tracing",
  "zeroize",
 ]
@@ -4750,6 +4759,7 @@ dependencies = [
  "shekyl-peer-policy",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
+ "tokio",
 ]
 
 [[package]]
@@ -4864,6 +4874,7 @@ dependencies = [
  "shekyl-tor-control-daemon",
  "shekyl-transport-layer",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -5002,6 +5013,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-wallet-contract"
+version = "3.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "shekyl-engine-core",
+ "shekyl-engine-file",
+ "shekyl-engine-prefs",
+ "shekyl-engine-state",
+ "shekyl-rpc-client",
+ "shekyl-types",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "shekyl-wallet-rpc"
 version = "3.1.0"
 dependencies = [
@@ -5025,9 +5052,11 @@ dependencies = [
  "shekyl-logging",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
+ "shekyl-rpc-types",
  "shekyl-scanner",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-wallet-contract",
  "shekyl-win-sec",
  "subtle",
  "tempfile",

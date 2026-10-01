@@ -58,7 +58,7 @@ pub enum RelayMethod {
     /// (no such RPC); kept because the byte contract is shared. Matches no
     /// relay category but `All`.
     None = 0,
-    /// Originated by this node; trying to send over i2p/tor. The class that
+    /// Originated by this node; trying to send over Tor. The class that
     /// routes the txpool backstop to fail-closed rather than `public_req`.
     /// At the seam only — the record spells it
     /// `RelayState::Originated { phase: Held, .. }` (§92.4).
@@ -153,9 +153,7 @@ pub enum NetZone {
     Invalid = 0,
     /// The clear internet.
     Public = 1,
-    /// I2P.
-    I2p = 2,
-    /// Tor.
+    /// Tor. Discriminant 2 is unused so this value stays 3.
     Tor = 3,
 }
 
@@ -167,7 +165,6 @@ impl NetZone {
         match b {
             0 => Some(Self::Invalid),
             1 => Some(Self::Public),
-            2 => Some(Self::I2p),
             3 => Some(Self::Tor),
             _ => None,
         }
@@ -182,7 +179,7 @@ impl NetZone {
     /// A real anonymity network — not clearnet, not absent.
     #[must_use]
     pub const fn is_anonymity(self) -> bool {
-        matches!(self, Self::I2p | Self::Tor)
+        matches!(self, Self::Tor)
     }
 }
 
@@ -220,11 +217,10 @@ mod tests {
         for b in 0..=u8::MAX {
             match NetZone::from_byte(b) {
                 Some(z) => assert_eq!(z.to_byte(), b),
-                None => assert!(b > 3),
+                None => assert!(b == 2 || b > 3, "pinned byte {b} refused"),
             }
         }
         assert!(NetZone::Tor.is_anonymity());
-        assert!(NetZone::I2p.is_anonymity());
         assert!(!NetZone::Public.is_anonymity());
         assert!(!NetZone::Invalid.is_anonymity());
     }

@@ -57,15 +57,37 @@ pub enum SendError {
     #[error("daemon IO failure: {0}")]
     Io(#[from] IoError),
 
-    /// Spend-key material or spend-state preconditions were not
-    /// available to sign: signer unavailable, wallet state missing the
-    /// fields signing needs (key image, output handle, source
-    /// ciphertext), or the curve tree not yet covering the outputs.
-    /// Every wallet is `Capability::Full` (rule 23), so this is never a
-    /// capability refusal.
-    #[error("wallet cannot sign: {reason}")]
-    CannotSign {
-        /// Human-readable reason as named at the call site.
+    /// The wallet has not ingested a block yet, so there is no tip to
+    /// build against. A readiness state with its own remedy — let the
+    /// wallet sync — never an internal fault.
+    #[error("the wallet has not synced any blocks yet")]
+    NotSynced,
+
+    /// The signer holds no spend-key material in scope — its signing actor
+    /// is not running. Every wallet is `Capability::Full` (rule 23), so this
+    /// is never a capability refusal: the session's signer is gone, and
+    /// reopening the wallet restores it.
+    #[error("the wallet's signer is unavailable")]
+    SignerUnavailable,
+
+    /// The signer tried and a downstream failure stopped it (a device
+    /// error, a remote actor disconnecting). `reason` is fixed at the call
+    /// site.
+    #[error("the signer failed: {reason}")]
+    SignerFailed {
+        /// Compile-time-fixed description of the downstream failure.
+        reason: &'static str,
+    },
+
+    /// A precondition the build relies on did not hold: wallet state
+    /// missing a field signing needs (key image, output handle, source
+    /// ciphertext), a poisoned lock, a reference block the gate should
+    /// have resolved, or the sync wrapper driven with a future that could
+    /// not complete. None is a state a user reaches; each is a bug, and
+    /// `reason` names which.
+    #[error("build invariant failed: {reason}")]
+    BuildInvariant {
+        /// Compile-time-fixed name of the failed precondition.
         reason: &'static str,
     },
 

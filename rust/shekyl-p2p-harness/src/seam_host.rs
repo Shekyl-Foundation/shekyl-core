@@ -75,7 +75,7 @@ pub fn serve_seam_once(seed: u64) -> Result<SeamHost, Error> {
         pool,
         &engine.handle(),
         Sockets::new(),
-        Config {
+        &Config {
             listen: SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0)),
             option: ClearnetOption::Off,
             column: ConnectorId::Clearnet.column(),

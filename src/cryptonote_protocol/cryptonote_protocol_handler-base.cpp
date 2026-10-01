@@ -47,7 +47,6 @@
 
 
 #include "cryptonote_protocol_handler.h"
-#include "net/network_throttle.hpp"
 
 #include "cryptonote_core/cryptonote_core.h" // e.g. for the send_stop_signal()
 
@@ -99,45 +98,9 @@ cryptonote_protocol_handler_base::~cryptonote_protocol_handler_base() {
 void cryptonote_protocol_handler_base::handler_request_blocks_history(std::list<crypto::hash>& ids) {
 }
 
-void cryptonote_protocol_handler_base::handler_response_blocks_now(size_t packet_size) {
-	using namespace epee::net_utils;
-	double delay=0; // will be calculated
-	MDEBUG("Packet size: " << packet_size);
-	do
-	{ // rate limiting
-		//XXX 
-		/*if (::cryptonote::core::get_is_stopping()) { 
-			MDEBUG("We are stopping - so abort sleep");
-			return;
-		}*/
-		/*if (m_was_shutdown) { 
-			MDEBUG("m_was_shutdown - so abort sleep");
-			return;
-		}*/
-
-		{ 
-	  	CRITICAL_REGION_LOCAL(	network_throttle_manager::m_lock_get_global_throttle_out );
-			delay = network_throttle_manager::get_global_throttle_out().get_sleep_time_after_tick( packet_size );
-		}
-
-		
-		delay *= 0.50;
-		//delay = 0; // XXX
-		if (delay > 0) {
-			//delay += rand2*0.1;
-            		long int ms = (long int)(delay * 1000);
-			MDEBUG("Sleeping for " << ms << " ms before packet_size="<<packet_size); // XXX debug sleep
-			boost::this_thread::sleep(boost::posix_time::milliseconds( ms ) ); // TODO randomize sleeps
-		}
-	} while(delay > 0);
-
-// XXX LATER XXX
-	{
-	  CRITICAL_REGION_LOCAL(	network_throttle_manager::m_lock_get_global_throttle_out );
-		network_throttle_manager::get_global_throttle_out().handle_trafic_tcp( packet_size ); // increase counter - global
-		//epee::critical_region_t<decltype(m_throttle_global_lock)> guard(m_throttle_global_lock); // *** critical *** 
-		//m_throttle_global.m_out.handle_trafic_tcp( packet_size ); // increase counter - global
-	}
+void cryptonote_protocol_handler_base::handler_response_blocks_now(size_t /*packet_size*/) {
+	// The transport writer pauses when the operator's up bucket is empty.
+	// Sleeping here was a second limit, on the epee throttle.
 }
 
 } // namespace

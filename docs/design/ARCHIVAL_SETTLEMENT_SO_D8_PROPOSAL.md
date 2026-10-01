@@ -587,7 +587,9 @@ disagrees with the enumeration the correction is marked.
    `h_close(E)` becomes incomplete: records for `E` land up to `W₂ = 500`
    blocks into `E+1`. It moves to the slash pass
    (`process_archival_slash_for_epoch`, `:6075`, at `h > h_close(E) +
-   CHALLENGE_RESOLUTION_BLOCKS = h_close(E) + 10,000`, `constants.rs:44`),
+   CHALLENGE_RESOLUTION_BLOCKS = h_close(E) + 10,000`, `constants.rs:44`;
+   *since 2026-09-30 the grace is `SLASH_GRACE_EPOCHS · SEB` — one epoch, the
+   same height on this pin*),
    where **every** record for `E` is final because `10,000 ≥ 500`. This is
    `SO-D7`'s finding applied to a second consumer; the writer round verified
    emission was untouched *only under the beacon*, where records are final at

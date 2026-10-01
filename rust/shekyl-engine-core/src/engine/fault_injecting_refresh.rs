@@ -471,6 +471,7 @@ mod tests {
         let wrapper = FaultInjecting::new(DelegationStub);
         wrapper.queue_failure(RefreshError::Cancelled);
         wrapper.queue_failure(RefreshError::Io(IoError::Daemon {
+            fault: shekyl_rpc_client::DaemonFault::Unreachable,
             detail: "FIFO test: second injection".to_string(),
         }));
         assert_eq!(wrapper.queued_failures(), 2);

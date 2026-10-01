@@ -70,7 +70,7 @@ Numerics this round must reason against, all read at source:
 | block target | `daa_target_seconds = 120` | `config/consensus_constants.json:10` |
 | `SEB` | `settlement_epoch_blocks = 10000` (~14 d) | `:23` |
 | `D_max` / pass-anchor depth | `archival_reorg_depth_blocks = 720` | `:29` |
-| `CRB` | `challenge_resolution_blocks = 10000` in the JSON; the **response** deadline is `CHALLENGE_RESPONSE_BLOCKS = SEB / 20 = 500` blocks | `:31`; [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md):1991, [`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md):1266 |
+| `CRB` | `challenge_resolution_blocks = 10000` in the JSON *(as read at the pin; the key was removed 2026-09-30 — the slash grace is `SLASH_GRACE_EPOCHS · SEB`, one epoch, the same 10 000 on this pin)*; the **response** deadline is `CHALLENGE_RESPONSE_BLOCKS = SEB / 20 = 500` blocks | `:31`; [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md):1991, [`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md):1266 |
 | `L` | `archival_attestation_anchor_lag = 4` blocks, of which **two blocks are the fetch-plus-retry span** | `config/consensus_constants.json:33`; [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1074-1090 |
 | `N` | in-flight fetch cap `8` (`shekyl_p_fetch::MAX_INFLIGHT`) | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):6, `:796` |
 | holdings cap | `MAX_HOLDINGS_SHARDS = 4096`, over `ShardSet(Vec<u64>)` | `rust/shekyl-types/src/archival/mod.rs:73`, `:205` |
@@ -1347,7 +1347,11 @@ the engine swap completes before genesis, or this is revisited. The census carri
 **Build status, 2026-09-29 (PR #910).** Items 2, 4 and 5 are done, and item 1's row and
 cell are built. Item 1's mixer term and item 3's pins and corpora are held on one
 blocker, how a pruned form supplies the length (FOLLOWUPS "Build `SHT-Q2`", where the
-four resolutions and the recommendation are recorded).
+four resolutions and the recommendation are recorded). *Until the term lands, the
+invariant — no boundary reads a value the skeleton cannot bind — holds because every
+stored length is one `connect` measured; `scripts/ci/check_archival_len_source.py`
+(2026-09-30) holds that mechanically (named origins, one writer) and fails asking to
+be deleted once `hash_from_components` takes the length.*
 
 **Consequences recorded with the ruling:**
 

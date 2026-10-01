@@ -260,36 +260,8 @@ pub fn outgoing_block_height(row: &SendRecord) -> Option<u64> {
     }
 }
 
-/// Map journal lifecycle onto the OpenAPI `TransferState` enum.
-///
-/// Every arm is a distinct user-facing situation; none collapses into
-/// another, because each collapse is a different lie (rule 82):
-///
-/// - `Dispatched` → `PENDING` (in flight; the wallet is still waiting).
-/// - `Confirmed` → `CONFIRMED` (refresh observed the spend on chain).
-/// - `TerminalRejected` → `FAILED` (daemon refused; never mined — never
-///   collapse into `CONFIRMED`).
-/// - `PresumedDead` → `DROPPED` (the confirmed-absent watchdog released
-///   the input locks — never collapse into `PENDING`, which would say
-///   the wallet is still waiting while the same wallet reports those
-///   funds spendable again).
-/// - `Abandoned` → `ABANDONED` (user-authored give-up, P3-4 — never
-///   collapse into `DROPPED`, whose release claim is evidence-backed;
-///   an abandoned send's input locks may still be held).
-///
-/// This is the **single owner** of the journal → wire state map; error
-/// mapping and filters call here (or [`outgoing_transfer_state`]) rather
-/// than re-listing the arms.
-#[must_use]
-pub fn outgoing_transfer_state_of(state: SendState) -> TransferState {
-    match state {
-        SendState::Dispatched => TransferState::Pending,
-        SendState::Confirmed { .. } => TransferState::Confirmed,
-        SendState::TerminalRejected => TransferState::Failed,
-        SendState::PresumedDead => TransferState::Dropped,
-        SendState::Abandoned => TransferState::Abandoned,
-    }
-}
+/// The journal → wire state map, single-owned by the contract crate.
+pub use shekyl_wallet_contract::outgoing_transfer_state_of;
 
 /// Convenience: [`outgoing_transfer_state_of`] for a full journal row.
 #[must_use]

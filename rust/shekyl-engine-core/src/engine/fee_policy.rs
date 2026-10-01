@@ -143,19 +143,21 @@ fn structural_max_correction(params: &shekyl_economics::params::EconomicParams) 
 
 /// Failures from fee estimation / snapshot validation.
 ///
-/// Distinct from a transport failure ([`Self::DaemonUnreachable`]) and
-/// from a broken wire contract ([`Self::DaemonResponseInvalid`]):
+/// Distinct from a failed daemon query ([`Self::Daemon`]) and from a
+/// snapshot that arrived and could not be used ([`Self::DaemonResponseInvalid`]):
 /// [`Self::DaemonFeeUnreasonable`] is "the daemon answered and we refuse
 /// to pay what it asked." `#[non_exhaustive]` so V3.x estimators can
 /// extend the set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum FeeEstimatorError {
-    /// The daemon RPC the estimator depends on was unreachable.
-    #[error("fee estimator: daemon unreachable")]
-    DaemonUnreachable,
+    /// The daemon query the estimator depends on failed. The fault says
+    /// how: no answer, a daemon this wallet cannot use, or a reply that
+    /// broke the contract.
+    #[error("fee estimator: daemon query failed ({0})")]
+    Daemon(shekyl_rpc_client::DaemonFault),
 
-    /// The daemon returned a response the estimator could not consume.
+    /// The daemon's snapshot arrived and the estimator could not use it.
     #[error("fee estimator: daemon response invalid ({reason})")]
     DaemonResponseInvalid {
         /// Compile-time-fixed description of the contract violation.

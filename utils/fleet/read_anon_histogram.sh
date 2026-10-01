@@ -6,7 +6,7 @@
 # candidates. Neither substitutes for the other.
 #
 # `connection_info` already carries `incoming` and `address_type`, and
-# `address_type` distinguishes i2p (3) from tor (4)
+# `address_type` 4 is Tor (`enums.h`).
 # (contrib/epee/include/net/enums.h:39-46).
 #
 # ---------------------------------------------------------------------------

@@ -205,7 +205,16 @@ use super::{Canonical, CodecError};
 ///   (`(u64, u32) → slash_log_entry`, `([u8; 32], u64, u64) → Present`);
 ///   `archival_budget_accruing` is born Rust-only. No digest family moves
 ///   yet (`digest_v1` is commit 6's).
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(19);
+/// - `20` — DRS-E4 commit 5 (`DRS_E4_ARCHIVAL_WRITER.md` §3.2 phase 9,
+///   §3.5, `ARW-Q3`): **the undo log gains a third entry kind.** The
+///   epoch close deletes `archival_budget_accruing[E]` in the transaction
+///   that writes `archival_budget[E]`, and the store's first journaling
+///   delete records `Removed { table, key, prior }` under **tag 4**
+///   (`codec/undo.rs`); a `19` file's undo rows decode under `20`, but a
+///   `20` row with a tag-4 entry is a corrupt cell to `19`'s decoder and
+///   the pop it would drive must not be attempted. No table or digest
+///   family moves.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(20);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -262,10 +271,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(19));
-        assert_eq!(SCHEMA_VERSION.encode(), [19, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(20));
+        assert_eq!(SCHEMA_VERSION.encode(), [20, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[19, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[20, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

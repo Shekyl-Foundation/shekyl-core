@@ -877,11 +877,7 @@ std::string get_nix_version_display_string()
 
   bool is_privacy_preserving_network(const std::string &address)
   {
-    if (boost::ends_with(address, ".onion"))
-      return true;
-    if (boost::ends_with(address, ".i2p"))
-      return true;
-    return false;
+    return boost::ends_with(address, ".onion");
   }
 
   bool is_local_address(const std::string &address)

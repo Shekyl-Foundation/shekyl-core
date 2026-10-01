@@ -659,7 +659,7 @@ fn the_step_is_not_a_degraded_source_artifact() {
 /// that answers §43.2.
 ///
 /// Note the asymmetry this exposes, which is the whole of the per-zone
-/// question: the leak is **structurally zero on Tor/I2P** (§6.6 — fluff never
+/// question: the leak is **structurally zero on Tor** (§6.6 — fluff never
 /// traverses the supernode's inbound edges), so every millisecond of `beta`
 /// margin is derived from an anonymity-zone statistic and paid on the clearnet
 /// axis.

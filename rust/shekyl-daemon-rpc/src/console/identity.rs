@@ -74,9 +74,10 @@ fn handshake(src: &Source) -> Result<(), String> {
             return Err(reason);
         }
         Err(reason) => {
-            return Err(console_identity_message(&IdentityMismatch::unreadable(
-                reason,
-            )))
+            return Err(format!(
+                "{} (evidence: {reason})",
+                console_identity_message(&IdentityMismatch::unreadable())
+            ))
         }
     };
 
@@ -100,11 +101,11 @@ fn console_identity_message(m: &IdentityMismatch) -> String {
                 core_rpc_version_string(*theirs),
             )
         }
-        IdentityMismatch::WireUnreadable { ours, evidence } => format!(
+        IdentityMismatch::WireUnreadable { ours } => format!(
             "refusing to render: this daemon's `get_version` does not match the RPC \
              contract this build was compiled against, so the two are on different RPC \
              versions. This build is {}. The reply could not be read, so the daemon's \
-             version cannot be named here; align the two builds. (evidence: {evidence})",
+             version cannot be named here; align the two builds.",
             core_rpc_version_string(*ours),
         ),
         IdentityMismatch::Rules { ours, theirs } => format!(

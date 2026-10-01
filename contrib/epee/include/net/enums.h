@@ -42,7 +42,6 @@ namespace net_utils
 		invalid = 0,
 		ipv4 = 1,
 		ipv6 = 2,
-		i2p = 3,
 		tor = 4
 	};
 
@@ -50,7 +49,8 @@ namespace net_utils
 	{
 		invalid = 0,
 		public_ = 1, // public is keyword
-		i2p = 2,     // order from here changes priority of selection for origin TXes
+		// Discriminant 2 is unused. Tor stays 3 so the pool's two-bit field
+		// does not move.
 		tor = 3
 	};
 

@@ -19,7 +19,7 @@ mod get;
 mod notifies;
 mod types;
 
-pub use address::{NetworkAddress, ADDR_I2P, ADDR_IPV4, ADDR_IPV6, ADDR_TOR};
+pub use address::{NetworkAddress, ADDR_IPV4, ADDR_IPV6, ADDR_TOR};
 pub use block::{BlockCompleteEntry, TxBlobEntry, ATTESTATION_WITNESS_MAX_BYTES};
 pub use commands::{
     HandshakeRequest, HandshakeResponse, SupportFlagsRequest, SupportFlagsResponse,

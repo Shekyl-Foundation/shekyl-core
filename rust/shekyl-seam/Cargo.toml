@@ -18,6 +18,10 @@ shekyl-capped-stream = { path = "../shekyl-capped-stream" }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+tokio = { version = "1", default-features = false, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "sync"] }
 
 [lints]
 workspace = true

@@ -1,0 +1,6 @@
+shekyl-p2p-transcript 1
+seed 30
+role host
+sent 
+recv 01210101010101011b01
+end closed

@@ -392,7 +392,7 @@ where
         let mut state = self.state.lock().map_err(|_| {
             fail_build_after_attempted(
                 self.sink.as_ref(),
-                SendError::CannotSign {
+                SendError::BuildInvariant {
                     reason: "pending-tx state lock poisoned",
                 },
             )
@@ -512,9 +512,7 @@ where
         });
 
         let Some(tip_hash) = tip_hash else {
-            let err = SendError::CannotSign {
-                reason: "wallet has not ingested any block yet",
-            };
+            let err = SendError::NotSynced;
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
                 PendingTxDiagnostic::BuildFailed {
@@ -768,7 +766,7 @@ where
             let transfers = ledger.transfers();
             let mut assemble_inputs = Vec::with_capacity(selected.indices.len());
             for &index in &selected.indices {
-                let td = transfers.get(index).ok_or(SendError::CannotSign {
+                let td = transfers.get(index).ok_or(SendError::BuildInvariant {
                     reason: "selected transfer index out of range",
                 })?;
                 assemble_inputs.push(assemble_input(td));
@@ -851,24 +849,24 @@ where
             "assemble-input count must equal selected input count",
         );
         if indices.len() != assemble_inputs.len() {
-            return Err(SendError::CannotSign {
+            return Err(SendError::BuildInvariant {
                 reason: "assemble-input count does not match selected input count",
             });
         }
         let transfers = ledger.transfers();
         for (&index, ai) in indices.iter().zip(assemble_inputs) {
             let Some(td) = transfers.get(index) else {
-                return Err(SendError::CannotSign {
+                return Err(SendError::BuildInvariant {
                     reason: "selected transfer index out of range at commit",
                 });
             };
             if td.global_output_index != ai.gindex {
-                return Err(SendError::CannotSign {
+                return Err(SendError::BuildInvariant {
                     reason: "selected transfer shifted under the transaction before commit",
                 });
             }
             if td.spent {
-                return Err(SendError::CannotSign {
+                return Err(SendError::BuildInvariant {
                     reason: "a selected input was spent elsewhere during assembly",
                 });
             }
@@ -895,7 +893,7 @@ where
         let mut state = self.state.lock().map_err(|_| {
             fail_build_after_attempted(
                 self.sink.as_ref(),
-                SendError::CannotSign {
+                SendError::BuildInvariant {
                     reason: "pending-tx state lock poisoned",
                 },
             )
@@ -1030,7 +1028,7 @@ where
         let handle =
             self.curve_tree
                 .as_ref()
-                .ok_or(ReanchorError::Failed(SendError::CannotSign {
+                .ok_or(ReanchorError::Failed(SendError::BuildInvariant {
                     reason: "curve tree required to re-anchor a membership proof",
                 }))?;
 
@@ -1053,12 +1051,12 @@ where
             // keep content_gen monotonic.
             let (request, selected_indices) = {
                 let state = self.state.lock().map_err(|_| {
-                    ReanchorError::Failed(SendError::CannotSign {
+                    ReanchorError::Failed(SendError::BuildInvariant {
                         reason: "pending-tx state lock poisoned",
                     })
                 })?;
                 let held = state.consumer_held.get(&id).ok_or(ReanchorError::Failed(
-                    SendError::CannotSign {
+                    SendError::BuildInvariant {
                         reason: "reservation is no longer consumer_held",
                     },
                 ))?;
@@ -1175,27 +1173,26 @@ where
             // Re-read the selected inputs for `total_covered` and the assemble
             // inputs (public material only; the fold re-reads the secret pathway
             // by index after the assemble, guarding an index shift via `gindex`).
-            let (assemble_inputs, total_covered) = self
-                .ledger
-                .with_ledger_block(|ledger| {
-                    let transfers = ledger.transfers();
-                    let mut assemble_inputs = Vec::with_capacity(selected_indices.len());
-                    let mut covered = AtomicUnits::ZERO;
-                    for &index in &selected_indices {
-                        let td = transfers.get(index).ok_or(SendError::CannotSign {
-                            reason: "selected transfer index out of range during re-anchor",
-                        })?;
-                        covered =
-                            covered
-                                .checked_add(td.amount())
-                                .ok_or(SendError::CannotSign {
+            let (assemble_inputs, total_covered) =
+                self.ledger
+                    .with_ledger_block(|ledger| {
+                        let transfers = ledger.transfers();
+                        let mut assemble_inputs = Vec::with_capacity(selected_indices.len());
+                        let mut covered = AtomicUnits::ZERO;
+                        for &index in &selected_indices {
+                            let td = transfers.get(index).ok_or(SendError::BuildInvariant {
+                                reason: "selected transfer index out of range during re-anchor",
+                            })?;
+                            covered = covered.checked_add(td.amount()).ok_or(
+                                SendError::BuildInvariant {
                                     reason: "selected-input sum overflowed during re-anchor",
-                                })?;
-                        assemble_inputs.push(assemble_input(td));
-                    }
-                    Ok::<_, SendError>((assemble_inputs, covered))
-                })
-                .map_err(ReanchorError::Failed)?;
+                                },
+                            )?;
+                            assemble_inputs.push(assemble_input(td));
+                        }
+                        Ok::<_, SendError>((assemble_inputs, covered))
+                    })
+                    .map_err(ReanchorError::Failed)?;
 
             if total_covered < required {
                 return Err(ReanchorError::ReselectionRequired {
@@ -1266,14 +1263,14 @@ where
 
             // --- lock₂ (sync): authoritative re-validation + commit the swap ---
             let mut state = self.state.lock().map_err(|_| {
-                ReanchorError::Failed(SendError::CannotSign {
+                ReanchorError::Failed(SendError::BuildInvariant {
                     reason: "pending-tx state lock poisoned",
                 })
             })?;
             // A concurrent submit/discard could have removed the entry while the
             // prover ran (we held no lock). Fail clean, leaving nothing changed.
             if !state.consumer_held.contains_key(&id) {
-                return Err(ReanchorError::Failed(SendError::CannotSign {
+                return Err(ReanchorError::Failed(SendError::BuildInvariant {
                     reason: "reservation left consumer_held during re-anchor",
                 }));
             }
@@ -1291,7 +1288,7 @@ where
                 continue;
             }
             let Some(current_tip_hash) = self.ledger_block_hash(current_tip) else {
-                return Err(ReanchorError::Failed(SendError::CannotSign {
+                return Err(ReanchorError::Failed(SendError::BuildInvariant {
                     reason: "current tip block hash missing from ledger",
                 }));
             };
@@ -1319,7 +1316,7 @@ where
                 entry
                     .content_gen
                     .checked_add(1)
-                    .ok_or(ReanchorError::Failed(SendError::CannotSign {
+                    .ok_or(ReanchorError::Failed(SendError::BuildInvariant {
                         reason: "content_gen overflow on re-anchor (consent counter exhausted)",
                     }))?
             } else {

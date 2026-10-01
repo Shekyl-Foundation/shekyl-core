@@ -9,33 +9,52 @@
 
 use std::borrow::Cow;
 use std::net::{IpAddr, SocketAddr};
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use shekyl_capped_stream::{read_capped, write_capped, ByteQueue, Overfull, StreamEnds};
-use shekyl_net_address::NetworkAddress;
-use shekyl_p2p_transport::{
-    prefix_for, Established, Initiator, NetworkId, Responder, SendHalf, MESSAGE1_LEN, MESSAGE2_LEN,
-    PREFIX_LEN,
+use shekyl_capped_stream::{
+    accept_error_is_transient, node_gate, read_capped, write_capped, ByteQueue, Overfull,
+    QueueHold, StreamEnds,
 };
+use shekyl_net_address::NetworkAddress;
+use shekyl_p2p_transport::NetworkId;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_socks::{connect as socks_connect, Destination, Isolation, SocksError};
-use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick, WakeWait};
+use shekyl_timing_engine::{Clock, Handle, OwnerClass, OwnerHandle, Tick};
 use shekyl_transport_layer::{
-    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, Sockets,
+    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, OpenSocket, Sockets,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{mpsc, oneshot};
 
+use crate::handshake::{self, Setup};
 use crate::seam::{SeamRecv, SeamSend};
 use crate::{ChannelChoice, HandshakeTally, Session};
 
+#[derive(Clone, Copy)]
 pub(crate) enum Role {
     Responder,
     Initiator,
+}
+
+/// One admitted clearnet connection.
+///
+/// `open` is a clone of the reservation the connection task also holds.
+/// The task closes its clone when the socket ends. The recipient may
+/// close this one earlier. Dropping it leaves that task to close.
+/// `gap` disarms the Levin deadline. `None` means there is no deadline.
+pub struct Admitted {
+    pub open: OpenSocket,
+    pub session: Session,
+    pub ip: IpAddr,
+    pub port: u16,
+    /// Fired when the Levin handshake completes. `None` when this
+    /// connection has no gap deadline. Dropping the sender is what ends
+    /// the wait; the sender itself lives on the seam row after publish.
+    pub gap: Option<oneshot::Sender<()>>,
 }
 
 pub struct Dial {
@@ -44,11 +63,21 @@ pub struct Dial {
     pub sockets: Sockets,
     pub kind: ChannelChoice,
     pub network_id: NetworkId,
+    /// A direct clearnet dial. The three clearnet distributions.
+    pub dial_within: Tick,
+    /// A dial through `proxy`. The worst measured SOCKS path until that
+    /// path has its own distribution. A longer deadline costs only the dialer.
+    pub proxied_dial_within: Tick,
     pub handshake_within: Tick,
+    /// `Some` arms the Levin gap once the channel is up. `None` publishes
+    /// the connection with no gap: the library listener has no handshake
+    /// waiting on this socket.
+    pub gap_within: Option<Tick>,
     pub tally: Arc<HandshakeTally>,
-    pub sessions: mpsc::UnboundedSender<Session>,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
+    /// The one place a connected socket is published.
+    pub admitted: mpsc::UnboundedSender<Admitted>,
 }
 
 pub struct Accept {
@@ -58,10 +87,66 @@ pub struct Accept {
     pub kind: ChannelChoice,
     pub network_id: NetworkId,
     pub handshake_within: Tick,
+    /// See [`Dial::gap_within`].
+    pub gap_within: Option<Tick>,
     pub tally: Arc<HandshakeTally>,
-    pub sessions: mpsc::UnboundedSender<Session>,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
+    /// The one place a connected socket is published.
+    pub admitted: mpsc::UnboundedSender<Admitted>,
+}
+
+/// What an accept loop needs besides the socket it just took.
+///
+/// `ceiling` is read on every accept, so a later change is visible.
+/// `gap_within` of `None` publishes the connection with no Levin deadline.
+pub struct Inbound<F> {
+    pub sockets: Sockets,
+    pub ceiling: F,
+    pub kind: ChannelChoice,
+    pub network_id: NetworkId,
+    pub handshake_within: Tick,
+    pub gap_within: Option<Tick>,
+    pub tally: Arc<HandshakeTally>,
+    pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
+    pub send_queue_bytes: usize,
+    pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub backoff: Duration,
+}
+
+pub async fn accept_inbound<C, F>(listener: TcpListener, inbound: Inbound<F>, engine: Handle<C>)
+where
+    C: Clock + Clone + Send + Sync + 'static,
+    F: Fn() -> InboundCeiling + Send,
+{
+    loop {
+        let stream = match listener.accept().await {
+            Ok((stream, _)) => stream,
+            Err(error) if accept_error_is_transient(&error) => {
+                (inbound.on_cause)(CloseCause::new(CloseKind::IoError));
+                tokio::time::sleep(inbound.backoff).await;
+                continue;
+            }
+            Err(_) => {
+                (inbound.on_cause)(CloseCause::new(CloseKind::IoError));
+                break;
+            }
+        };
+        let accept = Accept {
+            stream,
+            sockets: inbound.sockets.clone(),
+            ceiling: (inbound.ceiling)(),
+            kind: inbound.kind,
+            network_id: inbound.network_id,
+            handshake_within: inbound.handshake_within,
+            gap_within: inbound.gap_within,
+            tally: Arc::clone(&inbound.tally),
+            on_cause: Arc::clone(&inbound.on_cause),
+            send_queue_bytes: inbound.send_queue_bytes,
+            admitted: inbound.admitted.clone(),
+        };
+        tokio::spawn(accept_one(accept, engine.clone()));
+    }
 }
 
 pub async fn accept_one<C>(accept: Accept, engine: Handle<C>)
@@ -75,10 +160,11 @@ where
         kind,
         network_id,
         handshake_within,
+        gap_within,
         tally,
-        sessions,
         on_cause,
         send_queue_bytes,
+        admitted,
     } = accept;
     let Ok(peer) = stream.peer_addr() else {
         finish_before_channel(&mut stream, &on_cause, CloseKind::TransportHandshakeFailed).await;
@@ -100,19 +186,21 @@ where
     let cause = serve(
         stream,
         engine,
-        kind,
-        network_id,
-        handshake_within,
-        tally,
-        sessions,
-        send_queue_bytes,
-        peer,
-        Role::Responder,
+        &reserved,
+        &admitted,
+        ChannelOpen {
+            kind,
+            network_id,
+            handshake_within,
+            gap_within,
+            tally,
+            send_queue_bytes,
+            peer,
+            role: Role::Responder,
+        },
     )
     .await;
-    match reserved.close(cause) {
-        CloseResult::Recorded(_) | CloseResult::AlreadyClosed => {}
-    }
+    settle(reserved, cause);
     on_cause(cause);
 }
 
@@ -126,11 +214,14 @@ where
         sockets,
         kind,
         network_id,
+        dial_within,
+        proxied_dial_within,
         handshake_within,
+        gap_within,
         tally,
-        sessions,
         on_cause,
         send_queue_bytes,
+        admitted,
     } = dial;
     if let Err(cause) = check_dial(ConnectorId::Clearnet, &address) {
         on_cause(cause);
@@ -142,30 +233,74 @@ where
     };
     let dest = SocketAddr::new(ip, port);
     let target = proxy.unwrap_or(dest);
-    let Ok(mut stream) = TcpStream::connect(target).await else {
-        on_cause(CloseCause::new(CloseKind::DialFailed));
+    // The engine refused. That is the host, not the peer, so it does not
+    // feed the address forget the way DialFailed does.
+    let Ok(owner) = engine.register(OwnerClass::Transport) else {
+        on_cause(CloseCause::new(CloseKind::LocalClose));
         return;
     };
-    if proxy.is_some() {
-        match socks_connect(&mut stream, Isolation::Principal, Destination::Ip(dest)).await {
-            Ok(()) => {}
-            Err(SocksError::Refused { reply }) => {
-                drop(stream.shutdown().await);
-                on_cause(CloseCause::proxy_refused(u16::from(reply)));
-                return;
-            }
-            Err(
-                SocksError::Io(_)
-                | SocksError::Malformed
-                | SocksError::AuthRejected { .. }
-                | SocksError::AuthFailed { .. },
-            ) => {
-                drop(stream.shutdown().await);
-                on_cause(CloseCause::new(CloseKind::DialFailed));
-                return;
+    let now = owner.clock().now();
+    // A proxied dial is the SOCKS exchange plus the proxy's path. The
+    // clearnet distributions had no proxy, and a Tor exit is a 3–6 s dial,
+    // so the direct clock would time it out. The proxied clock is the
+    // worst measured SOCKS path, pending its own distribution.
+    let within = if proxy.is_some() {
+        proxied_dial_within
+    } else {
+        dial_within
+    };
+    let deadline = Tick::new(now.get().saturating_add(within.get()));
+    if owner.arm(deadline).is_err() {
+        ignore(owner.deregister());
+        on_cause(CloseCause::new(CloseKind::LocalClose));
+        return;
+    }
+    let mut wake = std::pin::pin!(owner.wait_wake_async());
+    let connect = async {
+        let dialed = Instant::now();
+        let Ok(mut stream) = TcpStream::connect(target).await else {
+            return Err(CloseCause::new(CloseKind::DialFailed));
+        };
+        if proxy.is_some() {
+            match socks_connect(&mut stream, Isolation::Principal, Destination::Ip(dest)).await {
+                Ok(()) => {}
+                Err(SocksError::Refused { reply }) => {
+                    drop(stream.shutdown().await);
+                    return Err(CloseCause::proxy_refused(u16::from(reply)));
+                }
+                Err(
+                    SocksError::Io(_)
+                    | SocksError::Malformed
+                    | SocksError::AuthRejected { .. }
+                    | SocksError::AuthFailed { .. },
+                ) => {
+                    drop(stream.shutdown().await);
+                    return Err(CloseCause::new(CloseKind::DialFailed));
+                }
             }
         }
-    }
+        Ok((stream, handshake::span_ns(dialed.elapsed())))
+    };
+    tokio::pin!(connect);
+    let connected = tokio::select! {
+        biased;
+        result = wake.as_mut() => {
+            let kind = match result {
+                Ok(_) => CloseKind::TransportTimeout,
+                Err(_) => CloseKind::DialFailed,
+            };
+            Err(CloseCause::new(kind))
+        }
+        result = &mut connect => result,
+    };
+    ignore(owner.deregister());
+    let (mut stream, connect_ns) = match connected {
+        Ok(pair) => pair,
+        Err(cause) => {
+            on_cause(cause);
+            return;
+        }
+    };
     let now = engine.clock().now();
     let reserved = match sockets.open_clearnet(ip, now) {
         Ok(open) => open,
@@ -179,30 +314,44 @@ where
             return;
         }
     };
+    tracing::info!(
+        conn = reserved.id().get(),
+        connect_ns,
+        proxied = proxy.is_some(),
+        "clearnet dial connected"
+    );
     let cause = serve(
         stream,
         engine,
-        kind,
-        network_id,
-        handshake_within,
-        tally,
-        sessions,
-        send_queue_bytes,
-        dest,
-        Role::Initiator,
+        &reserved,
+        &admitted,
+        ChannelOpen {
+            kind,
+            network_id,
+            handshake_within,
+            gap_within,
+            tally,
+            send_queue_bytes,
+            peer: dest,
+            role: Role::Initiator,
+        },
     )
     .await;
-    match reserved.close(cause) {
+    settle(reserved, cause);
+    on_cause(cause);
+}
+
+fn settle(open: OpenSocket, cause: CloseCause) {
+    match open.close(cause) {
         CloseResult::Recorded(_) | CloseResult::AlreadyClosed => {}
     }
-    on_cause(cause);
 }
 
 fn socket_of(address: &NetworkAddress) -> Option<(IpAddr, u16)> {
     match address {
         NetworkAddress::Ipv4 { ip, port } => Some((IpAddr::V4(*ip), *port)),
         NetworkAddress::Ipv6 { ip, port } => Some((IpAddr::V6(*ip), *port)),
-        NetworkAddress::Tor { .. } | NetworkAddress::I2p { .. } => None,
+        NetworkAddress::Tor { .. } => None,
     }
 }
 
@@ -215,22 +364,91 @@ async fn finish_before_channel(
     on_cause(CloseCause::new(kind));
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn serve<C>(
-    stream: TcpStream,
-    engine: Handle<C>,
+struct ChannelOpen {
     kind: ChannelChoice,
     network_id: NetworkId,
     handshake_within: Tick,
+    gap_within: Option<Tick>,
     tally: Arc<HandshakeTally>,
-    sessions: mpsc::UnboundedSender<Session>,
     send_queue_bytes: usize,
-    _peer: SocketAddr,
+    peer: SocketAddr,
     role: Role,
+}
+
+enum GapEnd {
+    Established,
+    Dropped,
+    Timeout,
+    Closed,
+}
+
+struct GapWatch<C: Clock> {
+    owner: OwnerHandle<C>,
+    rx: oneshot::Receiver<()>,
+}
+
+struct ArmedGap<C: Clock> {
+    watch: GapWatch<C>,
+    established: oneshot::Sender<()>,
+}
+
+fn arm_gap<C>(engine: &Handle<C>, within: Option<Tick>) -> Result<Option<ArmedGap<C>>, CloseCause>
+where
+    C: Clock + Clone,
+{
+    let Some(within) = within else {
+        return Ok(None);
+    };
+    let owner = engine
+        .register(OwnerClass::Transport)
+        .map_err(|_| CloseCause::new(CloseKind::LocalClose))?;
+    let now = owner.clock().now();
+    let deadline = Tick::new(now.get().saturating_add(within.get()));
+    if owner.arm(deadline).is_err() {
+        ignore(owner.deregister());
+        return Err(CloseCause::new(CloseKind::LocalClose));
+    }
+    let (established, rx) = oneshot::channel();
+    Ok(Some(ArmedGap {
+        watch: GapWatch { owner, rx },
+        established,
+    }))
+}
+
+/// The wake future is pinned once inside this function. Rebuilding it on
+/// each poll of the outer select would drop a wake the slot had stored.
+async fn watch_gap<C: Clock>(watch: Option<GapWatch<C>>) -> GapEnd {
+    let Some(watch) = watch else {
+        return std::future::pending().await;
+    };
+    let mut wake = std::pin::pin!(watch.owner.wait_wake_async());
+    let mut rx = watch.rx;
+    let end = tokio::select! {
+        biased;
+        result = &mut rx => match result {
+            Ok(()) => GapEnd::Established,
+            Err(_) => GapEnd::Dropped,
+        },
+        result = wake.as_mut() => match result {
+            Ok(_) => GapEnd::Timeout,
+            Err(_) => GapEnd::Closed,
+        },
+    };
+    ignore(watch.owner.deregister());
+    end
+}
+
+async fn serve<C>(
+    stream: TcpStream,
+    engine: Handle<C>,
+    open: &OpenSocket,
+    admitted: &mpsc::UnboundedSender<Admitted>,
+    job: ChannelOpen,
 ) -> CloseCause
 where
     C: Clock + Clone + Send + 'static,
 {
+    let conn = open.id().get();
     let (mut read, write) = stream.into_split();
     let StreamEnds {
         session,
@@ -238,85 +456,135 @@ where
         hold,
         overfull,
         inbound,
-    } = StreamEnds::open(send_queue_bytes);
+    } = StreamEnds::open(job.send_queue_bytes);
     let opened = open_channel(
-        kind,
-        role,
+        &job,
         &mut read,
         write,
         &engine,
-        &network_id,
-        handshake_within,
-        &tally,
         writer_queue,
         Arc::clone(&overfull),
+        conn,
     )
     .await;
     let (mut writer, recv) = match opened {
-        Ok(pair) => pair,
+        Ok(opened) => opened,
         Err(kind) => {
             drop(hold);
             return CloseCause::new(kind);
         }
     };
-    if sessions.send(session).is_err() {
-        drop(hold);
-        drop(writer.await);
-        return CloseCause::new(CloseKind::LocalClose);
+    let (watch, gap_tx) = match arm_gap(&engine, job.gap_within) {
+        Ok(Some(armed)) => (Some(armed.watch), Some(armed.established)),
+        Ok(None) => (None, None),
+        Err(cause) => return end_connection(hold, &mut writer, cause).await,
+    };
+    let published = Admitted {
+        open: open.clone(),
+        session,
+        ip: job.peer.ip(),
+        port: job.peer.port(),
+        gap: gap_tx,
+    };
+    if admitted.send(published).is_err() {
+        return end_connection(hold, &mut writer, CloseCause::new(CloseKind::LocalClose)).await;
     }
-    let read_fut = read_half(read, recv, inbound, Arc::clone(&overfull));
+    let read_fut = read_half(read, recv, inbound, Arc::clone(&overfull), conn);
     tokio::pin!(read_fut);
-    tokio::select! {
-        read_cause = &mut read_fut => {
-            drop(hold);
-            writer.abort();
-            drop(writer.await);
-            read_cause
-        }
-        write_cause = &mut writer => {
-            drop(hold);
-            write_cause
-                .ok()
-                .flatten()
-                .unwrap_or(CloseCause::new(CloseKind::LocalClose))
+    let mut gap_open = watch.is_some();
+    let gap_fut = watch_gap(watch);
+    tokio::pin!(gap_fut);
+    loop {
+        tokio::select! {
+            biased;
+            end = gap_fut.as_mut(), if gap_open => {
+                gap_open = false;
+                match end {
+                    GapEnd::Established => {}
+                    GapEnd::Dropped | GapEnd::Closed => {
+                        return end_connection(hold, &mut writer, CloseCause::new(CloseKind::LocalClose)).await;
+                    }
+                    GapEnd::Timeout => {
+                        return end_connection(
+                            hold,
+                            &mut writer,
+                            CloseCause::new(CloseKind::LevinHandshakeTimeout),
+                        )
+                        .await;
+                    }
+                }
+            }
+            read_cause = &mut read_fut => {
+                return end_connection(hold, &mut writer, read_cause).await;
+            }
+            write_cause = &mut writer => {
+                drop(hold);
+                return write_cause
+                    .ok()
+                    .flatten()
+                    .unwrap_or(CloseCause::new(CloseKind::LocalClose));
+            }
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+async fn end_connection(
+    hold: QueueHold,
+    writer: &mut tokio::task::JoinHandle<Option<CloseCause>>,
+    cause: CloseCause,
+) -> CloseCause {
+    drop(hold);
+    writer.abort();
+    drop(writer.await);
+    cause
+}
+
 async fn open_channel<C>(
-    kind: ChannelChoice,
-    role: Role,
+    job: &ChannelOpen,
     read: &mut OwnedReadHalf,
     write: OwnedWriteHalf,
     engine: &Handle<C>,
-    network_id: &NetworkId,
-    handshake_within: Tick,
-    tally: &Arc<HandshakeTally>,
     outbound: ByteQueue,
     overfull: Arc<Overfull>,
+    conn: u64,
 ) -> Result<(tokio::task::JoinHandle<Option<CloseCause>>, SeamRecv), CloseKind>
 where
     C: Clock + Clone + Send + 'static,
 {
-    match (kind, role) {
+    let started = Instant::now();
+    let role_name = match job.role {
+        Role::Responder => "responder",
+        Role::Initiator => "initiator",
+    };
+    let kind_name = match job.kind {
+        ChannelChoice::Plain => "plain",
+        ChannelChoice::Noise => "noise",
+    };
+    let opened = match (job.kind, job.role) {
         (ChannelChoice::Plain, _) => {
             let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
-            let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull));
+            let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull, conn));
             drop(setup_tx.send(Setup::Plain));
             Ok((writer, SeamRecv::Plain))
         }
         (ChannelChoice::Noise, Role::Responder) => {
             let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
-            let writer = tokio::spawn(write_half(write, setup_rx, outbound, Arc::clone(&overfull)));
+            let writer = tokio::spawn(write_half(
+                write,
+                setup_rx,
+                outbound,
+                Arc::clone(&overfull),
+                conn,
+            ));
             let mut setup_tx = Some(setup_tx);
-            match noise_handshake(
+            match handshake::noise_handshake(
                 read,
                 engine,
-                network_id,
-                handshake_within,
-                tally,
+                &job.network_id,
+                job.handshake_within,
+                &job.tally,
                 &mut setup_tx,
+                conn,
             )
             .await
             {
@@ -329,11 +597,18 @@ where
             }
         }
         (ChannelChoice::Noise, Role::Initiator) => {
-            let (write, send, recv) =
-                initiator_handshake(read, write, engine, network_id, handshake_within, tally)
-                    .await?;
+            let (write, send, recv) = handshake::initiator_handshake(
+                read,
+                write,
+                engine,
+                &job.network_id,
+                job.handshake_within,
+                &job.tally,
+                conn,
+            )
+            .await?;
             let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
-            let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull));
+            let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull, conn));
             if setup_tx
                 .send(Setup::Noise {
                     flight: Vec::new(),
@@ -345,12 +620,17 @@ where
             }
             Ok((writer, recv))
         }
+    };
+    if opened.is_ok() {
+        tracing::info!(
+            conn,
+            role = role_name,
+            kind = kind_name,
+            handshake_ns = handshake::span_ns(started.elapsed()),
+            "clearnet channel established"
+        );
     }
-}
-
-enum Setup {
-    Plain,
-    Noise { flight: Vec<u8>, send: SendHalf },
+    opened
 }
 
 async fn write_half(
@@ -358,22 +638,38 @@ async fn write_half(
     setup: tokio::sync::oneshot::Receiver<Setup>,
     outbound: ByteQueue,
     overfull: Arc<Overfull>,
+    conn: u64,
 ) -> Option<CloseCause> {
     let setup = setup.await.ok()?;
     let mut seam = match setup {
         Setup::Plain => SeamSend::Plain,
         Setup::Noise { flight, send } => {
-            if write.write_all(&flight).await.is_err() {
-                return Some(CloseCause::new(CloseKind::IoError));
+            if !flight.is_empty() {
+                let started = Instant::now();
+                if !handshake::write_budgeted(&mut write, conn, &flight).await {
+                    return Some(CloseCause::new(CloseKind::IoError));
+                }
+                tracing::info!(
+                    conn,
+                    write_ns = handshake::span_ns(started.elapsed()),
+                    "clearnet responder message2"
+                );
             }
             SeamSend::Noise(send)
         }
     };
-    let cause = write_capped(&mut write, &outbound, &overfull, |plain| {
-        seam.encode(plain)
-            .map(Cow::Owned)
-            .map_err(|_| CloseKind::RecordRejected)
-    })
+    let cause = write_capped(
+        &mut write,
+        &outbound,
+        &overfull,
+        &node_gate(),
+        conn,
+        |plain| {
+            seam.encode(plain)
+                .map(Cow::Owned)
+                .map_err(|_| CloseKind::RecordRejected)
+        },
+    )
     .await;
     Some(cause)
 }
@@ -383,339 +679,16 @@ async fn read_half(
     mut seam: SeamRecv,
     inbound: mpsc::Sender<Vec<u8>>,
     overfull: Arc<Overfull>,
+    conn: u64,
 ) -> CloseCause {
-    read_capped(&mut read, inbound, &overfull, |chunk| {
+    read_capped(&mut read, inbound, &overfull, &node_gate(), conn, |chunk| {
         seam.push(chunk).map_err(|_| CloseKind::RecordRejected)
     })
     .await
 }
 
-async fn noise_handshake<C>(
-    read: &mut OwnedReadHalf,
-    engine: &Handle<C>,
-    network_id: &NetworkId,
-    handshake_within: Tick,
-    tally: &Arc<HandshakeTally>,
-    setup: &mut Option<tokio::sync::oneshot::Sender<Setup>>,
-) -> Result<SeamRecv, CloseKind>
-where
-    C: Clock + Clone + Send + 'static,
-{
-    let owner = engine
-        .register(OwnerClass::Transport)
-        .map_err(|_| CloseKind::TransportHandshakeFailed)?;
-    let now = owner.clock().now();
-    let deadline = Tick::new(now.get().saturating_add(handshake_within.get()));
-    owner
-        .arm(deadline)
-        .map_err(|_| CloseKind::TransportHandshakeFailed)?;
-    let fired = Arc::new(AtomicBool::new(false));
-    let mut wake = std::pin::pin!(owner.wait_wake_async());
-    let mut prefix = [0u8; PREFIX_LEN];
-    if let Err(kind) = read_or_wake(read, &mut prefix, &mut wake, &fired).await {
-        note_skip(tally, kind);
-        ignore(owner.deregister());
-        return Err(kind);
-    }
-    if prefix != prefix_for(network_id) {
-        ignore(owner.deregister());
-        return Err(CloseKind::PrefixMismatch);
-    }
-    let mut message1 = vec![0u8; MESSAGE1_LEN];
-    if let Err(kind) = read_or_wake(read, &mut message1, &mut wake, &fired).await {
-        note_skip(tally, kind);
-        ignore(owner.deregister());
-        return Err(kind);
-    }
-    if fired.load(Ordering::Acquire) {
-        tally.skip();
-        ignore(owner.deregister());
-        return Err(CloseKind::TransportTimeout);
-    }
-    tally.queue();
-    let tally_job = Arc::clone(tally);
-    let network_id = *network_id;
-    let fired_job = Arc::clone(&fired);
-    let join = tokio::task::spawn_blocking(move || {
-        handshake_job(&message1, network_id, &fired_job, &tally_job)
-    });
-    tokio::pin!(join);
-    let job = loop {
-        tokio::select! {
-            biased;
-            result = wake.as_mut(), if !fired.load(Ordering::Acquire) => {
-                fired.store(true, Ordering::Release);
-                match result {
-                    Ok(_) | Err(_) => {}
-                }
-            }
-            result = &mut join => break result,
-        }
-    };
-    ignore(owner.deregister());
-    let (send, recv, flight) = match job {
-        Ok(Ok(done)) if !fired.load(Ordering::Acquire) => done,
-        Ok(Ok(_) | Err(SkipOrFail::Skipped)) => return Err(CloseKind::TransportTimeout),
-        Ok(Err(SkipOrFail::Failed)) | Err(_) => {
-            return Err(CloseKind::TransportHandshakeFailed);
-        }
-    };
-    let Some(setup) = setup.take() else {
-        return Err(CloseKind::LocalClose);
-    };
-    if setup.send(Setup::Noise { flight, send }).is_err() {
-        return Err(CloseKind::LocalClose);
-    }
-    Ok(recv)
-}
-
 fn ignore<E>(result: Result<(), E>) {
     if let Err(_err) = result {}
-}
-
-fn note_skip(tally: &HandshakeTally, kind: CloseKind) {
-    if kind == CloseKind::TransportTimeout {
-        tally.skip();
-    }
-}
-
-enum SkipOrFail {
-    Skipped,
-    Failed,
-}
-
-fn handshake_job(
-    message1: &[u8],
-    network_id: NetworkId,
-    fired: &AtomicBool,
-    tally: &HandshakeTally,
-) -> Result<(SendHalf, SeamRecv, Vec<u8>), SkipOrFail> {
-    if fired.load(Ordering::Acquire) {
-        tally.skip();
-        tally.dequeue();
-        return Err(SkipOrFail::Skipped);
-    }
-    let result = (|| {
-        let ready = Responder::new(&network_id)
-            .read_message1(message1)
-            .map_err(|_| SkipOrFail::Failed)?;
-        let (established, message2) = ready.write_message2().map_err(|_| SkipOrFail::Failed)?;
-        Ok((established, message2))
-    })();
-    tally.dequeue();
-    let (established, message2) = result?;
-    tally.compute();
-    let (send, recv) = established_halves(established);
-    let mut flight = Vec::with_capacity(PREFIX_LEN + message2.len());
-    flight.extend_from_slice(&prefix_for(&network_id));
-    flight.extend_from_slice(&message2);
-    Ok((
-        send,
-        SeamRecv::Noise {
-            recv,
-            pending: Vec::new(),
-        },
-        flight,
-    ))
-}
-
-fn established_halves<const INITIATOR: bool>(
-    established: Established<INITIATOR>,
-) -> (SendHalf, shekyl_p2p_transport::RecvHalf) {
-    established.split()
-}
-
-async fn initiator_handshake<C>(
-    read: &mut OwnedReadHalf,
-    mut write: OwnedWriteHalf,
-    engine: &Handle<C>,
-    network_id: &NetworkId,
-    handshake_within: Tick,
-    tally: &Arc<HandshakeTally>,
-) -> Result<(OwnedWriteHalf, SendHalf, SeamRecv), CloseKind>
-where
-    C: Clock + Clone + Send + 'static,
-{
-    let owner = engine
-        .register(OwnerClass::Transport)
-        .map_err(|_| CloseKind::TransportHandshakeFailed)?;
-    let now = owner.clock().now();
-    let deadline = Tick::new(now.get().saturating_add(handshake_within.get()));
-    owner
-        .arm(deadline)
-        .map_err(|_| CloseKind::TransportHandshakeFailed)?;
-    let fired = Arc::new(AtomicBool::new(false));
-    let mut wake = std::pin::pin!(owner.wait_wake_async());
-    tally.queue();
-    let tally_job = Arc::clone(tally);
-    let network_id = *network_id;
-    let fired_job = Arc::clone(&fired);
-    let join =
-        tokio::task::spawn_blocking(move || initiator_job(network_id, &fired_job, &tally_job));
-    let job = await_job(join, &mut wake, &fired).await;
-    let (initiator, message1) = match job {
-        Ok(Ok(done)) if !fired.load(Ordering::Acquire) => done,
-        Ok(Ok(_) | Err(SkipOrFail::Skipped)) => {
-            ignore(owner.deregister());
-            drop(write.shutdown().await);
-            return Err(CloseKind::TransportTimeout);
-        }
-        Ok(Err(SkipOrFail::Failed)) => {
-            ignore(owner.deregister());
-            drop(write.shutdown().await);
-            return Err(CloseKind::TransportHandshakeFailed);
-        }
-        Err(_) => {
-            ignore(owner.deregister());
-            tally.dequeue();
-            drop(write.shutdown().await);
-            return Err(CloseKind::TransportHandshakeFailed);
-        }
-    };
-    let mut flight = Vec::with_capacity(PREFIX_LEN + message1.len());
-    flight.extend_from_slice(&prefix_for(&network_id));
-    flight.extend_from_slice(&message1);
-    if write.write_all(&flight).await.is_err() {
-        ignore(owner.deregister());
-        return Err(CloseKind::TransportHandshakeFailed);
-    }
-    let mut prefix = [0u8; PREFIX_LEN];
-    if let Err(kind) = read_or_wake(read, &mut prefix, &mut wake, &fired).await {
-        note_skip(tally, kind);
-        ignore(owner.deregister());
-        drop(write.shutdown().await);
-        return Err(kind);
-    }
-    if prefix != prefix_for(&network_id) {
-        ignore(owner.deregister());
-        drop(write.shutdown().await);
-        return Err(CloseKind::PrefixMismatch);
-    }
-    let mut message2 = vec![0u8; MESSAGE2_LEN];
-    if let Err(kind) = read_or_wake(read, &mut message2, &mut wake, &fired).await {
-        note_skip(tally, kind);
-        ignore(owner.deregister());
-        drop(write.shutdown().await);
-        return Err(kind);
-    }
-    if fired.load(Ordering::Acquire) {
-        tally.skip();
-        ignore(owner.deregister());
-        drop(write.shutdown().await);
-        return Err(CloseKind::TransportTimeout);
-    }
-    tally.queue();
-    let tally_job = Arc::clone(tally);
-    let fired_job = Arc::clone(&fired);
-    let join = tokio::task::spawn_blocking(move || {
-        finish_initiator(initiator, &message2, &fired_job, &tally_job)
-    });
-    let job = await_job(join, &mut wake, &fired).await;
-    ignore(owner.deregister());
-    let (send, recv) = match job {
-        Ok(Ok(done)) if !fired.load(Ordering::Acquire) => done,
-        Ok(Ok(_) | Err(SkipOrFail::Skipped)) => {
-            drop(write.shutdown().await);
-            return Err(CloseKind::TransportTimeout);
-        }
-        Ok(Err(SkipOrFail::Failed)) | Err(_) => {
-            drop(write.shutdown().await);
-            return Err(CloseKind::TransportHandshakeFailed);
-        }
-    };
-    Ok((write, send, recv))
-}
-
-fn initiator_job(
-    network_id: NetworkId,
-    fired: &AtomicBool,
-    tally: &HandshakeTally,
-) -> Result<(Initiator, Vec<u8>), SkipOrFail> {
-    if fired.load(Ordering::Acquire) {
-        tally.skip();
-        tally.dequeue();
-        return Err(SkipOrFail::Skipped);
-    }
-    match Initiator::new(&network_id) {
-        Ok(done) => {
-            tally.dequeue();
-            Ok(done)
-        }
-        Err(_) => {
-            tally.dequeue();
-            Err(SkipOrFail::Failed)
-        }
-    }
-}
-
-fn finish_initiator(
-    initiator: Initiator,
-    message2: &[u8],
-    fired: &AtomicBool,
-    tally: &HandshakeTally,
-) -> Result<(SendHalf, SeamRecv), SkipOrFail> {
-    if fired.load(Ordering::Acquire) {
-        tally.skip();
-        tally.dequeue();
-        return Err(SkipOrFail::Skipped);
-    }
-    let established = initiator
-        .read_message2(message2)
-        .map_err(|_| SkipOrFail::Failed);
-    tally.dequeue();
-    let established = established?;
-    tally.compute();
-    let (send, recv) = established_halves(established);
-    Ok((
-        send,
-        SeamRecv::Noise {
-            recv,
-            pending: Vec::new(),
-        },
-    ))
-}
-
-async fn await_job<T, C: Clock>(
-    join: tokio::task::JoinHandle<T>,
-    wake: &mut Pin<&mut WakeWait<'_, C>>,
-    fired: &AtomicBool,
-) -> Result<T, tokio::task::JoinError> {
-    tokio::pin!(join);
-    loop {
-        tokio::select! {
-            biased;
-            result = wake.as_mut(), if !fired.load(Ordering::Acquire) => {
-                fired.store(true, Ordering::Release);
-                match result {
-                    Ok(_) | Err(_) => {}
-                }
-            }
-            result = &mut join => return result,
-        }
-    }
-}
-
-async fn read_or_wake<C: Clock>(
-    read: &mut OwnedReadHalf,
-    buf: &mut [u8],
-    wake: &mut Pin<&mut WakeWait<'_, C>>,
-    fired: &AtomicBool,
-) -> Result<(), CloseKind> {
-    tokio::select! {
-        biased;
-        result = wake.as_mut() => {
-            fired.store(true, Ordering::Release);
-            match result {
-                Ok(_) | Err(_) => {}
-            }
-            Err(CloseKind::TransportTimeout)
-        }
-        result = read.read_exact(buf) => {
-            result
-                .map(|_| ())
-                .map_err(|_| CloseKind::TransportHandshakeFailed)
-        }
-    }
 }
 
 impl HandshakeTally {

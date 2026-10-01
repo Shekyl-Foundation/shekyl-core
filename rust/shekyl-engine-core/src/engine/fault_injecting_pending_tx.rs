@@ -312,7 +312,7 @@ mod tests {
             needed: 1,
             available: 0,
         });
-        wrapper.queue_build_failure(SendError::CannotSign { reason: "fifo-2" });
+        wrapper.queue_build_failure(SendError::BuildInvariant { reason: "fifo-2" });
 
         assert!(matches!(
             wrapper.build(standard_request()).await,
@@ -320,7 +320,7 @@ mod tests {
         ));
         assert!(matches!(
             wrapper.build(standard_request()).await,
-            Err(SendError::CannotSign { .. })
+            Err(SendError::BuildInvariant { .. })
         ));
         assert!(wrapper.build(standard_request()).await.is_ok());
         assert_eq!(wrapper.queued_build_failures(), 0);
@@ -363,7 +363,7 @@ mod tests {
             needed: 1,
             available: 0,
         });
-        wrapper.queue_build_failure(SendError::CannotSign { reason: "fifo-2" });
+        wrapper.queue_build_failure(SendError::BuildInvariant { reason: "fifo-2" });
         assert_eq!(wrapper.queued_build_failures(), 2);
 
         assert!(wrapper.build(standard_request()).await.is_err());

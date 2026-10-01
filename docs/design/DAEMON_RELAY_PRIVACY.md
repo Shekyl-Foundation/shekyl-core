@@ -89,6 +89,87 @@ carries reward-era assumptions, the parameters are network-topology-driven;
 *V4 lattice-only* — relay timing is cryptography-agnostic and survives any
 membership-proof successor untouched.
 
+## Relay-lane acceptance — RULED 2026-10-01
+
+Ruled so LV-3 and the zone-enum pull request do not choose shapes this
+lane then has to undo. The C++ that is still in the tree is the
+counterexample. Items 2 and 3 of the post-#909 pull request (the stem
+registry, then the `:832` reduction and the `Including transaction`
+move) are the first two of these criteria that land. The rest stay
+with this lane. The zone-enum change and this lane agree on criterion
+4 before either of those two lands.
+
+1. **One owner, one interface.** `shekyl-relay` already holds the
+   epoch, the stem map, the fluff walk, and the embargo derivation.
+   Its interface is: in = established outbound sessions, a transaction
+   with its arriving session or local, the node's own sync state, and
+   the clock; out = send to session S as stem, fluff to all but the
+   source, hold under embargo, or drop with a cause. Nothing else in
+   the daemon makes a relay decision. Today the decision is still
+   split across `levin_notify.cpp`, the pool's `relay_method`,
+   `core::on_transactions_relayed`, and the protocol handler's ingress
+   gates.
+
+2. **The pool knows one bit: public yet.** A stem-phase transaction
+   does not appear in `get_transaction_pool`, in peer pool sync, or in
+   a block template until it is fluffed. That is the only fact the
+   pool needs from Dandelion++. The bit is owned by the relay and read
+   by the pool. `relay_method` on the pool entry
+   (`tx_pool.cpp`, `blockchain_db.h`) is the relay state machine stored
+   beside the coins. The two-bit `origin_zone` field is the zone
+   enum's numeric identity (`enums.h`, discriminant 2 unused so `tor`
+   stays 3). When that enum goes, the field is deleted with it. It is
+   not renumbered into a network id. `address_type` (`ipv4 = 1`,
+   `ipv6 = 2`, `tor = 4`) stays the peerlist's wire discriminant. The
+   session's network is an attribute of the session.
+
+3. **Stem candidates come from the session registry.** Outbound,
+   uniform, without replacement, once per epoch (Dandelion++ §4.5).
+   The registry is `Zone::contexts` (`shekyl-relay` `zone/mod.rs`),
+   filled at session-established with direction. `get_out_connections`
+   (`levin_notify.cpp:194`) still snapshots the Levin registry and
+   keeps `state_normal`. That function goes. `get_out_connections_count`
+   does not: it answers whether a zone has an outbound peer
+   (`levin_notify.cpp:1610`) and trims the public-zone cap
+   (`net_node.inl:3305`). A falsifier of `rg get_out_connections` would
+   delete the count with the draw.
+
+4. **One Dandelion++ instance. Network is an edge attribute.** The
+   anonymity graph is every outbound edge this node has. A policy such
+   as "a Tor-originated transaction stems only on Tor edges" is a
+   named rule on edge selection inside that one instance. It is not a
+   second relay engine that sees half the graph. `make_relay_zone`
+   (`levin_notify.cpp:311`) still builds one zone per network and sets
+   `SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY` for every non-public zone.
+   The zone-enum pull request and this lane agree on this criterion
+   before either lands. Deleting the four zone switches
+   (`cryptonote_protocol_handler.inl:433` and `:2519`,
+   `net_node.inl:2813`, `levin_notify.cpp:321`) does not by itself
+   make one instance.
+
+5. **Embargo is a deadline in the timing engine.** `OwnerClass::Relay`
+   already exists (`shekyl-timing-engine`). The embargo is one
+   `OwnerClass::Relay` deadline per held transaction, memoryless as
+   `shekyl-relay-privacy` already derives it, firing fluff-now as an
+   event. The pool is not scanned by a relay timer.
+
+6. **Ingress gates are the relay's, decided in Rust.** After the
+   `:832` reduction and LV-3, notify dispatch is Rust and the relay
+   makes the ingress call with its own causes (`NotSynced`,
+   `UnknownSession`, `Duplicate`), logged after the decision. Today
+   `Including transaction` is logged at
+   `cryptonote_protocol_handler.inl:822` and
+   `m_state != state_normal` returns at `:832`, before the transaction
+   is accepted. `is_synchronized()` already answers whether the node
+   can validate it.
+
+7. **The measurements are inputs.** The hop distribution (transit,
+   verify, and admission, split), the transactions-per-epoch bound
+   against graph learning, and `record_stem_observation` feed the
+   embargo and the epoch length. They are taken against the head that
+   contains the stem-registry draw, not against the C++ filter they
+   replace.
+
 **Not consensus.** Every quantity in this document is node-local relay policy.
 Nodes running different delays do not fork, no rule reads these values, and
 none of this is genesis-blocking. It is being fixed before ship because it is

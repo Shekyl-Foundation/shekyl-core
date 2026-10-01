@@ -12,7 +12,7 @@ implementation:
   command, Q/S/B/E/COMPRESSED flags, protocol version;
 - whole-message builders for the notification / request / response flows;
 - dummy ("noise") messages and noise-shaped fragmentation for the white-noise
-  feature over i2p/Tor;
+  feature over Tor;
 - the zstd `COMPRESSED` path (cargo feature `zstd`, default on — this crate
   owns the policy; feature off is only for pure-Rust unavailability tests);
 - an incremental stream reader (`BucketReader`) mirroring the

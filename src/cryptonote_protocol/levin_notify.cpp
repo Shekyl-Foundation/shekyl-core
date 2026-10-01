@@ -183,44 +183,15 @@ namespace levin
       return ids.empty() ? nullptr : reinterpret_cast<const std::uint8_t*>(ids.data());
     }
 
-    uint64_t get_median_remote_height(connections& p2p)
-    {
-        std::vector<uint64_t> remote_heights;
-        remote_heights.reserve(connection_id_reserve_size);
-        p2p.foreach_connection([&remote_heights] (detail::p2p_context& context) {
-          if (!context.m_is_income)
-          {
-            remote_heights.emplace_back(context.m_remote_blockchain_height);
-          }
-          return true;
-        });
-
-        if (remote_heights.empty())
-        {
-          return 0;
-        }
-
-        const size_t n = remote_heights.size() / 2;
-        std::sort(remote_heights.begin(), remote_heights.end());
-        if (remote_heights.size() % 2 != 0)
-        {
-          return remote_heights[n];
-        }
-        return remote_heights[n-1];
-    }
-
-    uint64_t get_blockchain_height(connections& p2p, const i_core_events* core)
-    {
-      const uint64_t local_blockchain_height = core->get_current_blockchain_height();
-      if (core->is_synchronized())
-      {
-        return local_blockchain_height;
-      }
-      return std::max(local_blockchain_height, get_median_remote_height(p2p));
-    }
-
-    //! \return Outgoing connections supporting fragments in `connections` filtered by blockchain height.
-    std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, uint64_t blockchain_height)
+    //! \return Outbound connections in `state_normal`.
+    //!
+    //! That state is the session's answer to "is this peer caught up?".
+    //! A height comparison is a proxy for the same question, and it goes
+    //! stale for every peer the moment a new block lands, until the next
+    //! timed sync. One block behind for a few seconds is still caught up.
+    //! A session that is still synchronizing is not.
+    //! `local_height` is logged when the filter keeps nobody.
+    std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, uint64_t local_height)
     {
       std::vector<boost::uuids::uuid> outs;
       outs.reserve(connection_id_reserve_size);
@@ -229,19 +200,40 @@ namespace levin
          the reserve call so a strand is not used. Investigate if there is lots
          of waiting in here. */
 
-      p2p.foreach_connection([&outs, blockchain_height] (detail::p2p_context& context) {
-        if (!context.m_is_income && context.m_remote_blockchain_height >= blockchain_height)
+      p2p.foreach_connection([&outs] (detail::p2p_context& context) {
+        if (!context.m_is_income && context.m_state == cryptonote_connection_context::state_normal)
           outs.emplace_back(context.m_connection_id);
         return true;
       });
 
-      MDEBUG("Found " << outs.size() << " out connections having height >= " << blockchain_height);
+      if (!outs.empty())
+      {
+        MDEBUG("Found " << outs.size() << " out connections in normal state");
+        return outs;
+      }
+
+      MINFO("relay filter local_height=" << local_height << " rule=state_normal eligible=0");
+      std::size_t candidates = 0;
+      p2p.foreach_connection([&] (detail::p2p_context& context) {
+        ++candidates;
+        const bool eligible = !context.m_is_income
+            && context.m_state == cryptonote_connection_context::state_normal;
+        MINFO("relay candidate direction=" << (context.m_is_income ? "in" : "out")
+            << " state=" << get_protocol_state_string(context.m_state)
+            << " recorded_height=" << context.m_remote_blockchain_height
+            << " local_height=" << local_height
+            << " eligible=" << (eligible ? "yes" : "no")
+            << " height_from=" << remote_height_source_name(context.m_remote_height_source));
+        return true;
+      });
+      if (candidates == 0)
+        MINFO("relay filter candidates=0");
       return outs;
     }
 
     std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, const i_core_events* core)
     {
-      return get_out_connections(p2p, get_blockchain_height(p2p, core));
+      return get_out_connections(p2p, core->get_current_blockchain_height());
     }
 
     //! How wide a zone's stem set is and how long its epoch runs.
@@ -321,7 +313,7 @@ namespace levin
       const relay_zone_params params = public_zone_params();
 
       /* One bit, and it is NOT the noise enable. The transposition hazard the
-         named bits were introduced for (RP-3a shipped it once: the i2p/tor
+         named bits were introduced for (RP-3a shipped it once: the Tor
          outbound-only fluff rule swapped with the noise enable) cannot recur
          from here, because only one of the two is ever set. The Rust side
          still pins both values and refuses noise on a cleartext zone. */
@@ -358,8 +350,8 @@ namespace levin
       /* The carrier needs an ENCRYPTED link — it hides by payload
          indistinguishability, which needs encryption at step one. That is
          `LinkSecrecy`, a different axis from the outbound-fluff rule above
-         even though today's zone set makes the two conditions coincide: i2p
-         and tor are both encrypted AND anonymizing, and this line must not be
+         even though today's zone set makes the two conditions coincide: Tor
+         is both encrypted AND anonymizing, and this line must not be
          read as testing the second. P2P link encryption on a cleartext zone
          would separate them.
 
@@ -446,6 +438,16 @@ namespace levin
          then waited on a silence that peer was never given a chance to break.
          Found sweeping the carrier's own conversion; fixed here rather than
          left as the next instance of it. */
+      bool in_registry = false;
+      p2p.for_connection(destination, [&in_registry](detail::p2p_context&) {
+        in_registry = true;
+        return true;
+      });
+      if (!in_registry)
+      {
+        MINFO("seam send refused conn " << destination << " registry no");
+        return false;
+      }
       const int res = p2p.send(std::move(blob), destination);
       return res > 0;
     }
@@ -501,7 +503,7 @@ namespace levin
           forever — so only the last outstanding callback does work. The
           inherited `flush_callbacks` guarded the same hazard on `flush_txs`. */
       std::uint32_t pending_wakes;
-      const epee::net_utils::zone nzone;         //!< Zone is public ipv4/ipv6 connections, or i2p or tor
+      const epee::net_utils::zone nzone;         //!< Zone is public ipv4/ipv6 connections, or Tor or tor
       const bool pad_txs;                        //!< Pad txs to the next boundary for privacy
 
       /*! One transaction handed to the carrier, awaiting its verdict.
@@ -724,13 +726,13 @@ namespace levin
              order transactions were received in is an observable, and forwarding
              it would hand it to every peer downstream. */
 
-          /* A FLUFF over i2p/tor sends with the `fluff` flag — this arm only,
+          /* A FLUFF over Tor sends with the `fluff` flag — this arm only,
              and that is now a distinction rather than a blanket rule.
 
-             The inherited comment here said the flag went on *every* i2p/tor
-             release, on the reasoning that "the i2p/tor network is therefore
+             The inherited comment here said the flag went on *every* Tor
+             release, on the reasoning that "the Tor network is therefore
              replacing the sybil protection of Dandelion++", and closed by
-             noting that "Dandelion++ stem phase over i2p/tor is also worth
+             noting that "Dandelion++ stem phase over Tor is also worth
              investigating". §89 answers that: the zone stems, because a
              transport is a parameter and changing it does not change the
              graph. The sybil-substitution reasoning is retired with it — §64
@@ -1945,7 +1947,7 @@ namespace levin
       case relay_method::stem:
       case relay_method::local:
         /* GATE 3 of 3, deleted at §89.5. This was gated on
-           `zone_->nzone == public_`, so stem/local on i2p/tor fell
+           `zone_->nzone == public_`, so stem/local on Tor fell
            through into the fluff arm and the anonymity zone diffused where
            the design said it stemmed (§63). Tor is a transport like the
            clear internet; changing the transport does not change the graph.

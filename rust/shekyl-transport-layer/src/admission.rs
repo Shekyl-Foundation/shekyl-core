@@ -12,13 +12,14 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
 
-use crate::ban::{BanList, Ipv4Subnet};
+use crate::ban::{BanLeft, BanList, Ipv4Subnet, ListedBan};
 use crate::declaration::{declaration, Assessment, BannableInbound, ConnectorId, InboundIdentity};
 use crate::dial::check_dial;
 use crate::{CloseCause, CloseKind};
@@ -208,6 +209,9 @@ struct Inner {
     occupancy: Occupancy,
     live: HashMap<SocketId, Live>,
     bans: BanList,
+    /// An operator cap for one connector. `None` means that connector has
+    /// no cap of its own. The process ceiling applies either way.
+    zone_caps: [Option<u32>; ConnectorId::COUNT],
 }
 
 impl Inner {
@@ -217,6 +221,7 @@ impl Inner {
             occupancy: Occupancy::new(),
             live: HashMap::new(),
             bans: BanList::new(),
+            zone_caps: [None; ConnectorId::COUNT],
         }
     }
 
@@ -247,6 +252,23 @@ fn refuse_over_process_ceiling(inner: &Inner, ceiling: InboundCeiling) -> Result
     Ok(())
 }
 
+/// Refuse when this connector's cap is full, and when the process
+/// ceiling is full. The cap does not replace the ceiling: each connector
+/// can be under its own number while the sum still exhausts the descriptors.
+fn refuse_inbound(
+    inner: &Inner,
+    connector: ConnectorId,
+    ceiling: InboundCeiling,
+) -> Result<(), OpenError> {
+    if let Some(cap) = inner.zone_caps[connector.index()] {
+        let held = inner.occupancy.get(connector, Direction::Inbound);
+        if held >= u64::from(cap) {
+            return Err(admission_refused());
+        }
+    }
+    refuse_over_process_ceiling(inner, ceiling)
+}
+
 /// The socket table. Clones share it. A poisoned lock aborts the process:
 /// a panic while the table was held has already broken the count.
 #[derive(Clone, Debug)]
@@ -265,6 +287,12 @@ impl Sockets {
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().expect("socket table lock poisoned")
+    }
+
+    /// The operator's inbound cap for one connector. `None` clears it.
+    /// The process ceiling still bounds the sum.
+    pub fn set_zone_cap(&self, connector: ConnectorId, cap: Option<u32>) {
+        self.lock().zone_caps[connector.index()] = cap;
     }
 
     /// Inbound clearnet.
@@ -287,7 +315,7 @@ impl Sockets {
         if inner.bans.is_banned(ip, now) {
             return Err(admission_refused());
         }
-        refuse_over_process_ceiling(&inner, ceiling)?;
+        refuse_inbound(&inner, ConnectorId::Clearnet, ceiling)?;
         self.mint(
             &mut inner,
             ConnectorId::Clearnet,
@@ -321,7 +349,7 @@ impl Sockets {
             "tor inbound observation does not match its declaration"
         );
         let mut inner = self.lock();
-        refuse_over_process_ceiling(&inner, ceiling)?;
+        refuse_inbound(&inner, ConnectorId::Tor, ceiling)?;
         self.mint(&mut inner, ConnectorId::Tor, Direction::Inbound, endpoint)
     }
 
@@ -372,9 +400,50 @@ impl Sockets {
         close_matching(&mut inner, BanSubject::Subnet(subnet))
     }
 
+    /// Ban `host` until it is lifted, and close live sockets to it.
+    /// A ban that is already permanent closes nothing new.
+    pub fn ban_host_permanent(&self, host: IpAddr) -> Vec<SocketId> {
+        let mut inner = self.lock();
+        if !inner.bans.ban_host_permanent(host) {
+            return Vec::new();
+        }
+        close_matching(&mut inner, BanSubject::Host(host))
+    }
+
+    /// Ban `subnet` until it is lifted, and close live sockets inside it.
+    pub fn ban_subnet_permanent(&self, subnet: Ipv4Subnet) -> Vec<SocketId> {
+        let mut inner = self.lock();
+        if !inner.bans.ban_subnet_permanent(subnet) {
+            return Vec::new();
+        }
+        close_matching(&mut inner, BanSubject::Subnet(subnet))
+    }
+
     /// Remove a host ban. Sockets that are already open stay open.
     pub fn lift_host(&self, host: IpAddr) -> bool {
         self.lock().bans.lift_host(host)
+    }
+
+    /// Remove a subnet ban. Sockets that are already open stay open.
+    pub fn lift_subnet(&self, subnet: Ipv4Subnet) -> bool {
+        self.lock().bans.lift_subnet(subnet)
+    }
+
+    /// Drop every ban. Open sockets stay open. The daemon lifts one entry
+    /// at a time; a test process uses this because the list outlives the
+    /// `node_server` that used to own it.
+    pub fn clear_bans(&self) {
+        self.lock().bans.clear();
+    }
+
+    /// Time left on the longest ban that covers `host`.
+    pub fn remaining(&self, host: IpAddr, now: Tick) -> Option<BanLeft> {
+        self.lock().bans.remaining(host, now)
+    }
+
+    /// Bans still in force, with nanoseconds left from `now`.
+    pub fn listed(&self, now: Tick) -> Vec<ListedBan> {
+        self.lock().bans.listed(now)
     }
 
     /// How many live sockets this connector has in this direction.
@@ -443,9 +512,11 @@ impl Sockets {
         );
         debug_assert!(inner.holds());
         Ok(OpenSocket {
-            sockets: self.clone(),
-            id,
-            open: true,
+            inner: Arc::new(Reservation {
+                sockets: self.clone(),
+                id,
+                open: AtomicBool::new(true),
+            }),
         })
     }
 }
@@ -497,34 +568,22 @@ fn release(inner: &mut Inner, id: SocketId, cause: CloseCause) -> CloseResult {
     CloseResult::Recorded(cause)
 }
 
-/// A reserved socket. Dropping it closes with [`CloseKind::LocalClose`]
-/// if nothing has closed it yet, so a failure before the channel exists
-/// does not leave the count up.
-#[derive(Debug)]
-#[must_use = "dropping an OpenSocket releases the reservation"]
-pub struct OpenSocket {
+/// The reservation behind every clone of one [`OpenSocket`].
+///
+/// The first [`OpenSocket::close`] releases the row. Dropping the last
+/// clone does the same with [`CloseKind::LocalClose`] when nobody closed
+/// it, so a failure before the channel is published cannot leave the
+/// count up. Dropping an earlier clone does not: the connection task and
+/// the seam each hold one, and either of them may close first.
+struct Reservation {
     sockets: Sockets,
     id: SocketId,
-    open: bool,
+    open: AtomicBool,
 }
 
-impl OpenSocket {
-    /// The id.
-    #[must_use]
-    pub const fn id(&self) -> SocketId {
-        self.id
-    }
-
-    /// Close with `cause`. Drop will not close again.
-    pub fn close(mut self, cause: CloseCause) -> CloseResult {
-        self.open = false;
-        self.sockets.close(self.id, cause)
-    }
-}
-
-impl Drop for OpenSocket {
+impl Drop for Reservation {
     fn drop(&mut self) {
-        if self.open {
+        if self.open.swap(false, Ordering::AcqRel) {
             match self
                 .sockets
                 .close(self.id, CloseCause::new(CloseKind::LocalClose))
@@ -535,419 +594,47 @@ impl Drop for OpenSocket {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{CloseResult, ObservedEndpoint, OpenError};
-    pub(super) use super::{Direction, Sockets};
-    use crate::ban::Ipv4Subnet;
-    pub(super) use crate::declaration::ConnectorId;
-    use crate::{CloseCause, CloseKind};
-    use shekyl_net_address::NetworkAddress;
-    use shekyl_onion_v3::v3_onion_hostname;
-    use shekyl_peer_policy::InboundCeiling;
-    use shekyl_timing_engine::Tick;
-    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-    use std::sync::{Arc, Mutex};
-    use std::thread;
+/// A reserved socket. Clones name the same row.
+///
+/// The connection task keeps one clone and closes it when the socket
+/// ends. The seam keeps another and can close it earlier. The first
+/// close releases the row. A later close is [`CloseResult::AlreadyClosed`].
+#[derive(Clone, Debug)]
+#[must_use = "dropping the last OpenSocket releases the reservation"]
+pub struct OpenSocket {
+    inner: Arc<Reservation>,
+}
 
-    fn now() -> Tick {
-        Tick::new(1_000)
+impl std::fmt::Debug for Reservation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Reservation")
+            .field("id", &self.id)
+            .field("open", &self.open.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
+}
+
+impl OpenSocket {
+    /// The id.
+    #[must_use]
+    pub fn id(&self) -> SocketId {
+        self.inner.id
     }
 
-    fn ip(octets: [u8; 4]) -> IpAddr {
-        IpAddr::V4(Ipv4Addr::from(octets))
-    }
-
-    fn refused(error: OpenError) -> CloseKind {
-        match error {
-            OpenError::Refused(cause) => cause.kind(),
-            OpenError::Exhausted => panic!("exhausted"),
-        }
-    }
-
-    #[test]
-    fn a_ceiling_of_zero_admits_nothing_and_an_unbounded_ceiling_does() {
-        let sockets = Sockets::new();
-        let error = sockets
-            .accept_clearnet(ip([10, 0, 0, 1]), InboundCeiling::Bounded(0), now())
-            .expect_err("none");
-        assert_eq!(refused(error), CloseKind::AdmissionRefused);
-        assert_eq!(sockets.live(), 0);
-        let _open = sockets
-            .accept_tor(InboundCeiling::Unbounded(
-                shekyl_peer_policy::UnboundedReason::Unlimited,
-            ))
-            .expect("admitted");
-        assert_eq!(
-            sockets.socket_count(ConnectorId::Tor, Direction::Inbound),
-            1
-        );
-    }
-
-    #[test]
-    fn a_banned_accept_does_not_take_a_slot() {
-        let sockets = Sockets::new();
-        let host = ip([10, 0, 0, 1]);
-        assert_eq!(sockets.ban_host(host, Tick::new(2_000), now()).len(), 0);
-        let error = sockets
-            .accept_clearnet(host, InboundCeiling::Bounded(4), now())
-            .expect_err("banned");
-        assert_eq!(refused(error), CloseKind::AdmissionRefused);
-        assert_eq!(sockets.live(), 0);
-        assert!(!sockets.is_banned(host, Tick::new(2_000)));
-        let _open = sockets
-            .accept_clearnet(host, InboundCeiling::Bounded(4), Tick::new(2_000))
-            .expect("expired");
-        assert_eq!(sockets.live(), 1);
-    }
-
-    #[test]
-    fn inbound_held_sums_inbound_rows_and_leaves_outbound_out() {
-        let sockets = Sockets::new();
-        let ceiling = InboundCeiling::Bounded(4);
-        let _clearnet = sockets
-            .accept_clearnet(ip([10, 0, 0, 1]), ceiling, now())
-            .expect("clearnet inbound");
-        let _tor = sockets.accept_tor(ceiling).expect("tor inbound");
-        let _outbound = sockets
-            .open_clearnet(ip([10, 0, 0, 2]), now())
-            .expect("clearnet outbound");
-        assert_eq!(sockets.inbound_held(), 2);
-        assert_eq!(sockets.live(), 3);
-        assert_eq!(
-            sockets.socket_count(ConnectorId::Clearnet, Direction::Outbound),
-            1
-        );
-    }
-
-    #[test]
-    fn close_releases_once_and_drop_does_not_release_again() {
-        let sockets = Sockets::new();
-        let open = sockets
-            .accept_tor(InboundCeiling::Bounded(2))
-            .expect("open");
-        let id = open.id();
-        assert_eq!(
-            open.close(CloseCause::new(CloseKind::TransportHandshakeFailed)),
-            CloseResult::Recorded(CloseCause::new(CloseKind::TransportHandshakeFailed))
-        );
-        assert_eq!(
-            sockets.close(id, CloseCause::new(CloseKind::PeerClosed)),
+    /// Close with `cause`. A clone that is still held does not close again.
+    pub fn close(self, cause: CloseCause) -> CloseResult {
+        if self.inner.open.swap(false, Ordering::AcqRel) {
+            self.inner.sockets.close(self.inner.id, cause)
+        } else {
             CloseResult::AlreadyClosed
-        );
-        assert_eq!(sockets.live(), 0);
-        assert_eq!(
-            sockets.socket_count(ConnectorId::Tor, Direction::Inbound),
-            0
-        );
-    }
-
-    #[test]
-    fn drop_releases_a_socket_that_failed_before_the_channel_existed() {
-        let sockets = Sockets::new();
-        let open = sockets
-            .accept_clearnet(ip([10, 0, 0, 1]), InboundCeiling::Bounded(2), now())
-            .expect("open");
-        drop(open);
-        assert_eq!(sockets.live(), 0);
-    }
-
-    #[test]
-    fn outbound_does_not_consume_the_inbound_ceiling() {
-        let sockets = Sockets::new();
-        let ceiling = InboundCeiling::Bounded(1);
-        let _inbound = sockets
-            .accept_clearnet(ip([10, 0, 0, 1]), ceiling, now())
-            .expect("one inbound");
-        let error = sockets
-            .accept_clearnet(ip([10, 0, 0, 2]), ceiling, now())
-            .expect_err("full");
-        assert_eq!(refused(error), CloseKind::AdmissionRefused);
-        let _outbound = sockets
-            .open_clearnet(ip([10, 0, 0, 3]), now())
-            .expect("outbound");
-        assert_eq!(
-            sockets.socket_count(ConnectorId::Clearnet, Direction::Outbound),
-            1
-        );
-        assert_eq!(
-            sockets.socket_count(ConnectorId::Clearnet, Direction::Inbound),
-            1
-        );
-    }
-
-    #[test]
-    fn clearnet_and_tor_inbound_share_the_process_ceiling() {
-        let sockets = Sockets::new();
-        let ceiling = InboundCeiling::Bounded(1);
-        let clearnet = sockets
-            .accept_clearnet(ip([10, 0, 0, 1]), ceiling, now())
-            .expect("clearnet");
-        let error = sockets.accept_tor(ceiling).expect_err("process full");
-        assert_eq!(refused(error), CloseKind::AdmissionRefused);
-        assert_eq!(
-            sockets.socket_count(ConnectorId::Clearnet, Direction::Inbound),
-            1
-        );
-        assert_eq!(
-            sockets.socket_count(ConnectorId::Tor, Direction::Inbound),
-            0
-        );
-        assert_eq!(
-            sockets.endpoint(clearnet.id()),
-            Some(ObservedEndpoint::Host(ip([10, 0, 0, 1])))
-        );
-        let tor = sockets
-            .accept_tor(InboundCeiling::Bounded(2))
-            .expect("room");
-        assert_eq!(sockets.endpoint(tor.id()), Some(ObservedEndpoint::Zone));
-    }
-
-    #[test]
-    fn a_tor_dial_that_is_not_an_onion_reserves_nothing() {
-        let sockets = Sockets::new();
-        let error = sockets
-            .open_tor(&NetworkAddress::Ipv4 {
-                ip: Ipv4Addr::LOCALHOST,
-                port: 18080,
-            })
-            .expect_err("not an onion");
-        assert_eq!(refused(error), CloseKind::DialFailed);
-        assert_eq!(sockets.live(), 0);
-        let host = v3_onion_hostname(&[0x22; 32]);
-        let _open = sockets
-            .open_tor(&NetworkAddress::Tor { host, port: 18080 })
-            .expect("onion");
-        assert_eq!(
-            sockets.socket_count(ConnectorId::Tor, Direction::Outbound),
-            1
-        );
-    }
-
-    #[test]
-    fn a_new_ban_closes_matching_sockets_once() {
-        let sockets = Sockets::new();
-        let banned = ip([10, 1, 2, 5]);
-        let other = ip([10, 9, 0, 1]);
-        let inside = sockets
-            .accept_clearnet(banned, InboundCeiling::Bounded(8), now())
-            .expect("in");
-        let outbound = sockets.open_clearnet(banned, now()).expect("out");
-        let kept = sockets
-            .accept_clearnet(other, InboundCeiling::Bounded(8), now())
-            .expect("other");
-        let tor = sockets.accept_tor(InboundCeiling::Bounded(8)).expect("tor");
-        let v6 = sockets
-            .accept_clearnet(
-                IpAddr::V6(Ipv6Addr::LOCALHOST),
-                InboundCeiling::Bounded(8),
-                now(),
-            )
-            .expect("v6");
-        let closed = sockets.ban_host(banned, Tick::new(5_000), now());
-        assert_eq!(closed.len(), 2);
-        assert!(!sockets.is_live(inside.id()));
-        assert!(!sockets.is_live(outbound.id()));
-        assert!(sockets.is_live(kept.id()));
-        assert!(sockets.is_live(tor.id()));
-        assert!(sockets.is_live(v6.id()));
-        assert_eq!(
-            sockets.close(inside.id(), CloseCause::new(CloseKind::LocalClose)),
-            CloseResult::AlreadyClosed
-        );
-        assert_eq!(sockets.live(), 3);
-        drop(inside);
-        drop(outbound);
-        assert_eq!(sockets.live(), 3);
-
-        let subnet = Ipv4Subnet::new(Ipv4Addr::new(10, 9, 0, 9), 24).expect("prefix");
-        let closed = sockets.ban_subnet(subnet, Tick::new(5_000), now());
-        assert_eq!(closed, vec![kept.id()]);
-        assert!(sockets.is_live(v6.id()));
-        assert_eq!(sockets.live(), 2);
-        drop(kept);
-        drop(tor);
-        drop(v6);
-        assert_eq!(sockets.live(), 0);
-    }
-
-    #[test]
-    fn lift_does_not_close_and_a_later_accept_is_admitted() {
-        let sockets = Sockets::new();
-        let host = ip([10, 0, 0, 8]);
-        sockets.ban_host(host, Tick::new(5_000), now());
-        assert!(sockets.lift_host(host));
-        let _open = sockets
-            .accept_clearnet(host, InboundCeiling::Bounded(2), now())
-            .expect("lifted");
-    }
-
-    #[test]
-    fn racing_accepts_do_not_pass_the_ceiling() {
-        let sockets = Sockets::new();
-        let held = Arc::new(Mutex::new(Vec::new()));
-        thread::scope(|scope| {
-            for _ in 0..8 {
-                let sockets = sockets.clone();
-                let held = Arc::clone(&held);
-                scope.spawn(move || {
-                    for _ in 0..20 {
-                        if let Ok(open) = sockets.accept_tor(InboundCeiling::Bounded(5)) {
-                            held.lock().expect("held").push(open);
-                        }
-                    }
-                });
-            }
-        });
-        let guard = held.lock().expect("held");
-        assert_eq!(guard.len(), 5);
-        assert_eq!(sockets.live(), 5);
-        assert_eq!(
-            sockets.socket_count(ConnectorId::Tor, Direction::Inbound),
-            5
-        );
-        drop(guard);
-        drop(held);
-        assert_eq!(sockets.live(), 0);
-    }
-
-    #[test]
-    fn simultaneous_closes_release_the_slot_once() {
-        let sockets = Sockets::new();
-        let open = sockets
-            .accept_clearnet(ip([10, 0, 0, 1]), InboundCeiling::Bounded(2), now())
-            .expect("open");
-        let id = open.id();
-        let results = thread::scope(|scope| {
-            let first = scope.spawn(|| sockets.close(id, CloseCause::new(CloseKind::PeerClosed)));
-            let second = scope.spawn(|| sockets.close(id, CloseCause::new(CloseKind::LocalClose)));
-            (first.join().expect("join"), second.join().expect("join"))
-        });
-        let recorded = [results.0, results.1]
-            .into_iter()
-            .filter(|result| matches!(result, CloseResult::Recorded(_)))
-            .count();
-        assert_eq!(recorded, 1);
-        assert_eq!(sockets.live(), 0);
-        drop(open);
-        assert_eq!(sockets.live(), 0);
-    }
-
-    #[test]
-    fn churn_of_accepts_and_closes_returns_to_zero() {
-        let sockets = Sockets::new();
-        thread::scope(|scope| {
-            for n in 0..8u8 {
-                let sockets = sockets.clone();
-                scope.spawn(move || {
-                    let host = ip([10, 0, 0, n]);
-                    for i in 0..40 {
-                        if let Ok(open) =
-                            sockets.accept_clearnet(host, InboundCeiling::Bounded(64), now())
-                        {
-                            assert_eq!(
-                                open.close(CloseCause::new(CloseKind::LocalClose)),
-                                CloseResult::Recorded(CloseCause::new(CloseKind::LocalClose))
-                            );
-                        }
-                        if i % 2 == 0 {
-                            if let Ok(open) = sockets.accept_tor(InboundCeiling::Bounded(64)) {
-                                drop(open);
-                            }
-                        }
-                    }
-                });
-            }
-        });
-        assert_eq!(sockets.live(), 0);
-        assert_eq!(
-            sockets.socket_count(ConnectorId::Clearnet, Direction::Inbound),
-            0
-        );
-        assert_eq!(
-            sockets.socket_count(ConnectorId::Tor, Direction::Inbound),
-            0
-        );
-    }
-
-    fn cases_from_env() -> u32 {
-        match std::env::var("PROPTEST_CASES") {
-            Ok(raw) => raw
-                .parse()
-                .unwrap_or_else(|_| panic!("PROPTEST_CASES must be a u32, got {raw}")),
-            Err(std::env::VarError::NotPresent) => 64,
-            Err(std::env::VarError::NotUnicode(_)) => panic!("PROPTEST_CASES is not Unicode"),
-        }
-    }
-
-    pub(super) fn proptest_config() -> proptest::test_runner::Config {
-        proptest::test_runner::Config {
-            cases: cases_from_env(),
-            ..proptest::test_runner::Config::default()
-        }
-    }
-
-    pub(super) fn apply(sockets: &Sockets, open: &mut Vec<super::OpenSocket>, byte: u8) {
-        let hosts = [
-            ip([10, 0, 0, 1]),
-            ip([10, 0, 0, 2]),
-            ip([10, 1, 0, 1]),
-            ip([192, 168, 0, 1]),
-        ];
-        let ceiling = InboundCeiling::Bounded(4);
-        match byte % 6 {
-            0 => {
-                if let Ok(sock) =
-                    sockets.accept_clearnet(hosts[usize::from(byte) % hosts.len()], ceiling, now())
-                {
-                    open.push(sock);
-                }
-            }
-            1 => {
-                if let Ok(sock) = sockets.accept_tor(ceiling) {
-                    open.push(sock);
-                }
-            }
-            2 => {
-                if let Ok(sock) =
-                    sockets.open_clearnet(hosts[usize::from(byte) % hosts.len()], now())
-                {
-                    open.push(sock);
-                }
-            }
-            3 => {
-                let host = v3_onion_hostname(&[0x33; 32]);
-                if let Ok(sock) = sockets.open_tor(&NetworkAddress::Tor { host, port: 18080 }) {
-                    open.push(sock);
-                }
-            }
-            4 => {
-                if !open.is_empty() {
-                    let index = usize::from(byte) % open.len();
-                    let sock = open.swap_remove(index);
-                    let id = sock.id();
-                    assert!(matches!(
-                        sockets.close(id, CloseCause::new(CloseKind::PeerClosed)),
-                        CloseResult::Recorded(_)
-                    ));
-                    assert_eq!(
-                        sockets.close(id, CloseCause::new(CloseKind::IoError)),
-                        CloseResult::AlreadyClosed
-                    );
-                    drop(sock);
-                }
-            }
-            _ => {
-                if let Ok(sock) = sockets.accept_clearnet(hosts[0], ceiling, now()) {
-                    assert_eq!(
-                        sock.close(CloseCause::new(CloseKind::TransportHandshakeFailed)),
-                        CloseResult::Recorded(CloseCause::new(CloseKind::TransportHandshakeFailed))
-                    );
-                }
-            }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "admission_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 proptest::proptest! {

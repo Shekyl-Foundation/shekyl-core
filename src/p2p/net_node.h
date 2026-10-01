@@ -52,7 +52,6 @@
 #include "cryptonote_protocol/fwd.h"
 #include "cryptonote_protocol/levin_notify.h"
 #include "warnings.h"
-#include "net/abstract_tcp_server2.h"
 #include "net/levin_protocol_handler.h"
 #include "net/levin_protocol_handler_async.h"
 #include "p2p_protocol_defs.h"
@@ -64,6 +63,7 @@
 #include "net/parse.h"
 #include "common/command_line.h"
 #include "shekyl/shekyl_ffi.h"
+#include "p2p/zone_server.h"
 
 PUSH_WARNINGS
 DISABLE_VS_WARNINGS(4355)
@@ -192,11 +192,6 @@ namespace nodetool
   //! `network_address::host_str()` so they compare equal to a candidate.
   std::set<std::string> local_interface_hosts();
 
-  // hides boost::future and chrono stuff from mondo template file
-  std::optional<boost::asio::ip::tcp::socket>
-  socks_connect_internal(const std::atomic<bool>& stop_signal, boost::asio::io_context& service, const net::socks::endpoint& proxy, const epee::net_utils::network_address& remote);
-
-
   // There is no announced node identifier of any kind. The eclipse-oracle
   // doctrine that once pinned the anon-zone `peer_id` sentinel is preserved
   // as the rationale for the field's ABSENCE at `basic_node_data`
@@ -235,8 +230,7 @@ namespace nodetool
       // recovery this value comes from is a hidden-service property. Anything
       // that is not demonstrably an anonymity address keeps the public hour,
       // which is also the safe default for any zone added later.
-      const bool anonymity_zone =
-        zone == epee::net_utils::zone::tor || zone == epee::net_utils::zone::i2p;
+      const bool anonymity_zone = zone == epee::net_utils::zone::tor;
       if (!anonymity_zone)
         return P2P_FAILED_ADDR_FORGET_SECONDS;
 
@@ -295,6 +289,12 @@ namespace nodetool
         m_in_timedsync(false)
     {}
 
+    p2p_connection_context_t(boost::uuids::uuid connection_id, const epee::net_utils::network_address& remote_address, bool is_income)
+      : base_type(connection_id, remote_address, is_income),
+        support_flags(0),
+        m_in_timedsync(false)
+    {}
+
     uint32_t support_flags;
     bool m_in_timedsync;
     std::set<epee::net_utils::network_address> sent_addresses;
@@ -302,9 +302,7 @@ namespace nodetool
 
   template<class t_payload_net_handler>
   class node_server: public epee::levin::levin_commands_handler<p2p_connection_context_t<typename t_payload_net_handler::connection_context> >,
-                     public i_p2p_endpoint<typename t_payload_net_handler::connection_context>,
-                     public epee::net_utils::i_connection_filter,
-                     public epee::net_utils::i_connection_limit
+                     public i_p2p_endpoint<typename t_payload_net_handler::connection_context>
   {
     struct by_conn_id{};
     struct by_addr{};
@@ -315,10 +313,10 @@ namespace nodetool
     typedef COMMAND_TIMED_SYNC_T<typename t_payload_net_handler::payload_type> COMMAND_TIMED_SYNC;
     static_assert(p2p_connection_context::handshake_command() == COMMAND_HANDSHAKE::ID, "invalid handshake command id");
 
-    typedef epee::net_utils::boosted_tcp_server<epee::levin::async_protocol_handler<p2p_connection_context>> net_server;
+    typedef shekyl::zone_server<epee::levin::async_protocol_handler<p2p_connection_context>> net_server;
 
     struct network_zone;
-    using connect_func = std::optional<p2p_connection_context>(network_zone&, epee::net_utils::network_address const&, epee::net_utils::ssl_support_t);
+    using connect_func = std::optional<p2p_connection_context>(network_zone&, epee::net_utils::network_address const&);
 
     struct config_t
     {
@@ -336,7 +334,7 @@ namespace nodetool
     {
       network_zone()
         : m_connect(nullptr),
-          m_net_server(epee::net_utils::e_connection_type_P2P),
+          m_net_server(),
           m_seed_nodes(),
           m_bind_ip(),
           m_bind_ipv6_address(),
@@ -358,7 +356,7 @@ namespace nodetool
 
       network_zone(boost::asio::io_context& public_service)
         : m_connect(nullptr),
-          m_net_server(public_service, epee::net_utils::e_connection_type_P2P),
+          m_net_server(public_service),
           m_seed_nodes(),
           m_bind_ip(),
           m_bind_ipv6_address(),
@@ -485,6 +483,13 @@ namespace nodetool
     //! anonymity zone run dialer-only it is the zone's CONSTANT unknown
     //! sentinel: equal for every node, carrying no entropy, linking nothing.
     epee::net_utils::network_address get_announced_address(epee::net_utils::zone zone) const;
+    //! Advertise a managed-tor publish result. A failed publish or an
+    //! unparseable service id leaves `zone.m_our_address` unchanged.
+    void apply_managed_onion_publish(network_zone& zone, int publish_rc, const char* service_id, std::uint16_t virtual_port);
+    //! True when `address` is banned with no deadline.
+    bool host_ban_is_permanent(const epee::net_utils::network_address &address) const;
+    //! Bans still in force. `permanent` is 1 when the row has no deadline.
+    std::vector<shekyl_ban_view> ban_list();
     //! Mint a self-detection nonce for one outbound handshake attempt on
     //! `zone`, RECORDED IN THAT ZONE'S IN-FLIGHT SET BEFORE IT IS RETURNED.
     //!
@@ -528,14 +533,18 @@ namespace nodetool
     //! is descriptors another subsystem has promised but not opened. An
     //! explicit cap is left as stored. The probe counts descriptors open at
     //! the call, so the daemon calls this again after RPC listeners bind.
-    void apply_inbound_ceiling(std::uint64_t reserved_beyond_p2p);
+    bool apply_inbound_ceiling(std::uint64_t reserved_beyond_p2p);
     virtual bool block_host(epee::net_utils::network_address address, time_t seconds = P2P_IP_BLOCKTIME, bool add_only = false);
     virtual bool unblock_host(const epee::net_utils::network_address &address);
     virtual bool block_subnet(const epee::net_utils::ipv4_network_subnet &subnet, time_t seconds = P2P_IP_BLOCKTIME);
     virtual bool unblock_subnet(const epee::net_utils::ipv4_network_subnet &subnet);
-    virtual bool is_host_blocked(const epee::net_utils::network_address &address, time_t *seconds) { CRITICAL_REGION_LOCAL(m_blocked_hosts_lock); return !is_remote_host_allowed(address, seconds); }
-    virtual std::map<std::string, time_t> get_blocked_hosts() { CRITICAL_REGION_LOCAL(m_blocked_hosts_lock); return m_blocked_hosts; }
-    virtual std::map<epee::net_utils::ipv4_network_subnet, time_t> get_blocked_subnets() { CRITICAL_REGION_LOCAL(m_blocked_hosts_lock); return m_blocked_subnets; }
+    bool block_host_permanent(epee::net_utils::network_address address);
+    bool block_subnet_permanent(const epee::net_utils::ipv4_network_subnet &subnet);
+    virtual bool is_host_blocked(const epee::net_utils::network_address &address, time_t *seconds);
+    //! Host to seconds remaining on the monotonic deadline.
+    virtual std::map<std::string, time_t> get_blocked_hosts();
+    //! Subnet to seconds remaining on the monotonic deadline.
+    virtual std::map<epee::net_utils::ipv4_network_subnet, time_t> get_blocked_subnets();
 
 
   private:
@@ -580,11 +589,7 @@ namespace nodetool
     virtual void for_each_connection(std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f);
     virtual bool for_connection(const boost::uuids::uuid&, std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f);
     virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score = 1);
-    //----------------- i_connection_filter  --------------------------------------------------------
-    virtual bool is_remote_host_allowed(const epee::net_utils::network_address &address, time_t *t = NULL);
-    //----------------- i_connection_limit  ---------------------------------------------------------
-    virtual bool is_host_limit(const epee::net_utils::network_address &address);
-    //-----------------------------------------------------------------------------------------------
+    bool is_remote_host_allowed(const epee::net_utils::network_address &address, time_t *t = NULL);
 
     bool parse_peer_from_string(epee::net_utils::network_address& pe, const std::string& node_addr, uint16_t default_port = 0);
     bool handle_command_line(
@@ -651,14 +656,6 @@ namespace nodetool
     //! Outbound caps on every zone, plus explicit inbound caps on zones
     //! other than public, plus `reserved_beyond_p2p`.
     std::uint64_t descriptor_reservations(std::uint64_t reserved_beyond_p2p) const;
-    struct inbound_census
-    {
-      std::size_t zone;
-      std::size_t process;
-    };
-    //! Live inbound counts for `which` and for the whole process. Refreshes
-    //! each zone's cached counter. Admission reads the census, not the cache.
-    inbound_census census_inbound(epee::net_utils::zone which);
     bool set_tos_flag(const boost::program_options::variables_map& vm, int limit);
 
     bool set_rate_up_limit(const boost::program_options::variables_map& vm, int64_t limit);
@@ -739,8 +736,9 @@ namespace nodetool
     //keep connections to initiate some interactions
 
 
-    static std::optional<p2p_connection_context> public_connect(network_zone&, epee::net_utils::network_address const&, epee::net_utils::ssl_support_t);
-    static std::optional<p2p_connection_context> socks_connect(network_zone&, epee::net_utils::network_address const&, epee::net_utils::ssl_support_t);
+    static std::optional<p2p_connection_context> public_connect(network_zone&, epee::net_utils::network_address const&);
+    shekyl_zone_params transport_spans() const;
+    shekyl_inbound_ceiling transport_ceiling() const;
 
 
     /* A `std::map` provides constant iterators and key/value pointers even with
@@ -753,10 +751,6 @@ namespace nodetool
 
     failed_addr_cache m_conn_fails_cache;
 
-    epee::critical_section m_blocked_hosts_lock; // for both hosts and subnets
-    std::map<std::string, time_t> m_blocked_hosts;
-    std::map<epee::net_utils::ipv4_network_subnet, time_t> m_blocked_subnets;
-
     epee::critical_section m_host_fails_score_lock;
     std::map<std::string, uint64_t> m_host_fails_score;
 
@@ -767,10 +761,6 @@ namespace nodetool
     //! An inbound count is unreadable without the window it was observed over:
     //! zero inbound after 40 seconds says nothing, zero after six hours does.
     std::chrono::steady_clock::time_point m_started_at;
-    //! Set when public inbound was derived. Admission then refuses once the
-    //! live inbound count across every zone reaches it. Empty when the
-    //! operator set `--in-peers`: that cap is the zone cap.
-    std::optional<std::uint32_t> m_process_inbound_ceiling;
     //! What the last `apply_inbound_ceiling` reserved beyond p2p's own
     //! sockets (the RPC connection budget). Kept so a re-derive triggered by
     //! a p2p-side change does not have to rediscover it.
@@ -780,12 +770,8 @@ namespace nodetool
     std::uint32_t m_applied_ceiling_kind = 0;
     std::uint32_t m_applied_ceiling_value = 0;
     cryptonote::network_type m_nettype;
-
-    epee::net_utils::ssl_support_t m_ssl_support;
   };
 
-    const int64_t default_limit_up = P2P_DEFAULT_LIMIT_RATE_UP;      // kB/s
-    const int64_t default_limit_down = P2P_DEFAULT_LIMIT_RATE_DOWN;  // kB/s
     extern const command_line::arg_descriptor<std::string> arg_p2p_bind_ip;
     extern const command_line::arg_descriptor<std::string> arg_p2p_bind_ipv6_address;
     extern const command_line::arg_descriptor<std::string, false, true, 2> arg_p2p_bind_port;

@@ -13,12 +13,14 @@ use serde::Serialize;
 //
 // Timing values that live in `config/consensus_constants.json` reach Rust via
 // `shekyl-archival-retention`'s build-generated bond-floor module (W, reorg
-// depth, release cooldown, retention horizon). `SETTLEMENT_EPOCH_BLOCKS` and
-// `CHALLENGE_RESOLUTION_BLOCKS` are still hand-pinned in that crate's
-// `constants.rs` (JSON has them too; dual-source cleanup is a separate pass).
+// depth, release cooldown, retention horizon). `SETTLEMENT_EPOCH_BLOCKS` is
+// still hand-pinned in that crate's `constants.rs` (JSON has it too;
+// dual-source cleanup is a separate pass). The slash grace is
+// `SLASH_GRACE_EPOCHS`, a multiple of the epoch with no JSON key: it has no
+// value of its own to source (DRS-E4 commit 5).
 pub use shekyl_archival_retention::{
-    ARCHIVAL_REORG_DEPTH_BLOCKS, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W,
-    RELEASE_COOLDOWN_EPOCHS, RETENTION_HORIZON_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
+    ARCHIVAL_REORG_DEPTH_BLOCKS, MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS,
+    RETENTION_HORIZON_BLOCKS, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
 };
 
 /// Canonical owner is `emission_wire`'s `usize` bound; this cluster does
@@ -56,7 +58,7 @@ pub struct TimingClusterConstants {
     pub retention_horizon_blocks: u64,
     pub archival_reorg_depth_blocks: u64,
     pub release_cooldown_epochs: u64,
-    pub challenge_resolution_blocks: u64,
+    pub slash_grace_epochs: u64,
     pub prune_horizon_epochs: u64,
     pub retention_horizon_epochs: u64,
     pub settlement_epoch_days: f64,
@@ -92,7 +94,7 @@ pub fn verify() -> TimingClusterReport {
         retention_horizon_blocks: RETENTION_HORIZON_BLOCKS,
         archival_reorg_depth_blocks: ARCHIVAL_REORG_DEPTH_BLOCKS,
         release_cooldown_epochs: RELEASE_COOLDOWN_EPOCHS,
-        challenge_resolution_blocks: CHALLENGE_RESOLUTION_BLOCKS,
+        slash_grace_epochs: SLASH_GRACE_EPOCHS,
         prune_horizon_epochs: MAX_CLAIM_AGE_W,
         retention_horizon_epochs,
         settlement_epoch_days: seb_days,
@@ -115,13 +117,15 @@ pub fn verify() -> TimingClusterReport {
         ),
     });
 
-    let release_cooldown_blocks = RELEASE_COOLDOWN_EPOCHS * SETTLEMENT_EPOCH_BLOCKS;
+    // L16: both sides in epochs since DRS-E4 commit 5, so the inequality is
+    // the same on every schedule rather than one the regtest lever could
+    // invert.
     couplings.push(CouplingCheck {
-        name: "release_cooldown_blocks_gt_challenge",
-        pass: release_cooldown_blocks > CHALLENGE_RESOLUTION_BLOCKS,
+        name: "release_cooldown_epochs_gt_slash_grace",
+        pass: RELEASE_COOLDOWN_EPOCHS > SLASH_GRACE_EPOCHS,
         detail: format!(
-            "RELEASE_COOLDOWN in blocks ({}) > CHALLENGE_RESOLUTION_BLOCKS ({})",
-            release_cooldown_blocks, CHALLENGE_RESOLUTION_BLOCKS
+            "RELEASE_COOLDOWN_EPOCHS ({}) > SLASH_GRACE_EPOCHS ({})",
+            RELEASE_COOLDOWN_EPOCHS, SLASH_GRACE_EPOCHS
         ),
     });
 

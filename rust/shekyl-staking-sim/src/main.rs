@@ -742,9 +742,9 @@ fn print_timing_cluster_report() {
         report.constants.archival_reorg_depth_days * 24.0,
     );
     eprintln!(
-        "  release_cooldown={} epochs  challenge={} blocks  prune_epochs={}  couplings+F4: {}",
+        "  release_cooldown={} epochs  slash_grace={} epochs  prune_epochs={}  couplings+F4: {}",
         report.constants.release_cooldown_epochs,
-        report.constants.challenge_resolution_blocks,
+        report.constants.slash_grace_epochs,
         report.constants.prune_horizon_epochs,
         yn(report.all_pass)
     );

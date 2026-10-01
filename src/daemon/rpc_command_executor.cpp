@@ -1061,7 +1061,10 @@ bool t_rpc_command_executor::print_bans()
     {
         for (auto i = res.bans.begin(); i != res.bans.end(); ++i)
         {
-            tools::msg_writer() << i->host << " banned for " << i->seconds << " seconds";
+            if (i->permanent)
+              tools::msg_writer() << i->host << " banned permanently";
+            else
+              tools::msg_writer() << i->host << " banned for " << i->seconds << " seconds";
         }
     }
     else 
@@ -1161,7 +1164,9 @@ bool t_rpc_command_executor::banned(const std::string &address)
         }
     }
 
-    if (res.banned)
+    if (res.banned && res.permanent)
+      tools::msg_writer() << address << " is banned permanently";
+    else if (res.banned)
       tools::msg_writer() << address << " is banned for " << res.seconds << " seconds";
     else
       tools::msg_writer() << address << " is not banned";

@@ -12,11 +12,50 @@
 
 use std::borrow::Cow;
 
-use shekyl_transport_layer::{CloseCause, CloseKind};
+use shekyl_transport_layer::{CloseCause, CloseKind, LinkDirection, MessageClass};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
+use crate::gate::LinkGate;
 use crate::queue::{ByteQueue, Overfull};
+
+/// Write every byte of `bytes`.
+///
+/// `Err(wrote)` is how many bytes the socket accepted before it failed
+/// or returned zero. A grant refund uses that count: the whole grant
+/// when nothing left, and only the unsent tail when a prefix did.
+pub async fn write_all_counted<W>(write: &mut W, bytes: &[u8]) -> Result<(), usize>
+where
+    W: AsyncWrite + Unpin,
+{
+    let mut wrote = 0usize;
+    while wrote < bytes.len() {
+        match write.write(&bytes[wrote..]).await {
+            Ok(0) | Err(_) => return Err(wrote),
+            Ok(n) => wrote += n,
+        }
+    }
+    Ok(())
+}
+
+/// Give back the part of `grant` the socket did not accept.
+///
+/// Nothing written returns the packet as well as the bytes. A prefix
+/// keeps the packet and returns only the tail.
+pub fn refund_unsent(
+    gate: &LinkGate,
+    direction: LinkDirection,
+    conn: u64,
+    grant: u64,
+    wrote: usize,
+) {
+    let wrote = u64::try_from(wrote).unwrap_or(grant);
+    if wrote == 0 {
+        gate.refund(direction, conn, grant, true);
+    } else if wrote < grant {
+        gate.refund(direction, conn, grant - wrote, false);
+    }
+}
 
 /// Bytes read from the socket in one turn.
 ///
@@ -34,7 +73,26 @@ pub async fn write_capped<W, F>(
     write: &mut W,
     outbound: &ByteQueue,
     overfull: &Overfull,
+    gate: &LinkGate,
+    conn: u64,
     mut encode: F,
+) -> CloseCause
+where
+    W: AsyncWrite + Unpin,
+    F: for<'a> FnMut(&'a [u8]) -> Result<Cow<'a, [u8]>, CloseKind>,
+{
+    let cause = write_queued(write, outbound, overfull, gate, conn, &mut encode).await;
+    gate.leave(LinkDirection::Up, conn);
+    cause
+}
+
+async fn write_queued<W, F>(
+    write: &mut W,
+    outbound: &ByteQueue,
+    overfull: &Overfull,
+    gate: &LinkGate,
+    conn: u64,
+    encode: &mut F,
 ) -> CloseCause
 where
     W: AsyncWrite + Unpin,
@@ -52,8 +110,8 @@ where
                 return CloseCause::new(CloseKind::SendQueueFull);
             }
             next = outbound.pop() => {
-                let bytes = match next {
-                    Ok(bytes) => bytes,
+                let (class, bytes) = match next {
+                    Ok(item) => item,
                     Err(closed) => {
                         shutdown(write).await;
                         return CloseCause::new(closed.kind());
@@ -72,21 +130,43 @@ where
                     outbound.release(n);
                     continue;
                 }
-                tokio::select! {
-                    biased;
-                    () = overfull.wait() => {
+                let mut off = 0usize;
+                while off < wire.len() {
+                    if overfull.tripped() {
                         outbound.release(n);
                         shutdown(write).await;
                         return CloseCause::new(CloseKind::SendQueueFull);
                     }
-                    result = write.write_all(&wire) => {
-                        outbound.release(n);
-                        if result.is_err() {
+                    let room = wire.len() - off;
+                    let grant = gate
+                        .acquire(LinkDirection::Up, conn, class, room as u64)
+                        .await;
+                    let grant = usize::try_from(grant).unwrap_or(room).min(room);
+                    if grant == 0 {
+                        continue;
+                    }
+                    let end = off + grant;
+                    tokio::select! {
+                        biased;
+                        () = overfull.wait() => {
+                            gate.refund(LinkDirection::Up, conn, grant as u64, true);
+                            outbound.release(n);
                             shutdown(write).await;
-                            return CloseCause::new(CloseKind::IoError);
+                            return CloseCause::new(CloseKind::SendQueueFull);
+                        }
+                        result = write_all_counted(write, &wire[off..end]) => {
+                            if let Err(wrote) = result {
+                                refund_unsent(gate, LinkDirection::Up, conn, grant as u64, wrote);
+                                outbound.release(n);
+                                shutdown(write).await;
+                                return CloseCause::new(CloseKind::IoError);
+                            }
                         }
                     }
+                    off = end;
                 }
+                gate.record_message(LinkDirection::Up, conn);
+                outbound.release(n);
             }
         }
     }
@@ -101,7 +181,26 @@ pub async fn read_capped<R, F>(
     read: &mut R,
     inbound: mpsc::Sender<Vec<u8>>,
     overfull: &Overfull,
+    gate: &LinkGate,
+    conn: u64,
     mut decode: F,
+) -> CloseCause
+where
+    R: AsyncRead + Unpin,
+    F: FnMut(&[u8]) -> Result<Vec<Vec<u8>>, CloseKind>,
+{
+    let cause = read_queued(read, inbound, overfull, gate, conn, &mut decode).await;
+    gate.leave(LinkDirection::Down, conn);
+    cause
+}
+
+async fn read_queued<R, F>(
+    read: &mut R,
+    inbound: mpsc::Sender<Vec<u8>>,
+    overfull: &Overfull,
+    gate: &LinkGate,
+    conn: u64,
+    decode: &mut F,
 ) -> CloseCause
 where
     R: AsyncRead + Unpin,
@@ -112,15 +211,37 @@ where
         if overfull.tripped() {
             return CloseCause::new(CloseKind::SendQueueFull);
         }
-        let n = tokio::select! {
+        let grant = tokio::select! {
             biased;
             () = overfull.wait() => return CloseCause::new(CloseKind::SendQueueFull),
-            result = read.read(&mut buf) => match result {
-                Ok(0) => return CloseCause::new(CloseKind::PeerClosed),
+            grant = gate.acquire(LinkDirection::Down, conn, MessageClass::Session, buf.len() as u64) => grant,
+        };
+        let room = usize::try_from(grant).unwrap_or(buf.len()).min(buf.len());
+        if room == 0 {
+            continue;
+        }
+        let n = tokio::select! {
+            biased;
+            () = overfull.wait() => {
+                gate.refund(LinkDirection::Down, conn, grant, true);
+                return CloseCause::new(CloseKind::SendQueueFull);
+            }
+            result = read.read(&mut buf[..room]) => match result {
+                Ok(0) => {
+                    gate.refund(LinkDirection::Down, conn, grant, true);
+                    return CloseCause::new(CloseKind::PeerClosed);
+                }
                 Ok(n) => n,
-                Err(_) => return CloseCause::new(CloseKind::IoError),
+                Err(_) => {
+                    gate.refund(LinkDirection::Down, conn, grant, true);
+                    return CloseCause::new(CloseKind::IoError);
+                }
             },
         };
+        if (n as u64) < grant {
+            gate.refund(LinkDirection::Down, conn, grant - n as u64, false);
+        }
+        gate.record_message(LinkDirection::Down, conn);
         let pieces = match decode(&buf[..n]) {
             Ok(pieces) => pieces,
             Err(kind) => return CloseCause::new(kind),
@@ -155,6 +276,7 @@ mod tests {
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
     use super::{read_capped, write_capped};
+    use crate::gate::LinkGate;
     use crate::queue::{ByteQueue, Overfull, PushError};
     use crate::UNREAD_FRAMES;
 
@@ -220,7 +342,8 @@ mod tests {
         queue.try_push(b"abcdefgh".to_vec()).expect("queue");
         let task = tokio::spawn(async move {
             let mut write = StuckWrite { entered: flag };
-            write_capped(&mut write, &queue, &overfull, |plain| {
+            let gate = LinkGate::new();
+            write_capped(&mut write, &queue, &overfull, &gate, 1, |plain| {
                 Ok(std::borrow::Cow::Borrowed(plain))
             })
             .await
@@ -245,7 +368,8 @@ mod tests {
         let overfull = queue.overfull();
         let task = tokio::spawn(async move {
             let mut sink = tokio::io::sink();
-            write_capped(&mut sink, &queue, &overfull, |plain| {
+            let gate = LinkGate::new();
+            write_capped(&mut sink, &queue, &overfull, &gate, 1, |plain| {
                 Ok(std::borrow::Cow::Borrowed(plain))
             })
             .await
@@ -267,7 +391,8 @@ mod tests {
         let overfull = queue.overfull();
         let task = tokio::spawn(async move {
             let mut sink = tokio::io::sink();
-            write_capped(&mut sink, &queue, &overfull, |plain| {
+            let gate = LinkGate::new();
+            write_capped(&mut sink, &queue, &overfull, &gate, 1, |plain| {
                 Ok(std::borrow::Cow::Borrowed(plain))
             })
             .await
@@ -290,7 +415,8 @@ mod tests {
         let (inbound, _rx) = tokio::sync::mpsc::channel(UNREAD_FRAMES);
         let task = tokio::spawn(async move {
             let mut read = StuckRead { entered: flag };
-            read_capped(&mut read, inbound, &overfull, |chunk| {
+            let gate = LinkGate::new();
+            read_capped(&mut read, inbound, &overfull, &gate, 1, |chunk| {
                 Ok(vec![chunk.to_vec()])
             })
             .await

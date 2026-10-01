@@ -39,14 +39,14 @@ namespace cryptonote
   enum class relay_method : std::uint8_t
   {
     none = 0, //!< Received via RPC with `do_not_relay` set
-    local,    //!< Received via RPC; trying to send over i2p/tor, etc.
+    local,    //!< Received via RPC; trying to send over Tor, etc.
     stem,     //!< Received/send over network using Dandelion++ stem
     fluff,    //!< Received/sent over network using Dandelion++ fluff
     block     //!< Received in block, takes precedence over others
   };
 
   /* `forward` was here, between `local` and `stem`, and Q12-U2 deleted it.
-     It meant "arrived over i2p/tor; hold on a timer, then broadcast to
+     It meant "arrived over Tor; hold on a timer, then broadcast to
      clearnet" — that is, PROVENANCE used as a routing input, and it threw away
      which anonymity network the transaction came from in the process. Q12-D3
      rules provenance is not a routing input, so the class had nothing left to
@@ -79,7 +79,6 @@ namespace cryptonote
     "relay_method bytes are the FFI contract with shekyl-relay::zone_route");
   static_assert(unsigned(epee::net_utils::zone::invalid) == 0
              && unsigned(epee::net_utils::zone::public_) == 1
-             && unsigned(epee::net_utils::zone::i2p) == 2
              && unsigned(epee::net_utils::zone::tor) == 3,
     "zone bytes are the FFI contract with shekyl-relay::zone_route");
 

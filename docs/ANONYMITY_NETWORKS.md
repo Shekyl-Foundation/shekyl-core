@@ -5,15 +5,16 @@
 > client (SOCKS and overlay inbound) to be **that same relay process** —
 > a sidecar client Tor is uncovered. See [`TOR_RELAY.md`](TOR_RELAY.md)
 > and [`design/TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md). This
-> file's remaining body is the inherited Tor/I2P P2P usage matrix; it is
-> not the cover-posture SoT. Do not copy `--tx-proxy …,10` from Usage as
+> file's remaining body is the Tor P2P usage matrix. I2P is not a network
+> this daemon dials. This file is not the cover-posture source of truth. Do not copy
+> `--tx-proxy …,10` from Usage as
 > the cover bind: counts below 12 are refused, and cover is TOR_RELAY's
 > shared-instance topology.
 
-Currently only Tor and I2P have been integrated into Shekyl. The usage of
-these networks is still considered experimental - there are a few pessimistic
+Tor is the anonymity network this daemon dials. I2P is not. The usage of
+Tor is still considered experimental - there are a few pessimistic
 cases where privacy is leaked. The design is intended to maximize privacy of
-the source of a transaction by broadcasting it over an anonymity network, while
+the source of a transaction by broadcasting it over Tor, while
 relying on IPv4 for the remainder of messages to make surrounding node attacks
 (via sybil) more difficult.
 
@@ -34,8 +35,6 @@ Practical consequences for anonymity relay:
 - A typical 2-in/2-out FCMP++ transaction grows from ~2–3 KB to ~7–8 KB.
 - On Tor, a single cell is 512 bytes; a v3 transaction spans ~14–16 cells
   vs ~4–6 cells pre-PQC. The burst pattern is more distinctive.
-- On I2P, tunnel messages are 1 KB; the same transaction requires ~7–8
-  fragments vs ~2–3.
 - Fragmented Levin messages (white noise feature) help pad smaller payloads
   but cannot conceal large-burst events unless dummy traffic volume is
   proportionally increased.
@@ -46,14 +45,14 @@ Practical consequences for anonymity relay:
 |---|---|---|---|
 | Timestamp correlation (timed sync) | Medium | System clock accuracy; future random offset | Fingerprintable if clock is skewed |
 | ISP link timing (intermittent sync) | Medium | Keep `shekyld` running continuously | Users who sync-send-quit are linkable |
-| Active bandwidth shaping | High | I2P preferred (non-circuit) | Tor circuits remain vulnerable |
+| Active bandwidth shaping | High | No second anonymity network is integrated | Tor circuits remain vulnerable |
 | Stream reuse (2+ tx same circuit) | Medium | Outgoing-only selection, 5-min rotation, 20-min change lock time | Small fixed outgoing pool → non-trivial reuse probability |
 | v3 tx size burst (new) | Medium | Fragmentation + dummy messages | Burst pattern still larger than pre-PQC; requires tuning dummy volume |
 | Levin 8-byte signature (DPI) | Low | SSL/BIP-151/Noise proposals | Not yet implemented; clearnet traffic is identifiable |
 
 ### Recommended Pre-Mainnet Testing
 
-1. Replay a representative testnet transaction mix over Tor and I2P, measuring
+1. Replay a representative testnet transaction mix over Tor, measuring
    circuit-level timing and cell/fragment counts before and after v3.
 2. Measure the ratio of real-to-dummy Levin messages required to make v3
    bursts statistically indistinguishable from pre-PQC traffic.
@@ -104,14 +103,12 @@ Connecting to an anonymous address requires the command line option
 separate process. On most systems the configuration will look like:
 
 ```
---tx-proxy tor,127.0.0.1:9050,10
---tx-proxy i2p,127.0.0.1:9000
+--tx-proxy tor,127.0.0.1:9050
 ```
 
 which tells `shekyld` that ".onion" p2p addresses can be forwarded to a socks
-proxy at IP 127.0.0.1 port 9050 with a max of 10 outgoing connections and
-".b32.i2p" p2p addresses can be forwarded to a socks proxy at IP 127.0.0.1 port
-9000 with the default max outgoing connections.
+proxy at IP 127.0.0.1 port 9050 with the default max outgoing connections.
+An explicit count below 12 is refused at start.
 
 If desired, peers can be manually specified:
 
@@ -120,8 +117,8 @@ If desired, peers can be manually specified:
 --add-peer rveahdfho7wo4b2m.onion:28083
 ```
 
-Either option can be listed multiple times, and can specify any mix of Tor,
-I2P, and IPv4 addresses. Using `--add-exclusive-node` will prevent the usage of
+Either option can be listed multiple times, and can specify any mix of Tor
+and IPv4 addresses. Using `--add-exclusive-node` will prevent the usage of
 seed nodes on ALL networks, which will typically be undesirable.
 
 ### Inbound Connections
@@ -132,14 +129,11 @@ type, and max connections:
 
 ```
 --anonymous-inbound rveahdfho7wo4b2m.onion:28083,127.0.0.1:28083,25
---anonymous-inbound cmeua5767mz2q5jsaelk2rxhf67agrwuetaso5dzbenyzwlbkg2q.b32.i2p,127.0.0.1:30000
 ```
 
 which tells `shekyld` that a max of 25 inbound Tor connections are being
 received at address "rveahdfho7wo4b2m.onion:28083" and forwarded to `shekyld`
-localhost port 28083, and a default max I2P connections are being received at
-address "cmeua5767mz2q5jsaelk2rxhf67agrwuetaso5dzbenyzwlbkg2q.b32.i2p" and
-forwarded to `shekyld` localhost port 30000.
+localhost port 28083.
 These addresses will be shared with outgoing peers, over the same network type,
 otherwise the peer will not be notified of the peer address by the proxy.
 
@@ -147,7 +141,7 @@ otherwise the peer will not be notified of the peer address by the proxy.
 
 An anonymity network can be configured to forward incoming connections to a
 `shekyld` RPC port - which is independent from the configuration for incoming
-P2P anonymity connections. The anonymity network (Tor/i2p) is
+P2P anonymity connections. Tor is
 [configured in the same manner](#configuration), except the localhost port
 must be the RPC port (typically 18081 for mainnet) instead of the p2p port:
 
@@ -156,16 +150,13 @@ HiddenServiceDir /var/lib/tor/data/shekyl
 HiddenServicePort 18081 127.0.0.1:18081
 ```
 
-Then the wallet will be configured to use a Tor/i2p address:
+Then the wallet will be configured to use a Tor address:
 ```
 --proxy 127.0.0.1:9050
 --daemon-address rveahdfho7wo4b2m.onion
 ```
 
-The proxy must match the address type - a Tor proxy will not work properly with
-i2p addresses, etc.
-
-i2p and onion addresses provide the information necessary to authenticate and
+An onion address provides the information necessary to authenticate and
 encrypt the connection from end-to-end. If desired, SSL can also be applied to
 the connection with `--daemon-address https://rveahdfho7wo4b2m.onion` which
 requires a server certificate that is signed by a "root" certificate on the
@@ -178,15 +169,15 @@ encryption.
 
 ### Network Types
 
-#### Tor & I2P
+#### Tor
 
-Options `--add-exclusive-node` and `--add-peer` recognize ".onion" and
-".b32.i2p" addresses, and will properly forward those addresses to the proxy
-provided with `--tx-proxy tor,...` or `--tx-proxy i2p,...`.
+Options `--add-exclusive-node` and `--add-peer` recognize ".onion" addresses,
+and forward those addresses to the proxy provided with `--tx-proxy tor,...`.
+`--tx-proxy i2p` is not a network this daemon accepts.
 
-Option `--anonymous-inbound` also recognizes ".onion" and ".b32.i2p" addresses,
-and will automatically be sent out to outgoing Tor/I2P connections so the peer
-can distribute the address to its other peers.
+Option `--anonymous-inbound` recognizes ".onion" addresses, and sends them
+to outgoing Tor connections so the peer can distribute the address to its
+other peers. A `.b32.i2p` address is not an inbound address.
 
 ##### Configuration
 
@@ -202,9 +193,6 @@ This will store key information in `/var/lib/tor/data/shekyl` and will forward
 "Tor port" 28083 to port 28083 of ip 127.0.0.1. The file
 `/var/lib/tor/data/shekyl/hostname` will contain the ".onion" address for use
 with `--anonymous-inbound`.
-
-I2P must be configured with a standard server tunnel. Configuration differs by
-I2P implementation.
 
 ## Privacy Limitations
 
@@ -247,21 +235,19 @@ simply a best effort attempt.
 ### Active Bandwidth Shaping
 
 An attacker could attempt to bandwidth shape traffic in an attempt to determine
-the source of a Tor/I2P connection. There isn't great mitigation against
-this, but I2P should provide better protection against this attack since
-the connections are not circuit based.
+the source of a Tor connection. There isn't a second anonymity network to
+move the traffic onto: I2P is not integrated.
 
 #### Mitigation
 
-The best mitigation is to use I2P instead of Tor. However, I2P
-has a smaller set of users (less cover traffic) and academic reviews, so there
-is a trade off in potential issues. Also, anyone attempting this strategy really
-wants to uncover a user, it seems unlikely that this would be performed against
-every Tor/I2P user.
+Tor is the network this daemon dials. Anyone attempting this strategy really
+wants to uncover a user, and it seems unlikely that this would be performed
+against every Tor user. A later anonymity network is a separate decision; it
+is not a flag on this daemon.
 
-### I2P/Tor Stream Used Twice
+### Tor stream used twice
 
-If a single I2P/Tor stream is used 2+ times for transmitting a transaction, the
+If a single Tor stream is used 2+ times for transmitting a transaction, the
 operator of the hidden service can conclude that both transactions came from the
 same source. If the subsequent transactions spend a change output from the
 earlier transactions, this will also reveal the "real" spend in the ring
@@ -270,7 +256,7 @@ signature. This issue was (primarily) raised by @secparam on Twitter.
 #### Mitigation
 
 `shekyld` currently selects two outgoing connections every 5 minutes for
-transmitting transactions over I2P/Tor. Using outgoing connections prevents an
+transmitting transactions over Tor. Using outgoing connections prevents an
 adversary from making many incoming connections to obtain information (this
 technique was taken from Dandelion). Outgoing connections also do not have a
 persistent public key identity - the creation of a new circuit will generate
@@ -289,7 +275,7 @@ more difficult for the hidden service to link information. This process will
 have to be done carefully because closing/reconnecting connections can also
 leak information to hidden services if done improperly.
 
-At the current time, if users need to frequently make transactions, I2P/Tor
+At the current time, if users need to frequently make transactions, Tor
 will improve privacy from ISPs and other common adversaries, but still have
 some metadata leakages to unknown hidden service operators.
 

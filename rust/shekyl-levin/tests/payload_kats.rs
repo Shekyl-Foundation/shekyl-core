@@ -197,14 +197,6 @@ fn network_address_ipv6_round_trip() {
 }
 
 #[test]
-fn network_address_i2p_round_trip() {
-    round_trip(&NetworkAddress::I2p {
-        host: "abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqr.b32.i2p".to_string(),
-        port: 0,
-    });
-}
-
-#[test]
 fn network_address_tor_round_trip() {
     round_trip(&NetworkAddress::Tor {
         host: "abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqr.onion".to_string(),

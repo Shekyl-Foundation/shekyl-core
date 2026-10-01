@@ -2,6 +2,183 @@
 
 ## [Unreleased]
 
+### Wallet contract — one owner for the error codes
+
+- The wallet contract's error vocabulary moves out of the RPC server into
+  `shekyl-wallet-contract`: the code table, `WalletRpcError`, and the mapping
+  from every engine error onto the code and message that name its remedy.
+  `shekyl-wallet-rpc` re-exports it unchanged, and the GUI wallet, which embeds
+  the engine rather than calling the RPC, uses the same mapping instead of a
+  partial copy that folded every unnamed cause into `INTERNAL_ERROR`. One
+  owner, so the two surfaces cannot answer the same failure differently.
+- The contract's `TransferState` and the one journal → wire projection move
+  with it, because a refused `abandon_tx` carries that state.
+- Each code carries the contract's name (`WalletRpcErrorCode::name`, e.g.
+  `"INSUFFICIENT_FUNDS"`, `"MSG_SIG_VERIFY_FAILED"`), declared beside its
+  number. The contract test now holds the (code, name) pairs to the
+  `wallet_rpc.yaml` enum in both directions. The five JSON-RPC protocol codes
+  gain their names (`PARSE_ERROR` … `INTERNAL_ERROR`) in the contract's
+  comments.
+### `CT-6` C7 — a reorg past finality refuses, and says why
+
+- **`W` has one home, and the hash window is that depth plus the kept block.**
+  `FINALITY_DEPTH_BLOCKS` is
+  `SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`.
+  `REORG_HASH_WINDOW_BLOCKS` is that depth plus the one block a rewind of
+  exactly `W` keeps, so the walk can still match a hash at the bottom of the
+  window. Spendable age is a positive span, so the snapshot ring's horizon
+  sits strictly inside `W`: the band between them is repaired by folding.
+- **The walk is the policy.** The producer keeps going until a stored hash
+  matches or the walk passes `W`. A match at `tip − W` is the deepest rewind
+  that still folds. Running out of stored hashes on a chain taller than `W`
+  is not a confirmed fork: the depth reported is how far the record reached.
+  A chain still inside `W` may rewind to the end of the record, or to genesis.
+- **Ingest uses the same comparison against the tree tip.** The tree and the
+  ledger are different subjects: the tree is acknowledged before the ledger
+  commits, a rescan clears the ledger and not the tree, and birthday backfill
+  climbs the tree below the scan floor. A rollback that would pass `W` from
+  the tree's tip is refused. The store primitive still truncates arbitrarily
+  deep — F9 requires it, and the replica generator forks that deep on purpose.
+- **Rule 82: one wire code, and the remedy reaches the caller.**
+  `ResyncRequired` is **`-29211`** (contract 0.10.0). `-29204` is
+  `REFRESH_CANCELLED`. `data` carries `depth`, `finality_depth`, `breach`
+  (`measured` or `record_ended`), and `history_cleared`. `record_ended`
+  reports how far the hash record reached, which can be shorter than `W`,
+  so that text does not call the span a rollback outside the window. The
+  remedy is both stores, file first: close the wallet, delete `.curvetree`,
+  open it, and run `rescan_blockchain`. The walk reads the ledger before
+  ingest, so deleting the file alone leaves the next refresh on the same
+  hashes; a rescan that finds the old file still holding another chain's
+  root refuses again instead of treating that tree as caught up. During a
+  rescan the same code is returned with `history_cleared`, because the
+  reset already emptied history and left the file in place. The engine's
+  own text states the span; it does not repeat the file instruction.
+
+
+### Wallet RPC — every failure a user can act on has its own code
+
+- A wallet created in a directory that does not exist was reported as
+  `-29003 WALLET_FILE_NOT_FOUND`. The RPC read the cause back out of an error
+  message: `IoError::WalletFile` carried only a string, and the classifier
+  searched it for "not found". `IoError::WalletFile` now carries
+  `WalletFileError` itself, `WalletFile::create` names a missing directory
+  before writing anything (`DirectoryMissing`), and the classifier is gone.
+  The same create now answers `-29009 WALLET_DIR_MISSING`.
+- 31 codes are allocated in `docs/api/wallet_rpc.yaml`, each for a cause that
+  previously reached `-32603` or a neighbouring code's text:
+  - wallet storage `-29007..-29016` (network mismatch, locked by another
+    process, missing directory, access denied, corrupt, unsupported version,
+    I/O failure, close blocked by in-flight transactions, curve-tree data
+    unavailable, and a curve-tree store that cannot be used — delete and
+    reopen, never "restore from seed": the store holds no keys or balance);
+  - build and submit `-29110..-29119` (not synced, membership rebuild,
+    output too fresh, chain too short, loop-breaker tripped, submit already
+    pending, re-anchor unavailable, reselection required, unreadable fee
+    answer, signer failed);
+  - `-29204 REFRESH_CANCELLED`;
+  - the daemon `-29205..-29210` (another RPC version, other consensus rules,
+    another network, another chain, a reply that broke the contract, and a
+    chain that kept reorganizing);
+  - a staker's open-time refusals `-29530..-29533`.
+- A daemon that answered and was refused (a wallet pointed at a daemon on
+  another network, version or chain) was reported as `-29201
+  DAEMON_UNREACHABLE`. The identity handshake flattened its typed verdict into
+  `RpcError::InvalidNode(String)`, and `IoError::Daemon` carried only a string.
+  `RpcError::IdentityMismatch` now carries the verdict, `RpcError::fault`
+  classifies every daemon failure by remedy (`DaemonFault`: no answer,
+  identity, protocol violation, unusable fee reply, this side's own fault),
+  and `IoError::Daemon` and `FeeEstimatorError::Daemon` carry that class. The
+  fee path's match on message prefixes is gone. Each identity axis has its own
+  code, with both sides named in `data`.
+- Refresh confirms the daemon's identity before the producer runs
+  (`scan_floor::prepare_refresh`), so the producer's error stays unit-variant
+  (`STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.7 R6). The producer's `Io` is split
+  into `DaemonUnreachable` and `DaemonProtocol`, and an identity refusal is
+  not retried. A malformed block served by the daemon is a protocol fault
+  (`-29209`), not an outage, and a reorg storm is `RefreshError::ReorgStorm`
+  (`-29210`); both used to answer `-29201`.
+- `IdentityMismatch` no longer carries the daemon's unparsed reply text: it is
+  logged where the reply is parsed, and the mismatch is a fixed-size `Copy`
+  value. The drain, unstake, collect and first-stake paths carry a failed fee
+  query as the typed `FeeEstimatorError`, so each cause answers the send
+  path's code rather than `-29102` for all of them.
+- Every wallet-file failure the text classifier did not recognise (a damaged
+  file, a lock held by another process, a failed atomic write) answered
+  `-32603` with the upstream error's own text as the message. That text names
+  local paths ("lock held on {path}", "rename into {target}"), so paths reached
+  the wire. Each now has its code, and a category-only message. The envelope's
+  "invalid password or corrupted" stays `-29004`: the envelope cannot tell the
+  two apart. A build's daemon failure answers `-29201` rather than
+  `-29102 FEE_ESTIMATION_FAILED`.
+- The curve-tree store classifies its own open failures
+  (`ClientError::open_fault`: locked elsewhere, corrupt, unsupported, I/O,
+  internal); the wallet carries the class, not a string. A ring snapshot that
+  will not decode or disagrees with the drain index at open is corruption.
+  A refresh's curve-tree ingest failure is typed (`CurveTreeIngestFault`,
+  whose `recoverable_by_respawn` replaces a separate flag beside a string), so
+  "close and reopen" is answered only where a reopen can help: a root the
+  header does not commit to or an undecodable backfill block is `-29209`, a
+  contract fault is `-32603`.
+- Creating a wallet under a path whose directory cannot be read keeps its own
+  cause (`-29010` for permissions); only absence is `-29009`.
+- `SendError::CannotSign` was split by meaning: `NotSynced`,
+  `SignerUnavailable` (answered as `-29006`), `SignerFailed`, and
+  `BuildInvariant` for preconditions only a bug breaks. The engine's
+  diagnostics no longer compare a reason string to recognise "not synced", and
+  no longer label proof-construction failures as an invalid recipient.
+- `-32603` is left to bugs and invariant failures. The `#[non_exhaustive]`
+  engine enums keep the wildcard arm Rust requires, with every current variant
+  named ahead of it.
+- A test holds `WalletRpcErrorCode` and the contract's enum to one set, in
+  both directions. The Rust table is declared once, and `ALL` is generated
+  from it. `IoError::Ledger`, which nothing constructed, is deleted.
+
+### P2P zones listen through the seam
+
+- Each zone's server is the seam: clearnet and Tor bind there, and a
+  bind failure fails that zone's start. The Levin connection registry
+  is unchanged. `--clearnet-transport-encrypt` stays, off by default,
+  as the clearnet connector's channel option. The pipe that used to
+  implement it is gone, and so is epee's TCP server. The I2P address
+  type is deleted with that server; Tor's address and zone
+  discriminants stay. The harness
+  checks the seam against the option-off parity goldens. The flip
+  deletes the option and re-records those goldens.
+- `--limit-rate-up`, `--limit-rate-down`, and `--limit-rate` reach one
+  token bucket per direction for the whole node. The default is
+  unlimited (`-1`). `0` is refused at startup. A set rate counts wire
+  bytes, including Noise overhead when the clearnet option is on. An
+  empty bucket pauses the writer and the reader. It does not close the
+  connection. `set_limit` and `get_limit` use the same budget. A
+  connection's current speed is the last ten seconds, in ten
+  one-second buckets, newest weighted most. The divisor is the
+  time the connection has actually occupied, so a new connection
+  and the current second are not charged for time they did not
+  use. A quiet connection reads zero once that window has passed.
+  The lifetime average stays the separate average.
+- Socket admission reads the transport's inbound count. `setbans` and
+  misbehaviour scoring write the Rust ban list as a duration on the
+  monotonic clock, and `getbans` returns the seconds left on that
+  deadline. A duration that does not fit is refused by `setbans`.
+  `--ban-list` entries are permanent, and `getbans` reports them
+  that way. A managed Tor address is advertised only after publication
+  succeeds. An `--anonymous-inbound` onion is advertised from the
+  operator's configuration. `get_info` reports per-connector socket
+  counts beside the session counts. A seam close logs its cause.
+  The clearnet cross-build record is
+  `docs/benchmarks/p2p_cutover_crossbuild_20260929.md`: sync, block
+  relay, and both dial directions passed against the pre-cutover
+  peer; transaction stem and fluff did not cross. The same record's
+  epee-to-epee control crossed the stem with the relay filter empty;
+  fluff found nobody. An accepted block raises that peer's recorded
+  chain length and never lowers it. Relay eligibility is the session's
+  normal state. An explicit `--in-peers` is enforced at accept, and a
+  cap above the descriptor ceiling is refused at startup.
+- **API.** `CORE_RPC_VERSION` 3.37 → 3.38. `get_info` gains
+  `public_incoming_socket_count`, `public_outgoing_socket_count`,
+  `tor_incoming_socket_count`, and `tor_outgoing_socket_count`. `get_bans`
+  and `banned` gain `permanent`. `get_version` gains nothing.
+
 ### Crypto — vendored FCMP++ subtree resynced to `2485a176`
 
 - Helios/Selene `from_bytes` still accepts the canonical identity (`x == 0`
@@ -20,6 +197,70 @@
   `fcmps` logic change, so it is unchanged. Q6 re-vetted: an honest on-curve
   proof's content, length, and framing are unchanged
   (`GENESIS_TX_WIRE_FORMAT.md` Q6).
+
+### Chain store — the archival writer: `connect` records the verdict's archival transition (DRS-E4 commit 5)
+
+- Every archival phase of the redb `connect` now has a body
+  (`shekyl-chain-store::store::archival_write`): the bond records and
+  serve credits the verdict's `ArchivalDelta` carries, written once after
+  the transaction loop from each persona's final post-image; the
+  attestation witness at the block's height (`Candidate.attestation_witness`,
+  carried unjudged under CEN-B4's coverage gap until B4 lands); the slash
+  burn folded into `total_burned` through phase 8's one fold; the budget
+  accrual row upserted every block and removed at the epoch close; the slash
+  log, the applied set and the watermark; the close's `r_market`,
+  `sigma_work` and `budget` rows, insert-once per epoch. The store computes
+  no archival value: a delta that does not fit the tables halts the connect
+  as a store invariant (SI-19…23 minted — insert-once records, an
+  update that replaces a present persona, whole-or-none close, dense
+  slash log with a per-key applied collision, one accruing row).
+  **UPDATE 2026-10-01:** SI-20 is that absent-update refusal
+  (`ReplaceTable`, `BondRecordAbsent`), not a re-sum of `bonded_total`.
+  The accrual ends are read through the upsert handle. A repeated
+  applied slash names `archival_slash_applied`. A family the apply
+  policy stubs is skipped and widens the file's provenance, never
+  refused. The `emission-claim` capture replays in
+  full (the interim L7 refusal pinned at height 1025 is gone). `pop` lifts
+  every row through `undo_log`; a pop across a close restores the budget
+  row's absence and the accruing row the close removed.
+- Regtest: `ChainStore::regtest_inject_serve_credit`, the writer's own door
+  for the C++ `regtest_inject_archival_serve_credit` — Fakechain only,
+  unjournaled, and refused for a persona with no bond record.
+- Contract: the chain store's `SCHEMA_VERSION` 19 → 20 — the undo journal
+  gains a keyed-delete entry (`Removed`, tag 4), which a 19 reader cannot
+  decode. Pre-genesis, rebuild-never-migrate.
+  (`DRS_E4_ARCHIVAL_WRITER.md` §3.2, §6 row 5.)
+
+### Consensus — the archival slash grace is one settlement epoch by construction (DRS-E4 commit 5, ruling)
+
+- The slash deadline for epoch `E` is `last_block(E) + SLASH_GRACE_EPOCHS ·
+  SEB` with `SLASH_GRACE_EPOCHS = 1` (`shekyl-archival-retention`,
+  `SettlementSchedule::slash_grace_blocks`), replacing the independent
+  constant `CHALLENGE_RESOLUTION_BLOCKS = 10_000`. **Behaviour-neutral on
+  the production schedule** (`SEB = 10_000`: the same height). The change is
+  to what a levered schedule does: a Fakechain `SEB` now scales the grace
+  with it — before, a regtest chain at `SEB 100` kept a 10 000-block grace,
+  a hundred epochs, nine times the eleven epochs of settled misses the
+  `11`-of-`13` slash predicate needs, and the release/slash ordering pin
+  `RELEASE_COOLDOWN_EPOCHS > SLASH_GRACE_EPOCHS` inverted under it. The
+  reorg journal horizon is `(SLASH_GRACE_EPOCHS + FAILURE_WINDOW_N) · SEB +
+  cap` (`shekyl-chain-rules::journal_horizon_under`), the same value on the
+  production pin.
+- W₂ (`CHALLENGE_RESPONSE_BLOCKS`, one twentieth of an epoch) is computed on
+  the schedule (`SettlementSchedule::challenge_response_blocks`; the
+  constant is that method on the genesis pin, 500). **UPDATE 2026-10-01:**
+  the method returns `Option<NonZeroU64>`. An epoch shorter than
+  `W2_EPOCH_DIVISOR` has no window (`None`); `grace ≥ 0` is not the
+  coupling. Where a window exists, the slash grace covers it. The
+  production comparison is `SLASH_GRACE_EPOCHS · SETTLEMENT_EPOCH_BLOCKS ≥
+  CHALLENGE_RESPONSE_BLOCKS`. W₂'s ruled band is unchanged.
+- Contract: `config/consensus_constants.json` loses
+  `challenge_resolution_blocks` (no generator read it); the
+  `shekyl-rpc-types` build's pinned digest of the file moves accordingly. FFI:
+  `shekyl_archival_challenge_resolution_blocks` (no C++ caller) is deleted;
+  `shekyl_archival_epoch_slash_deadline_height` is the deadline's only
+  export. (`ARCHIVAL_TIMING_CONSTANTS.md` §2.2; `DRS_E4_ARCHIVAL_WRITER.md`
+  §10, 2026-09-30.)
 
 ### Consensus — the Rust validator's CEN-F17 operand `n` is the closed archival-shard count (DRS-E4 commit 4)
 

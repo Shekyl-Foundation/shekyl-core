@@ -15,6 +15,7 @@ use shekyl_capped_stream::Session;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
 use shekyl_transport_layer::{CloseCause, OpenSocket, SocketId};
+use tokio::sync::oneshot;
 
 use crate::endpoint::Endpoint;
 
@@ -26,6 +27,9 @@ pub struct Channel {
     pub session: Session,
     /// What `established` posts.
     pub endpoint: Endpoint,
+    /// Fires when the Levin handshake completes. `None` when this channel
+    /// has no gap deadline. Dropping it ends the connector's wait.
+    pub gap: Option<oneshot::Sender<()>>,
 }
 
 /// Opens a channel. The hub adopts the result and posts `established`.

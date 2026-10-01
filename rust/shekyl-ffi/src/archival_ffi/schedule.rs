@@ -11,8 +11,8 @@
 use shekyl_archival_retention::{
     challenge_fire_height, challenge_leaf_chunk_bounds, challenge_seal_height,
     challenge_seal_on_chain, empty_attestation_root, epoch_close_height, frozen_segment_count,
-    p_canonical_id_from_hybrid_pubkey, ATTESTATION_HEADER_LEN, CHALLENGE_RESOLUTION_BLOCKS,
-    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES,
+    p_canonical_id_from_hybrid_pubkey, ATTESTATION_HEADER_LEN, MAX_ATTESTATION_RECORDS,
+    MAX_ATTESTATION_WITNESS_BYTES,
 };
 pub use shekyl_archival_retention::{
     settlement_epoch_last_block, settlement_epoch_open_height,
@@ -138,13 +138,12 @@ pub extern "C" fn shekyl_archival_epoch_close_processing_height(settlement_epoch
     epoch_close_height(settlement_epoch).unwrap_or(0)
 }
 
-/// Slash grace after `H_close` (`CHALLENGE_RESOLUTION_BLOCKS`).
-#[no_mangle]
-pub extern "C" fn shekyl_archival_challenge_resolution_blocks() -> u64 {
-    CHALLENGE_RESOLUTION_BLOCKS
-}
-
-/// Last block before slash may fire for settlement epoch `E` (`H_slash_deadline`).
+/// Last block before slash may fire for settlement epoch `E`
+/// (`H_slash_deadline = last_block(E + SLASH_GRACE_EPOCHS)`, one epoch of
+/// grace under the process-latched schedule). The grace itself has no C
+/// entry: it was `shekyl_archival_challenge_resolution_blocks`, a block
+/// count no C++ site ever called, deleted with the constant (DRS-E4
+/// commit 5); C++ reads the deadline, never the operand.
 #[no_mangle]
 pub extern "C" fn shekyl_archival_epoch_slash_deadline_height(settlement_epoch: u64) -> u64 {
     settlement_epoch_slash_deadline_height(settlement_epoch)

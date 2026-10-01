@@ -58,15 +58,17 @@
 namespace nodetool
 {
   // Corruption ceiling for each list in the persisted peerlist store. A
-  // legitimate store holds at most one list per network zone (public_ /
-  // i2p / tor), each trimmed to its cap — the largest is
-  // P2P_LOCAL_GRAY_PEERLIST_LIMIT. The 4x headroom over cap * zones
-  // keeps this a corruption detector, never an operational
-  // limit: the length prefix is untrusted disk input, and past this
-  // ceiling loading it would mean a reserve() of disk-chosen magnitude at
-  // startup instead of the designed drop-and-rebootstrap.
+  // legitimate store holds at most one list per network (clearnet and
+  // Tor), each trimmed to its cap — the largest is
+  // P2P_LOCAL_GRAY_PEERLIST_LIMIT. Headroom over cap × networks keeps
+  // this a corruption detector, never an operational limit: the length
+  // prefix is untrusted disk input, and past this ceiling loading it
+  // would mean a reserve() of disk-chosen magnitude at startup instead
+  // of the designed drop-and-rebootstrap.
+  constexpr std::uint64_t PEERLIST_STORE_NETWORKS = 2;
+  constexpr std::uint64_t PEERLIST_STORE_HEADROOM = 4;
   constexpr std::uint64_t PEERLIST_STORE_LIST_CEILING =
-    P2P_LOCAL_GRAY_PEERLIST_LIMIT * 3 * 4;
+    P2P_LOCAL_GRAY_PEERLIST_LIMIT * PEERLIST_STORE_NETWORKS * PEERLIST_STORE_HEADROOM;
 
   // The persisted peerlist carries CANDIDATES and nothing else. There is no
   // `white` member on purpose: white membership means "this process dialled it

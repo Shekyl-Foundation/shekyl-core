@@ -1,0 +1,29 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-wallet-contract"
+description = "The wallet contract's vocabulary (docs/api/wallet_rpc.yaml): its error codes and the engine-error mapping onto them, shared by the wallet RPC server and embedders"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = "0.1"
+shekyl-engine-core = { path = "../shekyl-engine-core" }
+shekyl-engine-file = { path = "../shekyl-engine-file" }
+shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
+shekyl-engine-state = { path = "../shekyl-engine-state" }
+shekyl-rpc-client = { path = "../shekyl-rpc-client" }
+
+[dev-dependencies]
+shekyl-types = { path = "../shekyl-types" }
+
+[lints]
+workspace = true

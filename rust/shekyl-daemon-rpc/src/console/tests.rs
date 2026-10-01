@@ -1036,7 +1036,7 @@ fn a_peer_address_gains_a_port_only_when_it_has_one() {
 fn address_types_have_their_own_names() {
     assert_eq!(address_type_name(1), "IPv4");
     assert_eq!(address_type_name(2), "IPv6");
-    assert_eq!(address_type_name(3), "I2P");
+    assert_eq!(address_type_name(3), "invalid");
     assert_eq!(address_type_name(4), "Tor");
     assert_eq!(address_type_name(0), "invalid");
     assert_eq!(address_type_name(200), "invalid");
