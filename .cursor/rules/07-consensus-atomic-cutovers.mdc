@@ -288,11 +288,12 @@ invocations:
   simultaneously valid. Criterion 3: six `git grep` queries against the base
   commit pasted into the PR description, checked against the list of tests
   the mixer term alone turned red. Criterion 4: the PR description carries
-  the reviewer map — consensus-affecting: `rust/shekyl-wire/src/transaction/
-  txid.rs` and `transaction.rs`, `cryptonote_format_utils.cpp`, the FFI
-  entry (`rust/shekyl-ffi/src/txid_ffi.rs`, `shekyl_ffi.h`), the chain
-  store's skeleton rebuild (`tx_reads.rs`, `leaf_reads.rs`) and the two
-  version pins; trust-boundary: the `get_transactions` entry and its three
+  the reviewer map — consensus-affecting: the mixer
+  (`rust/shekyl-wire/src/transaction/txid.rs`, with `transaction.rs`),
+  `cryptonote_format_utils.cpp`, the FFI entry
+  (`rust/shekyl-ffi/src/txid_ffi.rs`, `shekyl_ffi.h`), the chain store's
+  skeleton rebuild (`tx_reads.rs`, `leaf_reads.rs`) and the two version
+  pins; trust-boundary: the `get_transactions` entry and its three
   consumers; the rest mechanical, regenerated data, deletions and docs.
   Rollback: revert the merge commit, with the manual fallback named per file;
   a reverted build refuses both stores at open (pre-genesis, free).
