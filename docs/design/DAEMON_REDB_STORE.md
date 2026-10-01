@@ -999,12 +999,17 @@ stand in the crate. Code wins where this list and the code disagree.
   'id>>, RuleSetId)` — the verdict alone, since E6 slice 7 wave B
   (2026-09-29) deleted the pass-through `ConnectFacts` with its last
   member — writes the 17-table set in the C++
-  funnel's phase order with E4 as empty hook phases — E3's phase 3 has its
+  funnel's phase order — E3's phase 3 has its
   body since 2026-09-26 (`store/grow.rs`: the verdict's drain into
   `curve_tree_leaves`, the position maps, `curve_tree_layers`,
   `curve_tree_meta`, and `curve_tree_leaf_counts[h + 1]` every connect;
-  `curve_tree_roots[h + 1]` is the verdict's `root_after`, `DRS_E3_CURVE_WRITER.md`)
-  — refuses a verdict
+  `curve_tree_roots[h + 1]` is the verdict's `root_after`, `DRS_E3_CURVE_WRITER.md`),
+  and E4's phases have theirs since 2026-09-30 (`store/archival_write.rs`:
+  the verdict's `ArchivalDelta` written as bond records and serve credits
+  after the transaction loop, the attestation witness, the slash burn
+  through phase 8's one fold, and the accrual / slashes / epoch close in
+  phase 9; `DRS_E4_ARCHIVAL_WRITER.md` §3.2, §6 row 5 — *was* "E4 as empty
+  hook phases" until commit 5) — refuses a verdict
   minted under a rule set other than the one in force (`StoreCannot::
   RuleSetNotInForce`), and records nothing it did not receive — the
   consensus-visible values arrive as `Fact<T> { value, origin }` and their

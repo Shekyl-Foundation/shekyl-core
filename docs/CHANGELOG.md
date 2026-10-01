@@ -21,6 +21,34 @@
   proof's content, length, and framing are unchanged
   (`GENESIS_TX_WIRE_FORMAT.md` Q6).
 
+### Chain store — the archival writer: `connect` records the verdict's archival transition (DRS-E4 commit 5)
+
+- Every archival phase of the redb `connect` now has a body
+  (`shekyl-chain-store::store::archival_write`): the bond records and
+  serve credits the verdict's `ArchivalDelta` carries, written once after
+  the transaction loop from each persona's final post-image; the
+  attestation witness at the block's height (`Candidate.attestation_witness`,
+  carried unjudged under CEN-B4's coverage gap until B4 lands); the slash
+  burn folded into `total_burned` through phase 8's one fold; the budget
+  accrual row upserted every block and removed at the epoch close; the slash
+  log, the applied set and the watermark; the close's `r_market`,
+  `sigma_work` and `budget` rows, insert-once per epoch. The store computes
+  no archival value: a delta that does not fit the tables halts the connect
+  as a store invariant (SI-19…23 minted — insert-once records, Σ
+  `bonded_total` agreement, whole-or-none close, dense slash log, one
+  accruing row). A family the apply policy stubs is skipped and widens the
+  file's provenance, never refused. The `emission-claim` capture replays in
+  full (the interim L7 refusal pinned at height 1025 is gone). `pop` lifts
+  every row through `undo_log`; a pop across a close restores the budget
+  row's absence and the accruing row the close removed.
+- Regtest: `ChainStore::regtest_inject_serve_credit`, the writer's own door
+  for the C++ `regtest_inject_archival_serve_credit` — Fakechain only,
+  unjournaled, and refused for a persona with no bond record.
+- Contract: the chain store's `SCHEMA_VERSION` 19 → 20 — the undo journal
+  gains a keyed-delete entry (`Removed`, tag 4), which a 19 reader cannot
+  decode. Pre-genesis, rebuild-never-migrate.
+  (`DRS_E4_ARCHIVAL_WRITER.md` §3.2, §6 row 5.)
+
 ### Consensus — the Rust validator's CEN-F17 operand `n` is the closed archival-shard count (DRS-E4 commit 4)
 
 - The D2 staker-share escalation's operand `n` (`staker_pool_share_at`) in
