@@ -109,7 +109,7 @@ statement. **Held:** the txid mixer row, on the pruned-form blocker (FOLLOWUPS "
 | the FFI archival shims | `rust/shekyl-ffi/src/archival_ffi/*` (bond, emission, attestation, epoch_close, ct_balance, codes), `archival_admission_ffi.rs` | the C++ boundary for all of the above | consensus | **yes, wherever a shard id crosses** | — |
 | **new (`SHT-Q2`)** the archival-length row | `rust/shekyl-chain-store` schema, beside `txs_prunable_hash` / `txs_pqc_auth_hash` | each in-domain transaction's archival length (prunable + `pqc_auths` bytes, as `write_segments` emits them) | consensus | **new** — written at connect from the body; supplied by storage-pruned and skeleton forms like the prunable hash; a rule-42 schema bump | — |
 | **new (`SHT-Q2`)** the cumulative archival-length cell | `block_info`, beside `cumulative_tx_count` (`rust/shekyl-chain-store/src/codec/chain.rs`) | running total of archival length through each block, `checked_add` under SI-8 | consensus | **new** — the operand of every boundary above; `cumulative_tx_count` stays, because it feeds the fee ladder (CEN-F20) | — |
-| **new (`SHT-Q2`)** the txid mixer | Rust `Transaction::hash_from_components` and `hash_with_supplied_components` (`rust/shekyl-wire/src/transaction/txid.rs`) — **the one mixer**; C++ `calculate_transaction_hash` (`src/cryptonote_basic/cryptonote_format_utils.cpp`) **calls it over FFI**, its body replaced and its hashing deleted (row 3 = (b), RULED 2026-09-29 — the length term is never written in C++) | the transaction id | consensus | **new operand** — the archival length is folded in, so **every txid changes**; the coinbase's 3-part form is unchanged | — |
+| **new (`SHT-Q2`)** the txid mixer | Rust `mix` (`rust/shekyl-wire/src/transaction/txid.rs`) — **the one mixer**, reached from a parsed body (`Transaction::txid_parts`), from a pruned or skeleton body with its components supplied (`hash_with_supplied_prunable`, `hash_with_supplied_components`), and from a serialized body's byte ranges (`TxidSegments::txid`); C++ `calculate_transaction_hash` (`src/cryptonote_basic/cryptonote_format_utils.cpp`) **calls the last over FFI** (`shekyl_txid_from_segments`), its hashing deleted (row 3 = (b), RULED 2026-09-29 — the length term is never written in C++) | the transaction id | consensus | **new operand** — the archival length is folded in, so **every non-coinbase txid changes**; the coinbase's 3-part form is unchanged | — |
 
 **`SCC-2` — a correction to the brief's family-1 list.** It named
 archival-retention's `bond_duration`, `failure_window`, `serve_credit_decisions`,
@@ -290,6 +290,22 @@ premises corrected ([`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATI
   hands it the full prunable bytes, so the Rust server measures the length at serve
   time and the reply carries it; the wallet's block fetch and the console supply it to
   the mixer.
+
+**Built (the txid-length cutover).** Of the list above, the mixer, the regenerated pins
+and corpora, and every pruned or skeleton transport **that has a reader** are built —
+the store's skeleton rebuild, the daemon RPC reply, the wallet's block fetch and the
+console; the row, the cell, the boundary function and `W` were the Rust-half PR's
+(#910). **One transport is not grown, and is named:** the P2P block entry
+(`tx_blob_entry` / `TxBlobEntry`). Nothing reads a pruned entry on that wire — the C++
+arm that did was unreachable and is deleted — so a length field there would have no
+reader and no writer. The skeleton sync wire is `PDM-Q-F28`'s, unbuilt, and owes the
+`pqc_auths` digest and the length together (FOLLOWUPS, "Skeleton block payload"). The mixer's word
+encoding, its three arities, the shape of the FFI entry and the RPC field are the
+build's choices and are recorded for ratification in
+[`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md) §10.3 ("As
+built"). One consequence is the engine swap's: the Rust store, unlike LMDB, discards
+prunable halves, so when it backs the daemon RPC its transaction slot must carry the
+`txs_archival_len` row — the serve path cannot measure bytes it no longer holds.
 
 **`g(age)`'s segment-keyed no-segment branch is this cutover's (RULED 2026-10-01,
 `SHT-8`).** It is a row of this census, Rust-side, owned by the design-owner lane; it

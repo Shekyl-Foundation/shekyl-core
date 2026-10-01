@@ -1358,12 +1358,13 @@ cutover (rule 07).
 
 **Build status, 2026-09-29 (PR #910).** Items 2, 4 and 5 are done, and item 1's row and
 cell are built. Item 1's mixer term and item 3's pins and corpora are held on one
-blocker, how a pruned form supplies the length (FOLLOWUPS "Build `SHT-Q2`", where the
-four resolutions and the recommendation are recorded). *Until the term lands, the
-invariant — no boundary reads a value the skeleton cannot bind — holds because every
-stored length is one `connect` measured; `scripts/ci/check_archival_len_source.py`
-(2026-09-30) holds that mechanically (named origins, one writer) and fails asking to
-be deleted once `hash_from_components` takes the length.*
+blocker, how a pruned form supplies the length; §10.3 rules it and records the build.
+**The term has landed (§10.3, "As built"):** the invariant — no boundary reads a value
+the skeleton cannot bind — now holds because the length is an operand of the txid. In
+the interval it held because every stored length was one `connect` measured, which an
+interim gate (`check_archival_len_source.py`, 2026-09-30) checked mechanically; that
+gate was written to fail once the mixer took the length, and is deleted with the
+cutover.
 
 **Consequences recorded with the ruling:**
 
@@ -1622,6 +1623,50 @@ its conclusion, and both change what the build touches.
 gains the length; the wallet and the console supply it. The Rust store supplies it
 from `txs_archival_len`. The interim gate `check_archival_len_source.py` is deleted
 with its workflow step, as it was built to be.
+
+**As built (the txid-length cutover; the lane's choices, stated for ratification).**
+The ruling fixes *that* the length is bound and *who* measures it. These it left to
+the build:
+
+- **The word.** The length is one more 32-byte word after the prunable digest: a
+  `u64`, little-endian in the low 8 bytes, the other 24 zero. Fixed-width so the
+  preimage stays a sequence of words; little-endian because every other integer the
+  wire carries is.
+- **Three arities.** A coinbase mixes three words as before and takes no length — it
+  carries no archival good, and the genesis ids do not move. The serve-credit form
+  mixes four (prefix, base, prunable, length), a spend five (with the `pqc_auths`
+  digest). The word counts differ, so no body of one arity shares a preimage with a
+  body of another.
+- **The FFI entry takes byte ranges, not a transaction.**
+  `shekyl_txid_from_segments` receives the four regions of the blob C++ just
+  serialized, cut at the offsets its serializer recorded, with the authorization
+  count and whether the first input is a spend. Rust parses nothing, so the call
+  cannot fail on content: the daemon names a body before it validates it, and an
+  entry that could refuse a malformed body would leave it without the id the C++
+  mixer used to give it. Rust hashes the ranges and measures the last two.
+- **Of the four C++ sites the Rust-half PR listed as computing a txid part,** two are
+  resolved here — `calculate_transaction_hash` is the FFI call, and
+  `get_pruned_transaction_hash` is deleted. The other two,
+  `calculate_transaction_prunable_hash` and `get_transaction_prefix_hash`, no longer
+  feed a txid: nothing in C++ hands a digest to a mix. They remain as plain `keccak`
+  over a byte range for their other consumers (the `txs_prunable_hash` row and the
+  pool facts; the signing and proof contexts) and are **not** routed through FFI. A
+  region digest has no second definition to drift — which bytes it covers is the
+  serializer's fact either way, and the parity pins hold it. *Reopens if* a C++
+  region digest gains a term that is not the bytes' hash.
+- **The pruned RPC reply.** `get_transactions` entries gain a required
+  `archival_len` (`CORE_RPC_VERSION` 3.39). The Rust server measures it from the
+  pruned half and the prunable half LMDB hands it, and fails the reply rather than
+  guess when it cannot. LMDB never drops a prunable half in place (its tx-data prune
+  was removed, schema v15), so that refusal is unreachable on today's daemon.
+  `shekyl-chain-store` does drop them and keeps `txs_archival_len` for this: when it
+  backs the RPC, its transaction slot carries the row's length. That is the engine
+  swap's to build, named on FOLLOWUPS.
+- **What C++ still witnesses.** With one mixer, the C++ parity tests no longer derive
+  the mix a second time. They pin what decides which bytes reach it: the serializer's
+  bytes, the three offsets, the prunable digest, and that the bytes after
+  `pqc_auths_offset` number the pinned length. The mix itself is held on the Rust
+  side by a derivation spelled out beside the mixer.
 
 ### 10.4 `SHT-8`'s residues have owners
 

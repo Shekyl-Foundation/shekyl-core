@@ -852,25 +852,46 @@ over-cap block, must be rejected by both impls).
 
 ## 11. Hashing layer (consensus identities)
 
-- **Tx hash** = `cn_fast_hash` over concatenated component hashes (format_utils.cpp:1137/1163-1182):
-  - coinbase (`Null`, no pqc): **3-part** `H(prefix) · H(base) · null_hash`
-  - spend (`Fcmp`, pqc present): **4-part** `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`,
-    used iff `has_pqc && !pqc_auths.empty()` where `has_pqc = version≥3 && vin[0] != gen`
-    (a `gen`-first tx hashes 3-part like a coinbase).
+- **Tx hash** = `keccak256` over concatenated 32-byte words. **One mixer, in Rust**
+  (`shekyl-wire` `transaction/txid.rs`, `mix`); the C++ `calculate_transaction_hash`
+  serializes, cuts the blob at the offsets its serializer recorded, and calls it
+  (`shekyl_txid_from_segments`) — it hashes nothing and measures nothing (`SHT-Q2`,
+  [`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md) §F family 1).
+  Three arities, by what the body carries:
+  - coinbase (`Null`): **3 words** `H(prefix) · H(base) · null_hash`. A coinbase
+    carries no archival good, so no length;
+  - FCMP++ with no `pqc_auths` component (the serve-credit form, RF-D9):
+    **4 words** `H(prefix) · H(base) · H(prunable) · L`;
+  - FCMP++ spend: **5 words** `H(prefix) · H(base) · H(pqc_auths) · H(prunable) · L`,
+    used iff the first input exists and is not `gen` and `pqc_auths` is non-empty.
 
-  where `H(prefix)` = `get_transaction_prefix_hash` (version + prefix fields),
-  `H(base)` = hash of `serialize_ct_base`, `H(pqc_auths)` = hash of the serialized
-  pqc_auths vec, `H(prunable)` = hash of prunable (`null_hash` for coinbase).
-  ⚠️ The `H(pqc_auths)` preimage is **count-prefixed**: the hash serializes
-  `pqc_auths` with the **generic `std::vector` archiver** (format_utils.cpp:1169 →
-  `begin_array(cnt)` → leading `varint(N)`), so the preimage is `V(N) · auth₀ · … ·
+  `H(prefix)` = hash of the version varint and the prefix fields; `H(base)` = hash
+  of the ct type byte through the committed base; `H(prunable)` = hash of the
+  prunable region (`null_hash` when a body in hand does not hold it).
+  **`L` is the transaction's archival length** — the bytes of the tx-level
+  `pqc_auths` segment as the body carries it (no count prefix) plus the bytes of
+  the prunable region — as a `u64`, little-endian in the low 8 bytes of the word,
+  the other 24 zero. It is the operand the shard partition is cut by
+  ([`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md) §8.6): bound
+  here, it cannot be reported differently for a transaction that keeps its id. It
+  is **not** on the wire and **not** signed — it is measured from the body, or
+  supplied beside a pruned one and checked by this recomputation. The three
+  arities differ in word count, so no body of one arity shares a preimage with a
+  body of another. *Vocabulary:* "3-part" and "4-part", used across the code and
+  the design docs, count the **component digests** — 4-part ⇔ the body carries the
+  `pqc_auths` component — not the preimage's words; `L` is the word after them.
+  ⚠️ The `H(pqc_auths)` preimage is **count-prefixed**: `V(N) · auth₀ · … ·
   auth_{N-1}` — **unlike** the tx *body*, where the count is implicit (`vin.size()`,
-  no prefix; basic.h:505-516). The two C++ paths legitimately differ; the Rust
-  `hash()` must prepend `V(N)` for the hash component only.
-- **Pruning stable (pruned == full).** `pqc_auths` are **unprunable** (kept in the
-  pruned form, format_utils.cpp:1204) and `prunable_hash` is retained, so all
-  components match → identical tx hash. *(The EOF-tolerant pqc-auths-empty form is
-  a genuinely different tx with the 3-part hash — correct, not a collision.)*
+  no prefix). The mixer prepends `V(N)` for the hash component only; `L` counts the
+  body's bytes, without it.
+- **Pruning stable (pruned == full).** A pruned form supplies what it no longer
+  holds: `prunable_hash` for a storage-pruned spend (which keeps its `pqc_auths`),
+  `H(pqc_auths)` too for a skeleton, and `L` in both — from the store's
+  `txs_archival_len` row, or from the daemon RPC reply's `archival_len`
+  (`Transaction::hash_with_supplied_prunable` / `hash_with_supplied_components`).
+  Every supplied value is an operand of the id it is checked against, so a wrong
+  one yields another id, not another transaction under the same id. C++ has no
+  pruned txid function: a pruned body has no length there to measure.
 - **Block hash** = `cn_fast_hash( V(len) · hashing_blob )`, where
   `hashing_blob = BlockHeader · tx_tree_hash · V(tx_count+1)`. The `V(len)` prefix
   comes from `get_object_hash` serializing the blob as a string
