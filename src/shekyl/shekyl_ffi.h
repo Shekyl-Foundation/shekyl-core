@@ -3248,10 +3248,10 @@ uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 /// launched, so there is no completion to wait on, and the pool keeps
 /// `MIN_RELAY_TIME` there. See `local_relay_base` in `tx_pool.cpp`.
 ///
-/// `zone` is `epee::net_utils::zone` as a byte. Originated traffic carries
-/// `origin_zone == invalid` -- it did not arrive over anything -- and
-/// `invalid` resolves to the anonymity class, which is both correct here (a
-/// surviving `local` IS an anonymity origin) and the fail-safe direction.
+/// `zone` is `epee::net_utils::zone` as a byte. The pool does not store an
+/// arrival zone; a surviving `local` origin passes 0 (`invalid`), which
+/// resolves to the anonymity class. That is correct (a surviving `local` IS
+/// an anonymity origin) and the fail-safe direction.
 ///
 /// CONTRACT: never zero, and never below the pool's own `MIN_RELAY_TIME`
 /// (300 s) for any zone -- the value is a pure function of shipped constants,
@@ -3548,8 +3548,8 @@ void shekyl_inbound_ceiling_resolve(std::uint64_t reserved,
 //! Unknown bytes map to the SAFE arm (fail-closed / false), never toward
 //! clearnet -- refuse-to-leak is the family's invariant (§30.5).
 //!
-//! Decision bytes: 0 = keep_arrival, 1 = anonymity_fail_closed,
-//! 2 = public_clearnet.
+//! Decision bytes: 1 = anonymity_fail_closed, 2 = public_clearnet,
+//! 3 = broadcast_all. A forwarded stem does not read this decision.
 std::uint8_t shekyl_relay_zone_once_at_origin_route(std::uint8_t tx_relay, std::uint8_t origin_zone);
 
 //! §30.5/§89.8: an origin on a non-public zone keeps its `local` txpool
@@ -3563,9 +3563,6 @@ bool shekyl_relay_zone_originated_stays_in_zone(std::uint8_t tx_relay, std::uint
 
 //! Pre-fluff relay methods (stem / local). Unknown bytes: false.
 bool shekyl_relay_zone_is_pre_fluff_relay(std::uint8_t tx_relay);
-
-//! R-1 coherence: pre-fluff on a real anonymity origin. Unknown bytes: false.
-bool shekyl_relay_zone_r1_coherence_keeps_origin(std::uint8_t tx_relay, std::uint8_t origin_zone);
 
 
 //! Record `n` packed 32-byte CANONICAL tx hashes stemmed to `successor`

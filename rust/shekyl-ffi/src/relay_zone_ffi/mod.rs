@@ -1170,7 +1170,7 @@ pub extern "C" fn shekyl_p2p_default_out_peers() -> u32 {
 // ---------------------------------------------------------------------------
 
 /// Q12-D5a once-at-origin routing: `(relay_method byte, zone byte)` → decision
-/// byte (0 = keep_arrival, 1 = anonymity_fail_closed, 2 = public_clearnet).
+/// byte (1 = anonymity_fail_closed, 2 = public_clearnet, 3 = broadcast_all).
 ///
 /// Unknown method or zone bytes return `1` (fail-closed: send nothing).
 #[no_mangle]
@@ -1216,23 +1216,6 @@ pub extern "C" fn shekyl_relay_zone_originated_stays_in_zone(tx_relay: u8, nzone
 pub extern "C" fn shekyl_relay_zone_is_pre_fluff_relay(tx_relay: u8) -> bool {
     shekyl_relay::zone_route::RelayMethod::from_byte(tx_relay)
         .is_some_and(shekyl_relay::zone_route::is_pre_fluff_relay)
-}
-
-/// R-1 coherence: pre-fluff on a real anonymity origin. Unknown bytes return
-/// `false` (no coherence claim is invented for a zone that does not decode).
-#[no_mangle]
-pub extern "C" fn shekyl_relay_zone_r1_coherence_keeps_origin(
-    tx_relay: u8,
-    origin_zone: u8,
-) -> bool {
-    use shekyl_relay::zone_route::{r1_coherence_keeps_origin, NetZone, RelayMethod};
-    match (
-        RelayMethod::from_byte(tx_relay),
-        NetZone::from_byte(origin_zone),
-    ) {
-        (Some(m), Some(z)) => r1_coherence_keeps_origin(m, z),
-        _ => false,
-    }
 }
 
 #[no_mangle]

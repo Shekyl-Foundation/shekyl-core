@@ -1313,12 +1313,6 @@ fn zone_route_unknown_bytes_fail_toward_refusal_never_clearnet() {
         FAIL_CLOSED
     );
 
-    // No coherence claim is invented for a zone that does not decode; the
-    // fail-closed token above is what actually guards the send.
-    assert!(!shekyl_relay_zone_r1_coherence_keeps_origin(
-        STEM,
-        UNKNOWN_ZONE
-    ));
     assert!(!shekyl_relay_zone_is_pre_fluff_relay(UNKNOWN_METHOD));
 }
 

@@ -738,7 +738,7 @@ block Blockchain::pop_block_from_blockchain()
       // we also set the "nic_verified_hf_version" paramater. Since we know we took this transaction
       // from the mempool earlier in this function call, when the mempool has the same current fork
       // version, we can return it without re-verifying the consensus rules on it.
-      const bool r = m_tx_pool.add_tx(tx, tvc, relay_method::block, true, version, /*origin=*/epee::net_utils::zone::invalid, version);
+      const bool r = m_tx_pool.add_tx(tx, tvc, relay_method::block, true, version, version);
       if (!r)
       {
         LOG_ERROR("Error returning transaction to tx_pool");
@@ -2289,7 +2289,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
       tx_verification_context tvc{};
       if ((!m_tx_pool.have_tx(txid, relay_category::broadcasted) &&
           !m_db->tx_exists(txid) &&
-          !m_tx_pool.add_tx(tx, tvc, relay_method::block, /*relayed=*/true, hf_version, /*origin=*/epee::net_utils::zone::invalid, hf_version))
+          !m_tx_pool.add_tx(tx, tvc, relay_method::block, /*relayed=*/true, hf_version, hf_version))
           || tvc.m_verifivation_failed)
       {
         MERROR_VER("Transaction " << txid <<
@@ -5485,7 +5485,7 @@ leave:
       // version, we can return it without re-verifying the consensus rules on it.
       cryptonote::tx_verification_context tvc{};
       if (!m_tx_pool.add_tx(tx, txid, tx_blob, tx_weight, tvc, relay_method::block, true,
-          hf_version, /*origin=*/epee::net_utils::zone::invalid, hf_version))
+          hf_version, hf_version))
         MERROR("Failed to return taken transaction with hash: " << txid << " to tx_pool");
     }
   };

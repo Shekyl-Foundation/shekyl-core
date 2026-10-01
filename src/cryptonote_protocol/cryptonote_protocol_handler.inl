@@ -862,13 +862,11 @@ namespace cryptonote
        selectable path with a latency price, not a property a transaction
        inherits from the peer that handed it over.
 
-       The class change is what makes coherence execute. `forward` was refused
-       propagation into `tvc.m_relay` (tx_pool.cpp), so the batching switch
-       below dropped it and `relay_transactions` was never called at arrival
-       with an anonymity origin — leaving the coherence branch in
-       `net_node.inl` correct but unreachable (it said so, at §89.8.5). As
-       `stem`, the arrival flows to `relay_transactions` with its real origin,
-       and coherence keeps it on the zone it arrived over.
+       `forward` was refused propagation into `tvc.m_relay` (tx_pool.cpp), so
+       the batching switch below dropped it and `relay_transactions` was
+       never called at arrival with an anonymity origin. As `stem`, the
+       arrival flows to `relay_transactions`. The session's notifier stems
+       it; arrival-coherence is not a routing decision.
 
        `dandelionpp_fluff` is unchanged and still overrides below: a sender who
        disabled white noise over Tor is fluffing, and the receiving hidden
@@ -891,11 +889,7 @@ namespace cryptonote
     for (auto& tx : arg.txs)
     {
       tx_verification_context tvc{};
-      // `zone` is the arrival transport, computed above. It is passed ALONGSIDE
-      // `tx_relay` rather than folded into it: the relay method is a routing
-      // decision that may be revised, the zone is a fact about where the bytes
-      // came from that must not be.
-      if (!m_core.handle_incoming_tx(tx, tvc, tx_relay, true, zone))
+      if (!m_core.handle_incoming_tx(tx, tvc, tx_relay, true))
       {
         if (shekyl_drop_verdict_severs(tvc.m_drop_verdict))
         {

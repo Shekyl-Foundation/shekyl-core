@@ -2611,9 +2611,20 @@ namespace nodetool
     if (m_network_zones.empty())
       return enet::zone::invalid;
 
+    /* A forwarded stem is not a zone-routing decision. Arrival-coherence is
+       deleted. The session that received the stem is registered on this
+       zone's notifier, and that notifier stems it — which notifier holds
+       the edge, until one relay holds every session. The route token is
+       not read on this path. */
+    if (tx_relay == cryptonote::relay_method::stem)
+    {
+      if (m_network_zones.count(origin))
+        return send(*m_network_zones.find(origin));
+      MWARNING("Unable to send " << txs.size() << " transaction(s): arrival zone is not configured");
+      return enet::zone::invalid;
+    }
+
     /* Anonymity-zone selection for originated traffic that chose the zone.
-       The mix is only a mix if originated and relayed (coherence-held)
-       classes land on the same zone: a helper that always took rbegin()
        Tor is the anonymity zone, and it is the greatest zone discriminant,
        so rbegin() on the sorted map is that zone when one is configured.
        m_network_zones is a sorted map. */
@@ -2629,8 +2640,8 @@ namespace nodetool
        arc exists to prevent (§30.5). Better to send nothing.
 
        The `require_usable=true` caller died with the per-arrival divert.
-       Relayed traffic no longer asks this helper — it inherits its arrival
-       zone or stays on clearnet. Do not resurrect a usable-or-fall-through
+       A forwarded stem does not ask this helper: the notifier that holds
+       the session stems it. Do not resurrect a usable-or-fall-through
        path here; that was the divert's eligibility semantics, and once-at-
        origin has no relayed roll for them to apply to. */
     const auto select_anonymity = [this]() -> zone_entry*
@@ -2669,12 +2680,12 @@ namespace nodetool
       return nullptr;
     };
 
-    /* Q12-D5a once-at-origin. The zone is chosen once, by the originating
-       node; every subsequent hop respects the arrival zone. Relayed traffic
-       does not roll — the per-arrival divert that used to sit here
-       (`still_stemming && !source.is_nil() && divert()`) was the duplicate
-       of coherence, and composing the two was the one-way absorption that
-       destroyed Q12-D4's cancellation.
+    /* Once-at-origin. The zone is chosen once, by the originating node.
+       A forwarded stem does not enter this switch: the notifier that holds
+       the session stems it. Relayed traffic does not roll — the per-arrival
+       divert that used to sit here (`still_stemming && !source.is_nil() &&
+       divert()`) was the duplicate of arrival-coherence, and composing the
+       two was the one-way absorption that destroyed Q12-D4's cancellation.
 
        The decision is a `zone_route` token only `once_at_origin_route`
        can construct. This function requires one; a caller that bypasses
@@ -2697,32 +2708,6 @@ namespace nodetool
        first origination rather than on every nil-source call. */
     switch (route.get())
     {
-      case cryptonote::zone_route::decision::keep_arrival:
-        /* LIVE as of Q12-U2. One caller reaches here with a real origin: the
-           ARRIVAL, from `handle_notify_new_transactions`, whose origin is the
-           live connection's zone. Coherence holds a still-stemming arrival on
-           that zone.
-
-           The pool re-relay does not come here as a stem, and does not read
-           `origin_zone` FOR ROUTING — it passes `invalid`, above. Since
-           §92.5c item 3 it does read the field for TIMING (`local_relay_base`
-           picks the retry's parameter class from it), which selects a wait
-           rather than a route and reaches no arm of this switch. The two
-           readings must stay apart, because turning the recorded origin into
-           a routing input is exactly the retracted path named next.
-
-           Expired stems leave as `fluff` at `zone::public_` — the
-           Dandelion++ exit. Re-reading that literal as a leak, and
-           re-stemming those entries on their recorded origin, is the
-           retracted U2-b path: a liveness defect that strands the tx in the
-           anonymity subgraph (§59.1).
-
-           Witness: the token type. Still NOT witnessed: the arrival leg
-           end-to-end (`t_core` harness, FOLLOWUPS). */
-        if (m_network_zones.count(origin))
-          return send(*m_network_zones.find(origin));
-        MWARNING("Unable to send " << txs.size() << " transaction(s): arrival zone is not configured");
-        return enet::zone::invalid;
       case cryptonote::zone_route::decision::anonymity_fail_closed:
         /* ORIGINATED, roll said anonymity — or a local re-relay of a tx
            that already chose anonymity. Take the zone regardless of

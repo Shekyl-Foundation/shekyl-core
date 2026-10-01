@@ -1531,8 +1531,7 @@ TEST(daemon_submit_shims, legacy_add_tx_double_spend_pin)
   // fee now lives in the transaction (`settle_fee`), so reaching this gate
   // is a property of the fixture rather than of the current fee schedule.
   EXPECT_FALSE(fx.bap.txpool.add_tx(mine.tx, tvc, relay_method::local,
-    /*relayed=*/false, /*version=*/1, /*origin=*/epee::net_utils::zone::invalid,
-    /*nic_verified_hf_version=*/1));
+    /*relayed=*/false, /*version=*/1, /*nic_verified_hf_version=*/1));
   EXPECT_TRUE(tvc.m_verifivation_failed);
   EXPECT_TRUE(tvc.m_double_spend)
     << "legacy path pins the foreign-key-image conflict on tvc.m_double_spend";

@@ -51,7 +51,6 @@ const _: () = {
     assert!(NetZone::Invalid as u8 == 0);
     assert!(NetZone::Public as u8 == 1);
     assert!(NetZone::Tor as u8 == 3);
-    assert!(ZoneRouteDecision::KeepArrival as u8 == 0);
     assert!(ZoneRouteDecision::AnonymityFailClosed as u8 == 1);
     assert!(ZoneRouteDecision::PublicClearnet as u8 == 2);
     assert!(ZoneRouteDecision::BroadcastAllZones as u8 == 3);
@@ -69,10 +68,6 @@ pub use shekyl_types::relay::{NetZone, RelayCategory, RelayMethod};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ZoneRouteDecision {
-    /// Still-stemming on a real anonymity origin: stay there (R-1 coherence,
-    /// §89.2). No re-roll — re-rolling per hop was the one-way absorption
-    /// Q12-D5a deleted.
-    KeepArrival = 0,
     /// Originated traffic chose anonymity (or the pool re-relays `Local`):
     /// take the zone, **send nothing if it is unusable** (§30.5). Never
     /// clearnet.
@@ -99,7 +94,6 @@ pub enum ZoneRouteDecision {
 impl fmt::Display for ZoneRouteDecision {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::KeepArrival => "keep_arrival",
             Self::AnonymityFailClosed => "anonymity_fail_closed",
             Self::PublicClearnet => "public_clearnet",
             Self::BroadcastAllZones => "broadcast_all_zones",
@@ -134,40 +128,24 @@ pub const fn originated_stays_in_zone(tx_relay: RelayMethod, nzone: NetZone) -> 
     matches!(tx_relay, RelayMethod::Local) && nzone.is_anonymity()
 }
 
-/// R-1 coherence: keep a still-stemming transaction on its arrival anonymity
-/// zone (no re-roll).
+/// The once-at-origin routing decision — the single constructor of the C++
+/// `zone_route` token's value.
 ///
-/// True only when the method is pre-fluff **and** the arrival zone is a real
-/// anonymity network. Clearnet never coheres to itself via this path; absent
-/// origin never coheres; fluff never coheres (liveness exit). The caller
-/// still checks that the zone is present in the local zone map before
-/// sending.
-#[must_use]
-pub const fn r1_coherence_keeps_origin(tx_relay: RelayMethod, origin: NetZone) -> bool {
-    is_pre_fluff_relay(tx_relay) && origin.is_anonymity()
-}
-
-/// The Q12-D5a once-at-origin routing decision — the single constructor of
-/// the C++ `zone_route` token's value.
+/// Arrival-coherence is gone. A forwarded stem is not this function's
+/// decision: the session that received it is registered on that network's
+/// notifier, and that notifier stems it, until one relay holds every
+/// session. This function decides origination and fluff.
 ///
-/// What edit reds the table (`zone_route` tests here, and the unchanged
-/// `levin.cpp` gtest as the migration oracle): returning
-/// [`ZoneRouteDecision::PublicClearnet`] from the coherence arm. What edit
-/// fails to compile in C++: constructing a `zone_route` anywhere except its
-/// forwarding `once_at_origin_route`, or calling `send_txs` without one.
+/// What edit fails to compile in C++: constructing a `zone_route` anywhere
+/// except its forwarding `once_at_origin_route`, or calling `send_txs`
+/// without one.
 #[must_use]
 pub const fn once_at_origin_route(tx_relay: RelayMethod, origin: NetZone) -> ZoneRouteDecision {
     // §91 Design A: a fluff floods every link class, whatever it arrived on.
-    // Checked FIRST because fluff can never cohere (`is_pre_fluff_relay` is
-    // `Stem | Local`), so the coherence arm below would never claim it — but
-    // stating the fluff rule first is what makes the ordering an assertion
-    // rather than a coincidence of the arms beneath it.
     if matches!(tx_relay, RelayMethod::Fluff) {
         return ZoneRouteDecision::BroadcastAllZones;
     }
-    if r1_coherence_keeps_origin(tx_relay, origin) {
-        ZoneRouteDecision::KeepArrival
-    } else if matches!(origin, NetZone::Invalid) && is_pre_fluff_relay(tx_relay) {
+    if matches!(origin, NetZone::Invalid) && is_pre_fluff_relay(tx_relay) {
         ZoneRouteDecision::AnonymityFailClosed
     } else {
         ZoneRouteDecision::PublicClearnet
@@ -219,15 +197,13 @@ mod tests {
         for &method in &METHODS {
             for &zone in &ZONES {
                 let expect = match (method, zone) {
-                    // Coherence: still-stemming on a real anonymity origin.
-                    (M::Stem | M::Local, NetZone::Tor) => D::KeepArrival,
                     // Originated chose anon (or pool re-relay of Local):
                     // fail closed, never clearnet (§30.5).
                     (M::Stem | M::Local, NetZone::Invalid) => D::AnonymityFailClosed,
                     // §91 Design A: a fluff floods every configured zone.
                     (M::Fluff, _) => D::BroadcastAllZones,
-                    // Everything else exits public: clearnet inherit and the
-                    // non-relay classes.
+                    // Clearnet origination, and every non-relay class. A
+                    // forwarded stem is not decided here.
                     _ => D::PublicClearnet,
                 };
                 assert_eq!(
@@ -255,35 +231,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// Fluff is the exit on every origin — coherence would strand it (§59.1).
-    #[test]
-    fn fluff_never_coheres() {
-        for &zone in &ZONES {
-            assert!(!r1_coherence_keeps_origin(RelayMethod::Fluff, zone));
-            // Coherence is still refused — that is the invariant. What §91
-            // changed is where a fluff goes once refused: every zone, not
-            // clearnet alone.
-            assert_eq!(
-                once_at_origin_route(RelayMethod::Fluff, zone),
-                ZoneRouteDecision::BroadcastAllZones
-            );
-        }
-    }
-
-    /// The C++ `r1_coherence` witness table, ported line for line.
-    #[test]
-    fn r1_coherence_table() {
-        for &m in &[RelayMethod::Stem, RelayMethod::Local] {
-            assert!(!r1_coherence_keeps_origin(m, NetZone::Public));
-            assert!(!r1_coherence_keeps_origin(m, NetZone::Invalid));
-            assert!(r1_coherence_keeps_origin(m, NetZone::Tor));
-            assert!(is_pre_fluff_relay(m));
-        }
-        assert!(!r1_coherence_keeps_origin(RelayMethod::None, NetZone::Tor));
-        assert!(!r1_coherence_keeps_origin(RelayMethod::Block, NetZone::Tor));
-        assert!(!is_pre_fluff_relay(RelayMethod::Fluff));
     }
 
     /// `originated_stays_in_zone` is `Local`-only and anonymity-only — the

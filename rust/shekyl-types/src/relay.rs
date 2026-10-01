@@ -139,11 +139,8 @@ pub enum RelayCategory {
 /// zone the origination roll chose). Mirrors `epee::net_utils::zone` by value
 /// and `static_assert`, same contract discipline as [`RelayMethod`].
 ///
-/// `Invalid == 0` is load-bearing on the C++ side: a pool record written
-/// before the zone field existed carries zero there and decodes to "origin
-/// unknown" with no migration (`blockchain_db.cpp`, `set_origin_zone`'s
-/// `static_assert`). The Rust pool record has no such history, but the pin
-/// is the seam's and stays.
+/// `Invalid == 0` is the seam pin with `epee::net_utils::zone::invalid`.
+/// The pool record does not store an arrival zone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum NetZone {

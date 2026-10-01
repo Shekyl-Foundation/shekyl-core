@@ -133,11 +133,9 @@ namespace cryptonote
         lives on this branch for its whole life, and its retry IS the origin
         asking whether its stem completed. That is the derived quantity.
 
-        The zone read is the entry's recorded origin zone. Originated traffic
-        carries `invalid` -- it did not arrive over anything -- which the Rust
-        boundary resolves to the anonymity parameter class: correct, because a
-        surviving `local` record IS an anonymity origin, and fail-safe, because
-        it is the longer wait.
+        The arrival zone is not stored. A surviving `local` record IS an
+        anonymity origin, so the retry asks for the anonymity parameter
+        class (byte 0). That is the longer wait.
 
         The Rust side caches per parameter class, so this is a lookup rather
         than a survival-quantile solve per entry per pass. */
@@ -145,8 +143,10 @@ namespace cryptonote
     {
       if (!meta.relayed)
         return MIN_RELAY_TIME;
-      const auto zone = static_cast<std::uint8_t>(meta.get_origin_zone());
-      return static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(zone));
+      // A surviving `local` record is an anonymity origin. The arrival zone
+      // is not stored; byte 0 is `zone::invalid`, which the retry resolves
+      // to the anonymity parameter class — the longer wait.
+      return static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(0));
     }
 
     uint64_t template_accept_threshold(uint64_t amount)
@@ -224,8 +224,7 @@ namespace cryptonote
   bool tx_memory_pool::add_tx(transaction &tx, /*const crypto::hash& tx_prefix_hash,*/
     const crypto::hash &id, const cryptonote::blobdata &blob, size_t tx_weight,
     tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-    uint8_t version, epee::net_utils::zone origin_zone,
-    uint8_t nic_verified_hf_version)
+    uint8_t version, uint8_t nic_verified_hf_version)
   {
     const bool kept_by_block = (tx_relay == relay_method::block);
 
@@ -329,11 +328,6 @@ namespace cryptonote
         meta.double_spend_seen = have_tx_keyimges_as_spent(tx, id);
         meta.pruned = tx.pruned;
         meta.fcmp_verified = 0;
-        // The zone the bytes actually arrived over, carried from the protocol
-        // handler rather than inferred from the relay method. `invalid` here
-        // means the caller had no arrival to report (block-sourced, or locally
-        // originated), which is a different statement from "clearnet".
-        meta.set_origin_zone(origin_zone);
         meta.fcmp_verification_hash = null_hash;
         memset(meta.padding, 0, sizeof(meta.padding));
         try
@@ -481,13 +475,6 @@ namespace cryptonote
           meta.relayed = relayed;
           meta.double_spend_seen = false;
           meta.pruned = tx.pruned;
-          // First arrival wins. Origin is a fact about where the bytes first
-          // came from, not a routing decision: an upgrade (stem→fluff loop
-          // detection, out-of-order fluff) revises the method, not the
-          // provenance. Overwriting here would hand Q12-U3 the second peer's
-          // zone after a normal Dandelion++ re-delivery.
-          if (!existing_tx)
-            meta.set_origin_zone(origin_zone);
           memset(meta.padding, 0, sizeof(meta.padding));
 
           if (tx.ct_signatures.type == ct::CTTypeFcmpPlusPlusPqc)
@@ -543,8 +530,7 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::add_tx(transaction &tx, tx_verification_context& tvc, relay_method tx_relay,
-    bool relayed, uint8_t version, epee::net_utils::zone origin_zone,
-    uint8_t nic_verified_hf_version)
+    bool relayed, uint8_t version, uint8_t nic_verified_hf_version)
   {
     crypto::hash h = null_hash;
     cryptonote::blobdata bl;
@@ -552,7 +538,7 @@ namespace cryptonote
     if (bl.size() == 0 || !get_transaction_hash(tx, h))
       return false;
     return add_tx(tx, h, bl, get_transaction_weight(tx, bl.size()), tvc, tx_relay, relayed, version,
-      origin_zone, nic_verified_hf_version);
+      nic_verified_hf_version);
   }
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::insert_attested_tx(transaction &tx, const crypto::hash &id,
@@ -602,11 +588,6 @@ namespace cryptonote
     meta.do_not_relay = 0;
     meta.double_spend_seen = false;
     meta.pruned = tx.pruned;
-    // A locally originated transaction did not ARRIVE over anything, so
-    // `invalid` here is the permanent answer rather than a value awaiting the
-    // seam. Origin-unknown and origin-none are the same statement to every
-    // consumer: do not route this by a provenance it does not have.
-    meta.set_origin_zone(epee::net_utils::zone::invalid);
     memset(meta.padding, 0, sizeof(meta.padding));
 
     // §3.5 attestation: same derivation as the P2P path above. The
@@ -2273,12 +2254,7 @@ namespace cryptonote
 
         cryptonote::tx_verification_context tvc{};
         relay_method tx_relay = e.meta.get_relay_method();
-        // take_tx removed the entry, so add_tx sees a fresh insert and will
-        // write whatever origin we pass. First-writer-wins means this is the
-        // write. Passing `invalid` would replace a recorded anonymity origin
-        // with "unknown" at every hard-fork re-validation.
-        if (!add_tx(tx, e.txid, blob, e.meta.weight, tvc, tx_relay, relayed, version,
-              e.meta.get_origin_zone()))
+        if (!add_tx(tx, e.txid, blob, e.meta.weight, tvc, tx_relay, relayed, version))
         {
           MINFO("Failed to re-validate tx " << e.txid << " for v" << (unsigned)version << ", dropped");
           continue;

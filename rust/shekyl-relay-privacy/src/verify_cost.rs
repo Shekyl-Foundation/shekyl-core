@@ -476,8 +476,9 @@ pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 /// > `forward` class never reached `send_txs` at arrival, and the remaining
 /// > hops this constant spaces ran on a network it is not sized for.
 /// >
-/// > **Q12-U2 closed that path.** Arrivals now enter as `stem`, coherence
-/// > keeps them on the arrival zone (`KeepArrival`), and `set_relayed` draws
+/// > **Q12-U2 closed that path.** Arrivals enter as `stem`. Arrival-coherence
+/// > (`KeepArrival`) is deleted: the session's notifier stems a forward, and
+/// > `set_relayed` draws
 /// > the per-zone embargo — the zone is a parameter beside `tx_relay`, which
 /// > is the input §89.2 already had. Originated traffic still keeps `local`
 /// > and does not draw, by §89.8.3. The checklist at §89.8.4 is the current

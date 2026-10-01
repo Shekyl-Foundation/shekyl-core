@@ -85,6 +85,5 @@ pub use zone::{
 };
 pub use zone_route::{
     is_pre_fluff_relay, once_at_origin_route, originated_stays_in_zone,
-    originated_zone_from_anonymity_roll, r1_coherence_keeps_origin, NetZone, RelayMethod,
-    ZoneRouteDecision,
+    originated_zone_from_anonymity_roll, NetZone, RelayMethod, ZoneRouteDecision,
 };

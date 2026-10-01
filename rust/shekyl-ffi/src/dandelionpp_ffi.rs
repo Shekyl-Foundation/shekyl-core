@@ -230,10 +230,10 @@ pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
 ///
 /// `zone` is `epee::net_utils::zone` as a byte, as elsewhere in this module.
 /// A surviving `local` record **is** an anonymity origin — `originated_stays_
-/// in_zone` moves a clearnet origin to `Stem` — and originated traffic carries
-/// `origin_zone == invalid` because it did not arrive over anything. `invalid`
-/// resolves to the anonymity parameter class (it is not clearnet), which is
-/// the correct answer here and the fail-safe one: the longer wait.
+/// in_zone` moves a clearnet origin to `Stem`. The pool does not store an
+/// arrival zone; it passes byte 0 (`invalid`), which resolves to the
+/// anonymity parameter class. That is the correct answer here and the
+/// fail-safe one: the longer wait.
 /// # Cost
 ///
 /// Cached per parameter class, like the timers themselves: the relay loop asks

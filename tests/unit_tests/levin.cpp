@@ -798,62 +798,22 @@ namespace
     };
 }
 
-/* Pure R-1 coherence gate — pins the production predicate without needing a
-   full non-public `handle_notify_new_transactions` mock (§89.7). Fluff must
-   never cohere (liveness exit); anonymity stem/local must.
-
-   The table lost its `forward` row when Q12-U2 deleted the class. That row was
-   never a separate case here — `forward` and `stem` always answered
-   identically — which is a small piece of evidence for the deletion rather
-   than against it: a class the routing predicate could not distinguish was not
-   carrying a routing distinction. */
-TEST(r1_coherence_predicate, table)
-{
-    using cryptonote::relay_method;
-    using epee::net_utils::zone;
-
-    // Fluff is the exit on every origin — coherence would strand txs.
-    for (const auto origin : {zone::public_, zone::tor, zone::tor, zone::invalid})
-        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(relay_method::fluff, origin));
-
-    // Clearnet / invalid never cohere via this path.
-    for (const auto method : {relay_method::stem, relay_method::local})
-    {
-        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(method, zone::public_));
-        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(method, zone::invalid));
-        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(relay_method::none, zone::tor));
-        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(relay_method::block, zone::tor));
-    }
-
-    // Pre-fluff on a real anonymity zone — the live §89 path.
-    for (const auto method : {relay_method::stem, relay_method::local})
-    {
-        EXPECT_TRUE(cryptonote::r1_coherence_keeps_origin(method, zone::tor));
-        EXPECT_TRUE(cryptonote::r1_coherence_keeps_origin(method, zone::tor));
-        EXPECT_TRUE(cryptonote::is_pre_fluff_relay(method));
-    }
-    EXPECT_FALSE(cryptonote::is_pre_fluff_relay(relay_method::fluff));
-}
-
-/* Q12-D5a once-at-origin routing. Production `send_txs` requires a token
-   only this helper can construct. What edit reds the table: return
-   `decision::public_clearnet` from the `keep_arrival` arm (coherence
-   removed) — `(stem, tor)` below fails. What edit fails to compile:
+/* Once-at-origin routing. Production `send_txs` requires a token only this
+   helper can construct. A forwarded stem does not read the token: the
+   notifier that holds the session stems it. What edit fails to compile:
    constructing a `zone_route` outside this helper, or calling `send_txs`
-   without one. The table still does not drive `handle_notify_new_transactions`
-   on a non-public context (FOLLOWUPS / `t_core`). */
+   without one. */
 TEST(once_at_origin_route, table)
 {
     using cryptonote::relay_method;
     using cryptonote::zone_route;
     using epee::net_utils::zone;
 
-    // Coherence: still-stemming on a real anonymity origin stays there.
-    EXPECT_EQ(zone_route::decision::keep_arrival,
+    // A stem on a real zone is not this function's decision. The residual
+    // is clearnet; production does not consult it for a forwarded stem.
+    EXPECT_EQ(zone_route::decision::public_clearnet,
               cryptonote::once_at_origin_route(relay_method::stem, zone::tor).get());
-    EXPECT_EQ(zone_route::decision::keep_arrival,
-              cryptonote::once_at_origin_route(relay_method::stem, zone::tor).get());
-    EXPECT_EQ(zone_route::decision::keep_arrival,
+    EXPECT_EQ(zone_route::decision::public_clearnet,
               cryptonote::once_at_origin_route(relay_method::local, zone::tor).get());
 
     // Relayed clearnet inherit — no roll. This is the deleted divert.

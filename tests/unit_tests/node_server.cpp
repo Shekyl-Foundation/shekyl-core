@@ -72,7 +72,7 @@ public:
   unsigned handle_incoming_tx_calls = 0;
   bool handle_incoming_tx_result = true;
   uint8_t handle_incoming_tx_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
-  bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone)
+  bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed)
   {
     ++handle_incoming_tx_calls;
     if (handle_incoming_tx_result)
