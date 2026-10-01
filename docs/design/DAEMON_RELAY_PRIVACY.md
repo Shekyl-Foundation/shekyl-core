@@ -141,11 +141,13 @@ this lane.
    every outbound session. One epoch and one role are drawn. One fluff
    reaches every session except the source.
 
-   - **Hop 0.** `AnonOrigination::{Any, AnonymityOnly}` sits on the
-     node. `AnonymityOnly` draws the first hop of a locally originated
-     transaction only from anonymity-class outbound edges and returns
-     no route rather than falling back to clearnet. After hop 0 the
-     draw is uniform and class-blind.
+   - **Hop 0.** The relay is told at construction which connectors are
+     configured. The bit is whether any of them declares
+     `address_hidden_from_peer` as yes. A local origin on a node with
+     that bit draws hop 0 only from sessions whose own connector
+     declares the same, and returns no route when none do. After hop 0
+     the draw is uniform over every outbound edge. The clearnet route
+     byte is retired with the one relay.
    - **Embargo.** The stem watch records the class of the edge the
      stem was forwarded on. The privacy crate takes that class as the
      transit term: `ADOPTED_TRANSIT_ASSUMPTION_MS` (50) on clearnet,

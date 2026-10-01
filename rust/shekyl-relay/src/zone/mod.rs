@@ -28,6 +28,8 @@ use shekyl_relay_privacy::schedule::{
 };
 use shekyl_relay_privacy::stem_map::{ConnectionId, SlotIndex, StemMap};
 use shekyl_relay_privacy::LinkSecrecy;
+pub use shekyl_transport_layer::ConnectorId;
+use shekyl_transport_layer::{declaration, Assessment, YesNo};
 
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 
@@ -39,27 +41,20 @@ use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 /// de-duplication on flush compare by content (`Arc<[u8]>: Ord`).
 pub type TxBlob = Arc<[u8]>;
 
-/// Which network carried this session.
+/// This connector's declaration says the peer does not learn this node's address.
 ///
-/// An edge property. The relay reads it at hop 0, when it records the
-/// embargo's transit term, and when it decides whether a noise frame means
-/// anything. It is not a property of the relay.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NetworkClass {
-    /// A clearnet session.
-    Clearnet,
-    /// An anonymity-network session. Tor today.
-    Anonymity,
+/// The cell is the connector's description. A connector that has not assessed
+/// the cell is not eligible.
+#[must_use]
+pub fn address_hidden_from_peer(connector: ConnectorId) -> bool {
+    declaration(connector.column()).address_hidden_from_peer() == Assessment::Assessed(YesNo::Yes)
 }
 
-/// How a locally originated transaction chooses its first hop.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnonOrigination {
-    /// Any established outbound session.
-    Any,
-    /// Anonymity-class outbound sessions only. No anonymity edge is
-    /// [`RelayPlan::NoRoute`], not a clearnet fallback.
-    AnonymityOnly,
+/// True when any configured connector declares that the peer does not learn
+/// this node's address. Computed once, at construction.
+#[must_use]
+pub fn any_hides_address_from_peer(configured: &[ConnectorId]) -> bool {
+    configured.iter().copied().any(address_hidden_from_peer)
 }
 
 /// What the zone knows about one connected peer's pending fluff batch.
@@ -81,16 +76,16 @@ pub struct PeerFluff {
     /// inbound fluff delay, and [`shekyl_relay_privacy::schedule::FluffScheduler`]
     /// keeps that asymmetry.
     pub direction: PeerDirection,
-    /// The connector class that carried this session.
-    pub network: NetworkClass,
+    /// The connector that carried this session.
+    pub connector: ConnectorId,
 }
 
 impl PeerFluff {
-    fn new(direction: PeerDirection, network: NetworkClass) -> Self {
+    fn new(direction: PeerDirection, connector: ConnectorId) -> Self {
         Self {
             queued: Vec::new(),
             direction,
-            network,
+            connector,
         }
     }
 }
@@ -316,7 +311,10 @@ pub struct Relay {
     /// `i` ↔ slot `i`). Production pins it to [`inherited::NOISE_CHANNELS`].
     stems: usize,
     /// First hop of a locally originated transaction.
-    origination: AnonOrigination,
+    /// Hop 0 of a local origin draws only from connectors whose declaration
+    /// says the peer does not learn this node's address. False means hop 0
+    /// draws from every outbound edge.
+    hop0_restricted: bool,
     /// Noise schedule (enable + cadence + per-channel deadlines), or off.
     ///
     /// **Single owner of the enable fact** (§20.4). Before RP-3b it lived only
@@ -410,6 +408,7 @@ impl Relay {
         stems: usize,
         secrecy: LinkSecrecy,
         noise_enabled: bool,
+        configured: &[ConnectorId],
         now: Millis,
         rng: &mut R,
     ) -> Result<Self, RelayNewError> {
@@ -451,7 +450,7 @@ impl Relay {
             epoch_ends_at: epoch.ends_at,
             params,
             stems,
-            origination: AnonOrigination::Any,
+            hop0_restricted: any_hides_address_from_peer(configured),
             noise,
         })
     }
@@ -490,6 +489,13 @@ impl Relay {
         self.noise.enabled()
     }
 
+    /// Whether hop 0 of a local origin draws only from connectors that
+    /// declare the peer does not learn this node's address.
+    #[must_use]
+    pub fn hop0_restricted(&self) -> bool {
+        self.hop0_restricted
+    }
+
     /// Configured stem width (slot count). When noise is on, also the channel
     /// count — channel `i` follows slot `i`.
     #[must_use]
@@ -514,20 +520,15 @@ impl Relay {
         &mut self,
         id: ConnectionId,
         direction: PeerDirection,
-        network: NetworkClass,
+        connector: ConnectorId,
         rng: &mut R,
     ) {
         self.contexts
             .entry(id)
-            .or_insert_with(|| PeerFluff::new(direction, network));
+            .or_insert_with(|| PeerFluff::new(direction, connector));
         if direction == PeerDirection::Outbound {
             self.update_stems(rng);
         }
-    }
-
-    /// How this node originates. The default from [`Relay::new`] is [`AnonOrigination::Any`].
-    pub fn set_origination(&mut self, origination: AnonOrigination) {
-        self.origination = origination;
     }
 
     /// Record that `txs` were stemmed to `successor`, keyed under `source`
@@ -658,29 +659,32 @@ impl Relay {
         self.fluff.forget(*id);
     }
 
-    /// Established outbound sessions. Inbound peers are not stem candidates.
-    ///
-    /// The set is this zone's session registry. A handshake-complete peer
-    /// that is still synchronizing is included: recorded height is not a
-    /// filter, and neither is `state_normal`.
-    /// Hop 0 under [`AnonOrigination::AnonymityOnly`]. Empty is [`RelayPlan::NoRoute`].
-    fn anonymity_first_hop<R: RelayRng + ?Sized>(&mut self, rng: &mut R) -> RelayPlan {
+    /// Hop 0 when a configured connector declares the peer does not learn
+    /// this node's address. Eligible edges are outbound sessions whose own
+    /// connector declares the same. Empty is [`RelayPlan::NoRoute`].
+    fn restricted_first_hop<R: RelayRng + ?Sized>(&mut self, rng: &mut R) -> RelayPlan {
         let candidates: Vec<ConnectionId> = self
             .contexts
             .iter()
             .filter(|(_, peer)| {
-                peer.direction == PeerDirection::Outbound && peer.network == NetworkClass::Anonymity
+                peer.direction == PeerDirection::Outbound
+                    && address_hidden_from_peer(peer.connector)
             })
             .map(|(id, _)| *id)
             .collect();
         if candidates.is_empty() {
             return RelayPlan::NoRoute;
         }
-        let span = u64::try_from(candidates.len() - 1).expect("anonymity outbound count fits");
+        let span = u64::try_from(candidates.len() - 1).expect("eligible outbound count fits");
         let index = usize::try_from(bounded_uniform(rng, span)).expect("draw fits");
         RelayPlan::Stem(candidates[index])
     }
 
+    /// Established outbound sessions. Inbound peers are not stem candidates.
+    ///
+    /// The set is this zone's session registry. A handshake-complete peer
+    /// that is still synchronizing is included: recorded height is not a
+    /// filter, and neither is `state_normal`.
     fn outbound_ids(&self) -> Vec<ConnectionId> {
         self.contexts
             .iter()
@@ -817,8 +821,8 @@ impl Relay {
         if local_origin && node_sync == NodeSync::Unsynchronised {
             return RelayPlan::AwaitSync;
         }
-        if local_origin && self.origination == AnonOrigination::AnonymityOnly {
-            return self.anonymity_first_hop(rng);
+        if local_origin && self.hop0_restricted {
+            return self.restricted_first_hop(rng);
         }
         // The inherited predicate, transcribed rather than restated:
         // `if (!zone_->fluffing || tx_relay == relay_method::local)`.
@@ -850,9 +854,7 @@ impl Relay {
         rng: &mut R,
     ) -> RelayPlan {
         match self.plan_relay(source, local_origin, node_sync, rng) {
-            RelayPlan::NoRoute
-                if !(local_origin && self.origination == AnonOrigination::AnonymityOnly) =>
-            {
+            RelayPlan::NoRoute if !(local_origin && self.hop0_restricted) => {
                 self.update_stems(rng);
                 self.plan_relay(source, local_origin, node_sync, rng)
             }

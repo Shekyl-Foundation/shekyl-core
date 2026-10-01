@@ -52,7 +52,8 @@ const _: () = {
     assert!(NetZone::Public as u8 == 1);
     assert!(NetZone::Tor as u8 == 3);
     assert!(ZoneRouteDecision::AnonymityFailClosed as u8 == 1);
-    assert!(ZoneRouteDecision::PublicClearnet as u8 == 2);
+    // Byte 2 was the clearnet route. One relay has no such route: hop 0
+    // draws from the edges the declaration allows. The byte is not reused.
     assert!(ZoneRouteDecision::BroadcastAllZones as u8 == 3);
 };
 
@@ -72,17 +73,13 @@ pub enum ZoneRouteDecision {
     /// take the zone, **send nothing if it is unusable** (§30.5). Never
     /// clearnet.
     AnonymityFailClosed = 1,
-    /// Clearnet inherit, or the roll choosing clearnet by design.
-    ///
-    /// **No longer the fluff exit** — see [`Self::BroadcastAllZones`] (§91).
-    PublicClearnet = 2,
     /// **Design A (§91): a fluff goes to EVERY configured zone.**
     ///
     /// Transport is a parameter, not a topology: clearnet and Tor are
     /// link classes in one propagation graph, so a fluff floods all of them.
     ///
-    /// Before §91 a fluff took [`Self::PublicClearnet`], which is
-    /// `send(*m_network_zones.begin())` — the clearnet zone, **singular**. That
+    /// Before §91 a fluff took the clearnet zone, singular
+    /// (`send(*m_network_zones.begin())`). That
     /// made the anonymity zone a depth-one injection point into clearnet: a
     /// Tor-only node saw only anonymity-originated traffic, so it could not
     /// maintain a mempool, disarm embargoes against the real flood, or mine on
@@ -95,7 +92,6 @@ impl fmt::Display for ZoneRouteDecision {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::AnonymityFailClosed => "anonymity_fail_closed",
-            Self::PublicClearnet => "public_clearnet",
             Self::BroadcastAllZones => "broadcast_all_zones",
         })
     }
@@ -145,11 +141,9 @@ pub const fn once_at_origin_route(tx_relay: RelayMethod, origin: NetZone) -> Zon
     if matches!(tx_relay, RelayMethod::Fluff) {
         return ZoneRouteDecision::BroadcastAllZones;
     }
-    if matches!(origin, NetZone::Invalid) && is_pre_fluff_relay(tx_relay) {
-        ZoneRouteDecision::AnonymityFailClosed
-    } else {
-        ZoneRouteDecision::PublicClearnet
-    }
+    // Byte 2, the clearnet route, is retired. Hop 0 is the relay's draw.
+    let _ = (origin, is_pre_fluff_relay(tx_relay));
+    ZoneRouteDecision::AnonymityFailClosed
 }
 
 /// Map the origination roll onto the zone argument `send_txs` reads.
@@ -197,14 +191,14 @@ mod tests {
         for &method in &METHODS {
             for &zone in &ZONES {
                 let expect = match (method, zone) {
-                    // Originated chose anon (or pool re-relay of Local):
-                    // fail closed, never clearnet (§30.5).
-                    (M::Stem | M::Local, NetZone::Invalid) => D::AnonymityFailClosed,
-                    // §91 Design A: a fluff floods every configured zone.
+                    // §91 Design A: a fluff floods every session.
                     (M::Fluff, _) => D::BroadcastAllZones,
-                    // Clearnet origination, and every non-relay class. A
-                    // forwarded stem is not decided here.
-                    _ => D::PublicClearnet,
+                    // No clearnet route. Everything else fail-closes at this
+                    // function; hop 0 is the relay's draw.
+                    _ => {
+                        let _ = zone;
+                        D::AnonymityFailClosed
+                    }
                 };
                 assert_eq!(
                     once_at_origin_route(method, zone),
@@ -273,7 +267,7 @@ mod tests {
 
     /// §91: a fluff floods every zone, from every zone. Asserted as its own
     /// row because the whole Design A ruling reduces to this one mapping, and
-    /// a reversion to `PublicClearnet` re-creates the depth-one injection that
+    /// a reversion to flooding clearnet alone re-creates the depth-one injection that
     /// made Tor-only unworkable (§91.1).
     #[test]
     fn a_fluff_broadcasts_from_every_zone() {

@@ -33,6 +33,7 @@ fn zone(rng: &mut SplitMix64) -> Relay {
         2,
         LinkSecrecy::of(RelayZone::Public),
         false,
+        &[ConnectorId::Clearnet],
         0,
         rng,
     )
@@ -44,7 +45,7 @@ fn establish_outbound(zone: &mut Relay, peers: &[u8], rng: &mut SplitMix64) {
         zone.on_session_established(
             id(*peer),
             PeerDirection::Outbound,
-            NetworkClass::Clearnet,
+            ConnectorId::Clearnet,
             rng,
         );
     }
@@ -74,7 +75,7 @@ fn handshake_is_idempotent_and_does_not_discard_a_batch() {
     z.on_session_established(
         id(1),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     let stems = z.live_stems();
@@ -90,7 +91,7 @@ fn handshake_is_idempotent_and_does_not_discard_a_batch() {
     z.on_session_established(
         id(1),
         PeerDirection::Inbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     assert_eq!(z.live_stems(), stems);
@@ -110,13 +111,13 @@ fn close_removes_the_peer_and_its_queue() {
     z.on_session_established(
         id(1),
         PeerDirection::Inbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     z.on_session_established(
         id(2),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     z.on_connection_close(&id(1));
@@ -175,7 +176,7 @@ fn mean_delay(direction: PeerDirection, seed: u64, n: u64) -> u64 {
     let mut total = 0_u64;
     for _ in 0..n {
         let mut z = zone(&mut rng);
-        z.on_session_established(id(1), direction, NetworkClass::Clearnet, &mut rng);
+        z.on_session_established(id(1), direction, ConnectorId::Clearnet, &mut rng);
         assert_eq!(z.queue_fluff(&[vec![1]], None, 0, &mut rng), 1);
         total += z.fluff_deadline().expect("a batch is in flight");
     }
@@ -220,7 +221,7 @@ fn fluff_deadlines_are_pinned_for_a_fixed_seed() {
             z.on_session_established(
                 id(1),
                 PeerDirection::Inbound,
-                NetworkClass::Clearnet,
+                ConnectorId::Clearnet,
                 &mut rng,
             );
             z.queue_fluff(&[vec![0xAB]], None, 0, &mut rng);
@@ -233,7 +234,7 @@ fn fluff_deadlines_are_pinned_for_a_fixed_seed() {
             z.on_session_established(
                 id(1),
                 PeerDirection::Outbound,
-                NetworkClass::Clearnet,
+                ConnectorId::Clearnet,
                 &mut rng,
             );
             z.queue_fluff(&[vec![0xAB]], None, 0, &mut rng);
@@ -258,7 +259,7 @@ fn a_burst_does_not_push_a_peers_flush_further_out() {
     z.on_session_established(
         id(1),
         PeerDirection::Inbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
 
@@ -286,13 +287,13 @@ fn fluff_skips_the_source_and_releases_on_deadline() {
     z.on_session_established(
         id(1),
         PeerDirection::Inbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     z.on_session_established(
         id(2),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
 
@@ -326,7 +327,7 @@ fn forcing_a_flush_runs_the_same_release_path() {
     z.on_session_established(
         id(1),
         PeerDirection::Inbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     z.queue_fluff(&[vec![9]], None, 0, &mut rng);
@@ -366,7 +367,16 @@ fn zone_with_role_cover(fluffing: bool, noise: bool, rng: &mut SplitMix64) -> Re
         LinkSecrecy::of(RelayZone::Public)
     };
     for _ in 0..10_000 {
-        let z = Relay::new(DandelionParams::inherited(), 2, secrecy, noise, 0, rng).unwrap();
+        let z = Relay::new(
+            DandelionParams::inherited(),
+            2,
+            secrecy,
+            noise,
+            &[ConnectorId::Clearnet],
+            0,
+            rng,
+        )
+        .unwrap();
         if z.is_fluffing() == fluffing {
             return z;
         }
@@ -495,26 +505,17 @@ fn a_fluff_reaches_an_inbound_anonymity_session() {
         2,
         LinkSecrecy::of(RelayZone::Tor),
         false,
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     )
     .unwrap();
-    z.on_session_established(
-        id(1),
-        PeerDirection::Inbound,
-        NetworkClass::Anonymity,
-        &mut rng,
-    );
-    z.on_session_established(
-        id(2),
-        PeerDirection::Outbound,
-        NetworkClass::Anonymity,
-        &mut rng,
-    );
+    z.on_session_established(id(1), PeerDirection::Inbound, ConnectorId::Tor, &mut rng);
+    z.on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
     z.on_session_established(
         id(3),
         PeerDirection::Inbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
 
@@ -531,6 +532,7 @@ fn a_fluff_reaches_an_inbound_anonymity_session() {
         2,
         LinkSecrecy::of(RelayZone::Public),
         false,
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     )
@@ -538,19 +540,19 @@ fn a_fluff_reaches_an_inbound_anonymity_session() {
     z.on_session_established(
         id(1),
         PeerDirection::Inbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     z.on_session_established(
         id(2),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     z.on_session_established(
         id(3),
         PeerDirection::Inbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     assert_eq!(
@@ -561,31 +563,35 @@ fn a_fluff_reaches_an_inbound_anonymity_session() {
 }
 
 #[test]
-fn anonymity_only_origin_does_not_fall_back_to_clearnet() {
+fn a_hidden_connector_origin_does_not_draw_a_clear_edge() {
     let mut rng = SplitMix64::new(91);
-    let mut z = zone_with_role(false, &mut rng);
-    z.set_origination(AnonOrigination::AnonymityOnly);
+    let mut z = Relay::new(
+        DandelionParams::inherited(),
+        2,
+        LinkSecrecy::of(RelayZone::Public),
+        false,
+        &[ConnectorId::Clearnet, ConnectorId::Tor],
+        0,
+        &mut rng,
+    )
+    .unwrap();
+    // The epoch role is irrelevant: a restricted hop 0 returns before it.
     z.on_session_established(
         id(1),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     assert_eq!(
         z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
         RelayPlan::NoRoute,
     );
-    z.on_session_established(
-        id(2),
-        PeerDirection::Outbound,
-        NetworkClass::Anonymity,
-        &mut rng,
-    );
+    z.on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
     assert_eq!(
         z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
         RelayPlan::Stem(id(2)),
     );
-    // After hop 0 the same node stems on a clearnet edge.
+    // A forwarded stem draws from every outbound edge.
     let forwarded = z.plan_relay(Some(id(2)), false, NodeSync::Synchronised, &mut rng);
     assert!(matches!(forwarded, RelayPlan::Stem(_)));
 }
@@ -659,19 +665,19 @@ fn fluff_fanout_shares_one_blob_handle_across_peers() {
     z.on_session_established(
         id(1),
         PeerDirection::Inbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     z.on_session_established(
         id(2),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     z.on_session_established(
         id(3),
         PeerDirection::Inbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
 
@@ -715,7 +721,9 @@ fn a_noise_deadline_survives_wakes_it_did_not_cause() {
         DandelionParams::inherited(),
         2,
         LinkSecrecy::of(RelayZone::Tor),
-        true, // noise on — otherwise there are no deadlines and this is vacuous
+        true,
+        &[ConnectorId::Clearnet],
+        // noise on — otherwise there are no deadlines and this is vacuous
         0,
         &mut rng,
     )
@@ -781,6 +789,7 @@ fn noise_enabled_pins_stem_width_to_noise_channels() {
         inherited::NOISE_CHANNELS,
         LinkSecrecy::of(RelayZone::Tor),
         true,
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     )
@@ -887,6 +896,7 @@ fn dispatch_does_not_re_decide_the_phase() {
                 2,
                 LinkSecrecy::of(RelayZone::Tor),
                 true,
+                &[ConnectorId::Clearnet],
                 0,
                 &mut rng,
             )
@@ -908,6 +918,7 @@ fn dispatch_does_not_re_decide_the_phase() {
                     2,
                     LinkSecrecy::of(RelayZone::Tor),
                     true,
+                    &[ConnectorId::Clearnet],
                     0,
                     &mut rng,
                 )
@@ -956,6 +967,7 @@ fn a_noise_carrier_does_not_change_the_phase() {
             shekyl_relay_privacy::params::inherited::NOISE_CHANNELS,
             LinkSecrecy::of(RelayZone::Tor),
             noise,
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
@@ -1005,6 +1017,7 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
             stems,
             LinkSecrecy::of(zone),
             noise,
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
@@ -1057,6 +1070,7 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
         CHANNELS,
         LinkSecrecy::of(RelayZone::Tor),
         true,
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     ) {
@@ -1074,8 +1088,9 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
             2,
             LinkSecrecy::of(RelayZone::Public),
             false,
+            &[ConnectorId::Clearnet],
             0,
-            &mut rng,
+            &mut rng
         )
         .is_ok(),
         "no carrier, no fragment budget to blow"

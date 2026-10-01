@@ -453,7 +453,6 @@ namespace nodetool
   {
     bool testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
     bool stagenet = command_line::get_arg(vm, cryptonote::arg_stagenet_on);
-    const bool pad_txs = command_line::get_arg(vm, arg_pad_transactions);
     m_nettype = testnet ? cryptonote::TESTNET : stagenet ? cryptonote::STAGENET : cryptonote::MAINNET;
 
     network_zone& public_zone = m_network_zones[epee::net_utils::zone::public_];
@@ -497,9 +496,6 @@ namespace nodetool
     m_offline = command_line::get_arg(vm, cryptonote::arg_offline);
     m_use_ipv6 = command_line::get_arg(vm, arg_p2p_use_ipv6);
     m_require_ipv4 = !command_line::get_arg(vm, arg_p2p_ignore_ipv4);
-    public_zone.m_notifier = cryptonote::levin::notify{
-      public_zone.m_net_server.get_io_context(), public_zone.m_net_server.get_config_shared(), epee::net_utils::zone::public_, pad_txs, m_payload_handler.get_core()
-    };
 
     if (command_line::has_arg(vm, arg_p2p_add_peer))
     {
@@ -658,9 +654,6 @@ namespace nodetool
       // (see the `disable_noise` note in net_node.cpp);
       // COVER_TRAFFIC_RESTORATION.md §3.1 is why the replacement is a
       // development flag rather than an operator setting.
-      zone.m_notifier = cryptonote::levin::notify{
-        zone.m_net_server.get_io_context(), zone.m_net_server.get_config_shared(), proxy.zone, pad_txs, m_payload_handler.get_core()
-      };
     }
 
     for (const auto& zone : m_network_zones)
@@ -886,7 +879,6 @@ namespace nodetool
     // already-bound server. Zone insertion is the commit: bind failure MUST
     // erase the zone, or send_txs fail-closes originated txs onto a dead tor
     // zone whose public bind may still succeed.
-    const bool pad_txs = command_line::get_arg(vm, arg_pad_transactions);
     network_zone& zone = add_zone(epee::net_utils::zone::tor);
     zone.m_proxy_address = *proxy_endpoint;
     if (!zone.m_net_server.listen_tor(proxy_endpoint->address, "", "", false,
@@ -903,9 +895,6 @@ namespace nodetool
     set_max_out_peers(zone, -1);
     m_payload_handler.set_max_out_peers(epee::net_utils::zone::tor, zone.m_config.m_net_config.max_out_connection_count);
     set_max_in_peers(zone, -1);
-    zone.m_notifier = cryptonote::levin::notify{
-      zone.m_net_server.get_io_context(), zone.m_net_server.get_config_shared(), epee::net_utils::zone::tor, pad_txs, m_payload_handler.get_core()
-    };
     m_ephemeral_tor_alive = true;
 
     const uint16_t virtual_port =
@@ -1116,6 +1105,30 @@ namespace nodetool
 
     if (!apply_inbound_ceiling(0))
       return false;
+
+    /* One relay, after every connector zone exists. The mask is which
+       connectors are configured; the relay reads their declarations. */
+    {
+      std::vector<std::shared_ptr<cryptonote::levin::connections>> registries;
+      std::uint32_t configured = 0;
+      for (auto& zone : m_network_zones)
+      {
+        const std::uint8_t connector = cryptonote::levin::notify::connector_byte(zone.first);
+        if (connector == 0xff)
+          continue;
+        configured |= std::uint32_t{1} << connector;
+        registries.push_back(zone.second.m_net_server.get_config_shared());
+      }
+      const bool pad_txs = command_line::get_arg(vm, arg_pad_transactions);
+      network_zone& public_zone_for_relay = m_network_zones.at(epee::net_utils::zone::public_);
+      m_notifier = cryptonote::levin::notify{
+        public_zone_for_relay.m_net_server.get_io_context(),
+        std::move(registries),
+        configured,
+        pad_txs,
+        m_payload_handler.get_core()
+      };
+    }
     ephemeral_tor_guard.armed = false;
     return res;
   }
@@ -1630,7 +1643,7 @@ namespace nodetool
     zone.m_peerlist.append_with_peer_white(pe_local);
     //update last seen and push it to peerlist manager
 
-    zone.m_notifier.on_session_established(con->m_connection_id, con->m_is_income);
+    m_notifier.on_session_established(con->m_connection_id, con->m_is_income, cryptonote::levin::notify::connector_byte(na.get_zone()));
     {
       std::uint64_t socket_id = 0;
       std::memcpy(&socket_id, con->m_connection_id.data + 8, sizeof(socket_id));
@@ -2529,11 +2542,10 @@ namespace nodetool
        Disappears with the p2p migration. */
     using row_t = cryptonote::levin::notify::stem_tally_row;
     std::vector<std::pair<row_t, epee::net_utils::zone>> rows;
-    for (const auto& zone : m_network_zones)
     {
-      auto part = zone.second.m_notifier.stem_snapshot();
+      auto part = m_notifier.stem_snapshot();
       for (auto& r : part)
-        rows.emplace_back(std::move(r), zone.first);
+        rows.emplace_back(std::move(r), epee::net_utils::zone::public_);
     }
     std::sort(rows.begin(), rows.end(),
       [](const auto& a, const auto& b) {
@@ -2548,25 +2560,21 @@ namespace nodetool
        on the public listener is a free targeting oracle (§16.3). "No data"
        zones are omitted, never zero-filled. */
     std::string out = "{\"floor\":[";
-    bool first_zone = true;
-    for (const auto& zone : m_network_zones)
     {
       std::uint32_t achieved = 0, floor = 0;
       bool below = false;
-      if (!zone.second.m_notifier.floor_snapshot(achieved, floor, below))
-        continue;
-      if (!first_zone)
-        out += ',';
-      first_zone = false;
-      out += "{\"zone\":\"";
-      out += epee::net_utils::zone_to_string(zone.first);
-      out += "\",\"achieved_out_connections\":";
-      out += std::to_string(achieved);
-      out += ",\"floor\":";
-      out += std::to_string(floor);
-      out += ",\"below\":";
-      out += below ? "true" : "false";
-      out += '}';
+      if (m_notifier.floor_snapshot(achieved, floor, below))
+      {
+        out += "{\"zone\":\"";
+        out += epee::net_utils::zone_to_string(epee::net_utils::zone::public_);
+        out += "\",\"achieved_out_connections\":";
+        out += std::to_string(achieved);
+        out += ",\"floor\":";
+        out += std::to_string(floor);
+        out += ",\"below\":";
+        out += below ? "true" : "false";
+        out += '}';
+      }
     }
     out += "],\"tallies\":[";
     for (std::size_t i = 0; i < rows.size(); ++i)
@@ -2591,178 +2599,19 @@ namespace nodetool
       cryptonote::levin::stem_watch_tx_hashes(txs));
     if (hashes->empty())
       return;
-    for (auto& zone : m_network_zones)
-      zone.second.m_notifier.record_arrival(hashes, from);
+    m_notifier.record_arrival(hashes, from);
   }
 
   template<class t_payload_net_handler>
   epee::net_utils::zone node_server<t_payload_net_handler>::send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, const cryptonote::relay_method tx_relay, const cryptonote::zone_route route)
   {
-    namespace enet = epee::net_utils;
-    using zone_entry = std::pair<const enet::zone, network_zone>;
-
-    const auto send = [&txs, &source, tx_relay] (zone_entry& network)
-    {
-      if (network.second.m_notifier.send_txs(std::move(txs), source, tx_relay))
-        return network.first;
-      return enet::zone::invalid;
-    };
-
-    if (m_network_zones.empty())
-      return enet::zone::invalid;
-
-    /* A forwarded stem is not a zone-routing decision. Arrival-coherence is
-       deleted. The session that received the stem is registered on this
-       zone's notifier, and that notifier stems it — which notifier holds
-       the edge, until one relay holds every session. The route token is
-       not read on this path. */
-    if (tx_relay == cryptonote::relay_method::stem)
-    {
-      if (m_network_zones.count(origin))
-        return send(*m_network_zones.find(origin));
-      MWARNING("Unable to send " << txs.size() << " transaction(s): arrival zone is not configured");
-      return enet::zone::invalid;
-    }
-
-    /* Anonymity-zone selection for originated traffic that chose the zone.
-       Tor is the anonymity zone, and it is the greatest zone discriminant,
-       so rbegin() on the sorted map is that zone when one is configured.
-       m_network_zones is a sorted map. */
-    static_assert(std::is_same<std::underlying_type<enet::zone>::type, std::uint8_t>{}, "expected uint8_t zone");
-    static_assert(unsigned(enet::zone::invalid) == 0, "invalid expected to be 0");
-    static_assert(unsigned(enet::zone::public_) == 1, "public_ expected to be 1");
-    static_assert(unsigned(enet::zone::tor) == 3, "tor expected to be 3");
-
-    /* Anonymity-zone pick for originated traffic that chose the zone (or a
-       local re-relay of one that did). Fail closed: take the zone even when
-       it cannot currently send. Falling back to clearnet would put our own
-       transaction on the public network, which is the first-spy case this
-       arc exists to prevent (§30.5). Better to send nothing.
-
-       The `require_usable=true` caller died with the per-arrival divert.
-       A forwarded stem does not ask this helper: the notifier that holds
-       the session stems it. Do not resurrect a usable-or-fall-through
-       path here; that was the divert's eligibility semantics, and once-at-
-       origin has no relayed roll for them to apply to. */
-    const auto select_anonymity = [this]() -> zone_entry*
-    {
-      if (m_network_zones.size() <= 2)
-      {
-        auto candidate = m_network_zones.rbegin();
-        return std::addressof(*candidate); // public alone, or the one anonymity zone
-      }
-
-      for (auto network = ++m_network_zones.begin(); network != m_network_zones.end(); ++network)
-      {
-        if (enet::zone::tor < network->first)
-          break; // unknown network
-
-        const auto status = network->second.m_notifier.get_status();
-        if (!status.has_noise || !status.connections_filled)
-          continue;
-        /* Noise-priority says which zone is PREFERRED. Dormant today --
-           `has_noise` is false everywhere since §41 -- and live the moment
-           covert returns. Unusable is still returned: fail closed, not
-           fall through. */
-        return std::addressof(*network);
-      }
-
-      for (auto network = ++m_network_zones.begin(); network != m_network_zones.end(); ++network)
-      {
-        if (enet::zone::tor < network->first)
-          break; // unknown network
-
-        const auto status = network->second.m_notifier.get_status();
-        if (network->second.m_connect && status.has_outgoing)
-          return std::addressof(*network);
-      }
-
-      return nullptr;
-    };
-
-    /* Once-at-origin. The zone is chosen once, by the originating node.
-       A forwarded stem does not enter this switch: the notifier that holds
-       the session stems it. Relayed traffic does not roll — the per-arrival
-       divert that used to sit here (`still_stemming && !source.is_nil() &&
-       divert()`) was the duplicate of arrival-coherence, and composing the
-       two was the one-way absorption that destroyed Q12-D4's cancellation.
-
-       The decision is a `zone_route` token only `once_at_origin_route`
-       can construct. This function requires one; a caller that bypasses
-       the helper is a compile error. Fluff is the exit and must not
-       cohere (§59.1).
-
-       Two paths put originated traffic on clearnet and they are different
-       events (B-3). A reader who cannot tell which produced it reads the
-       §30.5 fail-closed reversal this arc has already recorded:
-
-         1. Roll said clearnet. `daemon_submit::relay_tx` passed `public_`
-            via `shekyl_relay_zone_roll_originated_zone()`. This arm.
-            By design — the node already relays on clearnet at (1−p)·A/q.
-         2. Roll said anon, zone unusable. That is the
-            `anonymity_fail_closed` arm: `select_anonymity()` then
-            send nothing. Never this arm.
-
-       Pool re-relays of `local` keep passing `invalid` and do not re-roll.
-       They share arm 2's fail-closed path, which is why the roll is at
-       first origination rather than on every nil-source call. */
-    switch (route.get())
-    {
-      case cryptonote::zone_route::decision::anonymity_fail_closed:
-        /* ORIGINATED, roll said anonymity — or a local re-relay of a tx
-           that already chose anonymity. Take the zone regardless of
-           current usability; falling back to clearnet would put our own
-           transaction on the public network (§30.5). Better to send
-           nothing.
-
-           ALSO reached by a missed submit nudge: the origination roll
-           never ran, the pool still holds `local`, and this arm
-           first-decides the zone as always-anon. That is D5a in
-           miniature — a second chooser after origination — not a
-           harmless "always anon for that tx". Recorded in FOLLOWUPS.
-           Do not "fix" by rolling here; that is the `source.is_nil()`
-           reversal. */
-        if (zone_entry* anonymity = select_anonymity())
-          return send(*anonymity);
-        MWARNING("Unable to send " << txs.size() << " transaction(s): anonymity networks had no outgoing connections");
-        return enet::zone::invalid;
-      case cryptonote::zone_route::decision::public_clearnet:
-        return send(*m_network_zones.begin());
-      case cryptonote::zone_route::decision::broadcast_all_zones:
-      {
-        /* DESIGN A (sec 91): transport is a parameter, not a topology, so a
-           fluff floods EVERY configured zone rather than clearnet alone.
-
-           Before this arm existed a fluff took `public_clearnet` —
-           `*m_network_zones.begin()`, the clearnet zone, singular — which made
-           an anonymity zone a depth-one injection point into clearnet. A
-           Tor-only node therefore saw only anonymity-originated traffic and
-           could not maintain a mempool, disarm embargoes against the real
-           flood, or mine on a current template. Tor-only was not a working
-           posture by ROUTING, not by ruling (sec 91.1).
-
-           Every zone gets its own copy; the last takes the move. Success is
-           reported if ANY zone accepted, and the returned zone is the first
-           that did — a fluff that reached clearnet but not tor is a partial
-           flood, not a failure, and reporting `invalid` there would tell the
-           caller nothing was sent when something was. */
-        epee::net_utils::zone accepted = enet::zone::invalid;
-        for (auto network = m_network_zones.begin(); network != m_network_zones.end(); ++network)
-        {
-          const bool last = (std::next(network) == m_network_zones.end());
-          std::vector<cryptonote::blobdata> copy = last ? std::move(txs) : txs;
-          if (network->second.m_notifier.send_txs(std::move(copy), source, tx_relay)
-              && accepted == enet::zone::invalid)
-          {
-            accepted = network->first;
-          }
-        }
-        if (accepted == enet::zone::invalid)
-          MWARNING("Unable to fluff " << "transaction(s): no configured zone accepted");
-        return accepted;
-      }
-    }
-    return enet::zone::invalid;
+    /* One relay. The route token no longer selects a connector: hop 0 is
+       inside the relay, and a fluff reaches every session of that relay.
+       Byte 2 (the clearnet route) is retired with this. */
+    (void)route;
+    if (m_notifier.send_txs(std::move(txs), source, tx_relay))
+      return origin == epee::net_utils::zone::invalid ? epee::net_utils::zone::public_ : origin;
+    return epee::net_utils::zone::invalid;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -2921,7 +2770,7 @@ namespace nodetool
       return 1;
     }
 
-    zone.m_notifier.on_session_established(context.m_connection_id, context.m_is_income);
+    m_notifier.on_session_established(context.m_connection_id, context.m_is_income, cryptonote::levin::notify::connector_byte(azone));
     {
       std::uint64_t socket_id = 0;
       std::memcpy(&socket_id, context.m_connection_id.data + 8, sizeof(socket_id));
@@ -3018,7 +2867,7 @@ namespace nodetool
   {
     network_zone& zone = m_network_zones.at(context.m_remote_address.get_zone());
     if (!zone.m_net_server.is_stop_signal_sent()) {
-      zone.m_notifier.on_connection_close(context.m_connection_id);
+      m_notifier.on_connection_close(context.m_connection_id);
     }
     m_payload_handler.on_connection_close(context);
 

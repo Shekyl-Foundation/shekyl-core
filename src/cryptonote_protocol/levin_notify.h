@@ -101,8 +101,11 @@ namespace levin
       , core_(nullptr)
     {}
 
-    //! Construct an instance with available notification `zones`.
+    //! One registry, one connector. Tests and the single-zone fixtures.
     explicit notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::net_utils::zone zone, bool pad_txs, i_core_events& core);
+
+    //! One relay over every connector registry this node has.
+    explicit notify(boost::asio::io_context& service, std::vector<std::shared_ptr<connections>> registries, std::uint32_t configured, bool pad_txs, i_core_events& core);
 
     notify(const notify&) = delete;
     notify(notify&&) = default;
@@ -115,7 +118,12 @@ namespace levin
     //! \return Status information for zone selection.
     status get_status() const noexcept;
 
-    void on_session_established(const boost::uuids::uuid &id, bool is_income);
+    //! `connector` is the connector discriminant that carried the session.
+    void on_session_established(const boost::uuids::uuid &id, bool is_income, std::uint8_t connector);
+
+    //! Connector discriminant for a zone the seam still names. `0xff` is
+    //! not a connector.
+    static std::uint8_t connector_byte(epee::net_utils::zone zone) noexcept;
     void on_connection_close(const boost::uuids::uuid &id);
 
     //! Run the logic for the next epoch immediately. Only use in testing.

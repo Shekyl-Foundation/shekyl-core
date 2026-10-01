@@ -3460,11 +3460,21 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 //! `CRYPTONOTE_NOISE_CHANNELS`. Secrecy is the zone discriminant, not the
 //! fluff-reach bit — `NOISE_ENABLED` without `OUTBOUND_FLUFF_ONLY` on an
 //! encrypted zone is valid. Treat null as fatal.
+//! `configured` is a bit per [`ConnectorId`] index. A bit past the
+//! connector count refuses the handle. An empty mask keeps `zone` as the
+//! parameter class for fixtures; a non-empty mask derives it from the
+//! declarations of the connectors named.
 RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::uint8_t zone,
                                        std::size_t stems,
                                        std::uint32_t min_epoch_secs,
                                        std::uint32_t epoch_jitter_secs,
-                                       std::uint32_t flags);
+                                       std::uint32_t flags,
+                                       std::uint32_t configured);
+//! The declaration cell for this connector: the peer does not learn this
+//! node's address. Unknown connector bytes are false.
+bool shekyl_connector_address_hidden_from_peer(std::uint8_t connector);
+//! The relay's construction bit. Null is false.
+bool shekyl_relay_zone_hop0_restricted(const RelayZoneHandle* handle);
 //! Whether this zone runs noise channels.
 //! The single owner of a fact this side used to re-derive at nine sites from
 //! `!zone::noise.empty()` — a byte payload doubling as its own enable flag.
@@ -3548,8 +3558,8 @@ void shekyl_inbound_ceiling_resolve(std::uint64_t reserved,
 //! Unknown bytes map to the SAFE arm (fail-closed / false), never toward
 //! clearnet -- refuse-to-leak is the family's invariant (§30.5).
 //!
-//! Decision bytes: 1 = anonymity_fail_closed, 2 = public_clearnet,
-//! 3 = broadcast_all. A forwarded stem does not read this decision.
+//! Decision bytes: 1 = fail closed, 3 = broadcast all. Byte 2, the
+//! clearnet route, is retired.
 std::uint8_t shekyl_relay_zone_once_at_origin_route(std::uint8_t tx_relay, std::uint8_t origin_zone);
 
 //! §30.5/§89.8: an origin on a non-public zone keeps its `local` txpool
@@ -3631,8 +3641,9 @@ std::size_t shekyl_relay_zone_stem_in_flight(const RelayZoneHandle* handle);
 //! Free a zone. Null is a no-op; free exactly once.
 void shekyl_relay_zone_free(RelayZoneHandle* handle);
 //! A peer's Levin handshake completed (session established).
+//! `connector` is a connector discriminant. An unknown byte is ignored.
 void shekyl_relay_zone_on_session_established(
-    RelayZoneHandle* handle, const std::uint8_t* id, bool is_income, std::uint8_t network);
+    RelayZoneHandle* handle, const std::uint8_t* id, bool is_income, std::uint8_t connector);
 //! A peer disconnected.
 void shekyl_relay_zone_on_close(RelayZoneHandle* handle, const std::uint8_t* id);
 //! Stem slots backed by a live peer — the inherited `connection_count`. Reads a

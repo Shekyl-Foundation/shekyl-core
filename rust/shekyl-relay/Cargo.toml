@@ -22,6 +22,9 @@ shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
 # The seam's byte-pinned vocabulary (`RelayMethod`, `NetZone`) lives below both
 # this crate and the daemon store (rule 18; DRS-E1 S-POOL `SPL-Q6`).
 shekyl-types = { path = "../shekyl-types" }
+# The connector declaration table. Hop 0 reads a row of it; this crate does
+# not name a connector in a match.
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 
 [lints]
 workspace = true

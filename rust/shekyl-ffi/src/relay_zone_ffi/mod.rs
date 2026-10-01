@@ -64,9 +64,9 @@ use std::sync::{Arc, Mutex};
 
 use shekyl_levin::{NewTransactions, PortableMap, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay::{
-    AchievedOutConnections, CarrierToken, Driver, Effect, FloorTransition, FloorWatch,
-    NetworkClass, NodeSync, NoiseQueues, Relay, RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob,
-    TxId,
+    any_hides_address_from_peer, AchievedOutConnections, CarrierToken, ConnectorId, Driver, Effect,
+    FloorTransition, FloorWatch, NodeSync, NoiseQueues, Relay, RelayCarrier, RelayPlan,
+    StemTallySnapshot, TxBlob, TxId,
 };
 use shekyl_relay_privacy::params::{carrier, DandelionParams};
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -74,6 +74,46 @@ use shekyl_relay_privacy::stem_map::ConnectionId;
 use shekyl_relay_privacy::zone::{LinkSecrecy, RelayZone};
 
 use crate::secure_relay_rng::SecureRelayRng;
+
+/// Connectors named by bits of `mask`, in [`ConnectorId::ALL`] order.
+/// A bit past [`ConnectorId::COUNT`] is a caller bug and refuses the handle.
+fn connectors_from_mask(mask: u32) -> Result<Vec<ConnectorId>, ()> {
+    let known = (1u32 << ConnectorId::COUNT) - 1;
+    if mask & !known != 0 {
+        return Err(());
+    }
+    Ok(ConnectorId::ALL
+        .iter()
+        .copied()
+        .filter(|connector| mask & (1u32 << connector.index()) != 0)
+        .collect())
+}
+
+/// `connector` is a [`ConnectorId`] discriminant. Unknown bytes are false.
+#[no_mangle]
+pub extern "C" fn shekyl_connector_address_hidden_from_peer(connector: u8) -> bool {
+    connector_from_byte(connector).is_some_and(shekyl_relay::address_hidden_from_peer)
+}
+
+/// The construction bit: some configured connector declares the peer does
+/// not learn this node's address. Null is false.
+///
+/// # Safety
+/// `handle` must be live or null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_hop0_restricted(handle: *const RelayZoneHandle) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+    (*handle).driver.zone().hop0_restricted()
+}
+
+fn connector_from_byte(byte: u8) -> Option<ConnectorId> {
+    ConnectorId::ALL
+        .iter()
+        .copied()
+        .find(|connector| u8::try_from(connector.index()).ok() == Some(byte))
+}
 
 /// The nil UUID: an absent stem slot, or a locally originated transaction.
 const NIL: [u8; 16] = [0u8; 16];
@@ -569,12 +609,27 @@ pub extern "C" fn shekyl_relay_zone_new(
     min_epoch_secs: u32,
     epoch_jitter_secs: u32,
     flags: u32,
+    configured: u32,
 ) -> *mut RelayZoneHandle {
     if stems == usize::MAX || min_epoch_secs == 0 {
         return std::ptr::null_mut();
     }
     let noise_enabled = flags & SHEKYL_RELAY_ZONE_NOISE_ENABLED != 0;
-    let relay_zone = RelayZone::from_ffi_u8(zone);
+    let Ok(configured_connectors) = connectors_from_mask(configured) else {
+        return std::ptr::null_mut();
+    };
+    // An empty mask keeps the zone byte for fixtures that predate the
+    // connector argument. A non-empty mask is the node's configured
+    // connectors, and the parameter class follows the declaration: a
+    // connector that hides this node's address uses that connector's
+    // transit term until the embargo reads the forwarded edge.
+    let relay_zone = if configured_connectors.is_empty() {
+        RelayZone::from_ffi_u8(zone)
+    } else if any_hides_address_from_peer(&configured_connectors) {
+        RelayZone::Tor
+    } else {
+        RelayZone::Public
+    };
     let params = DandelionParams {
         min_epoch_secs,
         epoch_jitter_secs,
@@ -596,7 +651,15 @@ pub extern "C" fn shekyl_relay_zone_new(
     let mut rng = SecureRelayRng;
     // `Err` is a refused configuration, not an allocation failure. See
     // `Relay::new`. Null is the only channel a C ABI has for saying so.
-    let Ok(zone) = Relay::new(params, stems, secrecy, noise_enabled, now_ms, &mut rng) else {
+    let Ok(zone) = Relay::new(
+        params,
+        stems,
+        secrecy,
+        noise_enabled,
+        &configured_connectors,
+        now_ms,
+        &mut rng,
+    ) else {
         return core::ptr::null_mut();
     };
     // The carrier's buffers are built exactly when the zone carries it. The
@@ -774,17 +837,15 @@ pub unsafe extern "C" fn shekyl_relay_zone_on_session_established(
     } else {
         PeerDirection::Outbound
     };
-    let network = match network {
-        0 => NetworkClass::Clearnet,
-        1 => NetworkClass::Anonymity,
-        _ => return,
+    let Some(connector) = connector_from_byte(network) else {
+        return;
     };
     // `publish` is `&self` and must not overlap the `driver`/`rng` borrow.
     {
         let RelayZoneHandle { driver, rng, .. } = &mut *handle;
         driver
             .zone_mut()
-            .on_session_established(peer, direction, network, rng);
+            .on_session_established(peer, direction, connector, rng);
     }
     (*handle).publish();
 }
@@ -1170,7 +1231,7 @@ pub extern "C" fn shekyl_p2p_default_out_peers() -> u32 {
 // ---------------------------------------------------------------------------
 
 /// Q12-D5a once-at-origin routing: `(relay_method byte, zone byte)` → decision
-/// byte (1 = anonymity_fail_closed, 2 = public_clearnet, 3 = broadcast_all).
+/// byte (1 = fail closed, 3 = broadcast all). Byte 2 is retired.
 ///
 /// Unknown method or zone bytes return `1` (fail-closed: send nothing).
 #[no_mangle]

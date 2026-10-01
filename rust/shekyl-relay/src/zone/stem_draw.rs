@@ -27,6 +27,7 @@ fn zone(rng: &mut SplitMix64) -> Relay {
         2,
         LinkSecrecy::of(RelayZone::Public),
         false,
+        &[ConnectorId::Clearnet],
         0,
         rng,
     )
@@ -38,7 +39,7 @@ fn establish_outbound(zone: &mut Relay, peers: &[u8], rng: &mut SplitMix64) {
         zone.on_session_established(
             id(*peer),
             PeerDirection::Outbound,
-            NetworkClass::Clearnet,
+            ConnectorId::Clearnet,
             rng,
         );
     }
@@ -131,7 +132,7 @@ fn rollover_candidates_are_established_outbound_sessions() {
     z.on_session_established(
         id(1),
         PeerDirection::Inbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     establish_outbound(&mut z, &[2, 3], &mut rng);
@@ -156,6 +157,7 @@ fn stem_draws_are_not_biased_toward_one_outbound_peer() {
         1,
         LinkSecrecy::of(RelayZone::Public),
         false,
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     )
@@ -190,6 +192,7 @@ fn a_two_slot_draw_over_three_peers_uses_each_peer() {
         2,
         LinkSecrecy::of(RelayZone::Public),
         false,
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     )

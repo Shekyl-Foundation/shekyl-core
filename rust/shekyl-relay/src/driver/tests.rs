@@ -5,8 +5,8 @@
 
 use super::*;
 use crate::stem_watch::TxId;
+use crate::ConnectorId;
 use crate::LinkSecrecy;
-use crate::NetworkClass;
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -25,6 +25,7 @@ fn driver(rng: &mut SplitMix64) -> Driver {
             2,
             LinkSecrecy::of(RelayZone::Public),
             false,
+            &[ConnectorId::Clearnet],
             0,
             rng,
         )
@@ -51,7 +52,7 @@ fn next_wake_follows_a_newly_queued_batch_without_re_arming() {
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.zone_mut().queue_fluff(&[vec![1]], None, 0, &mut rng);
@@ -73,7 +74,7 @@ fn polling_releases_a_batch_at_its_deadline_and_not_before() {
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Inbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.zone_mut().queue_fluff(&[vec![7]], None, 0, &mut rng);
@@ -103,7 +104,7 @@ fn an_epoch_rollover_redraws_the_stem_set() {
         d.zone_mut().on_session_established(
             *peer,
             PeerDirection::Outbound,
-            NetworkClass::Clearnet,
+            ConnectorId::Clearnet,
             &mut rng,
         );
     }
@@ -132,19 +133,19 @@ fn an_outbound_handshake_fills_the_map_without_rolling_the_epoch() {
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.zone_mut().on_session_established(
         id(2),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.zone_mut().on_session_established(
         id(3),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     assert_eq!(d.zone().live_stems(), 2, "the handshake fills the map");
@@ -158,19 +159,19 @@ fn an_outbound_handshake_fills_the_map_without_rolling_the_epoch() {
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.zone_mut().on_session_established(
         id(2),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.zone_mut().on_session_established(
         id(3),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     assert_eq!(
@@ -212,6 +213,7 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
             2,
             LinkSecrecy::of(RelayZone::Tor),
             true,
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
@@ -220,13 +222,13 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.zone_mut().on_session_established(
         id(2),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
 
@@ -238,7 +240,7 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
     d.zone_mut().on_session_established(
         keep,
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     assert_eq!(
@@ -313,6 +315,7 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
             2,
             LinkSecrecy::of(RelayZone::Tor),
             true,
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
@@ -321,13 +324,13 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.zone_mut().on_session_established(
         id(2),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
@@ -336,7 +339,7 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
     d.zone_mut().on_session_established(
         id(3),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     assert_eq!(
@@ -372,13 +375,13 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.zone_mut().on_session_established(
         id(2),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
@@ -387,7 +390,7 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
     d.zone_mut().on_session_established(
         keep,
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     assert_eq!(
@@ -424,7 +427,7 @@ fn forcing_runs_the_same_paths_as_the_deadline() {
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Inbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.zone_mut().queue_fluff(&[vec![9]], None, 0, &mut rng);
@@ -445,7 +448,7 @@ fn forcing_runs_the_same_paths_as_the_deadline() {
     d.zone_mut().on_session_established(
         id(2),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.force_epoch(0, &mut rng);
@@ -493,6 +496,7 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
             2,
             LinkSecrecy::of(RelayZone::Tor),
             true,
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
@@ -503,13 +507,13 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.zone_mut().on_session_established(
         id(2),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
 
@@ -584,6 +588,7 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
             2,
             LinkSecrecy::of(RelayZone::Tor),
             true,
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
@@ -592,13 +597,13 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.zone_mut().on_session_established(
         id(2),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
 
@@ -663,6 +668,7 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
             2,
             LinkSecrecy::of(RelayZone::Tor),
             true,
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
@@ -671,13 +677,13 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.zone_mut().on_session_established(
         id(2),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
 
@@ -693,7 +699,7 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
     d.zone_mut().on_session_established(
         keep,
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     let truth: Vec<Option<ConnectionId>> = d.zone().stem_slots().to_vec();
@@ -750,6 +756,7 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
             2,
             LinkSecrecy::of(RelayZone::Tor),
             true,
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
@@ -758,13 +765,13 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
     d.zone_mut().on_session_established(
         id(2),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
 
@@ -834,7 +841,7 @@ fn a_stem_observation_resolves_on_the_poll_clock_and_a_close_drops_it() {
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
 
@@ -891,7 +898,7 @@ fn an_arrival_resolves_the_observation_as_propagated() {
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
-        NetworkClass::Clearnet,
+        ConnectorId::Clearnet,
         &mut rng,
     );
 

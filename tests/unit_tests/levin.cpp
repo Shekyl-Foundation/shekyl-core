@@ -398,7 +398,8 @@ namespace
         virtual void on_connection_new(cryptonote::levin::detail::p2p_context& context) override final
         {
             if (notifier)
-                notifier->on_session_established(context.m_connection_id, context.m_is_income);
+                notifier->on_session_established(context.m_connection_id, context.m_is_income,
+                  cryptonote::levin::notify::connector_byte(context.m_remote_address.get_zone()));
         }
 
         virtual void on_connection_close(cryptonote::levin::detail::p2p_context& context) override final
@@ -500,7 +501,17 @@ namespace
                notifier). Adopt them now. An outbound adopt merges the stem
                map on the strand; the caller's poll is queued after it. */
             for (const auto& context : contexts_)
-                receiver_.notifier->on_session_established(context.get_id(), context.is_incoming());
+                receiver_.notifier->on_session_established(context.get_id(), context.is_incoming(),
+                  cryptonote::levin::notify::connector_byte(zone));
+            return receiver_.notifier;
+        }
+
+        std::shared_ptr<cryptonote::levin::notify> make_hidden_and_clear_notifier()
+        {
+            std::vector<std::shared_ptr<cryptonote::levin::connections>> registries{connections_};
+            const std::uint32_t configured = (std::uint32_t{1} << 0) | (std::uint32_t{1} << 1);
+            receiver_.notifier.reset(new cryptonote::levin::notify{
+              io_service_, std::move(registries), configured, false, events_});
             return receiver_.notifier;
         }
 
@@ -811,13 +822,13 @@ TEST(once_at_origin_route, table)
 
     // A stem on a real zone is not this function's decision. The residual
     // is clearnet; production does not consult it for a forwarded stem.
-    EXPECT_EQ(zone_route::decision::public_clearnet,
+    EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
               cryptonote::once_at_origin_route(relay_method::stem, zone::tor).get());
-    EXPECT_EQ(zone_route::decision::public_clearnet,
+    EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
               cryptonote::once_at_origin_route(relay_method::local, zone::tor).get());
 
     // Relayed clearnet inherit — no roll. This is the deleted divert.
-    EXPECT_EQ(zone_route::decision::public_clearnet,
+    EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
               cryptonote::once_at_origin_route(relay_method::stem, zone::public_).get());
 
     // Originated, roll said anon (`invalid`) — fail closed, never clearnet.
@@ -827,7 +838,7 @@ TEST(once_at_origin_route, table)
               cryptonote::once_at_origin_route(relay_method::stem, zone::invalid).get());
 
     // Originated, roll said clearnet (`public_`) — by design, not a fallback.
-    EXPECT_EQ(zone_route::decision::public_clearnet,
+    EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
               cryptonote::once_at_origin_route(relay_method::local, zone::public_).get());
 
     /* DESIGN A (sec 91): a fluff floods EVERY configured zone, from every
@@ -1433,6 +1444,28 @@ TEST_F(levin_notify, unsynchronised_node_originates_no_stem)
     // unsynchronised) is the zone test
     // `an_unsynchronised_origin_is_withheld_without_touching_the_map`.
     // `stem_without_padding` runs synchronised, with `relay_method::stem`.
+}
+
+TEST_F(levin_notify, hidden_connector_with_only_tcp_originates_nothing)
+{
+    /* A node whose configured connectors include one that declares the
+       peer does not learn this node's address, and whose only session is
+       TCP. Hop 0 originates nothing. The plan is NoRoute; nothing is sent. */
+    auto notifier_ptr = make_hidden_and_clear_notifier();
+
+    add_connection(false);
+    notifier_ptr->on_session_established(contexts_.back().get_id(), false, 0);
+    io_service_.poll();
+
+    events_.set_synchronized(true);
+    std::vector<cryptonote::blobdata> mine(1);
+    mine[0].resize(100, 'e');
+    EXPECT_TRUE(notifier_ptr->send_txs(std::move(mine), boost::uuids::nil_uuid(), cryptonote::relay_method::local));
+    io_service_.restart();
+    ASSERT_LT(0u, io_service_.poll());
+    EXPECT_EQ(0u, events_.relayed_method_size());
+    EXPECT_EQ(0u, receiver_.notified_size());
+    EXPECT_EQ(0u, contexts_.back().process_send_queue());
 }
 
 TEST_F(levin_notify, local_without_padding)

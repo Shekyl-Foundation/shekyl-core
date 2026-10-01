@@ -340,7 +340,6 @@ namespace nodetool
           m_bind_ipv6_address(),
           m_port(),
           m_port_ipv6(),
-          m_notifier(),
           m_our_address(),
           m_peerlist(),
           m_config{},
@@ -362,7 +361,6 @@ namespace nodetool
           m_bind_ipv6_address(),
           m_port(),
           m_port_ipv6(),
-          m_notifier(),
           m_our_address(),
           m_peerlist(),
           m_config{},
@@ -383,7 +381,6 @@ namespace nodetool
       std::string m_bind_ipv6_address;
       std::string m_port;
       std::string m_port_ipv6;
-      cryptonote::levin::notify m_notifier;
       epee::net_utils::network_address m_our_address; // in anonymity networks
       // Self-detection nonces for outbound handshakes in flight on THIS
       // zone (SHEKYL_P2P_PROTOCOL.md, PWD-T1's token carried interim):
@@ -711,6 +708,8 @@ namespace nodetool
     //critical_section m_connections_lock;
     //connections_indexed_container m_connections;
 
+    //! One relay. Connection registries stay on each connector.
+    cryptonote::levin::notify m_notifier;
     t_payload_net_handler& m_payload_handler;
     peerlist_storage m_peerlist_storage;
 
