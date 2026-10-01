@@ -191,9 +191,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 g.refresh.scan_start_floor(),
             )
         };
-        if let Err(e) =
-            crate::engine::scan_floor::ensure_birthday_anchor(&ledger, &daemon, floor).await
-        {
+        if let Err(e) = crate::engine::scan_floor::prepare_refresh(&ledger, &daemon, floor).await {
             _ = completion.send(Err(e));
             return;
         }

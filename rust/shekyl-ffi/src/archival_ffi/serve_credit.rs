@@ -16,7 +16,7 @@ use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, Signature
 use shekyl_fcmp::SCALARS_PER_LEAF;
 
 use super::codes::*;
-use super::schedule::{settlement_epoch_close_height, settlement_epoch_open_height};
+use super::schedule::{settlement_epoch_last_block, settlement_epoch_open_height};
 use crate::legacy_util::{array_from_ptr, slice_from_ptr};
 
 /// Extract the three fields C++ indexes a serve-credit by — `(P, shard, E)` —
@@ -195,7 +195,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
     );
 
     let h_open = settlement_epoch_open_height(response.settlement_epoch);
-    let h_close = settlement_epoch_close_height(response.settlement_epoch);
+    let h_close = settlement_epoch_last_block(response.settlement_epoch);
     let h_fire = challenge_fire_height(
         h_open,
         h_close,

@@ -99,6 +99,8 @@ impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> ChainView<'id> for Outpu
     fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
         Ok((self.0)(height))
     }
+    // No bonds: the honest empty archival state (DRS-E4 §5.2).
+    crate::archival_reads!(empty);
 }
 
 #[test]

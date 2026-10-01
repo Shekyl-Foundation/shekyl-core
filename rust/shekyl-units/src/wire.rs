@@ -22,6 +22,7 @@
 //! the desktop wallet's Tauri edge all serialize this type, so the two front
 //! ends cannot disagree about it.
 
+use alloc::string::String;
 use core::fmt;
 use core::str::FromStr;
 
@@ -68,7 +69,7 @@ impl fmt::Display for ParseAtomicUnitsStringError {
     }
 }
 
-impl std::error::Error for ParseAtomicUnitsStringError {}
+impl core::error::Error for ParseAtomicUnitsStringError {}
 
 impl fmt::Display for AtomicUnitsString {
     /// The wire text: the raw atomic-unit integer, no unit marker.
@@ -109,6 +110,9 @@ impl<'de> Deserialize<'de> for AtomicUnitsString {
 
 #[cfg(test)]
 mod tests {
+    use alloc::format;
+    use alloc::string::ToString;
+
     use super::*;
 
     /// The first integer a JS `number` cannot hold.

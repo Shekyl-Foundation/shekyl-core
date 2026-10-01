@@ -2,6 +2,84 @@
 
 ## [Unreleased]
 
+### Wallet RPC — every failure a user can act on has its own code
+
+- A wallet created in a directory that does not exist was reported as
+  `-29003 WALLET_FILE_NOT_FOUND`. The RPC read the cause back out of an error
+  message: `IoError::WalletFile` carried only a string, and the classifier
+  searched it for "not found". `IoError::WalletFile` now carries
+  `WalletFileError` itself, `WalletFile::create` names a missing directory
+  before writing anything (`DirectoryMissing`), and the classifier is gone.
+  The same create now answers `-29009 WALLET_DIR_MISSING`.
+- 31 codes are allocated in `docs/api/wallet_rpc.yaml`, each for a cause that
+  previously reached `-32603` or a neighbouring code's text:
+  - wallet storage `-29007..-29016` (network mismatch, locked by another
+    process, missing directory, access denied, corrupt, unsupported version,
+    I/O failure, close blocked by in-flight transactions, curve-tree data
+    unavailable, and a curve-tree store that cannot be used — delete and
+    reopen, never "restore from seed": the store holds no keys or balance);
+  - build and submit `-29110..-29119` (not synced, membership rebuild,
+    output too fresh, chain too short, loop-breaker tripped, submit already
+    pending, re-anchor unavailable, reselection required, unreadable fee
+    answer, signer failed);
+  - `-29204 REFRESH_CANCELLED`;
+  - the daemon `-29205..-29210` (another RPC version, other consensus rules,
+    another network, another chain, a reply that broke the contract, and a
+    chain that kept reorganizing);
+  - a staker's open-time refusals `-29530..-29533`.
+- A daemon that answered and was refused (a wallet pointed at a daemon on
+  another network, version or chain) was reported as `-29201
+  DAEMON_UNREACHABLE`. The identity handshake flattened its typed verdict into
+  `RpcError::InvalidNode(String)`, and `IoError::Daemon` carried only a string.
+  `RpcError::IdentityMismatch` now carries the verdict, `RpcError::fault`
+  classifies every daemon failure by remedy (`DaemonFault`: no answer,
+  identity, protocol violation, unusable fee reply, this side's own fault),
+  and `IoError::Daemon` and `FeeEstimatorError::Daemon` carry that class. The
+  fee path's match on message prefixes is gone. Each identity axis has its own
+  code, with both sides named in `data`.
+- Refresh confirms the daemon's identity before the producer runs
+  (`scan_floor::prepare_refresh`), so the producer's error stays unit-variant
+  (`STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.7 R6). The producer's `Io` is split
+  into `DaemonUnreachable` and `DaemonProtocol`, and an identity refusal is
+  not retried. A malformed block served by the daemon is a protocol fault
+  (`-29209`), not an outage, and a reorg storm is `RefreshError::ReorgStorm`
+  (`-29210`); both used to answer `-29201`.
+- `IdentityMismatch` no longer carries the daemon's unparsed reply text: it is
+  logged where the reply is parsed, and the mismatch is a fixed-size `Copy`
+  value. The drain, unstake, collect and first-stake paths carry a failed fee
+  query as the typed `FeeEstimatorError`, so each cause answers the send
+  path's code rather than `-29102` for all of them.
+- Every wallet-file failure the text classifier did not recognise (a damaged
+  file, a lock held by another process, a failed atomic write) answered
+  `-32603` with the upstream error's own text as the message. That text names
+  local paths ("lock held on {path}", "rename into {target}"), so paths reached
+  the wire. Each now has its code, and a category-only message. The envelope's
+  "invalid password or corrupted" stays `-29004`: the envelope cannot tell the
+  two apart. A build's daemon failure answers `-29201` rather than
+  `-29102 FEE_ESTIMATION_FAILED`.
+- The curve-tree store classifies its own open failures
+  (`ClientError::open_fault`: locked elsewhere, corrupt, unsupported, I/O,
+  internal); the wallet carries the class, not a string. A ring snapshot that
+  will not decode or disagrees with the drain index at open is corruption.
+  A refresh's curve-tree ingest failure is typed (`CurveTreeIngestFault`,
+  whose `recoverable_by_respawn` replaces a separate flag beside a string), so
+  "close and reopen" is answered only where a reopen can help: a root the
+  header does not commit to or an undecodable backfill block is `-29209`, a
+  contract fault is `-32603`.
+- Creating a wallet under a path whose directory cannot be read keeps its own
+  cause (`-29010` for permissions); only absence is `-29009`.
+- `SendError::CannotSign` was split by meaning: `NotSynced`,
+  `SignerUnavailable` (answered as `-29006`), `SignerFailed`, and
+  `BuildInvariant` for preconditions only a bug breaks. The engine's
+  diagnostics no longer compare a reason string to recognise "not synced", and
+  no longer label proof-construction failures as an invalid recipient.
+- `-32603` is left to bugs and invariant failures. The `#[non_exhaustive]`
+  engine enums keep the wildcard arm Rust requires, with every current variant
+  named ahead of it.
+- A test holds `WalletRpcErrorCode` and the contract's enum to one set, in
+  both directions. The Rust table is declared once, and `ALL` is generated
+  from it. `IoError::Ledger`, which nothing constructed, is deleted.
+
 ### P2P zones listen through the seam
 
 - Each zone's server is the seam: clearnet and Tor bind there, and a
@@ -66,6 +144,36 @@
   `fcmps` logic change, so it is unchanged. Q6 re-vetted: an honest on-curve
   proof's content, length, and framing are unchanged
   (`GENESIS_TX_WIRE_FORMAT.md` Q6).
+
+### Consensus — the Rust validator's CEN-F17 operand `n` is the closed archival-shard count (DRS-E4 commit 4)
+
+- The D2 staker-share escalation's operand `n` (`staker_pool_share_at`) in
+  the Rust validator is re-keyed from the curve tree's frozen J-segment
+  count — the partition the retired freeze pipeline defined (`PDM-Q12`) —
+  to the archival shards the parent chain has closed on `SHT-Q2`'s
+  partition: `shard_of(cumulative_archival_len)` at parent state
+  (`shekyl_chain_rules::closed_shards_before`), and a closed shard's age
+  operand is the height whose fold first reached the shard's end
+  (`shard_close_height`), a binary search over the recorded fold, not a
+  stored freeze. The C++ validator keeps its frozen-segment operand
+  (`Blockchain::parent_frozen_segment_count`): LMDB keeps no archival fold,
+  and adding one to the C++ is refused (rule 20) — the difference is
+  CEN-L10's ruled divergence, closed by the cutover that deletes the C++
+  path. **Behaviour-neutral on every shipped parameterization**: the
+  escalation is flat (asymptote = floor), so the burn split is
+  bit-identical on both validators before and after. `escalation_knee_n`
+  is carried unchanged and is re-derived in the new unit before the
+  ceremony raises the asymptote (FOLLOWUPS' D2 row). `FrozenSegmentCount`
+  → `ClosedShardCount` across `shekyl-economics` and its Rust callers; the
+  FFI parameters keep the name `frozen_segment_count`, which is what the
+  C++ passes. (`DRS_E4_ARCHIVAL_WRITER.md` §3.7, ARW-Q6.)
+- Contract: the chain store's `SCHEMA_VERSION` 18 → 19 — the seven LMDB
+  archival tables the E4 writer does not port are catalogued
+  `NOT_PORTED`, `archival_budget_accruing` (one accrual row per open
+  epoch, ARW-Q3) is added, and the store's layout manifests are v3 with
+  the settlement schedule the store was opened under (ARW-15;
+  `StoreCannot::SettlementEpochMismatch` at open). Pre-genesis,
+  rebuild-never-migrate.
 
 ### Chain store — shards are cut by archival length (`SHT-Q2`, Rust half)
 

@@ -80,6 +80,7 @@ pub use served_frame::{ServedFrameError, ServedFrameField, ServedFrameHeader};
 pub use store::{
     mixed_composition_root, recompute_segment_r_k, FrozenSegmentBody, FrozenSegmentRecord,
     LeafStore, MixedRootError, PostureDeclaration, SegmentPin, ServingReader, StoreError,
+    StoreOpenFault,
 };
 pub use types::{
     AssembleInput, AssembledPath, BlockHash, BlockHeight, ChunkLeaf, CommitmentBytes,

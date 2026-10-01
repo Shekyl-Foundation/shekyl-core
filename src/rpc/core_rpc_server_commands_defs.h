@@ -1444,10 +1444,9 @@ namespace cryptonote
     {
       uint64_t settlement_epoch;
       /// The close-**processing** height `(E+1)·SEB` — sourced from
-      /// `shekyl_archival_epoch_close_processing_height`, NEVER the
-      /// lookalike `shekyl_archival_epoch_close_height` (= `(E+1)·SEB − 1`,
-      /// the epoch's last block). Carries the landed struct's hazard pin
-      /// verbatim (§7.3).
+      /// `shekyl_archival_epoch_close_processing_height`; one above the
+      /// epoch's last block `shekyl_archival_epoch_last_block` (= `(E+1)·SEB − 1`).
+      /// Carries the landed struct's pin (§7.3).
       uint64_t close_block_height;
       /// Persisted finalized `Σwork(E)` milli — the stored denominator,
       /// never a recompute (the M1 gate outcome reaches the wallet only

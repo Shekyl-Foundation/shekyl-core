@@ -33,7 +33,7 @@
 //!
 //! [`DaemonClient::verifying`] compares the daemon's `get_version` tuple
 //! to this build on first request, gated at [`Rpc::post`]. A mismatch is
-//! [`RpcError::InvalidNode`]. [`DaemonClient::new`] performs no check
+//! [`RpcError::IdentityMismatch`]. [`DaemonClient::new`] performs no check
 //! and exists for harnesses whose fake daemons serve no `get_version`.
 //! Wallet-file vs caller network remains [`OpenError::NetworkMismatch`]
 //! (`{ wallet, expected }`); that is a different fact.
@@ -234,7 +234,7 @@ impl DaemonClient {
             .await
         {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(mismatch)) => Err(RpcError::InvalidNode(wallet_identity_message(mismatch))),
+            Ok(Err(mismatch)) => Err(RpcError::IdentityMismatch(*mismatch)),
             Err(e) => Err(e),
         }
     }
@@ -290,8 +290,7 @@ async fn fetch_get_version(
         .post("json_rpc", body)
         .await
         .map_err(HandshakeFail::Transport)?;
-    let envelope: Value = serde_json::from_slice(&raw)
-        .map_err(|e| HandshakeFail::Mismatch(shekyl_rpc_types::IdentityMismatch::unreadable(e)))?;
+    let envelope: Value = serde_json::from_slice(&raw).map_err(unreadable_reply)?;
     if let Some(error) = envelope.get("error") {
         let message = error
             .get("message")
@@ -301,64 +300,18 @@ async fn fetch_get_version(
             format!("get_version: {message}"),
         )));
     }
-    let result = envelope.get("result").ok_or_else(|| {
-        HandshakeFail::Mismatch(shekyl_rpc_types::IdentityMismatch::unreadable(
-            "malformed get_version reply: no result",
-        ))
-    })?;
-    serde_json::from_value(result.clone())
-        .map_err(|e| HandshakeFail::Mismatch(shekyl_rpc_types::IdentityMismatch::unreadable(e)))
+    let result = envelope
+        .get("result")
+        .ok_or_else(|| unreadable_reply("malformed get_version reply: no result"))?;
+    serde_json::from_value(result.clone()).map_err(unreadable_reply)
 }
 
-fn wallet_identity_message(m: &shekyl_rpc_types::IdentityMismatch) -> String {
-    use shekyl_rpc_types::{core_rpc_version_string, IdentityAxis, IdentityMismatch};
-    match m {
-        IdentityMismatch::Wire { ours, theirs } => {
-            let older = if theirs < ours {
-                "daemon"
-            } else {
-                "this wallet"
-            };
-            format!(
-                "{axis} mismatch: this wallet is {}, the daemon is {} — the {older} is the \
-                 older one; update it. Refusing before any wallet operation.",
-                core_rpc_version_string(*ours),
-                core_rpc_version_string(*theirs),
-                axis = IdentityAxis::Wire,
-            )
-        }
-        IdentityMismatch::WireUnreadable { ours, evidence } => format!(
-            "this daemon's `get_version` does not match the RPC contract this wallet \
-             was built against, so the two are on different RPC versions. This wallet \
-             is {}. The reply could not be read, so the daemon's version cannot be \
-             named here; align the two builds. (evidence: {evidence})",
-            core_rpc_version_string(*ours),
-        ),
-        IdentityMismatch::Rules { ours, theirs } => format!(
-            "{axis} mismatch: this wallet's digest is {ours}, the daemon's is {theirs}. The \
-             RPC contract matches, so neither side is a stale release — one tree's config/ \
-             differs from the other, which is a different RULE SET rather than a version \
-             skew. Balances read from it would be computed under rules this wallet does \
-             not implement.",
-            axis = IdentityAxis::Rules,
-        ),
-        IdentityMismatch::Network { ours, theirs } => format!(
-            "{axis} mismatch: this wallet is a {ours} wallet, the daemon runs \
-             {theirs}. This is the case cross-cutting lock 5 names — a wallet pointed at a \
-             daemon on another network — so it refuses rather than scanning it.",
-            axis = IdentityAxis::Network,
-        ),
-        IdentityMismatch::Genesis {
-            ours,
-            theirs,
-            network,
-        } => format!(
-            "{axis} mismatch: this daemon's chain starts at {theirs}, this wallet's \
-             {network} genesis is {ours}. Whatever else agrees, that is a different \
-             chain.",
-            axis = IdentityAxis::Genesis,
-        ),
-    }
+/// A `get_version` reply this build cannot read. What failed to parse is the
+/// daemon's text: it goes to the log here and is not carried in the
+/// mismatch, which stays a fixed-size value.
+fn unreadable_reply(evidence: impl std::fmt::Display) -> HandshakeFail {
+    tracing::warn!(%evidence, "daemon get_version reply unreadable");
+    HandshakeFail::Mismatch(shekyl_rpc_types::IdentityMismatch::unreadable())
 }
 
 impl Rpc for DaemonClient {
@@ -379,6 +332,10 @@ impl Rpc for DaemonClient {
 
 impl DaemonEngine for DaemonClient {
     type Error = RpcError;
+
+    fn verify_identity(&self) -> impl Send + Future<Output = Result<(), RpcError>> {
+        self.ensure_identity()
+    }
 
     /// Atomic single-RPC fee snapshot (§3.3).
     ///
@@ -556,11 +513,20 @@ mod tests {
     /// The refusal must arrive through the request funnel, not only from a
     /// checker called directly — otherwise a wallet operation could reach the
     /// daemon around it.
-    async fn first_request_error(reply: String, expectation: DaemonExpectation) -> String {
+    async fn first_request_error(reply: String, expectation: DaemonExpectation) -> RpcError {
         let client = client_for(reply, expectation).await;
         match client.post("/get_height", Vec::new()).await {
             Ok(_) => panic!("the request must be refused before it reaches the daemon"),
-            Err(e) => format!("{e:?}"),
+            Err(e) => e,
+        }
+    }
+
+    /// The typed verdict a refusal carries: callers branch on this, and the
+    /// message is only its wording.
+    fn refused_on(err: &RpcError) -> shekyl_rpc_types::IdentityMismatch {
+        match err {
+            RpcError::IdentityMismatch(mismatch) => *mismatch,
+            other => panic!("expected an identity refusal, got {other:?}"),
         }
     }
 
@@ -577,8 +543,16 @@ mod tests {
 
     #[tokio::test]
     async fn a_wire_version_mismatch_refuses_and_names_the_older_side() {
-        let out =
+        let err =
             first_request_error(version_reply(|r| r.version -= 1), mainnet_expectation()).await;
+        assert_eq!(
+            refused_on(&err),
+            shekyl_rpc_types::IdentityMismatch::Wire {
+                ours: shekyl_rpc_types::CORE_RPC_VERSION,
+                theirs: shekyl_rpc_types::CORE_RPC_VERSION - 1,
+            }
+        );
+        let out = err.to_string();
         assert!(out.contains("RPC contract mismatch"), "{out}");
         assert!(
             out.contains("the daemon is the older one"),
@@ -588,31 +562,41 @@ mod tests {
 
     #[tokio::test]
     async fn a_rules_digest_mismatch_refuses_without_inventing_an_ordering() {
-        let out = first_request_error(
+        let err = first_request_error(
             version_reply(|r| {
                 r.consensus_constants_digest = shekyl_rpc_types::HashHex::from_bytes([0x99; 32]);
             }),
             mainnet_expectation(),
         )
         .await;
+        assert!(matches!(
+            refused_on(&err),
+            shekyl_rpc_types::IdentityMismatch::Rules { .. }
+        ));
+        let out = err.to_string();
         assert!(out.contains("consensus constants mismatch"), "{out}");
         // VC-D15: a hash carries no ordering and the message must not claim one.
         assert!(
             !out.contains("older"),
             "a digest mismatch cannot know a stale side and must not name one: {out}"
         );
-        assert!(out.contains("different RULE SET"), "{out}");
+        assert!(out.contains("a different rule set"), "{out}");
     }
 
     #[tokio::test]
     async fn a_foreign_genesis_daemon_is_refused() {
-        let out = first_request_error(
+        let err = first_request_error(
             version_reply(|r| {
                 r.genesis_hash = shekyl_rpc_types::HashHex::from_bytes([0xff; 32]);
             }),
             mainnet_expectation(),
         )
         .await;
+        assert!(matches!(
+            refused_on(&err),
+            shekyl_rpc_types::IdentityMismatch::Genesis { .. }
+        ));
+        let out = err.to_string();
         assert!(out.contains("genesis block mismatch"), "{out}");
         assert!(out.contains("different chain"), "{out}");
     }
@@ -622,13 +606,24 @@ mod tests {
         // The case only this axis can see: the digest is generated from ONE
         // JSON for every network, so a testnet daemon from this same tree
         // carries the SAME digest and the SAME RPC version.
-        let out = first_request_error(
+        let err = first_request_error(
             version_reply(|r| r.nettype = shekyl_rpc_types::DaemonNetwork::Testnet),
             mainnet_expectation(),
         )
         .await;
+        assert_eq!(
+            refused_on(&err),
+            shekyl_rpc_types::IdentityMismatch::Network {
+                ours: shekyl_rpc_types::DaemonNetwork::Mainnet,
+                theirs: shekyl_rpc_types::DaemonNetwork::Testnet,
+            }
+        );
+        let out = err.to_string();
         assert!(out.contains("network mismatch"), "{out}");
-        assert!(out.contains("lock 5"), "{out}");
+        assert!(
+            out.contains("the daemon runs testnet"),
+            "the refusal names the daemon's network: {out}"
+        );
     }
 
     #[tokio::test]
@@ -638,8 +633,11 @@ mod tests {
 
         // Default: refused. This is the shipped behaviour, and there is no
         // operator flag that changes it (VC-R3).
-        let out = first_request_error(fakechain(), mainnet_expectation()).await;
-        assert!(out.contains("network mismatch"), "{out}");
+        let err = first_request_error(fakechain(), mainnet_expectation()).await;
+        assert!(matches!(
+            refused_on(&err),
+            shekyl_rpc_types::IdentityMismatch::Network { .. }
+        ));
 
         // Armed in-process, as the regtest harness does.
         let client = client_for(
@@ -661,12 +659,17 @@ mod tests {
         // VC-D16: the tuple fields are strict, so a daemon whose get_version
         // shape moved fails deserialization before any axis is read. That IS
         // the wire axis disagreeing and the operator must be told so.
-        let out = first_request_error(
+        let err = first_request_error(
             json!({"jsonrpc": "2.0", "id": "0", "result": {"status": "OK", "version": 1}})
                 .to_string(),
             mainnet_expectation(),
         )
         .await;
+        assert_eq!(
+            refused_on(&err),
+            shekyl_rpc_types::IdentityMismatch::unreadable()
+        );
+        let out = err.to_string();
         assert!(out.contains("does not match the RPC contract"), "{out}");
         assert!(
             out.contains("cannot be named here"),
@@ -732,7 +735,7 @@ mod tests {
         let first = client.ensure_identity().await;
         assert!(
             matches!(first, Err(RpcError::ConnectionError(_))),
-            "a hang-up is transport, not InvalidNode: {first:?}"
+            "a hang-up is transport, not a mismatch: {first:?}"
         );
         let second = client.ensure_identity().await;
         assert!(

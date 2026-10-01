@@ -26,6 +26,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use shekyl_curve_io::*;
+use shekyl_rpc_types::core_rpc_version_string;
 use shekyl_types::ChainCount;
 // Number of blocks the fee estimate will be valid for
 // https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c
@@ -70,6 +71,133 @@ pub enum RpcError {
     /// The priority intended for use wasn't usable.
     #[error("invalid priority")]
     InvalidPriority,
+    /// The daemon answered the identity handshake (`VC-4`), and it is not a
+    /// daemon this wallet can use: another RPC contract, rule set, network or
+    /// chain. Typed, so a caller names the axis and its remedy from the value;
+    /// the message is this wallet's own wording of it.
+    #[error("{}", identity_refusal(.0))]
+    IdentityMismatch(IdentityMismatch),
+}
+
+/// What a daemon RPC failure means for whoever has to act on it.
+///
+/// Classified once, where the failure is raised ([`RpcError::fault`]), so
+/// every layer above reads the remedy from this value rather than from a
+/// message. Fixed-size and `Copy`: it carries no text the daemon supplied,
+/// so it can cross boundaries that must not carry any (the refresh
+/// producer's error, `STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.7 R6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DaemonFault {
+    /// The daemon could not be reached, or did not answer. Retry, or check
+    /// the daemon address.
+    Unreachable,
+    /// The daemon answered the identity handshake and is not one this wallet
+    /// can use. Retrying the same daemon cannot succeed.
+    Identity(IdentityMismatch),
+    /// The daemon answered with something that breaks the RPC contract: a
+    /// malformed, inconsistent or pruned reply. Another daemon may answer
+    /// correctly.
+    Protocol,
+    /// The daemon's fee estimate was unusable.
+    FeeResponse,
+    /// A failure on this side of the connection: a request this wallet could
+    /// not encode, or a priority with no fee tier. A bug, not a daemon fault.
+    Internal,
+}
+
+impl core::fmt::Display for DaemonFault {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Unreachable => f.write_str("the daemon did not answer"),
+            Self::Identity(mismatch) => {
+                write!(f, "the daemon was refused on its {}", mismatch.axis())
+            }
+            Self::Protocol => f.write_str("the daemon's reply broke the RPC contract"),
+            Self::FeeResponse => f.write_str("the daemon's fee estimate was unusable"),
+            Self::Internal => f.write_str("the request failed on this side of the connection"),
+        }
+    }
+}
+
+impl DaemonFault {
+    /// Whether retrying against the same daemon can succeed. An identity
+    /// refusal is cached by the client and repeats on every request.
+    #[must_use]
+    pub const fn is_retryable(self) -> bool {
+        !matches!(self, Self::Identity(_))
+    }
+}
+
+impl RpcError {
+    /// What this failure means for the remedy. Exhaustive: a new variant
+    /// does not compile until its remedy is named.
+    #[must_use]
+    pub const fn fault(&self) -> DaemonFault {
+        match self {
+            Self::ConnectionError(_) => DaemonFault::Unreachable,
+            Self::IdentityMismatch(mismatch) => DaemonFault::Identity(*mismatch),
+            Self::InvalidNode(_)
+            | Self::TransactionsNotFound(_)
+            | Self::PrunedTransaction
+            | Self::InvalidTransaction(_) => DaemonFault::Protocol,
+            Self::InvalidFee => DaemonFault::FeeResponse,
+            Self::InternalError(_) | Self::InvalidPriority => DaemonFault::Internal,
+        }
+    }
+}
+
+/// This wallet's wording of an identity refusal, one sentence per axis.
+///
+/// The console words the same verdict its own way
+/// (`shekyl-daemon-rpc`'s `console_identity_message`); the axes themselves
+/// are compared once, in [`shekyl_rpc_types::IdentityExpectation::check`].
+fn identity_refusal(mismatch: &IdentityMismatch) -> String {
+    match *mismatch {
+        IdentityMismatch::Wire { ours, theirs } => {
+            let older = if theirs < ours {
+                "daemon"
+            } else {
+                "this wallet"
+            };
+            format!(
+                "{axis} mismatch: this wallet is {}, the daemon is {} — the {older} is the \
+                 older one; update it. Refusing before any wallet operation.",
+                core_rpc_version_string(ours),
+                core_rpc_version_string(theirs),
+                axis = IdentityAxis::Wire,
+            )
+        }
+        IdentityMismatch::WireUnreadable { ours } => format!(
+            "this daemon's `get_version` does not match the RPC contract this wallet \
+             was built against, so the two are on different RPC versions. This wallet \
+             is {}. The reply could not be read, so the daemon's version cannot be \
+             named here; align the two builds.",
+            core_rpc_version_string(ours),
+        ),
+        IdentityMismatch::Rules { ours, theirs } => format!(
+            "{axis} mismatch: this wallet's digest is {ours}, the daemon's is {theirs}. The \
+             RPC contract matches, so neither side is a stale release — the two were built \
+             from different consensus configurations, which is a different rule set rather \
+             than a version skew. Balances read from it would be computed under rules this \
+             wallet does not implement.",
+            axis = IdentityAxis::Rules,
+        ),
+        IdentityMismatch::Network { ours, theirs } => format!(
+            "{axis} mismatch: this wallet is a {ours} wallet, the daemon runs {theirs}. \
+             Connect to a {ours} daemon; this one is refused before anything is scanned.",
+            axis = IdentityAxis::Network,
+        ),
+        IdentityMismatch::Genesis {
+            ours,
+            theirs,
+            network,
+        } => format!(
+            "{axis} mismatch: this daemon's chain starts at {theirs}, this wallet's \
+             {network} genesis is {ours}. Whatever else agrees, that is a different \
+             chain.",
+            axis = IdentityAxis::Genesis,
+        ),
+    }
 }
 
 /// A struct containing a fee rate.
@@ -242,6 +370,11 @@ fn hash_hex(hash: &str) -> Result<[u8; 32], RpcError> {
 // deleted `send_raw_transaction` boolean-flag reply) is replaced by the
 // typed [`SubmitVerdict`]; see [`Rpc::publish_transaction`].
 pub use shekyl_rpc_types::{RejectCause, SubmitTransactionRequest, SubmitVerdict};
+
+// The identity verdict [`RpcError::IdentityMismatch`] and
+// [`DaemonFault::Identity`] carry, with the types inside it, for the same
+// reason: a consumer that names the verdict reaches it through this crate.
+pub use shekyl_rpc_types::{DaemonNetwork, HashHex, IdentityAxis, IdentityMismatch};
 
 /// The HTTP `Content-Type` a daemon route expects: EPEE binary routes (`*.bin`,
 /// e.g. `get_o_indexes.bin`, `get_blocks_by_height.bin`) are
@@ -614,8 +747,99 @@ pub trait Rpc: Sync + Clone {
 
 #[cfg(test)]
 mod tests {
-    use super::{fee_tier_for, FeePriority};
+    use super::{
+        fee_tier_for, DaemonFault, DaemonNetwork, FeePriority, HashHex, IdentityMismatch, RpcError,
+    };
     use shekyl_rpc_types::FeeTier;
+
+    /// Each failure's remedy class, named once. The identity verdict rides
+    /// through unchanged; nothing is classified by its message.
+    #[test]
+    fn every_failure_is_classified_by_its_remedy() {
+        let wrong_network = IdentityMismatch::Network {
+            ours: DaemonNetwork::Mainnet,
+            theirs: DaemonNetwork::Testnet,
+        };
+        for (err, fault) in [
+            (
+                RpcError::ConnectionError("refused".into()),
+                DaemonFault::Unreachable,
+            ),
+            (
+                RpcError::IdentityMismatch(wrong_network),
+                DaemonFault::Identity(wrong_network),
+            ),
+            (RpcError::InvalidNode("bad".into()), DaemonFault::Protocol),
+            (
+                RpcError::TransactionsNotFound(vec![[0; 32]]),
+                DaemonFault::Protocol,
+            ),
+            (RpcError::PrunedTransaction, DaemonFault::Protocol),
+            (RpcError::InvalidTransaction([0; 32]), DaemonFault::Protocol),
+            (RpcError::InvalidFee, DaemonFault::FeeResponse),
+            (
+                RpcError::InternalError("encode".into()),
+                DaemonFault::Internal,
+            ),
+            (RpcError::InvalidPriority, DaemonFault::Internal),
+        ] {
+            assert_eq!(err.fault(), fault, "{err:?}");
+            assert_eq!(
+                fault.is_retryable(),
+                !matches!(fault, DaemonFault::Identity(_)),
+                "only an identity refusal is certain to repeat: {err:?}"
+            );
+        }
+    }
+
+    /// The typed variant is the contract. Consumers that still recognise an
+    /// identity refusal by its wording (`shekyl-gui-wallet`'s
+    /// `engine_errors.rs`) rely on these stems, so they are pinned here
+    /// until those consumers read the type.
+    #[test]
+    fn an_identity_refusal_keeps_its_axis_wording() {
+        let digest = |b| HashHex::from_bytes([b; 32]);
+        for (mismatch, stems) in [
+            (
+                IdentityMismatch::Wire {
+                    ours: 0x0003_001d,
+                    theirs: 0x0003_001c,
+                },
+                &["RPC contract mismatch:", "the daemon is the older one"][..],
+            ),
+            (
+                IdentityMismatch::WireUnreadable { ours: 0x0003_001d },
+                &["does not match the RPC contract", "cannot be named here"][..],
+            ),
+            (
+                IdentityMismatch::Rules {
+                    ours: digest(1),
+                    theirs: digest(2),
+                },
+                &["consensus constants mismatch:"][..],
+            ),
+            (
+                IdentityMismatch::Network {
+                    ours: DaemonNetwork::Mainnet,
+                    theirs: DaemonNetwork::Testnet,
+                },
+                &["network mismatch:", "the daemon runs testnet"][..],
+            ),
+            (
+                IdentityMismatch::Genesis {
+                    ours: digest(3),
+                    theirs: digest(4),
+                    network: DaemonNetwork::Mainnet,
+                },
+                &["genesis block mismatch:", "different chain"][..],
+            ),
+        ] {
+            let message = RpcError::IdentityMismatch(mismatch).to_string();
+            for stem in stems {
+                assert!(message.contains(stem), "{stem:?} in {message}");
+            }
+        }
+    }
 
     /// Every priority maps to the tier the deleted index arithmetic gave it.
     ///

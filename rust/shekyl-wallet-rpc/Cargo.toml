@@ -72,6 +72,9 @@ shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 # shekyl-logging; feature unification makes this edge free.
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 tower = { version = "0.5", features = ["util"] }
+# The daemon-identity tests serve a `get_version` reply built from the real
+# response type, so a change to its shape is a compile error there.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 http-body-util = "0.1"
 tempfile = "3"
 # Enable the engine-core `test-helpers` surface for this crate's tests only

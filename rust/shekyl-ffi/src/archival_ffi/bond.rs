@@ -499,6 +499,13 @@ pub unsafe extern "C" fn shekyl_archival_cold_authority_pin(
 /// caller journals the record's full pre-image **before** applying (the
 /// emission-claim WS-2 §6.3 shape) so the pop twin restores byte-identically.
 ///
+/// The fold itself is a function of the record (the bonded total is a view
+/// over the records, DRS-E4 `ARW-Q9`); the C++ store's maintained counter is
+/// debited **here**, at the edge, by the fold's `refund_atomic`. The debit is
+/// an absolute post-value: the caller reads the live counter immediately
+/// before *each* connect (`get → connect → set`), never once per block —
+/// different-`P` posts in one block legitimately share the counter.
+///
 /// Errors are connect-time invariant breaches (verify already rejected these);
 /// the caller maps any non-OK code to a FATAL abort, never a soft skip.
 ///
@@ -546,11 +553,15 @@ pub unsafe extern "C" fn shekyl_archival_release_connect(
         held_shard_count,
         record_bad_interval_count,
         vin_bond_debit,
-        total_bonded_atomic,
         release_settlement_epoch,
     ) {
         Err(e) => return map_release_connect_error(e),
         Ok(effect) => effect,
+    };
+    // The C++ store's counter disagreeing with the per-record balance it
+    // aggregates is store corruption (§4.5 audit scalar) — FATAL, not a skip.
+    let Some(new_total_bonded) = total_bonded_atomic.checked_sub(effect.refund_atomic) else {
+        return SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_TOTAL_BONDED_UNDERFLOW;
     };
     unsafe {
         *post_bonded_total_out = effect.post_bonded_total;
@@ -558,7 +569,7 @@ pub unsafe extern "C" fn shekyl_archival_release_connect(
         *post_held_shard_count_out = effect.post_holdings.shard_ids.len() as u64;
         *interval_close_start_out = effect.interval_close.start_epoch;
         *interval_close_end_out = effect.interval_close.end_exclusive;
-        *new_total_bonded_out = effect.new_total_bonded_atomic;
+        *new_total_bonded_out = new_total_bonded;
     }
     SHEKYL_ARCHIVAL_RELEASE_APPLY_OK
 }

@@ -5329,7 +5329,7 @@ bool BlockchainLMDB::archival_baseline_observed_at_epoch(uint64_t block_height,
     return false;
 
   const uint64_t h_open = shekyl_archival_epoch_open_height(settlement_epoch);
-  const uint64_t h_close = shekyl_archival_epoch_close_height(settlement_epoch);
+  const uint64_t h_close = shekyl_archival_epoch_last_block(settlement_epoch);
   const uint64_t h_slash_deadline = shekyl_archival_epoch_slash_deadline_height(settlement_epoch);
   if (block_height <= h_slash_deadline)
     return false;

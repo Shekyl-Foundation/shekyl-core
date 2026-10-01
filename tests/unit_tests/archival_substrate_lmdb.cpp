@@ -1775,7 +1775,7 @@ TEST(archival_substrate_lmdb, holds_shard_bounds_added_shard_by_its_add_epoch)
   EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 9, shekyl_archival_epoch_open_height(6)));
   EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 9, shekyl_archival_epoch_open_height(5)));
   EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 9,
-    shekyl_archival_epoch_close_height(5)));
+    shekyl_archival_epoch_last_block(5)));
   EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 9, shekyl_archival_epoch_open_height(3)));
 }
 
@@ -2198,7 +2198,7 @@ TEST(archival_substrate_lmdb, slash_scheduler_absorbs_a_single_missed_challenge)
   // be the trivial "there was no observation to miss" — it is the WINDOW that
   // absorbs, not a missing challenge.
   const uint64_t h_open = shekyl_archival_epoch_open_height(settlement_epoch);
-  const uint64_t h_close = shekyl_archival_epoch_close_height(settlement_epoch);
+  const uint64_t h_close = shekyl_archival_epoch_last_block(settlement_epoch);
   const uint64_t h_seal = shekyl_archival_challenge_seal_height(h_open);
   const crypto::hash seal_hash = db.get_block_hash_from_height(h_seal);
   const uint64_t h_fire = shekyl_archival_challenge_fire_height(

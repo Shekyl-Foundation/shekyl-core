@@ -39,9 +39,12 @@
 
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
+use shekyl_types::archival::{
+    BondRecord, PassCount, RMarket, ServedShard, SigmaWorkMilli, SlashLogEntry,
+};
 use shekyl_types::{
-    BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, GlobalOutputIndex, KeyImage,
-    LongTermWeight, TxHash,
+    ArchivalLength, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
+    GlobalOutputIndex, KeyImage, LongTermWeight, PCanonicalId, SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::BlockHeader;
@@ -180,6 +183,16 @@ pub struct RecordedBlock {
     /// `Σ tx_hashes.len()` over the prior `min(h, W)` blocks is the
     /// difference of two of these.
     pub cumulative_tx_count: u64,
+    /// Archival length of every transaction in blocks `0..=this`, a prefix
+    /// sum (`block_info.cumulative_archival_len`, `SHT-Q2`; SI-24 ties it
+    /// to the per-transaction rows). The shard partition's operand: shard
+    /// `k` holds the transactions whose fold-before lies in `[k·W, (k+1)·W)`
+    /// (`shekyl_types::shard_of`), so the shards the chain through this
+    /// block has closed are `0..shard_of(this)` — CEN-F17's `n`
+    /// ([`closed_shards_before`](crate::closed_shards_before)) and the
+    /// close's age operand ([`shard_close_height`](crate::shard_close_height))
+    /// read it here.
+    pub cumulative_archival_len: ArchivalLength,
 }
 
 /// What one recorded output contributes to its curve-tree leaf — the three
@@ -366,4 +379,252 @@ pub trait ChainView<'id> {
     ///
     /// [`Corrupt::BurnExceedsEmission`]: crate::Corrupt::BurnExceedsEmission
     fn total_burned(&self) -> Result<AtomicUnits, Self::Fault>;
+
+    // -----------------------------------------------------------------------
+    // The archival reads (DRS-E4 §2.3; DRS-E1 S-ARCH A1–A9, A11–A13)
+    //
+    // Recorded archival *state*, for the 4.J rows E6 slice 8 lands and the
+    // E4 fold that derives a bond post's transition: a record is state, the
+    // class the view exists to carry (G13 — no recorded body crosses it).
+    // Each is a by-key read, so `Option` / empty and not `AtHeight`:
+    // absence has one meaning per read, spelled on the read. All are
+    // parent-state reads (F19's brand) — there is no height to key them by.
+    //
+    // A view whose archival answers are one policy implements all of them
+    // with [`archival_reads!`](crate::archival_reads): `empty` (no bonds),
+    // `fault` (every read fails), or `delegate` (forward to an inner view).
+    // The real store projection answers from its rows and does not use the
+    // macro. Adding a method here without adding it there leaves those
+    // impls short of the trait, so the omission fails at compile time.
+    // -----------------------------------------------------------------------
+
+    /// **A1.** `persona`'s bond record as recorded, or `None` for a persona
+    /// with no bond. CEN-J4's read (the named persona must have a record),
+    /// the operand of every 4.J arm that reads the record (J5, J6, J13–J18)
+    /// and of the as-of-height holdings fold
+    /// (`shekyl-archival-retention::holds_shard_at`).
+    fn bond_record(&self, persona: &PCanonicalId) -> Result<Option<BondRecord>, Self::Fault>;
+
+    /// **A2.** Every slash logged against `persona` at a height **strictly
+    /// above** `height`, in log order; empty when none. The history half of
+    /// the as-of-height holdings question — `holds_shard_at` folds these
+    /// over the record to say whether a shard was held *as of* `height`
+    /// (CEN-J8's operand at the fire height; CEN-L16). Scoped to the persona
+    /// by the read, so the fold need not re-check it.
+    fn slash_log_after(
+        &self,
+        persona: &PCanonicalId,
+        height: BlockHeight,
+    ) -> Result<Vec<SlashLogEntry>, Self::Fault>;
+
+    /// **A3.** The latest settlement epoch `persona` earned a pass bit in
+    /// for `shard`, or `None` for a pair that never served — the release
+    /// cooldown's anchor and its vacuous arm (CEN-J16).
+    fn last_served_epoch(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+    ) -> Result<Option<SettlementEpoch>, Self::Fault>;
+
+    /// **A4.** Every shard `persona` ever earned a pass bit for, each with
+    /// its latest epoch; empty for a persona that never served. The
+    /// last-served marshal in its complete-tree form (such a record stores
+    /// no shard list, so the served set is the only list there is) —
+    /// CEN-J16's cooldown over every shard, CEN-J17's drop-arm grace tail.
+    fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, Self::Fault>;
+
+    /// **A5.** Pass bits recorded for `(persona, shard, epoch)`;
+    /// [`PassCount::ZERO`] when none. CEN-J3's pair-epoch dedup reads
+    /// [`PassCount::any`]; the settlement writer reads the count.
+    fn pass_count(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<PassCount, Self::Fault>;
+
+    /// **A6.** The market's co-holder count for `shard` at `epoch`'s close,
+    /// or `None` for an epoch that never closed for it. A written
+    /// `RMarket(0)` is a closed epoch with no co-holders (SAR-8): the view
+    /// keeps the two apart; what a rule does with `None` is that rule's to
+    /// say (`SAR-Q6`). CEN-J15's admission operand, CEN-J25's work
+    /// arithmetic.
+    fn r_market(
+        &self,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<RMarket>, Self::Fault>;
+
+    /// **A7.** The frozen `Σwork(E)` for `epoch`, in milli-units, or `None`
+    /// for an epoch that never closed (SAR-8). The stored denominator a
+    /// verifier never recomputes — CEN-J25's.
+    fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Self::Fault>;
+
+    /// **A8.** The frozen `budget(E)` for `epoch`, or `None` for an epoch
+    /// that never closed. CEN-J23: every claimed epoch must have one.
+    fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Self::Fault>;
+
+    /// **A9.** The slash watermark — the latest settlement epoch whose
+    /// slashes have been applied — or `None` when no epoch has settled yet
+    /// (the C++'s `u64::MAX` sentinel, gone by the type). CEN-J16's
+    /// "settlement current through the anchor".
+    fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Self::Fault>;
+
+    // -----------------------------------------------------------------------
+    // The transition's reads (DRS-E4 commit 4; `DRS_E4_ARCHIVAL_WRITER.md`
+    // §3.2 phase 9). A1–A9 answer a rule's question about one persona or
+    // one epoch; the slash scan and the close ask over *every* record, and
+    // the accrual reads the open epoch's running sum. Parent-state reads
+    // like the rest.
+    // -----------------------------------------------------------------------
+
+    /// **A11.** Every bond record, in persona-key order, each with its
+    /// persona; empty for a chain with no bonds. The slash scan's and the
+    /// close's universe (`db_lmdb.cpp:5301`'s record cursor and `:7600`'s
+    /// gather both walk `archival_bond` whole). Key order is the order the
+    /// scan applies slashes in, so the slash log's per-height sequence is a
+    /// function of the view and not of any iteration the store chose.
+    fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, Self::Fault>;
+
+    /// **A12.** Whether the slash for `(persona, shard, epoch)` has been
+    /// applied — the scan's dedup, read before anything else about the
+    /// triple (`archival_challenge_failed_at_height`'s first probe,
+    /// `db_lmdb.cpp:5471`). A set membership, so `bool` and never `Option`.
+    fn slash_applied(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<bool, Self::Fault>;
+
+    /// **A13.** The staker inflow accrued so far in `epoch` while it is
+    /// **open** (`archival_budget_accruing[E]`, SI-23), or `None` when no
+    /// block has accrued into it yet — the first block of an epoch, or a
+    /// closed epoch whose row the close deleted. The accrual adds this
+    /// block's inflow to it; the close freezes it as `budget(E)` (A8).
+    fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Self::Fault>;
+}
+
+/// Implement every archival [`ChainView`] read (A1–A9, A11–A13) as one policy.
+///
+/// Three policies, one method list. A new archival read is added here, once;
+/// every view that expands the macro then implements it. A view that answers
+/// from real rows (the store's `BatchView`) writes its own methods and
+/// does not expand this.
+///
+/// * `archival_reads!(empty)` — no bonds: `None`, empty, `PassCount::ZERO`,
+///   `false`. The `Ok` is any `Self::Fault`, including [`Infallible`](core::convert::Infallible).
+/// * `archival_reads!(fault <expr>)` — every read returns `Err(<expr>)`.
+///   The expression is pasted into each method, so it is a unit constructor
+///   or another value that is cheap to repeat.
+/// * `archival_reads!(delegate <field>)` — each read is `self.<field>.the_method(...)`.
+///   `<field>` names the inner view; the expansion writes `self` inside each method.
+///
+/// Paths are absolute so the expansion compiles in this crate and in a
+/// downstream test view (`shekyl-chain-ingest`'s grown tree) without matching
+/// imports.
+#[macro_export]
+macro_rules! archival_reads {
+    (empty) => {
+        $crate::archival_reads!(@methods {empty});
+    };
+    (fault $err:expr) => {
+        $crate::archival_reads!(@methods {fault $err});
+    };
+    (delegate $inner:ident) => {
+        $crate::archival_reads!(@methods {delegate $inner});
+    };
+    (@methods $policy:tt) => {
+        // One signature list. `@emit` writes the whole method, receiver and
+        // body together: a nested macro may not name `self`.
+        $crate::archival_reads!(@emit $policy; bond_record;
+            (persona: &shekyl_types::PCanonicalId);
+            (::core::option::Option<shekyl_types::archival::BondRecord>);
+            (persona);
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; slash_log_after;
+            (persona: &shekyl_types::PCanonicalId, height: shekyl_types::BlockHeight);
+            (::std::vec::Vec<shekyl_types::archival::SlashLogEntry>);
+            (persona, height);
+            (::std::vec::Vec::new()));
+        $crate::archival_reads!(@emit $policy; last_served_epoch;
+            (persona: &shekyl_types::PCanonicalId, shard: shekyl_types::ShardId);
+            (::core::option::Option<shekyl_types::SettlementEpoch>);
+            (persona, shard);
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; served_shards;
+            (persona: &shekyl_types::PCanonicalId);
+            (::std::vec::Vec<shekyl_types::archival::ServedShard>);
+            (persona);
+            (::std::vec::Vec::new()));
+        $crate::archival_reads!(@emit $policy; pass_count;
+            (
+                persona: &shekyl_types::PCanonicalId,
+                shard: shekyl_types::ShardId,
+                epoch: shekyl_types::SettlementEpoch
+            );
+            (shekyl_types::archival::PassCount);
+            (persona, shard, epoch);
+            (shekyl_types::archival::PassCount::ZERO));
+        $crate::archival_reads!(@emit $policy; r_market;
+            (shard: shekyl_types::ShardId, epoch: shekyl_types::SettlementEpoch);
+            (::core::option::Option<shekyl_types::archival::RMarket>);
+            (shard, epoch);
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; sigma_work;
+            (epoch: shekyl_types::SettlementEpoch);
+            (::core::option::Option<shekyl_types::archival::SigmaWorkMilli>);
+            (epoch);
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; budget;
+            (epoch: shekyl_types::SettlementEpoch);
+            (::core::option::Option<shekyl_units::AtomicUnits>);
+            (epoch);
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; last_settled_slash_epoch;
+            ();
+            (::core::option::Option<shekyl_types::SettlementEpoch>);
+            ();
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; bond_records;
+            ();
+            (::std::vec::Vec<(shekyl_types::PCanonicalId, shekyl_types::archival::BondRecord)>);
+            ();
+            (::std::vec::Vec::new()));
+        $crate::archival_reads!(@emit $policy; slash_applied;
+            (
+                persona: &shekyl_types::PCanonicalId,
+                shard: shekyl_types::ShardId,
+                epoch: shekyl_types::SettlementEpoch
+            );
+            (bool);
+            (persona, shard, epoch);
+            (false));
+        $crate::archival_reads!(@emit $policy; budget_accruing;
+            (epoch: shekyl_types::SettlementEpoch);
+            (::core::option::Option<shekyl_units::AtomicUnits>);
+            (epoch);
+            (::core::option::Option::None));
+    };
+    (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            $crate::archival_reads!(@touch $($arg),*);
+            ::core::result::Result::Ok($empty)
+        }
+    };
+    (@emit {fault $err:expr}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            $crate::archival_reads!(@touch $($arg),*);
+            ::core::result::Result::Err($err)
+        }
+    };
+    (@emit {delegate $inner:ident}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            self.$inner.$name($($arg),*)
+        }
+    };
+    (@touch) => {};
+    (@touch $($arg:expr),+) => {
+        let _ = ($($arg,)*);
+    };
 }

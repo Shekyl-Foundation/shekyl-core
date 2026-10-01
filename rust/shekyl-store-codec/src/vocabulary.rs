@@ -19,6 +19,7 @@
 //! Bytes are what the `u64` and `hash32` codecs already wrote: only the
 //! value's *name* is new.
 
+use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{
     ArchivalLength, BlockHeight, CurveTreeRoot, GlobalOutputIndex, PqcAuthHash, PrunableHash,
     SettlementEpoch, ShardId, TreeLeaf, TreePosition,
@@ -193,6 +194,30 @@ impl Canonical for SettlementEpoch {
     }
 }
 
+/// The `properties["settlement_epoch_blocks"]` cell — the datadir's
+/// settlement-schedule pin (S-CHAIN-W SCW-2): blocks per epoch, as the file
+/// was built under. The `shekyl-types` newtype, stored as its raw LE
+/// `u64`; `NAME` is also the `properties` key the C++ wrote, so a cell this
+/// codec reads back is the one that store pinned. `0` is not a schedule
+/// (the type cannot spell it), so a zero cell decodes as
+/// [`CodecError::Invalid`] — corruption, not "unpinned".
+impl Canonical for SettlementEpochBlocks {
+    const NAME: &'static str = "settlement_epoch_blocks";
+    const FIXED_WIDTH: Option<usize> = Some(8);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.get().encode_into(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let blocks = u64::decode(bytes).map_err(|e| e.in_codec(Self::NAME))?;
+        Self::new(blocks).ok_or(CodecError::Invalid {
+            codec: Self::NAME,
+            reason: "zero blocks per epoch names no schedule",
+        })
+    }
+}
+
 /// `txs_archival_len[tx_id]` and `block_info`'s cumulative fold — a
 /// transaction's archival length, or a run's (`SHT-Q2`). The `shekyl-types`
 /// newtype, stored as its raw LE `u64`.
@@ -258,6 +283,21 @@ mod tests {
         roundtrip(AtomicUnits::from_raw(u64::MAX));
         roundtrip(SettlementEpoch::from_raw(26));
         roundtrip(ShardId::from_raw(4095));
+        roundtrip(SettlementEpochBlocks::new(10_000).expect("non-zero"));
+    }
+
+    #[test]
+    fn the_schedule_pin_is_the_raw_word_and_refuses_zero() {
+        let pin = SettlementEpochBlocks::new(10_000).expect("non-zero");
+        assert_eq!(pin.encode(), 10_000u64.to_le_bytes());
+        assert_eq!(
+            SettlementEpochBlocks::decode(&[0; 8]),
+            Err(CodecError::Invalid {
+                codec: "settlement_epoch_blocks",
+                reason: "zero blocks per epoch names no schedule",
+            }),
+            "a zero cell is corruption, not an unpinned file"
+        );
     }
 
     #[test]

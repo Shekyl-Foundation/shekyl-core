@@ -142,6 +142,9 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::I19,
                 CenRow::I20,
                 CenRow::L1,
+                // DRS-E4 commit 4: the archival transition, which passes
+                // with nothing archival to fold and records the row.
+                CenRow::L7,
             ]
         );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
@@ -430,7 +433,10 @@ fn a_fakechain_rule_set_mints_at_genesis_with_d6_in_coverage() {
     // The Fixed arm used to return a Target without recording D6;
     // `covers_landed` then panicked at mint. Genesis and the set's id
     // coinciding with GENESIS is the shape that hid it.
-    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7), crate::D_MAX);
+    let seven = RuleSet::fakechain(
+        core::num::NonZeroU128::new(7),
+        crate::FakechainSchedule::PRODUCTION,
+    );
     MockChain::default().with_view(|view| {
         let formed = formed_under(candidate(Vec::new()), &seven, shekyl_types::BlockHash::NULL);
         let valid = judged(validate(formed, &view, &seven, &Trust::UNANCHORED))
@@ -447,7 +453,10 @@ fn a_fakechain_rule_set_mints_at_genesis_with_d6_in_coverage() {
 
 #[test]
 fn a_fakechain_set_is_stale_against_genesis_even_at_the_same_id() {
-    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7), crate::D_MAX);
+    let seven = RuleSet::fakechain(
+        core::num::NonZeroU128::new(7),
+        crate::FakechainSchedule::PRODUCTION,
+    );
     assert_eq!(seven.id(), RuleSet::GENESIS.id());
     let formed = formed_under(candidate(Vec::new()), &seven, shekyl_types::BlockHash::NULL);
     MockChain::default().with_view(|view| {
@@ -469,8 +478,14 @@ fn a_fakechain_set_is_stale_against_genesis_even_at_the_same_id() {
 
 #[test]
 fn two_fakechain_targets_are_distinct_sets() {
-    let three = RuleSet::fakechain(core::num::NonZeroU128::new(3), crate::D_MAX);
-    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7), crate::D_MAX);
+    let three = RuleSet::fakechain(
+        core::num::NonZeroU128::new(3),
+        crate::FakechainSchedule::PRODUCTION,
+    );
+    let seven = RuleSet::fakechain(
+        core::num::NonZeroU128::new(7),
+        crate::FakechainSchedule::PRODUCTION,
+    );
     let formed = formed_under(candidate(Vec::new()), &three, shekyl_types::BlockHash::NULL);
     MockChain::default().with_view(|view| {
         let fault = validate(formed, &view, &seven, &Trust::UNANCHORED)

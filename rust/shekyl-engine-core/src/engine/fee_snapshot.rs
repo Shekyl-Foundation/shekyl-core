@@ -17,25 +17,21 @@ use super::error::{FeeEstimatorError, IoError};
 use super::fee_policy::ValidatedFeeEstimates;
 use super::traits::DaemonEngine;
 
+/// A failed fee query, classified by the fault it carries. The fault was
+/// named where the failure was raised, so this reads a value, never the
+/// message.
 pub(crate) fn map_daemon_engine_fee_error<E: Into<IoError>>(err: E) -> FeeEstimatorError {
-    // The matched headers are the upstream `RpcError` Display prefixes,
-    // which the `From<RpcError> for IoError` conversion documents as the
-    // stable stringification contract. `starts_with`, not `contains`:
-    // the parenthesized interior can embed daemon-supplied response
-    // text, and a position-anchored match keeps a daemon from steering
-    // classification by echoing a header inside its error body.
     match err.into() {
-        IoError::Daemon { detail } if detail.starts_with("connection error") => {
-            FeeEstimatorError::DaemonUnreachable
+        IoError::Daemon { fault, detail } => {
+            tracing::debug!(%detail, "fee query failed");
+            FeeEstimatorError::Daemon(fault)
         }
-        IoError::Daemon { detail } if detail.starts_with("unexpected fee response") => {
-            FeeEstimatorError::DaemonResponseInvalid {
-                reason: "get_fee_estimates response unusable: unexpected fee response",
-            }
+        // A `DaemonEngine` error that is not a daemon failure: the
+        // implementor's own fault, not the daemon's.
+        other => {
+            tracing::warn!(error = %other, "fee query failed outside the daemon RPC");
+            FeeEstimatorError::Daemon(shekyl_rpc_client::DaemonFault::Internal)
         }
-        _ => FeeEstimatorError::DaemonResponseInvalid {
-            reason: "get_fee_estimates response unusable",
-        },
     }
 }
 
@@ -109,5 +105,44 @@ impl FeeSnapshotSource for FixedFeeSnapshotSource {
     ) -> impl Future<Output = Result<ValidatedFeeEstimates, FeeEstimatorError>> + Send {
         let snapshot = self.snapshot;
         async move { Ok(snapshot) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use shekyl_rpc_client::{DaemonFault, DaemonNetwork, IdentityMismatch, RpcError};
+
+    use super::*;
+
+    /// The classification reads the fault, never the message: a daemon that
+    /// echoes a transport-looking phrase inside its reply is still a
+    /// contract fault, and the identity verdict survives intact.
+    #[test]
+    fn a_failed_fee_query_is_classified_by_its_fault_not_its_text() {
+        let wrong_network = IdentityMismatch::Network {
+            ours: DaemonNetwork::Mainnet,
+            theirs: DaemonNetwork::Testnet,
+        };
+        for (err, fault) in [
+            (
+                RpcError::ConnectionError("refused".into()),
+                DaemonFault::Unreachable,
+            ),
+            (
+                RpcError::InvalidNode("connection error (spoofed by the reply)".into()),
+                DaemonFault::Protocol,
+            ),
+            (RpcError::InvalidFee, DaemonFault::FeeResponse),
+            (
+                RpcError::IdentityMismatch(wrong_network),
+                DaemonFault::Identity(wrong_network),
+            ),
+        ] {
+            assert_eq!(
+                map_daemon_engine_fee_error(err.clone()),
+                FeeEstimatorError::Daemon(fault),
+                "{err:?}"
+            );
+        }
     }
 }

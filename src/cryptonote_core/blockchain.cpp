@@ -4824,7 +4824,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   }
 
   const uint64_t h_open = shekyl_archival_epoch_open_height(sc_settlement_epoch);
-  const uint64_t h_close = shekyl_archival_epoch_close_height(sc_settlement_epoch);
+  const uint64_t h_close = shekyl_archival_epoch_last_block(sc_settlement_epoch);
   const uint64_t h_seal = shekyl_archival_challenge_seal_height(h_open);
   if (current_height > h_close)
   {

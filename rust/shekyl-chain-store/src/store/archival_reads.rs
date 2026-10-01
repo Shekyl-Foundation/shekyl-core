@@ -6,10 +6,14 @@
 //! One read body for the archival tables (DRS-E1 S-ARCH,
 //! `DRS_E1_SARCH.md` §3), the fifth sibling of `chain_reads`,
 //! `output_reads`, `tx_reads` and `curve_reads`. Eighteen C++ methods become
-//! nine reads (`DRS_E1_SARCH.md` §3.2; A2 travels with E4, `SAR-Q7`):
+//! ten reads (`DRS_E1_SARCH.md` §3.2; A2 landed with DRS-E4 commit 2, the
+//! `SAR-Q7` staged pair):
 //!
 //! - **A1** [`bond_record`] — `archival_bond[p]`, the persisted record, one
 //!   read where the C++ had four over the same row (SAR-1).
+//! - **A2** [`slash_log_after`] — every slash logged against `p` at a height
+//!   strictly above `h`: the history half of the as-of-height holdings
+//!   question, whose fold is `shekyl-archival-retention::holds_shard_at`.
 //! - **A3** [`last_served_epoch`] — the latest epoch with a pass bit for
 //!   `(p, shard)`, one reverse seek.
 //! - **A4** [`served_shards`] — every shard `p` ever served, each with its
@@ -22,6 +26,16 @@
 //!   where the C++ returned `u64::MAX`.
 //! - **A10** [`attestation_witness_at`] — a recorded block's witness bytes,
 //!   with the two absences the C++ collapsed into one empty blob told apart.
+//!
+//! The transition's own reads (DRS-E4 commit 4; `DRS_E4_ARCHIVAL_WRITER.md`
+//! §3.2 phase 9) — over every record, or over a table only the scan reads:
+//!
+//! - **A11** [`bond_records`] — every record in persona-key order, the slash
+//!   scan's and the close's universe.
+//! - **A12** [`slash_applied`] — the `(P, shard, E)` set membership the scan
+//!   dedups on.
+//! - **A13** [`budget_accruing`] — the open epoch's running staker inflow
+//!   (SI-23), the accrual's pre-image and the close's operand.
 //!
 //! # Absence, stated once (`DRS_E1_SARCH.md` §3.3)
 //!
@@ -56,22 +70,26 @@
 //!
 //! # What is not here
 //!
-//! No fold. `good_through` is `shekyl-archival-retention`'s and already
-//! takes the record's parts; `holds_shard_at` joins it with E4 and the slash
-//! log (A2). No composed "emission source" read (`SAR-Q4`): the rule that
-//! needs A1 + A5 + A7 + A8 composes them at its call site.
+//! No fold. `good_through` and `holds_shard_at` are
+//! `shekyl-archival-retention`'s and take the record's parts — the second
+//! takes A2's rows beside A1's record (CEN-L16: the as-of-height holdings
+//! question is a fold over recorded state, not a read the store composes).
+//! No composed "emission source" read (`SAR-Q4`): the rule that needs
+//! A1 + A5 + A7 + A8 composes them at its call site.
 
 use redb::ReadableTable;
 use shekyl_chain_rules::AtHeight;
 use shekyl_store_codec::{BlobKind, CodecError};
+pub use shekyl_types::archival::{PassCount, ServedShard};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
-use crate::codec::{AttestationWitnessBytes, BondRecord, RMarket, SigmaWorkMilli};
-use crate::ids::ServeCreditKey;
+use crate::codec::{AttestationWitnessBytes, BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry};
+use crate::ids::{ServeCreditKey, SlashAppliedKey, SlashLogKey};
 use crate::schema::{
-    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_R_MARKET,
-    ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SIGMA_WORK,
+    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
+    ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
+    ARCHIVAL_SLASH_LOG,
 };
 
 use super::chain_reads::{self, undecodable, ReadFault, ReadTables};
@@ -79,50 +97,18 @@ use super::error::StoreInvariant;
 
 /// The `archival_bond` cell as faults name it.
 const BOND: &str = "archival_bond";
+/// The `archival_slash_log` cell as faults name it.
+const SLASH_LOG: &str = "archival_slash_log";
 /// The `archival_r_market` cell as faults name it.
 const R_MARKET: &str = "archival_r_market";
 /// The `archival_sigma_work` cell as faults name it.
 const SIGMA_WORK: &str = "archival_sigma_work";
 /// The `archival_budget` cell as faults name it.
 const BUDGET: &str = "archival_budget";
+/// The `archival_budget_accruing` cell as faults name it.
+const BUDGET_ACCRUING: &str = "archival_budget_accruing";
 /// The `archival_attestation_witness` cell as faults name it.
 const WITNESS: &str = "archival_attestation_witness";
-
-/// How many pass bits a `(persona, shard, epoch)` recorded — `PC-D5`'s
-/// enumeration over the pair-epoch prefix. `u32` in the C++ (`PC-D5`'s
-/// bound); the newtype keeps it from being added to an epoch. Admission
-/// collapsed it to `> 0` while the beacon issued one challenge; the
-/// settlement writer and the assignment cutover's count bound consume the
-/// number.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub struct PassCount(u32);
-
-impl PassCount {
-    /// No pass bits.
-    pub const ZERO: Self = Self(0);
-
-    /// The count.
-    #[must_use]
-    pub const fn to_raw(self) -> u32 {
-        self.0
-    }
-
-    /// Whether any pass was recorded — the admission arm's question.
-    #[must_use]
-    pub const fn any(self) -> bool {
-        self.0 > 0
-    }
-}
-
-/// A served shard and the latest settlement epoch it earned a pass bit in
-/// — one row of A4's answer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ServedShard {
-    /// Which shard.
-    pub shard: ShardId,
-    /// The latest epoch with a pass bit for it.
-    pub last_served: SettlementEpoch,
-}
 
 /// **A1.** `archival_bond[p]`, decoded. `None` is "no bond record for `p`";
 /// a row that does not decode is SI-7 (which is also SI-14's arm: a record
@@ -132,6 +118,42 @@ pub(super) fn bond_record<T: ReadTables>(
     persona: &PCanonicalId,
 ) -> Result<Option<BondRecord>, ReadFault> {
     chain_reads::cell(txn, ARCHIVAL_BOND, *persona.as_bytes(), BOND)
+}
+
+/// **A2.** Every slash logged against `persona` at a height **strictly
+/// above** `height`, in log order — the rows `holds_shard_at` folds over
+/// the record to answer whether a shard was held *as of* `height`
+/// (`db_lmdb.cpp:4804`'s `archival_slash_removed_holding_after`, minus the
+/// fold, which is the retention crate's; CEN-L16). The log is keyed by
+/// height then sequence and holds every persona's slashes, so the walk is
+/// one range from `(height + 1, 0)` filtered to `persona`; the C++ walked
+/// the same range and skipped its epoch-marker rows, which the log no
+/// longer has (`ARW-Q2`). Empty when nothing above `height` names
+/// `persona` — including when `height` is the last height, where
+/// [`SlashLogKey::above`] has no range to give (no height lies above it),
+/// so the C++'s `u64::MAX` early-return is the key type's `None` and not a
+/// case here. A row that does not decode is SI-7.
+pub(super) fn slash_log_after<T: ReadTables>(
+    txn: &T,
+    persona: &PCanonicalId,
+    height: BlockHeight,
+) -> Result<Vec<SlashLogEntry>, ReadFault> {
+    let Some(above) = SlashLogKey::above(height) else {
+        return Ok(Vec::new());
+    };
+    let table = txn.table(ARCHIVAL_SLASH_LOG)?;
+    let mut out = Vec::new();
+    for row in table.range(above)? {
+        let (_key, value) = row?;
+        let entry = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(SLASH_LOG, cause))?;
+        if entry.persona == *persona {
+            out.push(entry);
+        }
+    }
+    Ok(out)
 }
 
 /// Whether `persona` has a bond record — SI-15's precondition, read without
@@ -246,7 +268,7 @@ pub(super) fn pass_count<T: ReadTables>(
     if count > 0 {
         serve_credit_rows_have_a_bond(txn, persona)?;
     }
-    Ok(PassCount(count))
+    Ok(PassCount::from_raw(count))
 }
 
 /// **A6.** `archival_r_market[(shard, epoch)]`. `None` is an epoch that never
@@ -318,4 +340,56 @@ pub(super) fn attestation_witness_at<T: ReadTables>(
         )
     })?;
     Ok(AtHeight::Recorded(Some(bytes.to_vec())))
+}
+
+/// **A11.** Every `archival_bond` row, decoded, in key order — the redb
+/// B-tree's order over the 32-byte persona, which is the LMDB comparator's
+/// order over the same bytes, so the scan applies slashes in the order the
+/// C++ cursor did. A row that does not decode is SI-7 (SI-14's arm too).
+pub(super) fn bond_records<T: ReadTables>(
+    txn: &T,
+) -> Result<Vec<(PCanonicalId, BondRecord)>, ReadFault> {
+    let table = txn.table(ARCHIVAL_BOND)?;
+    let mut out = Vec::new();
+    for row in table.iter()? {
+        let (key, value) = row?;
+        let record = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(BOND, cause))?;
+        out.push((PCanonicalId::from_bytes(key.value()), record));
+    }
+    Ok(out)
+}
+
+/// **A12.** Whether `archival_slash_applied` holds `(persona, shard,
+/// epoch)`. A set table ([`Present`](crate::schema::Present)): the row's
+/// existence is the whole fact, so there is nothing to decode and nothing
+/// to be `Option` about.
+pub(super) fn slash_applied<T: ReadTables>(
+    txn: &T,
+    persona: &PCanonicalId,
+    shard: ShardId,
+    epoch: SettlementEpoch,
+) -> Result<bool, ReadFault> {
+    Ok(txn
+        .table(ARCHIVAL_SLASH_APPLIED)?
+        .get(SlashAppliedKey::new(*persona, shard, epoch).key())?
+        .is_some())
+}
+
+/// **A13.** `archival_budget_accruing[epoch]` — the staker inflow accrued
+/// so far in an **open** epoch. `None` before the epoch's first accrual and
+/// after its close deleted the row (SI-23: the table holds at most the open
+/// epoch's row). A row that does not decode is SI-7.
+pub(super) fn budget_accruing<T: ReadTables>(
+    txn: &T,
+    epoch: SettlementEpoch,
+) -> Result<Option<AtomicUnits>, ReadFault> {
+    chain_reads::cell(
+        txn,
+        ARCHIVAL_BUDGET_ACCRUING,
+        epoch.to_raw(),
+        BUDGET_ACCRUING,
+    )
 }

@@ -99,8 +99,8 @@ use shekyl_crypto_pq::output::construct_output;
 use shekyl_crypto_pq::CryptoError;
 use shekyl_difficulty::is_timestamp_below_ftl;
 use shekyl_economics::{
-    price_emission, CirculatingSupply, EconomicParams, EmissionError, EmissionInputs,
-    FrozenSegmentCount, RewardArithmetic, SupplyInvariantViolation, TxVolume, REPRICING_PASSES,
+    price_emission, CirculatingSupply, ClosedShardCount, EconomicParams, EmissionError,
+    EmissionInputs, RewardArithmetic, SupplyInvariantViolation, TxVolume, REPRICING_PASSES,
 };
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, Timestamp, TxHash,
@@ -138,8 +138,9 @@ pub struct EmissionOperands {
     pub median_weight: u64,
     /// The transaction-volume window ending at the parent (CEN-F20).
     pub tx_volume: TxVolume,
-    /// Frozen-segment count for the burn escalation (CEN-F17).
-    pub frozen_segments: FrozenSegmentCount,
+    /// Closed transaction-shard count for the burn escalation (CEN-F17),
+    /// read at parent state by `shekyl_chain_rules::closed_shards_before`.
+    pub closed_shards: ClosedShardCount,
     /// The height the staker share's decay is measured from (CEN-F21).
     pub emission_split_epoch: BlockHeight,
 }
@@ -515,7 +516,7 @@ fn price_and_pay(
         tx_volume: e.tx_volume,
         total_fees: total_fees.to_raw(),
         supply,
-        frozen_segments: e.frozen_segments,
+        closed_shards: e.closed_shards,
         split_epoch: e.emission_split_epoch.to_raw(),
         params: cx.params,
     })

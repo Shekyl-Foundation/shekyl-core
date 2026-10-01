@@ -30,6 +30,7 @@
 use core::fmt;
 
 use shekyl_address::Network;
+pub use shekyl_archival_retention::{SettlementEpochBlocks, SettlementSchedule};
 use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::census::{CenRow, RowStatus};
@@ -103,8 +104,20 @@ impl RuleSetId {
 /// becomes usable — the pair is the drain calendar the tree grows by
 /// (`DRS_E3_CURVE_WRITER.md` §3.2, §3.6) — so they live together and move
 /// together; the reason is coherence with F6, not schedule variance.
-/// CEN-F21's split epoch is `rules::miner::EMISSION_SPLIT_EPOCH`, not a
-/// field: it joins this set when a schedule step names a different epoch.
+/// The seventh — `settlement_schedule` (DRS-E4 `ARW-15`) — is
+/// the epoch geometry the archival rows (CEN-L1…L9) are judged against:
+/// which epoch a height sits in, where a challenge opens and closes, when
+/// an epoch's claims settle. It is the reorg cap's other half — SPR-9's
+/// `SEB > D_max` is an invariant *between two fields of this struct*, held
+/// by [`FakechainSchedule`] — and it joined the set for the cap's reason:
+/// the validator reads its parameters off the rule set in force, never
+/// off the process's environment. Before it did, the daemon armed the
+/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever into a process latch and the
+/// validator read the latch; a replay of a capture made under the lever,
+/// in a process that had not armed it, refused the first claim under L7
+/// (`DRS_E4_ARCHIVAL_WRITER.md` §5 ARW-15). CEN-F21's split epoch is
+/// `rules::miner::EMISSION_SPLIT_EPOCH`, not a field: it joins this set
+/// when a schedule step names a different epoch.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuleSet {
     id: RuleSetId,
@@ -114,7 +127,113 @@ pub struct RuleSet {
     mined_money_unlock_window: BlockCount,
     reorg_cap: BlockCount,
     tx_spendable_age: BlockCount,
+    settlement_schedule: SettlementSchedule,
 }
+
+/// The two schedule parameters a Fakechain rule set may name — blocks per
+/// settlement epoch and the reorg cap — **as a validated pair**: the cap
+/// strictly inside the epoch (`0 < cap < SEB`, SPR-9 / `reorg.rs`'s
+/// `SEB > D_max`), refused at construction rather than discovered when the
+/// undo floor crosses the body horizon.
+///
+/// Why a pair and not two levers: the invariant is between them, so a
+/// constructor that took them separately would have to be fallible on the
+/// second, or leave the check to a store that does not own either number.
+/// [`RuleSet::fakechain`] takes one of these and stays infallible;
+/// [`Self::PRODUCTION`] is the genesis pair, and `fakechain(None,
+/// PRODUCTION)` is `GENESIS` by value. The daemon's
+/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` / `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`
+/// levers and the replay tool's flags both resolve to one of these before
+/// a rule set exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FakechainSchedule {
+    settlement: SettlementSchedule,
+    reorg_cap: BlockCount,
+}
+
+/// A [`FakechainSchedule`] whose reorg cap is not strictly inside its epoch
+/// (`0 < cap < SEB` fails). The store's `RetentionNotInsideEpoch` is the
+/// same inequality on the session's retention; this is it on the rule
+/// set's own parameters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ReorgCapNotInsideEpoch {
+    /// Blocks per epoch the pair named.
+    pub settlement_epoch: SettlementEpochBlocks,
+    /// The cap it named.
+    pub reorg_cap: BlockCount,
+}
+
+impl fmt::Display for ReorgCapNotInsideEpoch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "reorg cap {} is not strictly inside the settlement epoch ({}): 0 < cap < SEB is required",
+            self.reorg_cap.to_raw(),
+            self.settlement_epoch
+        )
+    }
+}
+
+impl std::error::Error for ReorgCapNotInsideEpoch {}
+
+impl FakechainSchedule {
+    /// The genesis pair: `SETTLEMENT_EPOCH_BLOCKS` per epoch, `D_MAX` cap
+    /// — the invariant on it is `reorg.rs`'s compile-time assertion.
+    pub const PRODUCTION: Self = Self {
+        settlement: SettlementSchedule::GENESIS,
+        reorg_cap: D_MAX,
+    };
+
+    /// The pair `(settlement_epoch, reorg_cap)`, if `0 < reorg_cap < SEB`.
+    ///
+    /// # Errors
+    ///
+    /// [`ReorgCapNotInsideEpoch`] otherwise.
+    pub const fn new(
+        settlement_epoch: SettlementEpochBlocks,
+        reorg_cap: BlockCount,
+    ) -> Result<Self, ReorgCapNotInsideEpoch> {
+        let cap = reorg_cap.to_raw();
+        if cap == 0 || cap >= settlement_epoch.get() {
+            return Err(ReorgCapNotInsideEpoch {
+                settlement_epoch,
+                reorg_cap,
+            });
+        }
+        Ok(Self {
+            settlement: SettlementSchedule::new(settlement_epoch),
+            reorg_cap,
+        })
+    }
+
+    /// The epoch geometry.
+    #[must_use]
+    pub const fn settlement(self) -> SettlementSchedule {
+        self.settlement
+    }
+
+    /// The reorg cap.
+    #[must_use]
+    pub const fn reorg_cap(self) -> BlockCount {
+        self.reorg_cap
+    }
+
+    /// Whether this is [`PRODUCTION`](Self::PRODUCTION) — the pair no lever
+    /// was pulled to reach, so a public network may carry it (`const`,
+    /// where `==` cannot yet be).
+    #[must_use]
+    pub const fn is_production(self) -> bool {
+        self.settlement.blocks().get() == Self::PRODUCTION.settlement.blocks().get()
+            && self.reorg_cap.to_raw() == Self::PRODUCTION.reorg_cap.to_raw()
+    }
+}
+
+// The genesis pair satisfies its own invariant — the same fact `reorg.rs`
+// asserts, restated on the type that carries it.
+const _: () = assert!(
+    FakechainSchedule::PRODUCTION.reorg_cap.to_raw()
+        < FakechainSchedule::PRODUCTION.settlement.blocks().get()
+);
 
 /// How a rule set derives the next-block target (CEN-D4 reads this).
 ///
@@ -155,6 +274,7 @@ impl RuleSet {
         mined_money_unlock_window: BlockCount::from_raw(60),
         reorg_cap: D_MAX,
         tx_spendable_age: BlockCount::from_raw(10),
+        settlement_schedule: SettlementSchedule::GENESIS,
     };
 
     /// Every rule set a schedule may name, in id order. A schedule step that
@@ -163,11 +283,13 @@ impl RuleSet {
 
     /// The genesis rules as a **Fakechain** set: the target fixed when
     /// `shekyld --regtest --fixed-difficulty=<n>` names one (CEN-D7, arm
-    /// (d)), and the reorg cap the regtest runs — `D_MAX` for a regtest on
-    /// the production schedule, something inside the shortened epoch for a
-    /// regtest under the `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever (the lever's
-    /// parse refuses `SEB ≤ cap`; the store refuses a retention below the
-    /// cap at open and at every connect).
+    /// (d)), and the settlement schedule the regtest runs —
+    /// [`FakechainSchedule::PRODUCTION`] for a regtest on the genesis
+    /// schedule, a shortened epoch with a cap inside it for a regtest under
+    /// the `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` / `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`
+    /// levers (the pair's constructor refuses `cap ≥ SEB`; the store
+    /// refuses a retention below the cap, and a pinned epoch other than
+    /// the set's, at open and at every connect).
     ///
     /// The one constructor of a non-issued rule set, and deliberately not
     /// reachable from [`RuleSchedule::for_network`]: `shekyl_address::Network`
@@ -175,16 +297,23 @@ impl RuleSet {
     /// `--regtest` is what binds this call to fakechain today; when the
     /// variant exists this takes it as a witness. `fixed` is non-zero by
     /// its type, so the target it fixes is a [`Target`] by construction
-    /// (CEN-D6). `fakechain(None, D_MAX)` **is** `GENESIS` by value.
+    /// (CEN-D6); `schedule` is a valid pair by its type, so the invariant
+    /// between the two fields it sets holds by construction.
+    /// `fakechain(None, FakechainSchedule::PRODUCTION)` **is** `GENESIS`
+    /// by value.
     #[must_use]
-    pub const fn fakechain(fixed: Option<core::num::NonZeroU128>, reorg_cap: BlockCount) -> Self {
+    pub const fn fakechain(
+        fixed: Option<core::num::NonZeroU128>,
+        schedule: FakechainSchedule,
+    ) -> Self {
         let difficulty = match fixed {
             Some(fixed) => DifficultyRule::Fixed(Target::fixed(fixed)),
             None => DifficultyRule::Lwma1,
         };
         Self {
             difficulty,
-            reorg_cap,
+            reorg_cap: schedule.reorg_cap,
+            settlement_schedule: schedule.settlement,
             ..Self::GENESIS
         }
     }
@@ -193,6 +322,19 @@ impl RuleSet {
     #[must_use]
     pub const fn difficulty(&self) -> DifficultyRule {
         self.difficulty
+    }
+
+    /// The settlement-epoch geometry the archival rows are judged against
+    /// (CEN-L1…L9): which epoch a height sits in, where a challenge opens,
+    /// closes and is slash-final, which epoch a height closes. The
+    /// validator reads epoch arithmetic here and nowhere else — never the
+    /// process-latched `SettlementSchedule::effective()`, which is the
+    /// daemon's and the FFI's entry point (rule 71: the schedule in force is
+    /// data on the set in force). The store pins the same number in its
+    /// header and refuses a session whose in-force set names another.
+    #[must_use]
+    pub const fn settlement_schedule(&self) -> SettlementSchedule {
+        self.settlement_schedule
     }
 
     /// The deepest reorganisation a node under this rule set is built to
@@ -309,6 +451,7 @@ impl fmt::Debug for RuleSet {
             .field("mined_money_unlock_window", &self.mined_money_unlock_window)
             .field("reorg_cap", &self.reorg_cap)
             .field("tx_spendable_age", &self.tx_spendable_age)
+            .field("settlement_schedule", &self.settlement_schedule)
             .finish()
     }
 }

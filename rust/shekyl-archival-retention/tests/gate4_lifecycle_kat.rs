@@ -16,12 +16,12 @@ use shekyl_archival_retention::{
     bond_floor, challenge_fire_height, challenge_leaf_chunk_bounds, challenge_leaf_index,
     challenge_seal_height, challenged_leaf_bytes, challenged_leaf_offset_in_chunk,
     hybrid_countersignature, p_canonical_id_from_hybrid_pubkey, r_market_count,
-    serve_credit_epoch_ok, sigma_work_milli, verify_conservation_snapshot,
-    verify_join_market_bond_post, verify_segment_path, ArchivalBondPostVin,
-    ArchivalServeCreditPruned, ArchivalServeCreditResponse, BadInterval, BondPostError,
-    ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind, ServeCreditRow,
-    ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC, ENDPOINT_BYTES, SETTLEMENT_EPOCH_BLOCKS,
-    VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
+    serve_credit_epoch_ok, settlement_epoch_last_block, settlement_epoch_open_height,
+    sigma_work_milli, verify_conservation_snapshot, verify_join_market_bond_post,
+    verify_segment_path, ArchivalBondPostVin, ArchivalServeCreditPruned,
+    ArchivalServeCreditResponse, BadInterval, BondPostError, ConservationError,
+    ConservationSnapshot, HoldingsDescriptor, HoldingsKind, ServeCreditRow, ShardSet,
+    ARCHIVAL_BOND_FLOOR_ATOMIC, ENDPOINT_BYTES, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 
@@ -54,10 +54,6 @@ fn decode_hex128(s: &str) -> [u8; 128] {
     let mut a = [0u8; 128];
     a.copy_from_slice(&v);
     a
-}
-
-fn settlement_epoch_open_height(e: u64) -> u64 {
-    e.saturating_mul(SETTLEMENT_EPOCH_BLOCKS)
 }
 
 fn build_gate4_document() -> Value {
@@ -351,7 +347,7 @@ fn gate4_lifecycle_kat_vectors() {
     verify_segment_path(&layer_scalars, leaf_offset, &pruned.path, &rk).expect("path verify");
 
     let h_open = settlement_epoch_open_height(settlement_epoch);
-    let h_close = h_open + SETTLEMENT_EPOCH_BLOCKS - 1;
+    let h_close = settlement_epoch_last_block(settlement_epoch);
     let seal_hash = decode_hex32(serve["block_hash_at_seal_hex"].as_str().expect("seal hash"));
     assert_eq!(
         challenge_seal_height(h_open),

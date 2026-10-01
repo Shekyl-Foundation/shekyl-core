@@ -28,7 +28,6 @@ fn ok_connect() -> ReleaseConnect {
         holdings.shard_ids.len(),
         0,
         RECORD_BONDED,
-        TOTAL_BONDED,
         E_RELEASE,
     )
     .expect("valid connect")
@@ -41,7 +40,6 @@ fn connect_full_release_effect() {
     assert_eq!(effect.post_holdings.kind, HoldingsKind::ShardSetCompact);
     assert!(effect.post_holdings.shard_ids.is_empty());
     assert_eq!(effect.interval_close, clean_interval_close(E_RELEASE));
-    assert_eq!(effect.new_total_bonded_atomic, TOTAL_BONDED - RECORD_BONDED);
     // §4.3 identity: refund == debit == bond_floor(record's current holdings).
     assert_eq!(effect.refund_atomic, RECORD_BONDED);
     assert_eq!(effect.refund_atomic, bond_floor(&record_holdings()));
@@ -56,7 +54,6 @@ fn connect_releases_complete_tree_record() {
         0,
         0,
         ARCHIVAL_BOND_FLOOR_ATOMIC,
-        TOTAL_BONDED,
         E_RELEASE,
     )
     .expect("complete-tree release");
@@ -107,15 +104,7 @@ const HOLDINGS_COUNT: usize = 2;
 #[test]
 fn connect_rejects_zero_debit() {
     assert_eq!(
-        release_connect(
-            0,
-            HOLDINGS_KIND,
-            HOLDINGS_COUNT,
-            0,
-            0,
-            TOTAL_BONDED,
-            E_RELEASE
-        ),
+        release_connect(0, HOLDINGS_KIND, HOLDINGS_COUNT, 0, 0, E_RELEASE),
         Err(ReleaseConnectError::DebitZero)
     );
 }
@@ -129,7 +118,6 @@ fn connect_rejects_debit_mismatch() {
             HOLDINGS_COUNT,
             0,
             RECORD_BONDED - 1,
-            TOTAL_BONDED,
             E_RELEASE,
         ),
         Err(ReleaseConnectError::DebitNotRecordTotal)
@@ -147,26 +135,9 @@ fn connect_rejects_broken_floor_invariant() {
             HOLDINGS_COUNT,
             0,
             corrupt,
-            TOTAL_BONDED,
             E_RELEASE
         ),
         Err(ReleaseConnectError::RecordFloorInvariantBroken)
-    );
-}
-
-#[test]
-fn connect_rejects_total_bonded_underflow() {
-    assert_eq!(
-        release_connect(
-            RECORD_BONDED,
-            HOLDINGS_KIND,
-            HOLDINGS_COUNT,
-            0,
-            RECORD_BONDED,
-            RECORD_BONDED - 1,
-            E_RELEASE,
-        ),
-        Err(ReleaseConnectError::TotalBondedUnderflow)
     );
 }
 
@@ -179,7 +150,6 @@ fn connect_rejects_full_interval_log() {
             HOLDINGS_COUNT,
             MAX_BOND_BAD_INTERVALS,
             RECORD_BONDED,
-            TOTAL_BONDED,
             E_RELEASE,
         ),
         Err(ReleaseConnectError::IntervalLogFull)
@@ -194,7 +164,6 @@ fn connect_appends_below_the_cap() {
         HOLDINGS_COUNT,
         MAX_BOND_BAD_INTERVALS - 1,
         RECORD_BONDED,
-        TOTAL_BONDED,
         E_RELEASE,
     )
     .is_ok());
@@ -202,7 +171,9 @@ fn connect_appends_below_the_cap() {
 
 #[test]
 fn pop_restores_total_bonded_exactly() {
-    // Connect ∘ pop is the identity on the global counter (§5 pop twin).
+    // Connect ∘ pop is the identity on the C++ store's global counter (§5
+    // pop twin): the store debits the fold's refund at connect and the pop
+    // re-credits the journaled pre-image.
     let effect = ok_connect();
     let restored = release_pop(
         effect.post_bonded_total,
@@ -210,7 +181,7 @@ fn pop_restores_total_bonded_exactly() {
         Some(effect.interval_close),
         E_RELEASE,
         RECORD_BONDED,
-        effect.new_total_bonded_atomic,
+        TOTAL_BONDED - effect.refund_atomic,
     )
     .expect("valid pop");
     assert_eq!(restored, TOTAL_BONDED);
