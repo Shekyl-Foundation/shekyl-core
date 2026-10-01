@@ -64,7 +64,7 @@ namespace cryptonote
     /*! The whole-second deadline at which a Rust-drawn relay delay expires.
 
         Used by BOTH delays the pool schedules — the stem embargo and the
-        i2p/tor -> clearnet forward delay. Renamed from `embargo_deadline` when
+        Tor -> clearnet forward delay. Renamed from `embargo_deadline` when
         the forward delay became its second caller: the cast and the rounding
         direction below are policy for any FFI-sourced delay, and duplicating
         them per call site is how one copy silently acquires a different

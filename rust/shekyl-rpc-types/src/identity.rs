@@ -119,7 +119,11 @@ impl IdentityExpectation {
 }
 
 /// Why a `get_version` reply is not this build.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// A fixed-size value with no text from the reply in it, so every error type
+/// on the way up can carry it, including the refresh producer's `Copy`-only
+/// error (`STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.7 R6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdentityMismatch {
     /// Packed `CORE_RPC_VERSION` disagrees; `theirs < ours` means the daemon
     /// is the older binary.
@@ -129,12 +133,12 @@ pub enum IdentityMismatch {
         /// The daemon's packed version.
         theirs: u32,
     },
-    /// The reply was not this build's `GetVersionResponse` (VC-D16).
+    /// The reply was not this build's `GetVersionResponse` (VC-D16). What
+    /// failed to parse is the daemon's own text, so it stays in the log of
+    /// the client that parsed it and is not carried here.
     WireUnreadable {
         /// This build's packed version, for the message that cannot name theirs.
         ours: u32,
-        /// Deserializer or envelope evidence; not shown as a version number.
-        evidence: String,
     },
     /// Digest disagrees. A hash has no ordering (`VC-D15`).
     Rules {
@@ -162,12 +166,12 @@ pub enum IdentityMismatch {
 }
 
 impl IdentityMismatch {
-    /// A reply that did not parse as this build's `get_version` shape.
+    /// A reply that did not parse as this build's `get_version` shape. The
+    /// caller logs what failed to parse; see [`Self::WireUnreadable`].
     #[must_use]
-    pub fn unreadable(evidence: impl std::fmt::Display) -> Self {
+    pub const fn unreadable() -> Self {
         Self::WireUnreadable {
             ours: CORE_RPC_VERSION,
-            evidence: evidence.to_string(),
         }
     }
 
@@ -378,7 +382,7 @@ mod tests {
 
     #[test]
     fn unreadable_is_the_wire_axis() {
-        let m = IdentityMismatch::unreadable("missing field `nettype`");
+        let m = IdentityMismatch::unreadable();
         assert_eq!(m.axis(), IdentityAxis::Wire);
         assert!(matches!(m, IdentityMismatch::WireUnreadable { .. }));
     }

@@ -64,7 +64,8 @@ use crate::engine::test_support::{derive_seed, TestDaemon, ROLE_DAEMON};
 use crate::engine::traits::{DaemonEngine, LedgerEngine, RefreshEngine};
 use crate::engine::view_material::ViewMaterial;
 use crate::engine::{
-    Credentials, DaemonClient, Engine, IoError, RefreshError, RefreshOptions, SoloSigner,
+    Credentials, CurveTreeIngestFault, DaemonClient, Engine, IoError, RefreshError, RefreshOptions,
+    SoloSigner,
 };
 use crate::scan::ScanResult;
 use shekyl_types::{BlockHash, CurveTreeRoot};
@@ -119,7 +120,8 @@ async fn start_refresh_propagates_daemon_io_error_via_join() {
 
     let result = handle.join().await;
     match result {
-        Err(RefreshError::Io(IoError::Daemon { detail })) => {
+        Err(RefreshError::Io(IoError::Daemon { fault, detail })) => {
+            assert_eq!(fault, shekyl_rpc_client::DaemonFault::Unreachable);
             assert!(
                 !detail.is_empty(),
                 "Daemon error carries a non-empty detail string"
@@ -903,10 +905,7 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
         assert!(
             matches!(
                 err,
-                RefreshError::CurveTreeIngest {
-                    recoverable_by_respawn: true,
-                    ..
-                }
+                RefreshError::CurveTreeIngest { fault } if fault.recoverable_by_respawn()
             ),
             "a fail-stopped actor is classified respawn-recoverable, got {err:?}",
         );
@@ -1024,9 +1023,8 @@ async fn ingest_rejects_header_root_mismatch() {
         matches!(
             err,
             RefreshError::CurveTreeIngest {
-                context,
-                recoverable_by_respawn: false,
-            } if context.contains("root mismatch")
+                fault: CurveTreeIngestFault::RootMismatch,
+            }
         ),
         "expected a terminal root-mismatch CurveTreeIngest, got {err:?}",
     );

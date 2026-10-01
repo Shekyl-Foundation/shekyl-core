@@ -62,7 +62,6 @@ compile_error!(
 // `shekyl_account_*` callers and removed once C++ no longer references
 // them.
 pub mod account_ffi;
-pub mod clearnet_transport_ffi;
 
 // LWMA-1 difficulty-adjustment FFI export. Wraps `shekyl_difficulty::
 // lwma1_next` in a C-ABI surface using the `ShekylU128` two-u64
@@ -151,6 +150,10 @@ pub mod seam_ffi;
 // The socketless asio executor. One ledger row. The floor check is
 // ExecutorBudget::above_floor; this module does not reimplement it.
 pub mod executor_ffi;
+
+// Zone listen and dial. The seam stays connector-agnostic; this module is
+// where clearnet and Tor meet it.
+pub mod zone_ffi;
 
 // Peer-attribution drop rule FFI — PWD-B7 (`SHEKYL_P2P_PROTOCOL.md`). The
 // classification is recorded by C++ as an opaque byte on the verification

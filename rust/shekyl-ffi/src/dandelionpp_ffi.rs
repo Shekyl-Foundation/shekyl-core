@@ -403,7 +403,7 @@ mod tests {
         // and invisible because 190 s is a perfectly reasonable-looking answer.
         let clearnet = embargo_timer(RelayZone::Public).mean_secs();
         assert_eq!(clearnet, 190);
-        for zone in [RelayZone::Tor, RelayZone::I2p, RelayZone::Invalid] {
+        for zone in [RelayZone::Tor, RelayZone::Invalid] {
             let anon = embargo_timer(zone).mean_secs();
             assert_eq!(
                 anon, 499,
@@ -474,7 +474,7 @@ mod tests {
         // Worst-zone, not clearnet: the wallet cannot know which zone its
         // transaction took, so the one wait it gets must clear them all.
         // Under-waiting un-reserves the inputs of a live transaction (§89.6).
-        for zone in [RelayZone::Public, RelayZone::I2p, RelayZone::Tor] {
+        for zone in [RelayZone::Public, RelayZone::Tor] {
             assert!(
                 shekyl_dandelionpp_propagation_timeout_seconds()
                     >= u64::from(

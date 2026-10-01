@@ -19,10 +19,12 @@
 
 mod accept;
 mod copy;
+mod gate;
 mod queue;
 mod session;
 
 pub use accept::accept_error_is_transient;
-pub use copy::{read_capped, write_capped, READ_CHUNK_BYTES};
+pub use copy::{read_capped, refund_unsent, write_all_counted, write_capped, READ_CHUNK_BYTES};
+pub use gate::{node_gate, LinkGate};
 pub use queue::{ByteQueue, CloseReason, Overfull, PushError};
 pub use session::{FrameSender, QueueHold, SendHalf, Session, StreamEnds, UNREAD_FRAMES};

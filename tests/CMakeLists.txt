@@ -76,7 +76,6 @@ else ()
   add_subdirectory(difficulty)
   add_subdirectory(block_weight)
   add_subdirectory(hash)
-  add_subdirectory(net_load_tests)
   # Phase 3a Hole-1 gate (RANDOMX_V2_PHASE3_PLAN.md §7): the C full-dataset
   # vs Rust light-cache PoW parity harness. Needs the imported
   # `shekyl_randomx_v2` target, which only exists when the full-dataset C
@@ -111,29 +110,18 @@ add_test(
   NAME    hash-target
   COMMAND hash-target-tests)
 
-# The epee reference for the differential harness. Not a unit test: it
-# writes one transcript and exits. The Rust peer drives it.
-monero_add_minimal_executable(epee-host p2p_harness/epee_host.cpp)
-target_link_libraries(epee-host PRIVATE epee net ${EXTRA_LIBRARIES})
-# The Rust archive on epee's link line is an imported location. Ninja does
-# not order the cargo build ahead of this binary unless the edge is named.
-if(TARGET shekyl_rust)
-  add_dependencies(epee-host shekyl_rust)
-endif()
-set_property(TARGET epee-host PROPERTY FOLDER "${folder}")
-
 # The test job unpacks `build/` and has no cargo. The bins have to be
-# inside that tree, next to epee-host, or the differential never runs.
-# `run-seeds` is the gate. `peer`, `seam-host`, and `compare` stay for
-# replay of a kept `p2p-harness-fail/` directory.
+# inside that tree. `check-goldens` is the gate: the seam against the
+# recorded parity transcripts. `peer`, `seam-host`, and `compare` stay
+# for replay of a kept `p2p-harness-fail/` directory.
 if(UNIX)
   if(CARGO_EXECUTABLE)
     set(_harness_peer "${CMAKE_CURRENT_BINARY_DIR}/peer${CMAKE_EXECUTABLE_SUFFIX}")
     set(_harness_seam "${CMAKE_CURRENT_BINARY_DIR}/seam-host${CMAKE_EXECUTABLE_SUFFIX}")
     set(_harness_compare "${CMAKE_CURRENT_BINARY_DIR}/compare${CMAKE_EXECUTABLE_SUFFIX}")
-    set(_harness_run_seeds "${CMAKE_CURRENT_BINARY_DIR}/run-seeds${CMAKE_EXECUTABLE_SUFFIX}")
+    set(_harness_check "${CMAKE_CURRENT_BINARY_DIR}/check-goldens${CMAKE_EXECUTABLE_SUFFIX}")
     add_custom_command(
-      OUTPUT "${_harness_peer}" "${_harness_seam}" "${_harness_compare}" "${_harness_run_seeds}"
+      OUTPUT "${_harness_peer}" "${_harness_seam}" "${_harness_compare}" "${_harness_check}"
       COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
         ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
         -p shekyl-p2p-harness --bins
@@ -144,18 +132,17 @@ if(UNIX)
       COMMAND ${CMAKE_COMMAND} -E copy
         "${RUST_BUILD_DIR}/compare${CMAKE_EXECUTABLE_SUFFIX}" "${_harness_compare}"
       COMMAND ${CMAKE_COMMAND} -E copy
-        "${RUST_BUILD_DIR}/run-seeds${CMAKE_EXECUTABLE_SUFFIX}" "${_harness_run_seeds}"
+        "${RUST_BUILD_DIR}/check-goldens${CMAKE_EXECUTABLE_SUFFIX}" "${_harness_check}"
       WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
       DEPENDS ${_shekyl_rust_deps}
       COMMENT "p2p harness bins"
       VERBATIM
     )
-    add_custom_target(p2p_harness_bins DEPENDS
-      "${_harness_peer}" "${_harness_seam}" "${_harness_compare}" "${_harness_run_seeds}")
-    add_dependencies(epee-host p2p_harness_bins)
+    add_custom_target(p2p_harness_bins ALL DEPENDS
+      "${_harness_peer}" "${_harness_seam}" "${_harness_compare}" "${_harness_check}")
     add_test(
       NAME p2p-harness-seeds
-      COMMAND "${_harness_run_seeds}" $<TARGET_FILE:epee-host>
+      COMMAND "${_harness_check}" "${CMAKE_SOURCE_DIR}/rust/shekyl-p2p-harness/goldens"
     )
     set_tests_properties(p2p-harness-seeds PROPERTIES TIMEOUT 600)
   else()

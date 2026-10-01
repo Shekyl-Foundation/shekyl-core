@@ -16,8 +16,13 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
-use shekyl_transport_layer::CloseKind;
+use shekyl_transport_layer::{CloseKind, MessageClass};
 use tokio::sync::Notify;
+
+struct Item {
+    class: MessageClass,
+    bytes: Vec<u8>,
+}
 
 /// Outbound bytes. The cap is the only storage limit. A send that does
 /// not fit is not stored.
@@ -38,7 +43,7 @@ struct ByteQueueInner {
     /// `Some` once the queue is closed, with why. Set once; the first
     /// reason stands.
     closed: Option<CloseReason>,
-    items: VecDeque<Vec<u8>>,
+    items: VecDeque<Item>,
 }
 
 /// Why a [`ByteQueue`] stopped taking bytes — what a writer that finds it
@@ -116,7 +121,10 @@ impl ByteQueue {
             return self.overflow(inner);
         }
         inner.used = next;
-        inner.items.push_back(bytes);
+        inner.items.push_back(Item {
+            class: MessageClass::Session,
+            bytes,
+        });
         drop(inner);
         self.data.notify_one();
         self.parked.notify_all();
@@ -155,9 +163,28 @@ impl ByteQueue {
         self.wake();
     }
 
-    /// The next buffer, or why the queue closed once it is closed and
-    /// empty. The byte count stays until [`Self::release`].
-    pub(crate) async fn pop(&self) -> Result<Vec<u8>, CloseReason> {
+    /// Close and drop the pending tail. The writer's next pop is the close
+    /// reason at once, not after draining what is queued.
+    ///
+    /// This is the local-close path: a ban, a protocol refusal, or
+    /// `del_in_connections` has nothing it needs delivered, so the tail is
+    /// dropped, not flushed. An overflow that already closed the queue keeps
+    /// its reason. It does not touch a write already in progress —
+    /// `write_all` on the frame the writer already popped runs to completion
+    /// or the socket errors; a stalled in-flight write is not bounded here.
+    pub(crate) fn discard(&self) {
+        let mut inner = self.inner.lock().expect("outbound");
+        inner.closed.get_or_insert(CloseReason::Local);
+        inner.items.clear();
+        inner.used = 0;
+        drop(inner);
+        self.wake();
+    }
+
+    /// The next buffer and the class the sender named, or why the queue
+    /// closed once it is closed and empty. The byte count stays until
+    /// [`Self::release`].
+    pub(crate) async fn pop(&self) -> Result<(MessageClass, Vec<u8>), CloseReason> {
         loop {
             let mut notified = std::pin::pin!(self.data.notified());
             notified.as_mut().enable();
@@ -173,7 +200,12 @@ impl ByteQueue {
     /// after it finishes them.
     #[must_use]
     pub fn try_pop(&self) -> Option<Vec<u8>> {
-        self.inner.lock().expect("outbound").items.pop_front()
+        self.inner
+            .lock()
+            .expect("outbound")
+            .items
+            .pop_front()
+            .map(|item| item.bytes)
     }
 
     /// The next buffer, or why the queue closed once it is closed and
@@ -191,7 +223,7 @@ impl ByteQueue {
         let mut inner = self.inner.lock().expect("outbound");
         loop {
             if let Some(next) = inner.next() {
-                return next;
+                return next.map(|(_class, bytes)| bytes);
             }
             inner = self
                 .parked
@@ -210,9 +242,9 @@ impl ByteQueueInner {
     /// What a pop takes now: the next buffer, or the close reason once the
     /// queue is closed and empty; `None` to wait. One reading for both
     /// pops, under the lock that set the reason.
-    fn next(&mut self) -> Option<Result<Vec<u8>, CloseReason>> {
+    fn next(&mut self) -> Option<Result<(MessageClass, Vec<u8>), CloseReason>> {
         match self.items.pop_front() {
-            Some(bytes) => Some(Ok(bytes)),
+            Some(item) => Some(Ok((item.class, item.bytes))),
             None => self.closed.map(Err),
         }
     }
@@ -317,5 +349,20 @@ mod tests {
         assert!(!queue.overfull().tripped());
         assert_eq!(CloseReason::Local.kind(), CloseKind::LocalClose);
         assert_eq!(CloseReason::Overfull.kind(), CloseKind::SendQueueFull);
+    }
+
+    /// A local close drops the tail. The next pop is the reason, not the
+    /// bytes that were queued.
+    #[test]
+    fn a_discard_drops_the_tail_and_keeps_an_earlier_reason() {
+        let queue = ByteQueue::new(8);
+        queue.try_push(b"ab".to_vec()).expect("fits");
+        queue.discard();
+        assert_eq!(queue.pop_blocking(), Err(CloseReason::Local));
+
+        let full = ByteQueue::new(0);
+        assert_eq!(full.try_push(b"x".to_vec()), Err(super::PushError::Full));
+        full.discard();
+        assert_eq!(full.pop_blocking(), Err(CloseReason::Overfull));
     }
 }

@@ -25,7 +25,7 @@
 // 
 
 // TODO(shekyl-v4): Migrate Levin protocol handler from boost::asio to
-// standalone Asio. Tightly coupled to abstract_tcp_server2; migrate together.
+// standalone Asio. The handler sits on i_service_endpoint and moves with LV-3.
 #pragma once
 #include <boost/asio/steady_timer.hpp>
 #include <boost/uuid/uuid_generators.hpp>
@@ -485,7 +485,7 @@ public:
           epee::span<const uint8_t> buff_to_invoke = m_cache_in_buffer.carve((std::string::size_type)m_current_head.m_cb);
           m_state = stream_state_head;
 
-          // abstract_tcp_server2.h manages max bandwidth for a p2p link
+          // The operator link budget is the rate limit. This handler does not sleep.
           if (!(m_current_head.m_flags & (LEVIN_PACKET_REQUEST | LEVIN_PACKET_RESPONSE)))
           {
             // special noise/fragment command

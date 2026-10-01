@@ -1347,7 +1347,11 @@ the engine swap completes before genesis, or this is revisited. The census carri
 **Build status, 2026-09-29 (PR #910).** Items 2, 4 and 5 are done, and item 1's row and
 cell are built. Item 1's mixer term and item 3's pins and corpora are held on one
 blocker, how a pruned form supplies the length (FOLLOWUPS "Build `SHT-Q2`", where the
-four resolutions and the recommendation are recorded).
+four resolutions and the recommendation are recorded). *Until the term lands, the
+invariant — no boundary reads a value the skeleton cannot bind — holds because every
+stored length is one `connect` measured; `scripts/ci/check_archival_len_source.py`
+(2026-09-30) holds that mechanically (named origins, one writer) and fails asking to
+be deleted once `hash_from_components` takes the length.*
 
 **Consequences recorded with the ruling:**
 

@@ -80,14 +80,7 @@ pub(crate) async fn create_payment_request(
             created_at,
             expiry,
         })
-        .map_err(|e| {
-            // A `PersistenceError` can carry `WalletFileError` display strings
-            // that embed filesystem paths (e.g. "refusing to overwrite … at
-            // {path}"); keep those server-side and return a stable, detail-free
-            // client message — same discipline as staking's `read_view` mapping.
-            tracing::warn!(error = %e, "create_payment_request: persist failed");
-            WalletRpcError::InternalError("failed to persist payment request".into())
-        })?;
+        .map_err(WalletRpcError::from)?;
 
     let address = engine
         .primary_address()

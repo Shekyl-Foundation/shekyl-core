@@ -180,14 +180,12 @@ void txpool_tx_meta_t::set_origin_zone(epee::net_utils::zone zone) noexcept
     "bits decoding to 'origin unknown', and no migration exists to fix them");
   static_assert(static_cast<uint8_t>(epee::net_utils::zone::public_) == 1,
     "zone::public_ must stay 1 so the two-bit field maps 1:1");
-  static_assert(static_cast<uint8_t>(epee::net_utils::zone::i2p) == 2,
-    "zone::i2p must stay 2 so the two-bit field maps 1:1");
   static_assert(static_cast<uint8_t>(epee::net_utils::zone::tor) == 3,
     "zone::tor must stay 3 so the two-bit field maps 1:1");
 
   // Exhaustive: -Werror=switch fails the build if a fifth enumerator is added.
   // The two-bit field cannot hold it. A mask (`& 0x3`) would have silently
-  // aliased a new real zone onto an existing one — `5 → public_`, `6 → i2p` —
+  // aliased a new real zone onto an existing one — `5 → public_` —
   // which is the failure this function exists to refuse. An unrecognised value
   // (a cast from outside the enumerators) leaves the field unchanged rather
   // than inventing a transport.
@@ -195,7 +193,6 @@ void txpool_tx_meta_t::set_origin_zone(epee::net_utils::zone zone) noexcept
   {
     case epee::net_utils::zone::invalid:
     case epee::net_utils::zone::public_:
-    case epee::net_utils::zone::i2p:
     case epee::net_utils::zone::tor:
       origin_zone = static_cast<uint8_t>(zone);
       break;

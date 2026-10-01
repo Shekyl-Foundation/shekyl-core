@@ -50,7 +50,6 @@ const _: () = {
     assert!(RelayMethod::Block as u8 == 4);
     assert!(NetZone::Invalid as u8 == 0);
     assert!(NetZone::Public as u8 == 1);
-    assert!(NetZone::I2p as u8 == 2);
     assert!(NetZone::Tor as u8 == 3);
     assert!(ZoneRouteDecision::KeepArrival as u8 == 0);
     assert!(ZoneRouteDecision::AnonymityFailClosed as u8 == 1);
@@ -84,7 +83,7 @@ pub enum ZoneRouteDecision {
     PublicClearnet = 2,
     /// **Design A (§91): a fluff goes to EVERY configured zone.**
     ///
-    /// Transport is a parameter, not a topology: clearnet, Tor and i2p are
+    /// Transport is a parameter, not a topology: clearnet and Tor are
     /// link classes in one propagation graph, so a fluff floods all of them.
     ///
     /// Before §91 a fluff took [`Self::PublicClearnet`], which is
@@ -206,12 +205,7 @@ mod tests {
         RelayMethod::Fluff,
         RelayMethod::Block,
     ];
-    const ZONES: [NetZone; 4] = [
-        NetZone::Invalid,
-        NetZone::Public,
-        NetZone::I2p,
-        NetZone::Tor,
-    ];
+    const ZONES: [NetZone; 3] = [NetZone::Invalid, NetZone::Public, NetZone::Tor];
 
     /// The full 5 × 4 truth table, written as data rather than re-derived, so
     /// a change to any arm reds a named row. This SUPERSETS the C++
@@ -226,7 +220,7 @@ mod tests {
             for &zone in &ZONES {
                 let expect = match (method, zone) {
                     // Coherence: still-stemming on a real anonymity origin.
-                    (M::Stem | M::Local, NetZone::I2p | NetZone::Tor) => D::KeepArrival,
+                    (M::Stem | M::Local, NetZone::Tor) => D::KeepArrival,
                     // Originated chose anon (or pool re-relay of Local):
                     // fail closed, never clearnet (§30.5).
                     (M::Stem | M::Local, NetZone::Invalid) => D::AnonymityFailClosed,
@@ -284,7 +278,6 @@ mod tests {
         for &m in &[RelayMethod::Stem, RelayMethod::Local] {
             assert!(!r1_coherence_keeps_origin(m, NetZone::Public));
             assert!(!r1_coherence_keeps_origin(m, NetZone::Invalid));
-            assert!(r1_coherence_keeps_origin(m, NetZone::I2p));
             assert!(r1_coherence_keeps_origin(m, NetZone::Tor));
             assert!(is_pre_fluff_relay(m));
         }

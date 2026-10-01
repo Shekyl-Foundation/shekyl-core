@@ -348,9 +348,9 @@ TEST(peerlist_manager, white_does_not_survive_a_save_load_cycle)
 
 TEST(peerlist_storage, oversized_persisted_list_is_rejected)
 {
-  // PEERLIST_STORE_LIST_CEILING is derived from the runtime per-zone caps
-  // the peerlist manager trims to (derivation at the constant's
-  // definition); store() itself serializes whatever lists it is handed and
+  // PEERLIST_STORE_LIST_CEILING is the corruption bound: gray cap times
+  // the stored networks times headroom (derivation at the constant's
+  // definition). store() itself serializes whatever lists it is handed and
   // enforces nothing — which is what lets this test write an oversized
   // store. A list beyond the ceiling therefore cannot come from a normally
   // operating daemon, and open() must refuse it — falling back to the
@@ -442,7 +442,7 @@ TEST(peerlist_storage, a_v7_store_is_dropped_whole)
     << "a store declaring a pre-current version restored " << restored.gray.size()
     << " peer(s); the version gate is the only thing preventing an older "
        "store's entries -- including its white section -- from being adopted";
-  EXPECT_TRUE(check_empty(*read_peers, {zone::invalid, zone::public_, zone::tor, zone::i2p}));
+  EXPECT_TRUE(check_empty(*read_peers, {zone::invalid, zone::public_, zone::tor}));
 }
 
 TEST(peerlist_storage, store)
@@ -464,7 +464,7 @@ TEST(peerlist_storage, store)
   };
 
   nodetool::peerlist_storage peers{};
-  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::tor, zone::i2p}));
+  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::tor}));
 
   std::string buffer{};
   {
@@ -478,7 +478,7 @@ TEST(peerlist_storage, store)
     EXPECT_TRUE(peers.store(stream, types));
     buffer = stream.str();
   }
-  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::tor, zone::i2p}));
+  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::tor}));
   {
     std::istringstream stream{buffer};
     std::optional<nodetool::peerlist_storage> read_peers =
@@ -486,10 +486,10 @@ TEST(peerlist_storage, store)
     ASSERT_TRUE(bool(read_peers));
     peers = std::move(*read_peers);
   }
-  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::i2p}));
+  EXPECT_TRUE(check_empty(peers, {zone::invalid}));
 
   nodetool::peerlist_types types = peers.take_zone(zone::public_);
-  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::i2p}));
+  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_}));
 
   ASSERT_EQ(2u, types.gray.size());
   {
@@ -508,7 +508,7 @@ TEST(peerlist_storage, store)
   }
 
   types = peers.take_zone(zone::tor);
-  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::i2p, zone::tor}));
+  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::tor}));
 
   ASSERT_EQ(2u, types.gray.size());
   {

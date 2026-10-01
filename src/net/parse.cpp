@@ -33,7 +33,6 @@
 #include "hex.h"
 #include "net/socks.h"
 #include "net/tor_address.h"
-#include "net/i2p_address.h"
 #include "string_tools.h"
 #include "string_tools_lexical.h"
 
@@ -144,7 +143,7 @@ namespace net
         {
             host = address;
         }
-        // Else IPv4, Tor, I2P address or hostname
+        // Else IPv4, Tor address or hostname
         else
         {
             host = address.substr(0, address.rfind(':'));
@@ -172,8 +171,6 @@ namespace net
             return make_error_code(net::error::invalid_host);
         if (host_str_ref.ends_with(".onion"))
             return tor_address::make(address, default_port);
-        if (host_str_ref.ends_with(".i2p"))
-            return i2p_address::make(address);
 
         boost::system::error_code ec;
         boost::asio::ip::address_v6 v6 = boost::asio::ip::make_address_v6(host_str, ec);

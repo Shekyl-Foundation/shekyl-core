@@ -122,20 +122,24 @@ pub(super) fn map_handle_err_to_reanchor(err: &CurveTreeHandleError) -> Reanchor
 
 pub(super) fn build_error_kind(err: &SendError) -> BuildErrorKind {
     match err {
-        SendError::InvalidRecipient { .. } | SendError::Tx(_) => BuildErrorKind::InvalidRecipient,
+        SendError::InvalidRecipient { .. } => BuildErrorKind::InvalidRecipient,
         SendError::Fee(
             FeeEstimatorError::DaemonFeeUnreasonable(_) | FeeEstimatorError::CustomFeeOutOfRange(_),
         ) => BuildErrorKind::FeeRefused,
         SendError::InsufficientFunds { .. } => BuildErrorKind::InsufficientFunds,
         SendError::SpendUnavailableRebuilding { .. } => BuildErrorKind::RebuildingMembershipData,
         SendError::OutputNotYetSpendable { .. } => BuildErrorKind::OutputNotYetSpendable,
-        // The chain is too short to anchor a reference block — a ledger-maturity
-        // readiness condition, projected like the other "ledger not ready" case.
-        SendError::WalletTooYoungToSpend { .. } => BuildErrorKind::LedgerNotReady,
-        SendError::CannotSign { reason } if *reason == "wallet has not ingested any block yet" => {
+        // No block ingested yet, or a chain too short to anchor a reference
+        // block: both are ledger readiness, not faults.
+        SendError::WalletTooYoungToSpend { .. } | SendError::NotSynced => {
             BuildErrorKind::LedgerNotReady
         }
-        SendError::CannotSign { .. } => BuildErrorKind::SignerUnavailable,
+        SendError::SignerUnavailable | SendError::SignerFailed { .. } => {
+            BuildErrorKind::SignerUnavailable
+        }
+        // A failed proof or signature, or a broken precondition: a bug, not a
+        // state the request put the wallet in.
+        SendError::Tx(_) | SendError::BuildInvariant { .. } => BuildErrorKind::InternalInvariant,
         // A curve-tree actor that cannot be queried is an infrastructure
         // outage indistinguishable, to the caller, from the daemon being down.
         SendError::CurveTreeUnavailable { .. } | SendError::Io(_) | SendError::Fee(_) => {
@@ -180,9 +184,7 @@ pub(super) fn map_fee_estimator_error(err: &FeeEstimatorError) -> SendError {
 
 pub(super) fn map_signer_error(err: &SignerError) -> SendError {
     match err {
-        SignerError::Unavailable => SendError::CannotSign {
-            reason: "signer unavailable",
-        },
-        SignerError::RemoteFailure { reason } => SendError::CannotSign { reason },
+        SignerError::Unavailable => SendError::SignerUnavailable,
+        SignerError::RemoteFailure { reason } => SendError::SignerFailed { reason },
     }
 }

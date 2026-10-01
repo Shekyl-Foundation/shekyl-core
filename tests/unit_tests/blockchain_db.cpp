@@ -228,7 +228,6 @@ TYPED_TEST(BlockchainDBTest, TxpoolOriginZoneSurvivesPersistence)
   this->get_filenames();
 
   for (const epee::net_utils::zone z : {epee::net_utils::zone::public_,
-                                        epee::net_utils::zone::i2p,
                                         epee::net_utils::zone::tor,
                                         epee::net_utils::zone::invalid})
   {

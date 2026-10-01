@@ -12,6 +12,7 @@
 //! `transfer/transfer_pending_tx_tests.rs` pattern).
 
 use super::*;
+use shekyl_rpc_client::RpcError;
 
 use proptest::prelude::*;
 use shekyl_crypto_pq::account::{
@@ -713,7 +714,7 @@ fn is_error_class(event: &RefreshDiagnostic) -> bool {
 }
 
 /// True iff `event` is a [`RefreshDiagnostic::DaemonProtocolError`].
-/// Used by the `LocalRefreshError::Io` coherence check.
+/// Used by the daemon-failure coherence checks.
 fn is_daemon_protocol_error(event: &RefreshDiagnostic) -> bool {
     matches!(event, RefreshDiagnostic::DaemonProtocolError { .. })
 }
@@ -866,7 +867,7 @@ async fn coherence_clean_chain_returns_ok_with_no_error_events() {
 /// Persistent `get_height` failure: the producer's first daemon
 /// call fails with `RpcError::ConnectionError`. `get_height` has
 /// no retry loop at the producer; the failure surfaces directly
-/// as `LocalRefreshError::Io`, preceded by exactly one
+/// as `LocalRefreshError::DaemonUnreachable`, preceded by exactly one
 /// `DaemonProtocolError { kind: ConnectionError }` emission.
 ///
 /// Pins the §5.4.6 coherence contract on the `Io` branch from
@@ -898,12 +899,12 @@ async fn coherence_get_height_failure_emits_protocol_error_then_returns_io() {
         .await;
 
     match &result {
-        Err(LocalRefreshError::Io) => {}
+        Err(LocalRefreshError::DaemonUnreachable) => {}
         Err(e) => {
-            panic!("get_height failure should surface as LocalRefreshError::Io, got Err({e:?})")
+            panic!("get_height failure should surface as LocalRefreshError::DaemonUnreachable, got Err({e:?})")
         }
         Ok(_) => {
-            panic!("get_height failure should surface as LocalRefreshError::Io, got Ok(_)")
+            panic!("get_height failure should surface as LocalRefreshError::DaemonUnreachable, got Ok(_)")
         }
     }
     let recorded = sink.recorded();
@@ -936,7 +937,7 @@ async fn coherence_malformed_block_emits_daemon_malformed_then_returns_malformed
     // Mark height 1 as persistently malformed: every fetch at
     // height 1 returns `RpcError::InvalidNode`. The producer's
     // `fetch_block_with_retry` runs MAX_BLOCK_FETCH_RETRIES
-    // attempts (all fail) and surfaces `LocalRefreshError::Io`
+    // attempts (all fail) and surfaces `LocalRefreshError::DaemonProtocol`
     // with one DaemonProtocolError per attempt (rate-limited by
     // the per-block ceiling + F13-S latch).
     //
@@ -947,7 +948,7 @@ async fn coherence_malformed_block_emits_daemon_malformed_then_returns_malformed
     // is the corresponding helper but it's not in scope here at C7. The
     // RPC-classified malformed path goes through `DaemonProtocolError`
     // (not `DaemonMalformed`), so this test covers the RPC-side
-    // coherence at the fetch-failure → `Io` branch.
+    // coherence at the fetch-failure → `DaemonProtocol` branch.
     daemon.set_block_returns_malformed(1);
     let snapshot = empty_snapshot();
     let sink = AssertionSink::new();
@@ -968,16 +969,17 @@ async fn coherence_malformed_block_emits_daemon_malformed_then_returns_malformed
     // The RPC-classified malformed path: TestDaemon returns
     // `RpcError::InvalidNode` for every fetch at height 1. The
     // fetch-with-retry loop exhausts its budget and returns
-    // `LocalRefreshError::Io` with one DaemonProtocolError per
+    // `LocalRefreshError::DaemonProtocol` — a reply that broke the
+    // contract, not an outage — with one DaemonProtocolError per
     // attempt (subject to the per-class rate-limit).
     match &result {
-        Err(LocalRefreshError::Io) => {}
+        Err(LocalRefreshError::DaemonProtocol) => {}
         Err(e) => panic!(
-            "RPC-classified malformed at height 1 should surface as Io \
+            "RPC-classified malformed at height 1 should surface as DaemonProtocol \
                  (fetch_with_retry-exhausted), got Err({e:?})"
         ),
         Ok(_) => panic!(
-            "RPC-classified malformed at height 1 should surface as Io \
+            "RPC-classified malformed at height 1 should surface as DaemonProtocol \
                  (fetch_with_retry-exhausted), got Ok(_)"
         ),
     }
@@ -1092,11 +1094,11 @@ enum InjectionScenario {
     /// `Ok(_)` with no error-class diagnostics.
     Clean,
     /// One-shot `RpcError::ConnectionError` on `get_height`.
-    /// Coherence requires `Err(Io)` with ≥1 `DaemonProtocolError`.
+    /// Coherence requires `Err(DaemonUnreachable)` with ≥1 `DaemonProtocolError`.
     GetHeightFails,
     /// Persistently-malformed block at height 1 (every fetch
     /// returns `RpcError::InvalidNode`). Coherence requires
-    /// `Err(Io)` (fetch-with-retry exhausted) with ≥1
+    /// `Err(DaemonProtocol)` (fetch-with-retry exhausted) with ≥1
     /// `DaemonProtocolError`.
     BlockFetchFails,
 }
@@ -1192,17 +1194,17 @@ fn coherence_property_holds(chain_length: u64, scenario: InjectionScenario) {
             }
             // get_height failure: Io required with ≥1
             // DaemonProtocolError (coherence pin).
-            (InjectionScenario::GetHeightFails, Err(LocalRefreshError::Io)) => {
+            (InjectionScenario::GetHeightFails, Err(LocalRefreshError::DaemonUnreachable)) => {
                 assert!(
                     recorded.iter().any(is_daemon_protocol_error),
-                    "GetHeightFails scenario, chain_length={chain_length}: Io return \
+                    "GetHeightFails scenario, chain_length={chain_length}: DaemonUnreachable return \
                          MUST be preceded by ≥1 DaemonProtocolError. Recorded: {recorded:?}",
                 );
             }
             (InjectionScenario::GetHeightFails, _) => {
                 panic!(
                     "GetHeightFails scenario, chain_length={chain_length}: expected \
-                         Err(Io), got {result_summary:?}. Recorded: {recorded:?}",
+                         Err(DaemonUnreachable), got {result_summary:?}. Recorded: {recorded:?}",
                 );
             }
             // BlockFetchFails with chain_length < 2: scan range
@@ -1215,19 +1217,19 @@ fn coherence_property_holds(chain_length: u64, scenario: InjectionScenario) {
                 );
             }
             // BlockFetchFails with chain_length ≥ 2: producer
-            // exhausts MAX_BLOCK_FETCH_RETRIES and returns Io
+            // exhausts MAX_BLOCK_FETCH_RETRIES and returns DaemonProtocol
             // with ≥1 DaemonProtocolError.
-            (InjectionScenario::BlockFetchFails, Err(LocalRefreshError::Io)) => {
+            (InjectionScenario::BlockFetchFails, Err(LocalRefreshError::DaemonProtocol)) => {
                 assert!(
                     recorded.iter().any(is_daemon_protocol_error),
-                    "BlockFetchFails scenario, chain_length={chain_length}: Io return \
+                    "BlockFetchFails scenario, chain_length={chain_length}: DaemonProtocol return \
                          MUST be preceded by ≥1 DaemonProtocolError. Recorded: {recorded:?}",
                 );
             }
             (InjectionScenario::BlockFetchFails, _) => {
                 panic!(
                     "BlockFetchFails scenario, chain_length={chain_length}: expected \
-                         Err(Io) (or Ok for short chains), got {result_summary:?}. \
+                         Err(DaemonProtocol) (or Ok for short chains), got {result_summary:?}. \
                          Recorded: {recorded:?}",
                 );
             }
@@ -1349,7 +1351,7 @@ async fn panic_safety_panicking_sink_on_scan_progress_unwinds_cleanly() {
 /// call fails (injected `ConnectionError`); the producer emits
 /// `DaemonProtocolError` for the §5.4.7 R6 classification; the
 /// sink panics. The panic propagates out before the producer
-/// reaches the `return Err(LocalRefreshError::Io)` line — i.e.,
+/// reaches the daemon-failure `return Err(..)` line — i.e.,
 /// the §5.4.6 emission/return coherence contract is consistent
 /// with the panic-safety contract (emission happens before the
 /// return; a sink that panics on emit prevents the typed
@@ -1534,4 +1536,48 @@ fn is_daemon_malformed_classifies_event_correctly() {
         candidates: 0,
     };
     assert!(!is_daemon_malformed(&non_malformed));
+}
+
+/// Run one refresh attempt over a 3-block chain whose first fetched block
+/// (height 1) fails once with `injected`, then serves normally.
+async fn refresh_after_one_fetch_failure(
+    injected: RpcError,
+) -> Result<ScanResult, LocalRefreshError> {
+    let refresh = make_local_refresh();
+    let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
+    daemon.inject_block_fetch_failure(1, injected);
+    let (progress_tx, _progress_rx) = fresh_progress_channel();
+    refresh
+        .produce_scan_result(
+            empty_snapshot(),
+            &daemon,
+            RefreshOptions::default(),
+            CancellationToken::new(),
+            progress_tx,
+            &AssertionSink::new(),
+        )
+        .await
+}
+
+/// An identity refusal is not retried: the client caches its verdict, so
+/// every retry would repeat it. One queued failure discriminates — a
+/// retried attempt would find the queue drained and succeed.
+#[tokio::test(start_paused = true)]
+async fn an_identity_refusal_stops_the_fetch_without_retrying() {
+    let wrong_network = RpcError::IdentityMismatch(shekyl_rpc_client::IdentityMismatch::Network {
+        ours: shekyl_rpc_client::DaemonNetwork::Mainnet,
+        theirs: shekyl_rpc_client::DaemonNetwork::Testnet,
+    });
+    assert_eq!(
+        refresh_after_one_fetch_failure(wrong_network).await.err(),
+        Some(LocalRefreshError::DaemonProtocol),
+    );
+    // The control: the same single failure, as an outage, is retried and
+    // the attempt completes.
+    assert!(
+        refresh_after_one_fetch_failure(RpcError::ConnectionError("flaky".into()))
+            .await
+            .is_ok(),
+        "a transient outage is retried within the budget"
+    );
 }

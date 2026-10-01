@@ -6,7 +6,7 @@
 //! The zone: one Dandelion++ relay domain's state and its scheduled steps.
 //!
 //! A zone is the unit the inherited C++ calls `detail::zone` — public,
-//! or i2p/tor. This type owns the state §18.5's inventory assigned to Rust:
+//! or Tor. This type owns the state §18.5's inventory assigned to Rust:
 //! peer fluff queues, the stem map, the epoch role, and the noise **schedule**
 //! (enable bit, cadence, per-channel deadlines). Noise **buffers** live in
 //! [`crate::NoiseQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2).
@@ -163,10 +163,10 @@ impl fmt::Display for ZoneNewError {
 pub enum FluffReach {
     /// Every connected peer except the source. Public ipv4/ipv6 zones.
     EveryPeer,
-    /// Outbound connections only — **i2p/tor**.
+    /// Outbound connections only — **Tor**.
     ///
     /// The mechanism is inherited — one line in `fluff_notify` under *"When
-    /// i2p/tor, only fluff to outbound connections"* — but **its Shekyl
+    /// Tor, only fluff to outbound connections"* — but **its Shekyl
     /// justification is not, and the inherited one was wrong.**
     ///
     /// > **Retracted rationale (2026-08-17).** This doc previously read *"it is
@@ -828,7 +828,7 @@ impl Zone {
             if Some(*id) == source {
                 continue;
             }
-            // See `FluffReach::OutboundOnly`: on i2p/tor an inbound peer is a
+            // See `FluffReach::OutboundOnly`: on Tor an inbound peer is a
             // stranger who dialled us, and relaying to it defeats the sybil
             // resistance the hidden-service network is standing in for.
             if outbound_only && peer.direction == PeerDirection::Inbound {

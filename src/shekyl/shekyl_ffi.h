@@ -3429,7 +3429,7 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 //!
 //! Named bits rather than two `bool` parameters, deliberately. Adjacent bools
 //! in a C signature transpose silently — and transposing THESE two swaps the
-//! i2p/tor outbound-only fluff rule with the noise enable, which is the exact
+//! Tor outbound-only fluff rule with the noise enable, which is the exact
 //! regression RP-3a's first pass shipped (caught only because eight `private_*`
 //! gtests happened to cover it). Function *signatures* on this surface are
 //! gated by `scripts/ci/check_relay_ffi_signatures.sh` (conflicting-declaration
@@ -3437,7 +3437,7 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 //! `zone_flag_bits_do_not_transpose` owns those, and a bitmask removes the
 //! ordering question the signature gate cannot see.
 //!
-//! The i2p/tor rule follows the NETWORK, not noise mode: a hidden-service zone
+//! The Tor rule follows the NETWORK, not noise mode: a hidden-service zone
 //! with noise disabled still needs it. That is why the bits are independent.
 //! Keep these values in sync with `SHEKYL_RELAY_ZONE_*` in `relay_zone_ffi`.
 #define SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY 1u
@@ -4059,40 +4059,6 @@ int32_t shekyl_e2_trace_finish(struct ShekylE2TraceWriter* writer);
 /// Free without a trailer.
 void shekyl_e2_trace_abort(struct ShekylE2TraceWriter* writer);
 
-/// Take ownership of a connected TCP socket. The handshake does not run
-/// until `shekyl_clearnet_start`, so the caller can publish `link` first.
-/// `initiator` is nonzero when this node dialed. Null means the socket was
-/// closed and the pipe was not created. `on_plain` returns 0 when the
-/// session will call `shekyl_clearnet_read_done`, and nonzero when it did not
-/// take the buffer.
-void* shekyl_clearnet_attach(
-    intptr_t native,
-    const uint8_t* network_id,
-    int32_t initiator,
-    int32_t (*on_plain)(void* ctx, const uint8_t* data, size_t len),
-    void (*on_closed)(void* ctx),
-    void (*on_ready)(void* ctx),
-    /// `direction` 0 = bytes read, 1 = bytes written. Returns milliseconds
-    /// the pipe should pause so the global rate limit still applies.
-    int32_t (*on_wire)(void* ctx, int32_t direction, size_t bytes),
-    void* ctx);
-
-/// Let the owner threads begin the handshake. Callbacks may run after this.
-void shekyl_clearnet_start(void* link);
-
-/// Keep `link` alive across a call that does not hold the publication mutex.
-void shekyl_clearnet_pin(void* link);
-void shekyl_clearnet_unpin(void* link);
-
-/// Queue `len` plaintext bytes. 0 on success. Empty `len` queues nothing.
-int32_t shekyl_clearnet_write(void* link, const uint8_t* data, size_t len);
-
-/// Shut the pipe down and join its threads. Consumes `link`.
-void shekyl_clearnet_detach(void* link);
-
-/// One posted plaintext buffer has been handed to the session.
-void shekyl_clearnet_read_done(void* link);
-
 } // extern "C"
 
 /// Owns a Rust-allocated ShekylBuffer for one C++ scope and returns it to
@@ -4183,7 +4149,6 @@ constexpr std::uint32_t SHEKYL_DIRECTION_INBOUND = 0;
 constexpr std::uint32_t SHEKYL_DIRECTION_OUTBOUND = 1;
 constexpr std::uint8_t SHEKYL_ADDR_IPV4 = 1;
 constexpr std::uint8_t SHEKYL_ADDR_IPV6 = 2;
-constexpr std::uint8_t SHEKYL_ADDR_I2P = 3;
 constexpr std::uint8_t SHEKYL_ADDR_TOR = 4;
 /// A v3 onion hostname, including `.onion`.
 constexpr std::uint16_t SHEKYL_SEAM_HOST_MAX = 62;
@@ -4239,11 +4204,121 @@ void shekyl_seam_delivery_finished(std::uint64_t id, int accepted);
 void shekyl_seam_handler_gone(std::uint64_t id);
 void shekyl_seam_reap(std::uint64_t id);
 int shekyl_seam_send(std::uint64_t id, const std::uint8_t* bytes, std::size_t len);
+/// Same send. `*found` is 1 when the registry held `id`. `*cause_kind`
+/// is the close code, or 0 when there is none. Returns 1 when accepted.
+int shekyl_seam_send_report(std::uint64_t id, const std::uint8_t* bytes, std::size_t len,
+    int* found, std::uint8_t* cause_kind);
 void shekyl_seam_close(std::uint64_t id);
 std::uint64_t shekyl_seam_socket_count(std::uint32_t connector, std::uint32_t direction);
 std::uint64_t shekyl_seam_inbound_held(void);
+
+/// One ban still in force. `kind` 1 is a host, 2 is an IPv4 subnet.
+/// `permanent` 1 means there is no deadline. `text` is NUL-terminated.
+/// `remaining_ns` is time left on the monotonic deadline, and is 0
+/// when the ban is permanent.
+struct shekyl_ban_view {
+  std::uint8_t kind;
+  std::uint8_t permanent;
+  std::uint8_t _pad[6];
+  char text[80];
+  std::uint64_t remaining_ns;
+};
+static_assert(sizeof(shekyl_ban_view) == 96, "ban view");
+
+/// Ban `text` for `duration_ns` from the process clock. `subnet` nonzero
+/// reads `text` as `address/prefix`. 0 when the duration fits, -1 when it
+/// does not, -2 when `text` is not that address. A later deadline already
+/// stored is still 0. A bound hub closes the sockets the list drops.
+int shekyl_ban_for(const char* text, int subnet, std::uint64_t duration_ns);
+/// Ban `text` until it is lifted. No deadline is stored. `subnet`
+/// nonzero reads `text` as `address/prefix`. 0 when stored or already
+/// permanent, -2 when `text` is not that address.
+int shekyl_ban_permanent(const char* text, int subnet);
+/// Lift a host or subnet ban. 0 when an entry was removed, -1 when there
+/// was none, -2 when `text` is not that address. Open sockets stay open.
+int shekyl_ban_lift(const char* text, int subnet);
+/// Time left on the longest ban that covers `host`. 1 and writes `out`
+/// for a deadline, 2 for a permanent ban, 0 when the host is not banned,
+/// -2 when `host` is not an address.
+int shekyl_ban_remaining_ns(const char* host, std::uint64_t* out);
+/// Copy bans still in force. `*count` is how many there are. When `cap`
+/// is smaller, the buffer receives the first `cap` and the return is -1.
+/// A null `out` with `cap` 0 only writes the count. -1 when `count` is null.
+int shekyl_bans_copy(shekyl_ban_view* out, std::size_t cap, std::size_t* count);
+/// Drop every ban. Open sockets stay open. The list is process-global and
+/// outlives one `node_server`; the daemon lifts entries one at a time.
+void shekyl_bans_clear(void);
 int shekyl_executor_record(const char* name, std::size_t lanes, std::size_t workers, std::uint64_t* out_handle);
 void shekyl_executor_release(std::uint64_t handle);
+
+/// Spans and the transport-runtime budget. The caller supplies every
+/// number. The five deadlines are the measured spans; `workers` and
+/// `blocking` stay the structural floor until the thread-budget leg.
+/// `shutdown_timeout_ns` is the longest of the armed deadlines.
+/// `network_id` is 16 bytes. Field order matches the Rust `repr(C)`
+/// struct.
+struct shekyl_zone_params {
+  const std::uint8_t* network_id;
+  std::uint64_t clearnet_dial_within_ns;
+  std::uint64_t clearnet_handshake_within_ns;
+  std::uint64_t clearnet_gap_within_ns;
+  std::uint64_t tor_dial_within_ns;
+  std::uint64_t tor_gap_within_ns;
+  std::uint64_t send_queue_bytes;
+  std::uint64_t shutdown_timeout_ns;
+  std::size_t workers;
+  std::size_t blocking;
+};
+
+/// Bind clearnet. Writes the bound ports. `ipv6` and `proxy_host` may be
+/// null. `encrypt` nonzero is the clearnet channel option on; zero is off.
+/// Returns 0, or -1 when the bind fails.
+int shekyl_zone_listen_clearnet(
+    const char* ipv4, std::uint16_t port,
+    const char* ipv6, std::uint16_t port_v6, int use_ipv6,
+    const char* proxy_host, std::uint16_t proxy_port, int encrypt,
+    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling,
+    int* out_port, int* out_port_v6);
+/// Bind the Tor forward listener. `extra` may be null. Returns 0, or -1
+/// when the bind fails.
+int shekyl_zone_listen_tor(
+    const char* socks_host, std::uint16_t socks_port,
+    const char* extra, std::uint16_t extra_port,
+    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling,
+    int* out_port);
+/// The SOCKS proxy the Tor connector dials through, for a tor zone with no
+/// inbound listener. `shekyl_zone_listen_tor` installs it for zones that
+/// listen. Returns 0, or -1 when the host cannot be built or the address
+/// does not parse.
+int shekyl_zone_set_tor_proxy(
+    const char* socks_host, std::uint16_t socks_port,
+    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling);
+/// Replace the ceiling later accepts use. Returns 0, or -1 when `ceiling`
+/// is null, not a known decision, or the seam is unbound.
+int shekyl_zone_set_ceiling(const shekyl_inbound_ceiling* ceiling);
+/// Operator inbound cap for one connector. Accept enforces it there and
+/// still enforces the process ceiling on the sum. Returns 0, or -1 for an
+/// unknown connector.
+int shekyl_zone_set_connector_cap(std::uint32_t connector, std::uint32_t cap);
+void shekyl_zone_session_established(std::uint64_t id);
+void shekyl_zone_shutdown(void);
+
+/// The operator's link budget, in KiB/s. A negative value removes that
+/// direction's bucket. Zero or positive installs one. The default is
+/// unlimited, which is the absence of a bucket.
+void shekyl_link_set_up(std::int64_t kbps);
+void shekyl_link_set_down(std::int64_t kbps);
+/// The rate in KiB/s, or -1 when that direction is unlimited.
+std::int64_t shekyl_link_get_up(void);
+std::int64_t shekyl_link_get_down(void);
+/// Bytes and packets the budget has moved. A null pointer is skipped.
+void shekyl_link_totals(std::uint64_t* bytes_down, std::uint64_t* packets_down,
+    std::uint64_t* bytes_up, std::uint64_t* packets_up);
+/// Bytes this connection has moved. A null pointer is skipped.
+void shekyl_link_connection(std::uint64_t id, std::uint64_t* bytes_up, std::uint64_t* bytes_down);
+/// Bytes per second right now, over the link budget's recent-speed
+/// window, read from the engine's clock. A null pointer is skipped.
+void shekyl_link_speed(std::uint64_t id, std::uint64_t* bytes_per_sec_up, std::uint64_t* bytes_per_sec_down);
 
 } // extern "C"
 

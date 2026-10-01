@@ -591,4 +591,7 @@ fn resume_refuses_a_ring_row_that_disagrees_with_the_store() {
         ),
         "expected SnapshotLeafCountMismatch, got {err:?}"
     );
+    // What the wallet is told: the store's own rows fail their checks, so
+    // the remedy is the corrupt-store one, not an internal fault.
+    assert_eq!(err.open_fault(), crate::StoreOpenFault::Corrupt);
 }

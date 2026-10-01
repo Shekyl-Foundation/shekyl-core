@@ -19,7 +19,7 @@ pub enum Transport {
     /// Public zone: a node fluffs to **all** peers, inbound and outbound. An
     /// inbound sybil edge receives the fluff.
     Clearnet,
-    /// I2P/Tor zone: a node fluffs to **outbound connections only**. An inbound
+    /// Tor zone: a node fluffs to **outbound connections only**. An inbound
     /// sybil edge receives nothing, and a spy cannot force honest nodes to dial
     /// it (Dandelion++ Prop. 2), so the supernode observer collapses.
     Anonymity,

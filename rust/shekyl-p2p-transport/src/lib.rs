@@ -5,11 +5,11 @@
 
 #![deny(unsafe_code)]
 
-//! Clearnet network pipe: an 8-byte prefix, Noise NNhfs, then length-prefixed
-//! records. The bytes above the pipe are plaintext. This crate does not parse
+//! Clearnet Noise: an 8-byte prefix, NNhfs, then length-prefixed records.
+//! The bytes above the channel are plaintext. This crate does not parse
 //! them, and it does not implement stem, fluff, or Levin.
 //!
-//! Tor and I2P are other network pipes. They are not built here.
+//! Tor is its own connector. It is not built here.
 //! `read_message1`, `read_message2`, `SendHalf::seal`, and `open_one` are
 //! the Noise layer's public record path. The D11 fuzz targets call those
 //! same methods. This crate stays the Noise layer.
@@ -17,7 +17,6 @@
 mod aead;
 mod channel;
 mod noise;
-mod pipe;
 mod prefix;
 
 /// Timing hooks for the C5 Pi-4 run. Not a wire API. Built only for that bench.
@@ -29,10 +28,6 @@ pub use channel::{RecordError, RecvHalf, SendHalf};
 pub use noise::{
     Established, HandshakeError, Initiator, Responder, ResponderReady, MESSAGE1_LEN, MESSAGE2_LEN,
     PROTOCOL_NAME,
-};
-pub use pipe::{
-    ClosedCallback, Pipe, PipeError, PipeHooks, PlainCallback, ReadyCallback, WireCallback,
-    HANDSHAKE_DEADLINE, PIPE_PLAINTEXT_BUDGET,
 };
 pub use prefix::{
     prefix_for, NetworkId, MAINNET_PREFIX, PREFIX_LEN, STAGENET_PREFIX, TESTNET_PREFIX,

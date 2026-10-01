@@ -36,6 +36,23 @@ impl SendHalf {
             Err(PushError::Closed) => Err(CloseKind::IoError),
         }
     }
+
+    /// Close the queue and drop the pending tail; the writer then finishes,
+    /// and the connection task drops the socket.
+    ///
+    /// This is how a close that started on the caller's side reaches the
+    /// wire. Without it the socket stays open until the peer next sends:
+    /// the [`Session`] whose drop would close the queue is held by the
+    /// inbound drive, parked in [`Session::recv`] waiting for that frame.
+    ///
+    /// The tail is discarded, not drained: a ban, a protocol refusal, or
+    /// `del_in_connections` has nothing queued that it needs delivered.
+    /// A write already taken by the writer is not part of that tail. That
+    /// frame runs to completion, or the socket errors. A stalled in-flight
+    /// write is not bounded here.
+    pub fn discard(&self) {
+        self.queue.discard();
+    }
 }
 
 /// Decoded frames waiting on [`Session::recv`].

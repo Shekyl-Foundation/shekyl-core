@@ -19,7 +19,7 @@ use shekyl_relay_privacy::{DelayFamily, EmbargoTimer, SplitMix64};
 /// "Tor is more private." Clearnet is the weakest allowable configuration (the
 /// floor we must defend); Tor is the likely recommended one, and this shows
 /// *what* it buys, anchored to `levin_notify.cpp:448` (fluff is outbound-only on
-/// I2P/Tor).
+/// Tor).
 #[test]
 fn tor_collapses_the_supernode_diffusion_observer() {
     use shekyl_relay_privacy::conformance::{simulate_transport_observation, Transport};
@@ -88,7 +88,7 @@ fn tor_collapses_the_supernode_diffusion_observer() {
         );
         println!(
             "{phi:>7.2} {:>10} {:>18.4} {:>14.4}",
-            "tor/i2p", t.observed_fraction, t.first_spy_precision
+            "Tor", t.observed_fraction, t.first_spy_precision
         );
 
         // Clearnet: an inbound supernode sees essentially every fluff.
@@ -218,7 +218,7 @@ fn passive_clearnet_leak_is_mean_dependent_and_zero_on_tor() {
         );
         println!(
             "{secs:>11} {:>10} {:>12.5} {:>14.4}",
-            "tor/i2p", t.leak_rate, t.origin_share_of_leaks
+            "Tor", t.leak_rate, t.origin_share_of_leaks
         );
         // Tor is structurally zero at every mean.
         assert!(

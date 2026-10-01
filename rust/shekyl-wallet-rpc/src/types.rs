@@ -349,73 +349,10 @@ pub enum TransferDirection {
     Outgoing,
 }
 
-/// Transfer confirmation state (OpenAPI `Transfer.state`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum TransferState {
-    /// Network-exposed spend awaiting confirmation (or still unsettled).
-    Pending,
-    /// Confirmed on chain, unspent (receive) or observed spent-on-chain (send).
-    Confirmed,
-    /// Spent (receive-side output consumed).
-    Spent,
-    /// Received but unspendable (INCOMING only; `PL-D3`,
-    /// `FCMP_SPEND_LINKABILITY.md` §6.2): the sender's transaction
-    /// published a `tx_extra` `0x07` leaf entry that does not open to this
-    /// wallet's derivation for the output, so the chain leaf can never be
-    /// proven by this wallet. The money is on chain and the row names the
-    /// sender's transaction (`tx_hash`); it is excluded from every
-    /// spendable balance (rule 82: a failure mode is first-class, not a
-    /// log line). `unspendable_reason` says which half failed.
-    Unspendable,
-    /// Terminal failure: daemon refused the dispatch; the tx never mined
-    /// (OUTGOING journal `TerminalRejected` only — rule 82 failed-send history).
-    Failed,
-    /// The network no longer holds the send: the watchdog's
-    /// confirmed-absent horizon released the input locks, so the funds
-    /// are spendable again and the send can be re-made (OUTGOING journal
-    /// `PresumedDead` only).
-    ///
-    /// Distinct from [`Self::Pending`] because the wallet has stopped
-    /// waiting — reporting PENDING would contradict the balance the
-    /// same wallet reports — and distinct from [`Self::Failed`] because
-    /// nothing proved the send was refused: a late confirmation still
-    /// flips this row to CONFIRMED (rule 82).
-    Dropped,
-    /// The user abandoned the send (`abandon_tx`; OUTGOING journal
-    /// `Abandoned` only).
-    ///
-    /// Distinct from [`Self::Dropped`] because the release came from
-    /// user intent, not confirmed-absent evidence — the carried input
-    /// locks may still be held until the watchdog resolves — and, as
-    /// with DROPPED, a late confirmation still flips this row to
-    /// CONFIRMED loudly rather than staying wrong (rule 82 / P3-4).
-    Abandoned,
-}
-
-impl TransferState {
-    /// OpenAPI / JSON-RPC wire string (`SCREAMING_SNAKE_CASE`). Single
-    /// owner of that vocabulary so error data and `get_transfers` never
-    /// diverge.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "PENDING",
-            Self::Confirmed => "CONFIRMED",
-            Self::Spent => "SPENT",
-            Self::Unspendable => "UNSPENDABLE",
-            Self::Failed => "FAILED",
-            Self::Dropped => "DROPPED",
-            Self::Abandoned => "ABANDONED",
-        }
-    }
-}
-
-impl std::fmt::Display for TransferState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+/// Transfer confirmation state (OpenAPI `Transfer.state`). Owned by the
+/// contract crate, beside the journal → wire projection and the error that
+/// carries it.
+pub use shekyl_wallet_contract::TransferState;
 
 /// Receive-attribution kind for INCOMING transfer rows (FA-8 / WI-RPC-4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

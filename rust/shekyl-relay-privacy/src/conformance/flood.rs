@@ -31,7 +31,7 @@ use super::util::usize_from;
 pub enum FloodReach {
     /// Relay to every peer, initiated or not — the clearnet rule. Undirected.
     EveryPeer,
-    /// Relay only across edges this node initiated — the i2p/tor rule.
+    /// Relay only across edges this node initiated — the Tor rule.
     /// Directed: first passage is strictly slower, because a node has
     /// `peers` usable out-edges rather than ~`2 × peers`, *and* paths must
     /// respect direction.

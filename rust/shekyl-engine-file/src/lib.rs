@@ -74,3 +74,6 @@ pub use secrets_transitional::RederivationInputs;
 // Re-export `Network` so consumers do not have to depend on
 // `shekyl-address` directly just to satisfy `open`'s signature.
 pub use shekyl_address::Network;
+// Re-export the envelope error [`WalletFileError::Envelope`] carries, so a
+// consumer can name its variants without depending on `shekyl-crypto-pq`.
+pub use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;

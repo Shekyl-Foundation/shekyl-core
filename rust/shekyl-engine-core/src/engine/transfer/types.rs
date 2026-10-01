@@ -98,13 +98,13 @@ impl ContentFingerprint {
         total_covered: AtomicUnits,
     ) -> Result<Self, SendError> {
         let paid = AtomicUnits::checked_sum(recipients.iter().map(|r| r.amount_atomic_units))
-            .ok_or(SendError::CannotSign {
+            .ok_or(SendError::BuildInvariant {
                 reason: "recipient amount sum overflowed computing the content fingerprint",
             })?;
         let change = paid
             .checked_add(fee)
             .and_then(|spent| total_covered.checked_sub(spent))
-            .ok_or(SendError::CannotSign {
+            .ok_or(SendError::BuildInvariant {
                 reason: "balance does not cover recipients + fee computing the content fingerprint",
             })?;
         Ok(Self::from_parts(fee, recipients, change))

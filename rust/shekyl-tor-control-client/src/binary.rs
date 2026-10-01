@@ -113,7 +113,29 @@ const CURRENT_PIN: Option<TorPin> = Some(TorPin {
     // design exists to avoid.
     sha256: hex_literal::hex!("660a8c54d0c9341f85f0a7f827b6bde640e7db14dfde44d3856979d4ee6d16fb"),
 });
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+/// The floor device's pin (rule 76: Pi 4, aarch64). Ruled 2026-09-29.
+///
+/// The stable Expert Bundle line publishes no `linux-aarch64`; the only
+/// build for this target is the alpha line. `ARCHIVAL_BOND_2D2_SP_T0_TOR.md`
+/// had ruled that an alpha is not promoted here and that the floor device
+/// waits for 16.0 stable. That ruling is reopened by the transport cutover:
+/// D9's Tor deadline is a distribution taken on the floor device under the
+/// managed posture with proof-of-work on, which `discover_and_verify` refuses
+/// without a pin. Same gate as the x86_64 arm, same signing key at pin time.
+/// Reopen: re-pin to the first stable bundle that ships `linux-aarch64`.
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const CURRENT_PIN: Option<TorPin> = Some(TorPin {
+    bundle_version: "16.0a12",
+    bundle_target: "linux-aarch64",
+    tor_version: "0.4.9.12",
+    // Recorded 2026-09-29 via the RELEASE_CHECKLIST procedure: tarball
+    // GPG-verified Good against TOR_SIGNING_KEY_FPR, extracted, hashed.
+    sha256: hex_literal::hex!("e703a978324938d62ed0b39bae299a6aa285dde4f08d5b3ebbd127311ac54a56"),
+});
+#[cfg(not(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+)))]
 const CURRENT_PIN: Option<TorPin> = None;
 
 /// The `tor` executable's file name on this platform. (The Windows arm is
@@ -701,12 +723,15 @@ mod tests {
     /// `discover_and_verify` can only fail on discovery/verification, never
     /// silently on `Unpinned`). Guards against a `cfg` arm being dropped in a
     /// refactor.
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
     #[test]
     fn current_target_has_a_recorded_pin() {
         assert!(
             CURRENT_PIN.is_some(),
-            "linux/x86_64 must have a recorded tor pin"
+            "linux/x86_64 and linux/aarch64 must have a recorded tor pin"
         );
     }
 

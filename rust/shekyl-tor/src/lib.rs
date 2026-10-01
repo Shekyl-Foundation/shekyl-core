@@ -25,7 +25,6 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use shekyl_capped_stream::accept_error_is_transient;
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::Pool;
@@ -39,7 +38,7 @@ mod publish;
 
 pub use publish::{publish_forward, publish_with_control, InboundPosture, PublishFault};
 
-use drive::{accept_one, dial_one, Accept, Dial};
+pub use drive::{accept_inbound, accept_one, dial_one, Accept, Admitted, Dial, Inbound};
 
 /// Caller inputs. The dial span, the gap span, and the send-queue byte
 /// cap are unmeasured until a measurement names them.
@@ -169,7 +168,7 @@ pub struct Listener<C: Clock + Clone> {
     gap_within: Tick,
     send_queue_bytes: usize,
     on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
-    sessions_tx: mpsc::UnboundedSender<Session>,
+    admitted_tx: mpsc::UnboundedSender<drive::Admitted>,
 }
 
 impl<C: Clock + Clone> Listener<C> {
@@ -210,9 +209,9 @@ where
             sockets: self.sockets.clone(),
             dial_within: self.dial_within,
             gap_within: self.gap_within,
-            sessions: self.sessions_tx.clone(),
             on_cause: Arc::clone(&self.on_cause),
             send_queue_bytes: self.send_queue_bytes,
+            admitted: self.admitted_tx.clone(),
         };
         let engine = self.engine.clone();
         self.handle.spawn(dial_one(dial, engine));
@@ -254,9 +253,10 @@ where
         extra_addrs.push(listener.local_addr()?);
     }
     let (sessions_tx, sessions_rx) = mpsc::unbounded_channel();
+    let (admitted_tx, mut admitted_rx) = mpsc::unbounded_channel::<Admitted>();
     let engine_keep = engine.clone();
     let sockets_keep = sockets.clone();
-    let sessions_keep = sessions_tx.clone();
+    let admitted_keep = admitted_tx.clone();
     let on_cause_keep = Arc::clone(&config.on_cause);
     let shutdown_timeout = config.shutdown_timeout;
     let proxy = config.proxy;
@@ -266,39 +266,30 @@ where
     let ceiling = config.ceiling;
     let backoff = config.accept_backoff;
     let on_cause = Arc::clone(&config.on_cause);
-    let engine = engine.clone();
+    handle.spawn(async move {
+        while let Some(admitted) = admitted_rx.recv().await {
+            drop(admitted.open);
+            let session = Session::open(admitted.bytes, admitted.gap);
+            if sessions_tx.send(session).is_err() {
+                break;
+            }
+        }
+    });
     let mut listeners = extras;
     listeners.push(forward_listener);
     for listener in listeners {
-        let sockets = sockets.clone();
-        let sessions = sessions_tx.clone();
-        let on_cause = Arc::clone(&on_cause);
+        let inbound = Inbound {
+            sockets: sockets.clone(),
+            ceiling: move || ceiling,
+            gap_within,
+            on_cause: Arc::clone(&on_cause),
+            send_queue_bytes,
+            admitted: admitted_tx.clone(),
+            backoff,
+        };
         let engine = engine.clone();
         handle.spawn(async move {
-            loop {
-                match listener.accept().await {
-                    Ok((stream, _)) => {
-                        let accept = Accept {
-                            stream,
-                            sockets: sockets.clone(),
-                            ceiling,
-                            gap_within,
-                            sessions: sessions.clone(),
-                            on_cause: Arc::clone(&on_cause),
-                            send_queue_bytes,
-                        };
-                        tokio::spawn(accept_one(accept, engine.clone()));
-                    }
-                    Err(error) if accept_error_is_transient(&error) => {
-                        on_cause(CloseCause::new(CloseKind::IoError));
-                        tokio::time::sleep(backoff).await;
-                    }
-                    Err(_) => {
-                        on_cause(CloseCause::new(CloseKind::IoError));
-                        break;
-                    }
-                }
-            }
+            accept_inbound(listener, inbound, engine).await;
         });
     }
     Ok(Listener {
@@ -315,7 +306,7 @@ where
         gap_within,
         send_queue_bytes,
         on_cause: on_cause_keep,
-        sessions_tx: sessions_keep,
+        admitted_tx: admitted_keep,
     })
 }
 

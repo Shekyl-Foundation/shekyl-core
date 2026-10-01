@@ -362,6 +362,8 @@ pub(crate) mod refresh_slot;
 /// all tests are `#[ignore]`d and require `SHEKYLD_BIN`.
 #[cfg(test)]
 mod regtest_e2e;
+/// Finality comparison shared by the producer fork walk and curve-tree ingest.
+pub(crate) mod reorg_finality;
 /// Full-wallet rescan: reset scan-derived ledger state (Phase 4c).
 pub(crate) mod rescan;
 #[cfg(test)]
@@ -441,8 +443,8 @@ pub use diagnostics::{
     TracingDiagnosticSink, WatchdogAlarmReason, WatchdogProbeOutcome,
 };
 pub use error::{
-    ChangePasswordError, IoError, KeyError, OpenError, PendingTxError, PersistenceError,
-    RefreshError, SendError, SubmitError, TxError,
+    ChangePasswordError, CurveTreeIngestFault, IoError, KeyError, OpenError, PendingTxError,
+    PersistenceError, RefreshError, SendError, SubmitError, TxError,
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
 // `ValidatedFeeEstimates` is the type of `FeeEstimationContext`'s public

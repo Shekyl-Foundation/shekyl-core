@@ -35,6 +35,7 @@ use super::bond_assembly::{
 };
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::fee_policy::{CeilingViolation, FeeEstimatorError, ValidatedFeeEstimates};
+use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::pending_post_gate::{ForegroundSession, UserPendingPost};
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::dispatch::PendingPostStore;
@@ -118,7 +119,7 @@ fn bond_fee_from_estimates(
 ) -> Result<AtomicUnits, FirstStakeError> {
     p_lane_floor_fee(estimates).map_err(|e| match e {
         FeeEstimatorError::DaemonFeeUnreasonable(v) => FirstStakeError::FeeUnreasonable(v),
-        other => FirstStakeError::FeeEstimate(other.to_string()),
+        other => FirstStakeError::FeeEstimate(other),
     })
 }
 
@@ -363,7 +364,7 @@ pub enum FirstStakeError {
     /// The daemon fee-estimate query failed — check the daemon connection
     /// and retry; nothing durable was written (W1-clean).
     #[error("bond fee estimate failed: {0}")]
-    FeeEstimate(String),
+    FeeEstimate(FeeEstimatorError),
     /// The daemon *answered* the fee query and the wallet refused the
     /// answer (`ValidatedFeeEstimates`). Distinct from
     /// [`Self::FeeEstimate`] by remedy, exactly as `-29109` is distinct
@@ -962,7 +963,7 @@ where
             daemon
                 .get_fee_estimates()
                 .await
-                .map_err(|e| FirstStakeError::FeeEstimate(e.into().to_string()))?,
+                .map_err(|e| FirstStakeError::FeeEstimate(map_daemon_engine_fee_error(e)))?,
         )?;
 
         // W1 preflight sweep (SA-R1-b, sweep-before-persist): the SAME body

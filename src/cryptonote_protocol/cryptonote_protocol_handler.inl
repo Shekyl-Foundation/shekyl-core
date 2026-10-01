@@ -42,7 +42,6 @@
 
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "profile_tools.h"
-#include "net/network_throttle-detail.hpp"
 #include "common/util.h"
 #include "misc_log_ex.h"
 
@@ -414,7 +413,9 @@ namespace cryptonote
       MINFO(context << "Claims " << hshd.current_height << ", claimed " << context.m_remote_blockchain_height << " before");
       hit_score(context, 1);
     }
-    context.m_remote_blockchain_height = hshd.current_height;
+    note_remote_height(context, hshd.current_height, is_inital
+        ? cryptonote_connection_context::remote_height_source::handshake
+        : cryptonote_connection_context::remote_height_source::timed_sync);
 
     uint64_t target = m_core.get_target_blockchain_height();
     if (target == 0)
@@ -428,7 +429,7 @@ namespace cryptonote
       return true;
     }
 
-    // No chain synchronization over hidden networks (tor, i2p, etc.)
+    // No chain synchronization over hidden networks (tor, Tor, etc.)
     if(context.m_remote_address.get_zone() != epee::net_utils::zone::public_)
     {
       context.set_state_normal();
@@ -611,6 +612,8 @@ namespace cryptonote
     // shekyl-peer-policy::BlockAnnounceAction (PWD-B7): C++ asks predicates
     // on the returned action, never on the classification bytes.
     const uint8_t announce = block_announce_action(bvc, handle_block_res);
+    if (block_added(bvc))
+      raise_remote_height(context, chain_length_of_accepted_block(get_block_height(new_block)));
     if (block_announce_re_request_txs(announce))
     {
         // PoW checking happens before missing transactions checks, so if
@@ -860,7 +863,7 @@ namespace cryptonote
        and coherence keeps it on the zone it arrived over.
 
        `dandelionpp_fluff` is unchanged and still overrides below: a sender who
-       disabled white noise over i2p/tor is fluffing, and the receiving hidden
+       disabled white noise over Tor is fluffing, and the receiving hidden
        service fluffs immediately — that is the deliberate exit from the
        anonymity zone (§59.1), not a routing inference about the transport. */
 
@@ -1033,8 +1036,6 @@ namespace cryptonote
       auto time_from_epoh = point.time_since_epoch();
       auto sec = duration_cast< seconds >( time_from_epoh ).count();*/
 
-    //epee::net_utils::network_throttle_manager::get_global_throttle_inreq().logger_handle_net("log/dr-shekyl/net/req-all.data", sec, get_avg_block_size());
-
     if(arg.blocks.empty())
     {
       LOG_ERROR_CCONTEXT("sent wrong NOTIFY_HAVE_OBJECTS: no blocks");
@@ -1056,7 +1057,8 @@ namespace cryptonote
       MINFO(context << "Claims " << arg.current_blockchain_height << ", claimed " << context.m_remote_blockchain_height << " before");
       hit_score(context, 1);
     }
-    context.m_remote_blockchain_height = arg.current_blockchain_height;
+    note_remote_height(context, arg.current_blockchain_height,
+        cryptonote_connection_context::remote_height_source::get_objects);
     if (context.m_remote_blockchain_height > m_core.get_target_blockchain_height())
       m_core.set_target_blockchain_height(context.m_remote_blockchain_height);
 
@@ -1538,6 +1540,21 @@ namespace cryptonote
               // in case the peer had dropped beforehand, remove the span anyway so other threads can wake up and get it
               m_block_queue.remove_spans(span_connection_id, start_height);
               return 1;
+            }
+            if (block_added(bvc) && m_p2p)
+            {
+              const block* added = !pblocks.empty() ? &pblocks[blockidx] : nullptr;
+              block parsed;
+              if (added == nullptr && parse_and_validate_block_from_blob(block_entry.block, parsed))
+                added = &parsed;
+              if (added != nullptr)
+              {
+                const uint64_t chain_length = chain_length_of_accepted_block(get_block_height(*added));
+                m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& origin, uint32_t) {
+                  raise_remote_height(origin, chain_length);
+                  return true;
+                });
+              }
             }
             if (block_sync_orphan_resync(sync))
             {
@@ -2155,8 +2172,6 @@ skip:
         context.m_expect_response = NOTIFY_RESPONSE_GET_OBJECTS::ID;
         MLOG_P2P_MESSAGE("-->>NOTIFY_REQUEST_GET_OBJECTS: blocks.size()=" << req.blocks.size()
             << "requested blocks count=" << count << " / " << l_m_bss << " from " << span.first << ", first hash " << req.blocks.front());
-        //epee::net_utils::network_throttle_manager::get_global_throttle_inreq().logger_handle_net("log/dr-shekyl/net/req-all.data", sec, get_avg_block_size());
-
         context.m_num_requested += req.blocks.size();
         post_notify<NOTIFY_REQUEST_GET_OBJECTS>(req, context);
         MLOG_PEER_STATE("requesting objects");
@@ -2221,7 +2236,6 @@ skip:
 
       //std::string blob; // for calculate size of request
       //epee::serialization::store_t_to_binary(r, blob);
-      //epee::net_utils::network_throttle_manager::get_global_throttle_inreq().logger_handle_net("log/dr-shekyl/net/req-all.data", sec, get_avg_block_size());
       //LOG_PRINT_CCONTEXT_L1("r = " << 200);
 
       context.m_last_request_time = boost::posix_time::microsec_clock::universal_time();
@@ -2393,7 +2407,8 @@ skip:
       MINFO(context << "Claims " << arg.total_height << ", claimed " << context.m_remote_blockchain_height << " before");
       hit_score(context, 1);
     }
-    context.m_remote_blockchain_height = arg.total_height;
+    note_remote_height(context, arg.total_height,
+        cryptonote_connection_context::remote_height_source::chain_entry);
     context.m_last_response_height = arg.start_height + arg.m_block_ids.size()-1;
     if(context.m_last_response_height > context.m_remote_blockchain_height)
     {

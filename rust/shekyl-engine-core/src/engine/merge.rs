@@ -77,7 +77,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
-use shekyl_curve_tree::ClientError;
+use shekyl_curve_tree::{ClientError, REORG_HASH_WINDOW_BLOCKS};
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
@@ -90,10 +90,10 @@ use crate::{
     engine::{
         curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError},
         curve_tree_decode,
-        error::IoError,
         local_ledger::LocalLedger,
+        reorg_finality::{overlap_disagreed, overlap_record_ended, rollback_past_finality},
         traits::{DaemonEngine, LedgerEngine},
-        Engine, EngineSignerKind, RefreshError,
+        CurveTreeIngestFault, Engine, EngineSignerKind, RefreshError,
     },
     scan::{OwnedTxLeaves, ScanResult},
 };
@@ -365,8 +365,8 @@ impl<
     ///
     /// It drains `result.block_leaves` once into an `Arc`-shared, height-keyed
     /// map and delegates to `curve_tree_ingest_scan_result_with_respawn`. On
-    /// a respawn-eligible failure ([`RefreshError::CurveTreeIngest`] with
-    /// `recoverable_by_respawn`) that helper reopens the actor via
+    /// a respawn-eligible failure ([`RefreshError::CurveTreeIngest`] whose
+    /// fault is [`CurveTreeIngestFault::recoverable_by_respawn`]) that helper reopens the actor via
     /// [`CurveTreeHandle::respawn`](super::curve_tree_actor::CurveTreeHandle::respawn)
     /// and re-runs the cursor-driven ingest **once** against the *same* drained
     /// leaves (the `Arc` map is retained across the retry, R1-Q4). The retry is
@@ -410,38 +410,29 @@ impl<
 /// - A fail-stopped actor ([`CurveTreeHandleError::Unavailable`]) and a
 ///   poisoned client ([`ClientError::Poisoned`] — whose own documented
 ///   recovery is "drop this object and resume over the same store") are
-///   `recoverable_by_respawn = true`: [`Engine::ingest_scan_result_with_respawn`]
+///   respawn-recoverable ([`CurveTreeIngestFault::recoverable_by_respawn`]):
+///   [`Engine::ingest_scan_result_with_respawn`]
 ///   respawns the actor and retries the cursor-driven ingest once, which
 ///   resumes from the held store's persisted tip (D2).
 /// - Every other client error (e.g.
 ///   [`ClientError::NonConsecutiveBlockHeight`], a producer-contract or
-///   store-state fault) is `false`: a reopen resumes the same cursor and
+///   store-state fault) is not: a reopen resumes the same cursor and
 ///   reproduces it, so it surfaces terminally rather than livelocking a retry.
 fn map_curve_tree_handle_error(err: &CurveTreeHandleError) -> RefreshError {
     match err {
-        CurveTreeHandleError::Unavailable => RefreshError::CurveTreeIngest {
-            context: "curve-tree actor unavailable",
-            recoverable_by_respawn: true,
-        },
-        CurveTreeHandleError::Client(ClientError::Poisoned) => RefreshError::CurveTreeIngest {
-            context: "curve-tree client poisoned",
-            recoverable_by_respawn: true,
-        },
+        CurveTreeHandleError::Unavailable => CurveTreeIngestFault::ActorUnavailable.into(),
+        CurveTreeHandleError::Client(ClientError::Poisoned) => {
+            CurveTreeIngestFault::ClientPoisoned.into()
+        }
         // §3.3 (CT-5b, O5): the reconstructed root diverged from the consensus
         // header-committed root. Terminal — a respawn re-derives the same root
         // from the same store, so it reproduces the mismatch rather than
         // healing it. Distinct context so an auditor reads the lying-daemon DoS
         // apart from a generic client rejection.
         CurveTreeHandleError::Client(ClientError::RootMismatch { .. }) => {
-            RefreshError::CurveTreeIngest {
-                context: "curve-tree root mismatch vs header",
-                recoverable_by_respawn: false,
-            }
+            CurveTreeIngestFault::RootMismatch.into()
         }
-        CurveTreeHandleError::Client(_) => RefreshError::CurveTreeIngest {
-            context: "curve-tree client rejected ingest",
-            recoverable_by_respawn: false,
-        },
+        CurveTreeHandleError::Client(_) => CurveTreeIngestFault::ClientRejected.into(),
     }
 }
 
@@ -456,19 +447,13 @@ pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits:
 ) -> Result<(), RefreshError> {
     match curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await {
         Ok(()) => Ok(()),
-        Err(RefreshError::CurveTreeIngest {
-            recoverable_by_respawn: true,
-            ..
-        }) => {
+        Err(RefreshError::CurveTreeIngest { fault }) if fault.recoverable_by_respawn() => {
             // Engine-side respawn (clause 2): runs after the failed `ask`
             // returned, never inside a handler under the engine guard.
             curve_tree
                 .respawn()
                 .await
-                .map_err(|_| RefreshError::CurveTreeIngest {
-                    context: "curve-tree respawn resume failed",
-                    recoverable_by_respawn: false,
-                })?;
+                .map_err(|_| CurveTreeIngestFault::RespawnFailed)?;
             curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await
         }
         Err(other) => Err(other),
@@ -494,6 +479,85 @@ pub(super) fn index_block_leaves(
         }
     }
     Ok(map)
+}
+
+/// The tree already holds a height this scan just verified.
+///
+/// One shared root that matches means the tree is this chain; the append
+/// loop then ingests only the suffix above the tip. A mismatch walks down
+/// the scanned roots. A common ancestor inside `W` is rolled back so the
+/// loop re-ingests the suffix. Past `W`, or a scan that runs out of roots
+/// first, refuses and does not modify the tree.
+async fn reconcile_overlapping_tree(
+    curve_tree: &CurveTreeHandle,
+    producer_roots: &BTreeMap<BlockHeight, CurveTreeRoot>,
+    range_start: BlockHeight,
+    range_end: BlockHeight,
+) -> Result<(), RefreshError> {
+    if range_end <= range_start {
+        return Ok(());
+    }
+    let Some(tip) = curve_tree
+        .ingested_tip_height()
+        .await
+        .map_err(|e| map_curve_tree_handle_error(&e))?
+    else {
+        return Ok(());
+    };
+    if tip < range_start {
+        return Ok(());
+    }
+    let last_scanned = range_end - BlockCount::ONE;
+    let mut height = if tip < last_scanned {
+        tip
+    } else {
+        last_scanned
+    };
+    if roots_agree(curve_tree, height, root_at(producer_roots, height)?).await? {
+        return Ok(());
+    }
+    loop {
+        let parent = overlap_disagreed(tip, height)
+            .map_err(|stop| RefreshError::ReorgDeeperThanFinality { stop })?;
+        let Some(expected) = producer_roots.get(&parent).copied() else {
+            let stop = overlap_record_ended(tip, height);
+            return Err(RefreshError::ReorgDeeperThanFinality { stop });
+        };
+        if roots_agree(curve_tree, parent, expected).await? {
+            curve_tree
+                .rollback_to_fork(parent)
+                .await
+                .map_err(|e| map_curve_tree_handle_error(&e))?;
+            return Ok(());
+        }
+        height = parent;
+    }
+}
+
+/// The producer's header root for a height inside the scanned range.
+fn root_at(
+    producer_roots: &BTreeMap<BlockHeight, CurveTreeRoot>,
+    height: BlockHeight,
+) -> Result<CurveTreeRoot, RefreshError> {
+    producer_roots
+        .get(&height)
+        .copied()
+        .ok_or(RefreshError::MalformedScanResult {
+            reason: "block_curve_tree_roots missing a height the tree already holds",
+        })
+}
+
+/// Whether the tree's root at `height` is the scan's root.
+async fn roots_agree(
+    curve_tree: &CurveTreeHandle,
+    height: BlockHeight,
+    expected: CurveTreeRoot,
+) -> Result<bool, RefreshError> {
+    let (got, _) = curve_tree
+        .reference_root_and_depth(height)
+        .await
+        .map_err(|e| map_curve_tree_handle_error(&e))?;
+    Ok(got == expected.to_bytes())
 }
 
 /// Reject a reorg `fork_height` of 0 as a producer-contract violation.
@@ -555,6 +619,9 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     // Only roll back when the tree holds blocks at or above the fork — a tree
     // still climbing below it has nothing to drop (R3-Q6).
     if let Some(rewind) = result.reorg_rewind.as_ref() {
+        // Well-formedness first: it is pure, and a fork of 0 must not
+        // spend a tip read. `keep` is the height retained — one definition,
+        // shared with the finality comparison below.
         validate_reorg_fork_height(rewind.fork_height)?;
         let keep = rewind.fork_height - BlockCount::ONE;
         if let Some(tip) = curve_tree
@@ -562,7 +629,14 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
             .await
             .map_err(|e| map_curve_tree_handle_error(&e))?
         {
-            if tip > keep {
+            // Same comparison the producer walk uses, against the tree tip.
+            // The tree can be ahead of the ledger (ack-before-commit, a
+            // rescan that cleared the ledger, birthday backfill). A hostile
+            // result and a tree that is simply ahead are not distinguishable
+            // here, and a wrong tree is the worse outcome, so both refuse.
+            if let Some(stop) = rollback_past_finality(tip, keep) {
+                return Err(RefreshError::ReorgDeeperThanFinality { stop });
+            } else if tip > keep {
                 curve_tree
                     .rollback_to_fork(keep)
                     .await
@@ -570,6 +644,12 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
             }
         }
     }
+
+    // A rescan clears the ledger and scans the chain without a rewind. The
+    // tree file is still the previous one. A height both already hold has to
+    // agree, or the append loop below would treat an orphaned fork as caught
+    // up and leave it in place.
+    reconcile_overlapping_tree(curve_tree, &producer_roots, range_start, range_end).await?;
 
     loop {
         let tip = curve_tree
@@ -583,10 +663,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
             None => BlockHeight::ZERO,
             Some(t) => t
                 .checked_add(BlockCount::ONE)
-                .ok_or(RefreshError::CurveTreeIngest {
-                    context: "ingested tip height overflow",
-                    recoverable_by_respawn: false,
-                })?,
+                .ok_or(CurveTreeIngestFault::TipHeightOverflow)?,
         };
         if next >= range_end {
             break;
@@ -596,23 +673,16 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
         // match. Both branches yield the pair so the verify below is uniform.
         let (leaves, expected_root) = if next < range_start {
             // Genesis/birthday backfill: tree-only daemon fetch + decode.
-            let number =
-                usize::try_from(next.to_raw()).map_err(|_| RefreshError::CurveTreeIngest {
-                    context: "backfill height exceeds usize",
-                    recoverable_by_respawn: false,
-                })?;
-            let block = daemon.fetch_scannable_block(number).await.map_err(|e| {
-                RefreshError::Io(IoError::Daemon {
-                    detail: e.to_string(),
-                })
-            })?;
-            let leaves =
-                Arc::new(curve_tree_decode::decode_block_leaves(&block).map_err(|_| {
-                    RefreshError::CurveTreeIngest {
-                        context: "backfill block decode failed",
-                        recoverable_by_respawn: false,
-                    }
-                })?);
+            let number = usize::try_from(next.to_raw())
+                .map_err(|_| CurveTreeIngestFault::BackfillHeightOverflow)?;
+            let block = daemon
+                .fetch_scannable_block(number)
+                .await
+                .map_err(|e| RefreshError::Io(e.into()))?;
+            let leaves = Arc::new(
+                curve_tree_decode::decode_block_leaves(&block)
+                    .map_err(|_| CurveTreeIngestFault::BackfillBlockUndecodable)?,
+            );
             // Backfill heights are below the producer's scanned range, so their
             // header root is not in `producer_roots`; take it from the
             // daemon-fetched block. The §3.3 verify still gates it: a daemon
@@ -812,6 +882,7 @@ pub(crate) fn apply_scan_result_to_state(
                 reason: "spent_key_images non-empty for empty processed_height_range",
             });
         }
+        ledger.reorg_blocks.retain_recent(REORG_HASH_WINDOW_BLOCKS);
         return Ok(Vec::new());
     }
 
@@ -953,6 +1024,7 @@ pub(crate) fn apply_scan_result_to_state(
         });
     }
 
+    ledger.reorg_blocks.retain_recent(REORG_HASH_WINDOW_BLOCKS);
     Ok(inserted)
 }
 

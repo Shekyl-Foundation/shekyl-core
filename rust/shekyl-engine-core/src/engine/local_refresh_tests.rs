@@ -14,11 +14,13 @@
 use shekyl_types::BlockHeight;
 
 use super::*;
-use crate::engine::diagnostics::NoopDiagnosticSink;
+use crate::engine::diagnostics::{NoopDiagnosticSink, ProtocolErrorKind};
+use crate::engine::error::{IoError, RefreshError};
+use shekyl_rpc_client::{DaemonFault, RpcError};
 
-/// `LocalRefreshError → RefreshError` mapping is total and
-/// preserves the discriminant classes per the §2.3
-/// unit-variant-only binding.
+/// `LocalRefreshError → RefreshError` mapping is total.
+/// `PastFinality` is the one producer variant with fields, and they
+/// cross unchanged: the depth is the branch, not a daemon string.
 #[test]
 fn local_refresh_error_maps_to_refresh_error() {
     assert!(matches!(
@@ -26,16 +28,42 @@ fn local_refresh_error_maps_to_refresh_error() {
         RefreshError::Cancelled
     ));
     assert!(matches!(
-        RefreshError::from(LocalRefreshError::Io),
-        RefreshError::Io(IoError::Daemon { .. })
+        RefreshError::from(LocalRefreshError::DaemonUnreachable),
+        RefreshError::Io(IoError::Daemon {
+            fault: DaemonFault::Unreachable,
+            ..
+        })
     ));
+    // A reply that broke the contract, and a block that did, are the same
+    // remedy: not an outage, so not "unreachable".
+    for broken in [
+        LocalRefreshError::DaemonProtocol,
+        LocalRefreshError::Malformed,
+    ] {
+        assert!(matches!(
+            RefreshError::from(broken),
+            RefreshError::Io(IoError::Daemon {
+                fault: DaemonFault::Protocol,
+                ..
+            })
+        ));
+    }
     assert!(matches!(
-        RefreshError::from(LocalRefreshError::Malformed),
-        RefreshError::Io(IoError::Scanner { .. })
+        RefreshError::from(LocalRefreshError::ReorgStorm),
+        RefreshError::ReorgStorm
     ));
     assert!(matches!(
         RefreshError::from(LocalRefreshError::Internal),
         RefreshError::InternalInvariantViolation { .. }
+    ));
+    let stop = crate::engine::error::FinalityStop {
+        depth: shekyl_types::BlockCount::from_raw(12),
+        finality_depth: shekyl_types::BlockCount::from_raw(730),
+        breach: crate::engine::error::FinalityBreach::RecordEnded,
+    };
+    assert!(matches!(
+        RefreshError::from(LocalRefreshError::PastFinality(stop)),
+        RefreshError::ReorgDeeperThanFinality { stop: got } if got == stop
     ));
 }
 

@@ -10,7 +10,7 @@
 //! framing of that union: the `address_type` tags and the section layout.
 //! `m_ip` is the IPv4 octets as a little-endian `uint32` after C++
 //! `SWAP32LE` (identity on little-endian hosts). IPv6 `addr` is a 16-byte
-//! blob. I2P and Tor sections are `host` + `port`.
+//! blob. A Tor section is `host` + `port`.
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -25,7 +25,6 @@ pub use shekyl_net_address::NetworkAddress;
 /// `epee::net_utils::address_type` values written as `network_address.type`.
 pub const ADDR_IPV4: u8 = 1;
 pub const ADDR_IPV6: u8 = 2;
-pub const ADDR_I2P: u8 = 3;
 pub const ADDR_TOR: u8 = 4;
 
 impl PortableMap for NetworkAddress {
@@ -44,7 +43,6 @@ impl PortableMap for NetworkAddress {
                 addr.insert("m_port", Value::UInt16(*port));
                 (ADDR_IPV6, addr)
             }
-            Self::I2p { host, port } => (ADDR_I2P, host_port(host, *port)),
             Self::Tor { host, port } => (ADDR_TOR, host_port(host, *port)),
         };
         root.insert("addr", Value::Object(inner));
@@ -65,10 +63,6 @@ impl PortableMap for NetworkAddress {
                 let ip = Ipv6Addr::from(get::blob::<16>(addr, "addr")?);
                 let port = get::u16_val(addr, "m_port")?;
                 Ok(Self::Ipv6 { ip, port })
-            }
-            ADDR_I2P => {
-                let (host, port) = host_port_from(addr)?;
-                Ok(Self::I2p { host, port })
             }
             ADDR_TOR => {
                 let (host, port) = host_port_from(addr)?;
