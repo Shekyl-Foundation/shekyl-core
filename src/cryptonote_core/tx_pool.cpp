@@ -129,23 +129,23 @@ namespace cryptonote
         which is "did the nudge miss?".
 
         SENT AND STILL HERE (`relayed == true`): `originated_stays_in_zone`
-        pins an anonymity-zone ORIGIN at `local` permanently, so this entry
+        pins a hidden-address origin at `local` permanently, so this entry
         lives on this branch for its whole life, and its retry IS the origin
         asking whether its stem completed. That is the derived quantity.
 
-        The arrival zone is not stored. A surviving `local` record IS an
-        anonymity origin, so the retry asks for the anonymity parameter
-        class (byte 0). That is the longer wait.
+        The arrival connector is not stored. A surviving `local` record is
+        a hidden-address origin, so the retry passes byte 0. Byte 0 selects
+        the Tor connector's measured transit — the longer wait.
 
-        The Rust side caches per parameter class, so this is a lookup rather
-        than a survival-quantile solve per entry per pass. */
+        The Rust side caches one interval per transit term, so this is a
+        lookup rather than a survival-quantile solve per entry per pass. */
     time_t local_relay_base(const txpool_tx_meta_t &meta)
     {
       if (!meta.relayed)
         return MIN_RELAY_TIME;
-      // A surviving `local` record is an anonymity origin. The arrival zone
-      // is not stored; byte 0 is `zone::invalid`, which the retry resolves
-      // to the anonymity parameter class — the longer wait.
+      // A surviving `local` record is a hidden-address origin. The arrival
+      // connector is not stored; byte 0 selects the Tor connector's measured
+      // transit — the longer wait.
       return static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(0));
     }
 

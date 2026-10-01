@@ -464,6 +464,23 @@ impl SpecVerifyCost {
 /// under-estimating shortens the embargo, the privacy-losing direction.
 pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 
+/// Measured transit for a connector, keyed by declaration order
+/// (`ConnectorId::index`).
+///
+/// Index 0 is the clearnet connector ([`ADOPTED_TRANSIT_ASSUMPTION_MS`]).
+/// Index 1 is Tor ([`ANON_ZONE_TRANSIT_ASSUMPTION_MS`]). The relay crate
+/// pins those two indexes. Any other index has no distribution and is not
+/// eligible to be stemmed on — a connector supplies its own measurement
+/// before it can be.
+#[must_use]
+pub fn transit_ms_for_connector_index(index: usize) -> Option<f64> {
+    match index {
+        0 => Some(ADOPTED_TRANSIT_ASSUMPTION_MS),
+        1 => Some(ANON_ZONE_TRANSIT_ASSUMPTION_MS),
+        _ => None,
+    }
+}
+
 /// The transit assumption for the **anonymity zones** (Tor), in
 /// milliseconds.
 ///
@@ -793,5 +810,18 @@ mod tests {
              1.07 % band, so the arithmetic moved",
             worst.2
         );
+    }
+
+    #[test]
+    fn an_unlisted_connector_index_has_no_transit() {
+        assert_eq!(
+            transit_ms_for_connector_index(0),
+            Some(ADOPTED_TRANSIT_ASSUMPTION_MS)
+        );
+        assert_eq!(
+            transit_ms_for_connector_index(1),
+            Some(ANON_ZONE_TRANSIT_ASSUMPTION_MS)
+        );
+        assert!(transit_ms_for_connector_index(2).is_none());
     }
 }

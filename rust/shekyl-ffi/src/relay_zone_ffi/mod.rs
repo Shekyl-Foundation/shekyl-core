@@ -620,9 +620,9 @@ pub extern "C" fn shekyl_relay_zone_new(
     };
     // An empty mask keeps the zone byte for fixtures that predate the
     // connector argument. A non-empty mask is the node's configured
-    // connectors, and the parameter class follows the declaration: a
-    // connector that hides this node's address uses that connector's
-    // transit term until the embargo reads the forwarded edge.
+    // connectors. The epoch follows the declaration: a connector that
+    // hides this node's address uses the Tor parameter set. The stem
+    // embargo is drawn from the forwarded connector, not from this set.
     let relay_zone = if configured_connectors.is_empty() {
         RelayZone::from_ffi_u8(zone)
     } else if any_hides_address_from_peer(&configured_connectors) {

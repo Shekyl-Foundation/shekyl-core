@@ -137,9 +137,10 @@ this lane.
    a property of the relay.
 
    One relay. Its session map is every established session, each
-   carrying a network class beside its direction. One stem map covers
-   every outbound session. One epoch and one role are drawn. One fluff
-   reaches every session except the source.
+   carrying its connector beside its direction. One stem map covers
+   every outbound session whose connector has a measured transit. One
+   epoch and one role are drawn. One fluff reaches every session
+   except the source.
 
    - **Hop 0.** The relay is told at construction which connectors are
      configured. The bit is whether any of them declares
@@ -148,16 +149,19 @@ this lane.
      declares the same, and returns no route when none do. After hop 0
      the draw is uniform over every outbound edge. The clearnet route
      byte is retired with the one relay.
-   - **Embargo.** The stem watch records the class of the edge the
-     stem was forwarded on. The privacy crate takes that class as the
-     transit term: `ADOPTED_TRANSIT_ASSUMPTION_MS` (50) on clearnet,
-     `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (1 625) on anonymity. Per
-     transaction, not per relay.
+   - **Embargo.** The stem watch records the connector the stem was
+     forwarded on, and the observation window is drawn from that
+     connector's measured transit: index 0 is
+     `ADOPTED_TRANSIT_ASSUMPTION_MS` (50), index 1 is
+     `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (1 625). An index with no
+     measurement is not a stem edge. Per transaction, not per relay.
    - **Cover.** Noise stays an edge property. The schedule is keyed by
      the session's link secrecy. A noise frame means something only on
      an encrypted channel.
 
-   Stem selection, role, epoch, fluff, and ingress are class-blind.
+   Role, epoch, fluff, and ingress do not read the connector. Stem
+   selection reads it twice: hop 0 reads the declaration, and a
+   connector with no measured transit is not a stem edge.
    `FluffReach` is deleted. The route decision drops arrival-coherence
    and keeps origination plus broadcast-all. D7, outbound-fluff-only
    on a non-public zone (`levin_notify.cpp:268`), is deleted. The
@@ -166,6 +170,11 @@ this lane.
    (`levin_notify.cpp:308` loses that arm).
 
    `m_network_zones` is re-keyed by the transport connector identity.
+   The two handshake registrations still pass
+   `connector_byte` of the address zone; the re-key takes the
+   connector from the seam's record of what carried the session,
+   because a proxied dial's address type and its connector need not
+   agree.
    Listener, advertised address, seeds, peerlist, and inbound cap stay
    per connector. Collapsing those into one session table is LV-3. The
    protocol handler does not branch on the connector: a session syncs,

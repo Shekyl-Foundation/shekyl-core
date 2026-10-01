@@ -505,10 +505,20 @@ impl DandelionParams {
     #[must_use]
     pub fn adopted_for(zone: RelayZone) -> Self {
         let transit = Self::TRANSIT_BY_CLASS[Self::adopted_class(zone)];
+        Self::adopted_for_transit_ms(transit)
+    }
+
+    /// The adopted parameter set for one measured transit term.
+    ///
+    /// The embargo draw uses this with the forwarded connector's entry in
+    /// [`crate::verify_cost::transit_ms_for_connector_index`]. Only
+    /// `time_between_hop_ms` changes.
+    #[must_use]
+    pub fn adopted_for_transit_ms(transit_ms: f64) -> Self {
         let hop = crate::verify_cost::adopted_hop_ms_with_transit(
             1,
             crate::verify_cost::GENESIS_TREE_DEPTH,
-            transit,
+            transit_ms,
         )
         .expect("the modal genesis cell is a pinned §85.3 measurement");
         Self {

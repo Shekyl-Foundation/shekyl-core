@@ -596,6 +596,42 @@ fn a_hidden_connector_origin_does_not_draw_a_clear_edge() {
     assert!(matches!(forwarded, RelayPlan::Stem(_)));
 }
 
+fn embargo_mean(transit_ms: f64) -> u32 {
+    shekyl_relay_privacy::schedule::EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(
+        transit_ms,
+    ))
+    .mean_secs()
+}
+
+fn stem_records(connector: ConnectorId, transit_ms: f64) {
+    let mut rng = SplitMix64::new(11);
+    let mut z = zone(&mut rng);
+    z.on_session_established(id(1), PeerDirection::Outbound, connector, &mut rng);
+    let tx = TxId::from_bytes([9u8; 32]);
+    z.record_stem(&[tx], id(1), None, 0, &mut rng);
+    assert_eq!(z.stem_connector(tx), Some(connector));
+    assert_eq!(
+        z.embargo_mean_secs(connector),
+        Some(embargo_mean(transit_ms))
+    );
+}
+
+#[test]
+fn a_clearnet_stem_records_the_clearnet_embargo() {
+    stem_records(
+        ConnectorId::Clearnet,
+        shekyl_relay_privacy::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS,
+    );
+}
+
+#[test]
+fn a_tor_stem_records_the_tor_embargo() {
+    stem_records(
+        ConnectorId::Tor,
+        shekyl_relay_privacy::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS,
+    );
+}
+
 #[test]
 fn no_routable_slot_reports_no_route_not_a_fluff_epoch() {
     // The discriminator between the two non-stem outcomes, and the reason

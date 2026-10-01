@@ -1643,6 +1643,9 @@ namespace nodetool
     zone.m_peerlist.append_with_peer_white(pe_local);
     //update last seen and push it to peerlist manager
 
+    // The connector is still the address zone's byte. The re-key takes it
+    // from the seam's record of what carried the session: a proxied dial's
+    // address type and its connector need not agree.
     m_notifier.on_session_established(con->m_connection_id, con->m_is_income, cryptonote::levin::notify::connector_byte(na.get_zone()));
     {
       std::uint64_t socket_id = 0;
@@ -2770,6 +2773,9 @@ namespace nodetool
       return 1;
     }
 
+    // The connector is still the address zone's byte. The re-key takes it
+    // from the seam's record of what carried the session: a proxied dial's
+    // address type and its connector need not agree.
     m_notifier.on_session_established(context.m_connection_id, context.m_is_income, cryptonote::levin::notify::connector_byte(azone));
     {
       std::uint64_t socket_id = 0;

@@ -303,7 +303,8 @@ namespace levin
          `SHEKYL_RELAY_ZONE_NOISE_ENABLED` stays off in every build that is
          not one. See COVER_TRAFFIC_RESTORATION.md §3.1 for the two reopening
          criteria that turn it into a shippable switch. */
-      /* Zone byte 0: a non-empty mask derives the parameter class. */
+      /* Zone byte 0: a non-empty mask derives the epoch's parameter set.
+         The stem embargo is drawn from the forwarded connector. */
       return shekyl_relay_zone_new(
         now_ms(), 0, params.stems,
         std::uint32_t(params.min_epoch.count()), std::uint32_t(params.epoch_range.count()),

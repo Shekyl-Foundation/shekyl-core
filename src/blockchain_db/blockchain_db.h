@@ -264,8 +264,9 @@ struct txpool_tx_meta_t
   uint8_t fcmp_verified: 1;  // set when fcmp_verification_hash is valid
   // The two bits that stored the arrival zone are unused. The pool's
   // remaining record of how a transaction is relayed is the relay method.
-  // A surviving `local` origin's retry uses the anonymity parameter class
-  // directly (`local_relay_base`); it does not read a stored zone. The bits
+  // A surviving `local` origin's retry passes byte 0, which selects the
+  // Tor connector's measured transit (`local_relay_base`); it does not
+  // read a stored connector. The bits
   // stay so this record stays 192 bytes and the hash below does not move.
   uint8_t : 2;
 

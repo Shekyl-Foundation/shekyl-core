@@ -41,6 +41,11 @@ use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 /// de-duplication on flush compare by content (`Arc<[u8]>: Ord`).
 pub type TxBlob = Arc<[u8]>;
 
+const _: () = {
+    assert!(ConnectorId::Clearnet.index() == 0);
+    assert!(ConnectorId::Tor.index() == 1);
+};
+
 /// This connector's declaration says the peer does not learn this node's address.
 ///
 /// The cell is the connector's description. A connector that has not assessed
@@ -326,15 +331,12 @@ pub struct Relay {
     /// Per-successor stem outcomes — §12.11's signal, **derived here rather
     /// than imported from `tx_pool`** (§38.1). Records; never judges.
     stem_watch: StemWatch,
-    /// Observation window for stem outcomes. Built once from this zone's
-    /// [`DandelionParams`] at construction — the adopted embargo draw, because
-    /// both questions ask the same peer the same thing (*did you propagate
-    /// this?*). Cached here rather than rebuilt on every stem: the timer is a
-    /// pure function of params and never changes for the life of the zone.
-    ///
-    /// If §12.11's decision window ever diverges from the embargo, this is the
-    /// one field that changes — not an FFI export and not a C++ call site.
-    observation_timer: EmbargoTimer,
+    /// One observation window per connector index, drawn when a stem is
+    /// forwarded on that connector. `None` is a connector with no measured
+    /// transit; its sessions are not stem candidates. Each timer is a pure
+    /// function of that connector's transit term and does not change for the
+    /// life of the relay.
+    embargo: Vec<Option<EmbargoTimer>>,
 }
 
 impl Relay {
@@ -433,12 +435,18 @@ impl Relay {
         } else {
             NoiseSchedule::Off
         };
-        // Observation window shares the zone's params, not a second
-        // `DandelionParams::inherited()` rebuild at the FFI edge.
-        let observation_timer = EmbargoTimer::adopted(&params);
+        // One embargo timer per measured connector. The draw at stem time
+        // reads the successor's connector, not the relay-wide parameter set.
+        let embargo = ConnectorId::ALL
+            .iter()
+            .map(|connector| {
+                shekyl_relay_privacy::transit_ms_for_connector_index(connector.index())
+                    .map(|ms| EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(ms)))
+            })
+            .collect();
         Ok(Self {
             stem_watch: StemWatch::default(),
-            observation_timer,
+            embargo,
             contexts: BTreeMap::new(),
             // Built at full width with no peers rather than `StemMap::empty()`,
             // so `update_stems` can grow into it. An empty map has no slots to
@@ -534,10 +542,11 @@ impl Relay {
     /// Record that `txs` were stemmed to `successor`, keyed under `source`
     /// (`None` = locally originated, matching `in_mapping_[nil]`).
     ///
-    /// The observation window is drawn here from the zone's cached adopted
-    /// embargo timer at `now` — the same question the pool's embargo asks of
-    /// the same peer (*did you propagate this?*). Domain ownership stays in
-    /// this crate (rule 20): the FFI only marshals bytes and a clock.
+    /// The observation window is drawn from the successor's connector at
+    /// `now`. A connector with no measured transit records nothing. The
+    /// question is the one the pool's embargo asks of the same peer (*did
+    /// you propagate this?*). Domain ownership stays in this crate (rule 20):
+    /// the FFI only marshals bytes and a clock.
     pub fn record_stem<R: RelayRng + ?Sized>(
         &mut self,
         txs: &[TxId],
@@ -546,10 +555,44 @@ impl Relay {
         now: Millis,
         rng: &mut R,
     ) {
-        let deadline = self.observation_timer.deadline(now, rng);
+        let Some(connector) = self.contexts.get(&successor).map(|peer| peer.connector) else {
+            return;
+        };
+        let Some(deadline) = self.embargo_deadline(connector, now, rng) else {
+            return;
+        };
         for tx in txs {
-            self.stem_watch.stemmed(*tx, successor, source, deadline);
+            self.stem_watch
+                .stemmed(*tx, successor, source, connector, deadline);
         }
+    }
+
+    fn embargo_deadline<R: RelayRng + ?Sized>(
+        &self,
+        connector: ConnectorId,
+        now: Millis,
+        rng: &mut R,
+    ) -> Option<Millis> {
+        self.embargo
+            .get(connector.index())
+            .and_then(|timer| timer.as_ref())
+            .map(|timer| timer.deadline(now, rng))
+    }
+
+    /// Mean of the embargo drawn for `connector`, when that connector has a
+    /// measured transit.
+    #[cfg(test)]
+    pub fn embargo_mean_secs(&self, connector: ConnectorId) -> Option<u32> {
+        self.embargo
+            .get(connector.index())
+            .and_then(|timer| timer.as_ref())
+            .map(EmbargoTimer::mean_secs)
+    }
+
+    /// The connector recorded for a still-pending stem.
+    #[cfg(test)]
+    pub fn stem_connector(&self, tx: TxId) -> Option<ConnectorId> {
+        self.stem_watch.pending_connector(tx)
     }
 
     /// Record stems with an explicit observation deadline.
@@ -566,8 +609,12 @@ impl Relay {
         source: Option<ConnectionId>,
         deadline: Millis,
     ) {
+        let Some(connector) = self.contexts.get(&successor).map(|peer| peer.connector) else {
+            return;
+        };
         for tx in txs {
-            self.stem_watch.stemmed(*tx, successor, source, deadline);
+            self.stem_watch
+                .stemmed(*tx, successor, source, connector, deadline);
         }
     }
 
@@ -667,8 +714,7 @@ impl Relay {
             .contexts
             .iter()
             .filter(|(_, peer)| {
-                peer.direction == PeerDirection::Outbound
-                    && address_hidden_from_peer(peer.connector)
+                Self::stem_candidate(peer) && address_hidden_from_peer(peer.connector)
             })
             .map(|(id, _)| *id)
             .collect();
@@ -680,15 +726,24 @@ impl Relay {
         RelayPlan::Stem(candidates[index])
     }
 
+    /// Outbound, and the connector has a measured transit. An unmeasured
+    /// connector is not a stem candidate.
+    fn stem_candidate(peer: &PeerFluff) -> bool {
+        peer.direction == PeerDirection::Outbound
+            && shekyl_relay_privacy::transit_ms_for_connector_index(peer.connector.index())
+                .is_some()
+    }
+
     /// Established outbound sessions. Inbound peers are not stem candidates.
     ///
     /// The set is this zone's session registry. A handshake-complete peer
     /// that is still synchronizing is included: recorded height is not a
-    /// filter, and neither is `state_normal`.
+    /// filter, and neither is `state_normal`. A connector with no measured
+    /// transit is not included.
     fn outbound_ids(&self) -> Vec<ConnectionId> {
         self.contexts
             .iter()
-            .filter(|(_, peer)| peer.direction == PeerDirection::Outbound)
+            .filter(|(_, peer)| Self::stem_candidate(peer))
             .map(|(id, _)| *id)
             .collect()
     }

@@ -202,6 +202,11 @@ pub struct StemWatch {
 struct Pending {
     successor: ConnectionId,
     source: Option<ConnectionId>,
+    /// The connector the stem was forwarded on. The embargo was drawn from
+    /// this connector's measured transit. The draw consumes it; the stored
+    /// value is what the stem-connector tests read.
+    #[cfg_attr(not(test), allow(dead_code))]
+    connector: crate::ConnectorId,
     deadline: Millis,
 }
 
@@ -220,6 +225,7 @@ impl StemWatch {
         tx: TxId,
         successor: ConnectionId,
         source: Option<ConnectionId>,
+        connector: crate::ConnectorId,
         deadline: Millis,
     ) {
         self.pending.insert(
@@ -227,9 +233,16 @@ impl StemWatch {
             Pending {
                 successor,
                 source,
+                connector,
                 deadline,
             },
         );
+    }
+
+    /// The connector recorded for a still-pending stem.
+    #[cfg(test)]
+    pub fn pending_connector(&self, tx: TxId) -> Option<crate::ConnectorId> {
+        self.pending.get(&tx).map(|pending| pending.connector)
     }
 
     /// Record that `tx` was seen again, arriving `from` a peer (`None` when
@@ -420,7 +433,7 @@ mod tests {
     #[test]
     fn a_transaction_that_returns_before_its_deadline_counts_as_propagated() {
         let mut w = StemWatch::default();
-        w.stemmed(tx(1), peer(9), None, 1_000);
+        w.stemmed(tx(1), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
         assert_eq!(w.in_flight(), 1, "fixture: the observation is armed");
         w.seen(&tx(1), Some(peer(3)));
         assert_eq!(w.in_flight(), 0, "resolution clears the pending entry");
@@ -432,7 +445,7 @@ mod tests {
     #[test]
     fn a_transaction_that_never_returns_counts_as_silent_at_its_deadline() {
         let mut w = StemWatch::default();
-        w.stemmed(tx(1), peer(9), None, 1_000);
+        w.stemmed(tx(1), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
         assert_eq!(w.expire(999), 0, "not due yet");
         assert!(w.tally(&peer(9)).is_none(), "nothing resolved before due");
         assert_eq!(w.expire(1_000), 1, "due at exactly the deadline");
@@ -447,8 +460,8 @@ mod tests {
         // no longer holding — and reshape fires precisely when a successor
         // looks dark, so this is the operative case, not an edge one.
         let mut w = StemWatch::default();
-        w.stemmed(tx(1), peer(1), None, 1_000);
-        w.stemmed(tx(1), peer(2), None, 2_000);
+        w.stemmed(tx(1), peer(1), None, crate::ConnectorId::Clearnet, 1_000);
+        w.stemmed(tx(1), peer(2), None, crate::ConnectorId::Clearnet, 2_000);
         assert_eq!(w.in_flight(), 1, "one observation, not two");
         assert_eq!(w.expire(2_000), 1);
         assert!(
@@ -466,7 +479,13 @@ mod tests {
         // supplying 100 transactions still contributes ONE distinct source.
         let mut w = StemWatch::default();
         for i in 0..100u8 {
-            w.stemmed(tx(i), peer(9), Some(peer(42)), 1_000);
+            w.stemmed(
+                tx(i),
+                peer(9),
+                Some(peer(42)),
+                crate::ConnectorId::Clearnet,
+                1_000,
+            );
             w.seen(&tx(i), Some(peer(42)));
         }
         let t = w.tally(&peer(9)).expect("resolved");
@@ -478,7 +497,7 @@ mod tests {
              counts 100, the gate cannot distinguish farming from breadth"
         );
 
-        w.stemmed(tx(200), peer(9), None, 1_000);
+        w.stemmed(tx(200), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
         w.seen(&tx(200), Some(peer(7)));
         assert_eq!(
             w.tally(&peer(9)).expect("resolved").distinct_sources(),
@@ -494,7 +513,7 @@ mod tests {
         // fix does not help. If the echo resolves, the signal is defeated by
         // one message, by exactly the adversary it exists to detect.
         let mut w = StemWatch::default();
-        w.stemmed(tx(1), peer(9), None, 1_000);
+        w.stemmed(tx(1), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
 
         w.seen(&tx(1), Some(peer(9)));
         assert_eq!(
@@ -512,7 +531,7 @@ mod tests {
 
         // And an arrival with no peer resolves: it cannot be the successor,
         // which is always a real connection.
-        w.stemmed(tx(2), peer(9), None, 1_000);
+        w.stemmed(tx(2), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
         w.seen(&tx(2), None);
         assert_eq!(w.tally(&peer(9)).expect("resolved").propagated, 2);
     }
@@ -521,11 +540,11 @@ mod tests {
     fn the_snapshot_is_ordered_and_omits_peers_with_no_resolved_observations() {
         let mut w = StemWatch::default();
         // Inserted out of order; only peer 2 and peer 7 resolve anything.
-        w.stemmed(tx(1), peer(7), None, 1_000);
+        w.stemmed(tx(1), peer(7), None, crate::ConnectorId::Clearnet, 1_000);
         w.seen(&tx(1), Some(peer(3)));
-        w.stemmed(tx(2), peer(2), None, 1_000);
+        w.stemmed(tx(2), peer(2), None, crate::ConnectorId::Clearnet, 1_000);
         assert_eq!(w.expire(1_000), 1);
-        w.stemmed(tx(3), peer(5), None, 9_000); // still pending — no outcome
+        w.stemmed(tx(3), peer(5), None, crate::ConnectorId::Clearnet, 9_000); // still pending — no outcome
 
         let snap = w.snapshot();
         assert_eq!(
@@ -541,9 +560,9 @@ mod tests {
     #[test]
     fn forgetting_a_peer_drops_its_tally_and_its_in_flight_observations() {
         let mut w = StemWatch::default();
-        w.stemmed(tx(1), peer(9), None, 1_000);
+        w.stemmed(tx(1), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
         w.seen(&tx(1), Some(peer(3)));
-        w.stemmed(tx(2), peer(9), None, 5_000);
+        w.stemmed(tx(2), peer(9), None, crate::ConnectorId::Clearnet, 5_000);
         assert!(w.tally(&peer(9)).is_some());
         w.forget(&peer(9));
         assert!(w.tally(&peer(9)).is_none(), "tally dropped, not retained");
@@ -562,7 +581,7 @@ mod tests {
         // in, counts out, no ratio and no decay.
         let mut w = StemWatch::default();
         for i in 0..10u8 {
-            w.stemmed(tx(i), peer(9), None, 1_000);
+            w.stemmed(tx(i), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
         }
         assert_eq!(w.expire(1_000), 10);
         let t = w.tally(&peer(9)).expect("resolved");
@@ -577,9 +596,9 @@ mod tests {
     fn next_deadline_is_the_earliest_in_flight_observation() {
         let mut w = StemWatch::default();
         assert!(w.next_deadline().is_none(), "empty watch has no wake");
-        w.stemmed(tx(1), peer(9), None, 5_000);
-        w.stemmed(tx(2), peer(8), None, 3_000);
-        w.stemmed(tx(3), peer(7), None, 9_000);
+        w.stemmed(tx(1), peer(9), None, crate::ConnectorId::Clearnet, 5_000);
+        w.stemmed(tx(2), peer(8), None, crate::ConnectorId::Clearnet, 3_000);
+        w.stemmed(tx(3), peer(7), None, crate::ConnectorId::Clearnet, 9_000);
         assert_eq!(w.next_deadline(), Some(3_000));
         w.seen(&tx(2), Some(peer(1)));
         assert_eq!(

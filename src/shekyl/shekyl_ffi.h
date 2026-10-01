@@ -3249,9 +3249,8 @@ uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 /// `MIN_RELAY_TIME` there. See `local_relay_base` in `tx_pool.cpp`.
 ///
 /// `zone` is `epee::net_utils::zone` as a byte. The pool does not store an
-/// arrival zone; a surviving `local` origin passes 0 (`invalid`), which
-/// resolves to the anonymity class. That is correct (a surviving `local` IS
-/// an anonymity origin) and the fail-safe direction.
+/// arrival connector; a surviving `local` origin passes 0 (`invalid`), which
+/// selects the Tor connector's measured transit. That is the longer wait.
 ///
 /// CONTRACT: never zero, and never below the pool's own `MIN_RELAY_TIME`
 /// (300 s) for any zone -- the value is a pure function of shipped constants,
@@ -3446,9 +3445,10 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 #define SHEKYL_RELAY_ZONE_NOISE_ENABLED 2u
 
 //! Open a zone with the caller's epoch length (public 600/30, noise 300/30).
-//! `zone` is the `epee::net_utils::zone` discriminant; it selects the
-//! transport-bound parameters (§89.2) so this zone's stem-observation window
-//! matches the embargo its successors draw. It is NOT a restatement of
+//! `zone` is the `epee::net_utils::zone` discriminant. An empty `configured`
+//! mask keeps it as the fixture parameter set; a non-empty mask derives the
+//! epoch from the declarations. The stem embargo is drawn from the forwarded
+//! connector, not from this byte. It is NOT a restatement of
 //! `SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY` — fluff reach follows the network,
 //! transit latency follows the transport, and outbound-only fluff on clearnet
 //! is still open (§25.5).
