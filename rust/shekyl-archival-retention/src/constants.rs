@@ -56,12 +56,12 @@ pub const CHALLENGES_PER_PAIR_PER_EPOCH: u32 = 3;
 ///
 /// The binding constraint under derived assignment is against the response
 /// window: a challenge issued at the epoch's **last** block must be
-/// resolvable before the fold reads the epoch, so `grace ≥ W₂`. Both are
-/// fractions of the same epoch on [`crate::SettlementSchedule`]
-/// (`slash_grace_blocks` = `k·SEB`, `challenge_response_blocks` =
-/// `SEB / W2_EPOCH_DIVISOR`), so the inequality is
-/// `k · W2_EPOCH_DIVISOR ≥ 1` — the const-assert below — and holds on every
-/// schedule, levered or not, rather than on the production pin alone.
+/// resolvable before the fold reads the epoch, so `grace ≥ W₂` wherever
+/// the schedule has a window. Both are drawn from the same epoch on
+/// [`crate::SettlementSchedule`]. A window is a positive count: an epoch
+/// shorter than [`W2_EPOCH_DIVISOR`] has no W₂, and the inequality is not
+/// asked of it. On the production pin the coupling is
+/// `SLASH_GRACE_EPOCHS · SETTLEMENT_EPOCH_BLOCKS ≥ CHALLENGE_RESPONSE_BLOCKS`.
 pub const SLASH_GRACE_EPOCHS: u64 = 1;
 
 /// Blocks after `H_open` before the fire beacon input `block_hash(H_seal)` is fixed.
@@ -174,9 +174,16 @@ pub const CHALLENGE_BEACON_SEAL_BLOCKS: u64 = 1;
 /// **Not a reopening either (2026-09-30):** moving the *computation* onto
 /// [`crate::SettlementSchedule`] so a levered epoch yields its own W₂. The
 /// band stays `1/20`, ratified; what moved is which epoch the fraction is
-/// taken of, so that the grace/W₂ coupling cannot be inverted by a lever.
+/// taken of. **UPDATE 2026-10-01:** an epoch shorter than the divisor has
+/// no window (`None`). The coupling `grace ≥ W₂` is asked only where a
+/// window exists; zero is not a window.
 pub const CHALLENGE_RESPONSE_BLOCKS: u64 =
-    crate::SettlementSchedule::GENESIS.challenge_response_blocks();
+    match crate::SettlementSchedule::GENESIS.challenge_response_blocks() {
+        Some(window) => window.get(),
+        None => {
+            panic!("genesis settlement epoch does not cover a challenge-response window")
+        }
+    };
 
 /// Fraction of a settlement epoch W₂ occupies: `SEB / 20`.
 ///
@@ -222,18 +229,16 @@ const _: () = assert!(
 // The slash fold for epoch E must not run before the response window of E's
 // last-issued challenge closes, or in-flight responses read as misses. The fold
 // runs strictly above the deadline (`failure_window.rs`), so `>=` is exact.
-// Both sides are fractions of one epoch on `SettlementSchedule` — grace
-// `k·SEB`, W₂ `SEB / W2_EPOCH_DIVISOR` — so `grace ≥ W₂` is `k · divisor ≥ 1`
-// and holds on every schedule, not only the production pin. (Its predecessor
-// compared `k · SETTLEMENT_EPOCH_BLOCKS` with the production-pin W₂: true at
-// genesis, and inverted under a levered `SEB = 100` once the grace moved onto
-// the schedule and W₂ had not — grace 100 against W₂ 500.)
+// This is the production pin: grace `k · SEB` against the genesis window.
+// A schedule whose epoch is shorter than `W2_EPOCH_DIVISOR` has no window
+// (`challenge_response_blocks` is `None`); that case is the lever test.
+// `k · divisor ≥ 1` stays true while the division yields 0, so it does not
+// say the window exists.
 const _: () = assert!(
-    SLASH_GRACE_EPOCHS * W2_EPOCH_DIVISOR >= 1,
-    "SLASH_GRACE_EPOCHS * W2_EPOCH_DIVISOR < 1: the slash grace (k * SEB) would be \
-     shorter than W2 (SEB / divisor) on every schedule, so the fold for an epoch \
-     would run before the response window of its last-issued challenge closes, \
-     reading in-flight responses as misses; re-derive the grace alongside any W2 re-pin"
+    SLASH_GRACE_EPOCHS * SETTLEMENT_EPOCH_BLOCKS >= CHALLENGE_RESPONSE_BLOCKS,
+    "the production slash grace (k * SEB) is shorter than the genesis \
+     challenge-response window, so the fold for an epoch would run before \
+     the response window of its last-issued challenge closes"
 );
 
 /// Global settlement-epoch boundary (`ARCHIVAL_TIMING_CONSTANTS.md` §1).

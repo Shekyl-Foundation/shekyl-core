@@ -9,6 +9,8 @@
 //! a fakechain lever's value, or the process latch via [`SettlementSchedule::effective`].
 //! The free functions in the parent module are that latch's entry points.
 
+use core::num::NonZeroU64;
+
 use crate::constants::{
     effective_settlement_epoch_blocks, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
     W2_EPOCH_DIVISOR,
@@ -190,30 +192,23 @@ impl SettlementSchedule {
             .saturating_add(self.slash_grace_blocks())
     }
 
-    /// W₂ under this schedule — blocks after a challenge's issuing block to
-    /// accept its serve-credit response: `SEB / W2_EPOCH_DIVISOR`, one
-    /// twentieth of the epoch (`constants::CHALLENGE_RESPONSE_BLOCKS` is
-    /// this method on [`Self::GENESIS`], and the W₂ ruling's band asserts
-    /// hold there).
+    /// W₂ under this schedule: blocks after a challenge's issuing block in
+    /// which its serve-credit response is still in time, one twentieth of
+    /// the epoch (`SEB / W2_EPOCH_DIVISOR`).
     ///
-    /// Here rather than only as a constant so that W₂ and the slash grace
-    /// are drawn from **one** epoch. The coupling the slash fold relies on —
-    /// the fold for `E` must not run before `E`'s last-issued challenge's
-    /// window closes, `grace ≥ W₂` — is then `k·SEB ≥ SEB/20`, i.e.
-    /// `k · W2_EPOCH_DIVISOR ≥ 1`, which holds on every schedule by
-    /// construction (the const-assert in `constants.rs`). Before this method
-    /// the grace was schedule-derived and W₂ const-derived from the
-    /// production pin, and under a levered `SEB = 100` the inequality the
-    /// production-pin assert "guaranteed" was inverted (grace 100, W₂ 500).
+    /// [`None`] when the epoch is shorter than the divisor. Zero is not a
+    /// window: a deadline of no blocks accepts nothing, and `grace ≥ 0`
+    /// would still hold. A schedule that returns [`Some`] has a positive
+    /// count; the production pin is
+    /// [`constants::CHALLENGE_RESPONSE_BLOCKS`](crate::constants::CHALLENGE_RESPONSE_BLOCKS),
+    /// this method on [`Self::GENESIS`].
     ///
-    /// Integer division, as the constant always was: a levered epoch that
-    /// is not a multiple of twenty truncates (the divisibility const-assert
-    /// defends the production pin only), and an epoch below twenty yields
-    /// `0`. W₂ has no consensus consumer yet; one that lands reads this
-    /// method, not the pin, and decides there what a zero window means.
+    /// Integer division: an epoch at least the divisor that is not a
+    /// multiple of it truncates. The divisibility const-assert defends the
+    /// production pin.
     #[must_use]
-    pub const fn challenge_response_blocks(self) -> u64 {
-        self.seb() / W2_EPOCH_DIVISOR
+    pub const fn challenge_response_blocks(self) -> Option<NonZeroU64> {
+        NonZeroU64::new(self.seb() / W2_EPOCH_DIVISOR)
     }
 
     /// Prune horizon at `block_height`: epochs strictly below the returned

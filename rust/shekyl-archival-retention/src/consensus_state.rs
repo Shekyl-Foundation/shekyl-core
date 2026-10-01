@@ -1198,35 +1198,56 @@ mod tests {
 
     #[test]
     fn slash_grace_dominates_w2_on_every_schedule() {
-        // The coupling the slash fold relies on, drawn from one epoch on
-        // both sides. Its predecessor held between the schedule's grace and
-        // the production-pin W₂ and inverted under a lever (grace 100, W₂
-        // 500 at SEB 100); the levered rows below are the ones that failed.
+        // Where a schedule has a window, the slash grace covers it. An
+        // epoch shorter than the divisor has no window: zero is not a
+        // count the grace can dominate.
         use crate::constants::{CHALLENGE_RESPONSE_BLOCKS, W2_EPOCH_DIVISOR};
         use shekyl_types::archival::SettlementEpochBlocks;
 
         let genesis = SettlementSchedule::GENESIS;
         assert_eq!(
-            genesis.challenge_response_blocks(),
-            CHALLENGE_RESPONSE_BLOCKS,
+            genesis
+                .challenge_response_blocks()
+                .map(core::num::NonZeroU64::get),
+            Some(CHALLENGE_RESPONSE_BLOCKS),
             "the constant is the schedule's method on the genesis pin"
         );
-        assert_eq!(genesis.challenge_response_blocks(), 500);
+        assert_eq!(
+            genesis
+                .challenge_response_blocks()
+                .map(core::num::NonZeroU64::get),
+            Some(500)
+        );
 
-        for seb in [SETTLEMENT_EPOCH_BLOCKS, 2_000, 100, 20, 7, 2] {
+        for seb in [SETTLEMENT_EPOCH_BLOCKS, 2_000, 100, 20] {
             let s = SettlementSchedule::new(SettlementEpochBlocks::new(seb).expect("nonzero"));
-            assert_eq!(s.challenge_response_blocks(), seb / W2_EPOCH_DIVISOR);
+            let window = s
+                .challenge_response_blocks()
+                .expect("an epoch at least the divisor covers a window");
+            assert_eq!(window.get(), seb / W2_EPOCH_DIVISOR);
             assert!(
-                s.slash_grace_blocks() >= s.challenge_response_blocks(),
+                s.slash_grace_blocks() >= window.get(),
                 "SEB {seb}: grace {} < W2 {}",
                 s.slash_grace_blocks(),
-                s.challenge_response_blocks()
+                window.get()
+            );
+        }
+        for seb in [7, 2] {
+            let s = SettlementSchedule::new(SettlementEpochBlocks::new(seb).expect("nonzero"));
+            assert!(
+                s.challenge_response_blocks().is_none(),
+                "SEB {seb} is below the divisor and has no window"
             );
         }
         // The levered bench regime, spelled out: the grace is the epoch and
         // W₂ is a twentieth of it — not the production 500.
         let bench = SettlementSchedule::new(SettlementEpochBlocks::new(100).expect("nonzero"));
         assert_eq!(bench.slash_grace_blocks(), 100);
-        assert_eq!(bench.challenge_response_blocks(), 5);
+        assert_eq!(
+            bench
+                .challenge_response_blocks()
+                .map(core::num::NonZeroU64::get),
+            Some(5)
+        );
     }
 }

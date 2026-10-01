@@ -70,12 +70,13 @@
   cap` (`shekyl-chain-rules::journal_horizon_under`), the same value on the
   production pin.
 - W₂ (`CHALLENGE_RESPONSE_BLOCKS`, one twentieth of an epoch) is computed on
-  the schedule too (`SettlementSchedule::challenge_response_blocks`; the
-  constant is that method on the genesis pin, 500), so the slash-fold
-  coupling `grace ≥ W₂` is asserted as `SLASH_GRACE_EPOCHS · W2_EPOCH_DIVISOR
-  ≥ 1` and holds on every schedule — the previous assert compared a
-  schedule-derived grace with a production-pin W₂ and inverted under a
-  levered epoch. W₂'s ruled band is unchanged.
+  the schedule (`SettlementSchedule::challenge_response_blocks`; the
+  constant is that method on the genesis pin, 500). **UPDATE 2026-10-01:**
+  the method returns `Option<NonZeroU64>`. An epoch shorter than
+  `W2_EPOCH_DIVISOR` has no window (`None`); `grace ≥ 0` is not the
+  coupling. Where a window exists, the slash grace covers it. The
+  production comparison is `SLASH_GRACE_EPOCHS · SETTLEMENT_EPOCH_BLOCKS ≥
+  CHALLENGE_RESPONSE_BLOCKS`. W₂'s ruled band is unchanged.
 - Contract: `config/consensus_constants.json` loses
   `challenge_resolution_blocks` (no generator read it); the
   `shekyl-rpc-types` build's pinned digest of the file moves accordingly. FFI:
