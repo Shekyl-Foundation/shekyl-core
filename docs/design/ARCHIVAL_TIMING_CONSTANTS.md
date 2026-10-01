@@ -32,7 +32,7 @@ rewrite → P2B-6 §7 threat re-center → **this cluster's values** (sim-backed
 | `ARCHIVAL_REORG_DEPTH_BLOCKS` | **720** | Max processable reorg depth (blocks); `pop_block` + wallet refresh; **since 2026-09-13 also the pass-countersignature anchor depth** (`SF-D8`: requester anchors a shard read to `block_hash(tip − this)`) | Gate-4 §5, P2B-5, `ARCHIVAL_SHARD_FETCH.md` `SF-D8` |
 | `ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS` (`L`) | **4** (**PROVISIONAL**, 2026-09-13) | Half-width of the pass-anchor admission window `[h − 720 − L, h − 720]` and of `P`'s pre-sign gate `[p − 720 − L, p − 720 + L]`; `≥ 2` build-enforced. Falsifier: W₂ / PD-F-2 dispersion — p99 fetch-plus-retry under 2 min → 3; over 6 min → tighten `SF-D6`'s retry budget, do not raise `L` | `ARCHIVAL_SHARD_FETCH.md` `SF-D8` |
 | `RELEASE_COOLDOWN_EPOCHS` | **2** | Grace after last serve before `Release` (settlement epochs) | Gate-4 §3.4–§4.3 |
-| `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** (gate-2 interface) | Worst-case slash challenge window (blocks) | Gate-2 (interface) |
+| `SLASH_GRACE_EPOCHS` (`k`) | **1** (ratified 2026-09-30, DRS-E4 commit 5) | Slash grace after an epoch's last block, **in settlement epochs**: `H_slash_deadline(E) = last_block(E + k)`; the grace in blocks is `k · SEB` under whatever schedule is in force. *Was `CHALLENGE_RESOLUTION_BLOCKS = 10_000`, a block count equal to one SEB by coincidence and not scaled by the Fakechain lever — see §2.2.* | Gate-2 (interface); `SettlementSchedule::slash_grace_blocks` |
 | `BOND_DURATION_BASE_EPOCHS` | **4** (provisional¹) | Flat floor of per-shard retention-commitment horizon (settlement epochs) | Gate-4; sim L9/L10 |
 | `BOND_DURATION_AGE_SCALE` | **4** (provisional¹) | Age multiplier: `bond_duration(age) = BASE · (1 + SCALE·age)`, `age ∈ [0,1]` normalized shard age | Gate-4; sim L9/L10 |
 
@@ -97,7 +97,7 @@ epoch ≈ **13.9 days** (~2 weeks).
 | `RETENTION_HORIZON_BLOCKS` | ~**583 days** (~19 months block-span floor) |
 | `ARCHIVAL_REORG_DEPTH_BLOCKS` | ~**24 hours** |
 | `RELEASE_COOLDOWN_EPOCHS` = 2 | ~**28 days** |
-| `CHALLENGE_RESOLUTION_BLOCKS` = 10_000 | ~**13.9 days** (one SEB) |
+| `SLASH_GRACE_EPOCHS` = 1 | ~**13.9 days** (one SEB, by construction) |
 | `bond_duration` range (base 4, scale 4) | ~**8 weeks** (youngest deep) → ~**9 months** (oldest) |
 
 ### 1.1 Reorg depth vs retention horizon (load-bearing split)
@@ -148,13 +148,32 @@ Collateral return and reward backlog are **independent** value flows
 ### 2.2 L16 floor on release cooldown; T-A16 margin
 
 ```text
-RELEASE_COOLDOWN_EPOCHS × SEB  >  CHALLENGE_RESOLUTION_BLOCKS     ✓  (20_000 > 10_000)
+RELEASE_COOLDOWN_EPOCHS  >  SLASH_GRACE_EPOCHS     ✓  (2 > 1), on every schedule
 ```
 
-`CHALLENGE_RESOLUTION_BLOCKS = 10_000` (~14 d at 120 s/block) is **generous** relative to
-onion rendezvous latency (L16): a transient DoS on `P`'s rendezvous cannot force slash within
-the challenge window (T-A16 forced-slash-via-liveness). Re-verify at gate-2 challenge cadence
-pin.
+*Was `RELEASE_COOLDOWN_EPOCHS × SEB > CHALLENGE_RESOLUTION_BLOCKS` (`20_000 > 10_000`), which
+held on the production pin and **inverted under the Fakechain `SEB` lever** — `200 > 10_000`
+is false — so a levered regtest chain ran a release/slash ordering production never has.
+Re-expressed in epochs 2026-09-30 (DRS-E4 commit 5); both sides now scale together.*
+
+One epoch of grace (~14 d at 120 s/block on the production schedule) is **generous**
+relative to onion rendezvous latency (L16): a transient DoS on `P`'s rendezvous cannot force
+slash within the challenge window (T-A16 forced-slash-via-liveness). Re-verify at gate-2
+challenge cadence pin.
+
+**Why the grace is a multiple and not a number (2026-09-30).** The record always read it as
+one epoch — Gate 6: *"a full settlement epoch"*; the free-rider round: *"a full epoch of
+settling after close"* — but it was carried as a second `10_000`, and a second number can be
+levered alone. Under `SEB = 100` the grace stayed ten thousand blocks: a hundred-epoch grace,
+**nine times the eleven epochs of settled misses** the m-of-n slash predicate needs before
+any deadline scan has a slash to write (`ARCHIVAL_FAILURE_WINDOW_M = 11` of `N = 13`, one
+observation per `(P, shard, epoch)` settled 2-of-3). Not a scaled-down regime but a malformed
+one: the settling window dwarfing the observation history it settles. Written as `k · SEB`
+with `k = 1` ratified, the whole slash lifecycle compresses together under a lever and the
+relationship is structural; if the ratio is ever meant to be other than `1×`, the factor is
+the only thing open. The JSON key `challenge_resolution_blocks` is gone (no generator read
+it; the multiple has no value of its own to source), and the slash grace is sourced through
+`settlement_epoch_blocks`.
 
 ### 2.3 Retention horizon floor (blocks — not reorg depth)
 
@@ -242,7 +261,7 @@ Unchanged — bond timing moves value between terms; it does not add supply.
 - [x] `RETENTION_HORIZON_BLOCKS` = 420_000
 - [x] `ARCHIVAL_REORG_DEPTH_BLOCKS` = 720
 - [x] `RELEASE_COOLDOWN_EPOCHS` = 2
-- [x] `CHALLENGE_RESOLUTION_BLOCKS` = 10_000 (+ T-A16 margin §2.2)
+- [x] `SLASH_GRACE_EPOCHS` = 1 (one SEB by construction; + T-A16 margin §2.2) — *was `CHALLENGE_RESOLUTION_BLOCKS = 10_000` until 2026-09-30*
 - [x] F4 signed in sim
 - [ ] `pop_block` implementation confirms §2.4 trace
 - [ ] `ClaimedEpochSet` wire encoding (PHASE_2B §3.3)
@@ -260,8 +279,8 @@ Unchanged — bond timing moves value between terms; it does not add supply.
 | **`W = 26`** | ~1 calendar year claim headroom at 13.9 d/settlement-epoch; bounds hot `ClaimedEpochSet` / retention state; F4 passes burst and slow catch-up. **Not** a decorrelation dial — lapse without portfolio change does not re-link (F1 T-A1); `W` bounds **forfeiture economics** and state growth. |
 | **`RETENTION_HORIZON_BLOCKS = 420_000`** | Tight §2.3 retention floor in blocks (`W×SEB + join + batch`). Governs minimum survival before prune **sweep**; distinct from reorg depth. |
 | **`ARCHIVAL_REORG_DEPTH_BLOCKS = 720`** | ~24 h at 120 s/block — PoW finality-scale processable reorg (`≪ SEB`). P2B-5 wallet archival refresh bound. |
-| **`RELEASE_COOLDOWN_EPOCHS = 2`** | Two settlement epochs (~28 d) > one SEB challenge window; `< W`; L16 + Release decorrelation headroom. |
-| **`CHALLENGE_RESOLUTION_BLOCKS = 10_000`** | One SEB; aligns slash challenge to settlement cadence; T-A16 transient-DoS margin (§2.2). |
+| **`RELEASE_COOLDOWN_EPOCHS = 2`** | Two settlement epochs (~28 d) > the one-epoch slash grace; `< W`; L16 + Release decorrelation headroom. |
+| **`SLASH_GRACE_EPOCHS = 1`** | One SEB **as a multiple**, so the slash grace aligns to settlement cadence on every schedule rather than on the production pin alone; T-A16 transient-DoS margin (§2.2). *Was `CHALLENGE_RESOLUTION_BLOCKS = 10_000`.* |
 
 ### 6.2 Sim verification
 
@@ -278,9 +297,12 @@ cargo run -p shekyl-staking-sim -- --timing-cluster
 "retention_horizon_blocks": 420000,
 "archival_reorg_depth_blocks": 720,
 "archival_attestation_anchor_lag_blocks": 4,
-"release_cooldown_epochs": 2,
-"challenge_resolution_blocks": 10000
+"release_cooldown_epochs": 2
 ```
+
+`SLASH_GRACE_EPOCHS` has no key: it is a multiple of `settlement_epoch_blocks`, pinned in
+`shekyl-archival-retention/src/constants.rs`. (`"challenge_resolution_blocks": 10000` was
+removed 2026-09-30; the `shekyl-rpc-types` digest paragraph of that date records why.)
 
 ---
 

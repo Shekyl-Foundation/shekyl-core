@@ -33,7 +33,7 @@
 - **Stores.** LMDB `VERSION` 15 → 16 — content, not layout: a v15 datadir
   indexes its transactions under ids no current node computes, and is
   refused at open (`LMDB_SCHEMA.md`). The redb store's `SCHEMA_VERSION`
-  19 → 20 for the same reason: `tx_indices` is keyed by the txid, so a
+  20 → 21 for the same reason: `tx_indices` is keyed by the txid, so a
   store written before this change is refused at open instead of halting
   as corruption on its first skeleton rebuild. No snapshot moves.
   Pre-genesis: delete and resync.
@@ -242,6 +242,70 @@
   `fcmps` logic change, so it is unchanged. Q6 re-vetted: an honest on-curve
   proof's content, length, and framing are unchanged
   (`GENESIS_TX_WIRE_FORMAT.md` Q6).
+
+### Chain store — the archival writer: `connect` records the verdict's archival transition (DRS-E4 commit 5)
+
+- Every archival phase of the redb `connect` now has a body
+  (`shekyl-chain-store::store::archival_write`): the bond records and
+  serve credits the verdict's `ArchivalDelta` carries, written once after
+  the transaction loop from each persona's final post-image; the
+  attestation witness at the block's height (`Candidate.attestation_witness`,
+  carried unjudged under CEN-B4's coverage gap until B4 lands); the slash
+  burn folded into `total_burned` through phase 8's one fold; the budget
+  accrual row upserted every block and removed at the epoch close; the slash
+  log, the applied set and the watermark; the close's `r_market`,
+  `sigma_work` and `budget` rows, insert-once per epoch. The store computes
+  no archival value: a delta that does not fit the tables halts the connect
+  as a store invariant (SI-19…23 minted — insert-once records, an
+  update that replaces a present persona, whole-or-none close, dense
+  slash log with a per-key applied collision, one accruing row).
+  **UPDATE 2026-10-01:** SI-20 is that absent-update refusal
+  (`ReplaceTable`, `BondRecordAbsent`), not a re-sum of `bonded_total`.
+  The accrual ends are read through the upsert handle. A repeated
+  applied slash names `archival_slash_applied`. A family the apply
+  policy stubs is skipped and widens the file's provenance, never
+  refused. The `emission-claim` capture replays in
+  full (the interim L7 refusal pinned at height 1025 is gone). `pop` lifts
+  every row through `undo_log`; a pop across a close restores the budget
+  row's absence and the accruing row the close removed.
+- Regtest: `ChainStore::regtest_inject_serve_credit`, the writer's own door
+  for the C++ `regtest_inject_archival_serve_credit` — Fakechain only,
+  unjournaled, and refused for a persona with no bond record.
+- Contract: the chain store's `SCHEMA_VERSION` 19 → 20 — the undo journal
+  gains a keyed-delete entry (`Removed`, tag 4), which a 19 reader cannot
+  decode. Pre-genesis, rebuild-never-migrate.
+  (`DRS_E4_ARCHIVAL_WRITER.md` §3.2, §6 row 5.)
+
+### Consensus — the archival slash grace is one settlement epoch by construction (DRS-E4 commit 5, ruling)
+
+- The slash deadline for epoch `E` is `last_block(E) + SLASH_GRACE_EPOCHS ·
+  SEB` with `SLASH_GRACE_EPOCHS = 1` (`shekyl-archival-retention`,
+  `SettlementSchedule::slash_grace_blocks`), replacing the independent
+  constant `CHALLENGE_RESOLUTION_BLOCKS = 10_000`. **Behaviour-neutral on
+  the production schedule** (`SEB = 10_000`: the same height). The change is
+  to what a levered schedule does: a Fakechain `SEB` now scales the grace
+  with it — before, a regtest chain at `SEB 100` kept a 10 000-block grace,
+  a hundred epochs, nine times the eleven epochs of settled misses the
+  `11`-of-`13` slash predicate needs, and the release/slash ordering pin
+  `RELEASE_COOLDOWN_EPOCHS > SLASH_GRACE_EPOCHS` inverted under it. The
+  reorg journal horizon is `(SLASH_GRACE_EPOCHS + FAILURE_WINDOW_N) · SEB +
+  cap` (`shekyl-chain-rules::journal_horizon_under`), the same value on the
+  production pin.
+- W₂ (`CHALLENGE_RESPONSE_BLOCKS`, one twentieth of an epoch) is computed on
+  the schedule (`SettlementSchedule::challenge_response_blocks`; the
+  constant is that method on the genesis pin, 500). **UPDATE 2026-10-01:**
+  the method returns `Option<NonZeroU64>`. An epoch shorter than
+  `W2_EPOCH_DIVISOR` has no window (`None`); `grace ≥ 0` is not the
+  coupling. Where a window exists, the slash grace covers it. The
+  production comparison is `SLASH_GRACE_EPOCHS · SETTLEMENT_EPOCH_BLOCKS ≥
+  CHALLENGE_RESPONSE_BLOCKS`. W₂'s ruled band is unchanged.
+- Contract: `config/consensus_constants.json` loses
+  `challenge_resolution_blocks` (no generator read it); the
+  `shekyl-rpc-types` build's pinned digest of the file moves accordingly. FFI:
+  `shekyl_archival_challenge_resolution_blocks` (no C++ caller) is deleted;
+  `shekyl_archival_epoch_slash_deadline_height` is the deadline's only
+  export. (`ARCHIVAL_TIMING_CONSTANTS.md` §2.2; `DRS_E4_ARCHIVAL_WRITER.md`
+  §10, 2026-09-30.)
 
 ### Consensus — the Rust validator's CEN-F17 operand `n` is the closed archival-shard count (DRS-E4 commit 4)
 

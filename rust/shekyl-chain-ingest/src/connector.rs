@@ -65,7 +65,10 @@ use shekyl_chain_rules::{
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
 use shekyl_types::archival::BondRecord;
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId};
+use shekyl_types::{
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, SettlementEpoch,
+};
+use shekyl_units::AtomicUnits;
 
 use crate::schedule::ChainRules;
 
@@ -191,8 +194,8 @@ pub struct Applied {
     /// the block does to the bond records, the serve credits, the slash log
     /// and the epoch state (`ValidatedBlock::archival`, DRS-E4 commit 4) —
     /// one per entry of `connected`. The scenario driver reads it for the
-    /// blocks it mines: until the writer lands (E4 commit 5) the store
-    /// holds none of it, so the delta is observable only here.
+    /// blocks it mines and compares it with what the store wrote from it
+    /// (E4 commit 5: `BondRecordOf`, `BudgetAccruingOf`).
     pub archival: Vec<(BlockHeight, ArchivalDelta)>,
     /// The census rows the connected blocks' verdicts exercised — the
     /// union of each `ChainValid`'s coverage, for the grader's clause (1).
@@ -245,14 +248,26 @@ pub struct RootAt {
 
 /// `persona`'s bond record as the store holds it — `archival_bond[persona]`
 /// (DRS-E1 A1), the row CEN-L7 reads a persona's standing from. `None` is
-/// no record. The read the archival scenarios hold the writer to: at DRS-E4
-/// commit 4 the transition is derived and not written, so this is `None`
-/// after a join the validator admitted, and the E4 writer's landing is what
-/// turns it `Some` (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 5's falsifier).
+/// no record. The read the archival scenarios hold the writer to: a join
+/// the validator admitted is `Some` here in the same block, with the
+/// fields the verdict's delta carried (`DRS_E4_ARCHIVAL_WRITER.md` §6 row
+/// 5).
 #[derive(Clone, Copy, Debug)]
 pub struct BondRecordOf {
     /// The persona asked for.
     pub persona: PCanonicalId,
+}
+
+/// The open epoch's accrued staker inflow as the store holds it —
+/// `archival_budget_accruing[epoch]` (DRS-E1 A13). `None` before the
+/// epoch's first accrual and after its close (SI-23), so a scenario can
+/// derive what a block's accrual post-image must be from the row the
+/// writer folds it onto, and hold the writer to the row's removal at the
+/// close.
+#[derive(Clone, Copy, Debug)]
+pub struct BudgetAccruingOf {
+    /// The epoch asked for.
+    pub epoch: SettlementEpoch,
 }
 
 /// What a block producer needs from the chain to build the next
@@ -643,5 +658,17 @@ impl Message<BondRecordOf> for Connector {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         Ok(self.writer.read()?.bond_record(&msg.persona)?)
+    }
+}
+
+impl Message<BudgetAccruingOf> for Connector {
+    type Reply = Result<Option<AtomicUnits>, RunFault>;
+
+    async fn handle(
+        &mut self,
+        msg: BudgetAccruingOf,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self.writer.read()?.budget_accruing(msg.epoch)?)
     }
 }

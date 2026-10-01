@@ -385,6 +385,14 @@ const _: () = assert!(
 );
 ```
 
+*(Since 2026-09-30 the grace is `k · SEB` and W₂ is `SEB / 20` on
+`SettlementSchedule`, both from one epoch. **UPDATE 2026-10-01:** a window
+is `Option<NonZeroU64>` — an epoch below the divisor has none — and the
+production comparison is `SLASH_GRACE_EPOCHS * SETTLEMENT_EPOCH_BLOCKS >=
+CHALLENGE_RESPONSE_BLOCKS`. `k * W2_EPOCH_DIVISOR >= 1` stayed true while
+the division yielded 0. The margin and the argument are unchanged, and
+`CHALLENGE_RESOLUTION_BLOCKS` below is the name the grace had.)*
+
 *"or in-flight responses read as misses"* is `SO-D7`'s entire argument, written
 before this round opened, **enforced by a const-assert** rather than left to
 prose. `CHALLENGE_RESOLUTION_BLOCKS`'s own doc goes further and states the

@@ -217,6 +217,62 @@ pub enum StoreInvariant {
         /// Which break the writer observed.
         observed: LeafCountFault,
     },
+    /// **SI-19** — a persona has at most one record, and a JoinMarket is
+    /// the only insert. `archival_bond[p]` is written insert-once by the
+    /// JoinMarket arm and only replaced — a present row, its pre-image
+    /// journaled — by every later change (Release, Reinstate, a claim's
+    /// record update, a slash); a second insert for a persona is a writer
+    /// that re-ran a join. The belt beneath CEN-J14's rule, bound at the
+    /// insert handle's open in the archival writer's phase 2 (DRS-E4
+    /// §3.2, §4; CEN-L14 site 2).
+    BondRecordNotFresh,
+    /// **SI-20** — an `Update` of `archival_bond` names a persona the
+    /// table already holds. Later changes replace a present row and
+    /// journal that pre-image; an absent persona is this row, returned
+    /// before any journal entry. There is no summed `bonded_total`: the
+    /// total is the rows (`ARW-Q9`, no cell), and a scan of the writes
+    /// just performed is those writes. Bound at the replace handle's open
+    /// in phase 2 (DRS-E4 `ARW-7`).
+    BondRecordAbsent,
+    /// **SI-21** — an epoch closes whole. `archival_sigma_work[E]` and
+    /// `archival_budget[E]` exist together with every `(shard, E)` row of
+    /// `archival_r_market` the close's snapshot named — zero rows written,
+    /// not skipped (`ARW-Q4`) — or none does; each is insert-once on `E`,
+    /// so a second close of `E` refuses rather than overwriting (CEN-L14's
+    /// O-2 adversary). Bound at the three insert handles' open in phase 9
+    /// (DRS-E4 `ARW-8`).
+    EpochCloseRewritten {
+        /// The epoch a close was already recorded for.
+        epoch: shekyl_types::SettlementEpoch,
+    },
+    /// **SI-22** — the slash log is dense per height, and every row is an
+    /// applied slash. `archival_slash_log`'s rows at height `h` are
+    /// `(h, 0) … (h, n−1)` and no other
+    /// ([`SlashFault::NotDense`]), and each row's `(persona, shard,
+    /// epoch)` is a key of `archival_slash_applied`
+    /// ([`SlashFault::AlreadyApplied`]). The applied key names the
+    /// persona, so that half is reported per insert rather than bound
+    /// once at open. Armed by phase 9 (DRS-E4 `ARW-2`, `ARW-Q2`).
+    SlashLogNotDense {
+        /// The connecting height.
+        height: u64,
+        /// Which half of the pair the writer observed.
+        observed: SlashFault,
+    },
+    /// **SI-23** — the accruing table holds at most one row, the open
+    /// epoch's. `archival_budget_accruing[E]` is upserted every connect of
+    /// epoch `E` and deleted in the transaction that writes
+    /// `archival_budget[E]` (`ARW-Q3`, second half); a second row is a
+    /// close that did not finish or a re-key, and a stale accumulator is
+    /// this refusal rather than a silently wrong operand of the next close.
+    /// Armed by phase 9: a row keyed by another epoch when the open
+    /// epoch's is written ([`AccrualFault::StaleRow`]), or no row for `E`
+    /// when the close deletes it ([`AccrualFault::AbsentAtClose`], the
+    /// remove handle's bound row).
+    AccruingNotSingular {
+        /// Which shape the writer observed.
+        observed: AccrualFault,
+    },
     /// **SI-24** — the archival fold is the sum of its rows:
     /// `block_info[h].cumulative_archival_len` equals the parent's value
     /// plus the `txs_archival_len` rows (absent ⇔ `0`) of the storage ids
@@ -225,8 +281,7 @@ pub enum StoreInvariant {
     /// is a row or a cell changed under the store. Armed by the prune's
     /// descent (`prune.rs` `walk_block`), which checks every block it
     /// passes and would otherwise place a shard boundary by a cell the rows
-    /// do not support. (SI-19…23 are held by the E4 plan,
-    /// `DRS_E4_ARCHIVAL_WRITER.md` §4.)
+    /// do not support.
     ArchivalLengthsDisagree {
         /// The height whose rows were summed.
         height: u64,
@@ -250,6 +305,44 @@ pub enum LeafCountFault {
         recorded: u64,
         /// The count `curve_tree_meta` holds.
         summary: u64,
+    },
+}
+
+/// What an SI-23 write observed (payload of
+/// [`StoreInvariant::AccruingNotSingular`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccrualFault {
+    /// `archival_budget_accruing` holds a row keyed by `epoch`, which is
+    /// not the open epoch the writer is accruing into: a close that did not
+    /// delete its row, or a re-key.
+    StaleRow {
+        /// The epoch the stale row is keyed by.
+        epoch: shekyl_types::SettlementEpoch,
+    },
+    /// The close of `E` found no `archival_budget_accruing[E]` to delete:
+    /// the epoch closed without having accrued.
+    AbsentAtClose,
+}
+
+/// What an SI-22 write observed (payload of
+/// [`StoreInvariant::SlashLogNotDense`]).
+///
+/// Density and a repeated applied key are different facts. One variant
+/// keeps the register's row; the payload says which table the display
+/// names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlashFault {
+    /// `archival_slash_log` at this height is not `(h, 0) … (h, n−1)`:
+    /// a row was already there, or `(h, seq)` was present at the append.
+    NotDense,
+    /// `archival_slash_applied` already holds this `(persona, shard, epoch)`.
+    AlreadyApplied {
+        /// The persona the key names.
+        persona: shekyl_types::PCanonicalId,
+        /// The shard the key names.
+        shard: shekyl_types::ShardId,
+        /// The epoch the key names.
+        epoch: shekyl_types::SettlementEpoch,
     },
 }
 
@@ -296,6 +389,11 @@ impl StoreInvariant {
             Self::PoolEntryUnpaired { .. } => 16,
             Self::PositionMapsNotBijective => 17,
             Self::LeafCountNotAdvanced { .. } => 18,
+            Self::BondRecordNotFresh => 19,
+            Self::BondRecordAbsent => 20,
+            Self::EpochCloseRewritten { .. } => 21,
+            Self::SlashLogNotDense { .. } => 22,
+            Self::AccruingNotSingular { .. } => 23,
             Self::ArchivalLengthsDisagree { .. } => 24,
         }
     }
@@ -398,6 +496,47 @@ impl core::fmt::Display for StoreInvariant {
                      tree, rebuild from the block corpus"
                 ),
             },
+            Self::BondRecordNotFresh => f.write_str(
+                "archival_bond already holds a record for the persona a JoinMarket is inserting; \
+                 a join was re-run past the validator",
+            ),
+            Self::BondRecordAbsent => f.write_str(
+                "an Update of archival_bond names a persona the table does not hold; the \
+                 replace was refused before any journal entry",
+            ),
+            Self::EpochCloseRewritten { epoch } => write!(
+                f,
+                "settlement epoch {epoch} already has a close row (archival_r_market / \
+                 archival_sigma_work / archival_budget); an epoch closes once"
+            ),
+            Self::SlashLogNotDense { height, observed } => match observed {
+                SlashFault::NotDense => write!(
+                    f,
+                    "archival_slash_log's rows at height {height} would not be (h, 0) … (h, n−1); \
+                     the scheduler wrote out of order"
+                ),
+                SlashFault::AlreadyApplied {
+                    persona,
+                    shard,
+                    epoch,
+                } => write!(
+                    f,
+                    "archival_slash_applied already holds ({persona}, {shard}, {epoch}) at height \
+                     {height}; a slash was applied twice"
+                ),
+            },
+            Self::AccruingNotSingular { observed } => match observed {
+                AccrualFault::StaleRow { epoch } => write!(
+                    f,
+                    "archival_budget_accruing holds a row for epoch {epoch}, which is not the \
+                     open epoch; a close did not delete its accumulator, rebuild from the block \
+                     corpus"
+                ),
+                AccrualFault::AbsentAtClose => f.write_str(
+                    "the epoch close found no archival_budget_accruing row to delete; the epoch \
+                     closed without having accrued, rebuild from the block corpus",
+                ),
+            },
             Self::ArchivalLengthsDisagree { height, rows, cell } => write!(
                 f,
                 "block {height}'s txs_archival_len rows sum to {rows} from its parent's \
@@ -438,6 +577,11 @@ impl core::error::Error for StoreInvariant {
             | Self::PoolEntryUnpaired { .. }
             | Self::PositionMapsNotBijective
             | Self::LeafCountNotAdvanced { .. }
+            | Self::BondRecordNotFresh
+            | Self::BondRecordAbsent
+            | Self::EpochCloseRewritten { .. }
+            | Self::SlashLogNotDense { .. }
+            | Self::AccruingNotSingular { .. }
             | Self::ArchivalLengthsDisagree { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }

@@ -87,7 +87,8 @@ use std::path::PathBuf;
 /// the key belongs here. The value is the one already shipped as the
 /// literal `shekyl_types::SHARD_TX_COUNT = 200`; the move gives it the same
 /// sourcing as the other Round-2 gate numerics (`settlement_epoch_blocks`,
-/// `archival_reorg_depth_blocks`, `challenge_resolution_blocks`) — one
+/// `archival_reorg_depth_blocks`, and at the time `challenge_resolution_blocks`,
+/// removed 2026-09-30 below) — one
 /// authority, read by `rust/shekyl-types/build.rs`. No behaviour changes;
 /// the digest moves because the binding grew.
 ///
@@ -148,7 +149,25 @@ use std::path::PathBuf;
 /// (it is PROVISIONAL and re-pinned before genesis by measurement), not a
 /// proof-system structural parameter. One authority, read by
 /// `rust/shekyl-types/build.rs` (`shekyl_types::SHARD_LENGTH`).
-const PINNED_DIGEST: &str = "7fa4b861ecaf24e560d1ce6594ccaaeaf6898beb4b1ca3f527706fdcb1403164";
+///
+/// **Re-pinned 2026-09-30 (DRS-E4 commit 5, `DRS_E4_ARCHIVAL_WRITER.md` §6
+/// row 5 ruling): a key was REMOVED — `challenge_resolution_blocks = 10000`.**
+/// The slash grace after a settlement epoch's last block is one settlement
+/// epoch: `shekyl_archival_retention::SLASH_GRACE_EPOCHS = 1`, a multiple of
+/// `settlement_epoch_blocks` rather than a block count of its own. The
+/// record always meant it that way (Gate 6: *"a full settlement epoch"*; the
+/// free-rider round: *"a full epoch of settling after close"*), and holding
+/// it as a second 10 000 made a levered schedule malformed — a 100-block
+/// epoch with a 10 000-block grace is a hundred-epoch grace, not a
+/// scaled-down regime. The chain question, answered: the deadline is still
+/// consensus (a node slashing at a different height is a different chain),
+/// and it is still sourced here — through `settlement_epoch_blocks`, which
+/// stays; the multiple is a ratified structural constant with no value of
+/// its own to source, so no key replaces the removed one. No generator read
+/// the key (no `build.rs`, no CMake); the Rust constant was hand-pinned. **No
+/// production behaviour changes** — `1 · 10 000 = 10 000`; the digest moves
+/// because the binding shrank.
+const PINNED_DIGEST: &str = "885f700d00009470568047e56be23e8f4810e54a4b989461a286775f1ad2234c";
 
 fn main() {
     let manifest_dir =

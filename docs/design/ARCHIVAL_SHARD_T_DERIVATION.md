@@ -74,7 +74,7 @@ Numerics this round must reason against, all read at source:
 | block target | `daa_target_seconds = 120` | `config/consensus_constants.json:10` |
 | `SEB` | `settlement_epoch_blocks = 10000` (~14 d) | `:23` |
 | `D_max` / pass-anchor depth | `archival_reorg_depth_blocks = 720` | `:29` |
-| `CRB` | `challenge_resolution_blocks = 10000` in the JSON; the **response** deadline is `CHALLENGE_RESPONSE_BLOCKS = SEB / 20 = 500` blocks | `:31`; [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md):1991, [`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md):1266 |
+| `CRB` | `challenge_resolution_blocks = 10000` in the JSON *(as read at the pin; the key was removed 2026-09-30 — the slash grace is `SLASH_GRACE_EPOCHS · SEB`, one epoch, the same 10 000 on this pin)*; the **response** deadline is `CHALLENGE_RESPONSE_BLOCKS = SEB / 20 = 500` blocks | `:31`; [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md):1991, [`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md):1266 |
 | `L` | `archival_attestation_anchor_lag = 4` blocks, of which **two blocks are the fetch-plus-retry span** | `config/consensus_constants.json:33`; [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1074-1090 |
 | `N` | in-flight fetch cap `8` (`shekyl_p_fetch::MAX_INFLIGHT`) | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):6, `:796` |
 | holdings cap | `MAX_HOLDINGS_SHARDS = 4096`, over `ShardSet(Vec<u64>)` | `rust/shekyl-types/src/archival/mod.rs:73`, `:205` |
@@ -1663,7 +1663,7 @@ the build:
   backs the RPC, its transaction slot carries the row's length. That is the engine
   swap's to build, named on FOLLOWUPS.
 - **Both stores' versions move, though no layout does.** LMDB `VERSION` 15 → 16 and
-  the redb store's `SCHEMA_VERSION` 19 → 20. Each store indexes transactions by txid
+  the redb store's `SCHEMA_VERSION` 20 → 21. Each store indexes transactions by txid
   and lists them by txid in every block, so a datadir written before the cutover
   names its spends by ids no current node computes. The version pin is what refuses
   it at open, as LMDB v14 did for the stale tree; without it the daemon serves bodies

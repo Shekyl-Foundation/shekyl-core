@@ -19,7 +19,10 @@
 //! ```text
 //!  1. belts        parent = recorded tip (SI-2); rule set in force (B3)
 //!  2. transactions miner tx then listed → tx_indices, txs_*, tx_outputs,
-//!                  output_txs, output_amounts, spent_keys (SI-3, SI-9, SI-1)
+//!                  output_txs, output_amounts, spent_keys (SI-3, SI-9, SI-1);
+//!                  then the delta's archival_bond post-images (SI-19/20)
+//!                  and archival_serve_credit bits (SI-15) —
+//!                  `archival_write.rs`, DRS-E4
 //!  3. tree         the verdict's drain → curve_tree_leaves, the position
 //!                  maps, curve_tree_layers, curve_tree_meta (SI-11/12/17);
 //!                  curve_tree_leaf_counts[h + 1] every connect (SI-18) —
@@ -27,18 +30,23 @@
 //!  4. root         curve_tree_roots[h + 1] = the verdict's root_after (SI-4)
 //!                  — every connect, grown or not (the C++ write at
 //!                  :663–:664 is outside the growth gate; SCW-19)
-//!  5. [E4 hook]    attestation witness
+//!  5. witness      archival_attestation_witness[h] = the verdict's sidecar,
+//!                  when non-empty — `archival_write.rs`
 //!  6. block        blocks[h], block_heights[hash], block_info[h] (SI-2)
 //!  7. rule set     hf_versions[h] = in_force (the CEN-B3 belt)
-//!  8. burn         only if h > 0 && burned > 0 (blockchain.cpp:6148):
-//!                  block_burn[h]; total_burned += burned (SI-8)
-//!  9. [E4 hook]    accrual row, slash, epoch close
+//!  8. burn         block_burn[h] only if h > 0 && burned > 0
+//!                  (blockchain.cpp:6148); total_burned += burned + Σ slash
+//!                  burns, one fold (SI-8; ARW-6) — `archival_write.rs`
+//!  9. archival     archival_budget_accruing[E] upserted, or removed at E's
+//!                  close (SI-23); slash log + applied + watermark (SI-22);
+//!                  r_market / sigma_work / budget at a close (SI-21) —
+//!                  `archival_write.rs`, DRS-E4
 //! 10. journal      undo_log[h] (SI-6)
 //! ```
 //!
-//! A `[hook]` phase has no body here; E4 lands bodies, not new phases (E3's
-//! body landed in phase 3). `pop` has no phase list — it is the reverse
-//! replay of step 10's row.
+//! Every phase has a body: E3's landed in phase 3 (`grow.rs`), E4's in
+//! phases 2, 5, 8 and 9 (`archival_write.rs`). `pop` has no phase list — it
+//! is the reverse replay of step 10's row.
 //!
 //! # What the connect stamps (§3.8)
 //!
@@ -85,14 +93,14 @@ use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::codec::{
     stored_timelock, BlockBody, BlockInfo, Canonical, Coded, CoverageGaps, OutKey, OutTx, Present,
-    PropertyCell, Raw, RuleSetInForce, TotalBurnedCell, TxIndex, TxOutputIndices,
-    TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
+    Raw, RuleSetInForce, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
+    TxPrunedSegment,
 };
 use crate::ids::{AmountIndex, OutputSlot, OutputStorageId, TxStorageId};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
-    BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
-    OUTPUT_TXS, SPENT_KEYS, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE,
+    BLOCKS, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS, OUTPUT_TXS,
+    SPENT_KEYS, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE,
     TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
 };
 
@@ -258,6 +266,11 @@ impl<'id> WriteBatch<'_, 'id> {
                 cell: "block_info.cumulative_archival_len",
             })
             .map_err(|row| self.poison().arm(row))?;
+        // The archival half (DRS-E4; `archival_write.rs`): the bond records
+        // and serve credits the block's transactions produced — written
+        // once, from the delta's per-persona post-images, after the loop
+        // that recorded the transactions themselves.
+        self.record_archival_records(height, &valid)?;
 
         // ---- 3. tree (DRS-E3; `grow.rs`) --------------------------------
         self.record_drain(height, &valid)?;
@@ -271,7 +284,12 @@ impl<'id> WriteBatch<'_, 'id> {
         self.open_insert_table(CURVE_TREE_ROOTS, StoreInvariant::RootRewritten)?
             .insert(height + 1, block.root_after().encoded().as_encoded())?;
 
-        // ---- 5. [E4 hook] attestation witness --------------------------
+        // ---- 5. attestation witness (DRS-E4; `archival_write.rs`) -------
+        // The verdict's sidecar, written unjudged until CEN-B4 lands in
+        // `validate`: the provenance widening above records B4 as a
+        // coverage gap for exactly as long as that is so.
+        self.record_attestation_witness(height, block.attestation_witness())?;
+
         // ---- 6. block --------------------------------------------------
         let hash = BlockHash::from_bytes(*block.hash().as_bytes());
         self.open_insert_table(BLOCKS, StoreInvariant::TipMismatch)?
@@ -333,29 +351,18 @@ impl<'id> WriteBatch<'_, 'id> {
         self.open_insert_table(HF_VERSIONS, StoreInvariant::TipMismatch)?
             .insert(height, RuleSetInForce(in_force.id()).encoded().as_encoded())?;
 
-        // ---- 8. burn ---------------------------------------------------
-        // The verdict's (CEN-F17 / G11: the fee split the validator priced
-        // over its own parent-state reads; E6 slice 7 wave B). Conditional
-        // as a whole, exactly as `blockchain.cpp:6148` (`new_height > 0 &&
-        // block_burn_amount > 0`): a zero-burn block and genesis write
-        // neither row nor a `total_burned` pre-image, so the declared write
-        // set and the undo row are the C++'s.
-        let burned = block.emission().burned();
-        if height > 0 && burned != AtomicUnits::ZERO {
-            self.open_insert_table(BLOCK_BURN, StoreInvariant::TipMismatch)?
-                .insert(height, burned.encoded().as_encoded())?;
-            let total = self
-                .get_property::<TotalBurnedCell>()?
-                .unwrap_or(AtomicUnits::ZERO)
-                .checked_add(burned)
-                .ok_or(StoreInvariant::FoldOverflow {
-                    cell: TotalBurnedCell::KEY,
-                })
-                .map_err(|row| self.poison().arm(row))?;
-            self.upsert_property::<TotalBurnedCell>(&total)?;
-        }
+        // ---- 8. burn (`archival_write.rs`) ------------------------------
+        // The emission burn is the verdict's (CEN-F17 / G11: the fee split
+        // the validator priced over its own parent-state reads; E6 slice 7
+        // wave B); the slash burns are the verdict's too (the delta's). The
+        // row is conditional exactly as `blockchain.cpp:6148` (`new_height
+        // > 0 && block_burn_amount > 0`); the cell takes both contributors
+        // through one fold (DRS-E4 `ARW-6`, SI-8).
+        self.record_burn(height, block.emission().burned(), block.archival())?;
 
-        // ---- 9. [E4 hook] accrual row, slash, epoch close ---------------
+        // ---- 9. accrual row, slash, epoch close (`archival_write.rs`) ---
+        self.record_archival_epoch(height, &valid)?;
+
         // ---- 10. journal -----------------------------------------------
         let journaled = recording.seal()?;
         // ---- 11. the retention prune (S-PRUNE) -------------------------
@@ -390,7 +397,9 @@ impl<'id> WriteBatch<'_, 'id> {
             .any(|input| matches!(input, Input::ArchivalRewardEmission { .. }));
 
         // Key images (SI-1). The archival vin arms — serve-credit bit,
-        // bond post, emission claim — are E4's hooks and write nothing here.
+        // bond post, emission claim — write nothing here: what they do to
+        // the archival state is the verdict's delta, written once after the
+        // transaction loop (`archival_write.rs`).
         let mut spent = self.open_insert_table(SPENT_KEYS, StoreInvariant::KeyImageNotFresh)?;
         for input in &tx.prefix.inputs {
             if let Input::ToKey { key_image, .. } = input {

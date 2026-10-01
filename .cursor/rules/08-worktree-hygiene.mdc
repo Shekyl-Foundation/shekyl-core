@@ -141,6 +141,19 @@ exactly the content the verification existed to remove.
    clone is the fix; the cold build it costs is the isolation being real.
    Check `echo ${CARGO_TARGET_DIR:-unset}` before trusting a clone result.
 
+   **A test count quoted in a commit message comes from a run with its own
+   log, or it isn't a count.** Observed 2026-10-01 (`wt-e4`, PR #921): the
+   workspace test lane was launched twice in one worktree, both runs
+   redirecting to one log file; the second overwrote the first mid-run,
+   `grep -c 'test result: ok'` over the interleaved file read **507**, and
+   that figure was written into a commit message where the truth was
+   **322**. Both runs had exited 0, so nothing was red; the count was
+   caught by noticing the two runs shared a log, not by doubting the
+   number. The same shape as *"re-running a broken instrument is not
+   verification"* (`SHEKYL_P2P_PROTOCOL.md`): a figure derived from a
+   corrupted instrument, in the artifact that outlives the run. One run,
+   one log, and the figure in the message is the fresh clone's.
+
    **A merge commit that resolved a real conflict is the commit that needs
    this most, not least.** A conflict resolution is new code that neither
    parent contains, so neither parent's green says anything about it — and

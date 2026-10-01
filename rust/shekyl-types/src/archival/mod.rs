@@ -248,6 +248,89 @@ pub const MAX_ATTESTATION_WITNESS_BYTES: usize = ATTESTATION_WITNESS_COUNT_LEN
             + ATTESTATION_WITNESS_ANCHOR_LEN
             + ATTESTATION_WITNESS_SIGNATURE_LEN);
 
+/// A block's attestation witness as it travels beside the block — the
+/// **sidecar** (`block_complete_entry::attestation_witness` on the C++
+/// sync wire; `shekyl-levin`'s `BlockCompleteEntry::attestation_witness`):
+/// canonical witness bytes the store persists unparsed and
+/// `shekyl-archival-retention::attestation_wire` parses.
+///
+/// Non-empty by construction and at most
+/// [`MAX_ATTESTATION_WITNESS_BYTES`]: an **empty attestation set is no
+/// witness** — `Option<AttestationWitness>::None` — never an empty one, so
+/// the daemon store's rule that an empty witness is no row rather than an
+/// empty row (`blockchain_db.cpp:669–671`) holds by the type, and a reader
+/// that finds a row knows it has bytes to parse. Judged by CEN-B4
+/// (`verify_block_attestation`); until that row lands in `validate` the
+/// bytes are carried and recorded under a coverage gap, not judged
+/// (DRS-E4 `DRS_E4_ARCHIVAL_WRITER.md` §3.2 phase 5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttestationWitness(Vec<u8>);
+
+/// Why bytes are not an [`AttestationWitness`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttestationWitnessError {
+    /// No bytes: an empty attestation set is the absence of a witness.
+    Empty,
+    /// More bytes than a canonical witness of
+    /// [`MAX_ATTESTATION_RECORDS`] records can hold.
+    TooLong {
+        /// The length offered.
+        len: usize,
+    },
+}
+
+impl core::fmt::Display for AttestationWitnessError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Empty => f.write_str("an empty attestation witness is no witness"),
+            Self::TooLong { len } => write!(
+                f,
+                "attestation witness of {len} bytes exceeds MAX_ATTESTATION_WITNESS_BYTES \
+                 ({MAX_ATTESTATION_WITNESS_BYTES})"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for AttestationWitnessError {}
+
+impl AttestationWitness {
+    /// Take `bytes` as a witness: non-empty and within the canonical bound.
+    ///
+    /// # Errors
+    ///
+    /// [`AttestationWitnessError::Empty`] for no bytes;
+    /// [`AttestationWitnessError::TooLong`] past the bound.
+    pub fn new(bytes: Vec<u8>) -> Result<Self, AttestationWitnessError> {
+        if bytes.is_empty() {
+            return Err(AttestationWitnessError::Empty);
+        }
+        if bytes.len() > MAX_ATTESTATION_WITNESS_BYTES {
+            return Err(AttestationWitnessError::TooLong { len: bytes.len() });
+        }
+        Ok(Self(bytes))
+    }
+
+    /// The sidecar as received: empty bytes are `None`, the rest are a
+    /// witness or [`AttestationWitnessError::TooLong`].
+    ///
+    /// # Errors
+    ///
+    /// [`AttestationWitnessError::TooLong`] past the bound.
+    pub fn from_sidecar(bytes: Vec<u8>) -> Result<Option<Self>, AttestationWitnessError> {
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        Self::new(bytes).map(Some)
+    }
+
+    /// The canonical bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ShardSet
 // ---------------------------------------------------------------------------

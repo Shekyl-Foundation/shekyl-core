@@ -3444,7 +3444,7 @@ worked byte sweep at the pinned cadence (`SETTLEMENT_EPOCH_BLOCKS = 10_000`,
 | `RETENTION_HORIZON_BLOCKS` | **420_000** blocks (~583 d retention floor) |
 | `ARCHIVAL_REORG_DEPTH_BLOCKS` | **720** blocks (~24 h processable reorg) |
 | `RELEASE_COOLDOWN_EPOCHS` | **2** |
-| `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** (one `SEB`; T-A16 margin) |
+| `SLASH_GRACE_EPOCHS` | **1** (one `SEB` by construction; T-A16 margin; *was `CHALLENGE_RESOLUTION_BLOCKS = 10_000` until 2026-09-30*) |
 | `prune_horizon_epochs` | **26** (`= W`) |
 
 **Verification:** `cargo run -p shekyl-staking-sim -- --timing-cluster` — all couplings §2 and
