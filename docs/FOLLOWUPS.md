@@ -161,9 +161,6 @@ Default. Lands before genesis if it should exist at launch.
 - **CEN-A7's per-block transaction-count bound has two undocumented values: `2^28` (`CRYPTONOTE_MAX_TX_PER_BLOCK`, `cryptonote_basic.h:914`, an element count) and `10^6` (`shekyl_wire::READ_LEN_CAP`, `block.rs:163`).** A knowingly-reproduced deviation in the DRS §7.6 three-field form — *reproduced:* two structural bounds on one field, neither derived; *why:* parity first, and no real block approaches either; *correct:* one constant with a derivation record (a count bound derived from the block-weight limit, or ruled unbounded-below-weight), typed as a count rather than a bare integer so a bytes/count misreading is a compile error. Owner: the wire-format port ([`BLOCK_TX_WIRE_FORMAT_PORT.md`](design/BLOCK_TX_WIRE_FORMAT_PORT.md)), where A6/A7's wire-side invariant register also lands. Falsifier: one constant with a derivation record, or the divergence ruled. Found at [`CHAIN_RULES_SLICE_1.md`](completed/CHAIN_RULES_SLICE_1.md) F2; migrates into the E2 repair-backlog query when minted.
   - Target: pre-genesis
 
-- **The `shekyl-fcmp` fuzz crate is built nowhere in CI.** `fuzz_curve_tree_leaf_hash.rs` compiles against `construct_leaf`'s three-argument `PL-D3` signature (target rewritten by `PL-D3`, verified 2026-09-14); the remaining gap is that the only gate is the file-presence inventory in `rust-audit-test.yml`, so a future stale target would go undetected. Build the fuzz crate in CI (`cargo fuzz build` or `--features fuzzing` check) so a stale target is red.
-  - Target: pre-genesis
-
 - **`ARCHIVAL_P_DERIVE_V1`'s regenerator is not citation-gated** — its manifest's `regeneration_command` predates rule 50's `SHEKYL_PINNED_REGEN_DECISION` requirement; arm it the way the gate-4 lifecycle regenerator is armed. Surfaced by the withdrawn V1 retirement ([`ARCHIVAL_ENDPOINT_UPDATE.md`](design/ARCHIVAL_ENDPOINT_UPDATE.md) §5, 2026-09-13).
   - Target: pre-genesis
 

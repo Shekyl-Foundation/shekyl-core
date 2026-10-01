@@ -238,6 +238,11 @@ jobs:
             exit 1
           fi
           echo "Fuzz harness inventory smoke gate passed (${#REQUIRED_TARGETS[@]} targets present)."
+      - name: compile the shekyl-fcmp fuzz harnesses
+        # The inventory above only checks the files exist. A harness whose
+        # signature drifted from the crate it fuzzes stays green until
+        # something compiles it. This workspace is separate from rust/.
+        run: cargo check --locked --manifest-path rust/shekyl-fcmp/fuzz/Cargo.toml
       - uses: Swatinem/rust-cache@v2
         with:
           # Workspace at rust/ with target dir at rust/target/.
