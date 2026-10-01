@@ -786,9 +786,14 @@ pub unsafe extern "C" fn shekyl_relay_zone_on_session_established(
     } else {
         PeerDirection::Outbound
     };
-    let h = &mut *handle;
-    h.driver.zone_mut().on_session_established(peer, direction);
-    h.publish();
+    // `publish` is `&self` and must not overlap the `driver`/`rng` borrow.
+    {
+        let RelayZoneHandle { driver, rng, .. } = &mut *handle;
+        driver
+            .zone_mut()
+            .on_session_established(peer, direction, rng);
+    }
+    (*handle).publish();
 }
 
 /// A peer disconnected.
@@ -1458,19 +1463,17 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
     write_plan(dispatch.plan, out_dest)
 }
 
-/// Merge the caller's current outbound set into the stem map mid-epoch.
+/// Merge this zone's established outbound sessions into the stem map.
 ///
-/// Ports `update_channels::run`. On a public zone this is the only thing that
-/// ever populates the map: `notify` is constructed before any peer connects, so
-/// without it every transaction would fluff. The daemon reaches it on three
-/// paths: a new outbound connection, a covert send that failed, and the forced
-/// refresh after a stem send failure. No callback: commands return nothing,
-/// and a covert channel the merge leaves unbound clears at its next due tick
-/// through [`shekyl_relay_zone_poll`]'s `on_unbind`.
+/// An outbound handshake already does this. What remains is the explicit
+/// refresh: a covert send that failed, and the retry after a stem send
+/// failure. A full map returns unchanged and draws nothing. No callback:
+/// commands return nothing, and a covert channel the merge leaves unbound
+/// clears at its next due tick through [`shekyl_relay_zone_poll`]'s
+/// `on_unbind`.
 ///
 /// # Safety
-/// `handle` must be live; `outbound` must point to `n * 16` readable bytes or be
-/// null with `n == 0`.
+/// `handle` must be live.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_update_stems(handle: *mut RelayZoneHandle) {
     if handle.is_null() {
@@ -1568,13 +1571,13 @@ unsafe fn read_blobs(blobs: *const ShekylRelayBlob, n: usize) -> Option<Vec<TxBl
 /// carrier queue across `dispatch` — while it invokes every callback. Calling
 /// any `shekyl_relay_zone_*` function on the same handle from inside one
 /// constructs a second `&mut` aliasing those live borrows, which is undefined
-/// behaviour. It applies to **all three**: buffer whatever
-/// the callback learns and act on it after this returns.
+/// behaviour. It applies to all three callbacks: buffer whatever the
+/// callback learns and act on it after this returns.
 ///
 /// Stated on both sides of the boundary deliberately: a Rust caller reads this
 /// section, a C caller reads `shekyl_relay_zone_poll` in `shekyl_ffi.h`, and
 /// neither doc system can reference the other — the FFI boundary is the
-/// uncrossable one that earns a second copy. Both must name all four
+/// uncrossable one that earns a second copy. Both must name all three
 /// callbacks. The C++ producer did exactly this, recording a stem observation
 /// from the resolution callback, until review caught it.
 #[no_mangle]
@@ -1634,8 +1637,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_fluff(
 /// a deadline-crossing rollover's do.
 ///
 /// # Safety
-/// `handle` must be live; `outbound` must point to `n * 16` readable bytes or be
-/// null with `n == 0`.
+/// `handle` must be live.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_force_epoch(handle: *mut RelayZoneHandle, now_ms: u64) {
     if handle.is_null() {

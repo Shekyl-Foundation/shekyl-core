@@ -536,13 +536,28 @@ impl Zone {
     /// A peer's Levin handshake finished (session established) and it may
     /// now carry relay traffic.
     ///
-    /// Mirrors `notify::on_session_established`. Idempotent: a repeated
-    /// call for a live connection keeps the existing batch rather than
-    /// discarding queued transactions.
-    pub fn on_session_established(&mut self, id: ConnectionId, direction: PeerDirection) {
+    /// Idempotent on the context: [`BTreeMap::entry`] keeps the first
+    /// direction and any queued batch. An **outbound** handshake also merges
+    /// the stem map, including a repeat: re-offering the survivor after a
+    /// close fills a hole, and a map that is already full returns unchanged
+    /// and draws nothing. An inbound handshake does not merge. Inbound peers
+    /// are not stem candidates, and a repeat of an outbound peer that arrives
+    /// as inbound must not consume `rng`.
+    ///
+    /// A close does not merge. A dead slot stays until the next outbound
+    /// handshake or an explicit [`Zone::update_stems`].
+    pub fn on_session_established<R: RelayRng + ?Sized>(
+        &mut self,
+        id: ConnectionId,
+        direction: PeerDirection,
+        rng: &mut R,
+    ) {
         self.contexts
             .entry(id)
             .or_insert_with(|| PeerFluff::new(direction));
+        if direction == PeerDirection::Outbound {
+            self.update_stems(rng);
+        }
     }
 
     /// Record that `txs` were stemmed to `successor`, keyed under `source`
@@ -699,15 +714,20 @@ impl Zone {
     /// Merge the currently live outbound connections into the stem map,
     /// **keeping** slots whose peer is still connected.
     ///
-    /// The mid-epoch refresh: the inherited `connection_map::update`, reached
-    /// through `update_channels::run`. Post-inversion (§20.3) the stem-set
-    /// change predicate has no consumer: a rebound channel picks up its new
-    /// peer at the next send, and a channel the merge leaves unbound clears at
-    /// its next due tick — both read from the map itself via [`Driver::poll`].
+    /// The mid-epoch refresh: the inherited `connection_map::update`. An
+    /// outbound handshake calls it. So does a stem-send failure. When every
+    /// slot is live and the map is at full width, the merge returns unchanged
+    /// and draws nothing: a bound slot is taken out of the candidate pool
+    /// rather than re-drawn, so the call cannot re-point an existing stem.
+    /// Post-inversion (§20.3) nothing else re-points either: a rebound channel
+    /// picks up its new peer at the next send, and a channel the merge leaves
+    /// unbound clears at its next due tick — both read from the map itself
+    /// via [`Driver::poll`].
     ///
     /// **Not what an epoch boundary does.** See [`Zone::rebuild_stems`]; the two
     /// are separate methods because collapsing them freezes the stem graph, and
-    /// nothing about the merged result looks wrong when it happens.
+    /// nothing about the merged result looks wrong when it happens. A close
+    /// does not call this. The dead slot stays until the next merge.
     pub fn update_stems<R: RelayRng + ?Sized>(&mut self, rng: &mut R) {
         // `StemMap::update` still returns `StemSetChange` for its own callers
         // and tests; the zone no longer surfaces it — nothing re-points on push.

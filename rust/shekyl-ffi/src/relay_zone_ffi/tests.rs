@@ -227,7 +227,6 @@ fn an_unbound_slots_due_ticks_cross_as_noise_unbind_at_its_index() {
         let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
         shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
         shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
-        shekyl_relay_zone_update_stems(h);
 
         // Ground truth from the owning structure: which peer holds slot 1.
         let zone = h.as_ref().expect("live zone").driver.zone();
@@ -321,7 +320,11 @@ fn live_stems_atomic_tracks_the_derived_value_after_every_mutation() {
         shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
         shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
         shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
-        assert_eq!(shekyl_relay_zone_live_stems(h), 0, "no stems drawn yet");
+        assert_eq!(
+            shekyl_relay_zone_live_stems(h),
+            2,
+            "an outbound handshake publishes the filled map"
+        );
 
         shekyl_relay_zone_force_epoch(h, 0);
         assert_eq!(
@@ -363,7 +366,6 @@ fn the_three_plan_outcomes_stay_distinct_across_the_boundary() {
         shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
         shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
         shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
-        shekyl_relay_zone_update_stems(h);
 
         // Drive to a fluff epoch. The role is drawn from OS entropy, so it
         // is reached by re-drawing rather than by construction; at q = 20%
@@ -398,7 +400,6 @@ fn an_unsynchronised_origin_is_withheld_across_the_boundary() {
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
         shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
-        shekyl_relay_zone_update_stems(h);
         let stems = shekyl_relay_zone_live_stems(h);
         let mut out = [0xABu8; 16];
         assert_eq!(
@@ -471,7 +472,6 @@ fn the_nil_uuid_means_locally_originated_which_is_what_cpp_actually_sends() {
         shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
         shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
         shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
-        shekyl_relay_zone_update_stems(h);
 
         let mut rolls = 0;
         while !h.as_ref().expect("live zone").driver.zone().is_fluffing() {
@@ -696,29 +696,31 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
 }
 
 #[test]
-fn plan_relay_with_refresh_fills_an_empty_map() {
-    // Production notify path: empty public zone, first plan is NoRoute, one
-    // refresh populates the map and re-plans — without C++ owning that loop.
+fn an_outbound_handshake_fills_the_map_across_the_boundary() {
+    // The handshake is the merge. An empty registry stays empty through
+    // with_refresh; plan_relay then stems.
     reset();
     unsafe {
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
+        let mut out = [0u8; 16];
+        assert_eq!(
+            shekyl_relay_zone_plan_relay_with_refresh(
+                h,
+                std::ptr::null(),
+                true,
+                true,
+                out.as_mut_ptr(),
+            ),
+            SHEKYL_RELAY_PLAN_NO_ROUTE,
+        );
+        assert_eq!(shekyl_relay_zone_live_stems(h), 0);
         shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
         shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
         shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
-        let mut out = [0u8; 16];
-        let plan = shekyl_relay_zone_plan_relay_with_refresh(
-            h,
-            std::ptr::null(),
-            true,
-            true,
-            out.as_mut_ptr(),
-        );
-        assert_eq!(
-            plan, SHEKYL_RELAY_PLAN_STEM,
-            "local origin stems after refresh"
-        );
-        assert_ne!(out, NIL, "successor written");
         assert_eq!(shekyl_relay_zone_live_stems(h), 2);
+        let plan = shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, true, out.as_mut_ptr());
+        assert_eq!(plan, SHEKYL_RELAY_PLAN_STEM, "local origin stems");
+        assert_ne!(out, NIL, "successor written");
         shekyl_relay_zone_free(h);
     }
 }
@@ -1383,7 +1385,6 @@ fn a_zone_without_the_carrier_refuses_to_enqueue() {
 unsafe fn drive_one_noise_send(h: *mut RelayZoneHandle) {
     shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
     shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
-    shekyl_relay_zone_update_stems(h);
 
     let before = REC.with(|r| r.borrow().noise.len());
     // Covert ticks average 5 s (3.333 s + U[0, 3.334 s]) and the epoch minimum
@@ -1692,7 +1693,6 @@ fn a_discarded_carrier_message_resolves_not_sent_across_the_boundary() {
 unsafe fn drive_one_wake(h: *mut RelayZoneHandle) {
     shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
     shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
-    shekyl_relay_zone_update_stems(h);
     let due = shekyl_relay_zone_next_wake(h);
     shekyl_relay_zone_poll(
         h,

@@ -831,14 +831,10 @@ namespace levin
            keeps a single poisoned verdict from taking the verdicts behind it. */
         try
         {
-          /* The connection set is gathered lazily: `poll` calls `on_outbound`
-             back only when this wake crosses an epoch boundary and the stem map
-             must be rebuilt. A fluff-release wake — the common case — never pays
-             for the locked connection scan and median-height sort the inherited
-             fluff path also skipped. The epoch deadline stays the zone's; this
-             side answers "give me the set", never "is it time", so no copy of the
-             deadline lives here. `sink` carries `core_` because `on_outbound`
-             needs it to filter by blockchain height. */
+          /* The stem set is the zone's established outbound sessions. An epoch
+             boundary rebuilds it there; a fluff release does not scan
+             connections or filter by recorded height. `sink` carries the
+             verdicts this wake will record after Rust releases the zone. */
           const std::uint64_t at = now_ms();
           relay_effects sink{zone_};
           sink.reserve_verdicts(*zone_);
@@ -1491,11 +1487,11 @@ namespace levin
        is no transport question left to ask here.
 
        The zone drew its first epoch when it was constructed, matching the
-       inherited `start_epoch` running once here. All that is left is to offer
-       it the connections that already exist and arm the timer on the deadline
-       it chose. */
+       inherited `start_epoch` running once here. Production builds the
+       notifier before any handshake, so there is no session to merge yet:
+       an outbound handshake does that. Arm the timer on the deadline the
+       zone chose. */
     boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
-      relay_update_stems(z);
       relay_wake::arm(z, core);
     });
 
@@ -1521,33 +1517,6 @@ namespace levin
     if (!noise)
       has_outgoing = zone_->p2p->get_out_connections_count();
     return {noise, CRYPTONOTE_NOISE_CHANNELS <= connection_count, has_outgoing};
-  }
-
-  void notify::new_out_connection()
-  {
-    /* GATE 2 of 3, deleted at §89.5 — and the predicate went with it rather
-       than being rewritten.
-
-       This read `!covert_enabled || CRYPTONOTE_NOISE_CHANNELS <= live_stems`,
-       so a new peer triggered a stem-map refresh only on a covert zone. That
-       under-maintained every other zone including the public one: the map
-       self-populates on `NoRoute` and on send failure, so what was lost was
-       the *proactive* refresh, not liveness.
-
-       The obvious repair was to swap the covert throttle for the zone's own
-       stem width. That would have left C++ deciding a relay question, which
-       §18 gives to Rust. Instead the decision moves down: `update_stems` is
-       already a no-op when nothing needs doing — `StemMap::update` returns
-       `Unchanged` when every slot is live at full width, and a bound slot is
-       taken out of the candidate pool rather than re-drawn, so an
-       unconditional call cannot re-point an existing stem. The throttle was
-       C++ guessing at a condition Rust already evaluates exactly. */
-    if (!zone_)
-      return;
-
-    boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
-      relay_update_stems(z);
-    });
   }
 
   void notify::on_session_established(const boost::uuids::uuid &id, bool is_income)

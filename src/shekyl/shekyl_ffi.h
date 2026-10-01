@@ -3404,7 +3404,7 @@ typedef bool (*ShekylRelayNoiseSendCb)(void* ctx, std::size_t channel, const std
 //! went to one peer.
 //!
 //! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll, which states
-//! the precondition once, for all four of its callbacks.
+//! the precondition once, for all three of its callbacks.
 typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, bool sent,
                                              const std::uint8_t* peer);
 
@@ -3678,9 +3678,10 @@ std::int32_t shekyl_relay_zone_plan_dispatch_with_refresh(
     RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
     bool node_synchronised, std::uint8_t* out_dest, std::uint8_t* out_carrier,
     std::uint32_t* out_channel);
-//! Merge the current outbound set into the stem map mid-epoch. Used for
-//! connection churn, noise-send recovery, and the forced refresh after a stem
-//! send failure. No callback — see plan_relay_with_refresh.
+//! Merge this zone's established outbound sessions into the stem map. An
+//! outbound handshake already does this. What remains is a covert send that
+//! failed, and the retry after a stem send failure. A full map draws nothing.
+//! No callback — see plan_relay_with_refresh.
 void shekyl_relay_zone_update_stems(RelayZoneHandle* handle);
 //! Accept a batch for fluffing to every peer but `source`. Returns how many
 //! peers took it — zero means nothing is connected to fluff to, or a blob span
@@ -3690,20 +3691,19 @@ std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t
                                           const ShekylRelayBlob* blobs, std::size_t n,
                                           const std::uint8_t* source);
 //! Run every step due at now_ms, delivering results through the callbacks. The
-//! outbound set is not passed in: `gather_outbound` is called back only when a
-//! wake crosses an epoch boundary and the stem map is rebuilt, so a fluff
-//! release never triggers the connection scan.
+//! stem map is this zone's established outbound sessions. An epoch boundary
+//! rebuilds it from that registry; a fluff release does not scan connections
+//! and does not filter by recorded height.
 //!
-//! \pre NO CALLBACK MAY RE-ENTER THIS HANDLE — all four of them, not only the
-//! newest. This function holds a mutable borrow of the zone for its whole
-//! body, and a second one of the carrier queue across the dispatch that
-//! delivers the effects. Calling any shekyl_relay_zone_*
-//! function on the same handle from inside on_fluff,
-//! on_noise or on_carrier_resolved constructs an aliasing mutable borrow,
-//! which is undefined behaviour. Buffer whatever the callback learns and
-//! apply it after poll returns — the C++ producer did exactly this, recording
-//! a stem observation from the resolution callback, until review caught it.
-//! No callback may throw across the boundary.
+//! \pre NO CALLBACK MAY RE-ENTER THIS HANDLE — all three of them. This
+//! function holds a mutable borrow of the zone for its whole body, and a
+//! second one of the carrier queue across the dispatch that delivers the
+//! effects. Calling any shekyl_relay_zone_* function on the same handle from
+//! inside on_fluff, on_noise or on_carrier_resolved constructs an aliasing
+//! mutable borrow, which is undefined behaviour. Buffer whatever the callback
+//! learns and apply it after poll returns — the C++ producer did exactly
+//! this, recording a stem observation from the resolution callback, until
+//! review caught it. No callback may throw across the boundary.
 void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
                             ShekylRelayFluffCb on_fluff,
                             ShekylRelayNoiseSendCb on_noise,

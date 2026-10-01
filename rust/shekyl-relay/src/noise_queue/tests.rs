@@ -308,9 +308,8 @@ fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64,
     for peer in &peers {
         driver
             .zone_mut()
-            .on_session_established(*peer, PeerDirection::Outbound);
+            .on_session_established(*peer, PeerDirection::Outbound, &mut rng);
     }
-    driver.zone_mut().update_stems(&mut rng);
 
     let mut out = Vec::new();
     let mut now = 0u64;
