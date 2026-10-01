@@ -315,15 +315,15 @@ wallet can ask rather than guess.
 > handy. The carrier is behind a development opt-in and defaults off, so
 > nothing pays this today; arming it is where the figure lands.
 >
-> **The burst is not the same number.** 16 KiB/s is the *sustained* rate; the
-> shortest interval the cadence draws puts a burst at
-> `carrier::PER_NODE_PEAK_BYTES_PER_SEC` = **24,579 B/s**, ~1.50×. Both
-> figures are **per node** — four channels aggregated. A *circuit* carries one
-> channel and wants `PER_CIRCUIT_PEAK_BYTES_PER_SEC` = **6,145 B/s**; sizing a
-> circuit against the node aggregate over-provisions it by 4×. Both peaks
-> **round up**: the exact rates are 24 578.46 and 6 144.61 B/s, and a "peak"
-> the emitter exceeds is wrong in the one direction a sizing number must not
-> be.
+> **The burst is not the same number.** 16 KiB/s is the *signed sustained
+> cap*, ruled when two encrypted networks (four channels) existed. The
+> emitter's live burst is `carrier::PER_NODE_PEAK_BYTES_PER_SEC` =
+> **12,290 B/s**: Tor, two channels, ~1.50× the 8,192 B/s that posture
+> sustains, and under the cap. A *circuit* carries one channel and wants
+> `PER_CIRCUIT_PEAK_BYTES_PER_SEC` = **6,145 B/s**; sizing a circuit against
+> the node peak over-provisions it by 2×. Both peaks **round up**: the exact
+> rates are 12 289.23 and 6 144.61 B/s, and a "peak" the emitter exceeds is
+> wrong in the one direction a sizing number must not be.
 
 **Absolute ceiling: 8 KiB/s per node**, exceeded only by a new ruling. That is
 rule 76's floor device on a consumer uplink, and ~4 % of the pessimistic
@@ -356,8 +356,8 @@ and now 4 KiB/s after the 2026-08-28 cadence change; a circuit carries ONE
 noise channel, so the per-channel figure is the one a circuit probe needs:
 `carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC` and
 `carrier::PER_CIRCUIT_PEAK_BYTES_PER_SEC`, which exist as named constants for
-exactly this reason. The node-level 16 KiB/s and 24,579 B/s are four channels
-aggregated and are NOT what this probe sizes. The burst figure is **6,145**,
+exactly this reason. The signed node cap is 16 KiB/s. The live node peak is
+12,290 B/s across Tor's two channels. Neither is what this probe sizes. The burst figure is **6,145**,
 not "6 KiB/s" — the exact rate is 6 144.61 B/s, so a 6,144 cap is 0.61 B/s
 under what one channel emits, and this section requires peaks to round up.)*; that is the one input
 to this axis we do not have.

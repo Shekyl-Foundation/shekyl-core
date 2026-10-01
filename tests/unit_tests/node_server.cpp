@@ -176,6 +176,15 @@ struct cryptonote_protocol_handler_test_seam
 
 typedef nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<test_core>> Server;
 
+/// The ban list is the process socket table. A `node_server` used to own
+/// its maps, so each test started empty. This drops what the previous
+/// test left, and drops again when the test returns.
+struct ban_isolate
+{
+  ban_isolate() { shekyl_bans_clear(); }
+  ~ban_isolate() { shekyl_bans_clear(); }
+};
+
 static bool is_blocked(Server &server, const epee::net_utils::network_address &address, time_t *t = NULL)
 {
   std::map<std::string, time_t> hosts = server.get_blocked_hosts();
@@ -272,6 +281,7 @@ TEST(node_server, sanitize_peerlist_drops_undialable_ipv4)
 
 TEST(ban, add)
 {
+  [[maybe_unused]] ban_isolate isolate;
   test_core pr_core;
   cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
   Server server(cprotocol);
@@ -357,6 +367,7 @@ TEST(ban, add)
 
 TEST(ban, limit)
 {
+  [[maybe_unused]] ban_isolate isolate;
   test_core pr_core;
   cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
   Server server(cprotocol);
@@ -444,6 +455,7 @@ namespace
 
 TEST(ban, subnet)
 {
+  [[maybe_unused]] ban_isolate isolate;
   // Formerly GTEST_SKIP'd as "intermittent allocator failure in constrained
   // environments; tracked for dedicated fix" — nothing in the tree tracked
   // it, and the stated cause was wrong on all three counts. The body called
@@ -496,6 +508,7 @@ TEST(ban, subnet)
 
 TEST(ban, file_entries_are_permanent)
 {
+  [[maybe_unused]] ban_isolate isolate;
   test_core pr_core;
   cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
   Server server(cprotocol);
@@ -531,7 +544,9 @@ TEST(node_server, operator_onion_is_advertised)
   const std::string onion =
     "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion";
   ASSERT_TRUE(server.init(offline_node_vm(node_dir, {
-    "--tx-proxy", "tor,127.0.0.1:9050,8",
+    // The count is omitted: an explicit count below the embargo floor
+  // refuses to start, and the count is not what this test observes.
+  "--tx-proxy", "tor,127.0.0.1:9050",
     "--anonymous-inbound", onion + ":18080,127.0.0.1:38123,8",
   })));
   const auto announced = server.get_announced_address(epee::net_utils::zone::tor);
@@ -541,6 +556,7 @@ TEST(node_server, operator_onion_is_advertised)
 
 TEST(ban, ignores_port)
 {
+  [[maybe_unused]] ban_isolate isolate;
   test_core pr_core;
   cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
   Server server(cprotocol);
@@ -557,6 +573,7 @@ TEST(ban, ignores_port)
 
 TEST(ban, file_banlist)
 {
+  [[maybe_unused]] ban_isolate isolate;
   test_core pr_core;
   cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
   Server server(cprotocol);

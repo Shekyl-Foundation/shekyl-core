@@ -16,7 +16,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use shekyl_capped_stream::{node_gate, read_capped, write_capped, StreamEnds};
+use shekyl_capped_stream::{
+    accept_error_is_transient, node_gate, read_capped, write_capped, StreamEnds,
+};
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_socks::{connect as socks_connect, Destination, Isolation, SocksError};
@@ -25,10 +27,8 @@ use shekyl_transport_layer::{
     check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, OpenSocket, Sockets,
 };
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
-
-use crate::Session;
 
 /// A measured span, in nanoseconds, for the D9 distributions. One line
 /// per connection at each anchor; nothing here changes what the
@@ -37,12 +37,16 @@ fn span_ns(elapsed: Duration) -> u64 {
     u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
 }
 
-/// A Tor channel handed to the seam. `onion` is the dialed host. Inbound
-/// has none: the zone is the address.
+/// A Tor channel. `onion` is the dialed host. Inbound has none: the zone
+/// is the address.
+///
+/// `open` is a clone of the reservation the connection task also holds.
+/// `gap` disarms the session deadline. Dropping it ends the wait with
+/// [`CloseKind::LocalClose`].
 pub struct Admitted {
     pub open: OpenSocket,
     pub bytes: shekyl_capped_stream::Session,
-    pub gap: Option<oneshot::Sender<()>>,
+    pub gap: oneshot::Sender<()>,
     pub onion: Option<(String, u16)>,
 }
 
@@ -51,10 +55,9 @@ pub struct Accept {
     pub sockets: Sockets,
     pub ceiling: InboundCeiling,
     pub gap_within: Tick,
-    pub sessions: mpsc::UnboundedSender<Session>,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
-    pub handoff: Option<mpsc::UnboundedSender<Admitted>>,
+    pub admitted: mpsc::UnboundedSender<Admitted>,
 }
 
 pub struct Dial {
@@ -63,10 +66,53 @@ pub struct Dial {
     pub sockets: Sockets,
     pub dial_within: Tick,
     pub gap_within: Tick,
-    pub sessions: mpsc::UnboundedSender<Session>,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
-    pub handoff: Option<mpsc::UnboundedSender<Admitted>>,
+    pub admitted: mpsc::UnboundedSender<Admitted>,
+}
+
+/// What an accept loop needs besides the socket it just took.
+///
+/// `ceiling` is read on every accept.
+pub struct Inbound<F> {
+    pub sockets: Sockets,
+    pub ceiling: F,
+    pub gap_within: Tick,
+    pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
+    pub send_queue_bytes: usize,
+    pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub backoff: Duration,
+}
+
+pub async fn accept_inbound<C, F>(listener: TcpListener, inbound: Inbound<F>, engine: Handle<C>)
+where
+    C: Clock + Clone + Send + Sync + 'static,
+    F: Fn() -> InboundCeiling + Send,
+{
+    loop {
+        let stream = match listener.accept().await {
+            Ok((stream, _)) => stream,
+            Err(error) if accept_error_is_transient(&error) => {
+                (inbound.on_cause)(CloseCause::new(CloseKind::IoError));
+                tokio::time::sleep(inbound.backoff).await;
+                continue;
+            }
+            Err(_) => {
+                (inbound.on_cause)(CloseCause::new(CloseKind::IoError));
+                break;
+            }
+        };
+        let accept = Accept {
+            stream,
+            sockets: inbound.sockets.clone(),
+            ceiling: (inbound.ceiling)(),
+            gap_within: inbound.gap_within,
+            on_cause: Arc::clone(&inbound.on_cause),
+            send_queue_bytes: inbound.send_queue_bytes,
+            admitted: inbound.admitted.clone(),
+        };
+        tokio::spawn(accept_one(accept, engine.clone()));
+    }
 }
 
 pub async fn accept_one<C>(accept: Accept, engine: Handle<C>)
@@ -78,10 +124,9 @@ where
         sockets,
         ceiling,
         gap_within,
-        sessions,
         on_cause,
         send_queue_bytes,
-        handoff,
+        admitted,
     } = accept;
     let reserved = match sockets.accept_tor(ceiling) {
         Ok(open) => open,
@@ -96,33 +141,17 @@ where
             return;
         }
     };
-    if let Some(tx) = handoff {
-        let cause = run(
-            stream,
-            &engine,
-            gap_within,
-            sessions,
-            send_queue_bytes,
-            Some(tx),
-            Some(reserved),
-            None,
-        )
-        .await;
-        on_cause(cause);
-    } else {
-        let cause = run(
-            stream,
-            &engine,
-            gap_within,
-            sessions,
-            send_queue_bytes,
-            None,
-            None,
-            None,
-        )
-        .await;
-        settle(reserved, cause, &on_cause);
-    }
+    let cause = run(
+        stream,
+        &engine,
+        gap_within,
+        send_queue_bytes,
+        &reserved,
+        &admitted,
+        None,
+    )
+    .await;
+    settle(reserved, cause, &on_cause);
 }
 
 pub async fn dial_one<C>(dial: Dial, engine: Handle<C>)
@@ -135,10 +164,9 @@ where
         sockets,
         dial_within,
         gap_within,
-        sessions,
         on_cause,
         send_queue_bytes,
-        handoff,
+        admitted,
     } = dial;
     let NetworkAddress::Tor { host, port } = &address else {
         on_cause(CloseCause::new(CloseKind::DialFailed));
@@ -233,33 +261,17 @@ where
             return;
         }
     };
-    if let Some(tx) = handoff {
-        let cause = run(
-            stream,
-            &engine,
-            gap_within,
-            sessions,
-            send_queue_bytes,
-            Some(tx),
-            Some(reserved),
-            Some((onion_host, port)),
-        )
-        .await;
-        on_cause(cause);
-    } else {
-        let cause = run(
-            stream,
-            &engine,
-            gap_within,
-            sessions,
-            send_queue_bytes,
-            None,
-            None,
-            None,
-        )
-        .await;
-        settle(reserved, cause, &on_cause);
-    }
+    let cause = run(
+        stream,
+        &engine,
+        gap_within,
+        send_queue_bytes,
+        &reserved,
+        &admitted,
+        Some((onion_host, port)),
+    )
+    .await;
+    settle(reserved, cause, &on_cause);
 }
 
 fn settle(open: OpenSocket, cause: CloseCause, on_cause: &Arc<dyn Fn(CloseCause) + Send + Sync>) {
@@ -269,21 +281,19 @@ fn settle(open: OpenSocket, cause: CloseCause, on_cause: &Arc<dyn Fn(CloseCause)
     on_cause(cause);
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run<C>(
     stream: TcpStream,
     engine: &Handle<C>,
     gap_within: Tick,
-    sessions: mpsc::UnboundedSender<Session>,
     send_queue_bytes: usize,
-    handoff: Option<mpsc::UnboundedSender<Admitted>>,
-    mut reserved: Option<OpenSocket>,
+    open: &OpenSocket,
+    admitted: &mpsc::UnboundedSender<Admitted>,
     onion: Option<(String, u16)>,
 ) -> CloseCause
 where
     C: Clock + Clone + Send + Sync + 'static,
 {
-    let conn = reserved.as_ref().map(|open| open.id().get()).unwrap_or(0);
+    let conn = open.id().get();
     let outbound = onion.is_some();
     let channel_at = Instant::now();
     let (mut read, mut write) = stream.into_split();
@@ -304,29 +314,16 @@ where
         overfull,
         inbound,
     } = StreamEnds::open(send_queue_bytes);
-    let (established_tx, mut established_rx) = oneshot::channel();
-    let session = Session::open(bytes, established_tx);
-    if let Some(tx) = handoff {
-        let Some(open) = reserved.take() else {
-            ignore(owner.deregister());
-            drop(hold);
-            return CloseCause::new(CloseKind::LocalClose);
-        };
-        let (gap, bytes) = session.into_seam();
-        if tx
-            .send(Admitted {
-                open,
-                bytes,
-                gap,
-                onion,
-            })
-            .is_err()
-        {
-            ignore(owner.deregister());
-            drop(hold);
-            return CloseCause::new(CloseKind::LocalClose);
-        }
-    } else if sessions.send(session).is_err() {
+    let (gap_tx, mut gap_rx) = oneshot::channel();
+    if admitted
+        .send(Admitted {
+            open: open.clone(),
+            bytes,
+            gap: gap_tx,
+            onion,
+        })
+        .is_err()
+    {
         ignore(owner.deregister());
         drop(hold);
         return CloseCause::new(CloseKind::LocalClose);
@@ -356,7 +353,7 @@ where
     loop {
         tokio::select! {
             biased;
-            result = &mut established_rx, if gap_open => {
+            result = &mut gap_rx, if gap_open => {
                 gap_open = false;
                 ignore(owner.deregister());
                 if result.is_err() {

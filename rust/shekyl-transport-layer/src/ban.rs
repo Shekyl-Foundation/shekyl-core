@@ -226,6 +226,15 @@ impl BanList {
         self.subnets.len() != before
     }
 
+    /// Drop every host and subnet ban.
+    ///
+    /// The process list outlives one `node_server`. A test process resets
+    /// it between servers; the daemon lifts entries one at a time.
+    pub fn clear(&mut self) {
+        self.hosts.clear();
+        self.subnets.clear();
+    }
+
     /// Whether `host` is banned at `now`. An entry whose deadline has
     /// arrived is removed by this lookup and is not banned.
     pub fn is_banned(&mut self, host: IpAddr, now: Tick) -> bool {
@@ -372,6 +381,20 @@ mod tests {
         assert!(Ipv4Subnet::new(Ipv4Addr::LOCALHOST, 33).is_none());
         let everything = Ipv4Subnet::new(Ipv4Addr::new(10, 0, 0, 1), 0).expect("prefix 0");
         assert!(everything.contains(Ipv4Addr::new(192, 168, 0, 1)));
+    }
+
+    #[test]
+    fn clear_drops_hosts_and_subnets() {
+        let mut bans = BanList::new();
+        let host = v4([10, 0, 0, 1]);
+        let subnet = Ipv4Subnet::new(Ipv4Addr::new(10, 1, 2, 9), 24).expect("prefix");
+        assert!(bans.ban_host_permanent(host));
+        assert!(bans.ban_subnet_permanent(subnet));
+        bans.clear();
+        assert!(!bans.is_banned(host, Tick::new(1)));
+        assert!(!bans.is_banned(v4([10, 1, 2, 5]), Tick::new(1)));
+        assert!(bans.hosts(Tick::new(1)).is_empty());
+        assert!(bans.subnets(Tick::new(1)).is_empty());
     }
 
     #[test]

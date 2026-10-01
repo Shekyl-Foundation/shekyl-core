@@ -714,6 +714,16 @@ pub unsafe extern "C" fn shekyl_bans_copy(
     }
 }
 
+/// Drop every ban. Open sockets stay open.
+///
+/// The list is process-global and outlives one `node_server`. The daemon
+/// lifts entries one at a time. A test process calls this so a fresh
+/// server is not born inside the previous server's bans.
+#[no_mangle]
+pub extern "C" fn shekyl_bans_clear() {
+    process_sockets().clear_bans();
+}
+
 fn ban_view(row: &ListedBan) -> Option<ShekylBanView> {
     let (kind, text, left) = match row {
         ListedBan::Host { host, left } => (BAN_KIND_HOST, host.to_string(), *left),

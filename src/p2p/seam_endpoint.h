@@ -58,7 +58,7 @@ namespace shekyl
       case SHEKYL_CLOSE_IO_ERROR: return "IoError";
       case SHEKYL_CLOSE_SEND_QUEUE_FULL: return "SendQueueFull";
       case SHEKYL_CLOSE_LOCAL_CLOSE: return "LocalClose";
-      default: return "none";
+      default: return kind == 0 ? "none" : "unknown";
     }
   }
 

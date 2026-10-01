@@ -933,7 +933,7 @@ fn render_peer(prefix: &str, peer: &shekyl_rpc_types::Peer, now: u64) -> String 
         time_interval(now.saturating_sub(peer.last_seen))
     };
     // `host` means three different things across the address arms, and only
-    // two of them leave a port to append. On the third — tor, Tor — `host` is
+    // two of them leave a port to append. On Tor, `host` is
     // the whole `network_address::str()`, which *already ends in a port*, and
     // `port` is 0; the C++ appended anyway and printed
     // `abcdefghijklmnop.onion:18080:0`. An inherited rendering, not a

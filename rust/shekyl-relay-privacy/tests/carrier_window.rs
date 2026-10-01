@@ -246,10 +246,10 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
 /// claim false: a third encrypted zone would have raised the real bandwidth
 /// while the constant, and therefore the assert, stayed put.
 ///
-/// What edit reds this: making `RelayZone::Public` encrypted (the case the
-/// predicate's own docs anticipate, "encrypting ordinary internet traffic
-/// would make Public eligible for noise") takes the count to 3, and the
-/// compile-time ceiling assert fires before this test even runs.
+/// What edit reds this: encrypting `RelayZone::Public`, or adding another
+/// encrypted network, moves the count off 1. The peak pin moves with it.
+/// The compile-time ceiling assert fires when the product exceeds the
+/// signed cap, which a third encrypted network does.
 #[test]
 fn the_ceiling_counts_encrypted_zones_and_states_its_peak() {
     let counted = RelayZone::ALL.iter().filter(|z| z.is_encrypted()).count();
@@ -259,19 +259,23 @@ fn the_ceiling_counts_encrypted_zones_and_states_its_peak() {
         "CEILING_ZONES must equal the number of encrypted zones, not a \
          transcription of today's answer"
     );
-    assert_eq!(counted, 2, "Tor — a change here is a ceiling change");
+    assert_eq!(counted, 1, "Tor — a change here is a ceiling change");
 
-    // The peak is an UPPER BOUND, so it rounds up. Asserted against the
-    // rounded-up scaling rather than a re-derivation of the same division,
-    // because the defect this replaces was a floor that published a "peak"
-    // the emitter exceeds by 0.46 B/s — small, and in the one direction a
-    // sizing figure must not err.
-    let exact_num =
-        u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC) * u64::from(carrier::MEAN_CADENCE_MS);
+    // The peak is an UPPER BOUND, so it rounds up. Asserted against today's
+    // sustained rate scaled by mean/min, rather than a re-derivation of the
+    // same division the constant performs, because the defect this replaces
+    // was a floor that published a "peak" the emitter exceeds — small, and
+    // in the one direction a sizing figure must not err. The signed cap is
+    // not that rate: Tor sustains half of it, and scaling the cap publishes
+    // a peak no emitter reaches.
+    let sustained = u64::from(carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC)
+        * u64::from(carrier::CEILING_ZONES)
+        * inherited::NOISE_CHANNELS as u64;
+    let exact_num = sustained * u64::from(carrier::MEAN_CADENCE_MS);
     assert_eq!(
         u64::from(carrier::PER_NODE_PEAK_BYTES_PER_SEC),
         exact_num.div_ceil(u64::from(carrier::NOISE_MIN_DELAY_MS)),
-        "the peak must be the sustained rate scaled by mean/min, rounded UP"
+        "the peak must be today's sustained rate scaled by mean/min, rounded UP"
     );
     assert!(
         u64::from(carrier::PER_NODE_PEAK_BYTES_PER_SEC) * u64::from(carrier::NOISE_MIN_DELAY_MS)
@@ -283,7 +287,7 @@ fn the_ceiling_counts_encrypted_zones_and_states_its_peak() {
     );
     assert_eq!(
         carrier::PER_NODE_PEAK_BYTES_PER_SEC,
-        24_579,
+        12_290,
         "the documented burst figure moved; COVER_TRAFFIC_RESTORATION.md sec \
          3.3 quotes it"
     );
@@ -303,13 +307,14 @@ fn the_ceiling_counts_encrypted_zones_and_states_its_peak() {
         4_096,
         "axis 2's rig spec quotes this as the sustained circuit load"
     );
+    // Tor sustains half the signed cap. The cap was ruled for two encrypted
+    // networks and was not lowered when one left, so equality would be the
+    // stale claim. The factor of two is that ruling, pinned here so neither
+    // a new network nor a re-ruled cap can pass in silence.
     assert_eq!(
-        u64::from(carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC)
-            * u64::from(carrier::CEILING_ZONES)
-            * inherited::NOISE_CHANNELS as u64,
+        sustained * 2,
         u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC),
-        "the per-circuit sustained rate times the channel count IS the \
-         per-node ceiling; if these drift apart one is on the wrong \
-         denominator"
+        "the signed cap is the two-network ruling. Tor sustains half of \
+         it. Adding an encrypted network, or re-ruling the cap, moves this."
     );
 }

@@ -4244,6 +4244,9 @@ int shekyl_ban_remaining_ns(const char* host, std::uint64_t* out);
 /// is smaller, the buffer receives the first `cap` and the return is -1.
 /// A null `out` with `cap` 0 only writes the count. -1 when `count` is null.
 int shekyl_bans_copy(shekyl_ban_view* out, std::size_t cap, std::size_t* count);
+/// Drop every ban. Open sockets stay open. The list is process-global and
+/// outlives one `node_server`; the daemon lifts entries one at a time.
+void shekyl_bans_clear(void);
 int shekyl_executor_record(const char* name, std::size_t lanes, std::size_t workers, std::uint64_t* out_handle);
 void shekyl_executor_release(std::uint64_t handle);
 
@@ -4289,6 +4292,8 @@ int shekyl_zone_listen_tor(
 int shekyl_zone_set_tor_proxy(
     const char* socks_host, std::uint16_t socks_port,
     const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling);
+/// Replace the ceiling later accepts use. Returns 0, or -1 when `ceiling`
+/// is null, not a known decision, or the seam is unbound.
 int shekyl_zone_set_ceiling(const shekyl_inbound_ceiling* ceiling);
 /// Operator inbound cap for one connector. Accept enforces it there and
 /// does not also apply the process ceiling. Returns 0, or -1 for an

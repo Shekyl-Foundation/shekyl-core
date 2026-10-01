@@ -43,6 +43,10 @@
   chain length and never lowers it. Relay eligibility is the session's
   normal state. An explicit `--in-peers` is enforced at accept, and a
   cap above the descriptor ceiling is refused at startup.
+- **API.** `CORE_RPC_VERSION` 3.37 → 3.38. `get_info` gains
+  `public_incoming_socket_count`, `public_outgoing_socket_count`,
+  `tor_incoming_socket_count`, and `tor_outgoing_socket_count`. `get_bans`
+  and `banned` gain `permanent`. `get_version` gains nothing.
 
 ### Crypto — vendored FCMP++ subtree resynced to `2485a176`
 

@@ -83,6 +83,7 @@ impl Dial for Loopback {
             open,
             session: ends.session,
             endpoint: endpoint.clone(),
+            gap: None,
         })
     }
 

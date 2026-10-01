@@ -19,6 +19,44 @@ use tokio::sync::mpsc;
 use crate::gate::LinkGate;
 use crate::queue::{ByteQueue, Overfull};
 
+/// Write every byte of `bytes`.
+///
+/// `Err(wrote)` is how many bytes the socket accepted before it failed
+/// or returned zero. A grant refund uses that count: the whole grant
+/// when nothing left, and only the unsent tail when a prefix did.
+pub async fn write_all_counted<W>(write: &mut W, bytes: &[u8]) -> Result<(), usize>
+where
+    W: AsyncWrite + Unpin,
+{
+    let mut wrote = 0usize;
+    while wrote < bytes.len() {
+        match write.write(&bytes[wrote..]).await {
+            Ok(0) | Err(_) => return Err(wrote),
+            Ok(n) => wrote += n,
+        }
+    }
+    Ok(())
+}
+
+/// Give back the part of `grant` the socket did not accept.
+///
+/// Nothing written returns the packet as well as the bytes. A prefix
+/// keeps the packet and returns only the tail.
+pub fn refund_unsent(
+    gate: &LinkGate,
+    direction: LinkDirection,
+    conn: u64,
+    grant: u64,
+    wrote: usize,
+) {
+    let wrote = u64::try_from(wrote).unwrap_or(grant);
+    if wrote == 0 {
+        gate.refund(direction, conn, grant, true);
+    } else if wrote < grant {
+        gate.refund(direction, conn, grant - wrote, false);
+    }
+}
+
 /// Bytes read from the socket in one turn.
 ///
 /// This is not a frame size. The connector's `decode` decides where a
@@ -116,9 +154,9 @@ where
                             shutdown(write).await;
                             return CloseCause::new(CloseKind::SendQueueFull);
                         }
-                        result = write.write_all(&wire[off..end]) => {
-                            if result.is_err() {
-                                gate.refund(LinkDirection::Up, conn, grant as u64, true);
+                        result = write_all_counted(write, &wire[off..end]) => {
+                            if let Err(wrote) = result {
+                                refund_unsent(gate, LinkDirection::Up, conn, grant as u64, wrote);
                                 outbound.release(n);
                                 shutdown(write).await;
                                 return CloseCause::new(CloseKind::IoError);

@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -59,47 +60,25 @@ namespace detail
     return slots;
   }
 
-  inline const char* close_kind_name(std::uint8_t kind)
-  {
-    switch (kind)
-    {
-      case SHEKYL_CLOSE_PREFIX_MISMATCH: return "PrefixMismatch";
-      case SHEKYL_CLOSE_TRANSPORT_HANDSHAKE_FAILED: return "TransportHandshakeFailed";
-      case SHEKYL_CLOSE_TRANSPORT_TIMEOUT: return "TransportTimeout";
-      case SHEKYL_CLOSE_ADMISSION_REFUSED: return "AdmissionRefused";
-      case SHEKYL_CLOSE_DIAL_FAILED: return "DialFailed";
-      case SHEKYL_CLOSE_PROXY_REFUSED: return "ProxyRefused";
-      case SHEKYL_CLOSE_LEVIN_HANDSHAKE_TIMEOUT: return "LevinHandshakeTimeout";
-      case SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED: return "LevinHandshakeRejected";
-      case SHEKYL_CLOSE_PEER_CLOSED: return "PeerClosed";
-      case SHEKYL_CLOSE_RECORD_REJECTED: return "RecordRejected";
-      case SHEKYL_CLOSE_SESSION_REFUSED: return "SessionRefused";
-      case SHEKYL_CLOSE_IO_ERROR: return "IoError";
-      case SHEKYL_CLOSE_SEND_QUEUE_FULL: return "SendQueueFull";
-      case SHEKYL_CLOSE_LOCAL_CLOSE: return "LocalClose";
-      default: return "unknown";
-    }
-  }
-
   inline void zone_post(void*, std::uint64_t id, std::uint32_t kind, const shekyl_seam_observed* observed,
       const std::uint8_t* bytes, std::size_t len, const shekyl_close_cause* cause)
   {
     if (kind == SHEKYL_SEAM_CLOSED)
     {
       if (cause != nullptr)
-        MINFO("seam close id " << id << " cause " << close_kind_name(cause->kind)
+        MINFO("seam close id " << id << " cause " << seam_close_name(cause->kind)
             << " reply " << cause->reply_code);
       else
         MINFO("seam close id " << id << " cause missing");
     }
+    // Hold the slot lock through enqueue. The binding pointer is raw, and
+    // unregister runs on another thread; enqueue only posts to the strand.
+    std::lock_guard<std::mutex> lock(slots().mu);
     zone_binding* target = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(slots().mu);
-      if (observed != nullptr && observed->connector == SHEKYL_CONNECTOR_TOR)
-        target = slots().tor;
-      else
-        target = slots().clearnet;
-    }
+    if (observed != nullptr && observed->connector == SHEKYL_CONNECTOR_TOR)
+      target = slots().tor;
+    else
+      target = slots().clearnet;
     if (target == nullptr)
       return;
     std::vector<std::uint8_t> copy;
@@ -186,14 +165,23 @@ namespace detail
     return false;
   }
 
-  inline std::uint16_t port_of(const std::string& text)
+  /// A canonical decimal in `0..=65535`. `"0"` is the ephemeral request.
+  /// Empty, trailing junk, and a leading zero are not a port.
+  inline std::optional<std::uint16_t> port_of(const std::string& text)
   {
-    if (text.empty())
-      return 0;
-    char* end = nullptr;
-    const unsigned long value = std::strtoul(text.c_str(), &end, 10);
-    if (end == text.c_str() || value > 65535ul)
-      return 0;
+    if (text.empty() || text.size() > 5)
+      return std::nullopt;
+    if (text.size() > 1 && text[0] == '0')
+      return std::nullopt;
+    unsigned long value = 0;
+    for (unsigned char ch : text)
+    {
+      if (ch < '0' || ch > '9')
+        return std::nullopt;
+      value = value * 10ul + static_cast<unsigned long>(ch - '0');
+      if (value > 65535ul)
+        return std::nullopt;
+    }
     return static_cast<std::uint16_t>(value);
   }
 }
@@ -307,6 +295,17 @@ public:
       bool use_ipv6, const boost::asio::ip::tcp::endpoint* proxy, bool encrypt, const std::uint8_t* network_id, const shekyl_inbound_ceiling& ceiling,
       const shekyl_zone_params& spans)
   {
+    const auto parsed_port = detail::port_of(port);
+    if (!parsed_port)
+      return false;
+    std::uint16_t parsed_v6 = 0;
+    if (use_ipv6)
+    {
+      const auto v6 = detail::port_of(port_v6);
+      if (!v6)
+        return false;
+      parsed_v6 = *v6;
+    }
     if (!detail::ensure_seam(ceiling))
       return false;
     detail::register_binding(SHEKYL_CONNECTOR_CLEARNET, this);
@@ -316,8 +315,8 @@ public:
     int bound_v6 = -1;
     const std::string proxy_host = proxy != nullptr ? proxy->address().to_string() : std::string();
     const int rc = shekyl_zone_listen_clearnet(
-        ip.c_str(), detail::port_of(port),
-        use_ipv6 ? ipv6.c_str() : nullptr, detail::port_of(port_v6), use_ipv6 ? 1 : 0,
+        ip.c_str(), *parsed_port,
+        use_ipv6 ? ipv6.c_str() : nullptr, parsed_v6, use_ipv6 ? 1 : 0,
         proxy != nullptr ? proxy_host.c_str() : nullptr, proxy != nullptr ? proxy->port() : 0,
         encrypt ? 1 : 0, &params, &ceiling, &bound, &bound_v6);
     if (rc != 0)
@@ -330,6 +329,14 @@ public:
   bool listen_tor(const boost::asio::ip::tcp::endpoint& socks, const std::string& extra_ip, const std::string& extra_port, bool have_extra,
       const std::uint8_t* network_id, const shekyl_inbound_ceiling& ceiling, const shekyl_zone_params& spans)
   {
+    std::uint16_t parsed_extra = 0;
+    if (have_extra)
+    {
+      const auto extra = detail::port_of(extra_port);
+      if (!extra)
+        return false;
+      parsed_extra = *extra;
+    }
     if (!detail::ensure_seam(ceiling))
       return false;
     detail::register_binding(SHEKYL_CONNECTOR_TOR, this);
@@ -339,7 +346,7 @@ public:
     int bound = -1;
     const int rc = shekyl_zone_listen_tor(
         socks_host.c_str(), socks.port(),
-        have_extra ? extra_ip.c_str() : nullptr, detail::port_of(extra_port),
+        have_extra ? extra_ip.c_str() : nullptr, parsed_extra,
         &params, &ceiling, &bound);
     if (rc != 0)
       return false;
@@ -372,7 +379,7 @@ public:
     const shekyl_seam_open_result result = shekyl_seam_open(&ffi, 0);
     if (result.id == 0)
     {
-      MINFO("seam open refused cause " << detail::close_kind_name(result.cause_kind)
+      MINFO("seam open refused cause " << seam_close_name(result.cause_kind)
           << " reply " << result.reply_code);
       return false;
     }

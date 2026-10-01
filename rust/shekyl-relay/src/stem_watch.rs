@@ -53,7 +53,7 @@
 //! Nothing on this side chooses which zones are observed; the caller does.
 //! Since §89.5 (GATE 3 of 3 deleted) Dandelion++ runs on **every** zone, not
 //! only clearnet -- `dandelionpp_notify` is no longer gated on
-//! `nzone == public_`. An Tor zone that stems produces stem observations
+//! `nzone == public_`. A Tor zone that stems produces stem observations
 //! like any other. Q12-U3's `/get_stem_tallies` row carries a `zone` label
 //! at the C++ merge so those observations are distinguishable.
 //!

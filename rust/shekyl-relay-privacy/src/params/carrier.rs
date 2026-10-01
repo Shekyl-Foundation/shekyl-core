@@ -67,9 +67,10 @@ use crate::zone::RelayZone;
 /// **Not sized to hold the largest admissible transaction.** That is the
 /// fragment cap's job ([`MAX_FRAGMENTS`]); conflating the two forces a
 /// ~98 KiB window, which breaches
-/// [`PER_NODE_CEILING_BYTES_PER_SEC`] — 78,436 B/s at the worst posture
-/// against 16,384. `tests/carrier_window.rs` asserts that breach as the
-/// negative control, rather than leaving it as an assertion in prose.
+/// [`PER_NODE_CEILING_BYTES_PER_SEC`] — 39,218 B/s with Tor's two channels
+/// against the 16,384 B/s cap. `tests/carrier_window.rs` asserts that
+/// breach as the negative control, rather than leaving it as an assertion
+/// in prose.
 ///
 /// *(This cited "the pre-registered 8 KiB/s ceiling" until 2026-08-28, when
 /// the denominator was ruled per node at 16 KiB/s. The conclusion is
@@ -195,20 +196,20 @@ const _: () = assert!(
      COVER_TRAFFIC_RESTORATION.md sec 3.3 is stated against exactly 5 000 ms"
 );
 
-/// Encrypted zones one node may carry at once — the **worst posture**.
+/// Encrypted networks one node may carry at once.
 ///
-/// Tor today. This is the multiplier that made the old per-zone
-/// figure misleading: `NOISE_CHANNELS` is documented as *"max outbound
-/// connections **per zone**"*, so a per-zone rate understates a dual-zone node
-/// by exactly this factor.
+/// Tor today, so the count is 1 and a per-network rate is the node rate.
+/// `NOISE_CHANNELS` is documented as *"max outbound connections **per
+/// zone**"*; the node rate is this count times that. The multiplier stays
+/// because the next encrypted network is a ceiling change, not because a
+/// second one is live.
 ///
 /// # Counted from the canonical zone set, not transcribed
 ///
-/// A literal `2` here would have been a hand-maintained copy of an answer that
-/// lives in [`RelayZone::is_encrypted`], and the ceiling's whole claim is that
-/// adding a third encrypted zone is a **build break**. A transcribed count
-/// makes that claim false — the new zone would raise the real bandwidth while
-/// this constant, and therefore the assert, stayed put. So it is derived from
+/// A literal `1` here would be a hand-maintained copy of an answer that
+/// lives in [`RelayZone::is_encrypted`]. A transcribed count makes the
+/// ceiling's claim false: the new network would raise the real bandwidth
+/// while this constant, and therefore the peak, stayed put. So it is derived from
 /// [`RelayZone::ALL`] through the same predicate the carrier uses to decide
 /// noise eligibility.
 ///
@@ -236,19 +237,20 @@ pub const CEILING_ZONES: u32 = {
 /// `COVER_TRAFFIC_RESTORATION.md` §3.3 recorded the two halves of the old
 /// comparison sitting on different denominators — an 8 KiB/s ceiling checked
 /// against a per-*zone* figure — and left the ruling owed. It is per node.
-/// A dual-zone node is the posture to state, because it is the one that
-/// exists, and a per-zone ceiling leaves the per-node total unbounded in the
-/// number of zones.
+/// Tor is the encrypted network that exists. The signed cap remains
+/// 16 KiB/s, the figure ruled when two encrypted networks existed; today's
+/// emitter sits at half of it. A per-network ceiling would leave the
+/// per-node total unbounded in the number of networks.
 ///
 /// # SUSTAINED, and the word is load-bearing
 ///
 /// The denominator is [`MEAN_CADENCE_MS`], so this bounds the **long-run mean**
-/// rate — which is the quantity a link is provisioned against, and the one
-/// "cover bandwidth per node" means. It is **not** an instantaneous cap. A
-/// jittered emitter's shortest interval is [`NOISE_MIN_DELAY_MS`], so a burst
-/// runs at [`PER_NODE_PEAK_BYTES_PER_SEC`] — `mean / min` ≈ 1.50015× this
-/// figure — and over any finite window the realised average sits either side
-/// of the mean rather than under it.
+/// the link is provisioned against: the signed cap, not the rate Tor emits
+/// today. It is **not** an instantaneous cap. A jittered emitter's shortest
+/// interval is [`NOISE_MIN_DELAY_MS`], so today's burst runs at
+/// [`PER_NODE_PEAK_BYTES_PER_SEC`] — `mean / min` ≈ 1.50015× the 8 192 B/s
+/// Tor sustains, and under this cap. Over any finite window the realised
+/// average sits either side of that mean rather than under it.
 ///
 /// That is inherent to a jittered cadence rather than a defect in the budget:
 /// removing the overshoot means removing the jitter, which is the metronome
@@ -257,19 +259,21 @@ pub const CEILING_ZONES: u32 = {
 /// being asked to do both jobs.
 ///
 /// **Both are NODE-level.** Sizing a single circuit needs
-/// [`PER_CIRCUIT_PEAK_BYTES_PER_SEC`], which is a quarter of the peak — a
-/// circuit carries one channel, not four.
+/// [`PER_CIRCUIT_PEAK_BYTES_PER_SEC`], which is half the node peak — a
+/// circuit carries one of Tor's two channels.
 ///
 /// # It is a statement of maximum cost, not a bound with slack
 ///
-/// The assert below holds at **exact equality** and that is deliberate:
-/// `20 480 B × 2 channels × 2 zones ÷ 5 s = 16 384 B/s`. §3.3 objected that a
-/// ceiling at 1.25× margin was "not constraining a future cadence proposal
-/// without constraining this one"; at 1.0× it does not pretend to. What it
-/// does instead is make any future change **say so** — shortening the cadence,
-/// widening the window, or adding a third encrypted zone is a build break
-/// here, and moving the ceiling becomes an explicit edit with a reason rather
-/// than a figure quietly going stale in a table.
+/// The 2026-08-28 ruling set this at exact equality with two encrypted
+/// networks: `20 480 B × 2 channels × 2 networks ÷ 5 s = 16 384 B/s`. One
+/// encrypted network remains, so the emitter sustains
+/// `20 480 × 2 × 1 ÷ 5 s = 8 192 B/s` and the assert below is `<=`. A second
+/// encrypted network meets the cap. A third exceeds it and fails the build.
+/// Shortening the cadence or widening the window does the same. The counted
+/// pin in `tests/carrier_window.rs` is what makes the second network a
+/// visible ceiling change rather than slack these constants absorb. Moving
+/// the cap is an explicit edit with a reason, not a figure going stale in
+/// a table.
 pub const PER_NODE_CEILING_BYTES_PER_SEC: u32 = 16 * 1024;
 
 // Cross-multiplied rather than divided, and the reason is the claim above.
@@ -293,9 +297,9 @@ const _: () = assert!(
 /// burst across every channel, as opposed to the sustained load the node is
 /// provisioned for.
 ///
-/// **NOT a circuit requirement.** A Tor or Tor circuit carries **one** of the
-/// four channels, so sizing a circuit against this figure over-provisions it
-/// by 4×. [`PER_CIRCUIT_PEAK_BYTES_PER_SEC`] is that number. The two were
+/// **NOT a circuit requirement.** A Tor circuit carries **one** of the two
+/// channels, so sizing a circuit against this figure over-provisions it
+/// by 2×. [`PER_CIRCUIT_PEAK_BYTES_PER_SEC`] is that number. The two were
 /// conflated here in an earlier draft, which is easy to do and expensive in
 /// the direction that wastes capacity.
 ///
@@ -304,7 +308,7 @@ const _: () = assert!(
 /// cadence it comes out of.
 ///
 /// **Rounded UP, because it is advertised as an upper bound.** The exact value
-/// is 24 578.46 B/s; flooring it to 24 578 publishes a "peak" the emitter
+/// is 12 289.23 B/s; flooring it to 12 289 publishes a "peak" the emitter
 /// actually exceeds, which is the one direction a sizing figure must not err
 /// in. `mean / min` is likewise **1.50015×** rather than exactly 1.5× — the
 /// asymmetric jitter that makes the mean exact makes this ratio inexact, and
@@ -341,9 +345,9 @@ pub const PER_NODE_PEAK_BYTES_PER_SEC: u32 = {
 /// Peak cover bandwidth **per circuit**, in bytes per second.
 ///
 /// One channel at the shortest interval the cadence can draw. This is the
-/// figure a Tor or Tor **circuit** probe sizes against, because a circuit
-/// carries one channel — [`PER_NODE_PEAK_BYTES_PER_SEC`] is four of these
-/// aggregated and over-provisions a single circuit by 4×.
+/// figure a Tor **circuit** probe sizes against, because a circuit
+/// carries one channel — [`PER_NODE_PEAK_BYTES_PER_SEC`] is two of these
+/// aggregated and over-provisions a single circuit by 2×.
 ///
 /// Exists as a constant rather than a division a reader performs, because the
 /// two were conflated in prose across two documents one review round apart:

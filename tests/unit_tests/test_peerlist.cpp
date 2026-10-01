@@ -348,9 +348,9 @@ TEST(peerlist_manager, white_does_not_survive_a_save_load_cycle)
 
 TEST(peerlist_storage, oversized_persisted_list_is_rejected)
 {
-  // PEERLIST_STORE_LIST_CEILING is derived from the runtime per-zone caps
-  // the peerlist manager trims to (derivation at the constant's
-  // definition); store() itself serializes whatever lists it is handed and
+  // PEERLIST_STORE_LIST_CEILING is the corruption bound: gray cap times
+  // the stored networks times headroom (derivation at the constant's
+  // definition). store() itself serializes whatever lists it is handed and
   // enforces nothing — which is what lets this test write an oversized
   // store. A list beyond the ceiling therefore cannot come from a normally
   // operating daemon, and open() must refuse it — falling back to the

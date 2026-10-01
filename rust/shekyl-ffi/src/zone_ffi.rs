@@ -16,20 +16,24 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use shekyl_capped_stream::{accept_error_is_transient, node_gate};
+use shekyl_capped_stream::{node_gate, Session};
 use shekyl_clearnet::{
-    accept_one as accept_clearnet, channel_choice, dial_one as dial_clearnet, zero_tally,
-    Admitted as ClearnetAdmitted, ClearnetOption, Dial as ClearnetDial,
+    accept_inbound as accept_clearnet_inbound, channel_choice, dial_one as dial_clearnet,
+    zero_tally, Admitted as ClearnetAdmitted, ClearnetOption, Dial as ClearnetDial,
+    Inbound as ClearnetInbound,
 };
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 use shekyl_seam::{
-    drive_inbound_async, Channel, CloseCause, CloseKind, ConnectorId, Dial, Direction, Endpoint,
-    Hub,
+    connector_from_index, drive_inbound_async, Channel, CloseCause, CloseKind, ConnectorId, Dial,
+    Direction, Endpoint, Hub, SocketId,
 };
 use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock, Tick};
-use shekyl_tor::{accept_one as accept_tor, dial_one as dial_tor, Admitted as TorAdmitted};
+use shekyl_tor::{
+    accept_inbound as accept_tor_inbound, dial_one as dial_tor, Admitted as TorAdmitted,
+    Inbound as TorInbound,
+};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
@@ -51,7 +55,9 @@ struct Host {
     engine_service: Mutex<Option<EngineService<MonotonicClock>>>,
     engine: Handle<MonotonicClock>,
     sockets: shekyl_seam::Sockets,
-    ceiling: Arc<Mutex<InboundCeiling>>,
+    /// The seam's hub. Accept reads its ceiling on every socket, and the
+    /// gap sender lives on the connection row there.
+    hub: Hub,
     clearnet: Mutex<Option<ClearnetReady>>,
     tor_proxy: Mutex<Option<SocketAddr>>,
     clearnet_tx: mpsc::UnboundedSender<ClearnetAdmitted>,
@@ -74,8 +80,6 @@ struct ClearnetReady {
 }
 
 static HOST: LazyLock<Mutex<Option<Arc<Host>>>> = LazyLock::new(|| Mutex::new(None));
-static GAPS: LazyLock<Mutex<std::collections::HashMap<u64, oneshot::Sender<()>>>> =
-    LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
 /// Spans and the runtime budget. The numbers are the caller's. The five
 /// deadlines are the measured spans; `workers` and `blocking` stay the
@@ -107,8 +111,9 @@ impl Dial for ZoneDial {
         ceiling: InboundCeiling,
         now: Tick,
     ) -> Result<Channel, CloseCause> {
-        let _ = now;
-        *self.host.ceiling.lock().expect("ceiling") = ceiling;
+        // Accept reads the hub's ceiling. An outbound dial does not admit
+        // against the inbound ceiling, so this copy is not stored.
+        let _ = (ceiling, now);
         match endpoint {
             Endpoint::Clearnet {
                 ip,
@@ -144,10 +149,8 @@ impl ZoneDial {
             IpAddr::V4(ip) => NetworkAddress::Ipv4 { ip, port },
             IpAddr::V6(ip) => NetworkAddress::Ipv6 { ip, port },
         };
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let (fail_tx, fail_rx) = oneshot::channel();
-        let fail_tx = Arc::new(Mutex::new(Some(fail_tx)));
-        let (sessions, _unread) = mpsc::unbounded_channel();
+        let (admitted_tx, admitted_rx) = mpsc::unbounded_channel();
+        let (on_cause, fail_rx) = failure_slot();
         let dial = ClearnetDial {
             address,
             proxy: ready.proxy,
@@ -160,34 +163,18 @@ impl ZoneDial {
             // deadline costs only the dialer. The owed distribution replaces it.
             proxied_dial_within: self.host.tor_dial_within,
             handshake_within: self.host.clearnet_handshake_within,
-            gap_within: self.host.clearnet_gap_within,
+            gap_within: Some(self.host.clearnet_gap_within),
             tally: ready.tally,
-            sessions,
-            on_cause: Arc::new(move |cause| {
-                if let Some(tx) = fail_tx.lock().expect("dial failure").take() {
-                    match tx.send(cause) {
-                        Ok(()) | Err(_) => {}
-                    }
-                }
-            }),
+            on_cause,
             send_queue_bytes: self.host.send_queue_bytes,
-            handoff: Some(tx),
+            admitted: admitted_tx,
         };
         let engine = self.host.engine.clone();
         self.host.handle.spawn(dial_clearnet(dial, engine));
-        let admitted = self.host.handle.block_on(async {
-            tokio::select! {
-                biased;
-                Some(admitted) = rx.recv() => Ok(admitted),
-                Ok(cause) = fail_rx => Err(cause),
-                else => Err(CloseCause::new(CloseKind::DialFailed)),
-            }
-        })?;
-        if let Some(gap) = admitted.gap {
-            GAPS.lock()
-                .expect("gaps")
-                .insert(admitted.open.id().get(), gap);
-        }
+        let admitted = self
+            .host
+            .handle
+            .block_on(recv_admitted(admitted_rx, fail_rx))?;
         Ok(Channel {
             open: admitted.open,
             session: admitted.session,
@@ -196,6 +183,7 @@ impl ZoneDial {
                 port,
                 direction: Direction::Outbound,
             },
+            gap: admitted.gap,
         })
     }
 
@@ -210,42 +198,24 @@ impl ZoneDial {
             host: host.to_owned(),
             port,
         };
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let (fail_tx, fail_rx) = oneshot::channel();
-        let fail_tx = Arc::new(Mutex::new(Some(fail_tx)));
-        let (sessions, _unread) = mpsc::unbounded_channel();
+        let (admitted_tx, admitted_rx) = mpsc::unbounded_channel();
+        let (on_cause, fail_rx) = failure_slot();
         let dial = shekyl_tor::Dial {
             address,
             proxy,
             sockets: self.host.sockets.clone(),
             dial_within: self.host.tor_dial_within,
             gap_within: self.host.tor_gap_within,
-            sessions,
-            on_cause: Arc::new(move |cause| {
-                if let Some(tx) = fail_tx.lock().expect("dial failure").take() {
-                    match tx.send(cause) {
-                        Ok(()) | Err(_) => {}
-                    }
-                }
-            }),
+            on_cause,
             send_queue_bytes: self.host.send_queue_bytes,
-            handoff: Some(tx),
+            admitted: admitted_tx,
         };
         let engine = self.host.engine.clone();
         self.host.handle.spawn(dial_tor(dial, engine));
-        let admitted = self.host.handle.block_on(async {
-            tokio::select! {
-                biased;
-                Some(admitted) = rx.recv() => Ok(admitted),
-                Ok(cause) = fail_rx => Err(cause),
-                else => Err(CloseCause::new(CloseKind::DialFailed)),
-            }
-        })?;
-        if let Some(gap) = admitted.gap {
-            GAPS.lock()
-                .expect("gaps")
-                .insert(admitted.open.id().get(), gap);
-        }
+        let admitted = self
+            .host
+            .handle
+            .block_on(recv_admitted(admitted_rx, fail_rx))?;
         Ok(Channel {
             open: admitted.open,
             session: admitted.bytes,
@@ -253,7 +223,39 @@ impl ZoneDial {
                 host: host.to_owned(),
                 port,
             },
+            gap: Some(admitted.gap),
         })
+    }
+}
+
+fn failure_slot() -> (
+    Arc<dyn Fn(CloseCause) + Send + Sync>,
+    oneshot::Receiver<CloseCause>,
+) {
+    let (tx, rx) = oneshot::channel();
+    let slot = Arc::new(Mutex::new(Some(tx)));
+    let on_cause = Arc::new(move |cause: CloseCause| {
+        if let Some(tx) = slot.lock().expect("dial failure").take() {
+            match tx.send(cause) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    });
+    (on_cause, rx)
+}
+
+async fn recv_admitted<T>(
+    mut rx: mpsc::UnboundedReceiver<T>,
+    fail: oneshot::Receiver<CloseCause>,
+) -> Result<T, CloseCause> {
+    tokio::pin!(fail);
+    tokio::select! {
+        biased;
+        admitted = rx.recv() => admitted.ok_or_else(|| CloseCause::new(CloseKind::DialFailed)),
+        result = &mut fail => match result {
+            Ok(cause) => Err(cause),
+            Err(_) => Err(CloseCause::new(CloseKind::DialFailed)),
+        },
     }
 }
 
@@ -265,6 +267,7 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
     let Some(hub) = hub() else {
         return Err(());
     };
+    hub.set_ceiling(ceiling);
     let network_id = read_id(params.network_id).ok_or(())?;
     let workers = NonZeroUsize::new(params.workers).ok_or(())?;
     let blocking = NonZeroUsize::new(params.blocking).ok_or(())?;
@@ -291,7 +294,7 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
         engine_service: Mutex::new(Some(engine)),
         engine: engine_handle,
         sockets: process_sockets(),
-        ceiling: Arc::new(Mutex::new(ceiling)),
+        hub: hub.clone(),
         clearnet: Mutex::new(None),
         tor_proxy: Mutex::new(None),
         clearnet_tx,
@@ -336,38 +339,36 @@ async fn pump(
 
 fn adopt_clearnet(hub: &Hub, admitted: ClearnetAdmitted) {
     let id = admitted.open.id();
-    if let Some(gap) = admitted.gap {
-        GAPS.lock().expect("gaps").insert(id.get(), gap);
-    }
     let endpoint = Endpoint::Clearnet {
         ip: admitted.ip,
         port: admitted.port,
         direction: Direction::Inbound,
     };
-    let Ok(attached) = hub.adopt(admitted.open, admitted.session, endpoint) else {
+    let Ok(attached) = hub.adopt(admitted.open, admitted.session, endpoint, admitted.gap) else {
         return;
     };
-    let hub = hub.clone();
-    // One task per connection, not one blocking thread: the pool has the
-    // caller's cap, and a thread held for the life of a connection made
-    // every connection past that cap deaf.
-    tokio::spawn(async move { drive_inbound_async(&hub, id, attached.session).await });
+    spawn_drive(hub, id, attached.session);
 }
 
 fn adopt_tor(hub: &Hub, admitted: TorAdmitted) {
     let id = admitted.open.id();
-    if let Some(gap) = admitted.gap {
-        GAPS.lock().expect("gaps").insert(id.get(), gap);
-    }
     let endpoint = match admitted.onion {
         Some((host, port)) => Endpoint::Tor { host, port },
         None => Endpoint::TorInbound,
     };
-    let Ok(attached) = hub.adopt(admitted.open, admitted.bytes, endpoint) else {
+    let Ok(attached) = hub.adopt(admitted.open, admitted.bytes, endpoint, Some(admitted.gap))
+    else {
         return;
     };
+    spawn_drive(hub, id, attached.session);
+}
+
+/// One task per connection, not one blocking thread: the pool has the
+/// caller's cap, and a thread held for the life of a connection made
+/// every connection past that cap deaf.
+fn spawn_drive(hub: &Hub, id: SocketId, session: Session) {
     let hub = hub.clone();
-    tokio::spawn(async move { drive_inbound_async(&hub, id, attached.session).await });
+    tokio::spawn(async move { drive_inbound_async(&hub, id, session).await });
 }
 
 fn read_id(ptr: *const u8) -> Option<[u8; 16]> {
@@ -447,47 +448,53 @@ pub unsafe extern "C" fn shekyl_zone_listen_clearnet(
         Err(_) => return -1,
     };
     let tally = Arc::new(zero_tally());
+    let ipv6_addr = if use_ipv6 != 0 {
+        let Some(text) = c_str(ipv6) else {
+            return -1;
+        };
+        let Ok(parsed) = text.parse::<IpAddr>() else {
+            return -1;
+        };
+        Some(SocketAddr::new(parsed, port_v6))
+    } else {
+        None
+    };
+    // Bind every requested socket before accepting or publishing readiness.
+    // A later failure drops the listeners, so no port stays up.
+    let bound = host.handle.block_on(async {
+        let v4 = TcpListener::bind(SocketAddr::new(ip, port)).await?;
+        let v6 = match ipv6_addr {
+            Some(addr) => Some(TcpListener::bind(addr).await?),
+            None => None,
+        };
+        std::io::Result::Ok((v4, v6))
+    });
+    let (bound_v4, bound_v6) = match bound {
+        Ok(pair) => pair,
+        Err(_) => return -1,
+    };
+    let Ok(local) = bound_v4.local_addr() else {
+        return -1;
+    };
+    let local_v6 = match &bound_v6 {
+        Some(listener) => match listener.local_addr() {
+            Ok(addr) => Some(addr.port()),
+            Err(_) => return -1,
+        },
+        None => None,
+    };
     *host.clearnet.lock().expect("clearnet") = Some(ClearnetReady {
         kind,
         tally: Arc::clone(&tally),
         proxy,
     });
-    let bound = match host
-        .handle
-        .block_on(TcpListener::bind(SocketAddr::new(ip, port)))
-    {
-        Ok(listener) => listener,
-        Err(_) => return -1,
-    };
-    let Ok(local) = bound.local_addr() else {
-        return -1;
-    };
-    spawn_clearnet(&host, bound, kind, Arc::clone(&tally));
+    spawn_clearnet(&host, bound_v4, kind, Arc::clone(&tally));
+    if let Some(listener) = bound_v6 {
+        spawn_clearnet(&host, listener, kind, tally);
+    }
     unsafe {
         *out_port = i32::from(local.port());
-        *out_port_v6 = -1;
-    }
-    if use_ipv6 != 0 {
-        let Some(text) = c_str(ipv6) else {
-            return -1;
-        };
-        let Ok(ip) = text.parse::<IpAddr>() else {
-            return -1;
-        };
-        let bound = match host
-            .handle
-            .block_on(TcpListener::bind(SocketAddr::new(ip, port_v6)))
-        {
-            Ok(listener) => listener,
-            Err(_) => return -1,
-        };
-        let Ok(local) = bound.local_addr() else {
-            return -1;
-        };
-        spawn_clearnet(&host, bound, kind, tally);
-        unsafe {
-            *out_port_v6 = i32::from(local.port());
-        }
+        *out_port_v6 = local_v6.map(i32::from).unwrap_or(-1);
     }
     0
 }
@@ -498,41 +505,23 @@ fn spawn_clearnet(
     kind: shekyl_clearnet::ChannelChoice,
     tally: Arc<shekyl_clearnet::HandshakeTally>,
 ) {
-    let sockets = host.sockets.clone();
-    let tx = host.clearnet_tx.clone();
+    let hub = host.hub.clone();
+    let inbound = ClearnetInbound {
+        sockets: host.sockets.clone(),
+        ceiling: move || hub.ceiling(),
+        kind,
+        network_id: host.network_id,
+        handshake_within: host.clearnet_handshake_within,
+        gap_within: Some(host.clearnet_gap_within),
+        tally,
+        on_cause: Arc::clone(&host.on_cause),
+        send_queue_bytes: host.send_queue_bytes,
+        admitted: host.clearnet_tx.clone(),
+        backoff: ACCEPT_BACKOFF,
+    };
     let engine = host.engine.clone();
-    let on_cause = Arc::clone(&host.on_cause);
-    let ceiling = Arc::clone(&host.ceiling);
-    let network_id = host.network_id;
-    let handshake_within = host.clearnet_handshake_within;
-    let gap_within = host.clearnet_gap_within;
-    let send_queue_bytes = host.send_queue_bytes;
     host.handle.spawn(async move {
-        loop {
-            let stream = match listener.accept().await {
-                Ok((stream, _)) => stream,
-                Err(error) if accept_error_is_transient(&error) => {
-                    tokio::time::sleep(ACCEPT_BACKOFF).await;
-                    continue;
-                }
-                Err(_) => break,
-            };
-            let accept = shekyl_clearnet::Accept {
-                stream,
-                sockets: sockets.clone(),
-                ceiling: *ceiling.lock().expect("ceiling"),
-                kind,
-                network_id,
-                handshake_within,
-                gap_within,
-                tally: Arc::clone(&tally),
-                sessions: mpsc::unbounded_channel().0,
-                on_cause: Arc::clone(&on_cause),
-                send_queue_bytes,
-                handoff: Some(tx.clone()),
-            };
-            tokio::spawn(accept_clearnet(accept, engine.clone()));
-        }
+        accept_clearnet_inbound(listener, inbound, engine).await;
     });
 }
 
@@ -606,35 +595,19 @@ pub unsafe extern "C" fn shekyl_zone_listen_tor(
 }
 
 fn spawn_tor(host: &Host, listener: TcpListener) {
-    let sockets = host.sockets.clone();
-    let tx = host.tor_tx.clone();
+    let hub = host.hub.clone();
+    let inbound = TorInbound {
+        sockets: host.sockets.clone(),
+        ceiling: move || hub.ceiling(),
+        gap_within: host.tor_gap_within,
+        on_cause: Arc::clone(&host.on_cause),
+        send_queue_bytes: host.send_queue_bytes,
+        admitted: host.tor_tx.clone(),
+        backoff: ACCEPT_BACKOFF,
+    };
     let engine = host.engine.clone();
-    let on_cause = Arc::clone(&host.on_cause);
-    let ceiling = Arc::clone(&host.ceiling);
-    let gap_within = host.tor_gap_within;
-    let send_queue_bytes = host.send_queue_bytes;
     host.handle.spawn(async move {
-        loop {
-            let stream = match listener.accept().await {
-                Ok((stream, _)) => stream,
-                Err(error) if accept_error_is_transient(&error) => {
-                    tokio::time::sleep(ACCEPT_BACKOFF).await;
-                    continue;
-                }
-                Err(_) => break,
-            };
-            let accept = shekyl_tor::Accept {
-                stream,
-                sockets: sockets.clone(),
-                ceiling: *ceiling.lock().expect("ceiling"),
-                gap_within,
-                sessions: mpsc::unbounded_channel().0,
-                on_cause: Arc::clone(&on_cause),
-                send_queue_bytes,
-                handoff: Some(tx.clone()),
-            };
-            tokio::spawn(accept_tor(accept, engine.clone()));
-        }
+        accept_tor_inbound(listener, inbound, engine).await;
     });
 }
 
@@ -676,6 +649,11 @@ pub unsafe extern "C" fn shekyl_zone_set_tor_proxy(
 }
 
 /// Replace the ceiling later accepts use.
+///
+/// Returns 0 when the seam hub holds the new ceiling. Returns -1 when
+/// `ceiling` is null or not a known decision, or when the seam is unbound:
+/// there is no hub to write, and a success would claim a ceiling that
+/// the next bind would replace with its own.
 #[no_mangle]
 pub extern "C" fn shekyl_zone_set_ceiling(ceiling: *const ShekylInboundCeiling) -> i32 {
     if ceiling.is_null() {
@@ -685,40 +663,38 @@ pub extern "C" fn shekyl_zone_set_ceiling(ceiling: *const ShekylInboundCeiling) 
         Some(ceiling) => ceiling,
         None => return -1,
     };
-    let slot = HOST.lock().expect("zone host");
-    let Some(host) = slot.as_ref() else {
-        return 0;
+    let Some(hub) = hub() else {
+        return -1;
     };
-    *host.ceiling.lock().expect("ceiling") = ceiling;
+    hub.set_ceiling(ceiling);
     0
 }
 
 /// The operator's inbound cap for one connector. Accept enforces it for
 /// that connector and does not also apply the process ceiling.
 ///
-/// `connector` is `SHEKYL_CONNECTOR_CLEARNET` or `SHEKYL_CONNECTOR_TOR`.
-/// Returns 0, or -1 when `connector` is not one of those.
+/// `connector` is the FFI connector word ([`connector_from_index`]).
+/// Returns 0, or -1 when `connector` is not one.
 #[no_mangle]
 pub extern "C" fn shekyl_zone_set_connector_cap(connector: u32, cap: u32) -> i32 {
-    let Some(connector) = (match connector {
-        0 => Some(ConnectorId::Clearnet),
-        1 => Some(ConnectorId::Tor),
-        _ => None,
-    }) else {
+    let Some(connector) = connector_from_index(connector) else {
         return -1;
     };
     process_sockets().set_zone_cap(connector, Some(cap));
     0
 }
 
-/// The handshake finished. Disarm a Tor gap when this id has one.
+/// The handshake finished. The row's gap sender fires, which disarms the
+/// connector's deadline. An unknown id has nothing to disarm.
 #[no_mangle]
 pub extern "C" fn shekyl_zone_session_established(id: u64) {
-    if let Some(gap) = GAPS.lock().expect("gaps").remove(&id) {
-        match gap.send(()) {
-            Ok(()) | Err(()) => {}
-        }
-    }
+    let Some(id) = SocketId::from_ffi(id) else {
+        return;
+    };
+    let Some(hub) = hub() else {
+        return;
+    };
+    hub.session_established(id);
 }
 
 const KIB: u64 = 1024;

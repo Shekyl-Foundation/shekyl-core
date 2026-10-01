@@ -47,19 +47,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use shekyl_capped_stream::accept_error_is_transient;
 use shekyl_net_address::NetworkAddress;
 use shekyl_p2p_transport::NetworkId;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::Pool;
 use shekyl_timing_engine::{Clock, Handle, Tick};
 use shekyl_transport_layer::{
-    stack_plan, AddedLayer, CloseCause, CloseKind, NetworkColumn, Sockets, StackPlan,
+    stack_plan, AddedLayer, CloseCause, NetworkColumn, Sockets, StackPlan,
 };
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
 mod drive;
+mod handshake;
 mod inode;
 mod seam;
 
@@ -68,7 +68,9 @@ pub use inode::socket_descriptors;
 pub use seam::ChannelChoice;
 pub use shekyl_capped_stream::Session;
 
-pub use drive::{accept_one, dial_one, zero_tally, Accept, Admitted, Dial};
+pub use drive::{
+    accept_inbound, accept_one, dial_one, zero_tally, Accept, Admitted, Dial, Inbound,
+};
 use seam::ChannelChoice as Choice;
 
 /// How many responder handshakes the blocking pool computed, and how many
@@ -173,7 +175,7 @@ pub struct Listener<C: Clock + Clone> {
     handshake_within: Tick,
     send_queue_bytes: usize,
     on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
-    sessions_tx: mpsc::UnboundedSender<Session>,
+    admitted_tx: mpsc::UnboundedSender<Admitted>,
 }
 
 impl<C: Clock + Clone> Listener<C> {
@@ -218,12 +220,11 @@ where
             dial_within: self.handshake_within,
             proxied_dial_within: self.handshake_within,
             handshake_within: self.handshake_within,
-            gap_within: self.handshake_within,
+            gap_within: None,
             tally: Arc::clone(&self.tally),
-            sessions: self.sessions_tx.clone(),
             on_cause: Arc::clone(&self.on_cause),
             send_queue_bytes: self.send_queue_bytes,
-            handoff: None,
+            admitted: self.admitted_tx.clone(),
         };
         let engine = self.engine.clone();
         self.handle.spawn(drive::dial_one(dial, engine));
@@ -247,7 +248,7 @@ pub fn listen<C>(
     pool: Pool,
     engine: &Handle<C>,
     sockets: Sockets,
-    config: Config,
+    config: &Config,
 ) -> std::io::Result<Listener<C>>
 where
     C: Clock + Clone + Send + Sync + 'static,
@@ -260,47 +261,42 @@ where
     let local = listener.local_addr()?;
     let tally = Arc::new(zero_tally());
     let (sessions_tx, sessions_rx) = mpsc::unbounded_channel();
-    let engine = engine.clone();
+    let (admitted_tx, mut admitted_rx) = mpsc::unbounded_channel::<Admitted>();
+    pool.spawn(async move {
+        while let Some(admitted) = admitted_rx.recv().await {
+            // The task holds the other clone and closes it when the socket ends.
+            drop(admitted.open);
+            drop(admitted.gap);
+            if sessions_tx.send(admitted.session).is_err() {
+                break;
+            }
+        }
+    });
     let engine_dial = engine.clone();
     let sockets_dial = sockets.clone();
-    let sessions_tx_dial = sessions_tx.clone();
+    let admitted_dial = admitted_tx.clone();
     let on_cause = Arc::clone(&config.on_cause);
     let network_id = config.network_id;
     let handshake_within = config.handshake_within;
     let send_queue_bytes = config.send_queue_bytes;
     let shutdown_timeout = config.shutdown_timeout;
-    let tally_loop = Arc::clone(&tally);
+    let ceiling = config.ceiling;
+    let inbound = Inbound {
+        sockets,
+        ceiling: move || ceiling,
+        kind,
+        network_id,
+        handshake_within,
+        gap_within: None,
+        tally: Arc::clone(&tally),
+        on_cause: Arc::clone(&config.on_cause),
+        send_queue_bytes,
+        admitted: admitted_tx,
+        backoff: config.accept_backoff,
+    };
+    let engine = engine.clone();
     pool.spawn(async move {
-        loop {
-            let stream = match listener.accept().await {
-                Ok((stream, _)) => stream,
-                Err(error) if accept_error_is_transient(&error) => {
-                    (config.on_cause)(CloseCause::new(CloseKind::IoError));
-                    tokio::time::sleep(config.accept_backoff).await;
-                    continue;
-                }
-                Err(_) => {
-                    (config.on_cause)(CloseCause::new(CloseKind::IoError));
-                    break;
-                }
-            };
-            let accept = Accept {
-                stream,
-                sockets: sockets.clone(),
-                ceiling: config.ceiling,
-                kind,
-                network_id: config.network_id,
-                handshake_within: config.handshake_within,
-                gap_within: config.handshake_within,
-                tally: Arc::clone(&tally_loop),
-                sessions: sessions_tx.clone(),
-                on_cause: Arc::clone(&config.on_cause),
-                send_queue_bytes: config.send_queue_bytes,
-                handoff: None,
-            };
-            let engine = engine.clone();
-            tokio::spawn(accept_one(accept, engine));
-        }
+        accept_inbound(listener, inbound, engine).await;
     });
     Ok(Listener {
         pool: Some(pool),
@@ -316,7 +312,7 @@ where
         handshake_within,
         send_queue_bytes,
         on_cause,
-        sessions_tx: sessions_tx_dial,
+        admitted_tx: admitted_dial,
     })
 }
 
@@ -341,9 +337,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     use super::inode::socket_descriptors;
-    use super::{
-        channel_choice, listen, ChannelChoice, ClearnetOption, Config, Listener,
-    };
+    use super::{channel_choice, listen, ChannelChoice, ClearnetOption, Config, Listener};
 
     const ID: [u8; 16] = [0x11; 16];
 
@@ -416,7 +410,7 @@ mod tests {
             pool,
             &engine.handle(),
             Sockets::new(),
-            config(option, within, ceiling, recorded.sink),
+            &config(option, within, ceiling, recorded.sink),
         )
         .expect("listen");
         (engine, listener, seen)
@@ -819,7 +813,7 @@ mod tests {
             pool,
             &engine.handle(),
             Sockets::new(),
-            config(
+            &config(
                 ClearnetOption::Off,
                 Tick::new(5_000_000_000),
                 InboundCeiling::Bounded(4),
