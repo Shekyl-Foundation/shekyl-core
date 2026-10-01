@@ -1131,7 +1131,14 @@ it legible. An origin-classified tally is **strictly more
 disclosive** than what is there now. The extension must inherit that gate, and
 any proposal to move it to the restricted listener answers §55 first.
 
-### Q12-D5a — RULED: once-at-origin. 2026-08-12
+### Q12-D5a — RULED 2026-08-12: once-at-origin — MOOT under Design A (2026-10-01)
+
+> **MOOT under Design A, 2026-10-01.** The one-way absorption this
+> section analysed is per-hop re-rolling composed with coherence that
+> holds a stem on its arrival zone. That coherence is reversed
+> (relay-lane acceptance, criterion 4): after hop 0 the draw is uniform
+> over every outbound edge. The 2026-08-12 ruling stays as the record
+> of the process it analysed. It is not the process that runs.
 
 **The redundancy is the defect.** Per-hop rolling and coherence are two
 mechanisms doing the same job. Coherence says *the zone is decided and held*; a

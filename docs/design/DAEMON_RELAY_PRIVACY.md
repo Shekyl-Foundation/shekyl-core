@@ -93,13 +93,11 @@ membership-proof successor untouched.
 
 ## Relay-lane acceptance — RULED 2026-10-01
 
-Ruled so LV-3 and the zone-enum pull request do not choose shapes this
-lane then has to undo. The C++ that is still in the tree is the
-counterexample. Items 2 and 3 of the post-#909 pull request (the stem
-registry, then the `:832` reduction and the `Including transaction`
-move) are the first two of these criteria that land. The rest stay
-with this lane. The zone-enum change and this lane agree on criterion
-4 before either of those two lands.
+Ruled so LV-3 and the zone-enum deletion do not choose shapes this
+lane then has to undo. UPDATE 2026-10-01: the ledger print, the stem
+registry, and the ingress reduction landed in #922. Criterion 4 is
+restated below for the deletion that follows. Criteria 5–7 stay with
+this lane.
 
 1. **One owner, one interface.** `shekyl-relay` already holds the
    epoch, the stem map, the fluff walk, and the embargo derivation.
@@ -127,27 +125,64 @@ with this lane. The zone-enum change and this lane agree on criterion
 
 3. **Stem candidates come from the session registry.** Outbound,
    uniform, without replacement, once per epoch (Dandelion++ §4.5).
-   The registry is `Zone::contexts` (`shekyl-relay` `zone/mod.rs`),
-   filled at session-established with direction. `get_out_connections`
-   (`levin_notify.cpp:194`) still snapshots the Levin registry and
-   keeps `state_normal`. That function goes. `get_out_connections_count`
-   does not: it answers whether a zone has an outbound peer
-   (`levin_notify.cpp:1610`) and trims the public-zone cap
-   (`net_node.inl:3305`). A falsifier of `rg get_out_connections` would
-   delete the count with the draw.
+   The registry is the relay's session map, filled at
+   session-established with direction. Landed in #922:
+   `get_out_connections(` is gone. `get_out_connections_count` stays:
+   it answers whether a connector has an outbound peer and trims the
+   public cap (`net_node.inl:3304`). A falsifier of
+   `rg get_out_connections` would delete the count with the draw.
 
-4. **One Dandelion++ instance. Network is an edge attribute.** The
-   anonymity graph is every outbound edge this node has. A policy such
-   as "a Tor-originated transaction stems only on Tor edges" is a
-   named rule on edge selection inside that one instance. It is not a
-   second relay engine that sees half the graph. `make_relay_zone`
-   (`levin_notify.cpp:311`) still builds one zone per network and sets
-   `SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY` for every non-public zone.
-   The zone-enum pull request and this lane agree on this criterion
-   before either lands. Deleting the four zone switches
-   (`cryptonote_protocol_handler.inl:433` and `:2519`,
-   `net_node.inl:2813`, `levin_notify.cpp:321`) does not by itself
-   make one instance.
+4. **One Dandelion++ instance. The network is a property of an edge.**
+   UPDATE 2026-10-01. It is read at three named points, and it is never
+   a property of the relay.
+
+   One relay. Its session map is every established session, each
+   carrying a network class beside its direction. One stem map covers
+   every outbound session. One epoch and one role are drawn. One fluff
+   reaches every session except the source.
+
+   - **Hop 0.** `AnonOrigination::{Any, AnonymityOnly}` sits on the
+     node. `AnonymityOnly` draws the first hop of a locally originated
+     transaction only from anonymity-class outbound edges and returns
+     no route rather than falling back to clearnet. After hop 0 the
+     draw is uniform and class-blind.
+   - **Embargo.** The stem watch records the class of the edge the
+     stem was forwarded on. The privacy crate takes that class as the
+     transit term: `ADOPTED_TRANSIT_ASSUMPTION_MS` (50) on clearnet,
+     `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (1 625) on anonymity. Per
+     transaction, not per relay.
+   - **Cover.** Noise stays an edge property. The schedule is keyed by
+     the session's link secrecy. A noise frame means something only on
+     an encrypted channel.
+
+   Stem selection, role, epoch, fluff, and ingress are class-blind.
+   `FluffReach` is deleted. The route decision drops arrival-coherence
+   and keeps origination plus broadcast-all. D7, outbound-fluff-only
+   on a non-public zone (`levin_notify.cpp:268`), is deleted. The
+   carrier development flag stays, default off, without a non-public
+   belt: link secrecy already refuses noise on cleartext
+   (`levin_notify.cpp:308` loses that arm).
+
+   `m_network_zones` is re-keyed by the transport connector identity.
+   Listener, advertised address, seeds, peerlist, and inbound cap stay
+   per connector. Collapsing those into one session table is LV-3. The
+   protocol handler does not branch on the connector: a session syncs,
+   relays blocks, answers support flags, and takes transactions the
+   same way whatever carried it. The switches that go are
+   `cryptonote_protocol_handler.inl:433` (no sync off clearnet),
+   `:2527` (blocks only to clearnet), `net_node.inl:2812` (support
+   flags only from clearnet), and the D7 arm above. A session
+   established before the relay exists is an ordering invariant and
+   fails loudly; the silent return at `levin_notify.cpp:1524` does not
+   survive.
+
+   `NETWORK_ID` is a handshake constant, not a relay field. Its home
+   is `shekyl-p2p-transport::prefix`: the production ids, and the wire
+   prefixes are `prefix_for` of those ids. C++ reads them through
+   `shekyl_network_id` and states no byte. The alpha.6 bytes stay in
+   this change. Rotating them is a testnet flag day — every unrotated
+   node fails the handshake — and that rotation is its own commit at
+   the release cut. The harness goldens keep their synthetic id.
 
 5. **Embargo is a deadline in the timing engine.** `OwnerClass::Relay`
    already exists (`shekyl-timing-engine`). The embargo is one
@@ -158,12 +193,12 @@ with this lane. The zone-enum change and this lane agree on criterion
 6. **Ingress gates are the relay's, decided in Rust.** After the
    `:832` reduction and LV-3, notify dispatch is Rust and the relay
    makes the ingress call with its own causes (`NotSynced`,
-   `UnknownSession`, `Duplicate`), logged after the decision. Today
-   `Including transaction` is logged at
-   `cryptonote_protocol_handler.inl:822` and
-   `m_state != state_normal` returns at `:832`, before the transaction
-   is accepted. `is_synchronized()` already answers whether the node
-   can validate it.
+   `UnknownSession`, `Duplicate`), logged after the decision. The
+   reduction landed in #922: only `state_before_handshake` is dropped,
+   and the log is a second pass that says the transaction was accepted
+   for admission. Moving that decision into Rust is what this
+   criterion still owes. `is_synchronized()` already answers whether
+   the node can validate it.
 
 7. **The measurements are inputs.** The hop distribution (transit,
    verify, and admission, split), the transactions-per-epoch bound
@@ -14006,7 +14041,13 @@ Recomputed at `q = 20` — the anon zone's value, verified unchanged:
 The decision stands. What changes is that it arrives with a bill §64 had not
 priced, because §63.2's margin was computed on the posture being retired.
 
-### 89.2 The embargo is per-zone — and F-7's precedent does not transfer
+### 89.2 The embargo is per-zone — SUPERSEDED 2026-10-01
+
+> **SUPERSEDED 2026-10-01.** The premise that a stem stays on the zone
+> it arrived on is reversed. One relay draws after hop 0 over every
+> outbound edge, and the embargo reads the class of the edge that stem
+> was forwarded on (relay-lane acceptance, criterion 4). The argument
+> below is the record of the ruling it replaced.
 
 > **Two amendments from §89.8, neither retracting the decision.** (a) The
 > well-definedness argument below leans on coherence keeping a stem on one
