@@ -238,11 +238,6 @@ jobs:
             exit 1
           fi
           echo "Fuzz harness inventory smoke gate passed (${#REQUIRED_TARGETS[@]} targets present)."
-      - name: compile the shekyl-fcmp fuzz harnesses
-        # The inventory above only checks the files exist. A harness whose
-        # signature drifted from the crate it fuzzes stays green until
-        # something compiles it. This workspace is separate from rust/.
-        run: cargo check --locked --manifest-path rust/shekyl-fcmp/fuzz/Cargo.toml
       - uses: Swatinem/rust-cache@v2
         with:
           # Workspace at rust/ with target dir at rust/target/.
@@ -419,6 +414,16 @@ jobs:
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp
+      - name: compile the shekyl-fcmp fuzz harnesses
+        # The inventory step only checks the files exist. This is a separate
+        # workspace, so `cargo check --workspace` does not see it
+        # (rust/Cargo.toml exclude: a stable workspace check must not resolve
+        # libfuzzer-sys). This job is the exception: the four harnesses are
+        # the API-drift gate for shekyl-fcmp, and libfuzzer-sys 0.4 typechecks
+        # on the pinned stable toolchain. The lockfile is the fuzz workspace's
+        # own. Placed after the cache so the registry restore is already warm.
+        # No CARGO_TARGET_DIR: this workspace must not share rust/target.
+        run: cargo check --locked --manifest-path rust/shekyl-fcmp/fuzz/Cargo.toml
       - name: cargo test (all workspace crates)
         working-directory: rust
         # `shekyl-randomx-differential` excluded from the workspace-wide
