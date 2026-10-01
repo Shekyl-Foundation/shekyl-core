@@ -3213,7 +3213,8 @@ namespace nodetool
     m_applied_ceiling_value = decision.ceiling;
     if (public_zone.m_inbound_cap_explicit)
     {
-      m_process_inbound_ceiling.reset();
+      // The operator cap bounds this connector. The derived decision still
+      // bounds the sum of every connector, in the Rust admission table.
       shekyl_seam_set_ceiling(&decision);
       shekyl_zone_set_ceiling(&decision);
       return true;
@@ -3231,7 +3232,6 @@ namespace nodetool
     {
       case SHEKYL_INBOUND_CEILING_BOUNDED:
         public_zone.m_config.m_net_config.max_in_connection_count = decision.ceiling;
-        m_process_inbound_ceiling = decision.ceiling;
         if (announce)
         {
           MGINFO("Inbound ceiling derived from the descriptor limit: " << decision.ceiling
@@ -3244,42 +3244,36 @@ namespace nodetool
         break;
       case SHEKYL_INBOUND_CEILING_NO_PER_PROCESS_LIMIT:
         public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
-        m_process_inbound_ceiling.reset();
         if (announce)
           MWARNING("This platform exposes no per-process descriptor limit, so the "
                    "inbound ceiling is unbounded. Set --in-peers explicitly to bound it.");
         break;
       case SHEKYL_INBOUND_CEILING_UNLIMITED:
         public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
-        m_process_inbound_ceiling.reset();
         if (announce)
           MWARNING("RLIMIT_NOFILE is unlimited, so no descriptor ceiling can be derived. "
                    "Set --in-peers explicitly to bound inbound.");
         break;
       case SHEKYL_INBOUND_CEILING_LIMIT_UNREADABLE:
         public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
-        m_process_inbound_ceiling.reset();
         if (announce)
           MWARNING("Cannot read this platform's descriptor limit, so the inbound ceiling "
                    "is unbounded. Set --in-peers explicitly to bound it.");
         break;
       case SHEKYL_INBOUND_CEILING_COUNT_UNREADABLE:
         public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
-        m_process_inbound_ceiling.reset();
         if (announce)
           MWARNING("Cannot count this process's open descriptors, so the inbound ceiling "
                    "is unbounded. Set --in-peers explicitly to bound it.");
         break;
       case SHEKYL_INBOUND_CEILING_EXCEEDS_COUNTER:
         public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
-        m_process_inbound_ceiling.reset();
         if (announce)
           MWARNING("Descriptor headroom does not fit the inbound counter, so a derived "
                    "ceiling would never fire. Set --in-peers explicitly to bound it.");
         break;
       default:
         public_zone.m_config.m_net_config.max_in_connection_count = 0;
-        m_process_inbound_ceiling = 0;
         if (announce)
           MERROR("Unrecognized inbound ceiling kind " << decision.kind << "; refusing inbound.");
         break;
@@ -3389,12 +3383,10 @@ namespace nodetool
             << m_applied_ceiling_value << "; leaving the previous cap.");
         return;
       }
-      // A runtime change is an explicit cap. The derived process backstop
-      // stops applying, matching an explicit `--in-peers` at startup.
-      // The mark follows the refusal: a cap the descriptors cannot hold
-      // leaves the previous cap, including a derived one.
+      // A runtime change is an explicit cap for this connector. The
+      // descriptor ceiling still bounds the sum. A cap the descriptors
+      // cannot hold was refused above, and the previous cap stays.
       public_zone->second.m_inbound_cap_explicit = true;
-      m_process_inbound_ceiling.reset();
       shekyl_zone_set_connector_cap(SHEKYL_CONNECTOR_CLEARNET, cap);
       const auto current = public_zone->second.m_net_server.get_config_object().get_in_connections_count();
       public_zone->second.m_config.m_net_config.max_in_connection_count = cap;

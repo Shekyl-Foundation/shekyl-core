@@ -209,8 +209,8 @@ struct Inner {
     occupancy: Occupancy,
     live: HashMap<SocketId, Live>,
     bans: BanList,
-    /// An operator cap for one connector. `None` leaves that connector on
-    /// the process ceiling.
+    /// An operator cap for one connector. `None` means that connector has
+    /// no cap of its own. The process ceiling applies either way.
     zone_caps: [Option<u32>; ConnectorId::COUNT],
 }
 
@@ -252,8 +252,9 @@ fn refuse_over_process_ceiling(inner: &Inner, ceiling: InboundCeiling) -> Result
     Ok(())
 }
 
-/// A zone with an operator cap is limited by that cap alone. A zone
-/// without one shares the process ceiling.
+/// Refuse when this connector's cap is full, and when the process
+/// ceiling is full. The cap does not replace the ceiling: each connector
+/// can be under its own number while the sum still exhausts the descriptors.
 fn refuse_inbound(
     inner: &Inner,
     connector: ConnectorId,
@@ -264,7 +265,6 @@ fn refuse_inbound(
         if held >= u64::from(cap) {
             return Err(admission_refused());
         }
-        return Ok(());
     }
     refuse_over_process_ceiling(inner, ceiling)
 }
@@ -289,8 +289,8 @@ impl Sockets {
         self.inner.lock().expect("socket table lock poisoned")
     }
 
-    /// The operator's inbound cap for one connector. `None` leaves that
-    /// connector on the process ceiling.
+    /// The operator's inbound cap for one connector. `None` clears it.
+    /// The process ceiling still bounds the sum.
     pub fn set_zone_cap(&self, connector: ConnectorId, cap: Option<u32>) {
         self.lock().zone_caps[connector.index()] = cap;
     }

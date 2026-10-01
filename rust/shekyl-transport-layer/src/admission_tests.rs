@@ -119,7 +119,7 @@ fn drop_releases_a_socket_that_failed_before_the_channel_existed() {
 }
 
 #[test]
-fn an_explicit_zone_cap_is_enforced_at_accept_and_skips_the_process_ceiling() {
+fn an_explicit_zone_cap_bounds_that_connector_when_the_process_ceiling_is_unbounded() {
     let sockets = Sockets::new();
     sockets.set_zone_cap(ConnectorId::Clearnet, Some(1));
     let ceiling = InboundCeiling::Unbounded(UnboundedReason::Unlimited);
@@ -131,6 +131,26 @@ fn an_explicit_zone_cap_is_enforced_at_accept_and_skips_the_process_ceiling() {
         .expect_err("over the cap");
     assert_eq!(refused(error), CloseKind::AdmissionRefused);
     let _tor = sockets.accept_tor(ceiling).expect("tor has no zone cap");
+}
+
+#[test]
+fn a_zone_cap_does_not_raise_the_process_ceiling() {
+    let sockets = Sockets::new();
+    sockets.set_zone_cap(ConnectorId::Clearnet, Some(2));
+    sockets.set_zone_cap(ConnectorId::Tor, Some(2));
+    let ceiling = InboundCeiling::Bounded(2);
+    let _tor = sockets.accept_tor(ceiling).expect("tor under both bounds");
+    let _clearnet = sockets
+        .accept_clearnet(ip([10, 0, 0, 1]), ceiling, now())
+        .expect("clearnet under both bounds");
+    let clearnet = sockets
+        .accept_clearnet(ip([10, 0, 0, 2]), ceiling, now())
+        .expect_err("the sum is the ceiling");
+    assert_eq!(refused(clearnet), CloseKind::AdmissionRefused);
+    let tor = sockets
+        .accept_tor(ceiling)
+        .expect_err("the sum is the ceiling");
+    assert_eq!(refused(tor), CloseKind::AdmissionRefused);
 }
 
 #[test]

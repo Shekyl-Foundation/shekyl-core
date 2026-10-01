@@ -761,10 +761,6 @@ namespace nodetool
     //! An inbound count is unreadable without the window it was observed over:
     //! zero inbound after 40 seconds says nothing, zero after six hours does.
     std::chrono::steady_clock::time_point m_started_at;
-    //! Set when public inbound was derived. Admission then refuses once the
-    //! live inbound count across every zone reaches it. Empty when the
-    //! operator set `--in-peers`: that cap is the zone cap.
-    std::optional<std::uint32_t> m_process_inbound_ceiling;
     //! What the last `apply_inbound_ceiling` reserved beyond p2p's own
     //! sockets (the RPC connection budget). Kept so a re-derive triggered by
     //! a p2p-side change does not have to rediscover it.

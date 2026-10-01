@@ -671,7 +671,7 @@ pub extern "C" fn shekyl_zone_set_ceiling(ceiling: *const ShekylInboundCeiling) 
 }
 
 /// The operator's inbound cap for one connector. Accept enforces it for
-/// that connector and does not also apply the process ceiling.
+/// that connector and still enforces the process ceiling on the sum.
 ///
 /// `connector` is the FFI connector word ([`connector_from_index`]).
 /// Returns 0, or -1 when `connector` is not one.
