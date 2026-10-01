@@ -57,10 +57,11 @@
 //!    - [`fetch_block_with_retry`] fetches the block;
 //!    - reorg-detection compares the daemon's
 //!      `block.header.previous` against `snapshot.block_hash_at`;
-//!      on mismatch [`find_fork_point`] walks back to the fork
-//!      and the per-event accumulators rewind to the fork height;
-//!      [`RefreshDiagnostic::ReorgObserved`] emits with the
-//!      bucketed `(fork_height, depth)` payload;
+//!      on mismatch [`find_fork_point`] walks back to the fork.
+//!      A fork inside finality rewinds the accumulators and emits
+//!      [`RefreshDiagnostic::ReorgObserved`]; a walk that passes
+//!      finality returns [`LocalRefreshError::PastFinality`] and
+//!      emits no rewind;
 //!    - producer-side per-tx excessive-outputs pre-pass: every
 //!      transaction whose `outputs.len() >
 //!      shekyl_scanner::MAX_OUTPUTS` emits
@@ -138,17 +139,16 @@
 //! [`ScanOutcome::Cancelled`] without exposing partial state;
 //! the producer translates to [`LocalRefreshError::Cancelled`].
 //!
-//! # Why a unit-variant error
+//! # Why the producer error carries no daemon string
 //!
-//! [`LocalRefreshError`] is unit-variant-only per the §2.3 +
-//! §5.4.7 R6 two-channel reframe binding pinned at
-//! [`RefreshEngine::Error`](super::traits::refresh::RefreshEngine::Error)'s
-//! rustdoc. Per-event detail flows through the
-//! [`DiagnosticSink`] channel; the terminal error carries only
-//! the discriminant. This forecloses attacker-controlled
-//! `String` payloads from flowing through the error type into
-//! orchestrator-side state (the §5.4.7 R6 memory-amplifier
-//! closure).
+//! [`LocalRefreshError`] carries no attacker-controlled `String`
+//! (§2.3 + §5.4.7 R6, pinned on
+//! [`RefreshEngine::Error`](super::traits::refresh::RefreshEngine::Error)).
+//! Per-event detail flows through the [`DiagnosticSink`] channel.
+//! [`LocalRefreshError::PastFinality`] is the exception with fields,
+//! and they are a [`FinalityStop`](super::error::FinalityStop): two
+//! block-counts and a closed breach. The remedy is a function of that
+//! span, and a daemon payload cannot land in it.
 //!
 //! [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
 //! [`Scanner`]: shekyl_scanner::Scanner
@@ -384,10 +384,12 @@ impl LocalRefresh {
     }
 }
 
-// The producer's error vocabulary (unit-variant-only; §5.4.7 R6) and the
-// bounded `RpcError` classification for the diagnostic stream.
+// The producer's error vocabulary (§5.4.7 R6: no attacker-controlled
+// string; `PastFinality` carries the measured stop) and the bounded
+// `RpcError` classification for the diagnostic stream.
 #[path = "local_refresh_error.rs"]
 mod producer_error;
+use super::reorg_finality::ForkCursor;
 use producer_error::classify_rpc_error;
 pub(crate) use producer_error::LocalRefreshError;
 
@@ -704,28 +706,15 @@ impl RefreshEngine for LocalRefresh {
                                 "LocalRefresh: chain reorg detected at parent of {h}, walking fork point",
                             );
 
-                            // Anchor the fork-walk at the persisted-window
-                            // top (`synced_height`), not `h - 1`. An
-                            // intra-attempt straddle's fork can sit *above*
-                            // the window, where `find_fork_point` (which
-                            // walks only the window) would return
-                            // `from_height + 1` immediately and splice
-                            // *around* the fork instead of behind it.
-                            // Anchoring at `synced_height` makes the
-                            // conservative answer the attempt boundary:
-                            // refetch the attempt range rather than keep
-                            // possibly-stale intra-attempt blocks. The
-                            // anchor is unconditionally `synced_height` (the
-                            // window top), never `h - 1`, and this holds for
-                            // *every* reorg this attempt, not only the first:
-                            // the rewind target is where the current chain
-                            // diverges from the persisted window — a function
-                            // of window-vs-daemon alone, independent of the
-                            // detection height `h` — and `find_fork_point`
-                            // measures exactly that. It follows that every
-                            // `fork_height <= synced_height + 1`, which is
-                            // what makes the clear-and-re-scan below sound
-                            // across repeated detection.
+                            // Anchor at `synced_height`, not `h - 1`. The fork
+                            // is where the daemon diverges from the persisted
+                            // window, independent of the detection height, so
+                            // every successful `fork_height` is
+                            // `<= synced_height + 1` and the clear-and-rescan
+                            // below stays sound on a later, shallower reorg.
+                            // A walk that cannot confirm a fork inside
+                            // finality returns `PastFinality` and emits no
+                            // rewind.
                             let fork_height = find_fork_point(
                                 daemon,
                                 &snapshot,
@@ -1016,19 +1005,12 @@ const fn scanner_error_to_malformed_kind(_err: &ScanError) -> MalformedKind {
     MalformedKind::InvalidBlockStructure
 }
 
-/// Walk backwards from `from_height` to find the highest height
-/// at which the daemon's reported block hash matches the
-/// wallet's snapshot. Returns `(matching_height + 1)` so the
-/// caller can use it directly as the fork-rewind point.
+/// Walk backwards from `from_height` until a stored hash matches the
+/// daemon, or [`ForkCursor`] refuses the walk.
 ///
-/// Stops at height `1` (genesis) if no match is found in the
-/// window. Honours cancellation between fetch attempts.
-///
-/// The `emit_state` / `diagnostics` parameters thread through to
-/// [`fetch_block_with_retry`]'s per-attempt `RpcError`
-/// classification so producer-side `DaemonProtocolError` events
-/// emit under the per-block ceiling + F13-S latch discipline
-/// during reorg-walk traversal.
+/// A match returns the first divergent height. A missing hash is not a
+/// match. Cancellation is honoured between fetches. `emit_state` /
+/// `diagnostics` thread through to [`fetch_block_with_retry`].
 async fn find_fork_point<R: DaemonEngine>(
     rpc: &R,
     snapshot: &LedgerSnapshot,
@@ -1037,30 +1019,33 @@ async fn find_fork_point<R: DaemonEngine>(
     emit_state: &mut EmitState,
     diagnostics: &dyn DiagnosticSink,
 ) -> Result<BlockHeight, LocalRefreshError> {
-    let mut h = from_height;
+    let mut cursor = ForkCursor::at_tip(from_height);
+    let mut height = from_height;
     loop {
         if cancel.is_cancelled() {
             return Err(LocalRefreshError::Cancelled);
         }
-
-        if h.is_zero() {
-            return Ok(BlockHeight::ZERO.saturating_add(BlockCount::ONE));
+        if height.is_zero() {
+            return Ok(cursor.reached_genesis());
         }
-
-        let Some(stored_hash) = snapshot.block_hash_at(h).map(BlockHash::from_bytes) else {
-            return Ok(h.saturating_add(BlockCount::ONE));
+        let Some(stored) = snapshot.block_hash_at(height).map(BlockHash::from_bytes) else {
+            return cursor
+                .record_ended(height)
+                .map_err(LocalRefreshError::PastFinality);
         };
-
-        let daemon_block = fetch_block_with_retry(rpc, h, cancel, emit_state, diagnostics).await?;
-        if daemon_block.block.hash() == stored_hash {
-            return Ok(h.saturating_add(BlockCount::ONE));
+        let daemon_block =
+            fetch_block_with_retry(rpc, height, cancel, emit_state, diagnostics).await?;
+        if daemon_block.block.hash() == stored {
+            return Ok(cursor.agreed(height));
         }
-
         debug!(
-            height = h.to_raw(),
+            height = height.to_raw(),
             "LocalRefresh::find_fork_point: hash mismatch, walking back"
         );
-        h = h.saturating_sub_count(BlockCount::ONE);
+        cursor
+            .disagreed()
+            .map_err(LocalRefreshError::PastFinality)?;
+        height = height.saturating_sub_count(BlockCount::ONE);
     }
 }
 

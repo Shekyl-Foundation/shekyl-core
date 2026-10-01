@@ -77,7 +77,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
-use shekyl_curve_tree::ClientError;
+use shekyl_curve_tree::{ClientError, REORG_HASH_WINDOW_BLOCKS};
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
@@ -91,6 +91,7 @@ use crate::{
         curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError},
         curve_tree_decode,
         local_ledger::LocalLedger,
+        reorg_finality::{overlap_disagreed, overlap_record_ended, rollback_past_finality},
         traits::{DaemonEngine, LedgerEngine},
         CurveTreeIngestFault, Engine, EngineSignerKind, RefreshError,
     },
@@ -480,6 +481,85 @@ pub(super) fn index_block_leaves(
     Ok(map)
 }
 
+/// The tree already holds a height this scan just verified.
+///
+/// One shared root that matches means the tree is this chain; the append
+/// loop then ingests only the suffix above the tip. A mismatch walks down
+/// the scanned roots. A common ancestor inside `W` is rolled back so the
+/// loop re-ingests the suffix. Past `W`, or a scan that runs out of roots
+/// first, refuses and does not modify the tree.
+async fn reconcile_overlapping_tree(
+    curve_tree: &CurveTreeHandle,
+    producer_roots: &BTreeMap<BlockHeight, CurveTreeRoot>,
+    range_start: BlockHeight,
+    range_end: BlockHeight,
+) -> Result<(), RefreshError> {
+    if range_end <= range_start {
+        return Ok(());
+    }
+    let Some(tip) = curve_tree
+        .ingested_tip_height()
+        .await
+        .map_err(|e| map_curve_tree_handle_error(&e))?
+    else {
+        return Ok(());
+    };
+    if tip < range_start {
+        return Ok(());
+    }
+    let last_scanned = range_end - BlockCount::ONE;
+    let mut height = if tip < last_scanned {
+        tip
+    } else {
+        last_scanned
+    };
+    if roots_agree(curve_tree, height, root_at(producer_roots, height)?).await? {
+        return Ok(());
+    }
+    loop {
+        let parent = overlap_disagreed(tip, height)
+            .map_err(|stop| RefreshError::ReorgDeeperThanFinality { stop })?;
+        let Some(expected) = producer_roots.get(&parent).copied() else {
+            let stop = overlap_record_ended(tip, height);
+            return Err(RefreshError::ReorgDeeperThanFinality { stop });
+        };
+        if roots_agree(curve_tree, parent, expected).await? {
+            curve_tree
+                .rollback_to_fork(parent)
+                .await
+                .map_err(|e| map_curve_tree_handle_error(&e))?;
+            return Ok(());
+        }
+        height = parent;
+    }
+}
+
+/// The producer's header root for a height inside the scanned range.
+fn root_at(
+    producer_roots: &BTreeMap<BlockHeight, CurveTreeRoot>,
+    height: BlockHeight,
+) -> Result<CurveTreeRoot, RefreshError> {
+    producer_roots
+        .get(&height)
+        .copied()
+        .ok_or(RefreshError::MalformedScanResult {
+            reason: "block_curve_tree_roots missing a height the tree already holds",
+        })
+}
+
+/// Whether the tree's root at `height` is the scan's root.
+async fn roots_agree(
+    curve_tree: &CurveTreeHandle,
+    height: BlockHeight,
+    expected: CurveTreeRoot,
+) -> Result<bool, RefreshError> {
+    let (got, _) = curve_tree
+        .reference_root_and_depth(height)
+        .await
+        .map_err(|e| map_curve_tree_handle_error(&e))?;
+    Ok(got == expected.to_bytes())
+}
+
 /// Reject a reorg `fork_height` of 0 as a producer-contract violation.
 ///
 /// `fork_height` is the *first divergent* height; genesis (height 0) is the
@@ -539,6 +619,9 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     // Only roll back when the tree holds blocks at or above the fork — a tree
     // still climbing below it has nothing to drop (R3-Q6).
     if let Some(rewind) = result.reorg_rewind.as_ref() {
+        // Well-formedness first: it is pure, and a fork of 0 must not
+        // spend a tip read. `keep` is the height retained — one definition,
+        // shared with the finality comparison below.
         validate_reorg_fork_height(rewind.fork_height)?;
         let keep = rewind.fork_height - BlockCount::ONE;
         if let Some(tip) = curve_tree
@@ -546,7 +629,14 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
             .await
             .map_err(|e| map_curve_tree_handle_error(&e))?
         {
-            if tip > keep {
+            // Same comparison the producer walk uses, against the tree tip.
+            // The tree can be ahead of the ledger (ack-before-commit, a
+            // rescan that cleared the ledger, birthday backfill). A hostile
+            // result and a tree that is simply ahead are not distinguishable
+            // here, and a wrong tree is the worse outcome, so both refuse.
+            if let Some(stop) = rollback_past_finality(tip, keep) {
+                return Err(RefreshError::ReorgDeeperThanFinality { stop });
+            } else if tip > keep {
                 curve_tree
                     .rollback_to_fork(keep)
                     .await
@@ -554,6 +644,12 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
             }
         }
     }
+
+    // A rescan clears the ledger and scans the chain without a rewind. The
+    // tree file is still the previous one. A height both already hold has to
+    // agree, or the append loop below would treat an orphaned fork as caught
+    // up and leave it in place.
+    reconcile_overlapping_tree(curve_tree, &producer_roots, range_start, range_end).await?;
 
     loop {
         let tip = curve_tree
@@ -786,6 +882,7 @@ pub(crate) fn apply_scan_result_to_state(
                 reason: "spent_key_images non-empty for empty processed_height_range",
             });
         }
+        ledger.reorg_blocks.retain_recent(REORG_HASH_WINDOW_BLOCKS);
         return Ok(Vec::new());
     }
 
@@ -927,6 +1024,7 @@ pub(crate) fn apply_scan_result_to_state(
         });
     }
 
+    ledger.reorg_blocks.retain_recent(REORG_HASH_WINDOW_BLOCKS);
     Ok(inserted)
 }
 

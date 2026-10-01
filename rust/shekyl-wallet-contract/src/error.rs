@@ -8,7 +8,7 @@
 
 use serde_json::{json, Value};
 use shekyl_engine_core::engine::error::{
-    FeeEstimatorError, RetryableRejectCause, TerminalErrorKind,
+    FeeEstimatorError, FinalityBreach, FinalityStop, RetryableRejectCause, TerminalErrorKind,
 };
 use shekyl_engine_core::engine::SubmitError;
 use shekyl_engine_core::{
@@ -232,6 +232,12 @@ wallet_rpc_error_codes! {
     /// Refresh: the chain kept reorganizing past the rewind budget; nothing
     /// was merged.
     ChainUnstable = -29210 => "CHAIN_UNSTABLE",
+    /// Refresh: a rollback would pass the finality window, so the
+    /// curve-tree store has to be removed and rebuilt. Terminal for this
+    /// store. Distinct from [`Self::RescanIncomplete`]: a rescan leaves
+    /// the tree untouched, and this code says so even when the rescan
+    /// already cleared history.
+    ResyncRequired = -29211 => "RESYNC_REQUIRED",
     /// `check_*`: proof string failed decode / framing / size caps.
     ProofMalformed = -29300 => "PROOF_MALFORMED",
     /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
@@ -573,6 +579,22 @@ pub enum WalletRpcError {
         "the chain kept reorganizing during refresh and nothing was merged — retry once it settles"
     )]
     ChainUnstable,
+    /// `-29211`: the finality window refused a rollback. The walk reads the
+    /// ledger's hash record before ingest, and the tree file is a separate
+    /// store, so the remedy clears both: delete `.curvetree`, then rescan.
+    /// `history_cleared` is the rescan path, where the ledger is already
+    /// empty and the file is the part still left.
+    #[error("{}", resync_required_message(*depth, *finality_depth, *breach, *history_cleared))]
+    ResyncRequired {
+        /// Blocks the rollback would drop, or how far the hash record reached.
+        depth: u64,
+        /// `W`, in blocks.
+        finality_depth: u64,
+        /// Whether the depth was measured or the hash record ended first.
+        breach: FinalityBreach,
+        /// The refusing call was a rescan whose reset had already cleared history.
+        history_cleared: bool,
+    },
     /// Build: address parse / network check failed.
     #[error("invalid recipient")]
     InvalidRecipient,
@@ -1045,6 +1067,7 @@ impl WalletRpcError {
             Self::DaemonChainMismatch { .. } => WalletRpcErrorCode::DaemonChainMismatch,
             Self::DaemonProtocolViolation => WalletRpcErrorCode::DaemonProtocolViolation,
             Self::ChainUnstable => WalletRpcErrorCode::ChainUnstable,
+            Self::ResyncRequired { .. } => WalletRpcErrorCode::ResyncRequired,
             Self::InvalidRecipient => WalletRpcErrorCode::InvalidRecipient,
             Self::InsufficientFunds => WalletRpcErrorCode::InsufficientFunds,
             Self::FeeEstimationFailed => WalletRpcErrorCode::FeeEstimationFailed,
@@ -1198,6 +1221,17 @@ impl WalletRpcError {
                 rate,
                 bound,
             } => Some(json!({ "reason": reason, "rate": rate, "bound": bound })),
+            Self::ResyncRequired {
+                depth,
+                finality_depth,
+                breach,
+                history_cleared,
+            } => Some(json!({
+                "depth": depth,
+                "finality_depth": finality_depth,
+                "breach": breach.as_str(),
+                "history_cleared": history_cleared,
+            })),
             _ => None,
         }
     }
@@ -1213,9 +1247,12 @@ impl WalletRpcError {
     /// a handle — i.e. after the reset is durable.
     ///
     /// The durability claim is the load-bearing axis, not the failure class:
-    /// `-29201` means "wallet untouched" (preflight only); every join-path
-    /// failure means history is empty until a rescan finishes, so they all
-    /// emit [`WalletRpcErrorCode::RescanIncomplete`]. Mapping only Io /
+    /// `-29201` means "wallet untouched" (preflight only). A join-path
+    /// failure means history is empty until a rescan finishes, so those
+    /// failures emit [`WalletRpcErrorCode::RescanIncomplete`]. A rollback
+    /// past finality is the exception: finishing the rescan cannot repair
+    /// the curve tree, so it emits [`WalletRpcErrorCode::ResyncRequired`]
+    /// with `history_cleared`. Mapping only Io /
     /// Cancelled / Malformed / CurveTree and leaving ConcurrentMutation /
     /// InternalInvariantViolation to `-32603` was the same bug class as
     /// reusing `-29201` — clients that branch on the durability code would
@@ -1232,12 +1269,22 @@ impl WalletRpcError {
             | RefreshError::RescanBlocked { .. }
             | RefreshError::RescanPersist(_) => err.into(),
 
-            // Every producer failure after a durable reset: one wire code so
-            // durability-branching clients cannot miss a subclass. Detail
-            // stays server-side (`message()` contract / rule 30).
+            // The other producer failures after a durable reset share one wire
+            // code so durability-branching clients cannot miss a subclass.
+            // A past-finality rollback is the arm below (`-29211`), not this
+            // one. Detail stays server-side (`message()` contract / rule 30).
             RefreshError::Io(io) => {
                 tracing::warn!(detail = %io, "rescan scan failed after durable reset");
                 Self::RescanIncomplete
+            }
+            // A past-finality rollback is not repaired by finishing the
+            // rescan: the reset emptied history and left the curve tree
+            // where it was. Same code as a refresh, and the message says
+            // the history is already gone so a client does not retry the
+            // rescan expecting the tree to move.
+            RefreshError::ReorgDeeperThanFinality { stop } => {
+                tracing::warn!(?stop, "rescan hit a rollback past finality");
+                resync_required(*stop, true)
             }
             RefreshError::Cancelled
             | RefreshError::ReorgStorm
@@ -1321,6 +1368,9 @@ impl From<RefreshError> for WalletRpcError {
             RefreshError::InternalInvariantViolation { context } => {
                 internal_detail("refresh invariant", context)
             }
+            // The remedy is the whole point of the error, so it does not go
+            // through `internal_detail` (that keeps its detail server-side).
+            RefreshError::ReorgDeeperThanFinality { stop } => resync_required(stop, false),
         }
     }
 }
@@ -1563,6 +1613,47 @@ impl OlderSide {
             Self::Wallet => "wallet",
         }
     }
+}
+
+/// `-29211`: the measured stop, plus whether this call already cleared history.
+fn resync_required(stop: FinalityStop, history_cleared: bool) -> WalletRpcError {
+    WalletRpcError::ResyncRequired {
+        depth: stop.depth.to_raw(),
+        finality_depth: stop.finality_depth.to_raw(),
+        breach: stop.breach,
+        history_cleared,
+    }
+}
+
+fn resync_required_message(
+    depth: u64,
+    finality_depth: u64,
+    breach: FinalityBreach,
+    history_cleared: bool,
+) -> String {
+    let cause = match breach {
+        FinalityBreach::Measured => format!(
+            "a rollback of {depth} blocks is outside the {finality_depth}-block window this \
+             wallet treats as final ({breach})"
+        ),
+        // `depth` here is how far the record reached. It can be smaller than
+        // the window, so it is not "a rollback outside the window".
+        FinalityBreach::RecordEnded => format!(
+            "the hash record ended after {depth} mismatches, before a common ancestor inside \
+             the {finality_depth}-block window was confirmed ({breach})"
+        ),
+    };
+    let remedy = if history_cleared {
+        "Wallet history is already empty from this rescan. Close the wallet, delete its \
+         .curvetree file, and open it again. The next refresh rebuilds the tree from genesis. \
+         Running rescan_blockchain again while that file is still there leaves the same tree \
+         in place"
+    } else {
+        "Close the wallet, delete its .curvetree file, open it again, and run \
+         rescan_blockchain — in that order. The rescan rebuilds scan history from genesis, \
+         and it rebuilds the tree only once that file is gone"
+    };
+    format!("{cause}. {remedy}")
 }
 
 /// `-29205`'s message: the remedy is to update whichever side is older, or,
@@ -2150,6 +2241,84 @@ mod tests {
             "post-reset scan failure must not echo local paths: {}",
             err.message()
         );
+    }
+
+    fn finality_stop(depth: u64, breach: FinalityBreach) -> FinalityStop {
+        FinalityStop {
+            depth: shekyl_types::BlockCount::from_raw(depth),
+            // The fixture's window. The policy's real `W` is pinned in the
+            // engine; this test checks that the number it is handed is the
+            // number the caller reads.
+            finality_depth: shekyl_types::BlockCount::from_raw(730),
+            breach,
+        }
+    }
+
+    /// `CT-6` C7 / rule 82. The remedy has to reach the caller, which is the
+    /// half that was missing: `internal_detail` logs its detail and returns
+    /// only the category, so a refusal routed through it would have told the
+    /// user "curve-tree ingest" and put the remedy in a server log.
+    #[test]
+    fn a_reorg_past_finality_tells_the_caller_to_resync() {
+        let err = WalletRpcError::from(RefreshError::ReorgDeeperThanFinality {
+            stop: finality_stop(1_000, FinalityBreach::Measured),
+        });
+        assert_eq!(err.code(), WalletRpcErrorCode::ResyncRequired);
+        assert_eq!(WalletRpcErrorCode::ResyncRequired as i32, -29211);
+
+        let message = err.to_string();
+        assert!(
+            message.contains(".curvetree") && message.contains("rescan_blockchain"),
+            "the remedy clears the file and the scan history: {message}"
+        );
+        assert!(
+            message.contains("in that order"),
+            "the file has to be gone before the rescan: {message}"
+        );
+        assert!(
+            message.contains("1000") && message.contains("730"),
+            "the cause must travel with the remedy: {message}"
+        );
+        assert!(
+            !message.contains("already empty"),
+            "an ordinary refresh has not cleared history: {message}"
+        );
+        let data = err.data().expect("structured depth");
+        assert_eq!(data["depth"], 1_000);
+        assert_eq!(data["finality_depth"], 730);
+        assert_eq!(data["breach"], "measured");
+        assert_eq!(data["history_cleared"], false);
+    }
+
+    /// The same refusal during a rescan still names the tree. History is
+    /// already empty, and retrying the rescan leaves the tree in place, so
+    /// the durability fact is a clause of this code rather than a different
+    /// one. The depth here is only what the record reached.
+    #[test]
+    fn during_a_rescan_the_tree_still_has_to_be_removed() {
+        let err = WalletRpcError::from_rescan_scan_failure(RefreshError::ReorgDeeperThanFinality {
+            stop: finality_stop(40, FinalityBreach::RecordEnded),
+        });
+        assert_eq!(err.code(), WalletRpcErrorCode::ResyncRequired);
+        let message = err.to_string();
+        assert!(message.contains(".curvetree"), "{message}");
+        assert!(message.contains("already empty"), "{message}");
+        assert!(
+            message.contains("while that file is still there"),
+            "{message}"
+        );
+        assert!(
+            message.contains("40") && message.contains("730"),
+            "{message}"
+        );
+        assert!(message.contains("hash record ended"), "{message}");
+        assert!(
+            !message.contains("outside"),
+            "a short record is not a measured rollback: {message}"
+        );
+        let data = err.data().expect("structured depth");
+        assert_eq!(data["breach"], "record_ended");
+        assert_eq!(data["history_cleared"], true);
     }
 
     /// Durability is the axis, not the failure subclass: ConcurrentMutation

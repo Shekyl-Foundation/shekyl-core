@@ -31,7 +31,7 @@
 
 use shekyl_consensus::COINBASE_LOCK_WINDOW;
 use shekyl_curve_tree::reference::REFERENCE_BLOCK_MIN_AGE;
-use shekyl_curve_tree::segment::{SEGMENT_FREEZE_REORG_MARGIN_BLOCKS, SPENDABLE_AGE_BLOCKS};
+use shekyl_curve_tree::segment::FINALITY_DEPTH_BLOCKS;
 use shekyl_economics::block_weight::BLOCK_WEIGHT_SURGE_FACTOR;
 use shekyl_economics::emission::block_weight_limit;
 use shekyl_economics::EconomicParams;
@@ -42,11 +42,13 @@ use shekyl_wire::transaction::TX_WEIGHT_LIMIT;
 /// Finalization depth `W`, in blocks: the age at which the wallet's frontier is
 /// taken to be beyond reorg.
 ///
-/// Summed from its two owners rather than written as `730`, which is the form
-/// [`shekyl_curve_tree::segment::segment_freeze_eligible`] uses for the same
-/// quantity. A reorg shallower than `W` never touches persisted state, which is
-/// why §6.3 needs no undo log.
-pub const W: u64 = SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS;
+/// The bench's local name for
+/// [`shekyl_curve_tree::segment::FINALITY_DEPTH_BLOCKS`], which is where the
+/// sum lives. This was a second derivation of `SPENDABLE_AGE_BLOCKS +
+/// SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` until 2026-09-30; the freeze gate and
+/// C7's refusal read the same constant, and three independent derivations of
+/// one quantity is the shape that drifts.
+pub const W: u64 = FINALITY_DEPTH_BLOCKS;
 
 /// The blocks a spend replays: `[F, ref]`, where `ref` is at most
 /// `tip − REFERENCE_BLOCK_MIN_AGE`.

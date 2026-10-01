@@ -5710,7 +5710,7 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   config) and const-asserted against the `shekyl-fcmp` width product
   `38·18·38 = 25 992` (`segment_freeze.rs:44–46`); the wallet-side store
   computes `outputs_per_node(SEGMENT_LAYER_J)` from the same widths
-  independently (`segment.rs:64`). The two agree *through the widths*, not
+  independently (`segment.rs:112`). The two agree *through the widths*, not
   through each other — change `SEGMENT_LAYER_J` and nothing asserts the
   store's segment is still the consensus segment. Three refinements
   (2026-09-18), the first leading: **(i) `SEGMENT_LAYER_J` is marked

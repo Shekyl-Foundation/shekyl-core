@@ -5,9 +5,92 @@
 
 //! Refresh and ledger error vocabulary.
 
-use shekyl_types::BlockHeight;
+use std::fmt;
+
+use shekyl_types::{BlockCount, BlockHeight};
 
 use super::IoError;
+
+/// Why a rollback is outside the finality window.
+///
+/// Two honest causes, one refusal. [`Self::Measured`] is a depth both
+/// sides of the comparison actually have. [`Self::RecordEnded`] is a
+/// hash record that ran out while a past-finality fork is still
+/// possible — the depth is how far the record reached, not a guess at
+/// the fork. A new cause is a new match arm and a contract bump: the
+/// wallet message and `data.breach` name this set exhaustively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinalityBreach {
+    /// The dropped span was measured: every stored block through the
+    /// window disagreed, or the tree tip and the retained height are
+    /// both known and the gap exceeds `W`.
+    Measured,
+    /// The hash record ended before a common ancestor was found, on a
+    /// chain tall enough that the fork may lie past `W`.
+    RecordEnded,
+}
+
+impl FinalityBreach {
+    /// Wire spelling of [`Self`], stable for `error.data.breach`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Measured => "measured",
+            Self::RecordEnded => "record_ended",
+        }
+    }
+}
+
+impl fmt::Display for FinalityBreach {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Measured => "the depth was measured",
+            Self::RecordEnded => "the hash record ended before the fork was confirmed",
+        })
+    }
+}
+
+/// A rollback the finality policy refused.
+///
+/// `depth` is a span, not a height. For [`FinalityBreach::Measured`] it
+/// is the span that was compared with `W`. For
+/// [`FinalityBreach::RecordEnded`] it is only how far the stored hashes
+/// reached, which may be shorter than `W`. The steps that clear the tree
+/// file and the scan history are the RPC message's job; this value states
+/// the span that was known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FinalityStop {
+    /// Blocks the rollback would drop, or — when the record ended — the
+    /// number of stored blocks that already disagreed.
+    pub depth: BlockCount,
+    /// `W`. [`shekyl_curve_tree::FINALITY_DEPTH_BLOCKS`].
+    pub finality_depth: BlockCount,
+    /// Which of the two causes produced this stop.
+    pub breach: FinalityBreach,
+}
+
+impl fmt::Display for FinalityStop {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.breach {
+            // The span was compared with `W` and lost.
+            FinalityBreach::Measured => write!(
+                f,
+                "a rollback of {depth} blocks is outside the {window}-block finality window ({breach})",
+                depth = self.depth,
+                window = self.finality_depth,
+                breach = self.breach,
+            ),
+            // `depth` is how far the record reached, which can be less than `W`.
+            // Saying that span is outside the window states a comparison that did not happen.
+            FinalityBreach::RecordEnded => write!(
+                f,
+                "the hash record ended after {depth} mismatches, before a common ancestor inside the {window}-block finality window was confirmed",
+                depth = self.depth,
+                window = self.finality_depth,
+            ),
+        }
+    }
+}
 
 // --- Refresh ---------------------------------------------------------------
 
@@ -184,6 +267,20 @@ pub enum RefreshError {
     CurveTreeIngest {
         /// Why the ingest failed, one member per remedy.
         fault: CurveTreeIngestFault,
+    },
+
+    /// A rollback would pass `W`
+    /// ([`shekyl_curve_tree::FINALITY_DEPTH_BLOCKS`]), the depth at which
+    /// this wallet's persisted state is final (`CT-6` C7).
+    ///
+    /// The store can truncate through a frozen segment — F9 requires it —
+    /// and a wallet refresh must not ask. [`FinalityStop`] is the fact.
+    /// The words that tell a caller to remove the curve-tree file and clear
+    /// scan history are the RPC error's, not a second copy here.
+    #[error("{stop}")]
+    ReorgDeeperThanFinality {
+        /// The span that failed the finality comparison, and why.
+        stop: FinalityStop,
     },
 
     /// [`Engine::start_rescan`](crate::engine::Engine::start_rescan) refused: a

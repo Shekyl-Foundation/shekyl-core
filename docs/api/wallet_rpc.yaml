@@ -386,7 +386,18 @@ info:
   # left to a daemon that did not answer), and a staker's open-time refusals
   # -29530..-29533. Some existing paths move to the new codes (see each
   # code's row). api_version stays 1.
-  version: 0.9.0
+  # 0.10.0: refresh and rescan gain -29211 RESYNC_REQUIRED. A rollback that
+  # would pass the wallet's finality window W is refused rather than applied
+  # to the curve tree. `data` carries depth, finality_depth, breach
+  # ("measured" or "record_ended"), and history_cleared. record_ended means
+  # the hash record ran out before a fork was confirmed, so depth may be
+  # shorter than W. The remedy is both steps, file first: close the wallet,
+  # delete .curvetree, open it, and run rescan_blockchain. The walk reads
+  # the ledger before ingest, so the file alone is not enough, and a rescan
+  # that finds the file still holding another chain refuses again. When the
+  # refusal arrives during a rescan, history_cleared is true because that
+  # reset already emptied wallet history. api_version stays 1.
+  version: 0.10.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -688,6 +699,7 @@ components:
         - -29208   # DAEMON_CHAIN_MISMATCH
         - -29209   # DAEMON_PROTOCOL_VIOLATION
         - -29210   # CHAIN_UNSTABLE
+        - -29211   # RESYNC_REQUIRED
         - -29300   # PROOF_MALFORMED
         - -29301   # PROOF_TX_SECRET_UNAVAILABLE
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
@@ -930,18 +942,22 @@ components:
                                           (data: {"detail": "..."})
           -29203 RESCAN_INCOMPLETE        rescan: reset persisted, then the
                                           producer failed before the ledger
-                                          was rebuilt (any join-path
-                                          RefreshError — Io, cancel,
-                                          malformed scan, concurrent
+                                          was rebuilt (a join-path
+                                          RefreshError other than a
+                                          past-finality rollback — Io,
+                                          cancel, malformed scan, concurrent
                                           mutation, invariant, curve-tree
-                                          ingest). History is empty until a
-                                          rescan finishes; retry. Distinct
-                                          from -29201 so clients that branch
-                                          on "untouched" do not lie after a
-                                          mid-scan failure; distinct from
-                                          -32603 so durability-branching
-                                          clients do not miss non-Io
-                                          producer failures
+                                          ingest, a reorg storm). History
+                                          is empty until a rescan finishes;
+                                          retry. A past-finality rollback
+                                          is -29211: finishing the rescan
+                                          does not move the curve tree.
+                                          Distinct from -29201 so clients
+                                          that branch on "untouched" do not
+                                          lie after a mid-scan failure;
+                                          distinct from -32603 so
+                                          durability-branching clients do
+                                          not miss non-Io producer failures
           -29204 REFRESH_CANCELLED        refresh: cancelled before it
                                           completed (the wallet is closing);
                                           nothing partial was applied — retry
@@ -992,6 +1008,32 @@ components:
                                           retry once it settles. After a
                                           durable rescan reset the same cause
                                           is -29203
+          -29211 RESYNC_REQUIRED          refresh or rescan: a rollback would
+                                          pass the finality window W, so the
+                                          curve-tree store must not be folded
+                                          through that suffix. Close the
+                                          wallet, delete its .curvetree file,
+                                          open it again, and run
+                                          rescan_blockchain — the file first.
+                                          The refresh walk reads scan history
+                                          before ingest, so deleting the file
+                                          alone leaves the next refresh on
+                                          the same refusal, and a rescan that
+                                          finds the file still holding
+                                          another chain refuses again.
+                                          data: {"depth", "finality_depth",
+                                          "breach": "measured" |
+                                          "record_ended", "history_cleared"}.
+                                          depth is the span compared with W,
+                                          or, when the hash record ended
+                                          first, only how far that record
+                                          reached — which can be shorter
+                                          than W. history_cleared is true
+                                          when the refusal arrived after a
+                                          rescan reset had already emptied
+                                          wallet history; another rescan
+                                          while the file is still there
+                                          leaves the same tree in place
           -29300 PROOF_MALFORMED          check_*: proof string failed
                                           Bech32m decode, carried the wrong
                                           HRP, its wire framing did not
@@ -2281,10 +2323,14 @@ components:
         hold spend records a replay cannot rebuild (-29202; unconfirmed
         submitted transactions no longer refuse — the send journal carries
         their input set across the wipe). Past those refusals the reset is
-        durable before scanning begins: a scan that then fails (any producer
-        failure on join) leaves the wallet emptied and returns -29203
+        durable before scanning begins: a scan that then fails leaves the
+        wallet emptied. Most producer failures return -29203
         RESCAN_INCOMPLETE (re-runnable; not -29201, and not a generic
-        -32603).
+        -32603). A rollback past finality returns -29211 RESYNC_REQUIRED
+        with history_cleared: the reset emptied history and left the
+        curve-tree file. Close the wallet, delete that .curvetree file,
+        and open it again. Another rescan while the file is still there
+        leaves the same tree in place.
 
     RescanBlockchainResult:
       type: object
