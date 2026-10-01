@@ -36,10 +36,7 @@
   - [x] malformed hybrid signature rejection tested (3 negative vector integration tests)
   - [x] encoded transaction size impact measured (5389 bytes `pqc_auth` per input via `pqc_auth_weight()`)
   - [x] payload limit guidance documented in V3_ROLLOUT.md
-- [ ] Ledger integration (deferred to v1.1)
-  - [x] FCMP++ device abstraction stubs in place (`device_ledger.cpp`)
-  - [ ] Ledger app updated with FCMP++ proof generation support
-  - [ ] Ledger Shekyl app (or Monero-compatible app) update available
+- [x] Ledger integration — **deleted 2026-10-01** (`docs/HARDWARE_WALLETS.md`). There is no in-tree backend to finish. Reopen only when a device ships the V4 primitives that doc names.
 - [ ] Trezor integration (deferred to v1.1)
   - [x] FCMP++ device abstraction defaults inherited (unsupported, returns false)
   - [ ] Trezor cold-signing protocol updated for FCMP++ transactions

@@ -34,20 +34,7 @@
 #include "cryptonote_config.h"
 
 
-// Ledger disabled in V3: two-component output keys + KEM derivation require
-// firmware changes that don't exist yet. See docs/HARDWARE_WALLETS.md.
-#ifndef USE_DEVICE_LEDGER
-#define USE_DEVICE_LEDGER 0
-#endif
-
-#if !defined(HAVE_HIDAPI) 
-#undef  USE_DEVICE_LEDGER
-#define USE_DEVICE_LEDGER 0
-#endif
-
-#if USE_DEVICE_LEDGER
-#define WITH_DEVICE_LEDGER
-#endif
+// Hardware-wallet backends are not in this tree. See docs/HARDWARE_WALLETS.md.
 
 // forward declaration needed because this header is included by headers in libcryptonote_basic which depends on libdevice
 namespace cryptonote

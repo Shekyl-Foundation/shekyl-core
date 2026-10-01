@@ -292,10 +292,9 @@ Shekyl's four-component economics formula).
 
 ## Seed node build (lean daemon)
 
-`make release-seed` builds only the daemon (`shekyld`) with hardware wallet
-support disabled (`-DUSE_HW_DEVICE=OFF`) and `ARCH=x86-64` (portable x86_64).
-This eliminates HIDAPI, protobuf, and libusb as runtime dependencies -- libraries
-a seed node never needs -- and ensures the binary runs on any x86_64 host
+`make release-seed` builds only the daemon (`shekyld`) with `ARCH=x86-64`
+(portable x86_64). There is no hardware-wallet build arm. This keeps protobuf
+and libusb off the seed binary, and ensures it runs on any x86_64 host
 regardless of CPU generation (no AVX/SSE4.x required).
 
 ```bash
@@ -310,7 +309,6 @@ Equivalent manual cmake invocation:
 cmake -S . -B build/seed-release \
   -DCMAKE_BUILD_TYPE=Release \
   -DARCH="x86-64" \
-  -DUSE_HW_DEVICE=OFF \
   -DBUILD_TESTS=OFF
 cmake --build build/seed-release --target daemon -- -j"$(nproc)"
 ```

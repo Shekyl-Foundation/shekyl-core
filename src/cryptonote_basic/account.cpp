@@ -437,12 +437,10 @@ DISABLE_VS_WARNINGS(4244 4345)
     try {
       CHECK_AND_ASSERT_THROW_MES(hwdev.get_public_address(m_keys.m_account_address), "Cannot get a device address");
       CHECK_AND_ASSERT_THROW_MES(hwdev.get_secret_keys(m_keys.m_view_secret_key, m_keys.m_spend_secret_key), "Cannot get device secret");
-      // Hardware-wallet integration for PQC is tracked separately; the
-      // device FFI currently returns only Ed25519 scalars so we can't
-      // materialize an ML-KEM keypair deterministically without the seed.
-      // For v1 we ship with device wallets as "classical signing only" and
-      // will teach device_ledger.cpp the master-seed export path in a
-      // follow-up (see docs/POST_QUANTUM_CRYPTOGRAPHY.md §Hardware).
+      // No hardware-wallet backend is in this tree (docs/HARDWARE_WALLETS.md).
+      // This path is the device interface's software-device shape; it cannot
+      // materialize an ML-KEM keypair from the Ed25519 scalars a device
+      // would return.
       clear_msg_sign_pk(m_keys);
     } catch (const std::exception &e){
       hwdev.disconnect();

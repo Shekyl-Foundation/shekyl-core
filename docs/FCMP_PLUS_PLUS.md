@@ -1302,7 +1302,7 @@ Do not reintroduce them. Archival emission is a different vin
 | `get_curve_tree_checkpoint` RPC | **Done** | `core_rpc_server.cpp` |
 | CI: Rust workspace + FCMP crate build | **Done** | `.github/workflows/build.yml` |
 | CI: Determinism check + Bech32m tests | **Done** | `.github/workflows/build.yml` |
-| Hardware device FCMP++ stubs | **Done** | `device.hpp`, `device_default.cpp`, `device_ledger.cpp` |
+| Hardware device FCMP++ stubs | **Deleted 2026-10-01** | `docs/HARDWARE_WALLETS.md` (the software device remains) |
 | Trezor protocol legacy RCT removal | **Done** | `protocol.cpp`, `protocol.hpp` |
 | Legacy RCT stripping (types 1-6, all structs, all src/) | **Done** | `ct_types.h/cpp`, `ct_semantics.h/cpp`, all consumers |
 | Non-plus Bulletproof code removal | **Done** | `bulletproofs.h`, `bulletproofs.cc` |
@@ -1359,7 +1359,7 @@ Do not reintroduce them. Archival emission is a different vin
 | Rust unit test suite (proof, tree, leaf, kem, address, derivation) | **Done** | `rust/shekyl-fcmp/src/`, `rust/shekyl-crypto-pq/src/` |
 | C++ unit tests (FCMP++ specific) | **Done** | `tests/unit_tests/fcmp.cpp` |
 | PQC rederivation benchmark (criterion) | **Done** | `rust/shekyl-crypto-pq/benches/pqc_rederivation.rs` |
-| CLSAG device interface removal | **Done** | `device.hpp`, `device_default.cpp/hpp`, `device_ledger.cpp/hpp` |
+| CLSAG device interface removal | **Done**; Ledger sources deleted 2026-10-01 | `device.hpp`, `device_default.cpp/hpp` |
 | `get_outs`/`get_outs.bin` RPC removal | **Done** | `core_rpc_server.h/cpp`, `core_rpc_ffi.cpp`, `shekyl-daemon-rpc` |
 | Dead HF constant cleanup (mixin, CLSAG, etc.) | **Done** | `cryptonote_config.h` |
 | Zstd Levin P2P compression | **Done** | `levin_base.h/cpp`, `levin_compression.h/cpp`, `net_node.inl` |
