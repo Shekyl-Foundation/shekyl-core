@@ -23,6 +23,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <functional>
 #include <memory>
 #include <string>
@@ -138,6 +139,8 @@ namespace shekyl
 
     bool take_bytes(const std::uint8_t* bytes, std::size_t len)
     {
+      if (len != 0)
+        m_context.m_last_recv = time(nullptr);
       return m_handler && m_handler->handle_recv(bytes, len);
     }
 
@@ -162,6 +165,8 @@ namespace shekyl
       std::uint8_t cause = 0;
       const int accepted = shekyl_seam_send_report(
           m_id, message.data(), message.size(), &found, &cause);
+      if (accepted != 0 && message.size() != 0)
+        m_context.m_last_send = time(nullptr);
       if (accepted == 0)
       {
         MINFO("seam send refused conn " << m_context.m_connection_id
