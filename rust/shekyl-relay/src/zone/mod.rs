@@ -148,19 +148,19 @@ pub enum RelayPlan {
     /// Locally originated while this node is unsynchronised. Send nothing
     /// and record nothing.
     ///
-    /// The plan is the refusal. [`Zone::carrier_for`] still names an ordinary
+    /// The plan is the refusal. [`Relay::carrier_for`] still names an ordinary
     /// carrier so the match stays total, and the caller must not read it:
     /// there is no send.
     AwaitSync,
 }
 
-/// Why [`Zone::new`] refused a configuration.
+/// Why [`Relay::new`] refused a configuration.
 ///
 /// Three refusals, three variants — collapsing them to `None` would be the
 /// same axis-merge this type exists to prevent. The FFI maps every variant
 /// to a null handle; a future in-process caller matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ZoneNewError {
+pub enum RelayNewError {
     /// Noise conceals packet sizing. On a cleartext link the observer reads
     /// the contents outright, so padding sizes conceals nothing.
     NoiseOnCleartext,
@@ -186,7 +186,7 @@ pub enum ZoneNewError {
     },
 }
 
-impl fmt::Display for ZoneNewError {
+impl fmt::Display for RelayNewError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoiseOnCleartext => {
@@ -290,7 +290,7 @@ impl NoiseSchedule {
 /// reactor. There is no interior mutability and no `Sync` shared state here —
 /// the boundary publishes what C++ needs to read rather than sharing it.
 #[derive(Debug)]
-pub struct Zone {
+pub struct Relay {
     /// Per-peer pending fluff batches, keyed by connection.
     contexts: BTreeMap<ConnectionId, PeerFluff>,
     /// Stem routing for this epoch. Already Rust-backed since RP-2a; RP-3a
@@ -339,7 +339,7 @@ pub struct Zone {
     observation_timer: EmbargoTimer,
 }
 
-impl Zone {
+impl Relay {
     /// Open a zone at `now` with no connections yet, or [`Err`] when the
     /// requested configuration is one the design forbids.
     ///
@@ -386,7 +386,7 @@ impl Zone {
     /// [`carrier::MAX_FRAGMENTS`]; the epoch is a runtime argument, so
     /// this is a refusal rather than a `const` assertion.
     ///
-    /// The three refusals are distinct [`ZoneNewError`] variants. The FFI
+    /// The three refusals are distinct [`RelayNewError`] variants. The FFI
     /// maps every one to null because that is the only channel a C ABI has;
     /// an in-process caller after the daemon cutover matches.
     ///
@@ -412,17 +412,17 @@ impl Zone {
         noise_enabled: bool,
         now: Millis,
         rng: &mut R,
-    ) -> Result<Self, ZoneNewError> {
+    ) -> Result<Self, RelayNewError> {
         if noise_enabled {
             if !secrecy.is_encrypted() {
-                return Err(ZoneNewError::NoiseOnCleartext);
+                return Err(RelayNewError::NoiseOnCleartext);
             }
             if stems != inherited::NOISE_CHANNELS {
-                return Err(ZoneNewError::NoiseChannelCount { got: stems });
+                return Err(RelayNewError::NoiseChannelCount { got: stems });
             }
             let affords = carrier::noise_windows_in_epoch(params.min_epoch_secs);
             if affords < carrier::MAX_FRAGMENTS {
-                return Err(ZoneNewError::NoiseCannotCrossOneEpoch {
+                return Err(RelayNewError::NoiseCannotCrossOneEpoch {
                     needs: carrier::MAX_FRAGMENTS,
                     affords,
                 });
@@ -509,7 +509,7 @@ impl Zone {
     /// as inbound must not consume `rng`.
     ///
     /// A close does not merge. A dead slot stays until the next outbound
-    /// handshake or an explicit [`Zone::update_stems`].
+    /// handshake or an explicit [`Relay::update_stems`].
     pub fn on_session_established<R: RelayRng + ?Sized>(
         &mut self,
         id: ConnectionId,
@@ -525,7 +525,7 @@ impl Zone {
         }
     }
 
-    /// How this node originates. The default from [`Zone::new`] is [`AnonOrigination::Any`].
+    /// How this node originates. The default from [`Relay::new`] is [`AnonOrigination::Any`].
     pub fn set_origination(&mut self, origination: AnonOrigination) {
         self.origination = origination;
     }
@@ -554,7 +554,7 @@ impl Zone {
     /// Record stems with an explicit observation deadline.
     ///
     /// **Test / deterministic-drive only.** Production always goes through
-    /// [`Zone::record_stem`], which draws from the cached embargo timer. Fixed
+    /// [`Relay::record_stem`], which draws from the cached embargo timer. Fixed
     /// deadlines let the poll-clock and next-wake witnesses assert without
     /// sampling the geometric table.
     #[cfg(test)]
@@ -712,7 +712,7 @@ impl Zone {
     /// unbound clears at its next due tick — both read from the map itself
     /// via [`Driver::poll`].
     ///
-    /// **Not what an epoch boundary does.** See [`Zone::rebuild_stems`]; the two
+    /// **Not what an epoch boundary does.** See [`Relay::rebuild_stems`]; the two
     /// are separate methods because collapsing them freezes the stem graph, and
     /// nothing about the merged result looks wrong when it happens. A close
     /// does not call this. The dead slot stays until the next merge.
@@ -743,7 +743,7 @@ impl Zone {
     /// Begin a new epoch at `now`: re-draw the fluff/stem role and the end time.
     ///
     /// This is what `notify::run_epoch()` forces in tests and what the driver
-    /// calls when [`Zone::epoch_deadline`] elapses. Both paths run the same
+    /// calls when [`Relay::epoch_deadline`] elapses. Both paths run the same
     /// code, which is why forcing it in a test is not a special case.
     pub fn start_epoch<R: RelayRng + ?Sized>(&mut self, now: Millis, rng: &mut R) {
         let epoch = EpochScheduler::new(self.params).start(now, rng);
@@ -762,7 +762,7 @@ impl Zone {
     }
 
     /// The raw stem decision for `source`, bypassing the epoch role — a
-    /// **test-only** window on the pinning mechanics that [`Zone::plan_relay`]
+    /// **test-only** window on the pinning mechanics that [`Relay::plan_relay`]
     /// wraps.
     ///
     /// Production never calls this: it routes through `plan_relay`, which applies
@@ -771,7 +771,7 @@ impl Zone {
     /// directly, without a redraw loop to force a stem epoch. It is `#[cfg(test)]`
     /// — compiled out of production — so a maintainer reading the type cannot
     /// mistake it for a second live routing entry point (unlike the deliberately
-    /// `pub` observation witnesses such as [`Zone::pinned_sources`], which only
+    /// `pub` observation witnesses such as [`Relay::pinned_sources`], which only
     /// read state and never decide a route).
     #[cfg(test)]
     fn stem_for<R: RelayRng + ?Sized>(
@@ -869,7 +869,7 @@ impl Zone {
     /// Returns **how many peers accepted the batch**, so a caller can report
     /// the inherited "no available connections" warning. Deliberately not the
     /// resulting deadline: the scheduler owns that, and returning it invites a
-    /// caller to store what it should be asking [`Zone::fluff_deadline`] for —
+    /// caller to store what it should be asking [`Relay::fluff_deadline`] for —
     /// the mistake `PeerFluff::flush_at` already made once.
     ///
     /// Each blob is mapped to a shared [`TxBlob`] once; peer queues clone the
@@ -947,7 +947,7 @@ impl Zone {
     /// The distribution family the fluff delay is drawn from.
     ///
     /// Exposed so the correction can be *witnessed* rather than assumed — see
-    /// the acceptance note on [`Zone::fluff`].
+    /// the acceptance note on [`Relay::fluff`].
     pub fn fluff_family(&self) -> DelayFamily {
         self.fluff.family()
     }
@@ -1030,7 +1030,7 @@ pub struct RelayDispatch {
     pub carrier: RelayCarrier,
 }
 
-impl Zone {
+impl Relay {
     /// Attach a carrier to a plan, per §42.3.
     ///
     /// Noise carries a **stem** and only a stem, and only when noise is

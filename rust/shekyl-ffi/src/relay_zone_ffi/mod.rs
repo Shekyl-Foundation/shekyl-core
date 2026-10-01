@@ -65,8 +65,8 @@ use std::sync::{Arc, Mutex};
 use shekyl_levin::{NewTransactions, PortableMap, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay::{
     AchievedOutConnections, CarrierToken, Driver, Effect, FloorTransition, FloorWatch,
-    NetworkClass, NodeSync, NoiseQueues, RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId,
-    Zone,
+    NetworkClass, NodeSync, NoiseQueues, Relay, RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob,
+    TxId,
 };
 use shekyl_relay_privacy::params::{carrier, DandelionParams};
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -253,7 +253,7 @@ pub struct RelayZoneHandle {
     ///   `set_carrier_development`, which defaults off;
     /// - **development-enabled** — an ENCRYPTED zone built after
     ///   `set_carrier_development(true)` holds `Some`. A cleartext one still
-    ///   does not, and that refusal is `Zone::new`'s (§93.2), not the flag's.
+    ///   does not, and that refusal is `Relay::new`'s (§93.2), not the flag's.
     ///
     /// Ownership here rather than in `Driver` is CV-4's type barrier expressed
     /// as a field, and that is unchanged by either posture: the scheduler
@@ -548,18 +548,18 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// but harmful, since every wake would find the epoch expired and the daemon's
 /// relay timer would spin. The caller treats null as a startup logic error.
 ///
-/// It also returns null on a configuration [`Zone::new`] refuses, not only a
+/// It also returns null on a configuration [`Relay::new`] refuses, not only a
 /// malformed one. Secrecy is read from the **zone discriminant**, not from a
 /// flag bit: `SHEKYL_RELAY_ZONE_NOISE_ENABLED` on a cleartext `zone` byte
 /// (public, or out-of-domain) is noise on a link where padding sizes conceals
 /// nothing an observer cannot already read. The fluff-reach bit is a different
 /// axis — `NOISE_ENABLED` without `OUTBOUND_FLUFF_ONLY` on an *encrypted*
 /// zone is a valid configuration (encrypted clearnet, when that exists) and
-/// builds. [`Zone::new`] also refuses a channel count other than the
+/// builds. [`Relay::new`] also refuses a channel count other than the
 /// inherited width, and a noise epoch too short to carry a full-size
-/// message. Every [`shekyl_relay::ZoneNewError`] maps to null because
+/// message. Every [`shekyl_relay::RelayNewError`] maps to null because
 /// that is the only channel a C ABI has. They are enforced at
-/// [`Zone::new`], so an in-process Rust caller after the daemon cutover
+/// [`Relay::new`], so an in-process Rust caller after the daemon cutover
 /// cannot route around them.
 #[no_mangle]
 pub extern "C" fn shekyl_relay_zone_new(
@@ -595,8 +595,8 @@ pub extern "C" fn shekyl_relay_zone_new(
     let secrecy = LinkSecrecy::of(relay_zone);
     let mut rng = SecureRelayRng;
     // `Err` is a refused configuration, not an allocation failure. See
-    // `Zone::new`. Null is the only channel a C ABI has for saying so.
-    let Ok(zone) = Zone::new(params, stems, secrecy, noise_enabled, now_ms, &mut rng) else {
+    // `Relay::new`. Null is the only channel a C ABI has for saying so.
+    let Ok(zone) = Relay::new(params, stems, secrecy, noise_enabled, now_ms, &mut rng) else {
         return core::ptr::null_mut();
     };
     // The carrier's buffers are built exactly when the zone carries it. The
@@ -625,7 +625,7 @@ pub extern "C" fn shekyl_relay_zone_new(
         // the epoch is the argument that sizes both. See `window_budget`.
         let budget = carrier::noise_windows_in_epoch(min_epoch_secs) as usize;
         let Some(q) = NoiseQueues::new(stems, dummy, budget) else {
-            // Same refusal channel as `Zone::new` above: a null handle.
+            // Same refusal channel as `Relay::new` above: a null handle.
             return core::ptr::null_mut();
         };
         Some(q)
@@ -871,7 +871,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_noise_enabled(handle: *const RelayZon
 /// **The observation window is drawn in the zone**, from the adopted embargo
 /// timer cached at zone construction against the zone's own params — not
 /// rebuilt here. This export is marshaling only (rule 20): if §12.11's window
-/// ever diverges from the embargo, the change is one field on `Zone`.
+/// ever diverges from the embargo, the change is one field on `Relay`.
 ///
 /// # Safety
 /// `handle` must be null (no-op) or a live zone from
@@ -1302,7 +1302,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay(
 /// The refresh policy lives in Rust with the rest of zone scheduling. The
 /// candidates are the session registry. A settled fluff epoch does not
 /// refresh, and neither does `AWAIT_SYNC`. See
-/// [`shekyl_relay::Zone::plan_relay_with_refresh`]. No callback: commands
+/// [`shekyl_relay::Relay::plan_relay_with_refresh`]. No callback: commands
 /// return nothing, and a covert channel the refresh leaves unbound clears at
 /// its next due tick through [`shekyl_relay_zone_poll`]'s `on_unbind`.
 ///

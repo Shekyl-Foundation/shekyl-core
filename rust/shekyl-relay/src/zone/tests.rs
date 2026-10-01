@@ -27,8 +27,8 @@ fn id(byte: u8) -> ConnectionId {
     ConnectionId::from_bytes(b)
 }
 
-fn zone(rng: &mut SplitMix64) -> Zone {
-    Zone::new(
+fn zone(rng: &mut SplitMix64) -> Relay {
+    Relay::new(
         DandelionParams::inherited(),
         2,
         LinkSecrecy::of(RelayZone::Public),
@@ -39,7 +39,7 @@ fn zone(rng: &mut SplitMix64) -> Zone {
     .unwrap()
 }
 
-fn establish_outbound(zone: &mut Zone, peers: &[u8], rng: &mut SplitMix64) {
+fn establish_outbound(zone: &mut Relay, peers: &[u8], rng: &mut SplitMix64) {
     for peer in peers {
         zone.on_session_established(
             id(*peer),
@@ -346,7 +346,7 @@ fn forcing_a_flush_runs_the_same_release_path() {
 /// A zone whose epoch role is known, found by seed search rather than by a
 /// test-only setter — the role must come from the same draw production
 /// uses, or the fixture would not exercise the real path.
-fn zone_with_role(fluffing: bool, rng: &mut SplitMix64) -> Zone {
+fn zone_with_role(fluffing: bool, rng: &mut SplitMix64) -> Relay {
     zone_with_role_cover(fluffing, false, rng)
 }
 
@@ -359,14 +359,14 @@ fn zone_with_role(fluffing: bool, rng: &mut SplitMix64) -> Zone {
 /// Noise tests that need a determined epoch must go through here — a lucky
 /// seed is determinism, not a determined epoch, and is the flake
 /// `noise_stem` exposed once noise consults the planner.
-fn zone_with_role_cover(fluffing: bool, noise: bool, rng: &mut SplitMix64) -> Zone {
+fn zone_with_role_cover(fluffing: bool, noise: bool, rng: &mut SplitMix64) -> Relay {
     let secrecy = if noise {
         LinkSecrecy::of(RelayZone::Tor)
     } else {
         LinkSecrecy::of(RelayZone::Public)
     };
     for _ in 0..10_000 {
-        let z = Zone::new(DandelionParams::inherited(), 2, secrecy, noise, 0, rng).unwrap();
+        let z = Relay::new(DandelionParams::inherited(), 2, secrecy, noise, 0, rng).unwrap();
         if z.is_fluffing() == fluffing {
             return z;
         }
@@ -490,7 +490,7 @@ fn a_fluff_reaches_an_inbound_anonymity_session() {
     // D7 is deleted. A fluff floods every session except the source,
     // including an inbound peer on an anonymity edge.
     let mut rng = SplitMix64::new(77);
-    let mut z = Zone::new(
+    let mut z = Relay::new(
         DandelionParams::inherited(),
         2,
         LinkSecrecy::of(RelayZone::Tor),
@@ -526,7 +526,7 @@ fn a_fluff_reaches_an_inbound_anonymity_session() {
     // The negative control: the same three peers on a public zone, where
     // the rule does not apply. Without this, a zone that fluffed to nobody
     // would also pass the assertions above.
-    let mut z = Zone::new(
+    let mut z = Relay::new(
         DandelionParams::inherited(),
         2,
         LinkSecrecy::of(RelayZone::Public),
@@ -711,7 +711,7 @@ fn fluff_fanout_shares_one_blob_handle_across_peers() {
 #[test]
 fn a_noise_deadline_survives_wakes_it_did_not_cause() {
     let mut rng = SplitMix64::new(7);
-    let mut z = Zone::new(
+    let mut z = Relay::new(
         DandelionParams::inherited(),
         2,
         LinkSecrecy::of(RelayZone::Tor),
@@ -776,7 +776,7 @@ fn a_noise_deadline_survives_wakes_it_did_not_cause() {
 fn noise_enabled_pins_stem_width_to_noise_channels() {
     use shekyl_relay_privacy::params::inherited;
     let mut rng = SplitMix64::new(19);
-    let z = Zone::new(
+    let z = Relay::new(
         DandelionParams::inherited(),
         inherited::NOISE_CHANNELS,
         LinkSecrecy::of(RelayZone::Tor),
@@ -882,7 +882,7 @@ fn dispatch_does_not_re_decide_the_phase() {
     for fluffing in [true, false] {
         let found = loop {
             let mut rng = SplitMix64::new(seed);
-            let z = Zone::new(
+            let z = Relay::new(
                 DandelionParams::inherited(),
                 2,
                 LinkSecrecy::of(RelayZone::Tor),
@@ -903,7 +903,7 @@ fn dispatch_does_not_re_decide_the_phase() {
         for local_origin in [true, false] {
             let make = || {
                 let mut rng = SplitMix64::new(found);
-                let mut z = Zone::new(
+                let mut z = Relay::new(
                     DandelionParams::inherited(),
                     2,
                     LinkSecrecy::of(RelayZone::Tor),
@@ -951,7 +951,7 @@ fn dispatch_does_not_re_decide_the_phase() {
 fn a_noise_carrier_does_not_change_the_phase() {
     let plan_with_noise = |noise: bool| {
         let mut rng = SplitMix64::new(0x0819);
-        let mut z = Zone::new(
+        let mut z = Relay::new(
             DandelionParams::inherited(),
             shekyl_relay_privacy::params::inherited::NOISE_CHANNELS,
             LinkSecrecy::of(RelayZone::Tor),
@@ -989,18 +989,18 @@ fn a_noise_carrier_does_not_change_the_phase() {
 /// configured for a protection it is not receiving is the failure worth being
 /// loud about, and a silent downgrade is indistinguishable from working.
 ///
-/// **This bites against a `Zone::new` that keys noise on reach instead of
+/// **This bites against a `Relay::new` that keys noise on reach instead of
 /// secrecy; it does NOT cover the FFI flag-decode.** Reach is an independent
 /// argument, not a proxy for encryption — `Encrypted + EveryPeer` is the
 /// case the axis exists for (encrypted clearnet), and
 /// `Cleartext + OutboundOnly` is §25.5's live configuration. The three
-/// refusals are distinct [`ZoneNewError`] variants so they cannot collapse
+/// refusals are distinct [`RelayNewError`] variants so they cannot collapse
 /// into one `None`.
 #[test]
 fn a_noise_carrier_is_refused_where_it_buys_nothing() {
     let build = |zone: RelayZone, stems: usize, noise: bool| {
         let mut rng = SplitMix64::new(0x0819);
-        Zone::new(
+        Relay::new(
             DandelionParams::inherited(),
             stems,
             LinkSecrecy::of(zone),
@@ -1013,7 +1013,7 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
 
     assert_eq!(
         build(RelayZone::Public, CHANNELS, true).err(),
-        Some(ZoneNewError::NoiseOnCleartext),
+        Some(RelayNewError::NoiseOnCleartext),
         "outbound-only fluff is not encryption; a cleartext zone earns no noise"
     );
     assert!(
@@ -1031,7 +1031,7 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
     );
     assert_eq!(
         build(RelayZone::Invalid, CHANNELS, true).err(),
-        Some(ZoneNewError::NoiseOnCleartext),
+        Some(RelayNewError::NoiseOnCleartext),
         "an unknown link is not presumed encrypted and earns no noise"
     );
 
@@ -1039,12 +1039,12 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
     // admitted the mismatch in exactly the build that ships.
     assert_eq!(
         build(RelayZone::Tor, CHANNELS + 1, true).err(),
-        Some(ZoneNewError::NoiseChannelCount { got: CHANNELS + 1 }),
+        Some(RelayNewError::NoiseChannelCount { got: CHANNELS + 1 }),
         "a channel count the schedule is not sized for is refused, not asserted"
     );
 
     // Arithmetic is `carrier::noise_windows_in_epoch`. This pins that
-    // Zone::new consumes it for a noise zone and ignores it otherwise.
+    // Relay::new consumes it for a noise zone and ignores it otherwise.
     let mut rng = SplitMix64::new(0x0820);
     let per_send_ms = carrier::NOISE_MIN_DELAY_MS + carrier::NOISE_DELAY_JITTER_MS;
     let mut short = DandelionParams::inherited();
@@ -1052,7 +1052,7 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
     // floored to whole seconds because the field is seconds. The assertion
     // below re-derives `affords` rather than trusting this arithmetic.
     short.min_epoch_secs = (carrier::MAX_FRAGMENTS * per_send_ms - 1) / 1_000;
-    match Zone::new(
+    match Relay::new(
         short,
         CHANNELS,
         LinkSecrecy::of(RelayZone::Tor),
@@ -1060,7 +1060,7 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
         0,
         &mut rng,
     ) {
-        Err(ZoneNewError::NoiseCannotCrossOneEpoch { needs, affords }) => {
+        Err(RelayNewError::NoiseCannotCrossOneEpoch { needs, affords }) => {
             assert_eq!(needs, carrier::MAX_FRAGMENTS);
             assert_eq!(affords, carrier::MAX_FRAGMENTS - 1);
         }
@@ -1069,7 +1069,7 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
     let mut params = DandelionParams::inherited();
     params.min_epoch_secs = 1;
     assert!(
-        Zone::new(
+        Relay::new(
             params,
             2,
             LinkSecrecy::of(RelayZone::Public),

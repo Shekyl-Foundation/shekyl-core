@@ -21,8 +21,8 @@ fn id(byte: u8) -> ConnectionId {
     ConnectionId::from_bytes(bytes)
 }
 
-fn zone(rng: &mut SplitMix64) -> Zone {
-    Zone::new(
+fn zone(rng: &mut SplitMix64) -> Relay {
+    Relay::new(
         DandelionParams::inherited(),
         2,
         LinkSecrecy::of(RelayZone::Public),
@@ -33,7 +33,7 @@ fn zone(rng: &mut SplitMix64) -> Zone {
     .unwrap()
 }
 
-fn establish_outbound(zone: &mut Zone, peers: &[u8], rng: &mut SplitMix64) {
+fn establish_outbound(zone: &mut Relay, peers: &[u8], rng: &mut SplitMix64) {
     for peer in peers {
         zone.on_session_established(
             id(*peer),
@@ -151,7 +151,7 @@ fn stem_draws_are_not_biased_toward_one_outbound_peer() {
     // for reporting a higher one. Two outbound sessions, one slot: over
     // many independent epochs each peer is the successor about half the time.
     let mut rng = SplitMix64::new(100);
-    let mut z = Zone::new(
+    let mut z = Relay::new(
         DandelionParams::inherited(),
         1,
         LinkSecrecy::of(RelayZone::Public),
@@ -185,7 +185,7 @@ fn a_two_slot_draw_over_three_peers_uses_each_peer() {
     // two thirds of the epochs include it. Seed 101, n = 3 000, σ ≈ 26;
     // 1 950 is about 1.9σ under the mean of 2 000.
     let mut rng = SplitMix64::new(101);
-    let mut z = Zone::new(
+    let mut z = Relay::new(
         DandelionParams::inherited(),
         2,
         LinkSecrecy::of(RelayZone::Public),

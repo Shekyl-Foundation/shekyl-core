@@ -15,7 +15,7 @@
 //! It was RP-2a's boundary: an opaque `StemMapHandle` that the C++
 //! `net::dandelionpp::connection_map` wrapped, so `levin_notify` could keep its
 //! map ABI while the logic moved to `stem_map.rs`. RP-3a took the whole relay
-//! zone into Rust, and `shekyl-relay::Zone` now owns a `StemMap` **directly** —
+//! zone into Rust, and `shekyl-relay::Relay` now owns a `StemMap` **directly** —
 //! no handle, no wrapper, no C ABI between them. The exports, the wrapper and
 //! its gtests were retired together in that round rather than left as a second
 //! path to the same map.

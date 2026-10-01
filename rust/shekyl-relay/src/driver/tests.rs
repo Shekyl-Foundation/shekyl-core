@@ -20,7 +20,7 @@ fn id(byte: u8) -> ConnectionId {
 
 fn driver(rng: &mut SplitMix64) -> Driver {
     Driver::new(
-        Zone::new(
+        Relay::new(
             DandelionParams::inherited(),
             2,
             LinkSecrecy::of(RelayZone::Public),
@@ -207,7 +207,7 @@ fn an_outbound_handshake_fills_the_map_without_rolling_the_epoch() {
 fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
     let mut rng = SplitMix64::new(31);
     let mut d = Driver::new(
-        Zone::new(
+        Relay::new(
             DandelionParams::inherited(),
             2,
             LinkSecrecy::of(RelayZone::Tor),
@@ -308,7 +308,7 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
     // slot refills — bound again by the time any tick comes due.
     let mut rng = SplitMix64::new(37);
     let mut d = Driver::new(
-        Zone::new(
+        Relay::new(
             DandelionParams::inherited(),
             2,
             LinkSecrecy::of(RelayZone::Tor),
@@ -488,7 +488,7 @@ fn forcing_runs_the_same_paths_as_the_deadline() {
 fn noise_channels_emit_one_per_advance_not_synchronized() {
     let mut rng = SplitMix64::new(11);
     let mut d = Driver::new(
-        Zone::new(
+        Relay::new(
             DandelionParams::inherited(),
             2,
             LinkSecrecy::of(RelayZone::Tor),
@@ -579,7 +579,7 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
 fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
     let mut rng = SplitMix64::new(23);
     let mut d = Driver::new(
-        Zone::new(
+        Relay::new(
             DandelionParams::inherited(),
             2,
             LinkSecrecy::of(RelayZone::Tor),
@@ -658,7 +658,7 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
 fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
     let mut rng = SplitMix64::new(29);
     let mut d = Driver::new(
-        Zone::new(
+        Relay::new(
             DandelionParams::inherited(),
             2,
             LinkSecrecy::of(RelayZone::Tor),
@@ -745,7 +745,7 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
 fn a_late_poll_emits_at_most_one_noise_channel() {
     let mut rng = SplitMix64::new(13);
     let mut d = Driver::new(
-        Zone::new(
+        Relay::new(
             DandelionParams::inherited(),
             2,
             LinkSecrecy::of(RelayZone::Tor),

@@ -67,7 +67,7 @@
 //! shekyl-ffi        shekyl_relay_zone_record_stem
 //!         |
 //!         v
-//! shekyl-relay      Zone::record_stem  ->  StemWatch::stemmed
+//! shekyl-relay      Relay::record_stem  ->  StemWatch::stemmed
 //! ```
 //!
 //! **An empty tally for a zone that is not configured still means "no
@@ -186,7 +186,7 @@ impl From<&StemTally> for StemTallySnapshot {
 
 /// Stem observations in flight, and their per-successor resolutions.
 ///
-/// One instance per zone, owned by [`crate::Zone`]. Sync by construction:
+/// One instance per zone, owned by [`crate::Relay`]. Sync by construction:
 /// nothing here sleeps or spawns — [`StemWatch::expire`] is driven from the
 /// same `now` the rest of the zone's schedule uses, so the outcome is a
 /// function of the poll clock exactly as every other relay decision is.

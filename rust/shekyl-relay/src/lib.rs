@@ -39,7 +39,7 @@
 //! maintains rather than a check it passed once:
 //!
 //! - Zone state — peer fluff queues, the stem map, the epoch role, and the
-//!   noise schedule — is owned **here**, mutated only through `&mut Zone`.
+//!   noise schedule — is owned **here**, mutated only through `&mut Relay`.
 //!   C++ connection events do not mutate it; they arrive as calls into the
 //!   owner. Noise **schedule** is owned here. Noise **buffers** live here
 //!   (`NoiseQueues`) as the §2.9 step-2 executor. C++ enables the carrier
@@ -60,7 +60,7 @@
 //!
 //! # Sync core, driven from outside
 //!
-//! [`Zone`] is a plain `&mut self` state machine that returns deadlines —
+//! [`Relay`] is a plain `&mut self` state machine that returns deadlines —
 //! deliberately the same shape as [`shekyl_relay_privacy::schedule`]. Nothing
 //! here spawns, sleeps, or awaits. The production driver arms a timer against
 //! the returned deadline; a test drives the same steps directly, which is how
@@ -80,8 +80,8 @@ pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend};
 pub use shekyl_relay_privacy::{LinkSecrecy, SlotIndex};
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
 pub use zone::{
-    AnonOrigination, NetworkClass, NodeSync, PeerFluff, RelayCarrier, RelayDispatch, RelayPlan,
-    TxBlob, Zone, ZoneNewError,
+    AnonOrigination, NetworkClass, NodeSync, PeerFluff, Relay, RelayCarrier, RelayDispatch,
+    RelayNewError, RelayPlan, TxBlob,
 };
 pub use zone_route::{
     is_pre_fluff_relay, once_at_origin_route, originated_stays_in_zone,
