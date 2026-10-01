@@ -10,7 +10,7 @@
 //! The free functions in the parent module are that latch's entry points.
 
 use crate::constants::{
-    effective_settlement_epoch_blocks, CHALLENGE_RESOLUTION_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
+    effective_settlement_epoch_blocks, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
 };
 use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockHeight, SettlementEpoch};
@@ -169,14 +169,24 @@ impl SettlementSchedule {
         self.open_height(epoch.saturating_add(1)).saturating_sub(1)
     }
 
+    /// The slash grace in blocks under this schedule —
+    /// `SLASH_GRACE_EPOCHS · SEB`, one full settlement epoch
+    /// (`constants::SLASH_GRACE_EPOCHS`). Scales with the epoch, so a
+    /// levered schedule's grace is the same *relationship* production has,
+    /// not the production number.
+    #[must_use]
+    pub const fn slash_grace_blocks(self) -> u64 {
+        self.seb().saturating_mul(SLASH_GRACE_EPOCHS)
+    }
+
     /// The slash deadline for settlement epoch `epoch` —
-    /// `H_close(E) + CHALLENGE_RESOLUTION_BLOCKS`. A block connecting
-    /// strictly above it folds `E`'s unanswered challenges into slashes
-    /// (`constants::CHALLENGE_RESOLUTION_BLOCKS`).
+    /// `H_close(E) + grace`, i.e. `last_block(E + SLASH_GRACE_EPOCHS)`. A
+    /// block connecting strictly above it folds `E`'s unanswered challenges
+    /// into slashes.
     #[must_use]
     pub const fn slash_deadline_height(self, epoch: u64) -> u64 {
         self.last_block(epoch)
-            .saturating_add(CHALLENGE_RESOLUTION_BLOCKS)
+            .saturating_add(self.slash_grace_blocks())
     }
 
     /// Prune horizon at `block_height`: epochs strictly below the returned
