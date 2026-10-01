@@ -18,10 +18,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **Move daemon RPC and Tor control onto `shekyl-runtime::runtime`, then print the thread ledger once at startup.** Both still build their own (`shekyl-daemon-rpc` `ffi_exports.rs:162`, `shekyl-tor-control-daemon` `blocking.rs:120`). A startup total taken before that move omits those pools. After both call `runtime`, `shekyld` prints `shekyl_thread_ledger::report` once before the p2p loop. Falsify by: those two builders call `runtime`, and `daemon.cpp` logs the report before the p2p loop. Reopen if another `Builder::new_multi_thread` appears outside `shekyl-runtime`.
-  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
-  - Target: pre-genesis
-
 - **Move `shekyl-p-transport` onto `shekyl-socks`.** The handshake there already requires `Isolation::Principal` or `Isolation::Persona`, offers a persona only username/password, and fails closed if the proxy selects anything else. What remains is ureq's `socks` 0.3.4 connector, which is that crate's HTTP client. Falsify by `shekyl-p-transport` dialing through `shekyl_socks::connect` with `Isolation::Persona` and no longer enabling ureq's `socks-proxy`.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
@@ -54,7 +50,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **Run the D5 thread-budget legs once the ledger prints.** The conditions are pinned (D5, 2026-09-30): the smallest worker count, blocking cap and executor count that meet each leg's duty, summed against four cores on the floor device with the miner off. A total taken before daemon RPC and Tor control construct through `shekyl-runtime::runtime` omits two of the pools the sum exists to count, so this waits on that row. Falsify by one record per leg, each naming its count and the ledger line it was read from.
+- **Run the D5 thread-budget legs once Rick pins the conditions.** The ledger prints before the p2p loop. The conditions (D5, 2026-09-30) are the smallest worker count, blocking cap and executor count that meet each leg's duty, summed against four cores on the floor device with the miner off. The floors now on the ledger (transport and daemon-RPC 2/1, Tor-control 1/1) are unmeasured. The pin is the draft of those conditions, and it comes before any leg. Falsify by one record per leg, each naming its count and the ledger line it was read from.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D5
   - Target: pre-genesis
 

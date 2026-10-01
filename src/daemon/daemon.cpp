@@ -356,6 +356,15 @@ bool Daemon::run(bool interactive)
     }
     mp_internals->p2p.apply_inbound_ceiling(rpc_reserved);
 
+    // Every daemon runtime is on the ledger by here: the transport pool
+    // is built at bind, Tor control at its start, and the RPC pools just
+    // above. The D5 pin of those counts is still ahead of any measurement.
+    {
+      char budget[4096];
+      shekyl_thread_ledger_report(budget, sizeof budget);
+      MGINFO(budget);
+    }
+
     MGINFO("Starting p2p net loop...");
     mp_internals->p2p.run(); // blocks until p2p goes down
     MGINFO("p2p net loop stopped");

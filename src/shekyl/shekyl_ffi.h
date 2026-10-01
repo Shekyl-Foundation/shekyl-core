@@ -1570,6 +1570,11 @@ ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
 /// Gracefully stop the Axum daemon RPC server and free the handle.
 void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
 
+/// Copy the thread-ledger report into `buf`, NUL-terminated.
+/// Returns the bytes written, excluding the NUL. A null `buf` or a
+/// `len` of 0 writes nothing and returns the report length.
+size_t shekyl_thread_ledger_report(char* buf, size_t len);
+
 // ---------------------------------------------------------------------------
 // shekyld control client (`shekyld <command>` → running daemon), the outbound
 // half of the daemon's HTTP surface. Plaintext loopback only — the daemon

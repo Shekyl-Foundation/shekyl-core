@@ -13,10 +13,9 @@
 //! The pool's row lives on [`shekyl_thread_ledger`]. A dedicated thread is
 //! spawned there, not here: that crate has no Tokio dependency, and the
 //! timing engine depends on it alone. The row this constructor records
-//! has no join. Daemon-RPC and Tor-control still build their own runtimes.
-//! The clearnet connector is the first caller that keeps one. Its blocking
-//! cap and its shutdown timeout are both the caller's, labelled unmeasured
-//! until a measurement names them. This crate holds neither number.
+//! has no join. Daemon-RPC, Tor-control, and the transport each call this
+//! constructor. Their budgets are the caller's, labelled unmeasured until
+//! the D5 pin names them. This crate holds neither number.
 
 #![deny(unsafe_code)]
 

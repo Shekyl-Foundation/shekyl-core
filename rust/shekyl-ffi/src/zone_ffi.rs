@@ -818,6 +818,31 @@ pub extern "C" fn shekyl_zone_shutdown() {
     drop(engine);
 }
 
+/// Copy the thread-ledger report into `buf`, NUL-terminated.
+///
+/// Returns the number of bytes written, excluding the NUL. A null `buf`
+/// or a `len` of 0 writes nothing and returns the report's length, so
+/// the caller can size a buffer. A short buffer is truncated and still
+/// NUL-terminated.
+///
+/// # Safety
+///
+/// `buf`, when non-null, must point at `len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_thread_ledger_report(buf: *mut c_char, len: usize) -> usize {
+    let report = shekyl_thread_ledger::report();
+    let bytes = report.as_bytes();
+    if buf.is_null() || len == 0 {
+        return bytes.len();
+    }
+    let n = bytes.len().min(len - 1);
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.cast(), n);
+        *buf.add(n) = 0;
+    }
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::c_void;
