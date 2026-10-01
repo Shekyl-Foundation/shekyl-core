@@ -18,9 +18,9 @@ use crate::engine::diagnostics::{NoopDiagnosticSink, ProtocolErrorKind};
 use crate::engine::error::{IoError, RefreshError};
 use shekyl_rpc_client::{DaemonFault, RpcError};
 
-/// `LocalRefreshError → RefreshError` mapping is total and
-/// preserves the discriminant classes per the §2.3
-/// unit-variant-only binding.
+/// `LocalRefreshError → RefreshError` mapping is total.
+/// `PastFinality` is the one producer variant with fields, and they
+/// cross unchanged: the depth is the branch, not a daemon string.
 #[test]
 fn local_refresh_error_maps_to_refresh_error() {
     assert!(matches!(
@@ -55,6 +55,15 @@ fn local_refresh_error_maps_to_refresh_error() {
     assert!(matches!(
         RefreshError::from(LocalRefreshError::Internal),
         RefreshError::InternalInvariantViolation { .. }
+    ));
+    let stop = crate::engine::error::FinalityStop {
+        depth: shekyl_types::BlockCount::from_raw(12),
+        finality_depth: shekyl_types::BlockCount::from_raw(730),
+        breach: crate::engine::error::FinalityBreach::RecordEnded,
+    };
+    assert!(matches!(
+        RefreshError::from(LocalRefreshError::PastFinality(stop)),
+        RefreshError::ReorgDeeperThanFinality { stop: got } if got == stop
     ));
 }
 

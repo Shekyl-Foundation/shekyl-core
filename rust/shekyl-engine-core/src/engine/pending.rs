@@ -756,7 +756,7 @@ pub(crate) fn build_pending_tx_in_state(
     // Derive the SnapshotId from a freshly-read LedgerSnapshot view
     // of the same LedgerBlock the rest of this body used for
     // candidate selection. The minor allocation (one ReorgBlocks
-    // clone, capped at DEFAULT_REORG_BLOCKS_CAPACITY) is bounded by
+    // clone, trimmed to the finality hash window) is bounded by
     // the wallet's reorg-window length and dominated by the rest of
     // the build pipeline's allocations.
     //

@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+### `CT-6` C7 — a reorg past finality refuses, and says why
+
+- **`W` has one home, and the hash window is that depth plus the kept block.**
+  `FINALITY_DEPTH_BLOCKS` is
+  `SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`.
+  `REORG_HASH_WINDOW_BLOCKS` is that depth plus the one block a rewind of
+  exactly `W` keeps, so the walk can still match a hash at the bottom of the
+  window. Spendable age is a positive span, so the snapshot ring's horizon
+  sits strictly inside `W`: the band between them is repaired by folding.
+- **The walk is the policy.** The producer keeps going until a stored hash
+  matches or the walk passes `W`. A match at `tip − W` is the deepest rewind
+  that still folds. Running out of stored hashes on a chain taller than `W`
+  is not a confirmed fork: the depth reported is how far the record reached.
+  A chain still inside `W` may rewind to the end of the record, or to genesis.
+- **Ingest uses the same comparison against the tree tip.** The tree and the
+  ledger are different subjects: the tree is acknowledged before the ledger
+  commits, a rescan clears the ledger and not the tree, and birthday backfill
+  climbs the tree below the scan floor. A rollback that would pass `W` from
+  the tree's tip is refused. The store primitive still truncates arbitrarily
+  deep — F9 requires it, and the replica generator forks that deep on purpose.
+- **Rule 82: one wire code, and the remedy reaches the caller.**
+  `ResyncRequired` is **`-29211`** (contract 0.10.0). `-29204` is
+  `REFRESH_CANCELLED`. `data` carries `depth`, `finality_depth`, `breach`
+  (`measured` or `record_ended`), and `history_cleared`. `record_ended`
+  reports how far the hash record reached, which can be shorter than `W`,
+  so that text does not call the span a rollback outside the window. The
+  remedy is both stores, file first: close the wallet, delete `.curvetree`,
+  open it, and run `rescan_blockchain`. The walk reads the ledger before
+  ingest, so deleting the file alone leaves the next refresh on the same
+  hashes; a rescan that finds the old file still holding another chain's
+  root refuses again instead of treating that tree as caught up. During a
+  rescan the same code is returned with `history_cleared`, because the
+  reset already emptied history and left the file in place. The engine's
+  own text states the span; it does not repeat the file instruction.
+
+
 ### Wallet RPC — every failure a user can act on has its own code
 
 - A wallet created in a directory that does not exist was reported as

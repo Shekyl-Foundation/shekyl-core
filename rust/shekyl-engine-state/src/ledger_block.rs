@@ -99,17 +99,6 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// the migration path).
 pub const LEDGER_BLOCK_VERSION: u32 = 12;
 
-/// Maximum number of `(height, hash)` pairs the scanner should keep in
-/// [`ReorgBlocks`]. The value is informational — the persistence layer
-/// does not truncate; it is enforced by the scanner before serializing.
-/// Pinned here so both the producer and the consumer read the same
-/// constant.
-///
-/// Sized to comfortably exceed the deepest reorg ever observed on
-/// Monero mainnet (~6) while staying below Shekyl V3's conservative
-/// scan-safety `max_reorg_depth` default (10) with headroom.
-pub const DEFAULT_REORG_BLOCKS_CAPACITY: usize = 32;
-
 /// Pointer to the most recently scanned block — "where the wallet is"
 /// on the chain.
 ///
@@ -148,13 +137,13 @@ impl BlockchainTip {
 /// detection. Sorted strictly ascending by height; duplicates at a
 /// given height are *not* allowed.
 ///
-/// The scanner trims this to [`DEFAULT_REORG_BLOCKS_CAPACITY`] entries
-/// before serializing; this module does not enforce the cap at
-/// deserialize-time so that a wallet written by a future scanner with
-/// a larger window still loads under this block version. Monotonicity
-/// is likewise the scanner's invariant — `LedgerBlock::check_version`
-/// verifies only the version field, so a corrupt or non-monotonic
-/// sequence will be caught by the runtime's `check_invariants`.
+/// How long the window is is the caller's policy
+/// ([`Self::retain_recent`]). This module does not truncate on load, so
+/// a record written under a larger window still opens under this block
+/// version, and the next successful merge trims it. Monotonicity is the
+/// writer's invariant — `LedgerBlock::check_version` verifies only the
+/// version field, so a corrupt or non-monotonic sequence will be caught
+/// by the runtime's `check_invariants`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct ReorgBlocks {
     /// The `(height, block_hash)` pairs. Strictly ascending by height.
@@ -176,6 +165,24 @@ impl ReorgBlocks {
     pub fn is_empty(&self) -> bool {
         self.blocks.is_empty()
     }
+
+    /// Keep the newest `window` entries. `window == 0` clears the record.
+    ///
+    /// `window` is a block count. A count this process cannot index is
+    /// longer than any `Vec`, so the record is kept whole.
+    ///
+    /// The entries are strictly ascending, so the tail is the newest.
+    /// The length is the caller's policy; this type does not know the
+    /// finality window.
+    pub fn retain_recent(&mut self, window: u64) {
+        let Some(keep) = usize::try_from(window).ok() else {
+            return;
+        };
+        let overflow = self.blocks.len().saturating_sub(keep);
+        if overflow > 0 {
+            self.blocks.drain(..overflow);
+        }
+    }
 }
 
 /// The ledger block. Scanner-derived on-chain state that persists to
@@ -196,9 +203,9 @@ pub struct LedgerBlock {
     /// Current scan pointer.
     pub tip: BlockchainTip,
 
-    /// Rolling `(height, hash)` window used by the scanner for reorg
-    /// detection. The scanner caps this at
-    /// [`DEFAULT_REORG_BLOCKS_CAPACITY`] before write.
+    /// Rolling `(height, hash)` window used for reorg detection. The
+    /// refresh trims it with [`ReorgBlocks::retain_recent`] after a
+    /// successful merge.
     pub reorg_blocks: ReorgBlocks,
 }
 
@@ -432,6 +439,27 @@ mod tests {
     use shekyl_curve_primitives::Commitment;
 
     use crate::{payment_id::PaymentId, transfer::SPENDABLE_AGE};
+
+    #[test]
+    fn retain_recent_keeps_the_newest_tail() {
+        let mut window = ReorgBlocks {
+            blocks: (0u8..5)
+                .map(|h| (BlockHeight::from_raw(u64::from(h)), [h; 32]))
+                .collect(),
+        };
+        window.retain_recent(2);
+        assert_eq!(
+            window.blocks,
+            vec![
+                (BlockHeight::from_raw(3), [3u8; 32]),
+                (BlockHeight::from_raw(4), [4u8; 32]),
+            ]
+        );
+        window.retain_recent(10);
+        assert_eq!(window.len(), 2);
+        window.retain_recent(0);
+        assert!(window.is_empty());
+    }
 
     fn sample_transfer(seed: u8) -> TransferDetails {
         let tx_hash = [seed; 32];

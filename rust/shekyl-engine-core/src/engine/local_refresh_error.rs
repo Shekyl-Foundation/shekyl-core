@@ -8,28 +8,31 @@
 //! classification of an upstream [`RpcError`] for the diagnostic stream.
 //!
 //! Split from `local_refresh.rs` so the producer workflow file measures the
-//! workflow; both halves read the same §5.4.7 R6 binding — the terminal
-//! error carries only its structural branch, and per-event detail flows
-//! through the [`DiagnosticSink`](crate::engine::diagnostics::DiagnosticSink).
+//! workflow. The terminal error carries no attacker-controlled string
+//! (§5.4.7 R6); per-event detail flows through the
+//! [`DiagnosticSink`](crate::engine::diagnostics::DiagnosticSink).
+//! [`LocalRefreshError::PastFinality`] carries a [`FinalityStop`] because
+//! the refusal's depth is the structural branch, not a daemon payload.
 
 use shekyl_rpc_client::{DaemonFault, RpcError};
 
 use crate::engine::diagnostics::ProtocolErrorKind;
-use crate::engine::error::{IoError, RefreshError};
+use crate::engine::error::{FinalityStop, IoError, RefreshError};
 
 // ============================================================================
-// LocalRefreshError (unit-variant-only)
+// LocalRefreshError
 // ============================================================================
 
 /// Producer-side error type for [`LocalRefresh::produce_scan_result`].
 ///
-/// **Unit-variant-only** per the §2.3 + §5.4.7 R6 two-channel
-/// reframe binding pinned at
+/// No attacker-controlled `String`, per the §2.3 + §5.4.7 R6
+/// two-channel binding pinned at
 /// [`RefreshEngine::Error`](crate::engine::traits::refresh::RefreshEngine::Error)'s
 /// rustdoc. Per-event detail (height, RPC payload, scanner
-/// rejection class) flows through the [`DiagnosticSink`] channel;
-/// the terminal error carries only the discriminant the
-/// orchestrator branches on.
+/// rejection class) flows through the [`DiagnosticSink`] channel.
+/// [`Self::PastFinality`] is the one variant with fields: a
+/// [`FinalityStop`], two block-counts and a closed breach, which is
+/// what the orchestrator reports. A daemon payload cannot land there.
 ///
 /// # Variant set
 ///
@@ -94,11 +97,19 @@ pub(crate) enum LocalRefreshError {
     /// adversarial input.
     #[error("internal invariant violation during refresh")]
     Internal,
+
+    /// The fork walk cannot confirm a common ancestor inside the
+    /// finality window. The scan attempt fails before a [`ScanResult`]
+    /// with that rewind is emitted.
+    ///
+    /// [`ScanResult`]: crate::scan::ScanResult
+    #[error("{0}")]
+    PastFinality(FinalityStop),
 }
 
 impl LocalRefreshError {
     /// The structural branch a daemon failure takes. Only the fault's
-    /// class crosses: its data stays behind, per the unit-variant binding.
+    /// class crosses: its data stays behind, per the no-daemon-string binding.
     ///
     /// An identity refusal cannot reach the producer — the orchestrator
     /// settles identity first ([`prepare_refresh`]) and the client caches
@@ -140,6 +151,7 @@ impl From<LocalRefreshError> for RefreshError {
                 "LocalRefresh: daemon returned a structurally malformed block",
             ),
             LocalRefreshError::ReorgStorm => RefreshError::ReorgStorm,
+            LocalRefreshError::PastFinality(stop) => RefreshError::ReorgDeeperThanFinality { stop },
             LocalRefreshError::Internal => RefreshError::InternalInvariantViolation {
                 context: "LocalRefresh: scanner construction or daemon request encoding failed",
             },

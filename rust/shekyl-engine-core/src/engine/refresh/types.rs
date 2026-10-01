@@ -50,9 +50,9 @@ use crate::scan::ScanResult;
 ///
 /// Per the Phase 2a snapshot-strategy decision, the snapshot is built
 /// by cloning these two fields directly (`BlockHeight` is trivially cheap;
-/// `ReorgBlocks` is a `Vec<(BlockHeight, [u8; 32])>` capped at the
-/// persistence-layer `DEFAULT_REORG_BLOCKS_CAPACITY`, so cloning it
-/// is a small allocation, not a full-ledger walk).
+/// `ReorgBlocks` is a `Vec<(BlockHeight, [u8; 32])>` trimmed after a
+/// successful merge to the finality hash window, so cloning it is a
+/// small allocation, not a full-ledger walk).
 ///
 /// If profiling under realistic ledger sizes shows `clone()` on hot
 /// paths, the strategy may shift to wrapping the inner data in

@@ -60,9 +60,7 @@ pub mod wallet_ledger;
 
 pub use bookkeeping_block::{AddressBookEntry, BookkeepingBlock, BOOKKEEPING_BLOCK_VERSION};
 pub use error::WalletLedgerError;
-pub use ledger_block::{
-    BlockchainTip, LedgerBlock, ReorgBlocks, DEFAULT_REORG_BLOCKS_CAPACITY, LEDGER_BLOCK_VERSION,
-};
+pub use ledger_block::{BlockchainTip, LedgerBlock, ReorgBlocks, LEDGER_BLOCK_VERSION};
 pub use ledger_indexes::LedgerIndexes;
 pub use local_label::{LocalLabel, SecretStr};
 pub use payment_id::PaymentId;
