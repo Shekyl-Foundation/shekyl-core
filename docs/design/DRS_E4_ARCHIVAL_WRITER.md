@@ -856,6 +856,124 @@ Releases, Reinstates, slashes (no corpus has them, §2.4) — those families'
 witnesses are the scenario driver's, and the stamp is the only §7.1.1
 instrument over them.
 
+### 3.8.1 The digest preimages — v0 as records-was, v1 as specified (`ARW-24`; written 2026-10-01, before the hasher)
+
+This section is the specification the hasher is written against and the
+KAT's `specification` field cites (`ARW-23`). It carries **v0 as well as
+v1**: v0's specification lived only in `digest_v0.rs`'s doc comment and
+retires with that file (commit 9), while every E2 checkpoint captured
+before commit 6 — and every graded `digest_identical` in the comparator's
+history — is denominated in v0. The v0 half below is lifted from that
+comment and **verified against the code at `dev@76bc64aa7`**
+(`canonical_preimage`, the three constants, `PINNED_FIXTURE`); it is a
+records-was claim and stays true when the function is gone. Whether this
+section is later promoted to a contract document is `ARW-Q13`.
+
+**Conventions shared by both versions.** The hash is cSHAKE256 with a
+32-byte output (`shekyl-crypto-hash::cshake256_32`; SP 800-185, the house
+default), customization string per table below, one string per context
+(SA-R-2). Every integer inside a preimage or a leaf is **little-endian** —
+including key components the stores hold big-endian, because the digest
+is layout-independent by charter and the stored key form is the store's
+business (`lmdb_order`). A counted sequence hashes its count: an empty
+sequence hashes the 8-byte zero count, never the empty string
+(`empty_chain_is_not_the_empty_cshake`). A set-shaped family is the XOR of
+its per-element leaf hashes (`0^32` when empty, order-independent,
+pop-symmetric) with its cardinality carried beside it in the outer
+preimage. The format-version tag is the first byte of the outer preimage
+and is also spelled in the domain strings, so a preimage change is a new
+domain, not a reinterpretation.
+
+#### v0 — DRS-P0d, format tag `0x00`, in force from DRS-P0d to PR-b commit 6; the only value in every checkpoint captured before that commit — RECORDS-WAS
+
+Outer preimage, **113** bytes, hashed under `shekyl/chain-digest/v0`:
+
+| Offset | Width | Field |
+|---|---|---|
+| 0 | 1 | `0x00` |
+| 1 | 8 | `n_blocks` — `BlockchainLMDB::height()` |
+| 9 | 8 | `n_spent` — cardinality of `spent_keys` |
+| 17 | 32 | chain component — `cSHAKE256("shekyl/chain-digest/v0/chain", u64(n) ‖ hash_0 ‖ … ‖ hash_{n−1})`, height order |
+| 49 | 32 | spent accumulator — `⊕_ki cSHAKE256("shekyl/chain-digest/v0/spent-elem", ki)` |
+| 81 | 32 | live curve-tree root (`get_curve_tree_root`; empty tree → Selene `hash_init`) |
+
+Self-pinned tripwire (not a KAT): `digest_v0([0x11^32], [0x22^32, 0x33^32],
+0x44^32) = a6990c0f feae0e0f fe437977 62928a3c 55bfc995 2bfcbf81 00e97665
+e061def2`. Deliberately excluded: every archival family, the txpool,
+alt-chain, txs, outputs, root history, `hf_versions` — which is why
+`DAEMON_REDB_STORE.md` §7.1.1 forbade S-ARCH's extraction on a v0 match and
+this increment exists.
+
+#### v1 — this increment, format tag `0x01`
+
+v1 is v0's three components, re-domained, plus the archival state §3.8
+item 1 names. Nothing in v0's field set moves; v1 appends.
+
+**Archival leaf encodings.** One leaf per logical row, `key ‖ value`,
+hashed under the family's domain string. Values use the store codec's
+`Canonical` encoding (`shekyl-store-codec`) — the stored form *is* the
+digest input, by that crate's charter — so both legs of the KAT encode in
+Rust: the C++ walker marshals decoded fields over the FFI (`ARW-Q10` (a))
+and the hasher re-encodes.
+
+| Family | Domain string suffix | Leaf (`key ‖ value`, LE) | Projection / exclusion |
+|---|---|---|---|
+| `archival_bond` | `/v1/bond` | `p[32] ‖ Canonical(BondRecord)` (`bond_record`) | — |
+| `archival_serve_credit` | `/v1/serve-credit` | `p[32] ‖ u64 shard ‖ u64 epoch ‖ u64 height` | set table — no value |
+| `archival_r_market` | `/v1/r-market` | `u64 shard ‖ u64 epoch ‖ u64 r` | rows with `r = 0` are **not leaves** (§3.6 — the C++ writes them, the redb close does not; the digest is over the logical non-zero set) |
+| `archival_sigma_work` | `/v1/sigma-work` | `u64 E ‖ u64 Σwork_milli` | — |
+| `archival_budget` | `/v1/budget` | `u64 E ‖ u64 budget` | — |
+| `archival_attestation_witness` | `/v1/witness` | `u64 h ‖ witness bytes` (`1 ≤ len ≤ MAX_ATTESTATION_WITNESS_BYTES`) | an empty attestation set is **no row** on both sides |
+| `archival_slash_log` | `/v1/slash-log` | `u64 height ‖ u32 seq ‖ Canonical(SlashLogEntry)` (`slash_log_entry`) | the C++ epoch-marker rows (`kArchivalSlashLogEpochMarkerSeq`) are **not leaves**; the C++ row's slashed amount is **projected out** (`ARW-Q2`) |
+| `archival_slash_applied` | `/v1/slash-applied` | `p[32] ‖ u64 shard ‖ u64 epoch` | set table — no value |
+
+Each family's accumulator is `acc_F = ⊕_rows cSHAKE256(D_F, leaf)` with
+`n_F` its row count — the shape `ARW-Q14` holds as default (a); under (b)
+this paragraph becomes `cSHAKE256(D_F, u64(n_F) ‖ leaf_0 ‖ … ‖ leaf_{n−1})`
+in the stores' shared key order, and nothing else in this section changes.
+Under (a) an empty family's accumulator is `0^32` by construction and its
+count is `0`; the KAT pins the outer digest over that state per family, so
+the empty case is asserted where the stamp needs it (`ARW-23`).
+
+**Two singletons**, fixed width, a presence byte then the value (zero
+bytes when absent, so the preimage length is constant):
+
+| Singleton | Width | Encoding | Source, both sides |
+|---|---|---|---|
+| open epoch's accrued total | 17 | `0x00 ‖ 0^16` absent; `0x01 ‖ u64 E_open ‖ u64 total` | redb: the one `archival_budget_accruing` row; C++: `Σ` of `archival_budget_accrual[h]` over `h ∈ [E_open·SEB, tip]` with checked addition (`db_lmdb.cpp:7836–7858`) — absent when the range holds no row |
+| `archival_last_slash_epoch` | 9 | `0x00 ‖ 0^8` absent; `0x01 ‖ u64 E` | redb: the chain-state cell, `Option`; C++: the key, with its `UINT64_MAX` sentinel (`db_lmdb.cpp:5217`) read as **absent** (`ARW-Q11`) |
+
+**Outer preimage**, **459** bytes (`113 + 8×40 + 17 + 9`), hashed under
+`shekyl/chain-digest/v1`:
+
+| Offset | Width | Field |
+|---|---|---|
+| 0 | 1 | `0x01` |
+| 1 | 8 | `n_blocks` |
+| 9 | 8 | `n_spent` |
+| 17 | 32 | chain component — as v0, under `shekyl/chain-digest/v1/chain` |
+| 49 | 32 | spent accumulator — as v0, under `shekyl/chain-digest/v1/spent-elem` |
+| 81 | 32 | live curve-tree root |
+| 113 | 8 × (8 + 32) | per family, in the table's order above: `u64 n_F ‖ acc_F` — bond, serve-credit, r-market, sigma-work, budget, witness, slash-log, slash-applied |
+| 433 | 17 | accrued total |
+| 450 | 9 | `last_slash_epoch` |
+
+**Not in v1, by name:** `archival_settlement` (held, SO-D8), the seven
+`NOT_PORTED` rows (no state to digest), `archival_alt_attestation_witness`
+(alt-chain, excluded as v0 excludes alt-chain), the txpool. The digest is
+**tip-only** (§1 item 5). A v0 match says nothing about any family in the
+leaf table; a v1 match over a run whose `Provenance.stubbed` is non-empty
+is a regression instrument, not correctness evidence (CSR-3).
+
+**Falsifiers the implementation carries.** `DIGEST_V1_PREIMAGE_LEN == 459`
+asserted against the documented layout; every domain string distinct and
+non-empty; the leaf table above reproduced as an exhaustive `match` over
+`ArchivalFamily` (an arm per retained family returns its leaf encoder;
+`Settlement`, the journals and `AltAttestationWitness` return the named
+exclusion) so a family added to the X-macro without a digest disposition
+is a compile error; and the KAT (`ARW-23`), whose `specification` field is
+this section.
+
 ### 3.9 The deletion surface
 
 C++ (`db_lmdb.cpp`): the appliers and reverters `:4486–4560` (accrual,
