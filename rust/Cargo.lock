@@ -5002,6 +5002,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-wallet-contract"
+version = "3.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "shekyl-engine-core",
+ "shekyl-engine-file",
+ "shekyl-engine-prefs",
+ "shekyl-engine-state",
+ "shekyl-rpc-client",
+ "shekyl-types",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "shekyl-wallet-rpc"
 version = "3.1.0"
 dependencies = [
@@ -5029,6 +5045,7 @@ dependencies = [
  "shekyl-scanner",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-wallet-contract",
  "shekyl-win-sec",
  "subtle",
  "tempfile",

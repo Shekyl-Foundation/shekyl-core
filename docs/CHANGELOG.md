@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Wallet contract — one owner for the error codes
+
+- The wallet contract's error vocabulary moves out of the RPC server into
+  `shekyl-wallet-contract`: the code table, `WalletRpcError`, and the mapping
+  from every engine error onto the code and message that name its remedy.
+  `shekyl-wallet-rpc` re-exports it unchanged, and the GUI wallet, which embeds
+  the engine rather than calling the RPC, uses the same mapping instead of a
+  partial copy that folded every unnamed cause into `INTERNAL_ERROR`. One
+  owner, so the two surfaces cannot answer the same failure differently.
+- The contract's `TransferState` and the one journal → wire projection move
+  with it, because a refused `abandon_tx` carries that state.
+- Each code carries the contract's name (`WalletRpcErrorCode::name`, e.g.
+  `"INSUFFICIENT_FUNDS"`, `"MSG_SIG_VERIFY_FAILED"`), declared beside its
+  number. The contract test now holds the (code, name) pairs to the
+  `wallet_rpc.yaml` enum in both directions. The five JSON-RPC protocol codes
+  gain their names (`PARSE_ERROR` … `INTERNAL_ERROR`) in the contract's
+  comments.
+
 ### Wallet RPC — every failure a user can act on has its own code
 
 - A wallet created in a directory that does not exist was reported as

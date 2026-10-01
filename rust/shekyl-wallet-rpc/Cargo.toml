@@ -51,6 +51,7 @@ shekyl-scanner = { path = "../shekyl-scanner" }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-units = { path = "../shekyl-units" }
 shekyl-types = { path = "../shekyl-types" }
+shekyl-wallet-contract = { path = "../shekyl-wallet-contract" }
 
 # WP-W2: the in-process host's named-pipe listener. The `unsafe`
 # `create_with_security_attributes_raw` call and the owner-only descriptor
