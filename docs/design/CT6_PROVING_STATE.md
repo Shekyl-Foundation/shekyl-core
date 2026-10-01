@@ -756,3 +756,113 @@ reader the examiner consumes has no such check, and the weld is asserted against
 directly — a snapshot over a count on the far side of a layer step must report
 that count's depth. Recorded here rather than left as a green that proves less
 than it looks like it does.
+
+## 11 — Increment 5's capture half: the instrument, before the subject
+
+`C7` is increment 5's other half and is built (§4, row C7). This section is the
+capture half, and what it records is an **instrument**, not capture. Capture has
+no code yet. The instrument came first deliberately: capture's claim is a
+*quantitative* one, and a claim graded by a criterion first seen after the
+change has been fitted to the curve it is meant to judge.
+
+### 11.1 Nothing measured the subject
+
+`assemble_paths` had never been timed. The spend-edge rig proves against
+**synthesized** paths (`shekyl-wss-q1b-bench`'s `fixture::synth_sparse_path`),
+so assembly is bypassed and its cost was unmeasured — which also means
+"today's slope is the evidence for capture" was, until now, an argument with no
+measurement behind it. `shekyl-wss-q1b-bench`'s `assembleedge` module and
+`assemble_edge` bin drive the real, store-backed `CurveTreeClient`.
+
+### 11.2 The cost is O(chain), and every neighbouring figure is windowed
+
+This is the finding, and it corrects a line in production:
+
+> `assemble.rs`: "…`n` the drained leaf count (765 600 at the graded worst
+> case)."
+
+765 600 is `worst_case_window_leaves` — the **725-block replay window**, about
+one day of chain at a 120 s target. Assembly is not bounded by it.
+`CurveTreeClient::entries` is append-only (`extend` on ingest, replaced
+wholesale only by a rollback's rebuild, never `retain`ed, `drain`ed or
+`truncate`d); `rebuild_from_store` reloads the **whole** drained set; and a
+resume from a store whose frozen segments were pruned is refused outright
+(`ClientError::ResumeFromPrunedStore`, `F5`) rather than resumed from a partial
+one. Every drained leaf since genesis is in memory, and every spend rebuilds
+every layer over all of them.
+
+At 760 320 leaves/day and the ~102 µs/leaf the instrument measures:
+
+| assembly population | `n` | cost per spend |
+| --- | --- | --- |
+| replay window, ~1 day of chain | 765 600 | ~78 s |
+| `min_leaves_for_depth(6)`, ~23 days | 17 778 529 | ~30 min |
+| one year of chain | 277 516 800 | ~7.9 h |
+
+**This is a mission-hierarchy failure, not a budget miss.** Commitment 3 — the
+system must outlast the team — is the binding one: a cost linear in chain
+length fails it at *some* chain age whatever the present budget says, so the
+remedy cannot be a faster board. That is the argument for capture, and it is
+stronger than the slope framing this increment was opened under.
+
+It also means **"worst case" cannot be derived here.** It is a ruling about how
+old a chain the wallet must still be able to spend on. Until that is ruled, no
+plan in the instrument is the graded plan: `plan_at_replay_window` is named for
+what it measures, `plan_at_depth` establishes shape on a cheap rung, and
+`AssembleEdgeRecord::plan` says which ran. **Blocked on that ruling (rule 22).**
+
+### 11.3 Three depths, which are not one
+
+A conflation worth keeping separate, because it already produced a wrong
+reading once in this session:
+
+| axis | value | what it is |
+| --- | --- | --- |
+| rate model | `GRADED_TREE_DEPTH` = 6 | what a path's proof weight is priced at, which fixes a block's leaf rate |
+| replay window | 5 | the depth of the tree 765 600 leaves makes — and it is 5 at every model depth 3…7, since the leaf rate moves 4.5 % across them while a rung needs 38× |
+| the chain | grows | what the curve tree actually is; it crosses `min_leaves_for_depth(6)` after ~23 days, so `GRADED_TREE_DEPTH`'s stated band is satisfied in weeks and its rule-21 reopener was never unsatisfiable |
+
+Two set relations are pinned by test so the conflation cannot return: the
+window's leaf count stays strictly below the floor of the rung the rate model
+names, and no plan may sit at or above it.
+
+### 11.4 The criterion, fixed in advance
+
+Flat does not mean constant — one more layer costs one more layer's walk — so
+the criterion has two halves:
+
+- **within a depth rung**, cost constant within noise however much `n` grows;
+- **across a rung boundary**, a step of one layer's work and no more.
+
+The populations are chosen so both are observable, and derived from the
+production ladder rather than restated: the cross-rung pair differs by **one
+leaf** (a rung floor and its predecessor), which isolates the layer step from
+the population term entirely, and the same-rung pair separates ≥ 1.5×, where a
+linear term shows as ≥ 50 % against a 10 % bound.
+
+`expected_cross_rung_ratio` is a **uniform-layer model** and says so: Selene
+nodes are 38 wide and Helios 18, so the true step is in chunk work. It is right
+for *this* question, where the hypotheses differ by orders of magnitude, and
+explicitly **not** good enough to grade a passing capture — increment 6 must
+widen the bound or derive from `chunk_width`. Named blocker.
+
+### 11.5 What this round does not establish
+
+- **No graded figure.** The instrument's own board control re-times identical
+  work on the same client at the end of a run; the first shape run **diverged
+  69.1 % against a 5 % bound and was discarded**, with the arms showing why it
+  had to be (one *more* leaf came out 38 % faster; `k = 8` came out cheaper
+  than `k = 2`). The dev box is shared (rule 38) and rule 76 pins the figure to
+  the floor device, so a figure-producing run is a claimed-host activity. The
+  ~102 µs/leaf above is a projection from a clean-but-unattested probe and is
+  labelled as one.
+- **The integrity gate's verdict.** The rig takes its reference root from the
+  client, so `assemble_paths`'s root gate is green by construction; the rig
+  measures what it costs, never whether it is right. Root agreement is graded
+  in-crate by the height-keyed C1 oracle (`client::ct6_oracle`, increments 2
+  and 4) against a replay oracle this crate cannot reach — `entries` is
+  `pub(crate)`, `store::ops` is private, the oracle is `#[cfg(test)]`. Widening
+  any of them would publish a second root mechanism a production caller could
+  gate against, which `assemble.rs` rules out by design. What the rig does
+  assert is its own subject (rule 47): the client drained exactly the
+  population fed, and reports the depth that count implies.
