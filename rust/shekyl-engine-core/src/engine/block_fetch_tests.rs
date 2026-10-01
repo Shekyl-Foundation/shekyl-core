@@ -16,7 +16,9 @@ use crate::engine::test_support::{conforming_coinbase_extra, conforming_pqc_extr
 use core::future::Future;
 use shekyl_rpc_types::HashHex;
 
-use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, PrunableHash, TxHash};
+use shekyl_types::{
+    ArchivalLength, AttestationRoot, BlockHash, CurveTreeRoot, PrunableHash, TxHash,
+};
 use shekyl_wire::transaction::UNLOCK_TIME_BLOCK_SENTINEL;
 use shekyl_wire::{BlockHeader, Ct, CtBase, Input, Output, TxPrefix};
 
@@ -55,7 +57,11 @@ async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
     // pinning the binding while claiming to pin the status guard.
     let tx = pruned_spend_tx(0);
     let prunable_digest = [0x5Au8; 32];
-    let txid = tx.hash_with_supplied_prunable(PrunableHash::from_bytes(prunable_digest));
+    let archival_len = 4_242u64;
+    let txid = tx.hash_with_supplied_prunable(
+        PrunableHash::from_bytes(prunable_digest),
+        ArchivalLength::from_raw(archival_len),
+    );
     let mut body = Vec::new();
     tx.write(&mut body).expect("Vec write is infallible");
     let reply = shekyl_rpc_types::GetTransactionsResponse {
@@ -66,6 +72,7 @@ async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
             pruned_as_hex: hex::encode(&body),
             prunable_as_hex: String::new(),
             prunable_hash: HashHex::from_bytes(prunable_digest),
+            archival_len,
             as_json: String::new(),
             pruned: false,
             double_spend_seen: false,
@@ -332,11 +339,11 @@ fn pruned_tx_hex() -> String {
 }
 
 /// The hash a pruned fixture body actually has, given the fixtures' all-zero
-/// `prunable_hash`. Deriving it rather than picking a label is the point:
+/// `prunable_hash` and zero `archival_len`. Deriving it rather than picking a label is the point:
 /// `parse_tx_batch` now binds the body, so a fixture that invents a hash is
 /// staging the substitution it is supposed to reject.
 fn pruned_id(tx: &Transaction) -> TxHash {
-    tx.hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]))
+    tx.hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]), ArchivalLength::ZERO)
 }
 
 /// A **full** (unpruned) non-miner spend: [`pruned_spend_tx`] with the
@@ -394,6 +401,7 @@ fn tx_entry_with(tx_hash: TxHash, as_hex: &str, pruned_as_hex: &str) -> TxEntry 
         pruned_as_hex: pruned_as_hex.to_owned(),
         prunable_as_hex: String::new(),
         prunable_hash: HashHex::from_bytes([0u8; 32]),
+        archival_len: 0,
         as_json: String::new(),
         pruned: false,
         double_spend_seen: false,
@@ -457,6 +465,25 @@ fn a_forged_prunable_digest_does_not_rescue_a_body() {
     assert!(
         format!("{err}").contains("a label is not an identity"),
         "the digest is an operand of the identity, not decoration: {err}"
+    );
+}
+
+/// **So is the archival length** (`SHT-Q2`): it is an operand of the txid, so
+/// the reply's value is checked by the same recomputation. A daemon that
+/// reports another length for an otherwise-correct body — one byte off is
+/// enough to move a shard boundary for whoever believed it — is refused.
+#[test]
+fn a_forged_archival_length_does_not_rescue_a_body() {
+    let tx = pruned_spend_tx(0);
+    let real_id = pruned_id(&tx);
+    let mut entry = tx_entry(&hex::encode(real_id), &hex::encode(tx.serialize()));
+    entry.archival_len = 1; // not the fixtures' zero
+
+    let err = parse_tx_batch(&[real_id], &[entry], TxBodyForm::Pruned)
+        .expect_err("a different length yields a different identity");
+    assert!(
+        format!("{err}").contains("a label is not an identity"),
+        "the length is an operand of the identity, not decoration: {err}"
     );
 }
 

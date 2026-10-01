@@ -26,7 +26,8 @@ use shekyl_rpc_types::{
     GetPeerListRequest, GetPeerListResponse, Peer, SyncInfoPeer, SyncInfoResponse, SyncSpan,
 };
 use shekyl_rpc_types::{GetTransactionsRequest, GetTransactionsResponse, TxEntry, TxLocation};
-use shekyl_types::{BlockHeight, ChainCount};
+use shekyl_types::{ArchivalLength, BlockHeight, ChainCount};
+use shekyl_wire::{Ct, Transaction};
 
 use crate::chain_facts::{BlockLookup, ChainFacts, ChainTip, FactsFault, P2pFacts};
 use shekyl_rpc_types::{
@@ -589,13 +590,56 @@ pub struct RenderFailed {
     pub code: i32,
 }
 
+/// A body whose archival length the daemon could not measure.
+///
+/// The length is measured at serve time from the segments the store hands
+/// over (`SHT-Q2`: nothing carries it, so nothing can carry a wrong one).
+/// That needs a pruned half this daemon's parser reads and, for an FCMP++
+/// transaction, the prunable half's bytes. Failing either, the request fails:
+/// the reply's `archival_len` is an operand of the txid, and a guessed value
+/// would hand the client an identity check it cannot pass.
+///
+/// **This is the LMDB store's contract, not every store's.** LMDB never
+/// drops a prunable half in place, so [`TxSlot`] always has the bytes and
+/// carries no length. `shekyl-chain-store` does drop them, and keeps the
+/// `txs_archival_len` row for exactly this reply: a `TxSlot` fed from that
+/// store carries the row's length, and this refusal then covers only a slot
+/// with neither the bytes nor the row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LengthUnmeasured {
+    pub txid: String,
+}
+
+/// Why a gathered slot could not be projected into the reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectionFailed {
+    Render(RenderFailed),
+    Length(LengthUnmeasured),
+}
+
+/// The archival length of the transaction the store handed over in two
+/// halves, measured from those bytes — or `None` when they do not hold it.
+///
+/// `pruned` is the prefix, the committed base and the tx-level `pqc_auths`;
+/// `prunable` is the region after them. A coinbase carries no archival good.
+/// An FCMP++ transaction always has a prunable region, so an empty one means
+/// this store does not hold it and its length is not here to measure.
+fn archival_len_at_serve(pruned: &[u8], prunable: &[u8]) -> Option<ArchivalLength> {
+    let body = Transaction::from_bytes(pruned).ok()?;
+    match &body.ct {
+        Ct::Null(_) => Some(ArchivalLength::ZERO),
+        Ct::Fcmp { .. } if prunable.is_empty() => None,
+        Ct::Fcmp { .. } => Some(body.archival_len_with_prunable(prunable)),
+    }
+}
+
 pub fn project_transactions<R>(
     request: &GetTransactionsRequest,
     ids: &[[u8; 32]],
     slots: &[TxSlot],
     chain_height: u64,
     render: R,
-) -> Result<GetTransactionsResponse, RenderFailed>
+) -> Result<GetTransactionsResponse, ProjectionFailed>
 where
     R: Fn(&[u8], bool) -> Result<String, i32>,
 {
@@ -663,12 +707,19 @@ where
         // transaction the store has no prunable half for, because there is
         // nothing to concatenate.
         let split_form = request.split || request.prune || prunable.is_empty();
+        let tx_hash = HashHex::from_bytes(*id);
+        let archival_len = archival_len_at_serve(pruned, prunable).ok_or_else(|| {
+            ProjectionFailed::Length(LengthUnmeasured {
+                txid: tx_hash.to_string(),
+            })
+        })?;
         let mut entry = TxEntry {
-            tx_hash: HashHex::from_bytes(*id),
+            tx_hash,
             as_hex: String::new(),
             pruned_as_hex: String::new(),
             prunable_as_hex: String::new(),
             prunable_hash: HashHex::from_bytes(*prunable_hash),
+            archival_len: archival_len.to_raw(),
             as_json: String::new(),
             pruned: pruned_flag,
             double_spend_seen,
@@ -687,18 +738,22 @@ where
                 } else {
                     [pruned.as_slice(), prunable.as_slice()].concat()
                 };
-                entry.as_json = render(&blob, base_only).map_err(|code| RenderFailed {
-                    txid: entry.tx_hash.to_string(),
-                    code,
+                entry.as_json = render(&blob, base_only).map_err(|code| {
+                    ProjectionFailed::Render(RenderFailed {
+                        txid: entry.tx_hash.to_string(),
+                        code,
+                    })
                 })?;
             }
         } else {
             let full: Vec<u8> = [pruned.as_slice(), prunable.as_slice()].concat();
             entry.as_hex = hex::encode(&full);
             if request.decode_as_json {
-                entry.as_json = render(&full, false).map_err(|code| RenderFailed {
-                    txid: entry.tx_hash.to_string(),
-                    code,
+                entry.as_json = render(&full, false).map_err(|code| {
+                    ProjectionFailed::Render(RenderFailed {
+                        txid: entry.tx_hash.to_string(),
+                        code,
+                    })
                 })?;
             }
         }
@@ -1715,10 +1770,49 @@ pub(crate) mod tests {
 
     // ── the get_transactions projection matrix ───────────────────────────
 
-    fn chain_slot(prunable: &[u8]) -> TxSlot {
+    /// A real transaction in the two halves the store hands over, with the
+    /// archival length the wire crate's fixture pins for it.
+    struct StoredTx {
+        pruned: Vec<u8>,
+        prunable: Vec<u8>,
+        archival_len: u64,
+    }
+
+    /// The pinned parity spend (`shekyl-wire`'s `pruned_tx_hash_parity_v1`):
+    /// prefix, base and `pqc_auths` in the pruned half, the prunable region
+    /// after it.
+    fn stored_spend() -> StoredTx {
+        let pin: serde_json::Value = serde_json::from_str(include_str!(
+            "../../shekyl-wire/tests/fixtures/pruned_tx_hash_parity_v1.json"
+        ))
+        .expect("parity fixture");
+        let full = hex::decode(pin["tx_hex"].as_str().expect("tx_hex")).expect("hex");
+        let pruned = hex::decode(pin["pruned_hex"].as_str().expect("pruned_hex")).expect("hex");
+        assert!(full.starts_with(&pruned), "the pruned half is a prefix");
+        StoredTx {
+            prunable: full[pruned.len()..].to_vec(),
+            pruned,
+            archival_len: pin["archival_len"].as_u64().expect("archival_len"),
+        }
+    }
+
+    /// A real coinbase: one half, no prunable region, no archival good.
+    fn stored_coinbase() -> StoredTx {
+        let block = shekyl_wire::Block::from_bytes(include_bytes!(
+            "../../shekyl-wire/tests/vectors/regtest_coinbase_h1.block"
+        ))
+        .expect("block vector");
+        StoredTx {
+            pruned: block.miner_transaction.serialize(),
+            prunable: Vec::new(),
+            archival_len: 0,
+        }
+    }
+
+    fn chain_slot(tx: &StoredTx) -> TxSlot {
         TxSlot::Chain {
-            pruned: vec![0xAA, 0xBB],
-            prunable: prunable.to_vec(),
+            pruned: tx.pruned.clone(),
+            prunable: tx.prunable.clone(),
             prunable_hash: [0x11; 32],
             block_height: 7,
             block_timestamp: 1_700_000_000,
@@ -1752,51 +1846,51 @@ pub(crate) mod tests {
     /// field.** This replaced a C++ matrix, and the parity vectors do not
     /// reach it — they build `TxEntry` directly — so without this the
     /// behaviour is unpinned on all three request flags at once.
+    ///
+    /// The archival length is on no axis: it is the same in every cell,
+    /// **including the cells that withhold the prunable half**. That is the
+    /// cell a wallet reads — it rebuilds the txid from the pruned body, the
+    /// digest and this length (`SHT-Q2`).
     #[test]
     fn projection_matrix_over_split_prune_and_decode() {
-        const PRUNED_HEX: &str = "aabb";
-        const PRUNABLE_HEX: &str = "ccdd";
-        let prunable = [0xCC, 0xDD];
+        let tx = stored_spend();
+        let pruned_hex = hex::encode(&tx.pruned);
+        let prunable_hex = hex::encode(&tx.prunable);
+        let full_hex = format!("{pruned_hex}{prunable_hex}");
+        let full_json = format!("{full_hex}|base_only=false");
+        let base_json = format!("{pruned_hex}|base_only=true");
 
         // (split, prune, decode) -> (as_hex, pruned_as_hex, prunable_as_hex, as_json)
         let cases: [(bool, bool, bool, &str, &str, &str, &str); 6] = [
             // Neither flag: the whole transaction, concatenated, one field.
-            (false, false, false, "aabbccdd", "", "", ""),
-            (
-                false,
-                false,
-                true,
-                "aabbccdd",
-                "",
-                "",
-                "aabbccdd|base_only=false",
-            ),
+            (false, false, false, &full_hex, "", "", ""),
+            (false, false, true, &full_hex, "", "", &full_json),
             // `split`: the halves, both carried; json still covers both.
-            (true, false, false, "", PRUNED_HEX, PRUNABLE_HEX, ""),
+            (true, false, false, "", &pruned_hex, &prunable_hex, ""),
             (
                 true,
                 false,
                 true,
                 "",
-                PRUNED_HEX,
-                PRUNABLE_HEX,
-                "aabbccdd|base_only=false",
+                &pruned_hex,
+                &prunable_hex,
+                &full_json,
             ),
             // `prune`: the prunable half is withheld, and json is base-only —
             // rendering the full blob here would leak what `prune` withheld.
-            (false, true, false, "", PRUNED_HEX, "", ""),
-            (false, true, true, "", PRUNED_HEX, "", "aabb|base_only=true"),
+            (false, true, false, "", &pruned_hex, "", ""),
+            (false, true, true, "", &pruned_hex, "", &base_json),
         ];
 
         for (split, prune, decode, as_hex, pruned_as_hex, prunable_as_hex, as_json) in cases {
             let out = project_transactions(
                 &req(split, prune, decode),
                 &[[0x01; 32]],
-                &[chain_slot(&prunable)],
+                &[chain_slot(&tx)],
                 9,
                 echo_render(),
             )
-            .expect("render succeeds");
+            .expect("projection succeeds");
             let e = &out.txs[0];
             let label = format!("split={split} prune={prune} decode={decode}");
             assert_eq!(e.as_hex, as_hex, "as_hex @ {label}");
@@ -1806,42 +1900,48 @@ pub(crate) mod tests {
                 "prunable_as_hex @ {label}"
             );
             assert_eq!(e.as_json, as_json, "as_json @ {label}");
+            assert_eq!(e.archival_len, tx.archival_len, "archival_len @ {label}");
         }
     }
 
-    /// **An empty prunable half takes the split form even unasked**, because
-    /// there is nothing to concatenate — and its json is base-only for the
-    /// same reason. This is the branch the live console test reaches (the
-    /// genesis transaction), and the only one it reaches.
+    /// **A transaction with no prunable half takes the split form even
+    /// unasked**, because there is nothing to concatenate — and its json is
+    /// base-only for the same reason. This is the branch the live console
+    /// test reaches (the genesis transaction), and the only one it reaches. A
+    /// coinbase carries no archival good, so its length is zero.
     #[test]
-    fn an_empty_prunable_half_is_split_form_and_renders_base_only() {
+    fn a_coinbase_is_split_form_renders_base_only_and_has_no_archival_length() {
+        let tx = stored_coinbase();
+        let pruned_hex = hex::encode(&tx.pruned);
         let out = project_transactions(
             &req(false, false, true),
             &[[0x02; 32]],
-            &[chain_slot(&[])],
+            &[chain_slot(&tx)],
             9,
             echo_render(),
         )
-        .expect("render succeeds");
+        .expect("projection succeeds");
         let e = &out.txs[0];
         assert!(e.as_hex.is_empty(), "no concatenated form exists");
-        assert_eq!(e.pruned_as_hex, "aabb");
+        assert_eq!(e.pruned_as_hex, pruned_hex);
         assert!(e.prunable_as_hex.is_empty());
-        assert_eq!(e.as_json, "aabb|base_only=true");
+        assert_eq!(e.as_json, format!("{pruned_hex}|base_only=true"));
+        assert_eq!(e.archival_len, 0);
     }
 
     /// Chain, pool and miss land in their own places: the first two become
     /// entries carrying their location, the third only a `missed_tx` id.
     #[test]
     fn chain_pool_and_missed_slots_are_projected_to_their_own_places() {
+        let tx = stored_spend();
         let out = project_transactions(
             &req(true, false, false),
             &[[0x01; 32], [0x02; 32], [0x03; 32]],
             &[
-                chain_slot(&[0xCC]),
+                chain_slot(&tx),
                 TxSlot::Pool {
-                    pruned: vec![0xAA],
-                    prunable: vec![0xCC],
+                    pruned: tx.pruned.clone(),
+                    prunable: tx.prunable.clone(),
                     prunable_hash: [0x22; 32],
                     double_spend_seen: true,
                     relayed: true,
@@ -1852,7 +1952,7 @@ pub(crate) mod tests {
             9,
             echo_render(),
         )
-        .expect("render succeeds");
+        .expect("projection succeeds");
 
         assert_eq!(out.txs.len(), 2, "the miss must not become an entry");
         assert_eq!(out.missed_tx.len(), 1);
@@ -1866,6 +1966,10 @@ pub(crate) mod tests {
             !out.txs[1].pruned,
             "a pooled transaction is never reported pruned"
         );
+        assert_eq!(
+            out.txs[1].archival_len, tx.archival_len,
+            "a pooled transaction's length is measured like a mined one's"
+        );
     }
 
     /// A renderer failure names the transaction it failed on and fails the
@@ -1875,13 +1979,77 @@ pub(crate) mod tests {
         let err = project_transactions(
             &req(false, false, true),
             &[[0x09; 32]],
-            &[chain_slot(&[0xCC])],
+            &[chain_slot(&stored_spend())],
             9,
             |_, _| Err(-7),
         )
         .expect_err("a failing renderer must fail the reply");
-        assert_eq!(err.code, -7);
-        assert_eq!(err.txid, HashHex::from_bytes([0x09; 32]).to_string());
+        assert_eq!(
+            err,
+            ProjectionFailed::Render(RenderFailed {
+                txid: HashHex::from_bytes([0x09; 32]).to_string(),
+                code: -7,
+            })
+        );
+    }
+
+    /// The length is measured or the reply fails. An FCMP++ body the store
+    /// holds no prunable half for has no bytes to measure, and a half that is
+    /// not a transaction cannot be measured at all: neither is answered with
+    /// a length, because the client mixes that length into the txid it checks
+    /// the body against.
+    #[test]
+    fn a_body_whose_length_cannot_be_measured_fails_the_reply() {
+        let spend = stored_spend();
+        let unmeasurable = [
+            (
+                "an FCMP++ body with no prunable half",
+                StoredTx {
+                    pruned: spend.pruned.clone(),
+                    prunable: Vec::new(),
+                    archival_len: 0,
+                },
+            ),
+            (
+                "a pruned half that is not a transaction",
+                StoredTx {
+                    pruned: vec![0xAA, 0xBB],
+                    prunable: vec![0xCC],
+                    archival_len: 0,
+                },
+            ),
+        ];
+        for (what, tx) in unmeasurable {
+            let err = project_transactions(
+                &req(true, true, false),
+                &[[0x0A; 32]],
+                &[chain_slot(&tx)],
+                9,
+                echo_render(),
+            )
+            .expect_err(what);
+            assert_eq!(
+                err,
+                ProjectionFailed::Length(LengthUnmeasured {
+                    txid: HashHex::from_bytes([0x0A; 32]).to_string(),
+                }),
+                "{what}"
+            );
+        }
+    }
+
+    /// The serve-time measurement is the wire crate's: the pinned spend's
+    /// two halves measure to its pinned archival length, which is the
+    /// `pqc_auths` segment inside the pruned half plus the prunable half.
+    #[test]
+    fn the_served_length_is_the_pinned_archival_length() {
+        let tx = stored_spend();
+        let measured = archival_len_at_serve(&tx.pruned, &tx.prunable).expect("measurable");
+        assert_eq!(measured.to_raw(), tx.archival_len);
+        assert!(
+            measured.to_raw() > u64::try_from(tx.prunable.len()).expect("fits"),
+            "the pqc_auths segment counts, so the length exceeds the prunable half"
+        );
     }
 
     #[test]
@@ -1922,10 +2090,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v15` = 3.38). A bump that
+        // Head of the `get_version` chain (`_v16` = 3.39). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v15.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v16.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {

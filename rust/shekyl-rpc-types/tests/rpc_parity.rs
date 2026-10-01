@@ -540,6 +540,7 @@ fn get_transactions_chain_and_pool_matches_the_oracle() {
         pruned_as_hex: String::new(),
         prunable_as_hex: String::new(),
         prunable_hash: tagged_hash(12),
+        archival_len: 16874,
         as_json: String::new(),
         pruned: false,
         double_spend_seen: false,
@@ -556,6 +557,7 @@ fn get_transactions_chain_and_pool_matches_the_oracle() {
         pruned_as_hex: String::new(),
         prunable_as_hex: String::new(),
         prunable_hash: tagged_hash(22),
+        archival_len: 5389,
         as_json: String::new(),
         pruned: false,
         double_spend_seen: true,
@@ -570,7 +572,7 @@ fn get_transactions_chain_and_pool_matches_the_oracle() {
         missed_tx: Vec::new(),
     };
     assert_parity(
-        include_str!("vectors/rpc/get_transactions_chain_and_pool_v2.json"),
+        include_str!("vectors/rpc/get_transactions_chain_and_pool_v3.json"),
         &built,
     );
 }
@@ -585,6 +587,7 @@ fn get_transactions_split_form_matches_the_oracle() {
             pruned_as_hex: "0102030405".to_owned(),
             prunable_as_hex: "0607".to_owned(),
             prunable_hash: tagged_hash(32),
+            archival_len: 7,
             as_json: String::new(),
             pruned: true,
             double_spend_seen: false,
@@ -600,7 +603,7 @@ fn get_transactions_split_form_matches_the_oracle() {
         missed_tx: Vec::new(),
     };
     assert_parity(
-        include_str!("vectors/rpc/get_transactions_split_form_v2.json"),
+        include_str!("vectors/rpc/get_transactions_split_form_v3.json"),
         &built,
     );
 }
@@ -616,6 +619,7 @@ fn get_transactions_decoded_matches_the_oracle() {
             pruned_as_hex: String::new(),
             prunable_as_hex: String::new(),
             prunable_hash: tagged_hash(42),
+            archival_len: 0,
             as_json,
             pruned: false,
             double_spend_seen: false,
@@ -629,7 +633,7 @@ fn get_transactions_decoded_matches_the_oracle() {
         missed_tx: Vec::new(),
     };
     assert_parity(
-        include_str!("vectors/rpc/get_transactions_decoded_v2.json"),
+        include_str!("vectors/rpc/get_transactions_decoded_v3.json"),
         &built,
     );
 }
@@ -926,7 +930,7 @@ fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 14] = [
+    let links: [(&str, &str); 15] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -983,6 +987,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v14.json"),
             include_str!("vectors/rpc/get_version_synced_v15.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v15.json"),
+            include_str!("vectors/rpc/get_version_synced_v16.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1001,7 +1009,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 14] = [
+    const ADDED_AT_LINK: [&[&str]; 15] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1016,6 +1024,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.36 (get_info drops tx_prune_height with the C++ tx-data prune; get_version gains nothing)
         &[], // 3.37 (get_block_template bounds reserve_size / extra_nonce to the fixed 8-byte coinbase nonce, TXE-Q6′; get_version gains nothing)
         &[], // 3.38 (get_info socket counts and the permanent-ban flag; get_version gains nothing)
+        &[], // 3.39 (get_transactions entries gain archival_len, SHT-Q2; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1119,6 +1128,57 @@ fn v2_is_v1_minus_exactly_the_two_retired_members() {
         seen.iter().all(|s| *s),
         "each retired member must appear in at least one v1 vector, or its \
          removal is not actually being checked: {RETIRED:?} seen = {seen:?}"
+    );
+}
+
+/// `SHT-Q2`: every `get_transactions` entry gains `archival_len`, and nothing
+/// else moves. The `_v3` vectors are the `_v2` ones plus that member on each
+/// entry — derived, so a hand-edited `_v3` fails here. `missed` and `refusal`
+/// carry no entry and stay at `_v2`.
+#[test]
+fn v3_is_v2_plus_exactly_the_archival_length_on_every_entry() {
+    const ADDED: &str = "archival_len";
+    let mut entries_seen = 0usize;
+    for (v2, v3) in [
+        (
+            include_str!("vectors/rpc/get_transactions_chain_and_pool_v2.json"),
+            include_str!("vectors/rpc/get_transactions_chain_and_pool_v3.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_transactions_decoded_v2.json"),
+            include_str!("vectors/rpc/get_transactions_decoded_v3.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_transactions_split_form_v2.json"),
+            include_str!("vectors/rpc/get_transactions_split_form_v3.json"),
+        ),
+    ] {
+        let before = parsed(v2);
+        let mut after = parsed(v3);
+        let entries = after
+            .get_mut("txs")
+            .and_then(Value::as_array_mut)
+            .expect("a v3 transaction vector carries entries");
+        for entry in entries {
+            let removed = entry
+                .as_object_mut()
+                .expect("an entry is an object")
+                .remove(ADDED)
+                .expect("every v3 entry carries the archival length");
+            assert!(
+                removed.is_u64(),
+                "the archival length is an unsigned integer"
+            );
+            entries_seen += 1;
+        }
+        assert_eq!(
+            before, after,
+            "v3 must differ from v2 by exactly the added member"
+        );
+    }
+    assert!(
+        entries_seen > 0,
+        "no entry was checked, so the addition is not being verified"
     );
 }
 

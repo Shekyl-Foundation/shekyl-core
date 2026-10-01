@@ -37,7 +37,7 @@ mod tests;
 
 use alt_chain::alt_chain_info;
 use blockchain::{print_blockchain_dynamic_stats, print_blockchain_info};
-use shekyl_types::PrunableHash;
+use shekyl_types::{ArchivalLength, PrunableHash};
 use status::{hard_fork_info, show_status};
 
 /// Rendered; `out` holds the text to print as success output.
@@ -419,9 +419,9 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
     // pointed it. So the body is bound the way `parse_tx_batch` binds the
     // wallet's: parse the bytes and recompute the identity. A reply carrying
     // its prunable half (or a transaction with nothing prunable) rehashes
-    // whole; a storage-pruned body mixes the reply's `prunable_hash` in,
-    // which turns a substituted body into a keccak preimage instead of a
-    // free choice. `as_json` stays unverified: it is the daemon's epee
+    // whole; a storage-pruned body mixes the reply's `prunable_hash` and
+    // `archival_len` in, which turns a substituted body into a keccak
+    // preimage instead of a free choice. `as_json` stays unverified: it is the daemon's epee
     // rendering of the same bytes the binding just checked (RK-D11).
     //
     // "(pruned)" below means the daemon holds no prunable half for a
@@ -440,7 +440,10 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
         format!("print_transaction: the daemon's body for {hash} is not a transaction")
     })?;
     let derived = if pruned {
-        parsed.hash_with_supplied_prunable(PrunableHash::from_bytes(tx.prunable_hash.to_bytes()))
+        parsed.hash_with_supplied_prunable(
+            PrunableHash::from_bytes(tx.prunable_hash.to_bytes()),
+            ArchivalLength::from_raw(tx.archival_len),
+        )
     } else {
         parsed.hash()
     };
@@ -602,7 +605,14 @@ fn fetch_transactions(
                 chain_height,
                 |blob, pruned| core.tx_to_json(blob, pruned),
             )
-            .map_err(|f| format!("could not decode {} to json ({})", f.txid, f.code))
+            .map_err(|f| match f {
+                crate::methods::ProjectionFailed::Render(f) => {
+                    format!("could not decode {} to json ({})", f.txid, f.code)
+                }
+                crate::methods::ProjectionFailed::Length(f) => {
+                    format!("could not measure the archival length of {}", f.txid)
+                }
+            })
         }
         Source::Remote { .. } => {
             let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;

@@ -1386,6 +1386,37 @@ int32_t shekyl_tx_extra_shape_of(
     char* out_msg,
     size_t out_msg_cap);
 
+// ---------------------------------------------------------------------------
+// The transaction id (rust/shekyl-ffi/src/txid_ffi.rs). There is one txid
+// mixer and it is Rust's (shekyl-wire `TxidSegments::txid`, SHT-Q2);
+// cryptonote::calculate_transaction_hash is its only C++ caller.
+//
+// The caller hands over the four byte ranges of a serialized v2+ transaction
+// -- prefix, ct base, tx-level pqc_auths, prunable -- cut at the offsets its
+// serializer recorded, plus the two facts about them that are not bytes. Rust
+// hashes the ranges, measures the archival length from the last two, and
+// mixes. There is no length parameter on purpose: the txid binds the length,
+// so a length the caller supplied would be a second measurement of a
+// consensus operand.
+//
+// The ranges are opaque here -- nothing is parsed -- so no content can make
+// the call fail. It returns false, writing nothing, only for a null pointer
+// where bytes were promised (out_txid, or a range with a non-zero length); a
+// null pointer is accepted for an empty range. out_txid receives 32 bytes.
+// ---------------------------------------------------------------------------
+bool shekyl_txid_from_segments(
+    const uint8_t* prefix,
+    size_t prefix_len,
+    const uint8_t* ct_base,
+    size_t ct_base_len,
+    const uint8_t* pqc_auths,
+    size_t pqc_auths_len,
+    size_t pqc_auth_count,
+    bool first_input_is_spend,
+    const uint8_t* prunable,
+    size_t prunable_len,
+    uint8_t* out_txid);
+
 /// Build the coinbase extra in the grammar's one layout: [PubKey(tx_pubkey
 /// [32]), Nonce(nonce[SHEKYL_COINBASE_NONCE_BYTES]), PqcKemCiphertext(kem),
 /// PqcLeafEntries(leaf)] — [PubKey, Nonce] when n_outputs == 0 — judged by

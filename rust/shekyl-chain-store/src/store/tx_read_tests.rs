@@ -625,8 +625,16 @@ fn no_read_projection_hands_out_unlock_time() {
             pqc_auths,
             prunable_hash,
             pqc_auth_hash,
+            archival_len,
         } = rec;
-        (location, pruned, pqc_auths, prunable_hash, pqc_auth_hash)
+        (
+            location,
+            pruned,
+            pqc_auths,
+            prunable_hash,
+            pqc_auth_hash,
+            archival_len,
+        )
     };
 }
 
@@ -634,7 +642,7 @@ fn no_read_projection_hands_out_unlock_time() {
 fn the_hash_rows_cannot_hold_a_malformed_digest_so_undecodable_is_unreachable_by_construction() {
     // PR #800 review round 3 asked T4 to decode the hash row, as T3 does,
     // so a malformed row is SI-7 `Undecodable` on both. Both now read it
-    // through one reader (`tx_reads::hash_row`) — but the fault the review
+    // through one reader (`tx_reads::coded_row`) — but the fault the review
     // feared cannot be planted: the codecs are fixed-width 32 and the
     // engine refuses a row of any other width at write time
     // (`redb` asserts the width in `append`), and a 32-byte row *is* a
