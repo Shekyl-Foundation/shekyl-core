@@ -1662,6 +1662,14 @@ the build:
   `shekyl-chain-store` does drop them and keeps `txs_archival_len` for this: when it
   backs the RPC, its transaction slot carries the row's length. That is the engine
   swap's to build, named on FOLLOWUPS.
+- **Both stores' versions move, though no layout does.** LMDB `VERSION` 15 → 16 and
+  the redb store's `SCHEMA_VERSION` 19 → 20. Each store indexes transactions by txid
+  and lists them by txid in every block, so a datadir written before the cutover
+  names its spends by ids no current node computes. The version pin is what refuses
+  it at open, as LMDB v14 did for the stale tree; without it the daemon serves bodies
+  a wallet refuses, and the redb store halts at its first skeleton rebuild as
+  corruption. The LMDB bump is a second C++ change beyond the FFI call — a constant
+  and a comment, no table, cell or archival logic.
 - **What C++ still witnesses.** With one mixer, the C++ parity tests no longer derive
   the mix a second time. They pin what decides which bytes reach it: the serializer's
   bytes, the three offsets, the prunable digest, and that the bytes after
