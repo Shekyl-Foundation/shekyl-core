@@ -55,8 +55,9 @@ impl fmt::Display for FinalityBreach {
 /// `depth` is a span, not a height. For [`FinalityBreach::Measured`] it
 /// is the span that was compared with `W`. For
 /// [`FinalityBreach::RecordEnded`] it is only how far the stored hashes
-/// reached. The file to delete and the rescan that will not repair this
-/// are the RPC message's job; this value states the fact.
+/// reached, which may be shorter than `W`. The steps that clear the tree
+/// file and the scan history are the RPC message's job; this value states
+/// the span that was known.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FinalityStop {
     /// Blocks the rollback would drop, or — when the record ended — the
@@ -70,13 +71,24 @@ pub struct FinalityStop {
 
 impl fmt::Display for FinalityStop {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "a rollback of {depth} blocks is outside the {window}-block finality window ({breach})",
-            depth = self.depth,
-            window = self.finality_depth,
-            breach = self.breach,
-        )
+        match self.breach {
+            // The span was compared with `W` and lost.
+            FinalityBreach::Measured => write!(
+                f,
+                "a rollback of {depth} blocks is outside the {window}-block finality window ({breach})",
+                depth = self.depth,
+                window = self.finality_depth,
+                breach = self.breach,
+            ),
+            // `depth` is how far the record reached, which can be less than `W`.
+            // Saying that span is outside the window states a comparison that did not happen.
+            FinalityBreach::RecordEnded => write!(
+                f,
+                "the hash record ended after {depth} mismatches, before a common ancestor inside the {window}-block finality window was confirmed",
+                depth = self.depth,
+                window = self.finality_depth,
+            ),
+        }
     }
 }
 
@@ -263,8 +275,8 @@ pub enum RefreshError {
     ///
     /// The store can truncate through a frozen segment — F9 requires it —
     /// and a wallet refresh must not ask. [`FinalityStop`] is the fact.
-    /// The words that tell a caller to delete `.curvetree` are the RPC
-    /// error's, not a second copy here.
+    /// The words that tell a caller to remove the curve-tree file and clear
+    /// scan history are the RPC error's, not a second copy here.
     #[error("{stop}")]
     ReorgDeeperThanFinality {
         /// The span that failed the finality comparison, and why.

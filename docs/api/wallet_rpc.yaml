@@ -389,12 +389,14 @@ info:
   # 0.10.0: refresh and rescan gain -29211 RESYNC_REQUIRED. A rollback that
   # would pass the wallet's finality window W is refused rather than applied
   # to the curve tree. `data` carries depth, finality_depth, breach
-  # ("measured" or "record_ended"), and history_cleared. The message names
-  # the remedy: remove the wallet's .curvetree file so the tree rebuilds
-  # from genesis. rescan_blockchain does not repair it — a rescan leaves the
-  # curve tree untouched — and when the refusal arrives during a rescan,
-  # history_cleared is true because that reset already emptied wallet
-  # history. Terminal for the store. api_version stays 1.
+  # ("measured" or "record_ended"), and history_cleared. record_ended means
+  # the hash record ran out before a fork was confirmed, so depth may be
+  # shorter than W. The remedy is both steps, file first: close the wallet,
+  # delete .curvetree, open it, and run rescan_blockchain. The walk reads
+  # the ledger before ingest, so the file alone is not enough, and a rescan
+  # that finds the file still holding another chain refuses again. When the
+  # refusal arrives during a rescan, history_cleared is true because that
+  # reset already emptied wallet history. api_version stays 1.
   version: 0.10.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
@@ -1009,22 +1011,29 @@ components:
           -29211 RESYNC_REQUIRED          refresh or rescan: a rollback would
                                           pass the finality window W, so the
                                           curve-tree store must not be folded
-                                          through that suffix. Remove the
-                                          wallet's .curvetree file so the tree
-                                          rebuilds from genesis.
-                                          rescan_blockchain does not repair
-                                          it. data: {"depth",
-                                          "finality_depth", "breach":
-                                          "measured" | "record_ended",
-                                          "history_cleared"}. depth is the
-                                          span compared with W, or, when the
-                                          hash record ended first, only how
-                                          far that record reached.
-                                          history_cleared is true when the
-                                          refusal arrived after a rescan
-                                          reset had already emptied wallet
-                                          history; retrying the rescan leaves
-                                          the same tree in place
+                                          through that suffix. Close the
+                                          wallet, delete its .curvetree file,
+                                          open it again, and run
+                                          rescan_blockchain — the file first.
+                                          The refresh walk reads scan history
+                                          before ingest, so deleting the file
+                                          alone leaves the next refresh on
+                                          the same refusal, and a rescan that
+                                          finds the file still holding
+                                          another chain refuses again.
+                                          data: {"depth", "finality_depth",
+                                          "breach": "measured" |
+                                          "record_ended", "history_cleared"}.
+                                          depth is the span compared with W,
+                                          or, when the hash record ended
+                                          first, only how far that record
+                                          reached — which can be shorter
+                                          than W. history_cleared is true
+                                          when the refusal arrived after a
+                                          rescan reset had already emptied
+                                          wallet history; another rescan
+                                          while the file is still there
+                                          leaves the same tree in place
           -29300 PROOF_MALFORMED          check_*: proof string failed
                                           Bech32m decode, carried the wrong
                                           HRP, its wire framing did not
@@ -2318,9 +2327,10 @@ components:
         wallet emptied. Most producer failures return -29203
         RESCAN_INCOMPLETE (re-runnable; not -29201, and not a generic
         -32603). A rollback past finality returns -29211 RESYNC_REQUIRED
-        with history_cleared: the reset did not touch the curve tree, so
-        re-running the rescan does not repair it — remove the .curvetree
-        file.
+        with history_cleared: the reset emptied history and left the
+        curve-tree file. Close the wallet, delete that .curvetree file,
+        and open it again. Another rescan while the file is still there
+        leaves the same tree in place.
 
     RescanBlockchainResult:
       type: object

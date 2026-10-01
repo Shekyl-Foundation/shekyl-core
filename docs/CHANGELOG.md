@@ -25,10 +25,16 @@
 - **Rule 82: one wire code, and the remedy reaches the caller.**
   `ResyncRequired` is **`-29211`** (contract 0.10.0). `-29204` is
   `REFRESH_CANCELLED`. `data` carries `depth`, `finality_depth`, `breach`
-  (`measured` or `record_ended`), and `history_cleared`. The message names
-  the `.curvetree` file and says `rescan_blockchain` does not repair it.
-  During a rescan the same code is returned with `history_cleared`, because
-  the reset already emptied history and left the tree in place. The engine's
+  (`measured` or `record_ended`), and `history_cleared`. `record_ended`
+  reports how far the hash record reached, which can be shorter than `W`,
+  so that text does not call the span a rollback outside the window. The
+  remedy is both stores, file first: close the wallet, delete `.curvetree`,
+  open it, and run `rescan_blockchain`. The walk reads the ledger before
+  ingest, so deleting the file alone leaves the next refresh on the same
+  hashes; a rescan that finds the old file still holding another chain's
+  root refuses again instead of treating that tree as caught up. During a
+  rescan the same code is returned with `history_cleared`, because the
+  reset already emptied history and left the file in place. The engine's
   own text states the span; it does not repeat the file instruction.
 
 

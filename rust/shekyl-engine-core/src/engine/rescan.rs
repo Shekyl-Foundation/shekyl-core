@@ -64,20 +64,21 @@
 //! - payment-request match fields (via attribution rewind, classified
 //!   against wall-clock Unix seconds — invoice expiry is not block height)
 //!
-//! # The curve tree is not touched
+//! # The curve tree is not wallet history
 //!
 //! [`CurveTreeActor`](super::curve_tree_actor) owns a **chain-global**
 //! anonymity-set store built from public on-chain material only — no wallet
-//! secret ever enters it, and no wallet event invalidates it. Rolling it back
-//! for a wallet rescan would discard a structure the wallet did not author
-//! and force a full genesis-onward re-ingest (the `next < range_start`
-//! daemon backfill in `curve_tree_ingest_scan_result`) for no gain: the
-//! ingest cursor already skips heights it holds, and CT-5b verified each of
-//! those roots when they were first ingested. Reorgs — the one event that
-//! *does* invalidate tree suffixes — roll it back at the merge, which is
-//! where that concern lives. A rollback past finality is refused there
-//! instead of rolled: this reset did not touch the tree file, so finishing
-//! the rescan does not repair it.
+//! secret ever enters it, and no wallet event invalidates it. A rescan that
+//! finds the same roots leaves the file where it is: rolling a matching tree
+//! back would discard a structure the wallet did not author and force a full
+//! genesis-onward re-ingest for no gain. Reorgs — the event that does
+//! invalidate a suffix — are compared at ingest. A shared root that matches
+//! leaves the file where it is. One that does not is the same finality
+//! comparison as a rewind: inside `W` it folds, and
+//! past `W` it refuses with the file untouched. Deleting `.curvetree`
+//! before this reset is what lets the empty store rebuild. The producer
+//! walk reads the ledger's hash record before that ingest, so a refresh
+//! that still holds the old record refuses even after the file is gone.
 
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes, WalletLedger};
 

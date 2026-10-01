@@ -9,7 +9,11 @@
 //! stored hash matches the daemon at a depth inside `W`, and it refuses
 //! when the walk passes `W` or the hash record ends while a deeper fork
 //! is still possible. [`rollback_past_finality`] is the ingest backstop,
-//! the same comparison against the **tree** tip.
+//! the same comparison against the **tree** tip. A scan that overlaps a
+//! tree without naming a rewind — a rescan, which clears the ledger and
+//! not the file — uses that same backstop ([`overlap_disagreed`]): a
+//! shared root that matches is this chain, and one that does not walks
+//! down until a keep inside `W` or a refusal.
 //!
 //! The two tips are different subjects. The tree is acknowledged before
 //! the ledger commits, a rescan clears the ledger and not the tree, and
@@ -159,6 +163,63 @@ pub(crate) fn rollback_past_finality(tip: BlockHeight, keep: BlockHeight) -> Opt
     })
 }
 
+/// `height` on the tree disagreed with the scan.
+///
+/// `Ok` is the parent height, and keeping it still drops at most `W`
+/// blocks from `tip`. The caller compares that parent, or rolls the tree
+/// back to it once the parent agrees. `Err` means even that parent is past
+/// the window, or `height` is genesis and there is no parent to keep: the
+/// tree stays where it is.
+pub(crate) fn overlap_disagreed(
+    tip: BlockHeight,
+    height: BlockHeight,
+) -> Result<BlockHeight, FinalityStop> {
+    if height.is_zero() {
+        let depth = tip.saturating_sub(BlockHeight::ZERO);
+        let window = finality_depth();
+        let breach = if depth > window {
+            FinalityBreach::Measured
+        } else {
+            // Genesis itself disagrees, so there is no ancestor to fold back
+            // to. The span is the chain's age, which is still inside `W`.
+            FinalityBreach::RecordEnded
+        };
+        return Err(FinalityStop {
+            depth,
+            finality_depth: window,
+            breach,
+        });
+    }
+    let parent = height - BlockCount::ONE;
+    match rollback_past_finality(tip, parent) {
+        Some(stop) => Err(stop),
+        None => Ok(parent),
+    }
+}
+
+/// The lowest scanned root disagreed, and the scan has no root below it.
+///
+/// The caller has already learned from [`overlap_disagreed`] that keeping
+/// the parent would be inside `W`. The depth is the suffix known to
+/// disagree — from `lowest_mismatch` through `tip` — and the breach is
+/// [`FinalityBreach::RecordEnded`] because the confirming ancestor was not
+/// in the scan.
+pub(crate) fn overlap_record_ended(tip: BlockHeight, lowest_mismatch: BlockHeight) -> FinalityStop {
+    let depth = tip
+        .checked_sub(lowest_mismatch)
+        .expect("overlap_record_ended: the mismatch is at or below the tree tip")
+        + BlockCount::ONE;
+    debug_assert!(
+        depth <= finality_depth(),
+        "a suffix past W is Measured, via overlap_disagreed"
+    );
+    FinalityStop {
+        depth,
+        finality_depth: finality_depth(),
+        breach: FinalityBreach::RecordEnded,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +287,10 @@ mod tests {
         assert!(message.contains("100"), "{message}");
         assert!(message.contains("hash record ended"), "{message}");
         assert!(!message.contains("731"), "{message}");
+        assert!(
+            !message.contains("outside"),
+            "a short record is not a measured rollback: {message}"
+        );
     }
 
     #[test]
@@ -270,6 +335,39 @@ mod tests {
             ForkCursor::at_tip(tip).reached_genesis(),
             BlockHeight::from_raw(1)
         );
+    }
+
+    #[test]
+    fn an_overlapping_mismatch_folds_through_w_and_refuses_one_deeper() {
+        let tip = tip(10_000);
+        let parent = overlap_disagreed(tip, tip).expect("the tip's parent is inside W");
+        assert_eq!(parent, tip.saturating_sub_count(BlockCount::ONE));
+
+        // Disagreeing at `tip - (W - 1)` offers the keep `tip - W`.
+        let still_inside =
+            tip.saturating_sub_count(BlockCount::from_raw(FINALITY_DEPTH_BLOCKS - 1));
+        let keep = overlap_disagreed(tip, still_inside).expect("keeping tip - W folds");
+        assert_eq!(
+            keep,
+            tip.saturating_sub_count(BlockCount::from_raw(FINALITY_DEPTH_BLOCKS))
+        );
+
+        // Disagreeing at `tip - W` would keep `tip - (W + 1)`.
+        let past = tip.saturating_sub_count(BlockCount::from_raw(FINALITY_DEPTH_BLOCKS));
+        let stop = overlap_disagreed(tip, past).expect_err("one deeper refuses");
+        assert_eq!(stop.breach, FinalityBreach::Measured);
+        assert_eq!(stop.depth, BlockCount::from_raw(FINALITY_DEPTH_BLOCKS + 1));
+
+        let ended = overlap_record_ended(tip, still_inside);
+        assert_eq!(ended.breach, FinalityBreach::RecordEnded);
+        assert_eq!(ended.depth, BlockCount::from_raw(FINALITY_DEPTH_BLOCKS));
+        assert!(!ended.to_string().contains("outside"), "{ended}");
+
+        let young = overlap_disagreed(BlockHeight::from_raw(4), BlockHeight::ZERO)
+            .expect_err("no parent of genesis");
+        assert_eq!(young.breach, FinalityBreach::RecordEnded);
+        let old = overlap_disagreed(tip, BlockHeight::ZERO).expect_err("genesis on a tall tree");
+        assert_eq!(old.breach, FinalityBreach::Measured);
     }
 
     #[test]

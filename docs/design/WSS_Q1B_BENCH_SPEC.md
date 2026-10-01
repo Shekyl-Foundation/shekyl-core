@@ -1037,7 +1037,7 @@ block, inside refresh**:
   per-block ingest loop**, as the CT-5b lying-daemon defence (*"the root the
   tree reconstructs for `next` must byte-equal the consensus header-committed
   root"*);
-- freeze requires 730-block burial (`segment.rs:69`), so the whole reference
+- freeze requires 730-block burial (`segment.rs:117`), so the whole reference
   window lies inside the **unfrozen** zone, and every call recomputes `R_k`
   over each complete-but-unfrozen segment — **~29 of them** at the worst-case
   leaf rate.
