@@ -36,10 +36,10 @@ incorrectly change the specification of the hostname.
 > so in this example the file would contain:
 > `proxy=socks5://username:password@192.168.0.10:1080`.
 
-The CLI and RPC wallets currently reject hosts that do **NOT** end in`.onion`
-or `.i2p` **unless** `--daemon-ssl-ca-certificates`,
+The CLI and RPC wallets currently reject hosts that do **NOT** end in `.onion`
+**unless** `--daemon-ssl-ca-certificates`,
 `--daemon-ssl-allow-any-cert`, or `--daemon-ssl-allowed-fingerprints` is used.
-If an onion or i2p address is used, the hostname contains the certificate
+If an onion address is used, the hostname contains the certificate
 verification, providing decent security against man-in-the-middle (MitM)
 attacks. The two `--daemon-ssl-*` options support specifying exact
 certificates, also preventing MitM attacks.
@@ -55,9 +55,9 @@ how local transactions are relayed. Both options support Socks 4, 4a, and 5.
 
 ### `--proxy`
 This option should be used when outbound connections to IPv4/IPv6 addresses and
-hostnames  (other than `.onion` `.i2p`) need to be proxied. Common examples
+hostnames  (other than `.onion`) need to be proxied. Common examples
 include using Tor exit nodes or a VPN to conceal your local IP. This option
-will **not** use Tor or I2P hidden services for P2P connections; this is
+will **not** use Tor onion services for P2P connections; this is
 primarily used for proxying standard IPv4 or IPv6 connections to some remote
 host. Hidden services are not used because this is designed to be more general
 purpose (i.e. a standard socks VPN can be used). 
@@ -80,8 +80,8 @@ to the daemon.
 ### `--tx-proxy`
 This option should be used to specify a proxy that can resolve hidden service
 hostnames, so that local transactions can be forwarded over a privacy
-preserving network. Currently only Tor or I2P hidden services are supported.
-This option be specified multiple times, but only once per network (see below).
+preserving network. Tor is the network this option accepts. I2P is not.
+This option can be specified once for Tor.
 
 The format for `--tx-proxy` is
 `network,[socks5://[user:pass@]]ip:port[,max_connections]`.
@@ -100,26 +100,14 @@ Examples:
 --tx-proxy tor,socks5://[::1]:1050,100
 --tx-proxy tor,socks5://username:password@[::1]:1050
 --tx-proxy tor,socks5://username:password@[::1]:1050,100
---tx-proxy i2p,127.0.0.1:1050
---tx-proxy i2p,127.0.0.1:1050,100
---tx-proxy i2p,socks5://127.0.0.1:1050
---tx-proxy i2p,socks5://127.0.0.1:1050,100
---tx-proxy i2p,socks5://username:password@127.0.0.1:1050
---tx-proxy i2p,socks5://username:password@127.0.0.1:1050,100
---tx-proxy i2p,[::1]:1050
---tx-proxy i2p,[::1]:1050,100
---tx-proxy i2p,socks5://[::1]:1050
---tx-proxy i2p,socks5://[::1]:1050,100
---tx-proxy i2p,socks5://username:password@[::1]:1050
---tx-proxy i2p,socks5://username:password@[::1]:1050,100
 ```
 
 The above examples are fairly exhaustive of all the possible option scenarios
 that will be incurred by the typical user. 
 
 #### The `network` portion of the option
-The first section (before the first `,`) indicates the network - only `tor` or
-`i2p` are valid here.
+The first section (before the first `,`) indicates the network. Only `tor`
+is valid.
 
 This portion of the option tells `--add-node`, `--add-priority-node`, and
 `--add-exclusive-node` options to use the specified proxy for those nodes. In
@@ -159,7 +147,7 @@ not masked by cover traffic.
 
 ### `--anonymous-inbound`
 Currently the daemon cannot configure incoming hidden services connections.
-Instead, the user must manually configure Tor or I2P to accept inbound
+Instead, the user must manually configure Tor to accept inbound
 connections. Then, `--anonymous-inbound` must be used to tell the daemon where
 to listen for incoming connections, and the incoming hidden service address.
 The option can be specified once for each network type. The format for usage
@@ -170,18 +158,14 @@ is: `hidden-service-address,[bind-ip:]port[,max_connections]`. Examples:
 --anonymous-inbound rveahdfho7wo4b2m.onion:18083,18083,100
 --anonymous-inbound rveahdfho7wo4b2m.onion:18083,127.0.0.1:18083
 --anonymous-inbound rveahdfho7wo4b2m.onion:18083,127.0.0.1:18083,100
---anonymous-inbound udhdrtrcetjm5sxzskjyr5ztpeszydbh4dpl3pl4utgqqw2v4jna.b32.i2p,18083
---anonymous-inbound udhdrtrcetjm5sxzskjyr5ztpeszydbh4dpl3pl4utgqqw2v4jna.b32.i2p,18083,100
---anonymous-inbound udhdrtrcetjm5sxzskjyr5ztpeszydbh4dpl3pl4utgqqw2v4jna.b32.i2p,127.0.0.1:18083
---anonymous-inbound udhdrtrcetjm5sxzskjyr5ztpeszydbh4dpl3pl4utgqqw2v4jna.b32.i2p,127.0.0.1:18083,100
 ```
 
 Everything before the first `,` is the hidden service hostname. This must be
-a valid Tor or I2P address. This tells the daemon the **inbound** hidden
-service as configured for the local Tor or I2P daemons.
+a valid Tor onion address. This tells the daemon the **inbound** hidden
+service as configured for the local Tor daemon.
 
 Everything between `,`s specify the bind ip and bind port. The IP address is
-optional, and defaults to `127.0.0.1`. The Tor and I2P daemons must be
+optional, and defaults to `127.0.0.1`. The Tor daemon must be
 configured to forward incoming hidden service connections to this IP/Port pair.
 
 Everything after the second `,` is used to specify the number of max inbound

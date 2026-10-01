@@ -17,7 +17,7 @@ cross-reference equivalent features.
 5. [Staking](#staking)
 6. [Mining](#mining)
 7. [PQC Multisig](#pqc-multisig)
-8. [Anonymity Networks (Tor and I2P)](#anonymity-networks-tor-and-i2p)
+8. [Anonymity Networks (Tor)](#anonymity-networks-tor)
 9. [Network Selection](#network-selection)
 10. [Post-Quantum Security](#post-quantum-security)
 11. [Wallet RPC Server](#wallet-rpc-server-shekyl-wallet-rpc)
@@ -759,7 +759,7 @@ Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
 
 ---
 
-## Anonymity Networks (Tor and I2P)
+## Anonymity Networks (Tor)
 
 > **Status: Experimental.** There are known metadata leak vectors. See
 > [ANONYMITY_NETWORKS.md](ANONYMITY_NETWORKS.md) for the full threat matrix.
@@ -773,15 +773,15 @@ Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
 > daemon does not check, warn, or refuse on that basis. The contract is
 > [design/TOR_COVER_POSTURE.md](design/TOR_COVER_POSTURE.md).
 
-Shekyl can broadcast transactions over Tor or I2P so that observers cannot
-link your IP address to your transactions. Regular block sync and peer
-communication still uses IPv4 to resist Sybil attacks.
+Shekyl can broadcast transactions over Tor so that observers cannot
+link your IP address to your transactions. I2P is not a network this
+daemon dials. Regular block sync and peer communication still uses IPv4
+to resist Sybil attacks.
 
 ### Daemon: outbound transaction proxy
 
 ```bash
-./shekyld --tx-proxy tor,127.0.0.1:9050 \
-          --tx-proxy i2p,127.0.0.1:9000
+./shekyld --tx-proxy tor,127.0.0.1:9050
 ```
 
 Omit the outbound count to use the default. An explicit count below 12 is
@@ -795,12 +795,6 @@ To receive connections over Tor:
 
 ```bash
 ./shekyld --anonymous-inbound <your-onion>.onion:11021,127.0.0.1:11021,25
-```
-
-For I2P:
-
-```bash
-./shekyld --anonymous-inbound <your-b32>.b32.i2p:11021,127.0.0.1:11021,25
 ```
 
 ### Wallet through Tor
@@ -824,8 +818,8 @@ operator sees what it asks for — true of your own node too; see
   never be broadcast over a public connection.
 - V3 transactions are larger (~7-8 KB vs ~2-3 KB pre-PQC), creating a more
   distinctive traffic burst. On Tor that burst is mixed by operator relay
-  volume ([TOR_RELAY.md](TOR_RELAY.md)), not by dummy traffic. Dummy and
-  fragmentation remain the cover for encrypted zones other than Tor.
+  volume ([TOR_RELAY.md](TOR_RELAY.md)), not by dummy traffic. Tor is the
+  only encrypted network, so dummy traffic is not a second network's cover.
 
 ---
 
