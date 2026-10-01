@@ -298,7 +298,9 @@
 #   -32700, -32600..-32603   JSON-RPC 2.0 protocol errors (spec-standard)
 #   -29000..-29099           wallet lifecycle (create/open/close/password)
 #   -29100..-29199           send / build / submit / discard
-#   -29200..-29299           refresh / rescan
+#   -29200..-29299           refresh / rescan, and the daemon itself
+#                            (-29201 and -29205..-29209 answer any
+#                            operation that reaches the daemon)
 #   -29300..-29399           proofs (RESERVED range)
 #   -29400..-29499           transfers / history queries
 #   -29500..-29599           staking (-29500..-29506 and -29512 live on
@@ -306,8 +308,9 @@
 #                            (WI-RPC-5); -29513..-29522 and -29528 live on
 #                            `unstake` and -29523..-29527 and -29529 on
 #                            `collect_unstaked` (PR-C; -29513 is shared by
-#                            the exit pair); rest reserved — never reuse an
-#                            allocated code)
+#                            the exit pair); -29530..-29533 are a staker's
+#                            open-time refusals; rest reserved — never reuse
+#                            an allocated code)
 #   -29600..-29699           payment requests (RESERVED range)
 #   -29700..-29799           air-gapped bundles (RESERVED, UNUSED — and
 #                            NOT pending work. Cold signing was rejected
@@ -371,22 +374,28 @@ info:
   # asked of an unsynchronized daemon refuses instead of returning a
   # verdict. A tx read gathered below that check's witness is -29201,
   # not this code. Generation is not gated. api_version stays 1.
-  # 0.9.0: refresh gains -29204 RESYNC_REQUIRED. The chain reorged deeper
-  #   than the wallet's finality window W, so its curve-tree store holds a
-  #   branch the chain abandoned and cannot be repaired in place (CT-6 C7).
-  #   `data` carries no fields; the message names the remedy, which is to
-  #   remove the wallet's .curvetree file so the tree rebuilds from genesis.
-  #   NOT rescan_blockchain: a rescan leaves the curve tree untouched by
-  #   design, so a client must not treat this as a rescan trigger. Terminal
-  #   for the store — a retry meets the same fork depth and reproduces it.
-  #   In the refresh block (-292xx) rather than the next free proof code,
-  #   because a client branches on a code's neighbours. api_version stays 1.
   # 0.8.0: build_pending_tx.recipients[].rid — the payment request a send
   # answers, echoed in the output's encrypted label (SUBADDRESS_UNDER_PQC
   # §5.7.11); refused at build when the u48 field cannot carry it. The rid
   # grammar is the PaymentRequestId schema's (^[1-9][0-9]*$), shared with
   # make_uri and parse_uri. api_version stays 1.
-  version: 0.9.0
+  # 0.9.0: specific causes get specific codes instead of -32603 or a
+  # neighbouring code's text — wallet storage -29007..-29016, build and
+  # submit -29110..-29119, -29204 REFRESH_CANCELLED, the daemon
+  # -29205..-29210 (a refused daemon names the identity axis; -29201 is
+  # left to a daemon that did not answer), and a staker's open-time refusals
+  # -29530..-29533. Some existing paths move to the new codes (see each
+  # code's row). api_version stays 1.
+  # 0.10.0: refresh and rescan gain -29211 RESYNC_REQUIRED. A rollback that
+  # would pass the wallet's finality window W is refused rather than applied
+  # to the curve tree. `data` carries depth, finality_depth, breach
+  # ("measured" or "record_ended"), and history_cleared. The message names
+  # the remedy: remove the wallet's .curvetree file so the tree rebuilds
+  # from genesis. rescan_blockchain does not repair it — a rescan leaves the
+  # curve tree untouched — and when the refusal arrives during a rescan,
+  # history_cleared is true because that reset already emptied wallet
+  # history. Terminal for the store. api_version stays 1.
+  version: 0.10.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -647,6 +656,16 @@ components:
         # stays recorded here so it is never reallocated with a new
         # meaning.
         - -29006   # WALLET_SESSION_ENDED
+        - -29007   # WALLET_NETWORK_MISMATCH
+        - -29008   # WALLET_LOCKED_ELSEWHERE
+        - -29009   # WALLET_DIR_MISSING
+        - -29010   # WALLET_FILE_ACCESS_DENIED
+        - -29011   # WALLET_FILE_CORRUPT
+        - -29012   # WALLET_FILE_VERSION_UNSUPPORTED
+        - -29013   # WALLET_FILE_IO_FAILED
+        - -29014   # WALLET_CLOSE_BLOCKED
+        - -29015   # CURVE_TREE_UNAVAILABLE
+        - -29016   # CURVE_TREE_STORE_UNUSABLE
         - -29100   # INVALID_RECIPIENT
         - -29101   # INSUFFICIENT_FUNDS
         - -29102   # FEE_ESTIMATION_FAILED
@@ -657,11 +676,28 @@ components:
         - -29107   # SUBMIT_AMBIGUOUS
         - -29108   # ABANDON_STATE_FORBIDS
         - -29109   # DAEMON_FEE_UNREASONABLE
+        - -29110   # WALLET_NOT_SYNCED
+        - -29111   # SPEND_UNAVAILABLE_REBUILDING
+        - -29112   # OUTPUT_NOT_YET_SPENDABLE
+        - -29113   # CHAIN_TOO_SHORT_TO_SPEND
+        - -29114   # SUBMIT_LOOP_BREAKER_TRIPPED
+        - -29115   # SUBMIT_ALREADY_PENDING
+        - -29116   # REANCHOR_UNAVAILABLE
+        - -29117   # RESELECTION_REQUIRED
+        - -29118   # DAEMON_FEE_RESPONSE_INVALID
+        - -29119   # SIGNER_FAILED
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
         - -29202   # RESCAN_BLOCKED
         - -29203   # RESCAN_INCOMPLETE
-        - -29204   # RESYNC_REQUIRED
+        - -29204   # REFRESH_CANCELLED
+        - -29205   # DAEMON_VERSION_MISMATCH
+        - -29206   # DAEMON_RULES_MISMATCH
+        - -29207   # DAEMON_NETWORK_MISMATCH
+        - -29208   # DAEMON_CHAIN_MISMATCH
+        - -29209   # DAEMON_PROTOCOL_VIOLATION
+        - -29210   # CHAIN_UNSTABLE
+        - -29211   # RESYNC_REQUIRED
         - -29300   # PROOF_MALFORMED
         - -29301   # PROOF_TX_SECRET_UNAVAILABLE
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
@@ -699,6 +735,10 @@ components:
         - -29527   # COLLECT_SYNCING
         - -29528   # UNSTAKE_LOCAL_NODE_REQUIRED
         - -29529   # COLLECT_DAEMON_UNREACHABLE
+        - -29530   # STAKE_STATE_UNREADABLE
+        - -29531   # SERVING_TOR_UNUSABLE
+        - -29532   # SERVING_IDENTITY_UNAVAILABLE
+        - -29533   # SERVING_LOCAL_NODE_REQUIRED
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -722,7 +762,59 @@ components:
                                           close and reopen the wallet, then
                                           retry. Emitted by sign_message;
                                           any future key-actor method maps
-                                          its stopped-actor failure here
+                                          its stopped-actor failure here —
+                                          so does a build whose signer holds
+                                          no spend-key material
+          -29007 WALLET_NETWORK_MISMATCH  open: the wallet file belongs to a
+                                          different network than this server
+                                          runs (data: {"wallet", "expected"},
+                                          network names — public)
+          -29008 WALLET_LOCKED_ELSEWHERE  open/create: another process holds
+                                          the wallet's lock (or its curve-tree
+                                          store's) — it is open elsewhere
+          -29009 WALLET_DIR_MISSING       create: the wallet directory does not
+                                          exist. Named before anything is
+                                          written; never reported as -29003,
+                                          which is open's "no such file"
+          -29010 WALLET_FILE_ACCESS_DENIED wallet files: the filesystem refused
+                                          access (permissions)
+          -29011 WALLET_FILE_CORRUPT      wallet files: contents damaged or not
+                                          a Shekyl wallet's (envelope, payload
+                                          frame, ledger decode, preferences,
+                                          keys whose public material the seed
+                                          does not derive).
+                                          Distinct from -29004: a wrong
+                                          password and a damaged file are
+                                          different remedies
+          -29012 WALLET_FILE_VERSION_UNSUPPORTED wallet files: written by a version,
+                                          or in a shape, this build cannot read
+          -29013 WALLET_FILE_IO_FAILED    wallet files: a read or write failed
+                                          underneath (disk full, filesystem
+                                          error, a failed atomic rename, a
+                                          rescan reset whose durable save
+                                          failed). Paths stay in the server log
+          -29014 WALLET_CLOSE_BLOCKED     close: transactions are in flight
+                                          (data: {"count"}); submit or discard
+                                          them first
+          -29015 CURVE_TREE_UNAVAILABLE   build/refresh: the wallet's curve-tree
+                                          membership data is unavailable for
+                                          this session (its actor stopped, or
+                                          its store would not resume; a
+                                          respawn did not recover it). Close
+                                          and reopen the wallet; a store that
+                                          cannot be used is then -29016
+          -29016 CURVE_TREE_STORE_UNUSABLE open: the wallet's curve-tree store
+                                          (the .curvetree file beside it) is
+                                          damaged or was written by a version
+                                          this build cannot read (data:
+                                          {"cause": "corrupt" | "unsupported"}).
+                                          It holds no keys and no balance:
+                                          delete it and open again — the wallet
+                                          rebuilds it from the chain, and
+                                          sending waits until the rebuild
+                                          finishes. Never a reason to restore
+                                          from the seed (that is -29011, for
+                                          the wallet's own files)
 
           -29100 INVALID_RECIPIENT        build/proofs: address parse or
                                           network check failed
@@ -781,11 +873,54 @@ components:
                                           the only place the operator learns
                                           the daemon quoted an absurd rate.
                                           Nothing durable is written (W1)
+          -29110 WALLET_NOT_SYNCED        build: the wallet has not synced a
+                                          block yet — refresh, then retry
+          -29111 SPEND_UNAVAILABLE_REBUILDING build: the funds exist but wait on
+                                          the membership-data rebuild (CT-5
+                                          §3.2.1); retry when it finishes.
+                                          Distinct from -29101. Amounts stay
+                                          off the wire
+          -29112 OUTPUT_NOT_YET_SPENDABLE build: an output is too fresh for the
+                                          reference block (data:
+                                          {"wait_blocks"}); spendable as the
+                                          tip advances
+          -29113 CHAIN_TOO_SHORT_TO_SPEND build: the chain is too short to
+                                          anchor a reference block (data:
+                                          {"synced_height", "ref_anchor_age"})
+          -29114 SUBMIT_LOOP_BREAKER_TRIPPED build: the rebuild-loop breaker is
+                                          tripped — two consecutive daemon
+                                          rejections of one kind (data:
+                                          {"cause"}, the -29106 vocabulary).
+                                          Builds stop until the operator calls
+                                          acknowledge_submit_loop_breaker
+          -29115 SUBMIT_ALREADY_PENDING   submit: a submit for this reservation
+                                          is already in progress — wait for its
+                                          result
+          -29116 REANCHOR_UNAVAILABLE     submit: the proof needs re-anchoring
+                                          and cannot be right now (CT-5d); the
+                                          reservation is kept — retry
+          -29117 RESELECTION_REQUIRED     submit: the proof cannot be
+                                          re-anchored content-preservingly
+                                          (CT-5d F-I) — discard and rebuild
+          -29118 DAEMON_FEE_RESPONSE_INVALID build/fee quote: the daemon answered
+                                          the fee query with something the
+                                          wallet could not read. Distinct from
+                                          -29102 (no answer) and -29109 (an
+                                          answer refused as unreasonable)
+          -29119 SIGNER_FAILED            build: the signer tried and a
+                                          downstream failure stopped it
+                                          (a device error, a remote actor
+                                          disconnecting)
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
-          -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs: daemon RPC
-                                          failed (proof methods dial the
-                                          daemon for tx bodies / spent-set
-                                          queries; for rescan this code is
+          -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs/build: the
+                                          daemon did not answer — check it
+                                          is running and its address, then
+                                          retry. A daemon that answers and
+                                          is refused is -29205..-29209,
+                                          never this code (proof methods
+                                          dial the daemon for tx bodies /
+                                          spent-set queries; for rescan this
+                                          code is
                                           reserved to the *preflight*
                                           refusal — wallet untouched. A
                                           mid-scan daemon drop after the
@@ -805,18 +940,91 @@ components:
                                           (data: {"detail": "..."})
           -29203 RESCAN_INCOMPLETE        rescan: reset persisted, then the
                                           producer failed before the ledger
-                                          was rebuilt (any join-path
-                                          RefreshError — Io, cancel,
-                                          malformed scan, concurrent
+                                          was rebuilt (a join-path
+                                          RefreshError other than a
+                                          past-finality rollback — Io,
+                                          cancel, malformed scan, concurrent
                                           mutation, invariant, curve-tree
-                                          ingest). History is empty until a
-                                          rescan finishes; retry. Distinct
-                                          from -29201 so clients that branch
-                                          on "untouched" do not lie after a
-                                          mid-scan failure; distinct from
-                                          -32603 so durability-branching
-                                          clients do not miss non-Io
-                                          producer failures
+                                          ingest, a reorg storm). History
+                                          is empty until a rescan finishes;
+                                          retry. A past-finality rollback
+                                          is -29211: finishing the rescan
+                                          does not move the curve tree.
+                                          Distinct from -29201 so clients
+                                          that branch on "untouched" do not
+                                          lie after a mid-scan failure;
+                                          distinct from -32603 so
+                                          durability-branching clients do
+                                          not miss non-Io producer failures
+          -29204 REFRESH_CANCELLED        refresh: cancelled before it
+                                          completed (the wallet is closing);
+                                          nothing partial was applied — retry
+                                          once the wallet is open
+          -29205 DAEMON_VERSION_MISMATCH  any daemon operation: the daemon
+                                          speaks another RPC version (VC-4
+                                          wire axis) — update the older side
+                                          (data: {"wallet_version": "3.29",
+                                          "daemon_version": "3.28" | null,
+                                          "update": "daemon" | "wallet" |
+                                          null}; null when the daemon's
+                                          get_version reply could not be
+                                          read — run matching releases).
+                                          Retrying the same daemon cannot
+                                          clear -29205..-29208
+          -29206 DAEMON_RULES_MISMATCH    any daemon operation: the daemon
+                                          was built from other consensus
+                                          rules (VC-4 rules axis) — connect
+                                          to a daemon from the same release
+                                          (data: {"wallet_digest",
+                                          "daemon_digest"}, hex)
+          -29207 DAEMON_NETWORK_MISMATCH  any daemon operation: the daemon
+                                          runs another network (VC-4 network
+                                          axis) — connect to a daemon on the
+                                          wallet's network (data: {"wallet":
+                                          "stagenet", "daemon": "mainnet"}).
+                                          Distinct from -29007, which is the
+                                          wallet FILE's network
+          -29208 DAEMON_CHAIN_MISMATCH    any daemon operation: the daemon's
+                                          chain starts at another genesis
+                                          block (VC-4 genesis axis) — a
+                                          different chain under the same
+                                          network name (data: {"network",
+                                          "wallet_genesis",
+                                          "daemon_genesis"}, hex)
+          -29209 DAEMON_PROTOCOL_VIOLATION any daemon operation: the daemon
+                                          answered with something that breaks
+                                          the RPC contract (malformed,
+                                          inconsistent or pruned replies, a
+                                          block that does not parse, leaves
+                                          its own block header does not
+                                          commit to) — try
+                                          another daemon. What it sent stays
+                                          in the server log
+          -29210 CHAIN_UNSTABLE           refresh: the chain kept
+                                          reorganizing past the per-attempt
+                                          rewind budget; nothing was merged —
+                                          retry once it settles. After a
+                                          durable rescan reset the same cause
+                                          is -29203
+          -29211 RESYNC_REQUIRED          refresh or rescan: a rollback would
+                                          pass the finality window W, so the
+                                          curve-tree store must not be folded
+                                          through that suffix. Remove the
+                                          wallet's .curvetree file so the tree
+                                          rebuilds from genesis.
+                                          rescan_blockchain does not repair
+                                          it. data: {"depth",
+                                          "finality_depth", "breach":
+                                          "measured" | "record_ended",
+                                          "history_cleared"}. depth is the
+                                          span compared with W, or, when the
+                                          hash record ended first, only how
+                                          far that record reached.
+                                          history_cleared is true when the
+                                          refusal arrived after a rescan
+                                          reset had already emptied wallet
+                                          history; retrying the rescan leaves
+                                          the same tree in place
           -29300 PROOF_MALFORMED          check_*: proof string failed
                                           Bech32m decode, carried the wrong
                                           HRP, its wire framing did not
@@ -1157,6 +1365,20 @@ components:
                                           unstake failure joins -29520 on
                                           data.cause "daemon". data.detail
                                           carries the transport's reason
+          -29530 STAKE_STATE_UNREADABLE   open (staker): the sealed staking-scan
+                                          state would not load; a staker does
+                                          not open without its scan (privacy is
+                                          not a degraded mode). The cause stays
+                                          in the server log
+          -29531 SERVING_TOR_UNUSABLE     open (staker): the wallet's Tor
+                                          configuration is unusable, so the
+                                          serving host cannot start
+          -29532 SERVING_IDENTITY_UNAVAILABLE open (staker): the persona's serving
+                                          identity is unavailable
+          -29533 SERVING_LOCAL_NODE_REQUIRED open (staker): serving needs the
+                                          wallet's own node on loopback — point
+                                          the daemon address at a local node
+                                          (the -29528 posture, for serving)
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over
@@ -2092,10 +2314,13 @@ components:
         hold spend records a replay cannot rebuild (-29202; unconfirmed
         submitted transactions no longer refuse — the send journal carries
         their input set across the wipe). Past those refusals the reset is
-        durable before scanning begins: a scan that then fails (any producer
-        failure on join) leaves the wallet emptied and returns -29203
+        durable before scanning begins: a scan that then fails leaves the
+        wallet emptied. Most producer failures return -29203
         RESCAN_INCOMPLETE (re-runnable; not -29201, and not a generic
-        -32603).
+        -32603). A rollback past finality returns -29211 RESYNC_REQUIRED
+        with history_cleared: the reset did not touch the curve tree, so
+        re-running the rescan does not repair it — remove the .curvetree
+        file.
 
     RescanBlockchainResult:
       type: object

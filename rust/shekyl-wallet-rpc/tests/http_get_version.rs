@@ -775,6 +775,49 @@ async fn lifecycle_create_open_close_change_password() {
     assert_eq!(missing["error"]["code"], -29003);
 }
 
+/// A wallet directory that does not exist is its own refusal, not
+/// "wallet file not found": create writes files, it looks none up, and
+/// the remedy is "create the directory". The message names no path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_wallet_into_a_missing_directory_says_so() {
+    let dir = TempDir::new().expect("tempdir");
+    let missing = dir.path().join("no-such-dir");
+    let state = Arc::new(AppState {
+        tenants: tokio::sync::Mutex::new(TenantState::new(
+            missing,
+            Network::Stagenet,
+            DaemonEndpoint {
+                address: "http://127.0.0.1:1".into(),
+                proxy: None,
+            },
+        )),
+        auth: Arc::new(AuthConfig::Disabled),
+        kdf: test_kdf(),
+        shutdown: Arc::new(Notify::new()),
+    });
+    let out = rpc(
+        state,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "create_wallet",
+            "params": { "name": "fresh", "password": "pw" }
+        }),
+    )
+    .await;
+    assert_eq!(
+        out["error"]["code"],
+        -29009,
+        "{}",
+        redact_create_wallet_response(&out)
+    );
+    let message = out["error"]["message"].as_str().expect("message");
+    assert!(
+        !message.contains("no-such-dir") && !message.contains(&*dir.path().to_string_lossy()),
+        "the wallet directory stays off the wire: {message}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn create_wallet_file_exists() {
     let dir = TempDir::new().expect("tempdir");

@@ -649,6 +649,65 @@ impl StoreError {
     pub fn is_already_open(&self) -> bool {
         matches!(self, StoreError::Redb(e) if matches!(**e, redb::Error::DatabaseAlreadyOpen))
     }
+
+    /// What this failure means to whoever has to act on a store that would
+    /// not open ([`StoreOpenFault`]). Exhaustive over this enum, so a new
+    /// variant has to be placed before it compiles; the arms a caller's own
+    /// operation raises (a bad truncate, a posture refusal, a rollback above
+    /// the tip) are [`StoreOpenFault::Internal`], since an open reaches them
+    /// only through a bug.
+    #[must_use]
+    pub fn open_fault(&self) -> StoreOpenFault {
+        match self {
+            StoreError::Redb(e) => match **e {
+                redb::Error::DatabaseAlreadyOpen => StoreOpenFault::LockedElsewhere,
+                redb::Error::Io(_) | redb::Error::PreviousIo => StoreOpenFault::Io,
+                redb::Error::UpgradeRequired(_) => StoreOpenFault::Unsupported,
+                redb::Error::Corrupted(_) => StoreOpenFault::Corrupt,
+                // `redb::Error` is foreign and `#[non_exhaustive]`: the rest
+                // are transaction, savepoint and table-shape misuse, which an
+                // open does not produce.
+                _ => StoreOpenFault::Internal,
+            },
+            StoreError::SchemaVersionMismatch { .. } => StoreOpenFault::Unsupported,
+            StoreError::CorruptMeta(_)
+            | StoreError::MixedComposition(_)
+            | StoreError::InvalidLeafBytes { .. }
+            | StoreError::PendingRowMissing { .. }
+            | StoreError::DuplicateGindex { .. }
+            | StoreError::FrozenSegmentRecordMissing { .. }
+            | StoreError::FrozenSegmentRkMismatch { .. } => StoreOpenFault::Corrupt,
+            StoreError::InvalidTruncate { .. }
+            | StoreError::LeafCountOutOfBounds { .. }
+            | StoreError::TruncatedIntoPrunedRange { .. }
+            | StoreError::FrozenSegmentPruned { .. }
+            | StoreError::PruneDisabledPosture
+            | StoreError::UnrepresentableShardId { .. }
+            | StoreError::InvalidRollback { .. }
+            | StoreError::PendingGindexCollision { .. }
+            | StoreError::SnapshotBelowSyncTip { .. } => StoreOpenFault::Internal,
+        }
+    }
+}
+
+/// Why a leaf store could not be opened, as far as the remedy goes — what
+/// the person who has to act on it needs to know, not the store's own
+/// diagnosis (which stays in the error for the log).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreOpenFault {
+    /// Another process holds the store's single-writer lock: the wallet is
+    /// open somewhere else.
+    LockedElsewhere,
+    /// The store's contents contradict themselves. Remedy: delete the store
+    /// and let the wallet rebuild it.
+    Corrupt,
+    /// The store was written by a different schema, or in a shape this
+    /// build cannot resume.
+    Unsupported,
+    /// The filesystem failed underneath the store.
+    Io,
+    /// Not an open-time outcome: only a programming error reaches it here.
+    Internal,
 }
 
 impl From<redb::Error> for StoreError {
@@ -1748,6 +1807,7 @@ impl LeafStore {
                 sync_tip,
             });
         }
+
         // Steps 1–2 under a scoped read of the leaf tables.
         let (partition, migrated) = {
             let leaf_meta = txn.open_table(LEAF_META_TABLE)?;
@@ -2586,6 +2646,48 @@ fn decode_target(tag: u8, _extra: &[u8]) -> Result<TargetKind, StoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A store already open in this process refuses a second open with
+    /// redb's lock error, and that is "locked elsewhere" — the remedy the
+    /// wallet names — not a generic failure.
+    #[test]
+    fn a_store_held_open_is_locked_elsewhere() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tree.redb");
+        let _held = LeafStore::open(&path).expect("first open");
+        let second = LeafStore::open(&path).expect_err("the lock is held");
+        assert!(second.is_already_open(), "{second:?}");
+        assert_eq!(second.open_fault(), StoreOpenFault::LockedElsewhere);
+    }
+
+    /// The remedy each store arm names, for the arms a test can build.
+    #[test]
+    fn store_open_faults_follow_the_remedy() {
+        let redb = |e: redb::Error| StoreError::Redb(Box::new(e));
+        let cases = [
+            (
+                redb(redb::Error::Corrupted("x".into())),
+                StoreOpenFault::Corrupt,
+            ),
+            (
+                redb(redb::Error::UpgradeRequired(1)),
+                StoreOpenFault::Unsupported,
+            ),
+            (
+                redb(redb::Error::Io(std::io::Error::other("disk"))),
+                StoreOpenFault::Io,
+            ),
+            (redb(redb::Error::PreviousIo), StoreOpenFault::Io),
+            (
+                StoreError::CorruptMeta("leaf_count"),
+                StoreOpenFault::Corrupt,
+            ),
+            (StoreError::PruneDisabledPosture, StoreOpenFault::Internal),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(err.open_fault(), expected, "{err:?}");
+        }
+    }
     use crate::segment::leaves_per_segment;
     use crate::types::OutputIdentity;
     use ciphersuite::{

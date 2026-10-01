@@ -38,7 +38,7 @@
 //! two different ways by method, and the split is intentional. The
 //! mutators (`build` / `submit` / `discard` / `signal_mempool_evicted`)
 //! map a poisoned lock to a domain error
-//! (`SendError::CannotSign`, `SubmitError::ReservationNotFound`,
+//! (`SendError::BuildInvariant`, `SubmitError::ReservationNotFound`,
 //! `PendingTxError::ReservationNotFound`) so the failure surfaces on
 //! the fallible path the caller is already handling. `outstanding` —
 //! an infallible `usize` read with no error channel — instead panics
@@ -188,7 +188,7 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     ///
     /// **Does not panic on mutex poisoning** — the Stage 1
     /// implementor maps a poisoned `Mutex<PendingTxState>` to
-    /// [`SendError::CannotSign`]. The only panic is the
+    /// [`SendError::BuildInvariant`]. The only panic is the
     /// `state.next_id` `u64`-overflow `.expect(...)`, unreachable in
     /// practice (a single engine handle cannot mint 2⁶⁴
     /// reservations). Contrast [`outstanding`](Self::outstanding),

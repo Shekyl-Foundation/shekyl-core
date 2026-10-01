@@ -354,7 +354,7 @@ pub enum OutputSelectorError {
 pub enum SignerError {
     /// The signer has no spend-key material in scope (view-only
     /// wallet; hardware wallet not connected; signing actor not yet
-    /// started). Distinct from [`SendError::CannotSign`](super::SendError::CannotSign) because it
+    /// started). Distinct from [`SendError::BuildInvariant`](super::SendError::BuildInvariant) because it
     /// is the trait-method's outcome, not the engine's pre-build
     /// capability check.
     #[error("signer unavailable")]

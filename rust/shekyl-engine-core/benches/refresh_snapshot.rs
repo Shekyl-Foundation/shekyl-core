@@ -6,9 +6,9 @@
 //! Phase 2a's snapshot strategy is **clone-not-Arc**: every retry of
 //! the snapshot-merge loop pulls a fresh [`LedgerSnapshot`] by copying
 //! `synced_height` (`u64`) and the bounded
-//! `reorg_blocks: ReorgBlocks` (capped at the persistence-layer
-//! `DEFAULT_REORG_BLOCKS_CAPACITY`, currently 10 entries of 40 bytes
-//! each). The wallet's `transfers` vec is deliberately **not**
+//! `reorg_blocks: ReorgBlocks` (the production window is the finality
+//! hash window; this bench's fixture is 11 entries of 40 bytes each).
+//! The wallet's `transfers` vec is deliberately **not**
 //! snapshotted — the producer collects every spend-side key image
 //! unfiltered and `apply_scan_result_to_state` does the actual
 //! matching against the live (post-lock) state.
@@ -98,11 +98,10 @@ fn sample_transfer(seed: u64) -> TransferDetails {
     }
 }
 
-/// Build a [`LedgerBlock`] with `n` transfers, a fixed 10-entry reorg
-/// window, and an arbitrary tip. The reorg window matches
-/// `shekyl-engine-state`'s `DEFAULT_REORG_BLOCKS_CAPACITY` so the bench
-/// reflects the snapshot a real wallet would produce; the transfer
-/// count varies to demonstrate the clone-cost decoupling.
+/// Build a [`LedgerBlock`] with `n` transfers, an 11-entry reorg
+/// window, and an arbitrary tip. The window is a bench fixture, not
+/// the production finality hash window; the transfer count varies to
+/// demonstrate the clone-cost decoupling.
 fn build_ledger(n: usize) -> LedgerBlock {
     let mut transfers = Vec::with_capacity(n);
     for i in 0..n {

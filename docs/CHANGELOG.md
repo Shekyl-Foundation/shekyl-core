@@ -4,34 +4,111 @@
 
 ### `CT-6` C7 — a reorg past finality refuses, and says why
 
-- **`FINALITY_DEPTH_BLOCKS` is `W`'s one home.** The sum
-  `SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` had two
-  independent derivations — the bench's `corpus.rs::W` and an inline sum in
-  `segment_freeze_eligible` — and C7 would have been a third. All three now
-  read one constant, and a `const` assertion pins the snapshot ring's horizon
-  **strictly inside** it, because the band between them is where a rollback is
-  past the ring and still repairable by folding.
-- **A refresh refuses a reorg deeper than `W`**
-  (`validate_reorg_within_finality`). Below `F = tip − W` the segments are
-  frozen and truncating through them deletes their freeze records — sealed
-  state the rest of the system may already have served. The bound is `> W` and
-  not `>= W`: keeping exactly `tip − W` drops nothing frozen, because
-  `segment_freeze_eligible` seals a segment ending at `e` once `tip − e >= W`.
-- **The seat is the wallet's refresh path, not `LeafStore`.** The store must
-  perform that truncation *correctly* — F9 requires it, and the replica
-  generator forks arbitrarily deep on purpose — so a guard on the shared
-  primitive would contradict the store's own contract and break a second
-  consumer. Both hold, one per layer: the store must do it right; the wallet
-  must never ask.
-- **Rule 82: the remedy reaches the caller.** `WalletRpcErrorCode`
-  **`ResyncRequired` (`-29204`)**, in the refresh family rather than the proof
-  block, carrying the reorg depth and `W` in its message — a bare "re-sync"
-  gives the user nothing to judge. It deliberately bypasses `internal_detail`,
-  which logs its detail and returns only the category, and which is why the
-  remedy previously reached a server log instead of the user. During a
-  *rescan* the same failure stays `RescanIncomplete`: the reset is already
-  durable, so the durability fact is what a client branches on.
+- **`W` has one home, and the hash window is that depth plus the kept block.**
+  `FINALITY_DEPTH_BLOCKS` is
+  `SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`.
+  `REORG_HASH_WINDOW_BLOCKS` is that depth plus the one block a rewind of
+  exactly `W` keeps, so the walk can still match a hash at the bottom of the
+  window. Spendable age is a positive span, so the snapshot ring's horizon
+  sits strictly inside `W`: the band between them is repaired by folding.
+- **The walk is the policy.** The producer keeps going until a stored hash
+  matches or the walk passes `W`. A match at `tip − W` is the deepest rewind
+  that still folds. Running out of stored hashes on a chain taller than `W`
+  is not a confirmed fork: the depth reported is how far the record reached.
+  A chain still inside `W` may rewind to the end of the record, or to genesis.
+- **Ingest uses the same comparison against the tree tip.** The tree and the
+  ledger are different subjects: the tree is acknowledged before the ledger
+  commits, a rescan clears the ledger and not the tree, and birthday backfill
+  climbs the tree below the scan floor. A rollback that would pass `W` from
+  the tree's tip is refused. The store primitive still truncates arbitrarily
+  deep — F9 requires it, and the replica generator forks that deep on purpose.
+- **Rule 82: one wire code, and the remedy reaches the caller.**
+  `ResyncRequired` is **`-29211`** (contract 0.10.0). `-29204` is
+  `REFRESH_CANCELLED`. `data` carries `depth`, `finality_depth`, `breach`
+  (`measured` or `record_ended`), and `history_cleared`. The message names
+  the `.curvetree` file and says `rescan_blockchain` does not repair it.
+  During a rescan the same code is returned with `history_cleared`, because
+  the reset already emptied history and left the tree in place. The engine's
+  own text states the span; it does not repeat the file instruction.
 
+
+### Wallet RPC — every failure a user can act on has its own code
+
+- A wallet created in a directory that does not exist was reported as
+  `-29003 WALLET_FILE_NOT_FOUND`. The RPC read the cause back out of an error
+  message: `IoError::WalletFile` carried only a string, and the classifier
+  searched it for "not found". `IoError::WalletFile` now carries
+  `WalletFileError` itself, `WalletFile::create` names a missing directory
+  before writing anything (`DirectoryMissing`), and the classifier is gone.
+  The same create now answers `-29009 WALLET_DIR_MISSING`.
+- 31 codes are allocated in `docs/api/wallet_rpc.yaml`, each for a cause that
+  previously reached `-32603` or a neighbouring code's text:
+  - wallet storage `-29007..-29016` (network mismatch, locked by another
+    process, missing directory, access denied, corrupt, unsupported version,
+    I/O failure, close blocked by in-flight transactions, curve-tree data
+    unavailable, and a curve-tree store that cannot be used — delete and
+    reopen, never "restore from seed": the store holds no keys or balance);
+  - build and submit `-29110..-29119` (not synced, membership rebuild,
+    output too fresh, chain too short, loop-breaker tripped, submit already
+    pending, re-anchor unavailable, reselection required, unreadable fee
+    answer, signer failed);
+  - `-29204 REFRESH_CANCELLED`;
+  - the daemon `-29205..-29210` (another RPC version, other consensus rules,
+    another network, another chain, a reply that broke the contract, and a
+    chain that kept reorganizing);
+  - a staker's open-time refusals `-29530..-29533`.
+- A daemon that answered and was refused (a wallet pointed at a daemon on
+  another network, version or chain) was reported as `-29201
+  DAEMON_UNREACHABLE`. The identity handshake flattened its typed verdict into
+  `RpcError::InvalidNode(String)`, and `IoError::Daemon` carried only a string.
+  `RpcError::IdentityMismatch` now carries the verdict, `RpcError::fault`
+  classifies every daemon failure by remedy (`DaemonFault`: no answer,
+  identity, protocol violation, unusable fee reply, this side's own fault),
+  and `IoError::Daemon` and `FeeEstimatorError::Daemon` carry that class. The
+  fee path's match on message prefixes is gone. Each identity axis has its own
+  code, with both sides named in `data`.
+- Refresh confirms the daemon's identity before the producer runs
+  (`scan_floor::prepare_refresh`), so the producer's error stays unit-variant
+  (`STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.7 R6). The producer's `Io` is split
+  into `DaemonUnreachable` and `DaemonProtocol`, and an identity refusal is
+  not retried. A malformed block served by the daemon is a protocol fault
+  (`-29209`), not an outage, and a reorg storm is `RefreshError::ReorgStorm`
+  (`-29210`); both used to answer `-29201`.
+- `IdentityMismatch` no longer carries the daemon's unparsed reply text: it is
+  logged where the reply is parsed, and the mismatch is a fixed-size `Copy`
+  value. The drain, unstake, collect and first-stake paths carry a failed fee
+  query as the typed `FeeEstimatorError`, so each cause answers the send
+  path's code rather than `-29102` for all of them.
+- Every wallet-file failure the text classifier did not recognise (a damaged
+  file, a lock held by another process, a failed atomic write) answered
+  `-32603` with the upstream error's own text as the message. That text names
+  local paths ("lock held on {path}", "rename into {target}"), so paths reached
+  the wire. Each now has its code, and a category-only message. The envelope's
+  "invalid password or corrupted" stays `-29004`: the envelope cannot tell the
+  two apart. A build's daemon failure answers `-29201` rather than
+  `-29102 FEE_ESTIMATION_FAILED`.
+- The curve-tree store classifies its own open failures
+  (`ClientError::open_fault`: locked elsewhere, corrupt, unsupported, I/O,
+  internal); the wallet carries the class, not a string. A ring snapshot that
+  will not decode or disagrees with the drain index at open is corruption.
+  A refresh's curve-tree ingest failure is typed (`CurveTreeIngestFault`,
+  whose `recoverable_by_respawn` replaces a separate flag beside a string), so
+  "close and reopen" is answered only where a reopen can help: a root the
+  header does not commit to or an undecodable backfill block is `-29209`, a
+  contract fault is `-32603`.
+- Creating a wallet under a path whose directory cannot be read keeps its own
+  cause (`-29010` for permissions); only absence is `-29009`.
+- `SendError::CannotSign` was split by meaning: `NotSynced`,
+  `SignerUnavailable` (answered as `-29006`), `SignerFailed`, and
+  `BuildInvariant` for preconditions only a bug breaks. The engine's
+  diagnostics no longer compare a reason string to recognise "not synced", and
+  no longer label proof-construction failures as an invalid recipient.
+- `-32603` is left to bugs and invariant failures. The `#[non_exhaustive]`
+  engine enums keep the wildcard arm Rust requires, with every current variant
+  named ahead of it.
+- A test holds `WalletRpcErrorCode` and the contract's enum to one set, in
+  both directions. The Rust table is declared once, and `ALL` is generated
+  from it. `IoError::Ledger`, which nothing constructed, is deleted.
 
 ### Crypto — vendored FCMP++ subtree resynced to `2485a176`
 

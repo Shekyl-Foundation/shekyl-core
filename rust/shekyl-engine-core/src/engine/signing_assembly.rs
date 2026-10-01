@@ -59,7 +59,7 @@ pub(crate) fn assemble_tx_to_sign(
     // plumbing bug, not a runtime condition. The `debug_assert`s surface the
     // actual counts in dev/CI (where it would be diagnosed); the release guard
     // refuses gracefully rather than letting the `zip` below silently truncate
-    // to a shorter — and unsound — transaction. (`CannotSign`'s reason is
+    // to a shorter — and unsound — transaction. (`BuildInvariant`'s reason is
     // `&'static str`, so the counts ride the assert rather than the error.)
     debug_assert_eq!(
         selected_indices.len(),
@@ -72,19 +72,19 @@ pub(crate) fn assemble_tx_to_sign(
         "assemble-input count must equal selected input count",
     );
     if selected_indices.len() != paths.len() || selected_indices.len() != assemble_inputs.len() {
-        return Err(SendError::CannotSign {
+        return Err(SendError::BuildInvariant {
             reason: "assembled path count does not match selected input count",
         });
     }
     let Some(first) = paths.first() else {
-        return Err(SendError::CannotSign {
+        return Err(SendError::BuildInvariant {
             reason: "transaction has no inputs to assemble",
         });
     };
 
     let mut inputs = Vec::with_capacity(selected_indices.len());
     for ((&index, ai), path) in selected_indices.iter().zip(assemble_inputs).zip(paths) {
-        let td = transfers.get(index).ok_or(SendError::CannotSign {
+        let td = transfers.get(index).ok_or(SendError::BuildInvariant {
             reason: "selected transfer index out of range",
         })?;
         // Index-stability guard: the transfer at this index must still be the
@@ -93,7 +93,7 @@ pub(crate) fn assemble_tx_to_sign(
         // reorg during the AssembleTx round-trip) — refuse rather than bind the
         // wrong secrets to this path.
         if td.global_output_index != ai.gindex {
-            return Err(SendError::CannotSign {
+            return Err(SendError::BuildInvariant {
                 reason: "selected transfer shifted under the transaction during assembly",
             });
         }
@@ -103,7 +103,7 @@ pub(crate) fn assemble_tx_to_sign(
         // bind a tx context (root/depth) inconsistent with that input's
         // membership data. Refuse rather than sign.
         if path.tree != first.tree {
-            return Err(SendError::CannotSign {
+            return Err(SendError::BuildInvariant {
                 reason: "assembled paths disagree on the tree context",
             });
         }
@@ -141,15 +141,18 @@ fn input_context_from_transfer(
     td: &TransferDetails,
     path: &AssembledPath,
 ) -> Result<TxInputSigningContext, SendError> {
-    let key_image = td.key_image.ok_or(SendError::CannotSign {
+    let key_image = td.key_image.ok_or(SendError::BuildInvariant {
         reason: "transfer missing key_image (scanner/indexes not populated)",
     })?;
-    let handle = td.output_handle.ok_or(SendError::CannotSign {
+    let handle = td.output_handle.ok_or(SendError::BuildInvariant {
         reason: "transfer missing output_handle (engine post-pass not run)",
     })?;
-    let source_ciphertext = td.source_ciphertext.clone().ok_or(SendError::CannotSign {
-        reason: "transfer missing source_ciphertext",
-    })?;
+    let source_ciphertext = td
+        .source_ciphertext
+        .clone()
+        .ok_or(SendError::BuildInvariant {
+            reason: "transfer missing source_ciphertext",
+        })?;
     let output_key = td.key.compress().to_bytes();
     let commitment = td.commitment.calculate().compress().to_bytes();
 

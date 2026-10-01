@@ -5025,6 +5025,7 @@ dependencies = [
  "shekyl-logging",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
+ "shekyl-rpc-types",
  "shekyl-scanner",
  "shekyl-types",
  "shekyl-units",

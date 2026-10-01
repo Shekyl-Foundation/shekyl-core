@@ -315,10 +315,7 @@ fn map_walletless_error(e: ProofsError) -> WalletRpcError {
         ProofsError::AmountOverflow => {
             WalletRpcError::InternalError("proof amount sum overflow".into())
         }
-        ProofsError::Daemon(detail) => {
-            tracing::warn!(detail = %detail, "proof daemon RPC failure");
-            WalletRpcError::DaemonUnreachable
-        }
+        ProofsError::Daemon(e) => crate::error::from_daemon_rpc_error(&e),
         ProofsError::Key(detail) => {
             tracing::warn!(detail = %detail, "proof key-engine failure");
             WalletRpcError::InternalError("proof key-engine failure".into())

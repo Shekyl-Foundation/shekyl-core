@@ -142,11 +142,8 @@ impl Engine<SoloSigner> {
         // Persist the caller-supplied preferences so the next open
         // sees them. `save_prefs` is HMAC-keyed by the session-cached
         // PrefsHmacKey on `file`.
-        file.save_prefs(&prefs).map_err(|e| {
-            OpenError::Io(IoError::WalletFile {
-                detail: e.to_string(),
-            })
-        })?;
+        file.save_prefs(&prefs)
+            .map_err(|e| OpenError::Io(IoError::WalletFile(e)))?;
 
         let indexes = LedgerIndexes::rebuild_from_ledger(&initial_ledger.ledger);
 
@@ -283,11 +280,7 @@ impl Engine<SoloSigner> {
                 );
                 prefs
             }
-            Err(e) => {
-                return Err(OpenError::Io(IoError::WalletFile {
-                    detail: e.to_string(),
-                }));
-            }
+            Err(e) => return Err(OpenError::Io(IoError::WalletFile(e))),
         };
 
         let (ledger, restored_from) = match outcome {

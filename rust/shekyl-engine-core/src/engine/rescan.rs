@@ -75,7 +75,9 @@
 //! ingest cursor already skips heights it holds, and CT-5b verified each of
 //! those roots when they were first ingested. Reorgs — the one event that
 //! *does* invalidate tree suffixes — roll it back at the merge, which is
-//! where that concern lives.
+//! where that concern lives. A rollback past finality is refused there
+//! instead of rolled: this reset did not touch the tree file, so finishing
+//! the rescan does not repair it.
 
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes, WalletLedger};
 

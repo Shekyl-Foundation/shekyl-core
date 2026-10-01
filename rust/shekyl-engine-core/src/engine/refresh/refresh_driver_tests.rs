@@ -27,6 +27,7 @@ use std::cell::RefCell;
 use std::num::NonZeroU32;
 use std::sync::{Mutex, OnceLock};
 
+use shekyl_rpc_client::DaemonFault;
 use shekyl_rpc_transport::HttpRpc;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
@@ -336,6 +337,7 @@ fn producer_io_error_propagates_immediately() {
         .refresh_with(&opts, |_attempt, _snapshot| {
             *observed_attempts.borrow_mut() += 1;
             Err(RefreshError::Io(IoError::Daemon {
+                fault: DaemonFault::Unreachable,
                 detail: "scripted daemon failure".to_string(),
             }))
         })
@@ -343,7 +345,7 @@ fn producer_io_error_propagates_immediately() {
 
     assert_eq!(*observed_attempts.borrow(), 1, "no retry on producer error");
     match err {
-        RefreshError::Io(IoError::Daemon { detail }) => {
+        RefreshError::Io(IoError::Daemon { detail, .. }) => {
             assert_eq!(detail, "scripted daemon failure");
         }
         other => panic!("expected Io(Daemon), got {other:?}"),
@@ -463,24 +465,14 @@ fn production_refresh_against_unreachable_daemon_returns_io_daemon() {
         .refresh(&opts, rt.handle())
         .expect_err("unreachable daemon must error out");
 
-    // After C5's trait-dispatch migration the producer-side
-    // error projection lives in `LocalRefresh`: a daemon-tip
-    // `get_height` failure surfaces as `LocalRefreshError::Io`,
-    // which the `From<LocalRefreshError> for RefreshError`
-    // conversion projects as `RefreshError::Io(IoError::Daemon
-    // { detail: "LocalRefresh: daemon I/O failure during refresh" })`.
-    // The bounded detail string is a deliberate design
-    // disposition (per §5.4.7 R6's memory-amplifier closure):
-    // upstream `RpcError` payloads are not propagated into the
-    // typed `RefreshError`; richer per-error classification
-    // routes through the `DiagnosticSink` as
-    // `DaemonProtocolError { kind: ProtocolErrorKind }`.
+    // The producer's error carries only its structural branch (§5.4.7
+    // R6's memory-amplifier closure): `LocalRefreshError::DaemonUnreachable`
+    // projects as `IoError::Daemon` with the `Unreachable` fault, and the
+    // upstream `RpcError` payload stays in the log and the `DiagnosticSink`.
+    // The fault is the contract callers branch on; the detail is log text.
     match err {
-        RefreshError::Io(IoError::Daemon { detail }) => {
-            assert!(
-                detail.contains("LocalRefresh"),
-                "expected LocalRefresh-projected daemon I/O detail, got {detail:?}"
-            );
+        RefreshError::Io(IoError::Daemon { fault, .. }) => {
+            assert_eq!(fault, DaemonFault::Unreachable);
         }
         other => panic!("expected Io(Daemon), got {other:?}"),
     }

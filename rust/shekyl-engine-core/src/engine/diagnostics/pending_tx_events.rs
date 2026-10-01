@@ -88,6 +88,12 @@ pub enum BuildErrorKind {
     /// §5.6.5 F4. `OutputSelector` trait lands in C4β.
     SelectorContractViolation,
 
+    /// A precondition the build relies on failed, or proof / signature
+    /// construction did — a bug, never a state the request put the wallet
+    /// in. Mirrors [`SendError::BuildInvariant`](crate::engine::error::SendError::BuildInvariant)
+    /// and [`SendError::Tx`](crate::engine::error::SendError::Tx).
+    InternalInvariant,
+
     /// The wallet has the balance but the FCMP++ curve tree is still
     /// rebuilding membership data behind the synced ledger tip, so a
     /// membership proof cannot yet be built for the shortfall outputs.

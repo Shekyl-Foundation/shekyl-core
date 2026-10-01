@@ -50,9 +50,9 @@ pub const SPENDABLE_AGE_BLOCKS: u64 = DEFAULT_LOCK_WINDOW as u64;
 /// deliberately *permits* a deep truncation — F9 requires it to drop the
 /// freeze records correctly, and the replica generator forks arbitrarily deep
 /// on purpose. `CT-6` C7 is a policy about whether a **wallet refresh** may
-/// ask for one, and it is enforced in the engine
-/// (`engine::merge::validate_reorg_within_finality`). The store must do it
-/// right; the wallet must never ask.
+/// ask for one. The producer walk and the ingest backstop share that
+/// comparison (`engine::reorg_finality`); the store must do the truncation
+/// right, and the wallet must never ask.
 ///
 /// Summed from its two owners rather than written as `730`, and named here
 /// because three places needed the sum: the freeze gate below, the C7 refusal,
@@ -60,11 +60,33 @@ pub const SPENDABLE_AGE_BLOCKS: u64 = DEFAULT_LOCK_WINDOW as u64;
 /// independently is one that drifts.
 pub const FINALITY_DEPTH_BLOCKS: u64 = SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS;
 
-// The snapshot ring's horizon must sit strictly inside `W`, because the band
-// between them is where a rollback is past the ring yet still repairable by
-// folding (`CT-6` §10.3). If the two ever met, C7's refusal would swallow that
-// band and turn a correct recovery into a re-sync.
-const _: () = assert!(SEGMENT_FREEZE_REORG_MARGIN_BLOCKS < FINALITY_DEPTH_BLOCKS);
+/// The block a maximal in-window rewind keeps. The hash window holds the
+/// `W` blocks that rewind would drop, plus this one, whose hash is what
+/// confirms the rewind is still inside finality.
+const REORG_HASH_WINDOW_KEPT_BLOCKS: u64 = 1;
+
+/// Hashes a wallet keeps so a rewind of exactly [`FINALITY_DEPTH_BLOCKS`]
+/// can be confirmed.
+///
+/// One hash past this window is a past-finality fork. The merge trims the
+/// ledger to this length after a successful apply; a longer record still
+/// loads (pre-genesis, no migration) and the next successful merge trims it.
+pub const REORG_HASH_WINDOW_BLOCKS: u64 = FINALITY_DEPTH_BLOCKS + REORG_HASH_WINDOW_KEPT_BLOCKS;
+
+// The window is the freeze depth plus the kept block, and it extends past
+// the snapshot ring: the band between the ring and `W` is where a rollback
+// is past the ring and still repairable by folding, and confirming that
+// rewind needs the kept block's hash to be in the record. `W` itself is
+// strictly past the ring because spendable age is a positive span. The
+// count stays a block count; the ledger converts it at the `Vec` edge.
+const _: () = assert!(SPENDABLE_AGE_BLOCKS > 0);
+const _: () = assert!(
+    REORG_HASH_WINDOW_BLOCKS
+        == SPENDABLE_AGE_BLOCKS
+            + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS
+            + REORG_HASH_WINDOW_KEPT_BLOCKS
+);
+const _: () = assert!(REORG_HASH_WINDOW_BLOCKS > SEGMENT_FREEZE_REORG_MARGIN_BLOCKS);
 
 /// Width of one stored leaf, in bytes.
 ///
@@ -131,7 +153,7 @@ mod tests {
 
     #[test]
     fn freeze_gate_requires_height_burial() {
-        let margin = SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS;
+        let margin = FINALITY_DEPTH_BLOCKS;
         assert!(!segment_freeze_eligible(margin - 1, 0));
         assert!(segment_freeze_eligible(margin, 0));
         assert!(!segment_freeze_eligible(margin, 1));
