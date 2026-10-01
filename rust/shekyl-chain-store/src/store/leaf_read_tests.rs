@@ -18,8 +18,8 @@ use shekyl_chain_rules::{AtHeight, ChainView, RuleSet};
 use shekyl_types::{ArchivalLength, BlockHeight, CurveTreeRoot, GlobalOutputIndex};
 
 use super::connect_fixtures::{
-    candidate, candidate_over, connect_chain, judge, root_going_into, spend, spendable_prefix,
-    FIRST_SPEND_HEIGHT,
+    candidate, candidate_over, connect_chain, connect_chain_anchored, judge, root_going_into,
+    spend, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, LeafCountFault, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
@@ -449,18 +449,18 @@ fn a_wrong_archival_length_row_is_corruption_not_a_drain() {
     for (name, plant) in [("leaf-len-plus-one", Some(1u64)), ("leaf-len-gone", None)] {
         let path = tmp(name);
         let store = ChainStore::create(&path, EPOCH).expect("create");
-        let hashes = connect_chain(&store, &listing());
+        let (hashes, connected) = connect_chain_anchored(&store, &listing());
         let hash = listed_hash_at_53(&store);
         let tx_id = {
             let snap = store.begin_read().expect("read");
             snap.tx_location(&hash).expect("read").expect("recorded").id
         };
         // The length `connect` measured, from the body it was handed.
-        let recorded = listing()
+        let recorded = connected
             .iter()
             .flatten()
             .find(|tx| tx.hash() == hash)
-            .expect("the listed spend")
+            .expect("the listed spend, as connected")
             .archival_len();
         assert_ne!(
             recorded,
