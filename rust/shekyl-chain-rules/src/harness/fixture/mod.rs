@@ -30,7 +30,9 @@ use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
 use shekyl_types::{ArchivalLength, SigningPayloadHash};
 
 mod archival;
-pub use archival::{join_market, serve_credit_only, serve_credit_vin, BOND_FLOOR};
+pub use archival::{
+    claimant, emission_vin, join_market, serve_credit_only, serve_credit_vin, BOND_FLOOR,
+};
 
 /// The well-formed **transaction** shapes this module builds, as a
 /// closed set. The sanity gate walks the chain from [`FIRST`](Self::FIRST)

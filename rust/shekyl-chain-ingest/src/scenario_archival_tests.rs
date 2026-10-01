@@ -3,46 +3,54 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! CEN-L7 through the production stack (DRS-E4 commit 4,
-//! `DRS_E4_ARCHIVAL_WRITER.md` §6 row 4): bond posts a persona's keys built
-//! and signed, riding the driver's real spend, judged by `validate` over the
-//! redb store's view and connected by `ChainStore::connect` — with the
-//! transition the verdict derived read back off the connector's reply.
+//! CEN-L7 through the production stack (DRS-E4 commits 4 and 5,
+//! `DRS_E4_ARCHIVAL_WRITER.md` §6 rows 4–5): bond posts a persona's keys
+//! built and signed, riding the driver's real spend, judged by `validate`
+//! over the redb store's view, connected by `ChainStore::connect` — which
+//! since commit 5 writes the verdict's delta (`archival_write.rs`) — and
+//! read back two ways: the transition off the connector's reply, and the
+//! rows the next block's rules read off the store.
 //!
-//! # Which arms are witnessed here, and why the others are not
+//! # Which arms are witnessed here
 //!
-//! The archival transition has two kinds of arm. **Single-block arms** need
-//! no persisted archival state: what they judge is the block in hand over a
-//! view that holds no bond — a join (the record it inserts), a serve credit
-//! for a persona whose join is in the same block, and the refusals of a
-//! post for a persona with no record. They run today, through the store
-//! and the validator as they are, and this module is their witness.
+//! The archival transition has two kinds of arm. **Single-block arms**
+//! judge the block in hand over a view that holds no bond — a join (the
+//! record it inserts), a serve credit for a persona whose join is in the
+//! same block, the refusals of a post for a persona with no record.
 //! **Multi-block arms** read a record a previous block wrote — a release,
-//! a reinstate, a second join, a credit for a persona who joined earlier —
-//! and at commit 4 nothing writes one: `connect` does not take the delta
-//! until the writer lands (§6 row 5). Their witness is commit 5's, over
-//! commit 5's code; putting a fixture-served record under them here would
-//! test a state the store cannot yet hold against rules that read the
-//! store. That is a pairing, not a deferral, and it is why the split falls
-//! where it does.
+//! a reinstate, a second join, a credit for a persona who joined earlier.
+//! Commit 4 witnessed the first kind and pinned the second as unreachable
+//! (nothing wrote a record); commit 5's writer turned that pin, and
+//! [`a_join_is_written_and_the_blocks_after_it_read_the_record`] is the
+//! same test with the two assertions inverted: the record is `Some` after
+//! the join, and the next block's credit for it connects. The multi-block
+//! arms follow on the same chain: a release of the persisted record (its
+//! post-image read back), a release whose debit is not that record's total
+//! refused at L7 before the valid one connects, a second join for a bonded
+//! persona refused, and a reinstate against a record whose only interval is
+//! a clean close
+//! refused — the reinstate arm's *positive* witness needs an open interval,
+//! which only a slash writes, and no fixture chain here reaches the slash
+//! scan (a slash needs `M` epochs of settled misses and one epoch of
+//! grace; `shekyl-chain-store`'s `slash_writes_land_at_the_m_epoch_deadline`
+//! is that path's witness).
 //!
 //! One arm the plan listed as single-block is not. A join and a release
 //! for one persona in one block do not reach L7: **CEN-G10**
 //! (`bond_post_block_unique`, ratified 2026-07-12) refuses a second bond
 //! post for a `P` in a block, whatever its kind, and G10 runs before the
 //! transition. So "join + release in one block" is G10's refusal, pinned
-//! below as such, and the release arm's first positive witness is a
-//! release of a *persisted* record — commit 5's.
+//! below as such, and the release arm's positive witness is a release of a
+//! *persisted* record.
 //!
-//! # The store does not write yet, and this module says so
+//! # What the store says
 //!
-//! [`a_join_is_the_records_insert_and_the_store_does_not_yet_hold_it`]
-//! reads `bond_record` after an admitted join and holds it `None`, then
-//! lists the persona's serve credit in the next block and holds it refused
-//! at L7. Both are what commit 5 inverts — the same test, with those two
-//! assertions turned, is the writer's falsifier — so the gap is pinned in
-//! code rather than remembered (rule 22: a blocker names how a reader would
-//! find it lifted).
+//! The accrual assertion is derived, not computed here: the verdict's
+//! `Accrual` is the epoch's row as the store held it before the block plus
+//! the block's own archival leg (`PaidEmission::accrual`), and the row the
+//! store holds after the block is that sum. Both reads go through the
+//! connector (`BudgetAccruingOf`, `BondRecordOf`), the same store the
+//! validator's view reads.
 //!
 //! # What is fixture here
 //!
@@ -55,8 +63,9 @@
 
 use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
 use shekyl_chain_rules::{Accrual, CenRow, Locus, RecordWriteKind, RuleSet, TxSlot};
-use shekyl_types::archival::Holdings;
+use shekyl_types::archival::{BadInterval, Holdings};
 use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
+use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{BondPostKind, Holdings as WireHoldings};
 use shekyl_wire::{Input, Transaction};
 
@@ -100,10 +109,15 @@ fn refused_at(outcome: Result<crate::scenario::Mined, StepOutcome>, row: CenRow,
 /// riding a real spend: the verdict's transition is that persona's
 /// `Insert`, field for field from the post and the open epoch; a serve
 /// credit in the same block is keyed to the post; the accrual is the open
-/// epoch's. Then the commit-4 gap, pinned: the store holds no record and
-/// the next block's credit is refused.
+/// epoch's row plus the block's leg. Then the store: the record is there,
+/// the accrual row is the post-image, and the blocks after read them — a
+/// credit for the persona connects, a release whose debit is not the
+/// persisted total is L7 before any connect, a release of that total
+/// empties the record and its post-image is what the store holds, a
+/// second join and a reinstate over a clean close are L7's refusals at
+/// their input.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_join_is_the_records_insert_and_the_store_does_not_yet_hold_it() {
+async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     let connecting = first_spending_height();
     let mut scenario = Scenario::open("scenario-archival-join");
     let mined = scenario.mine(connecting).await;
@@ -118,6 +132,13 @@ async fn a_join_is_the_records_insert_and_the_store_does_not_yet_hold_it() {
         spender.spend_coinbase_posting(scenario.wallet(), 1, connecting, FEE, Some(&join_whole)),
         compact.serve_credit(7, epoch_at(connecting).to_raw()),
     ];
+    let epoch = epoch_at(connecting);
+    // The epoch's row before this block: what the blocks before it accrued.
+    let accrued_before = scenario
+        .budget_accruing(epoch)
+        .await
+        .expect("read")
+        .unwrap_or(AtomicUnits::ZERO);
     let block = scenario
         .mine_listing(listed)
         .await
@@ -134,7 +155,6 @@ async fn a_join_is_the_records_insert_and_the_store_does_not_yet_hold_it() {
     }
 
     // The transition: two inserts, in post order.
-    let epoch = epoch_at(connecting);
     let records = block.archival.records();
     assert_eq!(records.len(), 2, "one write per join");
     let Input::BondPost(posted) = &join_compact.input else {
@@ -182,41 +202,169 @@ async fn a_join_is_the_records_insert_and_the_store_does_not_yet_hold_it() {
     assert_eq!(credits[0].shard, ShardId::from_raw(7));
     assert_eq!(credits[0].epoch, epoch);
 
-    // The accrual is the open epoch's post-image: the view's total so far
-    // plus the block's archival emission leg (the verdict's own
-    // `PaidEmission::accrual`, not a number this test computed). At commit
-    // 4 the view's total is zero — no block's accrual has been written — so
-    // the post-image is this block's leg alone; commit 5 adds the seventy
-    // written before it. This block, well inside the first epoch, slashes
-    // and closes nothing.
+    // The accrual is the open epoch's post-image: the row the store held
+    // before this block plus the block's archival emission leg (the
+    // verdict's own `PaidEmission::accrual`, not a number this test
+    // computed). This block, well inside the first epoch, slashes and
+    // closes nothing.
+    let accrued = accrued_before
+        .checked_add(block.emission.accrual)
+        .expect("a fixture chain's accrual fits");
     assert_eq!(
         block.archival.accrual(),
         Accrual {
             epoch,
-            total: block.emission.accrual,
+            total: accrued,
         }
     );
     assert!(block.archival.slashes().is_empty());
     assert!(block.archival.close().is_none());
     assert_eq!(block.archival.slash_watermark(), None);
 
-    // The commit-4 gap, pinned. Commit 5 turns both of these: the record is
-    // `Some` with the fields asserted above, and the credit connects.
+    // The store holds what the verdict derived: both records, field for
+    // field, and the accrual post-image (SI-19, SI-23).
     assert_eq!(
         scenario.bond_record(compact.id()).await.expect("read"),
-        None,
-        "E4 commit 4: the transition is derived, not written (commit 5's falsifier)"
+        Some(record.clone()),
+        "the join's insert is the store's row"
     );
+    assert_eq!(
+        scenario.bond_record(whole.id()).await.expect("read"),
+        Some(records[1].record().clone()),
+    );
+    assert_eq!(
+        scenario.budget_accruing(epoch).await.expect("read"),
+        Some(accrued),
+        "the epoch's accruing row is the verdict's post-image"
+    );
+    let whole_record = records[1].record().clone();
     spender.push(&block);
+
+    // The next block reads the records: the credit for a persona who
+    // joined earlier connects (SI-15's row keyed to it), and a release of
+    // the other persisted record is its `Update` — bonded to zero, holding
+    // nothing, one clean interval close at the open epoch.
+    let next = connecting + 1;
+    // A debit that is not the persisted total is L7
+    // (`DebitNotRecordTotal`) at the post input. The block does not
+    // connect, so the valid release below still lands at `next` on the
+    // same coinbase.
+    let wrong_debit = whole.release(whole_record.bonded_total.to_raw() + 1);
     refused_at(
         scenario
-            .mine_listing(vec![compact.serve_credit(42, epoch.to_raw())])
+            .mine_listing(vec![spender.spend_coinbase_posting(
+                scenario.wallet(),
+                2,
+                next,
+                FEE,
+                Some(&wrong_debit),
+            )])
             .await,
         CenRow::L7,
         Locus::Input {
             slot: TxSlot::Listed(0),
-            input: 0,
+            input: 1,
         },
+    );
+    let release_whole = whole.release(whole_record.bonded_total.to_raw());
+    let block = scenario
+        .mine_listing(vec![
+            compact.serve_credit(42, epoch.to_raw()),
+            spender.spend_coinbase_posting(scenario.wallet(), 2, next, FEE, Some(&release_whole)),
+        ])
+        .await
+        .unwrap_or_else(|outcome| panic!("a credit and a release connect: {outcome}"));
+    assert_eq!(block.height, BlockHeight::from_raw(next));
+    let credits = block.archival.serve_credits();
+    assert_eq!(credits.len(), 1);
+    assert_eq!(credits[0].persona, compact.id());
+    assert_eq!(credits[0].shard, ShardId::from_raw(42));
+    assert_eq!(credits[0].epoch, epoch);
+    let records = block.archival.records();
+    assert_eq!(records.len(), 1, "the release is the block's one write");
+    assert_eq!(records[0].persona(), &whole.id());
+    assert_eq!(records[0].kind(), RecordWriteKind::Update);
+    let released = records[0].record();
+    assert_eq!(released.bonded_total, AtomicUnits::ZERO);
+    assert_eq!(
+        released.holdings,
+        Holdings::shard_set(Vec::new()).expect("empty"),
+        "a release empties the holdings"
+    );
+    assert_eq!(
+        released.bad_intervals,
+        vec![BadInterval {
+            start_epoch: epoch.to_raw(),
+            end_exclusive: epoch.to_raw(),
+        }],
+        "one clean interval close at the release epoch"
+    );
+    assert_eq!(released.hybrid_pubkey, whole_record.hybrid_pubkey);
+    assert_eq!(
+        released.join_settlement_epoch,
+        whole_record.join_settlement_epoch
+    );
+    assert_eq!(
+        block.archival.accrual().total,
+        accrued.checked_add(block.emission.accrual).expect("fits"),
+        "the accrual keeps folding over the written row"
+    );
+    assert_eq!(
+        scenario.bond_record(whole.id()).await.expect("read"),
+        Some(released.clone()),
+        "the release's post-image is the store's row (the replace journals the pre-image)"
+    );
+    assert_eq!(
+        scenario.bond_record(compact.id()).await.expect("read"),
+        Some(record.clone()),
+        "a credit does not touch the record"
+    );
+    spender.push(&block);
+
+    // Refusals that read a persisted record: a second join for a bonded
+    // persona (SI-19's insert-once, judged at L7 first), and a reinstate
+    // of the released record — it holds nothing and its only interval is
+    // a clean close, so the fold has nothing to reinstate. Each is refused
+    // at the post's own input; the chain stays where it was.
+    let after = next + 1;
+    let at_post = Locus::Input {
+        slot: TxSlot::Listed(0),
+        input: 1,
+    };
+    let rejoin = compact.join(shard_set(vec![9]), ENDPOINT);
+    refused_at(
+        scenario
+            .mine_listing(vec![spender.spend_coinbase_posting(
+                scenario.wallet(),
+                3,
+                after,
+                FEE,
+                Some(&rejoin),
+            )])
+            .await,
+        CenRow::L7,
+        at_post,
+    );
+    let mut reinstate = whole.join_post(complete_tree(), ENDPOINT);
+    reinstate.kind = BondPostKind::Other(shekyl_archival_retention::BondPostKind::Reinstate as u8);
+    let reinstate = whole.post_by_hand(reinstate);
+    refused_at(
+        scenario
+            .mine_listing(vec![spender.spend_coinbase_posting(
+                scenario.wallet(),
+                3,
+                after,
+                FEE,
+                Some(&reinstate),
+            )])
+            .await,
+        CenRow::L7,
+        at_post,
+    );
+    assert_eq!(
+        scenario.bond_record(whole.id()).await.expect("read"),
+        Some(released.clone()),
+        "a refused block writes nothing"
     );
 
     scenario.close().await;

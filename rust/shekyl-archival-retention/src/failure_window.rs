@@ -136,7 +136,7 @@
 //! `bond_duration` precedent.
 
 use crate::bond_floor::MAX_CLAIM_AGE_W;
-use crate::constants::{CHALLENGE_RESOLUTION_BLOCKS, SETTLEMENT_EPOCH_BLOCKS};
+use crate::constants::SLASH_GRACE_EPOCHS;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -168,12 +168,12 @@ const _: () = assert!(
 
 /// Settlement epochs between a baseline epoch and the tip at which its slash
 /// pass runs. Epoch `E` is settled by the first block above
-/// `H_slash_deadline(E) = (E + 1)·SEB + CHALLENGE_RESOLUTION_BLOCKS`, and the
-/// scheduler settles each epoch at that block (it advances its watermark on
-/// every connect, so it does not drift behind the tip). At the genesis schedule
-/// this is `2`.
-const SLASH_SETTLEMENT_TIP_LAG_EPOCHS: u64 =
-    1 + (CHALLENGE_RESOLUTION_BLOCKS + 1) / SETTLEMENT_EPOCH_BLOCKS;
+/// `H_slash_deadline(E) = last_block(E + SLASH_GRACE_EPOCHS)`, which is the
+/// first block of epoch `E + 1 + k`, and the scheduler settles each epoch at
+/// that block (it advances its watermark on every connect, so it does not
+/// drift behind the tip). `2` at `k = 1` — **on every schedule**, since the
+/// grace is denominated in epochs.
+const SLASH_SETTLEMENT_TIP_LAG_EPOCHS: u64 = 1 + SLASH_GRACE_EPOCHS;
 
 /// **Prune-horizon coupling — the window may not out-reach the serve-credit
 /// ledger's retention.** At the moment epoch `E` is settled the tip is
@@ -193,12 +193,12 @@ const SLASH_SETTLEMENT_TIP_LAG_EPOCHS: u64 =
 /// both, not a bump — and whichever failure you are chasing, this is the
 /// assert for it.
 ///
-/// Measured on the **genesis** schedule. The FAKECHAIN-only
-/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override shortens `SEB` while
-/// `CHALLENGE_RESOLUTION_BLOCKS` stays in blocks, which inflates the real lag
-/// far past this constant — so a regtest chain short enough to prune inside the
-/// window is not a faithful model of the slash path. That is a harness-fidelity
-/// caveat, not a consensus one: the override is refused on public networks.
+/// Holds on every schedule: `n`, `W` and the lag are all epoch-denominated, so
+/// the FAKECHAIN-only `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever moves none of the
+/// three terms. (Until DRS-E4 commit 5 the grace was a block count that the
+/// lever did not shorten, and a levered chain's real lag ran far past this
+/// constant — a regtest chain was not a faithful model of the slash path. That
+/// caveat is gone with the constant.)
 const _: () = assert!(
     (ARCHIVAL_FAILURE_WINDOW_N as u64) + SLASH_SETTLEMENT_TIP_LAG_EPOCHS <= MAX_CLAIM_AGE_W + 1,
     "the failure window reaches further back than the epoch-scoped archival \
@@ -215,30 +215,30 @@ const _: () = assert!(
 /// (`blockchain_db.cpp`: `process_archival_slash_at_height` before
 /// `process_archival_epoch_close_at_height`), so the height at which the
 /// slash pass settles epoch `E` (the first block above
-/// `H_slash_deadline(E) = (E+1)·SEB − 1 + CHALLENGE_RESOLUTION_BLOCKS`, i.e.
-/// operand `(E+1)·SEB + CHALLENGE_RESOLUTION_BLOCKS`) must be **strictly**
-/// greater than the height at which `E`'s close fires (operand `(E+1)·SEB`) —
-/// same-height is not enough, because within one connect the slash arm runs
-/// first. The difference is exactly `CHALLENGE_RESOLUTION_BLOCKS`, so the
-/// coupling holds iff it is at least one block.
+/// `H_slash_deadline(E) = (E+1)·SEB − 1 + k·SEB`, i.e. operand
+/// `(E+1+k)·SEB`) must be **strictly** greater than the height at which
+/// `E`'s close fires (operand `(E+1)·SEB`) — same-height is not enough,
+/// because within one connect the slash arm runs first. The difference is
+/// exactly `k·SEB`, so the coupling holds iff `k ≥ 1` (the epoch is nonzero
+/// by its own assert).
 ///
 /// This can fire on a real re-pin: a future `W`-window redesign that sets the
-/// resolution window to zero ("settle immediately at close") silently inverts
-/// the order — the slash pass would read settlement state the close has not
-/// written yet, exactly the fold-before-read hazard the settlement design
-/// gates structurally. Re-pinning `CHALLENGE_RESOLUTION_BLOCKS` below one
-/// block requires reordering the connect hooks first, and that is a decision
-/// about both sides, not a constant bump. The affine-shape coupling of the
-/// two derivations (`epoch_close_height` and
-/// `settlement_epoch_slash_deadline_height`, both in `consensus_state` since
-/// DRS-E4 commit 4 moved the geometry to its one home) is asserted by test
-/// in `shekyl-ffi`'s schedule module, which imports both.
+/// grace to zero ("settle immediately at close") silently inverts the order —
+/// the slash pass would read settlement state the close has not written yet,
+/// exactly the fold-before-read hazard the settlement design gates
+/// structurally. Re-pinning `SLASH_GRACE_EPOCHS` to zero requires reordering
+/// the connect hooks first, and that is a decision about both sides, not a
+/// constant bump. The affine-shape coupling of the two derivations
+/// (`epoch_close_height` and `settlement_epoch_slash_deadline_height`, both
+/// in `consensus_state` since DRS-E4 commit 4 moved the geometry to its one
+/// home) is asserted by test in `shekyl-ffi`'s schedule module, which
+/// imports both.
 const _: () = assert!(
-    CHALLENGE_RESOLUTION_BLOCKS >= 1,
-    "CHALLENGE_RESOLUTION_BLOCKS = 0 lands the slash pass for epoch E on the \
-     SAME connect height as E's close, and the connect order runs slash before \
+    SLASH_GRACE_EPOCHS >= 1,
+    "SLASH_GRACE_EPOCHS = 0 lands the slash pass for epoch E on the SAME \
+     connect height as E's close, and the connect order runs slash before \
      close - the slash would read settlement state the close has not written \
-     yet; reorder the connect hooks before re-pinning this below one block"
+     yet; reorder the connect hooks before re-pinning this to zero"
 );
 
 /// One baseline observation for a `(P_id, shard)` pair: an epoch at which a

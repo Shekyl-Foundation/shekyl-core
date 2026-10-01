@@ -12,8 +12,8 @@
 //! archival shard partition (`shekyl_types::SHARD_LENGTH`; `SHT-Q2`, RULED
 //! 2026-09-29): shards are cut by archival length. It lives in the JSON rather than as a
 //! literal because every other numeric on the Round-2 re-pin gate
-//! (`settlement_epoch_blocks`, `archival_reorg_depth_blocks`,
-//! `challenge_resolution_blocks`) is sourced there, and a consensus
+//! (`settlement_epoch_blocks`, `archival_reorg_depth_blocks`) is sourced
+//! there, and a consensus
 //! numeric with two sourcing idioms is a drift waiting for a re-pin
 //! (S-PRUNE review, PR #861 item 6). The per-crate `build.rs` — rather
 //! than a dependency on a crate that already reads the JSON — keeps this

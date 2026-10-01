@@ -10,6 +10,8 @@
 //! While a [`Recording`] is live on a batch, every declared write made
 //! through that batch — [`InsertTable::insert`](super::InsertTable::insert),
 //! [`UpsertTable::upsert`](super::UpsertTable::upsert),
+//! [`ReplaceTable::replace`](super::ReplaceTable::replace),
+//! [`RemoveTable::remove`](super::RemoveTable::remove) and
 //! [`WriteBatch::upsert_property`](super::WriteBatch::upsert_property) —
 //! pushes its own pre-image as a side effect of succeeding. There is no
 //! "journaled" flavour of a verb to forget to call: the handle records or
@@ -23,16 +25,16 @@
 //! the recording for the whole block, so "not live" means "not a
 //! chain-state write" by construction.
 //!
-//! # Replay is the only deleter
+//! # Replay reverses the journal
 //!
 //! [`replay`] reads one height's row, walks its entries **from the back**,
 //! and applies each entry's inverse through the table the entry's ordinal
-//! names — then deletes the row. Nothing else in the store removes a key:
-//! `KeyedTable` has no `remove`, and does not gain one here (S-CURVE names
-//! a journaling delete when the drain needs it). Every inverse asserts the
-//! state it expects to find (the inserted key present, the replaced key
-//! present) and a miss is SI-6 — the journal has stopped describing the
-//! tables, and the batch is poisoned.
+//! names — then deletes the row.
+//! [`RemoveTable::remove`](super::RemoveTable::remove) is the connect-time
+//! delete (the epoch close); its inverse puts the prior back. Every inverse
+//! asserts the state it expects to find (the inserted key present, the
+//! replaced key present, the removed key absent) and a miss is SI-6 — the
+//! journal has stopped describing the tables, and the batch is poisoned.
 //!
 //! # `from_bytes` is not a decoder
 //!
@@ -247,6 +249,7 @@ where
             UndoEntry::Replaced {
                 key, prior, post, ..
             } => (key, prior.as_deref(), post),
+            UndoEntry::Removed { key, prior, .. } => return undo_removed(self, txn, key, prior),
         };
         if let Err(reason) = K::well_formed(key) {
             return Ok(Undone::Malformed(reason));
@@ -281,6 +284,39 @@ where
             Some(_) => Undone::PostImageMismatch,
         })
     }
+}
+
+/// The inverse of a journaling delete ([`UndoEntry::Removed`]): the write
+/// left the key absent, so `prior` goes back and the insert must displace
+/// nothing. A value found under the key is the mismatch the keyed arms read
+/// off the post-image — there is no digest of an absence to compare
+/// against, and none is needed: absence is one state.
+fn undo_removed<K, V>(
+    def: &TableDefinition<'static, K, V>,
+    txn: &WriteTransaction,
+    key: &[u8],
+    prior: &[u8],
+) -> Result<Undone, StoreError>
+where
+    K: Key + Restorable + 'static,
+    V: Value + Restorable + 'static,
+{
+    if let Err(reason) = K::well_formed(key) {
+        return Ok(Undone::Malformed(reason));
+    }
+    if let Err(reason) = V::well_formed(prior) {
+        return Ok(Undone::Malformed(reason));
+    }
+    let mut table = txn.open_table(*def).map_err(EngineError::Table)?;
+    let displaced = table
+        .insert(K::from_bytes(key), V::from_bytes(prior))
+        .map_err(EngineError::Storage)?
+        .is_some();
+    Ok(if displaced {
+        Undone::TargetMismatch
+    } else {
+        Undone::Reversed
+    })
 }
 
 /// The batch's journal slot: at most one live [`Recording`].

@@ -4,14 +4,73 @@
 // BSD-3-Clause
 
 //! Archival transaction fixtures: the bond floor, a serve-credit vin, the
-//! JoinMarket that opens a persona's record, and the serve-credit-only body
-//! that follows it.
+//! JoinMarket that opens a persona's record, the serve-credit-only body
+//! that follows it, and a parseable emission claim for a persona.
 
+use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
 use shekyl_types::PCanonicalId;
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
 use shekyl_wire::{BondPost, BondPostKind, Ct, CtBase, Holdings, Input, Transaction, TxPrefix};
 
 use super::{balanced_bond_post, UNRECORDED_REFERENCE};
+
+/// The persona a `[fill; LEN]` hybrid pubkey derives to — the emission
+/// vin's persona is derived from its `p_pubkey`, so a [`join_market`] for
+/// `claimant(fill)` is the record an [`emission_vin`] built with `fill`
+/// claims against.
+#[must_use]
+pub fn claimant(p_pubkey_fill: u8) -> [u8; 32] {
+    *shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey(&vec![
+        p_pubkey_fill;
+        PQC_HYBRID_SINGLE_KEY_LEN
+    ])
+    .as_bytes()
+}
+
+/// A parseable **emission-claim vin** for the persona [`claimant`]`(fill)`
+/// claiming `epochs`, one shard-7 serve-credit entry per epoch, a
+/// membership-only backing and filler auths: enough for CEN-L7's claim
+/// arm to read the persona and the epochs (and for the block-level G9,
+/// which reads the claims). Nothing here verifies the backing or the
+/// auths. [`balanced_emission`](super::balanced_emission) puts it in a
+/// body CEN-H22 balances.
+pub fn emission_vin(p_pubkey_fill: u8, epochs: &[u64]) -> Input {
+    use shekyl_archival_retention::{
+        ArchivalRewardEmissionVin, HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking,
+        ShardSet, ShardWorkEntry, WorkEpochClaim,
+    };
+    let vin = ArchivalRewardEmissionVin {
+        p_pubkey: vec![p_pubkey_fill; PQC_HYBRID_SINGLE_KEY_LEN],
+        holdings: HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: ShardSet::new(vec![7]).expect("one shard"),
+        },
+        settlement_epochs: epochs.to_vec(),
+        work_claim: epochs
+            .iter()
+            .map(|&epoch| WorkEpochClaim {
+                epoch,
+                shard_entries: vec![ShardWorkEntry {
+                    shard_id: 7,
+                    serve_credit_bit: true,
+                    scarcity_micro: 1_000,
+                }],
+            })
+            .collect(),
+        backing: MembershipOnlyBacking {
+            proof: vec![0xee; 64],
+            pseudo_out: [0x22; 32],
+            backing_pubkey: vec![0xb2; PQC_HYBRID_SINGLE_KEY_LEN],
+            tree_depth: 3,
+        },
+        reward_amount_plain: epochs.iter().map(|_| 1_000_000).collect(),
+        auth_backing: vec![0xc3; SINGLE_SIG_CANONICAL_LEN],
+        auth_claim: vec![0xd4; SINGLE_SIG_CANONICAL_LEN],
+    };
+    Input::ArchivalRewardEmission {
+        canonical_bytes: vin.serialize().expect("an emission vin serializes"),
+    }
+}
 
 /// The bond floor a [`join_market`] posts and is bonded at — the
 /// complete-tree floor, one bond (`bond_floor_of(CompleteTree, _)`).

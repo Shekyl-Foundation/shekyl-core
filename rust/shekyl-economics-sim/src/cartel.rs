@@ -80,8 +80,8 @@ use core::fmt;
 
 use shekyl_archival_retention::bond_floor::bond_floor_of;
 use shekyl_archival_retention::{
-    reinstate_connect, BadInterval, HoldingsKind, CHALLENGE_RESOLUTION_BLOCKS, FAILURE_WINDOW_M,
-    FAILURE_WINDOW_N, MAX_HOLDINGS_SHARDS, SETTLEMENT_EPOCH_BLOCKS,
+    reinstate_connect, BadInterval, HoldingsKind, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
+    MAX_HOLDINGS_SHARDS, SLASH_GRACE_EPOCHS,
 };
 
 use crate::proxy::{bond_at_risk_skl, epochs_per_year, expected_epochs_to_first_slash};
@@ -204,12 +204,11 @@ impl EpochCache {
 /// The floor is `max(reachability, validation)`, and today reachability binds:
 ///
 /// 1. **Reachability leg (derived from the timing constants):** the slash for
-///    epoch `e` folds only past `h_slash_deadline(e) = H_close(e) +
-///    CHALLENGE_RESOLUTION_BLOCKS` (`db_lmdb.cpp`
-///    `process_archival_slash_at_height`), writing the interval
-///    **retroactively** at `start_epoch = e`. The earliest reachable
-///    `E_reinstate` is therefore the fold's epoch:
-///    `e + 1 + CHALLENGE_RESOLUTION_BLOCKS/SETTLEMENT_EPOCH_BLOCKS`. The
+///    epoch `e` folds only past `h_slash_deadline(e) = last_block(e +
+///    SLASH_GRACE_EPOCHS)` (`shekyl-chain-rules`' slash scan, the store's
+///    phase 9b), writing the interval **retroactively** at `start_epoch = e`.
+///    The earliest reachable `E_reinstate` is therefore the fold's epoch:
+///    `e + 1 + SLASH_GRACE_EPOCHS`. The
 ///    forgone-earnings span is `E_reinstate − e` — epochs `e+1 ..= E_reinstate`
 ///    are voided (epoch `e` is also interval-covered, but it is the absorbing
 ///    MISS epoch, already unpaid in the cycle model, so it adds no friction).
@@ -247,8 +246,7 @@ pub fn reinstate_structural_downtime_epochs() -> f64 {
         })
         .expect("reinstate_connect admits no reinstatement within 64 epochs of a slash");
     // Reachable downtime: the fold's epoch minus the slash epoch.
-    let reachability_downtime =
-        1.0 + (CHALLENGE_RESOLUTION_BLOCKS / SETTLEMENT_EPOCH_BLOCKS) as f64;
+    let reachability_downtime = 1.0 + SLASH_GRACE_EPOCHS as f64;
     reachability_downtime.max(validation_downtime)
 }
 
@@ -549,7 +547,7 @@ pub fn tj_inequalities_report(
          at end_exclusive = E_reinstate + 1, so exclusion runs the slash epoch\n\
          THROUGH the reinstate epoch inclusive — structural floor {D:.0} epochs of\n\
          FORGONE EARNINGS: the slash for epoch e folds only past H_close(e) +\n\
-         CHALLENGE_RESOLUTION_BLOCKS (one epoch of slash grace), writing the\n\
+         SLASH_GRACE_EPOCHS·SEB (one epoch of slash grace), writing the\n\
          interval RETROACTIVELY at start = e, so the earliest reachable reinstate\n\
          is in epoch e+2 and epochs e+1..=e+2 are voided (epoch e is the\n\
          absorbing miss — already unpaid; claim order enforces the retro void:\n\
@@ -781,12 +779,12 @@ mod tests {
     #[test]
     fn structural_downtime_is_two_epochs_and_reachability_binds() {
         // max(reachability, validation), reachability binding today: the slash
-        // for epoch e folds past H_close(e) + CHALLENGE_RESOLUTION_BLOCKS
+        // for epoch e folds past H_close(e) + SLASH_GRACE_EPOCHS·SEB
         // (one epoch of grace), retroactive to start = e, so the earliest
         // reinstate lands in e+2 and the forgone span is {e+1, e+2} = 2 (epoch e
         // is the absorbing miss, already unpaid in the model). The probed
         // validation leg admits a same-epoch close (downtime 0) — slack. If
-        // this pin goes red: CHALLENGE_RESOLUTION_BLOCKS moved, or the
+        // this pin goes red: SLASH_GRACE_EPOCHS moved, or the
         // connect grew a cooldown gate that now out-binds reachability —
         // re-read the remedy curve's baseline from the new floor; do not
         // patch the pin without doing so.

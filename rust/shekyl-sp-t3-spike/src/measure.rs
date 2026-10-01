@@ -7,12 +7,13 @@
 //!
 //! # Why this does not report a pass rate
 //!
-//! `CHALLENGE_RESOLUTION_BLOCKS = 10_000` is the **pre-TJ** value
-//! (`shekyl_archival_retention::constants`), and §8.3 says explicitly that
-//! *"TJ-C's deadline is a dependency, not this round's answer."* Measuring
-//! pass/fail against 10 000 blocks would return a trivial "not forceable" and
-//! answer nothing — at ~2 min/block that deadline is over a week, and every fetch
-//! passes.
+//! The slash grace — one settlement epoch, `SLASH_GRACE_EPOCHS · SEB`
+//! (`shekyl_archival_retention::constants`; 10 000 blocks on the production
+//! pin, where this round read it as `CHALLENGE_RESOLUTION_BLOCKS = 10_000`) —
+//! is the **pre-TJ** value, and §8.3 says explicitly that *"TJ-C's deadline
+//! is a dependency, not this round's answer."* Measuring pass/fail against
+//! 10 000 blocks would return a trivial "not forceable" and answer nothing —
+//! at ~2 min/block that deadline is over a week, and every fetch passes.
 //!
 //! So the harness reports the **distribution**, and inverts it:
 //!

@@ -49,10 +49,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use shekyl_chain_rules::harness::MockSubstrate;
-use shekyl_chain_rules::{
-    CenRow, FakechainSchedule, InvalidBlock, Locus, ReleaseAnchors, SettlementEpochBlocks,
-    Substrate, TxSlot,
-};
+use shekyl_chain_rules::{FakechainSchedule, ReleaseAnchors, SettlementEpochBlocks, Substrate};
 use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::corpus::CorpusReader;
@@ -185,59 +182,6 @@ const CAPTURED_SHAPES: [&str; 6] = [
     "spend-1in-2out",
     "spend-depth3",
 ];
-
-/// The one refusal the gate currently expects, pinned as a verdict rather
-/// than hidden behind `#[ignore]`: `DRS_E4_ARCHIVAL_WRITER.md` §6 row 4's
-/// disclosed interim red. `emission-claim`'s claim at height 1025 finds no
-/// JoinMarket record because the transition derives the record on the
-/// verdict (commit 4) and no store writer persists it until the phase
-/// bodies land (commit 5), so CEN-L7 refuses at the claim's input. The pin
-/// is two-sided: a refusal anywhere else, under any other row, is a
-/// finding; and the chain replaying in full is commit 5 landing, at which
-/// point this row is deleted and `hold` judges the chain like the other
-/// five. Falsify: `rg interim_refusal` → this function has no rows.
-fn interim_refusal(manifest: &Manifest) -> Option<(BlockHeight, InvalidBlock)> {
-    match manifest.shape.as_str() {
-        "emission-claim" => Some((
-            BlockHeight::from_raw(1025),
-            InvalidBlock {
-                rule: CenRow::L7,
-                locus: Locus::Input {
-                    slot: TxSlot::Listed(0),
-                    input: 2,
-                },
-            },
-        )),
-        _ => None,
-    }
-}
-
-/// Judge a pinned chain against its [`interim_refusal`]; `true` when the
-/// chain is pinned and the pin held, `false` when it is not pinned and
-/// [`hold`] judges it. Both replay lanes call this so they cannot disagree
-/// about what the corpus is expected to do.
-fn holds_as_pinned(manifest: &Manifest, report: &RunReport) -> bool {
-    let Some(pin) = interim_refusal(manifest) else {
-        return false;
-    };
-    assert_eq!(
-        report.refused,
-        Some(pin),
-        "{} ({}): the pinned interim refusal moved. `None` here is commit 5 landing — delete this \
-         chain's `interim_refusal` row and let `hold` judge it; any other value is a finding \
-         (E2 §0)",
-        manifest.shape,
-        manifest.generator
-    );
-    eprintln!(
-        "{}: refused at {:?} as pinned (DRS-E4 §6 row 4, until commit 5); {} blocks connected \
-         before it",
-        manifest.shape,
-        pin.0,
-        report.connected.len()
-    );
-    true
-}
 
 /// Replay one captured chain through the production pipeline against a
 /// fresh store; return the report.
@@ -501,9 +445,6 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
     for (dir, manifest) in captured_chains() {
         genesis_is_the_current_builds(&manifest);
         let report = replay(&dir, &manifest, Arc::clone(&substrate)).await;
-        if holds_as_pinned(&manifest, &report) {
-            continue;
-        }
         hold(&dir, &manifest, &report);
         eprintln!(
             "{}: {} blocks connected, digest MATCH at {}, roots MATCH at all {} heights, weights \
@@ -534,9 +475,6 @@ async fn replays_every_captured_chain_under_the_production_substrate() {
     for (dir, manifest) in captured_chains() {
         genesis_is_the_current_builds(&manifest);
         let report = replay(&dir, &manifest, substrate.clone()).await;
-        if holds_as_pinned(&manifest, &report) {
-            continue;
-        }
         hold(&dir, &manifest, &report);
     }
 }

@@ -1999,7 +1999,8 @@ penalty (killed by the impossibility result). Under derived assignment there
 is no occupancy to extend — the witness is the producer of block `h`, and if
 it does nothing, nothing is held. Clock-burn is a draw-count attack, not a
 duration one. The remaining candidates are slack: settlement bookkeeping
-already grants `CHALLENGE_RESOLUTION_BLOCKS` = one full epoch of grace;
+already grants one full epoch of grace (`SLASH_GRACE_EPOCHS · SEB`, `k = 1`;
+*was* `CHALLENGE_RESOLUTION_BLOCKS = 10_000` until 2026-09-30);
 outstanding-challenge count is bookkeeping; `P`'s availability burden is
 unchanged; and DDoS makes a **longer** window a defense, as §6 already
 lists. One candidate raised in review and rejected — **outsourcing

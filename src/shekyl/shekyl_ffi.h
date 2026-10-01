@@ -1733,7 +1733,9 @@ uint64_t shekyl_archival_attestation_witness_max_bytes(void);
 /// The close-processing boundary (E+1)·SEB — the height the close runs at
 /// and the shard-age operand it received; 0 for the overflowing epoch.
 uint64_t shekyl_archival_epoch_close_processing_height(uint64_t settlement_epoch);
-uint64_t shekyl_archival_challenge_resolution_blocks(void);
+/// H_slash_deadline(E) = last_block(E + SLASH_GRACE_EPOCHS): one settlement
+/// epoch of grace under the latched schedule. The grace has no entry of its
+/// own; read the deadline.
 uint64_t shekyl_archival_epoch_slash_deadline_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_challenge_seal_height(uint64_t h_open);
 /// 1 iff the epoch's challenge seal block is committed at chain_height (block

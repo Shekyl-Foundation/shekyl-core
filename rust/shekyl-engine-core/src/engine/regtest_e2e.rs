@@ -4107,16 +4107,19 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
 /// `inject_serve_credit` lever, which this walk never calls), so
 /// `release_cooldown_elapsed(None, _)` and `slashes_settled_through(_, None)`
 /// are both `true`, and the walk runs on the **genesis schedule** — no
-/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever, no arming. This is not a
-/// shortcut but the only faithful cheap point: a *served* persona's exit
-/// waits on the slash watermark, which advances `CHALLENGE_RESOLUTION_BLOCKS`
-/// (10 000, block-denominated — the lever never shortens it) past the
-/// anchor epoch's close, and at a levered SEB the L16 pin
-/// (`RELEASE_COOLDOWN_EPOCHS · SEB > CHALLENGE_RESOLUTION_BLOCKS`) inverts,
-/// so a levered served-exit run would exercise a regime the real chain
-/// cannot reach. The served-exit arms (cooldown, watermark, interval log)
-/// are PR-A's unit battery (`submit_verifier.rs`), NOT this walk — "the
-/// walk ran" must never be read as "the served-exit arc is covered".
+/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever, no arming. A *served* persona's
+/// exit waits on the slash watermark, which advances one settlement epoch
+/// (`SLASH_GRACE_EPOCHS · SEB`) past the anchor epoch's close — denominated
+/// in epochs since DRS-E4 commit 5, so a levered SEB shortens it with the
+/// epoch and the L16 pin (`RELEASE_COOLDOWN_EPOCHS > SLASH_GRACE_EPOCHS`)
+/// holds on every schedule. (Until then the grace was a block count of
+/// 10 000 the lever did not shorten, L16 inverted under a lever, and this
+/// walk's genesis schedule was the only faithful cheap point; it stays on
+/// the genesis schedule because an unserved persona needs no lever, not
+/// because a levered one would be unfaithful.) The served-exit arms
+/// (cooldown, watermark, interval log) are PR-A's unit battery
+/// (`submit_verifier.rs`), NOT this walk — "the walk ran" must never be
+/// read as "the served-exit arc is covered".
 ///
 /// Reachability history: when this walk landed (PR-B) the seam's only
 /// caller was this test and wallet-RPC `unstake` was RESERVED; PR-C's
