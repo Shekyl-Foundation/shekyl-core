@@ -96,7 +96,12 @@ CANONICAL_IMPL = re.compile(
 WRITE_CALL = re.compile(r"open_insert_table\s*\(\s*" + TABLE + r"\b")
 MEASURED = "let archival_len = segments.archival_len();"
 INSERTED = "archival_len.encoded().as_encoded()"
-CFG_TEST = re.compile(r"^\s*#\[cfg\(test\)\]", re.MULTILINE)
+# Exactly these two attributes gate an item out of every shipped build. A
+# wider `#[cfg(any(test, feature = "..."))]` is *not* stripped: it ships
+# under the feature, and over-scanning it can only make the gate red, never
+# silently green.
+TEST_ATTR = re.compile(r"^[ \t]*#\[(cfg\(test\)|test)\][ \t]*\n", re.MULTILINE)
+ATTR_OR_DOC = re.compile(r"[ \t]*(#\[|///|//!)")
 
 TEST_PATH_PARTS = ("tests", "harness", "benches", "examples")
 TEST_NAME = re.compile(r"(^test_.*\.rs$|_tests?\.rs$|^test_support\.rs$)")
@@ -109,10 +114,119 @@ def is_test_file(rel: str) -> bool:
     return bool(TEST_NAME.search(parts[-1]))
 
 
+def _skip_lexeme(text: str, i: int) -> int | None:
+    """If a string, char or comment starts at `i`, the index just past it."""
+    if text.startswith("//", i):
+        j = text.find("\n", i)
+        return len(text) if j < 0 else j
+    if text.startswith("/*", i):
+        depth, j = 1, i + 2
+        while j < len(text) and depth:
+            if text.startswith("/*", j):
+                depth, j = depth + 1, j + 2
+            elif text.startswith("*/", j):
+                depth, j = depth - 1, j + 2
+            else:
+                j += 1
+        return j
+    m = re.match(r'(b|c)?r(#*)"', text[i:])
+    if m:
+        close = '"' + m.group(2)
+        j = text.find(close, i + m.end())
+        return len(text) if j < 0 else j + len(close)
+    if text[i] == '"' or text.startswith('b"', i):
+        j = i + (2 if text[i] == "b" else 1)
+        while j < len(text) and text[j] != '"':
+            j += 2 if text[j] == "\\" else 1
+        return j + 1
+    if text[i] == "'":
+        # A char literal (`'x'`, `'\n'`, `'\u{..}'`), not a lifetime (`'a`).
+        m = re.match(r"'(\\u\{[0-9a-fA-F]+\}|\\.|[^\\'])'", text[i:])
+        if m:
+            return i + m.end()
+    return None
+
+
+# Every position a bracket scan has to look at: a bracket, a terminator, or
+# the start of a string / char / comment. Everything between is skipped.
+INTERESTING = re.compile(r"[{}\[\];\"'/]|\b[bc]?r#*\"|\bb\"")
+
+
+def _item_end(text: str, i: int) -> int:
+    """From the start of an item at `i`, the index just past its end: the
+    `;` that closes a declaration, or the `}` matching its first `{`."""
+    depth = 0
+    while True:
+        m = INTERESTING.search(text, i)
+        if m is None:
+            return len(text)
+        i = m.start()
+        j = _skip_lexeme(text, i)
+        if j is not None:
+            i = j
+            continue
+        c = text[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        elif c == ";" and depth == 0:
+            return i + 1
+        i += 1
+
+
 def production_text(text: str) -> str:
-    """The file up to its first `#[cfg(test)]`; unit-test modules sit last."""
-    m = CFG_TEST.search(text)
-    return text if m is None else text[: m.start()]
+    """The file with every `#[cfg(test)]` / `#[test]` item removed.
+
+    The item is whatever the attribute annotates — `mod tests;`, an inline
+    `mod tests { … }`, a `use`, a `fn`, an `impl` — through any further
+    attributes or doc comments between. Nothing after it is dropped: a
+    production item declared below a test module is still scanned (the
+    `engine/mod.rs` layout; Copilot, PR #919). Braces are matched past
+    strings, chars and comments so a `{` in a test's format string does not
+    swallow the rest of the file.
+    """
+    out, pos = [], 0
+    while True:
+        m = TEST_ATTR.search(text, pos)
+        if m is None:
+            out.append(text[pos:])
+            return "".join(out)
+        out.append(text[pos : m.start()])
+        i = m.end()
+        # Further attributes and doc comments belong to the same item.
+        while True:
+            a = ATTR_OR_DOC.match(text, i)
+            if a is None:
+                break
+            if text.startswith("#[", a.end() - 2):
+                i = _item_end_attr(text, a.end())
+            else:
+                nl = text.find("\n", i)
+                i = len(text) if nl < 0 else nl + 1
+        pos = _item_end(text, i)
+        # Blank lines in place of the item, so reported line numbers hold.
+        out.append("\n" * text[m.start() : pos].count("\n"))
+
+
+def _item_end_attr(text: str, i: int) -> int:
+    """From just past `#[`, the index past the matching `]` and its newline."""
+    depth = 1
+    while depth:
+        m = INTERESTING.search(text, i)
+        if m is None:
+            return len(text)
+        i = m.start()
+        j = _skip_lexeme(text, i)
+        if j is not None:
+            i = j
+            continue
+        depth += {"[": 1, "]": -1}.get(text[i], 0)
+        i += 1
+    nl = text.find("\n", i)
+    return len(text) if nl < 0 else nl + 1
 
 
 def mixer_signature(text: str) -> str | None:
@@ -290,6 +404,21 @@ def synthetic_tree() -> dict[str, str]:
     tree["rust/shekyl-chain-rules/src/harness/fixture/mod.rs"] = (
         "cumulative_archival_len: ArchivalLength::from_raw(0),\n"
     )
+    # Test items in the middle of a production file, each followed by more
+    # production code: a declaration, an inline module whose body carries a
+    # `{` inside a string and a `'{'` char, and a `#[test]` fn with a second
+    # attribute. None of what follows them may be dropped, and none of what
+    # is inside them may count.
+    tree["rust/shekyl-engine-core/src/engine/mod.rs"] = (
+        "#[cfg(test)]\n#[path = \"obs_tests.rs\"]\nmod observability;\n"
+        "pub(crate) mod economics;\n"
+        "#[cfg(test)]\nmod tests {\n    fn t() {\n"
+        "        let s = \"{\"; let c = '{'; // } in a comment\n"
+        "        let _ = ArchivalLength::from_raw(7);\n    }\n}\n"
+        "/// Production again.\npub fn after() {}\n"
+        "#[test]\n#[ignore = \"slow\"]\nfn probe() { ArchivalLength::from_raw(1); }\n"
+        "pub fn tail() {}\n"
+    )
     return tree
 
 
@@ -343,12 +472,33 @@ def selftest() -> int:
     )
     expect("multi-line unbound signature still read", multiline, discharged=False, hits=0)
 
+    # Production code *after* a test item is still scanned (the layout
+    # `engine/mod.rs` has: test module declarations, then production mods).
+    for where, name in (
+        ("pub(crate) mod economics;\n", "after a `#[cfg(test)] mod x;` declaration"),
+        ("/// Production again.\n", "after an inline `#[cfg(test)] mod tests { … }`"),
+        ("pub fn tail() {}\n", "after a `#[test]` fn"),
+    ):
+        tail = dict(clean)
+        src = clean["rust/shekyl-engine-core/src/engine/mod.rs"]
+        tail["rust/shekyl-engine-core/src/engine/mod.rs"] = src.replace(
+            where, where + "const L: ArchivalLength = ArchivalLength::from_raw(2);\n"
+        )
+        expect(f"production origin {name} is seen", tail, discharged=False, hits=1)
+
+    # And the reported line number is the file's own, not the stripped text's.
+    got = production_text(clean["rust/shekyl-engine-core/src/engine/mod.rs"])
+    if got.count("\n") != clean["rust/shekyl-engine-core/src/engine/mod.rs"].count("\n"):
+        failures.append("production_text changed the line count")
+    if "from_raw" in got:
+        failures.append("production_text kept a test item's constructor")
+
     if failures:
         print("SELFTEST FAIL:")
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("SELFTEST OK: 7 synthetic cases, each limb seen to go red and green.")
+    print("SELFTEST OK: 10 synthetic cases, each limb seen to go red and green.")
     return 0
 
 
