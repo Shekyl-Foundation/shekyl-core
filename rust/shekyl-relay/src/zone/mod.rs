@@ -22,7 +22,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
-use shekyl_relay_privacy::rng::RelayRng;
+use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
 use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
@@ -38,6 +38,29 @@ use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 /// into one of these once; per-peer queues hold cheap handles. Sorting and
 /// de-duplication on flush compare by content (`Arc<[u8]>: Ord`).
 pub type TxBlob = Arc<[u8]>;
+
+/// Which network carried this session.
+///
+/// An edge property. The relay reads it at hop 0, when it records the
+/// embargo's transit term, and when it decides whether a noise frame means
+/// anything. It is not a property of the relay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkClass {
+    /// A clearnet session.
+    Clearnet,
+    /// An anonymity-network session. Tor today.
+    Anonymity,
+}
+
+/// How a locally originated transaction chooses its first hop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnonOrigination {
+    /// Any established outbound session.
+    Any,
+    /// Anonymity-class outbound sessions only. No anonymity edge is
+    /// [`RelayPlan::NoRoute`], not a clearnet fallback.
+    AnonymityOnly,
+}
 
 /// What the zone knows about one connected peer's pending fluff batch.
 ///
@@ -58,13 +81,16 @@ pub struct PeerFluff {
     /// inbound fluff delay, and [`shekyl_relay_privacy::schedule::FluffScheduler`]
     /// keeps that asymmetry.
     pub direction: PeerDirection,
+    /// The connector class that carried this session.
+    pub network: NetworkClass,
 }
 
 impl PeerFluff {
-    fn new(direction: PeerDirection) -> Self {
+    fn new(direction: PeerDirection, network: NetworkClass) -> Self {
         Self {
             queued: Vec::new(),
             direction,
+            network,
         }
     }
 }
@@ -180,67 +206,6 @@ impl fmt::Display for ZoneNewError {
     }
 }
 
-/// Which peers a fluff batch may reach in this zone.
-///
-/// A zone-lifetime policy, not a per-batch choice, which is why it is set at
-/// construction and never passed to [`Zone::queue_fluff`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FluffReach {
-    /// Every connected peer except the source. Public ipv4/ipv6 zones.
-    EveryPeer,
-    /// Outbound connections only — **Tor**.
-    ///
-    /// The mechanism is inherited — one line in `fluff_notify` under *"When
-    /// Tor, only fluff to outbound connections"* — but **its Shekyl
-    /// justification is not, and the inherited one was wrong.**
-    ///
-    /// > **Retracted rationale (2026-08-17).** This doc previously read *"it is
-    /// > why noise-mode networks can substitute for Dandelion++'s sybil
-    /// > resistance at all"*. That is the sybil-substitution fallacy §64
-    /// > already named, and it conflates two different observers: **noise**
-    /// > masks the node↔proxy wire against an *external* observer, while
-    /// > **Dandelion++** defends against an *internal* adversarial peer.
-    /// > Neither substitutes for the other, and minting onion addresses is
-    /// > free, so the anonymity network never supplied sybil resistance —
-    /// > this rule did.
-    ///
-    /// Two justifications, both standing on their own:
-    ///
-    /// 1. **A node relays only to peers it chose.** An inbound connection on a
-    ///    hidden service is an unauthenticated stranger who dialled *us*, so
-    ///    relaying to it hands a transaction to a peer we did not select. That
-    ///    is a genuine partial sybil mitigation and it needs no cover traffic
-    ///    to be true.
-    /// 2. **It is the leg that makes anonymity-zone emit attribution
-    ///    impossible** (§91.4). To receive a fluff from node `Y`, an adversary
-    ///    must be `Y`'s *outbound* — i.e. `Y` dialled it — which is exactly the
-    ///    direction where the adversary holds `tor_address::unknown()` and
-    ///    **no node identifier at all**. On the reverse link, where the
-    ///    adversary does know `Y`'s onion because it chose it, this rule skips
-    ///    the send. **There is no direction carrying both the emit and the
-    ///    name**, and §91 (Design A) now depends on that.
-    ///
-    /// Point 2 makes this rule load-bearing rather than merely inherited:
-    /// widening the reach to inbound peers would hand an active marker the
-    /// attribution it currently cannot obtain. Do not relax it without
-    /// reopening §91.4.
-    ///
-    /// **The identifier is gone from the wire (PWD-I1, landed), so this
-    /// clause cites its absence rather than a constant.** It used to name
-    /// `ANON_ZONE_SENTINEL_PEER_ID`, which pinned the announced value to `1`
-    /// and supplied one half of "no distinguishing identifier on the emit
-    /// direction"; `tor_address::unknown()` on inbound supplied the other.
-    /// `basic_node_data` now carries no identifier of any kind and
-    /// `peerlist_entry` none either, so the half that needed a pinned
-    /// constant needs nothing — the argument got shorter, not wider.
-    ///
-    /// **Removing the field does not extend Point 2 to clearnet**: a clearnet
-    /// counterparty still holds the connection's IP address, and this spec
-    /// concedes that clearnet gives confidentiality and integrity, not
-    /// anonymity (PW-3a). The leg was never unsatisfied in between.
-    OutboundOnly,
-}
-
 /// Noise-channel schedule for a zone — or its deliberate absence.
 ///
 /// One type so "enabled" and "has deadlines" cannot disagree: a disabled zone
@@ -350,8 +315,8 @@ pub struct Zone {
     /// When noise is enabled this is also the noise channel count (channel
     /// `i` ↔ slot `i`). Production pins it to [`inherited::NOISE_CHANNELS`].
     stems: usize,
-    /// Which peers a fluff batch may reach. See [`FluffReach`].
-    reach: FluffReach,
+    /// First hop of a locally originated transaction.
+    origination: AnonOrigination,
     /// Noise schedule (enable + cadence + per-channel deadlines), or off.
     ///
     /// **Single owner of the enable fact** (§20.4). Before RP-3b it lived only
@@ -443,7 +408,6 @@ impl Zone {
     pub fn new<R: RelayRng + ?Sized>(
         params: DandelionParams,
         stems: usize,
-        reach: FluffReach,
         secrecy: LinkSecrecy,
         noise_enabled: bool,
         now: Millis,
@@ -487,7 +451,7 @@ impl Zone {
             epoch_ends_at: epoch.ends_at,
             params,
             stems,
-            reach,
+            origination: AnonOrigination::Any,
             noise,
         })
     }
@@ -550,14 +514,20 @@ impl Zone {
         &mut self,
         id: ConnectionId,
         direction: PeerDirection,
+        network: NetworkClass,
         rng: &mut R,
     ) {
         self.contexts
             .entry(id)
-            .or_insert_with(|| PeerFluff::new(direction));
+            .or_insert_with(|| PeerFluff::new(direction, network));
         if direction == PeerDirection::Outbound {
             self.update_stems(rng);
         }
+    }
+
+    /// How this node originates. The default from [`Zone::new`] is [`AnonOrigination::Any`].
+    pub fn set_origination(&mut self, origination: AnonOrigination) {
+        self.origination = origination;
     }
 
     /// Record that `txs` were stemmed to `successor`, keyed under `source`
@@ -693,6 +663,24 @@ impl Zone {
     /// The set is this zone's session registry. A handshake-complete peer
     /// that is still synchronizing is included: recorded height is not a
     /// filter, and neither is `state_normal`.
+    /// Hop 0 under [`AnonOrigination::AnonymityOnly`]. Empty is [`RelayPlan::NoRoute`].
+    fn anonymity_first_hop<R: RelayRng + ?Sized>(&mut self, rng: &mut R) -> RelayPlan {
+        let candidates: Vec<ConnectionId> = self
+            .contexts
+            .iter()
+            .filter(|(_, peer)| {
+                peer.direction == PeerDirection::Outbound && peer.network == NetworkClass::Anonymity
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        if candidates.is_empty() {
+            return RelayPlan::NoRoute;
+        }
+        let span = u64::try_from(candidates.len() - 1).expect("anonymity outbound count fits");
+        let index = usize::try_from(bounded_uniform(rng, span)).expect("draw fits");
+        RelayPlan::Stem(candidates[index])
+    }
+
     fn outbound_ids(&self) -> Vec<ConnectionId> {
         self.contexts
             .iter()
@@ -829,6 +817,9 @@ impl Zone {
         if local_origin && node_sync == NodeSync::Unsynchronised {
             return RelayPlan::AwaitSync;
         }
+        if local_origin && self.origination == AnonOrigination::AnonymityOnly {
+            return self.anonymity_first_hop(rng);
+        }
         // The inherited predicate, transcribed rather than restated:
         // `if (!zone_->fluffing || tx_relay == relay_method::local)`.
         if !self.fluffing || local_origin {
@@ -859,7 +850,9 @@ impl Zone {
         rng: &mut R,
     ) -> RelayPlan {
         match self.plan_relay(source, local_origin, node_sync, rng) {
-            RelayPlan::NoRoute => {
+            RelayPlan::NoRoute
+                if !(local_origin && self.origination == AnonOrigination::AnonymityOnly) =>
+            {
                 self.update_stems(rng);
                 self.plan_relay(source, local_origin, node_sync, rng)
             }
@@ -896,15 +889,8 @@ impl Zone {
         // O(1); cloning `Vec<u8>` was O(payload × peers).
         let shared: Vec<TxBlob> = txs.iter().map(|t| TxBlob::from(t.as_ref())).collect();
         let mut accepted = 0;
-        let outbound_only = self.reach == FluffReach::OutboundOnly;
         for (id, peer) in &mut self.contexts {
             if Some(*id) == source {
-                continue;
-            }
-            // See `FluffReach::OutboundOnly`: on Tor an inbound peer is a
-            // stranger who dialled us, and relaying to it defeats the sybil
-            // resistance the hidden-service network is standing in for.
-            if outbound_only && peer.direction == PeerDirection::Inbound {
                 continue;
             }
             // `queue` draws only when the peer has no pending deadline, so a

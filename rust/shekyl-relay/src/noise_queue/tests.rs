@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 use super::*;
-use crate::{Driver, Effect, FluffReach, LinkSecrecy, Zone};
+use crate::{Driver, Effect, LinkSecrecy, NetworkClass, Zone};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -289,7 +289,6 @@ fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64,
     let zone = Zone::new(
         DandelionParams::inherited(),
         2,
-        FluffReach::OutboundOnly,
         LinkSecrecy::of(RelayZone::Tor),
         true, // noise ON, or there are no deadlines and this is vacuous
         0,
@@ -306,9 +305,12 @@ fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64,
     let mut driver = Driver::new(zone);
     let peers = vec![id(1), id(2), id(3), id(4)];
     for peer in &peers {
-        driver
-            .zone_mut()
-            .on_session_established(*peer, PeerDirection::Outbound, &mut rng);
+        driver.zone_mut().on_session_established(
+            *peer,
+            PeerDirection::Outbound,
+            NetworkClass::Clearnet,
+            &mut rng,
+        );
     }
 
     let mut out = Vec::new();

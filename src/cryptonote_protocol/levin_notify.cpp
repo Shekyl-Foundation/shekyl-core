@@ -1525,7 +1525,10 @@ namespace levin
       return;
 
     boost::asio::dispatch(zone_->strand, [z = zone_, id, is_income] {
-      shekyl_relay_zone_on_session_established(z->relay.get(), uuid_bytes(id), is_income);
+      const std::uint8_t network =
+        z->nzone == epee::net_utils::zone::public_ ? 0 : 1;
+      shekyl_relay_zone_on_session_established(
+        z->relay.get(), uuid_bytes(id), is_income, network);
     });
   }
 

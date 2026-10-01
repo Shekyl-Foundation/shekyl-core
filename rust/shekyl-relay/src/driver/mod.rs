@@ -38,8 +38,6 @@ use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::Millis;
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
-#[cfg(test)]
-use crate::zone::FluffReach;
 use crate::zone::{TxBlob, Zone};
 
 /// Work the driver produced that the caller must perform.

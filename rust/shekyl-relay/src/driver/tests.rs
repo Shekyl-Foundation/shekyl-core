@@ -6,6 +6,7 @@
 use super::*;
 use crate::stem_watch::TxId;
 use crate::LinkSecrecy;
+use crate::NetworkClass;
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -22,7 +23,6 @@ fn driver(rng: &mut SplitMix64) -> Driver {
         Zone::new(
             DandelionParams::inherited(),
             2,
-            FluffReach::EveryPeer,
             LinkSecrecy::of(RelayZone::Public),
             false,
             0,
@@ -48,8 +48,12 @@ fn next_wake_follows_a_newly_queued_batch_without_re_arming() {
         "with no batch pending, the epoch boundary is the only wake"
     );
 
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     d.zone_mut().queue_fluff(&[vec![1]], None, 0, &mut rng);
     let fluff = d.zone().fluff_deadline().expect("a batch is in flight");
     assert!(fluff < epoch_wake, "fixture: the fluff must be the sooner");
@@ -66,8 +70,12 @@ fn next_wake_follows_a_newly_queued_batch_without_re_arming() {
 fn polling_releases_a_batch_at_its_deadline_and_not_before() {
     let mut rng = SplitMix64::new(41);
     let mut d = driver(&mut rng);
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Inbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Inbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     d.zone_mut().queue_fluff(&[vec![7]], None, 0, &mut rng);
     let due = d.zone().fluff_deadline().unwrap();
 
@@ -92,8 +100,12 @@ fn an_epoch_rollover_redraws_the_stem_set() {
     let mut d = driver(&mut rng);
     let outbound = vec![id(1), id(2), id(3)];
     for peer in &outbound {
-        d.zone_mut()
-            .on_session_established(*peer, PeerDirection::Outbound, &mut rng);
+        d.zone_mut().on_session_established(
+            *peer,
+            PeerDirection::Outbound,
+            NetworkClass::Clearnet,
+            &mut rng,
+        );
     }
 
     let effects = d.poll(d.zone().epoch_deadline(), &mut rng);
@@ -117,12 +129,24 @@ fn an_outbound_handshake_fills_the_map_without_rolling_the_epoch() {
     let deadline = d.zone().epoch_deadline();
     assert_eq!(d.zone().live_stems(), 0, "fixture: no peers yet");
 
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(3), PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(3),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     assert_eq!(d.zone().live_stems(), 2, "the handshake fills the map");
     assert_eq!(
         d.zone().epoch_deadline(),
@@ -131,12 +155,24 @@ fn an_outbound_handshake_fills_the_map_without_rolling_the_epoch() {
     );
 
     let slots_before = d.zone().stem_slots().to_vec();
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(3), PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(3),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     assert_eq!(
         d.zone().stem_slots(),
         slots_before.as_slice(),
@@ -174,7 +210,6 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
         Zone::new(
             DandelionParams::inherited(),
             2,
-            FluffReach::OutboundOnly,
             LinkSecrecy::of(RelayZone::Tor),
             true,
             0,
@@ -182,18 +217,30 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
         )
         .unwrap(),
     );
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
 
     // The hole recipe the CV-2 witness established: close the slot's peer
     // AND re-offer only the survivor, so nothing backfills.
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
     let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
     d.zone_mut().on_connection_close(&slot0_peer);
-    d.zone_mut()
-        .on_session_established(keep, PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        keep,
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     assert_eq!(
         d.zone().stem_slots()[0],
         None,
@@ -264,7 +311,6 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
         Zone::new(
             DandelionParams::inherited(),
             2,
-            FluffReach::OutboundOnly,
             LinkSecrecy::of(RelayZone::Tor),
             true,
             0,
@@ -272,15 +318,27 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
         )
         .unwrap(),
     );
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
     let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
     d.zone_mut().on_connection_close(&slot0_peer);
-    d.zone_mut()
-        .on_session_established(id(3), PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(3),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     assert_eq!(
         d.zone().stem_slots(),
         &[Some(id(3)), Some(keep)],
@@ -311,15 +369,27 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
     // check. The hole is still constructed, so the emptiness below comes
     // from the missing schedule and not from the state failing to happen.
     let mut d = driver(&mut rng);
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
     let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
     d.zone_mut().on_connection_close(&slot0_peer);
-    d.zone_mut()
-        .on_session_established(keep, PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        keep,
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     assert_eq!(
         d.zone().stem_slots()[0],
         None,
@@ -351,8 +421,12 @@ fn forcing_runs_the_same_paths_as_the_deadline() {
     // property the whole round's oracle rests on.
     let mut rng = SplitMix64::new(44);
     let mut d = driver(&mut rng);
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Inbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Inbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     d.zone_mut().queue_fluff(&[vec![9]], None, 0, &mut rng);
     let due = d.zone().fluff_deadline().unwrap();
     if due > 0 {
@@ -368,8 +442,12 @@ fn forcing_runs_the_same_paths_as_the_deadline() {
     );
 
     let before = d.zone().epoch_deadline();
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     d.force_epoch(0, &mut rng);
     assert_ne!(d.zone().epoch_deadline(), before, "a new epoch was drawn");
 }
@@ -413,7 +491,6 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
         Zone::new(
             DandelionParams::inherited(),
             2,
-            FluffReach::OutboundOnly,
             LinkSecrecy::of(RelayZone::Tor),
             true,
             0,
@@ -423,10 +500,18 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
     );
     // Bind both slots: since the inversion, an unbound slot emits no send
     // (CV-2), and this test is about cadence, not binding.
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
 
     // Fixture requirement: distinct deadlines, or "one per advance" could
     // hold by coincidence rather than by independence.
@@ -497,7 +582,6 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
         Zone::new(
             DandelionParams::inherited(),
             2,
-            FluffReach::OutboundOnly,
             LinkSecrecy::of(RelayZone::Tor),
             true,
             0,
@@ -505,10 +589,18 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
         )
         .unwrap(),
     );
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
 
     // Ground truth from the owning structure, captured before driving.
     let truth: Vec<Option<ConnectionId>> = d.zone().stem_slots().to_vec();
@@ -569,7 +661,6 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
         Zone::new(
             DandelionParams::inherited(),
             2,
-            FluffReach::OutboundOnly,
             LinkSecrecy::of(RelayZone::Tor),
             true,
             0,
@@ -577,10 +668,18 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
         )
         .unwrap(),
     );
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
 
     // Make a hole at index 0 the way the RP-3a seal did: close slot 0's
     // peer AND re-offer only slot 1's, so there is nothing to backfill
@@ -591,8 +690,12 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
     let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
     d.zone_mut().on_connection_close(&slot0_peer);
-    d.zone_mut()
-        .on_session_established(keep, PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        keep,
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     let truth: Vec<Option<ConnectionId>> = d.zone().stem_slots().to_vec();
     assert_eq!(truth[0], None, "fixture: the hole is at index 0");
     let bound = truth[1].expect("fixture: index 1 still bound");
@@ -645,7 +748,6 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
         Zone::new(
             DandelionParams::inherited(),
             2,
-            FluffReach::OutboundOnly,
             LinkSecrecy::of(RelayZone::Tor),
             true,
             0,
@@ -653,10 +755,18 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
         )
         .unwrap(),
     );
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
 
     let a = d.zone().noise_deadline_at(0).expect("ch0 armed");
     let b = d.zone().noise_deadline_at(1).expect("ch1 armed");
@@ -721,8 +831,12 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
 fn a_stem_observation_resolves_on_the_poll_clock_and_a_close_drops_it() {
     let mut rng = SplitMix64::new(0x57E3);
     let mut d = driver(&mut rng);
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
 
     let tx = TxId::from_bytes([7u8; 32]);
     let deadline = 5_000;
@@ -774,8 +888,12 @@ fn a_stem_observation_resolves_on_the_poll_clock_and_a_close_drops_it() {
 fn an_arrival_resolves_the_observation_as_propagated() {
     let mut rng = SplitMix64::new(0x57E4);
     let mut d = driver(&mut rng);
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
 
     let tx = TxId::from_bytes([9u8; 32]);
     d.zone_mut().record_stem_at(&[tx], id(1), None, 5_000);

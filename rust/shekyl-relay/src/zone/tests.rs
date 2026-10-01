@@ -31,7 +31,6 @@ fn zone(rng: &mut SplitMix64) -> Zone {
     Zone::new(
         DandelionParams::inherited(),
         2,
-        FluffReach::EveryPeer,
         LinkSecrecy::of(RelayZone::Public),
         false,
         0,
@@ -42,7 +41,12 @@ fn zone(rng: &mut SplitMix64) -> Zone {
 
 fn establish_outbound(zone: &mut Zone, peers: &[u8], rng: &mut SplitMix64) {
     for peer in peers {
-        zone.on_session_established(id(*peer), PeerDirection::Outbound, rng);
+        zone.on_session_established(
+            id(*peer),
+            PeerDirection::Outbound,
+            NetworkClass::Clearnet,
+            rng,
+        );
     }
 }
 
@@ -67,7 +71,12 @@ fn handshake_is_idempotent_and_does_not_discard_a_batch() {
     // queued transactions — dropping them would silently lose relay work.
     let mut rng = SplitMix64::new(2);
     let mut z = zone(&mut rng);
-    z.on_session_established(id(1), PeerDirection::Outbound, &mut rng);
+    z.on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     let stems = z.live_stems();
     let slots = z.stem_slots().to_vec();
     z.contexts
@@ -78,7 +87,12 @@ fn handshake_is_idempotent_and_does_not_discard_a_batch() {
 
     // The repeat arrives as inbound, so it must not merge again. `or_insert`
     // keeps the outbound direction and the queued batch.
-    z.on_session_established(id(1), PeerDirection::Inbound, &mut rng);
+    z.on_session_established(
+        id(1),
+        PeerDirection::Inbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     assert_eq!(z.live_stems(), stems);
     assert_eq!(z.stem_slots(), slots.as_slice());
     assert_eq!(z.peer_count(), 1, "no duplicate peer");
@@ -93,8 +107,18 @@ fn handshake_is_idempotent_and_does_not_discard_a_batch() {
 fn close_removes_the_peer_and_its_queue() {
     let mut rng = SplitMix64::new(3);
     let mut z = zone(&mut rng);
-    z.on_session_established(id(1), PeerDirection::Inbound, &mut rng);
-    z.on_session_established(id(2), PeerDirection::Outbound, &mut rng);
+    z.on_session_established(
+        id(1),
+        PeerDirection::Inbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    z.on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     z.on_connection_close(&id(1));
     assert_eq!(z.peer_count(), 1);
     assert!(z.peer(&id(1)).is_none());
@@ -151,7 +175,7 @@ fn mean_delay(direction: PeerDirection, seed: u64, n: u64) -> u64 {
     let mut total = 0_u64;
     for _ in 0..n {
         let mut z = zone(&mut rng);
-        z.on_session_established(id(1), direction, &mut rng);
+        z.on_session_established(id(1), direction, NetworkClass::Clearnet, &mut rng);
         assert_eq!(z.queue_fluff(&[vec![1]], None, 0, &mut rng), 1);
         total += z.fluff_deadline().expect("a batch is in flight");
     }
@@ -193,7 +217,12 @@ fn fluff_deadlines_are_pinned_for_a_fixed_seed() {
     let inbound: Vec<Millis> = (0..4)
         .map(|_| {
             let mut z = zone(&mut rng);
-            z.on_session_established(id(1), PeerDirection::Inbound, &mut rng);
+            z.on_session_established(
+                id(1),
+                PeerDirection::Inbound,
+                NetworkClass::Clearnet,
+                &mut rng,
+            );
             z.queue_fluff(&[vec![0xAB]], None, 0, &mut rng);
             z.fluff_deadline().unwrap()
         })
@@ -201,7 +230,12 @@ fn fluff_deadlines_are_pinned_for_a_fixed_seed() {
     let outbound: Vec<Millis> = (0..4)
         .map(|_| {
             let mut z = zone(&mut rng);
-            z.on_session_established(id(1), PeerDirection::Outbound, &mut rng);
+            z.on_session_established(
+                id(1),
+                PeerDirection::Outbound,
+                NetworkClass::Clearnet,
+                &mut rng,
+            );
             z.queue_fluff(&[vec![0xAB]], None, 0, &mut rng);
             z.fluff_deadline().unwrap()
         })
@@ -221,7 +255,12 @@ fn a_burst_does_not_push_a_peers_flush_further_out() {
     // trickling transactions and defer the fluff indefinitely.
     let mut rng = SplitMix64::new(23);
     let mut z = zone(&mut rng);
-    z.on_session_established(id(1), PeerDirection::Inbound, &mut rng);
+    z.on_session_established(
+        id(1),
+        PeerDirection::Inbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
 
     z.queue_fluff(&[vec![1]], None, 0, &mut rng);
     let first = z.fluff_deadline().unwrap();
@@ -244,8 +283,18 @@ fn a_burst_does_not_push_a_peers_flush_further_out() {
 fn fluff_skips_the_source_and_releases_on_deadline() {
     let mut rng = SplitMix64::new(24);
     let mut z = zone(&mut rng);
-    z.on_session_established(id(1), PeerDirection::Inbound, &mut rng);
-    z.on_session_established(id(2), PeerDirection::Outbound, &mut rng);
+    z.on_session_established(
+        id(1),
+        PeerDirection::Inbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    z.on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
 
     let accepted = z.queue_fluff(&[vec![7]], Some(id(1)), 0, &mut rng);
     assert_eq!(accepted, 1, "one peer took it; the source is skipped");
@@ -274,7 +323,12 @@ fn forcing_a_flush_runs_the_same_release_path() {
     // daemon's force-step hook honest rather than a special case.
     let mut rng = SplitMix64::new(25);
     let mut z = zone(&mut rng);
-    z.on_session_established(id(1), PeerDirection::Inbound, &mut rng);
+    z.on_session_established(
+        id(1),
+        PeerDirection::Inbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     z.queue_fluff(&[vec![9]], None, 0, &mut rng);
     let deadline = z.fluff_deadline().unwrap();
 
@@ -306,22 +360,13 @@ fn zone_with_role(fluffing: bool, rng: &mut SplitMix64) -> Zone {
 /// seed is determinism, not a determined epoch, and is the flake
 /// `noise_stem` exposed once noise consults the planner.
 fn zone_with_role_cover(fluffing: bool, noise: bool, rng: &mut SplitMix64) -> Zone {
-    let (reach, secrecy) = if noise {
-        (FluffReach::OutboundOnly, LinkSecrecy::of(RelayZone::Tor))
+    let secrecy = if noise {
+        LinkSecrecy::of(RelayZone::Tor)
     } else {
-        (FluffReach::EveryPeer, LinkSecrecy::of(RelayZone::Public))
+        LinkSecrecy::of(RelayZone::Public)
     };
     for _ in 0..10_000 {
-        let z = Zone::new(
-            DandelionParams::inherited(),
-            2,
-            reach,
-            secrecy,
-            noise,
-            0,
-            rng,
-        )
-        .unwrap();
+        let z = Zone::new(DandelionParams::inherited(), 2, secrecy, noise, 0, rng).unwrap();
         if z.is_fluffing() == fluffing {
             return z;
         }
@@ -441,43 +486,42 @@ fn an_unsynchronised_origin_is_withheld_without_touching_the_map() {
 }
 
 #[test]
-fn a_private_zone_fluffs_only_to_outbound_peers() {
-    // The rule the first port dropped, and the `levin_notify.private_*`
-    // gtests caught: eight failures, all on Tor zones, all "9 peers
-    // notified where 5 were expected".
-    //
-    // It is a *privacy* rule wearing the clothes of a delivery detail. On a
-    // hidden service an inbound peer is a stranger who dialled us; fluffing
-    // to it hands a transaction to a peer this node never chose. Dandelion++
-    // still runs on this zone (§93.1) — outbound-only fluff is not a
-    // substitute for stemming. Nothing about *delivery* looks wrong when it
-    // breaks — the transaction still propagates — so the assertion has to be
-    // on who received it, not on whether it went anywhere.
+fn a_fluff_reaches_an_inbound_anonymity_session() {
+    // D7 is deleted. A fluff floods every session except the source,
+    // including an inbound peer on an anonymity edge.
     let mut rng = SplitMix64::new(77);
     let mut z = Zone::new(
         DandelionParams::inherited(),
         2,
-        FluffReach::OutboundOnly,
         LinkSecrecy::of(RelayZone::Tor),
         false,
         0,
         &mut rng,
     )
     .unwrap();
-    z.on_session_established(id(1), PeerDirection::Inbound, &mut rng);
-    z.on_session_established(id(2), PeerDirection::Outbound, &mut rng);
-    z.on_session_established(id(3), PeerDirection::Inbound, &mut rng);
+    z.on_session_established(
+        id(1),
+        PeerDirection::Inbound,
+        NetworkClass::Anonymity,
+        &mut rng,
+    );
+    z.on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Anonymity,
+        &mut rng,
+    );
+    z.on_session_established(
+        id(3),
+        PeerDirection::Inbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
 
-    assert_eq!(
-        z.queue_fluff(&[vec![7]], None, 0, &mut rng),
-        1,
-        "only the one outbound peer may take the batch"
-    );
-    assert!(
-        z.peer(&id(1)).unwrap().queued.is_empty() && z.peer(&id(3)).unwrap().queued.is_empty(),
-        "an inbound peer on Tor must receive nothing"
-    );
+    assert_eq!(z.queue_fluff(&[vec![7]], None, 0, &mut rng), 3);
+    assert_eq!(z.peer(&id(1)).unwrap().queued.len(), 1);
     assert_eq!(z.peer(&id(2)).unwrap().queued.len(), 1);
+    assert_eq!(z.peer(&id(3)).unwrap().queued.len(), 1);
 
     // The negative control: the same three peers on a public zone, where
     // the rule does not apply. Without this, a zone that fluffed to nobody
@@ -485,21 +529,65 @@ fn a_private_zone_fluffs_only_to_outbound_peers() {
     let mut z = Zone::new(
         DandelionParams::inherited(),
         2,
-        FluffReach::EveryPeer,
         LinkSecrecy::of(RelayZone::Public),
         false,
         0,
         &mut rng,
     )
     .unwrap();
-    z.on_session_established(id(1), PeerDirection::Inbound, &mut rng);
-    z.on_session_established(id(2), PeerDirection::Outbound, &mut rng);
-    z.on_session_established(id(3), PeerDirection::Inbound, &mut rng);
+    z.on_session_established(
+        id(1),
+        PeerDirection::Inbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    z.on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    z.on_session_established(
+        id(3),
+        PeerDirection::Inbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     assert_eq!(
         z.queue_fluff(&[vec![7]], None, 0, &mut rng),
         3,
         "a public zone reaches every peer but the source"
     );
+}
+
+#[test]
+fn anonymity_only_origin_does_not_fall_back_to_clearnet() {
+    let mut rng = SplitMix64::new(91);
+    let mut z = zone_with_role(false, &mut rng);
+    z.set_origination(AnonOrigination::AnonymityOnly);
+    z.on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    assert_eq!(
+        z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+        RelayPlan::NoRoute,
+    );
+    z.on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Anonymity,
+        &mut rng,
+    );
+    assert_eq!(
+        z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+        RelayPlan::Stem(id(2)),
+    );
+    // After hop 0 the same node stems on a clearnet edge.
+    let forwarded = z.plan_relay(Some(id(2)), false, NodeSync::Synchronised, &mut rng);
+    assert!(matches!(forwarded, RelayPlan::Stem(_)));
 }
 
 #[test]
@@ -568,9 +656,24 @@ fn fluff_fanout_shares_one_blob_handle_across_peers() {
     // N Arc clones of one allocation, not N owned copies of the payload.
     let mut rng = SplitMix64::new(36);
     let mut z = zone(&mut rng);
-    z.on_session_established(id(1), PeerDirection::Inbound, &mut rng);
-    z.on_session_established(id(2), PeerDirection::Outbound, &mut rng);
-    z.on_session_established(id(3), PeerDirection::Inbound, &mut rng);
+    z.on_session_established(
+        id(1),
+        PeerDirection::Inbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    z.on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
+    z.on_session_established(
+        id(3),
+        PeerDirection::Inbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
 
     assert_eq!(z.queue_fluff(&[[0xDEu8, 0xAD]], None, 0, &mut rng), 3);
     let a = &z.peer(&id(1)).unwrap().queued[0];
@@ -611,7 +714,6 @@ fn a_noise_deadline_survives_wakes_it_did_not_cause() {
     let mut z = Zone::new(
         DandelionParams::inherited(),
         2,
-        FluffReach::OutboundOnly,
         LinkSecrecy::of(RelayZone::Tor),
         true, // noise on — otherwise there are no deadlines and this is vacuous
         0,
@@ -677,7 +779,6 @@ fn noise_enabled_pins_stem_width_to_noise_channels() {
     let z = Zone::new(
         DandelionParams::inherited(),
         inherited::NOISE_CHANNELS,
-        FluffReach::OutboundOnly,
         LinkSecrecy::of(RelayZone::Tor),
         true,
         0,
@@ -784,7 +885,6 @@ fn dispatch_does_not_re_decide_the_phase() {
             let z = Zone::new(
                 DandelionParams::inherited(),
                 2,
-                FluffReach::OutboundOnly,
                 LinkSecrecy::of(RelayZone::Tor),
                 true,
                 0,
@@ -806,7 +906,6 @@ fn dispatch_does_not_re_decide_the_phase() {
                 let mut z = Zone::new(
                     DandelionParams::inherited(),
                     2,
-                    FluffReach::OutboundOnly,
                     LinkSecrecy::of(RelayZone::Tor),
                     true,
                     0,
@@ -855,7 +954,6 @@ fn a_noise_carrier_does_not_change_the_phase() {
         let mut z = Zone::new(
             DandelionParams::inherited(),
             shekyl_relay_privacy::params::inherited::NOISE_CHANNELS,
-            FluffReach::OutboundOnly,
             LinkSecrecy::of(RelayZone::Tor),
             noise,
             0,
@@ -900,12 +998,11 @@ fn a_noise_carrier_does_not_change_the_phase() {
 /// into one `None`.
 #[test]
 fn a_noise_carrier_is_refused_where_it_buys_nothing() {
-    let build = |zone: RelayZone, reach: FluffReach, stems: usize, noise: bool| {
+    let build = |zone: RelayZone, stems: usize, noise: bool| {
         let mut rng = SplitMix64::new(0x0819);
         Zone::new(
             DandelionParams::inherited(),
             stems,
-            reach,
             LinkSecrecy::of(zone),
             noise,
             0,
@@ -915,25 +1012,25 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
     const CHANNELS: usize = inherited::NOISE_CHANNELS;
 
     assert_eq!(
-        build(RelayZone::Public, FluffReach::OutboundOnly, CHANNELS, true).err(),
+        build(RelayZone::Public, CHANNELS, true).err(),
         Some(ZoneNewError::NoiseOnCleartext),
         "outbound-only fluff is not encryption; a cleartext zone earns no noise"
     );
     assert!(
-        build(RelayZone::Tor, FluffReach::EveryPeer, CHANNELS, true).is_ok(),
+        build(RelayZone::Tor, CHANNELS, true).is_ok(),
         "encrypted + every-peer is the case the secrecy axis exists for — \
          encrypting clearnet must not require renaming reach"
     );
     assert!(
-        build(RelayZone::Tor, FluffReach::OutboundOnly, CHANNELS, true).is_ok(),
+        build(RelayZone::Tor, CHANNELS, true).is_ok(),
         "production Tor pairing still builds"
     );
     assert!(
-        build(RelayZone::Public, FluffReach::EveryPeer, CHANNELS, false).is_ok(),
+        build(RelayZone::Public, CHANNELS, false).is_ok(),
         "a cleartext zone without noise is the ordinary case"
     );
     assert_eq!(
-        build(RelayZone::Invalid, FluffReach::OutboundOnly, CHANNELS, true).err(),
+        build(RelayZone::Invalid, CHANNELS, true).err(),
         Some(ZoneNewError::NoiseOnCleartext),
         "an unknown link is not presumed encrypted and earns no noise"
     );
@@ -941,7 +1038,7 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
     // Was a `debug_assert!`, which compiles out in release and therefore
     // admitted the mismatch in exactly the build that ships.
     assert_eq!(
-        build(RelayZone::Tor, FluffReach::OutboundOnly, CHANNELS + 1, true).err(),
+        build(RelayZone::Tor, CHANNELS + 1, true).err(),
         Some(ZoneNewError::NoiseChannelCount { got: CHANNELS + 1 }),
         "a channel count the schedule is not sized for is refused, not asserted"
     );
@@ -958,7 +1055,6 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
     match Zone::new(
         short,
         CHANNELS,
-        FluffReach::OutboundOnly,
         LinkSecrecy::of(RelayZone::Tor),
         true,
         0,
@@ -976,7 +1072,6 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
         Zone::new(
             params,
             2,
-            FluffReach::EveryPeer,
             LinkSecrecy::of(RelayZone::Public),
             false,
             0,

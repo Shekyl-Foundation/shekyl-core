@@ -25,7 +25,6 @@ fn zone(rng: &mut SplitMix64) -> Zone {
     Zone::new(
         DandelionParams::inherited(),
         2,
-        FluffReach::EveryPeer,
         LinkSecrecy::of(RelayZone::Public),
         false,
         0,
@@ -36,7 +35,12 @@ fn zone(rng: &mut SplitMix64) -> Zone {
 
 fn establish_outbound(zone: &mut Zone, peers: &[u8], rng: &mut SplitMix64) {
     for peer in peers {
-        zone.on_session_established(id(*peer), PeerDirection::Outbound, rng);
+        zone.on_session_established(
+            id(*peer),
+            PeerDirection::Outbound,
+            NetworkClass::Clearnet,
+            rng,
+        );
     }
 }
 
@@ -124,7 +128,12 @@ fn a_source_pins_to_one_stem_for_the_epoch() {
 fn rollover_candidates_are_established_outbound_sessions() {
     let mut rng = SplitMix64::new(99);
     let mut z = zone(&mut rng);
-    z.on_session_established(id(1), PeerDirection::Inbound, &mut rng);
+    z.on_session_established(
+        id(1),
+        PeerDirection::Inbound,
+        NetworkClass::Clearnet,
+        &mut rng,
+    );
     establish_outbound(&mut z, &[2, 3], &mut rng);
     z.rebuild_stems(&mut rng);
     let mut chosen: Vec<_> = z.stem_slots().iter().flatten().copied().collect();
@@ -145,7 +154,6 @@ fn stem_draws_are_not_biased_toward_one_outbound_peer() {
     let mut z = Zone::new(
         DandelionParams::inherited(),
         1,
-        FluffReach::EveryPeer,
         LinkSecrecy::of(RelayZone::Public),
         false,
         0,
@@ -180,7 +188,6 @@ fn a_two_slot_draw_over_three_peers_uses_each_peer() {
     let mut z = Zone::new(
         DandelionParams::inherited(),
         2,
-        FluffReach::EveryPeer,
         LinkSecrecy::of(RelayZone::Public),
         false,
         0,

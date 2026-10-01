@@ -64,8 +64,9 @@ use std::sync::{Arc, Mutex};
 
 use shekyl_levin::{NewTransactions, PortableMap, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay::{
-    AchievedOutConnections, CarrierToken, Driver, Effect, FloorTransition, FloorWatch, FluffReach,
-    NodeSync, NoiseQueues, RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
+    AchievedOutConnections, CarrierToken, Driver, Effect, FloorTransition, FloorWatch,
+    NetworkClass, NodeSync, NoiseQueues, RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId,
+    Zone,
 };
 use shekyl_relay_privacy::params::{carrier, DandelionParams};
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -572,7 +573,6 @@ pub extern "C" fn shekyl_relay_zone_new(
     if stems == usize::MAX || min_epoch_secs == 0 {
         return std::ptr::null_mut();
     }
-    let outbound_fluff_only = flags & SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY != 0;
     let noise_enabled = flags & SHEKYL_RELAY_ZONE_NOISE_ENABLED != 0;
     let relay_zone = RelayZone::from_ffi_u8(zone);
     let params = DandelionParams {
@@ -588,11 +588,6 @@ pub extern "C" fn shekyl_relay_zone_new(
         // the arguments above.
         ..DandelionParams::adopted_for(relay_zone)
     };
-    let reach = if outbound_fluff_only {
-        FluffReach::OutboundOnly
-    } else {
-        FluffReach::EveryPeer
-    };
     // Secrecy is a function of the zone discriminant, not a flag bit. The
     // zone byte already crosses and encryption is a property of the network,
     // so `LinkSecrecy::of` keeps one transposable bit off the ABI and keeps
@@ -601,15 +596,7 @@ pub extern "C" fn shekyl_relay_zone_new(
     let mut rng = SecureRelayRng;
     // `Err` is a refused configuration, not an allocation failure. See
     // `Zone::new`. Null is the only channel a C ABI has for saying so.
-    let Ok(zone) = Zone::new(
-        params,
-        stems,
-        reach,
-        secrecy,
-        noise_enabled,
-        now_ms,
-        &mut rng,
-    ) else {
+    let Ok(zone) = Zone::new(params, stems, secrecy, noise_enabled, now_ms, &mut rng) else {
         return core::ptr::null_mut();
     };
     // The carrier's buffers are built exactly when the zone carries it. The
@@ -776,6 +763,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_on_session_established(
     handle: *mut RelayZoneHandle,
     id: *const u8,
     is_income: bool,
+    network: u8,
 ) {
     if handle.is_null() {
         return;
@@ -786,12 +774,17 @@ pub unsafe extern "C" fn shekyl_relay_zone_on_session_established(
     } else {
         PeerDirection::Outbound
     };
+    let network = match network {
+        0 => NetworkClass::Clearnet,
+        1 => NetworkClass::Anonymity,
+        _ => return,
+    };
     // `publish` is `&self` and must not overlap the `driver`/`rng` borrow.
     {
         let RelayZoneHandle { driver, rng, .. } = &mut *handle;
         driver
             .zone_mut()
-            .on_session_established(peer, direction, rng);
+            .on_session_established(peer, direction, network, rng);
     }
     (*handle).publish();
 }
