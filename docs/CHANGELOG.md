@@ -34,10 +34,15 @@
   log, the applied set and the watermark; the close's `r_market`,
   `sigma_work` and `budget` rows, insert-once per epoch. The store computes
   no archival value: a delta that does not fit the tables halts the connect
-  as a store invariant (SI-19…23 minted — insert-once records, Σ
-  `bonded_total` agreement, whole-or-none close, dense slash log, one
-  accruing row). A family the apply policy stubs is skipped and widens the
-  file's provenance, never refused. The `emission-claim` capture replays in
+  as a store invariant (SI-19…23 minted — insert-once records, an
+  update that replaces a present persona, whole-or-none close, dense
+  slash log with a per-key applied collision, one accruing row).
+  **UPDATE 2026-10-01:** SI-20 is that absent-update refusal
+  (`ReplaceTable`, `BondRecordAbsent`), not a re-sum of `bonded_total`.
+  The accrual ends are read through the upsert handle. A repeated
+  applied slash names `archival_slash_applied`. A family the apply
+  policy stubs is skipped and widens the file's provenance, never
+  refused. The `emission-claim` capture replays in
   full (the interim L7 refusal pinned at height 1025 is gone). `pop` lifts
   every row through `undo_log`; a pop across a close restores the budget
   row's absence and the accruing row the close removed.

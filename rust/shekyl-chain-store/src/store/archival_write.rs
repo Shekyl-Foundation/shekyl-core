@@ -16,15 +16,15 @@
 //! record post-images, the credit keys, the slash entries and what each
 //! burned, the accruing total, the close's frozen facts. What the store
 //! adds is the belts: SI-15 (a credit names a persona with a record),
-//! SI-19 (a join inserts once), SI-20 (`Σ bonded_total` moves by what the
-//! writes displaced and left), SI-21 (an epoch closes whole, once), SI-22
-//! (the slash log is dense per height), SI-23 (the accruing table holds
-//! the open epoch's row and no other), and SI-8 for the burn fold. A delta
-//! that does not fit the tables is not adjusted; the writer halts.
+//! SI-19 (a join inserts once), SI-20 (an update replaces a present
+//! persona), SI-21 (an epoch closes whole, once), SI-22 (the slash log is
+//! dense per height, and an applied key is written once), SI-23 (the
+//! accruing table holds the open epoch's row and no other), and SI-8 for
+//! the burn fold. A delta that does not fit the tables is not adjusted;
+//! the writer halts.
 //!
 //! ```text
-//!  2.  records   archival_bond[p] = post-image — Insert (SI-19) / Upsert;
-//!                Σ bonded_total re-summed after                     (SI-20)
+//!  2.  records   archival_bond[p] = post-image — Insert (SI-19) / Replace (SI-20)
 //!      credits   archival_serve_credit[(p, s, E, h)] = Present      (SI-15)
 //!  5.  witness   archival_attestation_witness[h] = bytes, non-empty only
 //!  8.  burn      total_burned += emission burn + Σ slash burns       (SI-8)
@@ -44,8 +44,8 @@
 //! delta made that shape unavailable and the better one obvious: the delta
 //! carries each persona's **final** post-image for the block, slashes
 //! folded in, so the records are written **once, after the transaction
-//! loop**, and SI-20 is armed once over the result rather than after
-//! phase 2 and again after phase 9 (the plan's §6 row 5 records the move).
+//! loop**. An update replaces a present row (SI-20); there is no second
+//! pass over the table.
 //!
 //! # Skip-and-widen (`ARW-9`)
 //!
@@ -86,7 +86,6 @@
 //! leaves the bit — the C++'s behaviour, and the corpus's `Inject` event
 //! (commit 7) is a pipeline barrier for the same reason.
 
-use redb::ReadableTable;
 use shekyl_chain_rules::{
     ArchivalDelta, ChainValid, ChainView, RecordWriteKind, ReleaseAnchors, Trust,
 };
@@ -107,13 +106,11 @@ use crate::schema::{
 };
 
 use super::archival_reads;
-use super::chain_reads::undecodable;
-use super::error::{AccrualFault, EngineError, StoreCannot, StoreError, StoreInvariant};
+use super::error::{
+    AccrualFault, EngineError, SlashFault, StoreCannot, StoreError, StoreInvariant,
+};
 use super::write::WriteBatch;
 use super::ChainStore;
-
-/// `archival_bond` as the SI-20 fold names the sum that would not fit.
-const BONDED_TOTAL: &str = "archival_bond.bonded_total";
 
 impl<'id> WriteBatch<'_, 'id> {
     /// Phase 2's archival half: the block's bond records and serve credits.
@@ -136,23 +133,16 @@ impl<'id> WriteBatch<'_, 'id> {
         Ok(())
     }
 
-    /// `archival_bond[p] = post-image` for every record the delta carries,
-    /// inserts bound to SI-19, updates journaling the displaced pre-image;
-    /// then SI-20 over the table.
+    /// `archival_bond[p] = post-image` for every record the delta carries.
+    /// A join inserts once (SI-19). A later change replaces a present row
+    /// (SI-20): an absent persona is the bound row, returned before any
+    /// journal entry. The two handles do not coexist — redb holds one
+    /// handle per table per transaction.
     fn write_bond_records(&self, delta: &ArchivalDelta) -> Result<(), StoreError> {
         let records = delta.records();
         if records.is_empty() {
             return Ok(());
         }
-        // SI-20's left-hand side: the sum before this block's writes. Read
-        // before any handle on the table is open (redb holds one handle
-        // per table per transaction).
-        let before = self.bonded_total_sum()?;
-
-        // Inserts first, on the insert-once handle (SI-19), then the
-        // updates on the overwrite handle; the two handles do not coexist.
-        let mut left = AtomicUnits::ZERO;
-        let mut displaced = AtomicUnits::ZERO;
         {
             let mut inserts =
                 self.open_insert_table(ARCHIVAL_BOND, StoreInvariant::BondRecordNotFresh)?;
@@ -164,66 +154,22 @@ impl<'id> WriteBatch<'_, 'id> {
                     *write.persona().as_bytes(),
                     write.record().encoded().as_encoded(),
                 )?;
-                left = self.fold_bonded(left, write.record().bonded_total)?;
             }
         }
         {
-            let mut updates = self.open_upsert_table(ARCHIVAL_BOND)?;
+            let mut updates =
+                self.open_replace_table(ARCHIVAL_BOND, StoreInvariant::BondRecordAbsent)?;
             for write in records
                 .iter()
                 .filter(|w| w.kind() == RecordWriteKind::Update)
             {
-                let prior = updates.upsert(
+                updates.replace(
                     *write.persona().as_bytes(),
                     write.record().encoded().as_encoded(),
                 )?;
-                // An `Update` of a record the table does not hold is a
-                // delta describing a record that is not there: the same
-                // disagreement SI-20 names, caught by the sum below (the
-                // displaced side is short by the post-image's whole).
-                if let Some(guard) = prior {
-                    let prior = guard.value().decode().map_err(|cause| {
-                        self.arm_read_fault(undecodable("archival_bond", cause))
-                    })?;
-                    displaced = self.fold_bonded(displaced, prior.bonded_total)?;
-                }
-                left = self.fold_bonded(left, write.record().bonded_total)?;
             }
         }
-
-        // SI-20: the new sum is the old sum minus what the writes displaced
-        // plus what they left. `before ≥ displaced` when the table is
-        // consistent — a displaced pre-image was a summand of `before`.
-        let expected = before
-            .checked_sub(displaced)
-            .and_then(|kept| kept.checked_add(left))
-            .ok_or(StoreInvariant::FoldOverflow { cell: BONDED_TOTAL })
-            .map_err(|row| self.poison().arm(row))?;
-        let found = self.bonded_total_sum()?;
-        if found != expected {
-            return Err(self
-                .poison()
-                .arm(StoreInvariant::BondedTotalDisagrees { expected, found }));
-        }
         Ok(())
-    }
-
-    /// `Σ bonded_total` over `archival_bond` as of this batch's writes.
-    fn bonded_total_sum(&self) -> Result<AtomicUnits, StoreError> {
-        let records =
-            archival_reads::bond_records(self.txn()).map_err(|f| self.arm_read_fault(f))?;
-        records
-            .iter()
-            .try_fold(AtomicUnits::ZERO, |sum, (_, record)| {
-                self.fold_bonded(sum, record.bonded_total)
-            })
-    }
-
-    /// One `checked_add` of the SI-20 fold; overflow is SI-8 on the sum.
-    fn fold_bonded(&self, sum: AtomicUnits, add: AtomicUnits) -> Result<AtomicUnits, StoreError> {
-        sum.checked_add(add)
-            .ok_or(StoreInvariant::FoldOverflow { cell: BONDED_TOTAL })
-            .map_err(|row| self.poison().arm(row))
     }
 
     /// `archival_serve_credit[(p, s, E, h)] = Present` for every credit the
@@ -392,22 +338,18 @@ impl<'id> WriteBatch<'_, 'id> {
         let accrual = delta.accrual();
         let epoch = accrual.epoch;
         {
+            // Admission runs because the handle opens through the verb.
             // Every row keyed by `E`: a B-tree's first and last keys equal
-            // `E` iff every key does.
-            let table = self
-                .txn()
-                .open_table(ARCHIVAL_BUDGET_ACCRUING)
-                .map_err(|e| StoreError::from(EngineError::Table(e)))?;
-            for end in [table.first(), table.last()] {
-                if let Some((key, _)) =
-                    end.map_err(|e| StoreError::from(EngineError::Storage(e)))?
-                {
-                    let found = SettlementEpoch::from_raw(key.value());
-                    if found != epoch {
-                        return Err(self.poison().arm(StoreInvariant::AccruingNotSingular {
-                            observed: AccrualFault::StaleRow { epoch: found },
-                        }));
-                    }
+            // `E` iff every key does. The handle drops before the remove
+            // or the upsert — redb holds one per table per transaction.
+            let table = self.open_upsert_table(ARCHIVAL_BUDGET_ACCRUING)?;
+            let ends = [table.first()?, table.last()?];
+            for (key, _) in ends.into_iter().flatten() {
+                let found = SettlementEpoch::from_raw(key.value());
+                if found != epoch {
+                    return Err(self.poison().arm(StoreInvariant::AccruingNotSingular {
+                        observed: AccrualFault::StaleRow { epoch: found },
+                    }));
                 }
             }
         }
@@ -429,15 +371,21 @@ impl<'id> WriteBatch<'_, 'id> {
 
     /// 9b. The slashes: `archival_slash_log[(h, seq)] = entry` for `seq`
     /// dense from `0`, `archival_slash_applied[(p, s, E)] = Present`, then
-    /// the watermark cell when it moves. SI-22 is bound at both handles
-    /// and checked once more before the first append: a row already at
-    /// `h` means the log is not dense at this height.
+    /// the watermark cell when it moves. Density is SI-22's
+    /// [`SlashFault::NotDense`], bound at the log handle and checked once
+    /// more before the first append: a row already at `h` means the log
+    /// is not dense at this height. A repeated applied key is
+    /// [`SlashFault::AlreadyApplied`] for that key — the persona is not
+    /// known when the handle opens, so the insert names it.
     fn write_slashes(&self, height: u64, delta: &ArchivalDelta) -> Result<(), StoreError> {
         let policy = self.apply_policy();
         let log_applies = policy.applies(ArchivalFamily::SlashLog);
         let applied_applies = policy.applies(ArchivalFamily::SlashApplied);
         let slashes = delta.slashes();
-        let not_dense = StoreInvariant::SlashLogNotDense { height };
+        let not_dense = StoreInvariant::SlashLogNotDense {
+            height,
+            observed: SlashFault::NotDense,
+        };
         if log_applies && !slashes.is_empty() {
             let mut log = self.open_insert_table(ARCHIVAL_SLASH_LOG, not_dense)?;
             let at_height = BlockHeight::from_raw(height);
@@ -461,12 +409,23 @@ impl<'id> WriteBatch<'_, 'id> {
             }
         }
         if applied_applies && !slashes.is_empty() {
+            // The row bound at open is what `insert` would report. Every
+            // write here goes through `insert_observing`, whose row names
+            // this key.
             let mut applied = self.open_insert_table(ARCHIVAL_SLASH_APPLIED, not_dense)?;
             for slash in slashes {
                 let entry = &slash.entry;
-                applied.insert(
+                applied.insert_observing(
                     SlashAppliedKey::new(entry.persona, entry.shard, entry.epoch).key(),
                     Present,
+                    StoreInvariant::SlashLogNotDense {
+                        height,
+                        observed: SlashFault::AlreadyApplied {
+                            persona: entry.persona,
+                            shard: entry.shard,
+                            epoch: entry.epoch,
+                        },
+                    },
                 )?;
             }
         }

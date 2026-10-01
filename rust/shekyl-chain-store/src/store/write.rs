@@ -32,14 +32,15 @@
 //!
 //! # The verbs
 //!
-//! Keyed tables open as one of three handles — [`InsertTable`] (fatal on a
+//! Keyed tables open as one of four handles — [`InsertTable`] (fatal on a
 //! present key; the `SI-` row is bound at open), [`UpsertTable`]
-//! (overwrite, declared) or [`RemoveTable`] (a journaling delete, fatal on
-//! an absent key; the row is bound at open) — never as a raw
-//! `redb::Table` (C2-R8 §7.3). The verb is the handle: a set table cannot
-//! upsert, a register cannot insert, and a hard-fork that reclassifies a
-//! table opens the other handle. Typed `properties` cells are registers
-//! and are written
+//! (overwrite, and may create), [`ReplaceTable`] (overwrite of a present
+//! key only; an absent key is the row bound at open) or [`RemoveTable`]
+//! (a journaling delete, fatal on an absent key; the row is bound at
+//! open) — never as a raw `redb::Table` (C2-R8 §7.3). The verb is the
+//! handle: a set table cannot upsert, a register cannot insert, a replace
+//! cannot create, and a hard-fork that reclassifies a table opens the
+//! other handle. Typed `properties` cells are registers and are written
 //! through [`upsert_property`](WriteBatch::upsert_property). There is no
 //! multimap opener: the catalogue has had no multimap since S-OUT-KI's
 //! layout commit made `output_amounts` a keyed `(amount, amount_index)`
@@ -84,7 +85,7 @@ use shekyl_units::AtomicUnits;
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
 use super::header;
-use super::keyed::{Handles, InsertTable, RemoveTable, UpsertTable};
+use super::keyed::{Handles, InsertTable, RemoveTable, ReplaceTable, UpsertTable};
 use super::shared::Shared;
 use super::undo::{self, Journal, Recording, Replayed, Restorable};
 use super::view::BatchView;
@@ -567,6 +568,51 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         self.txn()
             .open_table(definition)
             .map(|table| UpsertTable::new_upsert(table, handles))
+            .map_err(|e| EngineError::Table(e).into())
+    }
+
+    /// Open a keyed table whose writes overwrite a present key only; an
+    /// absent key is a violation of `row`, returned before any journal
+    /// entry.
+    ///
+    /// `upsert` does not compile on the returned type — a register that
+    /// may create its key is opened with
+    /// [`open_upsert_table`](Self::open_upsert_table):
+    ///
+    /// ```compile_fail,E0599
+    /// use redb::TableDefinition;
+    /// use shekyl_chain_store::store::{ChainStore, StoreError, StoreInvariant};
+    /// use shekyl_chain_store::codec::SettlementEpochBlocks;
+    /// const T: TableDefinition<&str, u64> = TableDefinition::new("t");
+    /// const ROW: StoreInvariant = StoreInvariant::BondRecordAbsent;
+    /// let epoch = SettlementEpochBlocks::new(10_000).unwrap();
+    /// let store = ChainStore::create("never-opened.redb", epoch).unwrap();
+    /// store.write(|batch| -> Result<(), StoreError> {
+    ///     batch.open_replace_table(T, ROW)?.upsert("k", &1)?;
+    ///     Ok(())
+    /// });
+    /// ```
+    ///
+    /// Same by-name refusals as [`open_insert_table`](Self::open_insert_table).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreCannot::FamilyStubbed`], [`StoreCannot::PropertiesAreTyped`]
+    /// or [`EngineError::Table`].
+    pub fn open_replace_table<'txn, K, V>(
+        &'txn self,
+        definition: TableDefinition<'_, K, V>,
+        row: StoreInvariant,
+    ) -> Result<ReplaceTable<'txn, K, V>, StoreError>
+    where
+        K: Key + Restorable + 'static,
+        V: Restorable + 'static,
+    {
+        self.admit(definition.name())?;
+        let handles = self.handles(definition.name());
+        self.txn()
+            .open_table(definition)
+            .map(|table| ReplaceTable::new_replace(table, handles, row))
             .map_err(|e| EngineError::Table(e).into())
     }
 

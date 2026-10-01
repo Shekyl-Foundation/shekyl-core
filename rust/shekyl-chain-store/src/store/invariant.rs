@@ -219,31 +219,21 @@ pub enum StoreInvariant {
     },
     /// **SI-19** — a persona has at most one record, and a JoinMarket is
     /// the only insert. `archival_bond[p]` is written insert-once by the
-    /// JoinMarket arm and only upserted — pre-image journaled — by every
-    /// later change (Release, Reinstate, a claim's record update, a slash);
-    /// a second insert for a persona is a writer that re-ran a join. The
-    /// belt beneath CEN-J14's rule, bound at the insert handle's open in
-    /// the archival writer's phase 2 (DRS-E4 §3.2, §4; CEN-L14 site 2).
+    /// JoinMarket arm and only replaced — a present row, its pre-image
+    /// journaled — by every later change (Release, Reinstate, a claim's
+    /// record update, a slash); a second insert for a persona is a writer
+    /// that re-ran a join. The belt beneath CEN-J14's rule, bound at the
+    /// insert handle's open in the archival writer's phase 2 (DRS-E4
+    /// §3.2, §4; CEN-L14 site 2).
     BondRecordNotFresh,
-    /// **SI-20** — `Σ bonded_total` over `archival_bond` equals the total
-    /// the delta implies: after the block's record writes, the new sum is
-    /// the old sum minus the pre-images the writes displaced plus the
-    /// post-images they left. A disagreement is a writer that changed a
-    /// record the delta did not describe (an `Update` of a record the
-    /// table does not hold reads the same way: the displaced side is short
-    /// by a whole post-image). Armed **once** by the archival writer's
-    /// phase 2, after the block's record writes: the verdict's delta
-    /// carries each persona's *final* post-image with the slashes already
-    /// folded in, so the plan's second arming after phase 9 has nothing
-    /// left to check (DRS-E4 `ARW-7`, `ARW-Q9`; §6 row 5 records the
-    /// move). A sum that would not fit is not this row — it is SI-8's
-    /// [`Self::FoldOverflow`] on `archival_bond.bonded_total`.
-    BondedTotalDisagrees {
-        /// The sum the writes imply.
-        expected: shekyl_units::AtomicUnits,
-        /// The sum the table holds after them.
-        found: shekyl_units::AtomicUnits,
-    },
+    /// **SI-20** — an `Update` of `archival_bond` names a persona the
+    /// table already holds. Later changes replace a present row and
+    /// journal that pre-image; an absent persona is this row, returned
+    /// before any journal entry. There is no summed `bonded_total`: the
+    /// total is the rows (`ARW-Q9`, no cell), and a scan of the writes
+    /// just performed is those writes. Bound at the replace handle's open
+    /// in phase 2 (DRS-E4 `ARW-7`).
+    BondRecordAbsent,
     /// **SI-21** — an epoch closes whole. `archival_sigma_work[E]` and
     /// `archival_budget[E]` exist together with every `(shard, E)` row of
     /// `archival_r_market` the close's snapshot named — zero rows written,
@@ -257,15 +247,17 @@ pub enum StoreInvariant {
     },
     /// **SI-22** — the slash log is dense per height, and every row is an
     /// applied slash. `archival_slash_log`'s rows at height `h` are
-    /// `(h, 0) … (h, n−1)` and no other, and each row's `(persona, shard,
-    /// epoch)` is a key of `archival_slash_applied`. Armed by phase 9 when
-    /// the log already holds a row at the connecting height before the
-    /// first slash is appended, when `(h, seq)` is present at the append,
-    /// or when the applied key is present at its insert — a scheduler that
-    /// wrote out of order or slashed twice (DRS-E4 `ARW-2`, `ARW-Q2`).
+    /// `(h, 0) … (h, n−1)` and no other
+    /// ([`SlashFault::NotDense`]), and each row's `(persona, shard,
+    /// epoch)` is a key of `archival_slash_applied`
+    /// ([`SlashFault::AlreadyApplied`]). The applied key names the
+    /// persona, so that half is reported per insert rather than bound
+    /// once at open. Armed by phase 9 (DRS-E4 `ARW-2`, `ARW-Q2`).
     SlashLogNotDense {
-        /// The connecting height whose rows are not `(h, 0) … (h, n−1)`.
+        /// The connecting height.
         height: u64,
+        /// Which half of the pair the writer observed.
+        observed: SlashFault,
     },
     /// **SI-23** — the accruing table holds at most one row, the open
     /// epoch's. `archival_budget_accruing[E]` is upserted every connect of
@@ -332,6 +324,28 @@ pub enum AccrualFault {
     AbsentAtClose,
 }
 
+/// What an SI-22 write observed (payload of
+/// [`StoreInvariant::SlashLogNotDense`]).
+///
+/// Density and a repeated applied key are different facts. One variant
+/// keeps the register's row; the payload says which table the display
+/// names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlashFault {
+    /// `archival_slash_log` at this height is not `(h, 0) … (h, n−1)`:
+    /// a row was already there, or `(h, seq)` was present at the append.
+    NotDense,
+    /// `archival_slash_applied` already holds this `(persona, shard, epoch)`.
+    AlreadyApplied {
+        /// The persona the key names.
+        persona: shekyl_types::PCanonicalId,
+        /// The shard the key names.
+        shard: shekyl_types::ShardId,
+        /// The epoch the key names.
+        epoch: shekyl_types::SettlementEpoch,
+    },
+}
+
 /// What an SI-11 observation was. A length comparison does not know which
 /// position is missing, and a walk knows the position and not the table's
 /// length. The writer has two more, and neither of them is a length: the
@@ -376,7 +390,7 @@ impl StoreInvariant {
             Self::PositionMapsNotBijective => 17,
             Self::LeafCountNotAdvanced { .. } => 18,
             Self::BondRecordNotFresh => 19,
-            Self::BondedTotalDisagrees { .. } => 20,
+            Self::BondRecordAbsent => 20,
             Self::EpochCloseRewritten { .. } => 21,
             Self::SlashLogNotDense { .. } => 22,
             Self::AccruingNotSingular { .. } => 23,
@@ -486,22 +500,31 @@ impl core::fmt::Display for StoreInvariant {
                 "archival_bond already holds a record for the persona a JoinMarket is inserting; \
                  a join was re-run past the validator",
             ),
-            Self::BondedTotalDisagrees { expected, found } => write!(
-                f,
-                "Σ bonded_total over archival_bond is {found} after the block's record writes \
-                 but the writes imply {expected}; a record changed that the delta did not \
-                 describe, rebuild from the block corpus"
+            Self::BondRecordAbsent => f.write_str(
+                "an Update of archival_bond names a persona the table does not hold; the \
+                 replace was refused before any journal entry",
             ),
             Self::EpochCloseRewritten { epoch } => write!(
                 f,
                 "settlement epoch {epoch} already has a close row (archival_r_market / \
                  archival_sigma_work / archival_budget); an epoch closes once"
             ),
-            Self::SlashLogNotDense { height } => write!(
-                f,
-                "archival_slash_log's rows at height {height} would not be (h, 0) … (h, n−1) \
-                 of applied slashes; the scheduler wrote out of order or slashed twice"
-            ),
+            Self::SlashLogNotDense { height, observed } => match observed {
+                SlashFault::NotDense => write!(
+                    f,
+                    "archival_slash_log's rows at height {height} would not be (h, 0) … (h, n−1); \
+                     the scheduler wrote out of order"
+                ),
+                SlashFault::AlreadyApplied {
+                    persona,
+                    shard,
+                    epoch,
+                } => write!(
+                    f,
+                    "archival_slash_applied already holds ({persona}, {shard}, {epoch}) at height \
+                     {height}; a slash was applied twice"
+                ),
+            },
             Self::AccruingNotSingular { observed } => match observed {
                 AccrualFault::StaleRow { epoch } => write!(
                     f,
@@ -555,7 +578,7 @@ impl core::error::Error for StoreInvariant {
             | Self::PositionMapsNotBijective
             | Self::LeafCountNotAdvanced { .. }
             | Self::BondRecordNotFresh
-            | Self::BondedTotalDisagrees { .. }
+            | Self::BondRecordAbsent
             | Self::EpochCloseRewritten { .. }
             | Self::SlashLogNotDense { .. }
             | Self::AccruingNotSingular { .. }

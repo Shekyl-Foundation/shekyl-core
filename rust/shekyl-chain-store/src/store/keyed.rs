@@ -7,12 +7,14 @@
 //!
 //! A [`WriteBatch`](super::WriteBatch) opens a keyed table as one of an
 //! [`InsertTable`] (fatal on a present key; the `SI-` belt is bound at
-//! open), an [`UpsertTable`] (overwrite, declared) or a [`RemoveTable`]
-//! (fatal on an absent key; the belt is bound at open). redb admits one
-//! handle per table per transaction, so the verb is chosen when the table
-//! is opened — not per call, and not as a flag on a common type. A
-//! hard-fork that reclassifies a table from a set to a register opens the
-//! other handle; the wrong verb does not compile.
+//! open), an [`UpsertTable`] (overwrite, and may create), a
+//! [`ReplaceTable`] (overwrite of a present key only; an absent key is
+//! the belt bound at open) or a [`RemoveTable`] (fatal on an absent key;
+//! the belt is bound at open). redb admits one handle per table per
+//! transaction, so the verb is chosen when the table is opened — not per
+//! call, and not as a flag on a common type. A hard-fork that reclassifies
+//! a table from a set to a register opens the other handle; the wrong
+//! verb does not compile.
 //!
 //! redb's own `insert` replaces silently and is not reachable. Reads are
 //! inherent methods returning [`StoreError`]; the engine's `ReadableTable`
@@ -20,15 +22,17 @@
 //!
 //! Every verb **journals** itself: while the batch is recording a pop
 //! journal (`store::undo`), a successful `insert` records the key it
-//! added, a successful `upsert` the value it displaced, and a successful
-//! `remove` the value it took out, so `pop` can reverse any of them
-//! without knowing which surface made the write.
+//! added, a successful `upsert` or `replace` the value it displaced, and
+//! a successful `remove` the value it took out, so `pop` can reverse any
+//! of them without knowing which surface made the write. A `replace`
+//! journals `prior: Some`; it never records an absence, because an absent
+//! key is the bound row and returns before the journal.
 //!
 //! The delete verb has one caller: DRS-E4's epoch close removes
 //! `archival_budget_accruing[E]` in the transaction that writes
-//! `archival_budget[E]` (`ARW-Q3`, SI-23). The keyed-handle module refused
-//! to pre-provision a deleter until a drain named the row it enforces;
-//! that is the row.
+//! `archival_budget[E]` (`ARW-Q3`, SI-23). The replace verb has one
+//! caller: an `Update` of `archival_bond` (SI-20). Each was added when a
+//! drain named the row it enforces.
 
 use core::borrow::Borrow;
 use core::ops::RangeBounds;
@@ -49,8 +53,14 @@ pub struct InsertOnce {
     row: StoreInvariant,
 }
 
-/// This handle's value writes are declared overwrite.
+/// This handle's value writes are declared overwrite, and may create the key.
 pub struct Overwrite;
+
+/// This handle's writes overwrite a present key only, enforcing `row` on
+/// an absent one.
+pub struct ReplaceOnce {
+    row: StoreInvariant,
+}
 
 /// This handle's writes are journaling deletes of present keys, enforcing
 /// `row` on an absent one.
@@ -61,9 +71,9 @@ pub struct RemoveOnce {
 /// A keyed table opened for writing inside one
 /// [`WriteBatch`](super::WriteBatch).
 ///
-/// `W` is the write verb: [`InsertOnce`], [`Overwrite`] or [`RemoveOnce`].
-/// Reads are on all three. Call sites name the aliases [`InsertTable`],
-/// [`UpsertTable`] and [`RemoveTable`].
+/// `W` is the write verb: [`InsertOnce`], [`Overwrite`], [`ReplaceOnce`]
+/// or [`RemoveOnce`]. Reads are on all four. Call sites name the aliases
+/// [`InsertTable`], [`UpsertTable`], [`ReplaceTable`] and [`RemoveTable`].
 ///
 /// Borrows the batch for `'txn`, so it cannot outlive the closure that
 /// opened it.
@@ -127,8 +137,13 @@ impl Handles<'_> {
 /// Insert-once keyed table: a present key is the belt bound at open.
 pub type InsertTable<'txn, K, V> = KeyedTable<'txn, K, V, InsertOnce>;
 
-/// Overwrite keyed table: a present key is replaced, and the verb says so.
+/// Overwrite keyed table: a present key is replaced, and a missing key is
+/// created. The verb says so, including when the prior is absent.
 pub type UpsertTable<'txn, K, V> = KeyedTable<'txn, K, V, Overwrite>;
+
+/// Replace-once keyed table: an absent key is the belt bound at open.
+/// A successful replace journals a present prior.
+pub type ReplaceTable<'txn, K, V> = KeyedTable<'txn, K, V, ReplaceOnce>;
 
 /// Remove-once keyed table: an absent key is the belt bound at open.
 pub type RemoveTable<'txn, K, V> = KeyedTable<'txn, K, V, RemoveOnce>;
@@ -161,6 +176,10 @@ impl<'txn, K: Key + Restorable + 'static, V: Restorable + 'static> InsertTable<'
     /// While the batch is recording a pop journal, a successful insert
     /// records the key so `pop` can remove it.
     ///
+    /// The row is the one bound at open.
+    /// [`insert_observing`](Self::insert_observing) names a row for this
+    /// key when the collision's fact is not known until the key is.
+    ///
     /// # Errors
     ///
     /// [`StoreError::InvariantViolated`] for the bound row if `key` was
@@ -171,9 +190,30 @@ impl<'txn, K: Key + Restorable + 'static, V: Restorable + 'static> InsertTable<'
         key: impl Borrow<K::SelfType<'k>>,
         value: impl Borrow<V::SelfType<'v>>,
     ) -> Result<(), StoreError> {
+        self.insert_observing(key, value, self.write.row)
+    }
+
+    /// [`insert`](Self::insert), reporting `row` when `key` is present.
+    ///
+    /// The existence check runs before any journal capture, as
+    /// [`insert`](Self::insert) does: a refused insert writes no undo
+    /// entry. `archival_slash_applied` uses this because the colliding
+    /// key is `(persona, shard, epoch)` and one row bound at open cannot
+    /// name the persona.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::InvariantViolated`] for `row` if `key` was present;
+    /// [`EngineError::Storage`] if the engine refused the lookup or the
+    /// write.
+    pub fn insert_observing<'k, 'v>(
+        &mut self,
+        key: impl Borrow<K::SelfType<'k>>,
+        value: impl Borrow<V::SelfType<'v>>,
+        row: StoreInvariant,
+    ) -> Result<(), StoreError> {
         check_row::<K>(self.batch.table_name(), key.borrow())?;
         check_row::<V>(self.batch.table_name(), value.borrow())?;
-        let row = self.write.row;
         if self
             .inner
             .get(key.borrow())
@@ -244,6 +284,75 @@ impl<'txn, K: Key + Restorable + 'static, V: Restorable + 'static> UpsertTable<'
             });
         }
         Ok(displaced)
+    }
+}
+
+impl<'txn, K: Key + Restorable + 'static, V: Restorable + 'static> ReplaceTable<'txn, K, V> {
+    pub(super) const fn new_replace(
+        inner: Table<'txn, K, V>,
+        batch: Handles<'txn>,
+        row: StoreInvariant,
+    ) -> Self {
+        Self {
+            inner,
+            batch,
+            write: ReplaceOnce { row },
+        }
+    }
+
+    /// Write `key → value` where `key` must already be present.
+    ///
+    /// An absent key is a violation of the `SI-` row this handle was
+    /// opened with (SI-20 for `archival_bond`: an `Update` names a persona
+    /// the table holds). The check returns **before** any journal entry,
+    /// so a missing pre-image is never recorded as `prior: None`. The
+    /// table is left untouched and the batch is **poisoned** as
+    /// [`InsertTable::insert`] poisons it.
+    ///
+    /// While the batch is recording a pop journal, a successful replace
+    /// records the present prior so `pop` can restore it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::InvariantViolated`] for the bound row if `key` was
+    /// absent; [`EngineError::Storage`] if the engine refused the lookup
+    /// or the write.
+    pub fn replace<'k, 'v>(
+        &mut self,
+        key: impl Borrow<K::SelfType<'k>>,
+        value: impl Borrow<V::SelfType<'v>>,
+    ) -> Result<(), StoreError> {
+        check_row::<K>(self.batch.table_name(), key.borrow())?;
+        check_row::<V>(self.batch.table_name(), value.borrow())?;
+        let row = self.write.row;
+        // Presence first. The guard must end before `insert`: redb will
+        // not hold a read guard and a write on the same table together.
+        let prior = {
+            let present = self.inner.get(key.borrow()).map_err(EngineError::Storage)?;
+            let Some(guard) = present else {
+                return Err(self.batch.poison.arm(row));
+            };
+            let copied = self.batch.capture(V::as_bytes(&guard.value()));
+            drop(guard);
+            copied
+        };
+        let key_bytes = self.batch.capture(K::as_bytes(key.borrow()));
+        let post = key_bytes
+            .is_some()
+            .then(|| post_image(V::as_bytes(value.borrow()).as_ref()));
+        debug_assert_eq!(key_bytes.is_some(), prior.is_some());
+        self.inner
+            .insert(key, value)
+            .map_err(EngineError::Storage)?;
+        if let (Some(key), Some(post), Some(prior)) = (key_bytes, post, prior) {
+            self.batch.journal(|table| UndoEntry::Replaced {
+                table,
+                key,
+                prior: Some(prior),
+                post,
+            });
+        }
+        Ok(())
     }
 }
 

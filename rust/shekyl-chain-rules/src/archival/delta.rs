@@ -160,7 +160,8 @@ pub enum RecordWriteKind {
     /// error (CEN-L14).
     Insert,
     /// Release, Reinstate, claim or slash: the record existed and this is
-    /// its post-image. The store journals the pre-image.
+    /// its post-image. The store replaces a present row and journals that
+    /// pre-image; an absent persona is SI-20 before any journal entry.
     Update,
 }
 
