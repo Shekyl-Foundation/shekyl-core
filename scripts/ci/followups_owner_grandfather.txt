@@ -22,7 +22,6 @@ The archiver's serving store needs a retention rule for a dropped shard, and an 
 `SO-D9` — `ERR_EPOCH_MISMATCH` on the serve-credit admission path is a tautology; RULED (i) 2026-09-13, implementation owed.
 Serve-credit inclusion incentive and archival weight pricing — the fee-and-weight round Q9 names but nothing scheduled.
 Connect-path regression for the hash-gated FCMP++ proof-skip (`CEN-M8` fix wiring).
-The C++ transaction builder is test-only and nothing tracked that.
 `get_archival_emission_claim_source` walks the entire serve-credit table per unauthenticated RPC
 `shekyl-ffi` has 105 undocumented items, so `missing_docs` cannot gate detached-doc drift.
 `release_readiness` query (frozen §2 surface) deferred — blocker: persona addressing.
