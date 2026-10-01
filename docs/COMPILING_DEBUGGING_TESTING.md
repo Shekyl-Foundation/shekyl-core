@@ -130,8 +130,7 @@ static libraries.
 cmake -S . -B build\msvc-release -G "Visual Studio 18 2026" -A x64 ^
   -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake ^
   -DVCPKG_TARGET_TRIPLET=x64-windows-static ^
-  -DCMAKE_BUILD_TYPE=Release ^
-  -DUSE_DEVICE_TREZOR=OFF
+  -DCMAKE_BUILD_TYPE=Release
 cmake --build build\msvc-release --config Release --parallel
 ```
 
