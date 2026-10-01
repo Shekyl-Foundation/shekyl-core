@@ -78,8 +78,6 @@ namespace cryptonote
     uint8_t m_msg_sign_pk[SHEKYL_MSG_SIGN_PK_BYTES]{};
     bool m_has_msg_sign_pk = false;
 
-    hw::device *m_device = &hw::get_device("default");
-
     account_keys() = default;
     ~account_keys();
     account_keys(const account_keys&) = default;
@@ -95,8 +93,6 @@ namespace cryptonote
       KV_SERIALIZE_OPT(m_seed_format, (uint8_t)SHEKYL_SEED_FORMAT_RAW32)
     END_KV_SERIALIZE_MAP()
 
-    hw::device& get_device()  const ;
-    void set_device( hw::device &hwdev) ;
   };
 
   /************************************************************************/
@@ -185,17 +181,11 @@ namespace cryptonote
         bool two_random,
         network_type nettype);
 
-    void create_from_device(const std::string &device_name);
-    void create_from_device(hw::device &hwdev);
     void create_from_keys(const cryptonote::account_public_address& address, const crypto::secret_key& spendkey, const crypto::secret_key& viewkey);
     void create_from_viewkey(const cryptonote::account_public_address& address, const crypto::secret_key& viewkey);
     const account_keys& get_keys() const;
     std::string get_public_address_str(network_type nettype) const;
     std::string get_public_integrated_address_str(const crypto::hash8 &payment_id, network_type nettype) const;
-
-    hw::device& get_device() const  {return m_keys.get_device();}
-    void set_device( hw::device &hwdev) {m_keys.set_device(hwdev);}
-    void deinit();
 
     uint64_t get_createtime() const { return m_creation_timestamp; }
     void set_createtime(uint64_t val) { m_creation_timestamp = val; }

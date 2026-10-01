@@ -293,9 +293,8 @@ Shekyl's four-component economics formula).
 ## Seed node build (lean daemon)
 
 `make release-seed` builds only the daemon (`shekyld`) with `ARCH=x86-64`
-(portable x86_64). There is no hardware-wallet build arm. This keeps protobuf
-and libusb off the seed binary, and ensures it runs on any x86_64 host
-regardless of CPU generation (no AVX/SSE4.x required).
+(portable x86_64), so it runs on any x86_64 host regardless of CPU
+generation (no AVX/SSE4.x required).
 
 ```bash
 make release-seed
@@ -322,8 +321,6 @@ CMake cache values cannot leak architecture-specific flags.
 - Boost (chrono, date-time, filesystem, program-options, regex, serialization,
   system, thread)
 - OpenSSL, libsodium, readline
-
-No HIDAPI, protobuf, or libusb packages are required on the target machine.
 
 See `shekyl-dev/docs/SEED_NODE_DEPLOYMENT.md` for full deployment instructions.
 

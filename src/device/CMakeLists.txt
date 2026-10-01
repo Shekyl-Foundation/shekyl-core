@@ -29,14 +29,11 @@
 set(device_sources
   device.cpp
   device_default.cpp
-  log.cpp
   )
 
 set(device_headers
   device.hpp
-  device_io.hpp
   device_default.hpp
-  log.hpp
  )
 
 set(device_private_headers)

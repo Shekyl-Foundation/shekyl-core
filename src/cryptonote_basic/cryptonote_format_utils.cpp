@@ -92,20 +92,6 @@ namespace cryptonote
 
 namespace cryptonote
 {
-  //---------------------------------------------------------------
-  void get_transaction_prefix_hash(const transaction_prefix& tx, crypto::hash& h, hw::device &hwdev)
-  {
-    hwdev.get_transaction_prefix_hash(tx,h);    
-  }
-
-  //---------------------------------------------------------------  
-  crypto::hash get_transaction_prefix_hash(const transaction_prefix& tx, hw::device &hwdev)
-  {
-    crypto::hash h = null_hash;
-    get_transaction_prefix_hash(tx, h, hwdev);
-    return h;
-  }
-  
   bool expand_transaction_1(transaction &tx, bool base_only)
   {
     if (tx.version >= 2 && !is_coinbase(tx))

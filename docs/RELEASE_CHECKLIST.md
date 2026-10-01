@@ -37,15 +37,9 @@
   - [x] encoded transaction size impact measured (5389 bytes `pqc_auth` per input via `pqc_auth_weight()`)
   - [x] payload limit guidance documented in V3_ROLLOUT.md
 - [x] Ledger integration — **deleted 2026-10-01** (`docs/HARDWARE_WALLETS.md`). There is no in-tree backend to finish. Reopen only when a device ships the V4 primitives that doc names.
-- [ ] Trezor integration (deferred to v1.1)
-  - [x] FCMP++ device abstraction defaults inherited (unsupported, returns false)
-  - [ ] Trezor cold-signing protocol updated for FCMP++ transactions
-  - [ ] Trezor firmware update available (if needed)
+- [x] Trezor integration — **deleted 2026-08-18** (`docs/HARDWARE_WALLETS.md`). Same reopen criterion. The software device is the key helper the daemon calls, and it does not carry FCMP offload hooks.
 
-**Software wallets only for v1.0 launch. Hardware support (Ledger/Trezor) targeted for v1.1.**
-The device abstraction layer (`device.hpp`) exposes `fcmp_prepare`, `fcmp_proof_start`,
-and `fcmp_proof_add_input` so that hardware wallet implementations can be added without
-further changes to the interface.
+**Software wallets only.** Hardware support reopens against the Rust wallet when a device ships the V4 primitives `docs/HARDWARE_WALLETS.md` names.
 
 - [x] Fork height set (rebooted chain: all features at HF 1 from genesis)
   - [ ] Shekyl announcement mailer / notice

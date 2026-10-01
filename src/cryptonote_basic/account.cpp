@@ -164,15 +164,6 @@ DISABLE_VS_WARNINGS(4244 4345)
     m_master_seed_present = false;
   }
   //-----------------------------------------------------------------
-  hw::device& account_keys::get_device() const  {
-    return *m_device;
-  }
-  //-----------------------------------------------------------------
-  void account_keys::set_device( hw::device &hwdev)  {
-    m_device = &hwdev;
-    MCDEBUG("device", "account_keys::set_device device type: "<<typeid(hwdev).name());
-  }
-  //-----------------------------------------------------------------
   account_base::account_base()
   {
     set_null();
@@ -192,15 +183,6 @@ DISABLE_VS_WARNINGS(4244 4345)
     }
     m_keys = account_keys();
     m_creation_timestamp = 0;
-  }
-  //-----------------------------------------------------------------
-  void account_base::deinit()
-  {
-    try{
-      m_keys.get_device().disconnect();
-    } catch (const std::exception &e){
-      MERROR("Device disconnect exception: " << e.what());
-    }
   }
   //-----------------------------------------------------------------
   void account_base::forget_spend_key()
@@ -420,44 +402,6 @@ DISABLE_VS_WARNINGS(4244 4345)
       m_creation_timestamp = 0; // lowest value
   }
 
-  //-----------------------------------------------------------------
-  void account_base::create_from_device(const std::string &device_name)
-  {
-    hw::device &hwdev =  hw::get_device(device_name);
-    hwdev.set_name(device_name);
-    create_from_device(hwdev);
-  }
-
-  void account_base::create_from_device(hw::device &hwdev)
-  {
-    m_keys.set_device(hwdev);
-    MCDEBUG("device", "device type: "<<typeid(hwdev).name());
-    CHECK_AND_ASSERT_THROW_MES(hwdev.init(), "Device init failed");
-    CHECK_AND_ASSERT_THROW_MES(hwdev.connect(), "Device connect failed");
-    try {
-      CHECK_AND_ASSERT_THROW_MES(hwdev.get_public_address(m_keys.m_account_address), "Cannot get a device address");
-      CHECK_AND_ASSERT_THROW_MES(hwdev.get_secret_keys(m_keys.m_view_secret_key, m_keys.m_spend_secret_key), "Cannot get device secret");
-      // No hardware-wallet backend is in this tree (docs/HARDWARE_WALLETS.md).
-      // This path is the device interface's software-device shape; it cannot
-      // materialize an ML-KEM keypair from the Ed25519 scalars a device
-      // would return.
-      clear_msg_sign_pk(m_keys);
-    } catch (const std::exception &e){
-      hwdev.disconnect();
-      throw;
-    }
-    struct tm timestamp = {0};
-    timestamp.tm_year = 2014 - 1900;  // year 2014
-    timestamp.tm_mon = 4 - 1;  // month april
-    timestamp.tm_mday = 15;  // 15th of april
-    timestamp.tm_hour = 0;
-    timestamp.tm_min = 0;
-    timestamp.tm_sec = 0;
-
-    m_creation_timestamp = mktime(&timestamp);
-    if (m_creation_timestamp == (uint64_t)-1) // failure
-      m_creation_timestamp = 0; // lowest value
-  }
   //-----------------------------------------------------------------
   void account_base::create_from_viewkey(const cryptonote::account_public_address& address, const crypto::secret_key& viewkey)
   {

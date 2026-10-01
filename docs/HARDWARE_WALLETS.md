@@ -50,8 +50,10 @@ hardware wallet firmware:
 
 ### Build Behavior
 
-There is no hardware-wallet build arm. HIDAPI is not searched. The software
-device (`device_default`) is what the daemon links.
+There is no hardware-wallet build arm. HIDAPI is not searched, and the
+depends build does not fetch hidapi, libusb, protobuf, or udev. The software
+device (`device_default`) is the key helper the daemon links. It does not
+carry hardware onboarding or FCMP offload stubs.
 
 The Trezor and Ledger backends are both deleted (see above). Reintroduce one
 when the reopen criterion is met, rather than restoring the deleted tree.

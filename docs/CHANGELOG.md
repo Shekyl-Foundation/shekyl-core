@@ -10,6 +10,13 @@
   reading is still the C++ reply, which keeps the old convention until that
   method moves.
 
+### Build — hardware-wallet packages are not dependencies
+
+- The daemon does not link hidapi, libusb, protobuf, or udev. Install
+  lists, the depends build, and CI package lines no longer fetch them.
+  The software device remains the key helper; both hardware backends stay
+  deleted (`docs/HARDWARE_WALLETS.md`).
+
 ### Consensus — the txid binds the archival length (`SHT-Q2`, rule 07 cutover)
 
 - **Every non-coinbase txid changes.** The transaction id mixes one more
