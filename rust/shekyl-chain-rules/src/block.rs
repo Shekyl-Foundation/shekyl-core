@@ -32,7 +32,8 @@ use crate::rules::reward::PaidEmission;
 /// `PDM-Q-F26`) and the digest of the prunable region (its fourth, S-CHAIN-W
 /// SCW-10) — the values the chain store records as `txs_pqc_auth_hash` and
 /// `txs_prunable_hash` so a node that keeps only the skeleton can still
-/// reconstruct the txid it accepted (`Transaction::hash_with_supplied_components`).
+/// reconstruct the txid it accepted (`Transaction::hash_with_supplied_components`,
+/// with the archival length the store measured at connect, `txs_archival_len`).
 /// All three come from the same `validate`, copied from
 /// [`Transaction::txid_parts`] so no consumer re-hashes a body and the store
 /// never derives a consensus-visible value (C2-R8 Q4).

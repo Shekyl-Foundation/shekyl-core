@@ -15,7 +15,7 @@
 //! derived growth starts where they say the tree ends.
 
 use shekyl_chain_rules::{AtHeight, ChainView, RuleSet};
-use shekyl_types::{BlockHeight, CurveTreeRoot, GlobalOutputIndex};
+use shekyl_types::{ArchivalLength, BlockHeight, CurveTreeRoot, GlobalOutputIndex};
 
 use super::connect_fixtures::{
     candidate, candidate_over, connect_chain, judge, root_going_into, spend, spendable_prefix,
@@ -26,7 +26,7 @@ use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::{Canonical, LeafCount, OutTx, Raw, TxIndex, TxPrunedSegment};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{CURVE_TREE_LEAF_COUNTS, OUTPUT_TXS, TXS_PRUNED, TX_INDICES};
+use crate::schema::{CURVE_TREE_LEAF_COUNTS, OUTPUT_TXS, TXS_ARCHIVAL_LEN, TXS_PRUNED, TX_INDICES};
 
 fn h(height: u64) -> BlockHeight {
     BlockHeight::from_raw(height)
@@ -437,4 +437,80 @@ fn a_pruned_row_holding_another_transactions_body_is_corruption_not_a_drain() {
     .to_string();
     assert_eq!(out, Err(TestErr::Store(expected)));
     cleanup(&path);
+}
+
+/// The length row is an operand of the identity the drain rebuilds
+/// (`SHT-Q2`), so a row that is wrong — one byte long, or missing, which
+/// reads as zero — is caught where the row is used: the skeleton no longer
+/// hashes to the transaction the block names. That is what lets a shard
+/// boundary be cut from this row after the bodies it measured are gone.
+#[test]
+fn a_wrong_archival_length_row_is_corruption_not_a_drain() {
+    for (name, plant) in [("leaf-len-plus-one", Some(1u64)), ("leaf-len-gone", None)] {
+        let path = tmp(name);
+        let store = ChainStore::create(&path, EPOCH).expect("create");
+        let hashes = connect_chain(&store, &listing());
+        let hash = listed_hash_at_53(&store);
+        let tx_id = {
+            let snap = store.begin_read().expect("read");
+            snap.tx_location(&hash).expect("read").expect("recorded").id
+        };
+        // The length `connect` measured, from the body it was handed.
+        let recorded = listing()
+            .iter()
+            .flatten()
+            .find(|tx| tx.hash() == hash)
+            .expect("the listed spend")
+            .archival_len();
+        assert_ne!(
+            recorded,
+            ArchivalLength::ZERO,
+            "the spend carries archival good, or a missing row would be right"
+        );
+        drop(store);
+        {
+            let db = redb::Database::open(&path).expect("open raw");
+            let txn = db.begin_write().expect("write");
+            {
+                let mut table = txn.open_table(TXS_ARCHIVAL_LEN).expect("t");
+                match plant {
+                    Some(extra) => {
+                        let wrong = ArchivalLength::from_raw(recorded.to_raw() + extra);
+                        table
+                            .insert(tx_id.to_raw(), wrong.encoded().as_encoded())
+                            .expect("plant");
+                    }
+                    None => {
+                        table.remove(tx_id.to_raw()).expect("remove");
+                    }
+                }
+            }
+            txn.commit().expect("commit");
+        }
+        let store = ChainStore::create(&path, EPOCH).expect("reopen");
+        let root = root_going_into(&store, TIP + 1);
+        let out: Result<(), TestErr> = store.write(|batch| {
+            let view = batch.chain_view();
+            judge(
+                &view,
+                candidate_over(
+                    root,
+                    TIP + 1,
+                    hashes[usize::try_from(TIP).expect("small")],
+                    Vec::new(),
+                ),
+            )?;
+            Ok(())
+        });
+        let expected = StoreError::from(StoreInvariant::CellCorrupt {
+            key: "txs_pruned",
+            fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+                codec: "transaction",
+                reason: "the pruned segment is not the transaction the block names",
+            }),
+        })
+        .to_string();
+        assert_eq!(out, Err(TestErr::Store(expected)), "{name}");
+        cleanup(&path);
+    }
 }

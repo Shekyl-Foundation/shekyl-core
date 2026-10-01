@@ -1356,7 +1356,7 @@ pub struct Transaction {
 }
 
 mod txid;
-pub use txid::{carries_archival_good, empty_region_prunable_hash, TxidParts};
+pub use txid::{carries_archival_good, empty_region_prunable_hash, TxidParts, TxidSegments};
 
 mod signing_preimage;
 pub use signing_preimage::PqcSigningPreimage;
@@ -1403,9 +1403,17 @@ impl TxSegments {
     /// pinned class by class in `shekyl-chain-rules`' `tx_domain_tests`).
     #[must_use]
     pub fn archival_len(&self) -> ArchivalLength {
-        let bytes = self.prunable.len() + self.pqc_auths.len();
-        ArchivalLength::from_raw(u64::try_from(bytes).expect("a segment length fits u64"))
+        archival_len_of(&self.pqc_auths, &self.prunable)
     }
+}
+
+/// The archival length of a transaction whose two discardable segments are
+/// these bytes: `|pqc_auths| + |prunable|`. The **one** measurement — the
+/// store row ([`TxSegments::archival_len`]) and the txid's length operand
+/// (`txid.rs`) both come from here, so they cannot be two definitions.
+fn archival_len_of(pqc_auths: &[u8], prunable: &[u8]) -> ArchivalLength {
+    let bytes = pqc_auths.len() + prunable.len();
+    ArchivalLength::from_raw(u64::try_from(bytes).expect("a segment length fits u64"))
 }
 
 impl Transaction {
@@ -1461,6 +1469,25 @@ impl Transaction {
         self.write_segments()
             .expect("write_segments writes into Vecs; Vec writes are infallible")
             .archival_len()
+    }
+
+    /// The archival length of the transaction this **storage-pruned** body
+    /// belongs to, given the prunable region held beside it: this body's
+    /// `pqc_auths` segment plus `prunable`'s bytes, by the one measurement
+    /// ([`TxSegments::archival_len`]).
+    ///
+    /// For a holder of both halves that has them apart — a daemon serving a
+    /// pruned reply out of a store that kept the region — so the length it
+    /// serves is measured from the bytes, not carried (`SHT-Q2`). `prunable`
+    /// must be the transaction's whole region: a caller without it has no
+    /// length to measure, and supplies the stored one instead.
+    #[must_use]
+    pub fn archival_len_with_prunable(&self, prunable: &[u8]) -> ArchivalLength {
+        let mut pqc_auths = Vec::new();
+        self.ct
+            .write_pqc_auths(&mut pqc_auths)
+            .expect("Vec write is infallible");
+        archival_len_of(&pqc_auths, prunable)
     }
 
     /// Read the transaction.

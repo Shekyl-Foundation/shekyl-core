@@ -69,7 +69,7 @@ use shekyl_rpc_types::{
     TxEntry,
 };
 use shekyl_scanner::ScannableBlock;
-use shekyl_types::{PrunableHash, TxHash};
+use shekyl_types::{ArchivalLength, PrunableHash, TxHash};
 use shekyl_wire::{block::MAX_BLOCK_BLOB_SIZE, transaction::MAX_TX_SIZE, Block, Transaction};
 
 /// Monero restricts `get_transactions` to 100 hashes per call on the
@@ -86,11 +86,11 @@ pub(crate) const TXS_PER_REQUEST: usize = 100;
 /// - [`Pruned`](Self::Pruned) — the refresh path. The prunable proof is
 ///   dropped by the daemon (`prune: true`), so the body does not hash to its
 ///   committed tx hash on its own (`GENESIS_TX_WIRE_FORMAT.md` §11 — the
-///   pruned form mixes a *supplied* prunable digest). Association is still by
-///   recomputed identity, not by the daemon's label:
+///   pruned form mixes a *supplied* prunable digest and archival length).
+///   Association is still by recomputed identity, not by the daemon's label:
 ///   [`Transaction::hash_with_supplied_prunable`] takes the reply's
-///   `prunable_hash` as that operand. Validation is the pruned-safe
-///   context-free subset.
+///   `prunable_hash` and `archival_len` as those operands. Validation is the
+///   pruned-safe context-free subset.
 /// - [`Full`](Self::Full) — the P-scan path. SP-6's exhaustiveness gate
 ///   recomputes every body's hash from received material
 ///   (`pscan::exhaustiveness`), which **requires** the prunable section: a
@@ -397,8 +397,8 @@ pub(crate) fn refuse_unless_ok(status: &RpcStatus, method: &'static str) -> Resu
 /// the daemon chooses the label as freely as the body, so every body is then
 /// **re-hashed and compared** — the pruned form through
 /// [`Transaction::hash_with_supplied_prunable`], which takes the reply's
-/// `prunable_hash` as the operand §11 requires, and the full form through
-/// `hash()` directly. An unchecked reorder or substitution would otherwise
+/// `prunable_hash` and `archival_len` as the operands §11 requires, and the
+/// full form through `hash()` directly. An unchecked reorder or substitution would otherwise
 /// mis-assign the running global output index (assigned by walking txs in
 /// block order) and record wrong txids — exactly the failure the untrusted-node
 /// model must reject. (The P-scan's SP-6 exhaustiveness gate recomputes full
@@ -465,13 +465,16 @@ pub(crate) fn parse_tx_batch(
         // bytes closes it: to substitute a body the daemon would have to find
         // one whose hash is a txid someone else named first.
         //
-        // The pruned form takes its prunable digest from the reply, which is
-        // also the daemon's to choose — and gains nothing by it. Choosing the
-        // digest freely leaves it solving `H(prefix ‖ base ‖ pqc ‖ X) = txid`
-        // for `X`, a keccak preimage, not a substitution.
+        // The pruned form takes its prunable digest and its archival length
+        // from the reply, which are also the daemon's to choose — and it
+        // gains nothing by it. Choosing them freely leaves it solving
+        // `H(prefix ‖ base ‖ pqc ‖ X ‖ len) = txid` for `X` and `len`, a
+        // keccak preimage, not a substitution.
         let recomputed = match form {
-            TxBodyForm::Pruned => parsed
-                .hash_with_supplied_prunable(PrunableHash::from_bytes(t.prunable_hash.to_bytes())),
+            TxBodyForm::Pruned => parsed.hash_with_supplied_prunable(
+                PrunableHash::from_bytes(t.prunable_hash.to_bytes()),
+                ArchivalLength::from_raw(t.archival_len),
+            ),
             TxBodyForm::Full => parsed.hash(),
         };
         if recomputed != *expected_hash {
