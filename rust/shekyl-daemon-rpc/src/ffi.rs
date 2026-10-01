@@ -338,7 +338,8 @@ pub struct ChainTipFactsFfi {
     /// Top block height + 1.
     pub chain_height: u64,
     pub top_hash: [u8; 32],
-    /// Raw core target height (the synchronized rule is the handler's).
+    /// Raw core target height. The handlers forward it; they do not rewrite
+    /// it to 0 when the node is synchronized.
     pub target_height: u64,
     pub synchronized: u8,
     pub release_build: u8,

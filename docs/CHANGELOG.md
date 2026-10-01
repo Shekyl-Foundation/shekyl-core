@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Daemon RPC — `target_height` is the core's target (`CORE_RPC_VERSION` 3.40)
+
+- `get_version` and `sync_info` no longer write `0` when the node is
+  synchronized. `0` is only a core-reported absence. A synchronized node
+  whose core named a target reports that target. The wallet's `get_info`
+  reading is still the C++ reply, which keeps the old convention until that
+  method moves.
+
 ### Consensus — the txid binds the archival length (`SHT-Q2`, rule 07 cutover)
 
 - **Every non-coinbase txid changes.** The transaction id mixes one more

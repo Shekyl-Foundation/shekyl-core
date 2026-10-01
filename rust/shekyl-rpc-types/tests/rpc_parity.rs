@@ -930,7 +930,7 @@ fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 15] = [
+    let links: [(&str, &str); 16] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -991,6 +991,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v15.json"),
             include_str!("vectors/rpc/get_version_synced_v16.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v16.json"),
+            include_str!("vectors/rpc/get_version_synced_v17.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1009,14 +1013,14 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 15] = [
+    const ADDED_AT_LINK: [&[&str]; 16] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
         &[],                                                        // 3.28
         &["consensus_constants_digest", "nettype", "genesis_hash"], // 3.29 (VC-2)
-        &[], // 3.30 (FL-R25 removes a fee slot; get_version gains nothing)
-        &[], // 3.31 (coverage/fetch RPC; get_version gains nothing)
+        &[],                // 3.30 (FL-R25 removes a fee slot; get_version gains nothing)
+        &[],                // 3.31 (coverage/fetch RPC; get_version gains nothing)
         &[], // 3.32 (calc_pow drops leftover major_version; get_version gains nothing)
         &[], // 3.33 (get_output_histogram deleted; get_version gains nothing)
         &[], // 3.34 (get_curve_tree_path removed, SOK-10 Q7 → A; get_version gains nothing)
@@ -1025,6 +1029,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.37 (get_block_template bounds reserve_size / extra_nonce to the fixed 8-byte coinbase nonce, TXE-Q6′; get_version gains nothing)
         &[], // 3.38 (get_info socket counts and the permanent-ban flag; get_version gains nothing)
         &[], // 3.39 (get_transactions entries gain archival_len, SHT-Q2; get_version gains nothing)
+        &["target_height"], // 3.40 (synced replies carry the core target; 0 is no longer "synchronized")
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),

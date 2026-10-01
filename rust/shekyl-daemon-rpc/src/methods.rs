@@ -112,9 +112,8 @@ pub fn get_height(facts: &dyn ChainFacts) -> Result<GetHeightResponse, RpcFault>
 /// `get_version` (JSON-RPC, no params): RPC contract version, release flag,
 /// current and target heights, hard-fork schedule.
 ///
-/// Mirrors `core_rpc_server::on_get_version` including its one rule:
-/// `target_height` is `0` when the node is synchronized, whatever the core's
-/// raw target says.
+/// `target_height` is the core's target. `0` means the core reported none,
+/// not that the node is synchronized.
 pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFault> {
     let tip = facts.chain_tip()?;
     // The identity axes. Two FFI reads inside one handler still produce one
@@ -147,14 +146,10 @@ pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFaul
     })
 }
 
-/// C5: the wire still carries `0` when synchronized. Inland facts hold
-/// `Option<ChainCount>` (`None` includes a core-reported 0).
+/// The core's target height. `None` (a core-reported 0) is `0`.
+/// `synchronized` is a separate fact and is not folded into this count.
 fn wire_target_height(tip: &ChainTip) -> u64 {
-    if tip.synchronized {
-        0
-    } else {
-        tip.target_height.map(ChainCount::to_raw).unwrap_or(0)
-    }
+    tip.target_height.map(ChainCount::to_raw).unwrap_or(0)
 }
 
 /// `get_block_count` (alias `getblockcount`): the chain height as `count`.
@@ -1383,8 +1378,8 @@ pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoR
     Ok(SyncInfoResponse {
         status: RpcStatus::ok(),
         height,
-        // The same rule `get_version` applies, from the same uncollapsed
-        // facts: the raw target survives the seam and is zeroed here.
+        // The same count `get_version` reports: the core's target, not a
+        // rewrite of it when the node is synchronized.
         target_height: wire_target_height(&tip),
         peers: connections
             .connections
@@ -2054,8 +2049,8 @@ pub(crate) mod tests {
 
     #[test]
     fn get_version_reproduces_the_synced_oracle_vector() {
-        // Synchronized with a non-zero raw target: the rule zeroes it, and the
-        // zero is omitted on the wire exactly as epee omitted it.
+        // Synchronized with a non-zero raw target: the reply carries that
+        // target. Synchronization is not encoded by writing 0 here.
         //
         // Against `_v5`: 3.28 removed the peer identifier from every readout
         // (PWD-I1). Before it: RK-5b's three header-method shape changes bumped
@@ -2076,7 +2071,7 @@ pub(crate) mod tests {
         // source — the digest against the compiled constant, the genesis and
         // nettype against what the facts layer handed up.
         let out = get_version(&facts(true, 999_999)).unwrap();
-        assert_eq!(out.target_height, 0);
+        assert_eq!(out.target_height, 999_999);
         assert_eq!(
             out.consensus_constants_digest,
             shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
@@ -2090,10 +2085,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v16` = 3.39). A bump that
+        // Head of the `get_version` chain (`_v17` = 3.40). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v16.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v17.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -3294,10 +3289,10 @@ pub(crate) mod tests {
         );
     }
 
-    /// `sync_info` reads both sources and applies the same synchronized rule
-    /// `get_version` does — to the raw target that survived the seam.
+    /// `sync_info` reads both sources and reports the core's target, synced
+    /// or not. Writing 0 for the synced case made the two states one value.
     #[test]
-    fn sync_info_zeroes_the_target_only_when_synchronized() {
+    fn sync_info_reports_the_core_target_when_synchronized() {
         let p2p = FakeP2p {
             spans: Ok(SyncSpansSnapshot {
                 spans: vec![span(100, 10, true)],
@@ -3324,6 +3319,6 @@ pub(crate) mod tests {
 
         let synced = facts(true, 1_234_600);
         let res = sync_info(&synced, &p2p).expect("sync info");
-        assert_eq!(res.target_height, 0);
+        assert_eq!(res.target_height, 1_234_600);
     }
 }

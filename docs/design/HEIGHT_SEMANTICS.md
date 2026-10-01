@@ -11,7 +11,8 @@ difference constants); height-semantics Phase 2e RULED 2026-09-21
 height-semantics Phase 2f RULED 2026-09-21 (ScanResult and the remaining
 inland ordinals are `BlockHeight`; reference spans are `BlockCount`).
 Stamp-clock COUNT→ORDINAL conversion is optional-not-owed. The
-`get_version` `target_height` wire `0` stays `RK-`. Numerics are frozen
+`get_version` `target_height` wire `0` was retired at `CORE_RPC_VERSION`
+3.40 (2026-10-01); `get_info` still uses the C++ convention. Numerics are frozen
 as pinned (Rick, 2026-09-19).
 
 <!-- claim-audit: citations -->
@@ -361,7 +362,7 @@ quantity.
   height-semantics Phase 2f: `SyncStateBlock.restore_from_height` is
   `BlockHeight` as of Phase 2f; stamp-clock COUNT→ORDINAL conversion
   stays optional-not-owed (§2.3 item 1); `get_version` `target_height`
-  wire `0` stays `RK-`; requester mint stays a pin on the mint PR.
+  wire `0` was retired at `CORE_RPC_VERSION` 3.40; requester mint stays a pin on the mint PR.
 - **Height-semantics Phase 2f — remaining inland ordinals — RULED
   2026-09-21.** `ScanResult`'s eight height fields, the refresh echoes,
   the build and send-journal clocks, the birthday floor (including
