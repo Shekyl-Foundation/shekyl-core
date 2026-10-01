@@ -152,6 +152,9 @@ members = [
     # bridge that used to sit beside it is deleted (roadmap B1); the C++
     # `wallet2_ffi` surface it wrapped is Phase 5's to remove.
     "shekyl-wallet-rpc",
+    # The wallet contract's vocabulary (error codes and the engine-error
+    # mapping onto them), shared by shekyl-wallet-rpc and engine embedders.
+    "shekyl-wallet-contract",
 
     "shekyl-tx-builder",
     "shekyl-daemon-rpc",

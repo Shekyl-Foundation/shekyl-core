@@ -641,11 +641,11 @@ components:
       # each reserved code lands in the sub-PR that implements its method). A
       # server emitting a code outside this set is a conformance failure.
       enum:
-        - -32700   # JSON-RPC parse error
-        - -32600   # JSON-RPC invalid request
-        - -32601   # JSON-RPC method not found (covers RESERVED, unimplemented names)
-        - -32602   # JSON-RPC invalid params
-        - -32603   # JSON-RPC internal error
+        - -32700   # PARSE_ERROR — JSON-RPC parse error
+        - -32600   # INVALID_REQUEST — JSON-RPC invalid request
+        - -32601   # METHOD_NOT_FOUND — JSON-RPC method not found (covers RESERVED, unimplemented names)
+        - -32602   # INVALID_PARAMS — JSON-RPC invalid params
+        - -32603   # INTERNAL_ERROR — JSON-RPC internal error
         - -29000   # WALLET_ALREADY_OPEN
         - -29001   # WALLET_NOT_OPEN
         - -29002   # WALLET_FILE_EXISTS

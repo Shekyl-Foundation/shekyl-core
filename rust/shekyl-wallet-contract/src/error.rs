@@ -57,11 +57,12 @@ This bond declares your node a whole-corpus archival backstop. It is not a staki
 To proceed, confirm that you are choosing a non-earning, unbounded-storage service posture.
 CLI: type exactly: `serve without reward` — RPC: set `acknowledge_non_earning_unbounded: true`.";
 
-/// Declare the code table once: the enum and [`WalletRpcErrorCode::ALL`]
-/// come from the same list, so the set a test compares with the contract
-/// is the set the server can emit.
+/// Declare the code table once: the enum, [`WalletRpcErrorCode::ALL`] and
+/// [`WalletRpcErrorCode::name`] come from the same list, so the set a test
+/// compares with the contract is the set the server can emit, under the
+/// names the contract spells.
 macro_rules! wallet_rpc_error_codes {
-    ($($(#[$doc:meta])* $name:ident = $value:literal,)*) => {
+    ($($(#[$doc:meta])* $name:ident = $value:literal => $wire:literal,)*) => {
         /// Allocated application / protocol error codes (spec enum).
         ///
         /// Emitting a code outside this set is a conformance failure. RESERVED-range
@@ -77,305 +78,315 @@ macro_rules! wallet_rpc_error_codes {
             /// contract's `WalletRpcErrorCode` enum
             /// (`docs/api/wallet_rpc.yaml`), both directions, by test.
             pub const ALL: &'static [Self] = &[$(Self::$name,)*];
+
+            /// The contract's name for this code (the comment beside it in
+            /// `wallet_rpc.yaml`'s enum), for a surface that reports a code by
+            /// name rather than number.
+            #[must_use]
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(Self::$name => $wire,)*
+                }
+            }
         }
     };
 }
 
 wallet_rpc_error_codes! {
     /// JSON-RPC parse error.
-    ParseError = -32700,
+    ParseError = -32700 => "PARSE_ERROR",
     /// JSON-RPC invalid request.
-    InvalidRequest = -32600,
+    InvalidRequest = -32600 => "INVALID_REQUEST",
     /// JSON-RPC method not found (also covers RESERVED / not-yet-implemented).
-    MethodNotFound = -32601,
+    MethodNotFound = -32601 => "METHOD_NOT_FOUND",
     /// JSON-RPC invalid params.
-    InvalidParams = -32602,
+    InvalidParams = -32602 => "INVALID_PARAMS",
     /// JSON-RPC internal error.
-    InternalError = -32603,
+    InternalError = -32603 => "INTERNAL_ERROR",
     /// A wallet is already open; close first.
-    WalletAlreadyOpen = -29000,
+    WalletAlreadyOpen = -29000 => "WALLET_ALREADY_OPEN",
     /// No wallet is open.
-    WalletNotOpen = -29001,
+    WalletNotOpen = -29001 => "WALLET_NOT_OPEN",
     /// Create refused: wallet file already exists.
-    WalletFileExists = -29002,
+    WalletFileExists = -29002 => "WALLET_FILE_EXISTS",
     /// Open failed: no such wallet file.
-    WalletFileNotFound = -29003,
+    WalletFileNotFound = -29003 => "WALLET_FILE_NOT_FOUND",
     /// Open / change_password: MAC / password failure.
-    InvalidPassword = -29004,
+    InvalidPassword = -29004 => "INVALID_PASSWORD",
     // -29005 CAPABILITY_FORBIDS is RETIRED (never reuse): FULL is the
     // only capability (rule 23), so no operation can be refused on
     // capability grounds. The number stays recorded in wallet_rpc.yaml
     // so it is never reallocated with a new meaning.
     /// The open wallet's session has ended (its key actor stopped and the
     /// key material is wiped); close and reopen the wallet, then retry.
-    WalletSessionEnded = -29006,
+    WalletSessionEnded = -29006 => "WALLET_SESSION_ENDED",
     /// Open: the wallet file belongs to a different network than this
     /// server runs (`data`: `wallet`, `expected`).
-    WalletNetworkMismatch = -29007,
+    WalletNetworkMismatch = -29007 => "WALLET_NETWORK_MISMATCH",
     /// Open / create: another process holds the wallet's lock — it is
     /// open elsewhere.
-    WalletLockedElsewhere = -29008,
+    WalletLockedElsewhere = -29008 => "WALLET_LOCKED_ELSEWHERE",
     /// Create: the wallet directory does not exist.
-    WalletDirMissing = -29009,
+    WalletDirMissing = -29009 => "WALLET_DIR_MISSING",
     /// Wallet files: the filesystem refused access.
-    WalletFileAccessDenied = -29010,
+    WalletFileAccessDenied = -29010 => "WALLET_FILE_ACCESS_DENIED",
     /// Wallet files: the contents are damaged or not a wallet's.
-    WalletFileCorrupt = -29011,
+    WalletFileCorrupt = -29011 => "WALLET_FILE_CORRUPT",
     /// Wallet files: written by a version or in a shape this build cannot
     /// read.
-    WalletFileVersionUnsupported = -29012,
+    WalletFileVersionUnsupported = -29012 => "WALLET_FILE_VERSION_UNSUPPORTED",
     /// Wallet files: a read or write failed underneath (disk, filesystem).
-    WalletFileIoFailed = -29013,
+    WalletFileIoFailed = -29013 => "WALLET_FILE_IO_FAILED",
     /// Close: transactions are in flight (`data`: `count`); submit or
     /// discard them first.
-    WalletCloseBlocked = -29014,
+    WalletCloseBlocked = -29014 => "WALLET_CLOSE_BLOCKED",
     /// The wallet's curve-tree membership data is unavailable for this
     /// session; close and reopen the wallet.
-    CurveTreeUnavailable = -29015,
+    CurveTreeUnavailable = -29015 => "CURVE_TREE_UNAVAILABLE",
     /// Open: the wallet's curve-tree store (`.curvetree`) is damaged or from
     /// a version this build cannot read. It is rebuilt from the chain once
     /// deleted; `data.cause` says which.
-    CurveTreeStoreUnusable = -29016,
+    CurveTreeStoreUnusable = -29016 => "CURVE_TREE_STORE_UNUSABLE",
     /// Build: address parse / network check failed.
-    InvalidRecipient = -29100,
+    InvalidRecipient = -29100 => "INVALID_RECIPIENT",
     /// Build: spendable balance too low.
-    InsufficientFunds = -29101,
+    InsufficientFunds = -29101 => "INSUFFICIENT_FUNDS",
     /// Build: daemon fee query failed.
-    FeeEstimationFailed = -29102,
+    FeeEstimationFailed = -29102 => "FEE_ESTIMATION_FAILED",
     /// Submit: unknown / expired reservation handle.
-    ReservationNotFound = -29103,
+    ReservationNotFound = -29103 => "RESERVATION_NOT_FOUND",
     /// Submit: reorg raced the reservation.
-    SnapshotInvalidated = -29104,
+    SnapshotInvalidated = -29104 => "SNAPSHOT_INVALIDATED",
     /// Submit: `seen_gen` ≠ `content_gen` (CT-5d).
-    ContentGenMismatch = -29105,
+    ContentGenMismatch = -29105 => "CONTENT_GEN_MISMATCH",
     /// Submit: definite daemon rejection.
-    SubmitRejected = -29106,
+    SubmitRejected = -29106 => "SUBMIT_REJECTED",
     /// Submit: transport-level ambiguity.
-    SubmitAmbiguous = -29107,
+    SubmitAmbiguous = -29107 => "SUBMIT_AMBIGUOUS",
     /// `abandon_tx`: the send's state forbids abandoning (`CONFIRMED`
     /// is on chain; `FAILED` was never relayed). A state conflict, not
     /// a bad request — refresh the view and re-decide.
-    AbandonStateForbids = -29108,
+    AbandonStateForbids = -29108 => "ABANDON_STATE_FORBIDS",
     /// Build / fee quote: the daemon's fee snapshot failed
     /// well-formedness (non-monotonic tier band, or a tier above the
     /// absolute per-weight cap). The daemon *answered*; the wallet
     /// refused what it said — distinct from `-29102`'s "the fee query
     /// itself failed" (rule 82).
-    DaemonFeeUnreasonable = -29109,
+    DaemonFeeUnreasonable = -29109 => "DAEMON_FEE_UNREASONABLE",
     /// Build: the wallet has not synced any blocks yet.
-    WalletNotSynced = -29110,
+    WalletNotSynced = -29110 => "WALLET_NOT_SYNCED",
     /// Build: funds exist but wait on the membership-data rebuild.
-    SpendUnavailableRebuilding = -29111,
+    SpendUnavailableRebuilding = -29111 => "SPEND_UNAVAILABLE_REBUILDING",
     /// Build: an output is too fresh for the reference block
     /// (`data`: `wait_blocks`).
-    OutputNotYetSpendable = -29112,
+    OutputNotYetSpendable = -29112 => "OUTPUT_NOT_YET_SPENDABLE",
     /// Build: the chain is too short to anchor a reference block
     /// (`data`: `synced_height`, `ref_anchor_age`).
-    ChainTooShortToSpend = -29113,
+    ChainTooShortToSpend = -29113 => "CHAIN_TOO_SHORT_TO_SPEND",
     /// Build: the rebuild-loop breaker is tripped (`data`: `kind`); the
     /// operator acknowledges it before builds resume.
-    SubmitLoopBreakerTripped = -29114,
+    SubmitLoopBreakerTripped = -29114 => "SUBMIT_LOOP_BREAKER_TRIPPED",
     /// Submit: a submit for this reservation is already in progress.
-    SubmitAlreadyPending = -29115,
+    SubmitAlreadyPending = -29115 => "SUBMIT_ALREADY_PENDING",
     /// Submit: the proof needs re-anchoring and cannot be right now;
     /// the reservation is kept — retry.
-    ReanchorUnavailable = -29116,
+    ReanchorUnavailable = -29116 => "REANCHOR_UNAVAILABLE",
     /// Submit: the proof cannot be re-anchored content-preservingly;
     /// discard and rebuild.
-    ReselectionRequired = -29117,
+    ReselectionRequired = -29117 => "RESELECTION_REQUIRED",
     /// Build: the daemon's fee answer could not be read.
-    DaemonFeeResponseInvalid = -29118,
+    DaemonFeeResponseInvalid = -29118 => "DAEMON_FEE_RESPONSE_INVALID",
     /// Build: the signer tried and a downstream failure stopped it.
-    SignerFailed = -29119,
+    SignerFailed = -29119 => "SIGNER_FAILED",
     /// Refresh: single-flight violation.
-    RefreshInProgress = -29200,
+    RefreshInProgress = -29200 => "REFRESH_IN_PROGRESS",
     /// Refresh / rescan / proofs / build: the daemon did not answer.
     ///
     /// For `rescan_blockchain` only the **preflight** refusal uses this code
     /// (wallet untouched). A scan that fails *after* the reset is durable
     /// emits [`Self::RescanIncomplete`] instead — same daemon class of
     /// failure, opposite durability claim.
-    DaemonUnreachable = -29201,
+    DaemonUnreachable = -29201 => "DAEMON_UNREACHABLE",
     /// Rescan: refused — transactions in flight whose spend record a chain
     /// replay cannot rebuild. A resolvable state conflict, not a bad request.
-    RescanBlocked = -29202,
+    RescanBlocked = -29202 => "RESCAN_BLOCKED",
     /// Rescan: the reset persisted, then the producer failed before the
     /// ledger was rebuilt. History is empty until a rescan finishes; retry.
-    RescanIncomplete = -29203,
+    RescanIncomplete = -29203 => "RESCAN_INCOMPLETE",
     /// Refresh: cancelled before it completed (the wallet is closing).
-    RefreshCancelled = -29204,
+    RefreshCancelled = -29204 => "REFRESH_CANCELLED",
     /// The daemon speaks another RPC version than this wallet: update the
     /// older side (`VC-4` wire axis).
-    DaemonVersionMismatch = -29205,
+    DaemonVersionMismatch = -29205 => "DAEMON_VERSION_MISMATCH",
     /// The daemon was built from other consensus rules than this wallet
     /// (`VC-4` rules axis).
-    DaemonRulesMismatch = -29206,
+    DaemonRulesMismatch = -29206 => "DAEMON_RULES_MISMATCH",
     /// The daemon runs another network than this wallet (`VC-4` network
     /// axis). Distinct from `-29007`, which is the wallet *file's* network.
-    DaemonNetworkMismatch = -29207,
+    DaemonNetworkMismatch = -29207 => "DAEMON_NETWORK_MISMATCH",
     /// The daemon follows another chain than this wallet's: its genesis
     /// block differs (`VC-4` genesis axis).
-    DaemonChainMismatch = -29208,
+    DaemonChainMismatch = -29208 => "DAEMON_CHAIN_MISMATCH",
     /// The daemon answered with something that breaks the RPC contract.
-    DaemonProtocolViolation = -29209,
+    DaemonProtocolViolation = -29209 => "DAEMON_PROTOCOL_VIOLATION",
     /// Refresh: the chain kept reorganizing past the rewind budget; nothing
     /// was merged.
-    ChainUnstable = -29210,
+    ChainUnstable = -29210 => "CHAIN_UNSTABLE",
     /// Refresh: a rollback would pass the finality window, so the
     /// curve-tree store has to be removed and rebuilt. Terminal for this
     /// store. Distinct from [`Self::RescanIncomplete`]: a rescan leaves
     /// the tree untouched, and this code says so even when the rescan
     /// already cleared history.
-    ResyncRequired = -29211,
+    ResyncRequired = -29211 => "RESYNC_REQUIRED",
     /// `check_*`: proof string failed decode / framing / size caps.
-    ProofMalformed = -29300,
+    ProofMalformed = -29300 => "PROOF_MALFORMED",
     /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
-    ProofTxSecretUnavailable = -29301,
+    ProofTxSecretUnavailable = -29301 => "PROOF_TX_SECRET_UNAVAILABLE",
     /// `get_tx_proof` INBOUND / `get_reserve_proof`: nothing to prove.
-    ProofNoProvableOutputs = -29302,
+    ProofNoProvableOutputs = -29302 => "PROOF_NO_PROVABLE_OUTPUTS",
     /// Proofs: a txid named by the request is unknown to the daemon.
-    ProofTxNotFound = -29303,
+    ProofTxNotFound = -29303 => "PROOF_TX_NOT_FOUND",
     /// Proofs: a reserve-proof locator names a tx the daemon holds only
     /// in its pool — unconfirmed money cannot back a reserve claim.
-    ProofTxUnconfirmed = -29304,
+    ProofTxUnconfirmed = -29304 => "PROOF_TX_UNCONFIRMED",
     /// Proof **verification** was asked of a daemon that is not
     /// synchronized: the chain facts a proof is checked against would not
     /// be the chain's, and "not found" / a short confirmation count from a
     /// daemon mid-sync is indistinguishable from a forged proof. Retryable
     /// once the daemon catches up.
-    ProofDaemonSyncing = -29305,
+    ProofDaemonSyncing = -29305 => "PROOF_DAEMON_SYNCING",
     /// `get_transfer_by_id`: no match.
-    UnknownTransferId = -29400,
+    UnknownTransferId = -29400 => "UNKNOWN_TRANSFER_ID",
     /// Stake: funding not ready (W1-clean refusal — fund the persona /
     /// let the scan catch up, then retry).
-    StakeNotReady = -29500,
+    StakeNotReady = -29500 => "STAKE_NOT_READY",
     /// Stake: a signed bond post is already awaiting dispatch.
-    StakeInFlight = -29501,
+    StakeInFlight = -29501 => "STAKE_IN_FLIGHT",
     /// Stake: the wallet already holds a confirmed bond (idempotency).
-    AlreadyStaked = -29502,
+    AlreadyStaked = -29502 => "ALREADY_STAKED",
     /// Stake: the wallet's persona record moved during the credentialed
     /// reopen; nothing was written — re-invoke `stake`.
-    StakeRecordMoved = -29503,
+    StakeRecordMoved = -29503 => "STAKE_RECORD_MOVED",
     /// Stake: this session's scan recovered a staked slot; staking becomes
     /// operational at the next wallet open — close and reopen, then retry.
-    StakeRecoveredPendingReopen = -29504,
+    StakeRecoveredPendingReopen = -29504 => "STAKE_RECOVERED_PENDING_REOPEN",
     /// Stake: market staking has no shard to bond over — shard assignment
     /// is an unbuilt round (`COMPLETETREE_ACTIVATION.md` §10 item 1).
-    StakeNoShardsAvailable = -29505,
+    StakeNoShardsAvailable = -29505 => "STAKE_NO_SHARDS_AVAILABLE",
     /// Stake: the foundation posture was requested without the
     /// acknowledgment; the refusal message is the warning itself (D-4).
-    StakeFoundationUnacknowledged = -29506,
+    StakeFoundationUnacknowledged = -29506 => "STAKE_FOUNDATION_UNACKNOWLEDGED",
     /// Stake: the persona's spendable funding is fragmented across more
     /// outputs than one bond post's vin headroom carries (the consensus
     /// vin cap minus the post's own bond input). W1-clean; funding is
     /// intact — neither "fund and retry" nor an internal fault.
-    StakeFundingFragmented = -29512,
+    StakeFundingFragmented = -29512 => "STAKE_FUNDING_FRAGMENTED",
     /// Drain: this wallet runs no stake engine — it is not an archival
     /// staker, and the drain path does not exist here (WI-RPC-5;
     /// `stake_in`'s equivalent refusal is `-29500`).
-    DrainNotStaker = -29507,
+    DrainNotStaker = -29507 => "DRAIN_NOT_STAKER",
     /// Drain: the wallet is a staker but no persona is currently active.
     /// The façade resolves the LIVE active persona from actor state — there
     /// is no `p_slot` parameter to point elsewhere.
-    DrainNoActivePersona = -29508,
+    DrainNoActivePersona = -29508 => "DRAIN_NO_ACTIVE_PERSONA",
     /// Drain: a live-persona drain would spend the pool below
     /// `EXIT_FEE_RESERVE_ATOMIC` (DS-4). Lower the payment or retire first.
-    DrainReserveBreached = -29509,
+    DrainReserveBreached = -29509 => "DRAIN_RESERVE_BREACHED",
     /// Drain: no submittable curve-tree reference can be anchored yet —
     /// transient; sync and retry. (The *read* method reports syncing as a
     /// result discriminant, not this code; this fires on an attempted send.)
-    DrainUnanchorable = -29510,
+    DrainUnanchorable = -29510 => "DRAIN_UNANCHORABLE",
     /// Drain: the one-live-drain-per-persona seal (a pending drain exists,
     /// or a concurrent post raced this drain's inputs — retry).
-    DrainInFlight = -29511,
+    DrainInFlight = -29511 => "DRAIN_IN_FLIGHT",
     /// Unstake/collect: this wallet runs no stake engine — the exit lane
     /// does not exist here (the drain's `-29507` sibling; shared by both
     /// exit verbs, which are one lane).
-    UnstakeNotStaker = -29513,
+    UnstakeNotStaker = -29513 => "UNSTAKE_NOT_STAKER",
     /// Unstake: no persona holds a live confirmed bond and nothing is
     /// mid-exit — there is nothing to unstake.
-    UnstakeNothingStaked = -29514,
+    UnstakeNothingStaked = -29514 => "UNSTAKE_NOTHING_STAKED",
     /// Unstake: the only bond activity is a confirming bond post — wait
     /// for it to confirm, then unstake.
-    UnstakeBondConfirming = -29515,
+    UnstakeBondConfirming = -29515 => "UNSTAKE_BOND_CONFIRMING",
     /// Unstake: an exit is already in progress (dispatched or awaiting
     /// collection) — wait, then `collect_unstaked`.
-    UnstakeExitInProgress = -29516,
+    UnstakeExitInProgress = -29516 => "UNSTAKE_EXIT_IN_PROGRESS",
     /// Unstake: consensus's readiness predicates refuse the exit for now
     /// (cooldown / slash watermark / interval log); `data.detail` carries
     /// the operands that say when the refusal lifts.
-    UnstakeNotReady = -29517,
+    UnstakeNotReady = -29517 => "UNSTAKE_NOT_READY",
     /// Unstake: the daemon holds no bond record for the resolved persona —
     /// wallet and chain disagree; resync and retry.
-    UnstakeNoBondRecord = -29518,
+    UnstakeNoBondRecord = -29518 => "UNSTAKE_NO_BOND_RECORD",
     /// Unstake: the exit's floor fee cannot be funded from the persona pool
     /// yet — wait for outputs to mature or land.
-    UnstakeNotFundable = -29519,
+    UnstakeNotFundable = -29519 => "UNSTAKE_NOT_FUNDABLE",
     /// Unstake: a transient condition (reference view syncing, or a
     /// concurrent operation raced the exit's inputs); nothing was sent —
     /// retry. `data.cause` distinguishes `"syncing"` / `"raced"`.
-    UnstakeRetryTransient = -29520,
+    UnstakeRetryTransient = -29520 => "UNSTAKE_RETRY_TRANSIENT",
     /// Unstake: the daemon refused the exit with a definite first-send
     /// verdict and the sealed record was RELEASED — nothing propagated;
     /// address the named refusal and retry at will.
-    UnstakeRefusedReleased = -29521,
+    UnstakeRefusedReleased = -29521 => "UNSTAKE_REFUSED_RELEASED",
     /// Unstake: the exit's network fate is unknown (or retryable-refused);
     /// its sealed record is HELD funds-safe and the one-live-exit lane
     /// stays shut until it settles or the recovery slice disposes of it.
     /// Do NOT retry blindly; the stall alarm names the record.
-    UnstakeFateUnknown = -29522,
+    UnstakeFateUnknown = -29522 => "UNSTAKE_FATE_UNKNOWN",
     /// Collect: no confirmed exit awaits collection — unstake first, or
     /// wait for the exit to confirm and be observed.
-    CollectNoExit = -29523,
+    CollectNoExit = -29523 => "COLLECT_NO_EXIT",
     /// Collect: the released collateral is not spendable yet — wait for
     /// maturity and retry.
-    CollectNotSpendableYet = -29524,
+    CollectNotSpendableYet = -29524 => "COLLECT_NOT_SPENDABLE_YET",
     /// Collect: the remaining residue cannot fund the fee plus a payable
     /// amount (the 2-atomic-unit two-output split floor) — the named dust
     /// residual; it stays in the persona's pool.
-    CollectDustRemainder = -29525,
+    CollectDustRemainder = -29525 => "COLLECT_DUST_REMAINDER",
     /// Collect: a sweep pass is already in flight for this persona (or a
     /// concurrent operation raced this pass's inputs — `data.cause`).
-    CollectPassInFlight = -29526,
+    CollectPassInFlight = -29526 => "COLLECT_PASS_IN_FLIGHT",
     /// Collect: no submittable curve-tree reference can be anchored yet —
     /// transient; sync and retry.
-    CollectSyncing = -29527,
+    CollectSyncing = -29527 => "COLLECT_SYNCING",
     /// Unstake: the exit's record fetch rides the wallet's OWN node on
     /// loopback only (the local transport posture; remote posture for the
     /// exit lands with posture selection, DQ-T2.3) — this server's daemon
     /// address is not loopback. Operator-actionable configuration, never an
     /// internal fault.
-    UnstakeLocalNodeRequired = -29528,
+    UnstakeLocalNodeRequired = -29528 => "UNSTAKE_LOCAL_NODE_REQUIRED",
     /// Collect: a daemon query needed to prepare the sweep failed (the
     /// dispatch-tip clock read) before anything was sealed — the daemon is
     /// unreachable, not the wallet out of sync (`-29527`) nor an internal
     /// fault (`-32603`). Check the daemon and retry.
-    CollectDaemonUnreachable = -29529,
+    CollectDaemonUnreachable = -29529 => "COLLECT_DAEMON_UNREACHABLE",
     /// Open (staker): the sealed staking-scan state could not be loaded;
     /// the wallet refuses to open without its scan.
-    StakeStateUnreadable = -29530,
+    StakeStateUnreadable = -29530 => "STAKE_STATE_UNREADABLE",
     /// Open (staker): the wallet's Tor configuration is unusable, so the
     /// serving host cannot start.
-    ServingTorUnusable = -29531,
+    ServingTorUnusable = -29531 => "SERVING_TOR_UNUSABLE",
     /// Open (staker): the persona's serving identity is unavailable.
-    ServingIdentityUnavailable = -29532,
+    ServingIdentityUnavailable = -29532 => "SERVING_IDENTITY_UNAVAILABLE",
     /// Open (staker): serving needs the wallet's own node on loopback.
-    ServingLocalNodeRequired = -29533,
+    ServingLocalNodeRequired = -29533 => "SERVING_LOCAL_NODE_REQUIRED",
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
-    MessageSigVerifyFailed = -29800,
+    MessageSigVerifyFailed = -29800 => "MSG_SIG_VERIFY_FAILED",
     /// `verify_message`: the armored string's checksum does not match — the
     /// paste was corrupted in transit. Distinct from
     /// [`Self::MessageSigVerifyFailed`] by ruling (rule 82): "your copy is
     /// damaged" and "not from that address" are different sentences.
-    MessageSigCorrupted = -29801,
+    MessageSigCorrupted = -29801 => "MSG_SIG_CORRUPTED",
     /// `verify_message`: the scheme byte names a signature scheme this
     /// build does not implement (SM-R-5's append-only forward-compat
     /// field) — "this wallet is too old to check it", not "malformed".
-    MessageSigUnsupportedScheme = -29802,
+    MessageSigUnsupportedScheme = -29802 => "MSG_SIG_UNSUPPORTED_SCHEME",
     /// Server: wallet-dir tenancy unavailable.
-    TenantUnavailable = -29900,
+    TenantUnavailable = -29900 => "TENANT_UNAVAILABLE",
 }
 
 impl WalletRpcErrorCode {
@@ -682,12 +693,12 @@ pub enum WalletRpcError {
     #[error("submit ambiguous")]
     SubmitAmbiguous,
     /// `abandon_tx`: the send's current state forbids abandoning.
-    /// `state` is the projected [`TransferState`](crate::types::TransferState) so the client hears
+    /// `state` is the projected [`TransferState`](crate::TransferState) so the client hears
     /// the same vocabulary `get_transfers` speaks.
     #[error("cannot abandon: the send is {state}")]
     AbandonStateForbids {
-        /// Projected [`TransferState`](crate::types::TransferState) of the refusing row.
-        state: crate::types::TransferState,
+        /// Projected [`TransferState`](crate::TransferState) of the refusing row.
+        state: crate::TransferState,
     },
     /// `check_*`: proof string failed Bech32m decode, carried the wrong
     /// HRP, its wire framing did not parse, or it exceeds the section's
@@ -1248,7 +1259,9 @@ impl WalletRpcError {
     /// miss an incomplete rescan. Exhaustive match (no catch-all): a new
     /// [`RefreshError`] variant fails to compile here until its durability
     /// claim is named.
-    pub(crate) fn from_rescan_scan_failure(err: RefreshError) -> Self {
+    ///
+    /// For a server or embedder that reports a rescan's join-path result.
+    pub fn from_rescan_scan_failure(err: RefreshError) -> Self {
         match &err {
             // Start-only refusals — unreachable on the join path. Preserve
             // their codes if they appear rather than inventing a third story.
@@ -1539,8 +1552,9 @@ fn from_curve_tree_ingest_fault(fault: CurveTreeIngestFault) -> WalletRpcError {
 }
 
 /// A daemon RPC failure a caller holds untyped by [`IoError`] (the proof
-/// path keeps the upstream error).
-pub(crate) fn from_daemon_rpc_error(err: &shekyl_rpc_client::RpcError) -> WalletRpcError {
+/// path keeps the upstream error). For any surface that holds a bare
+/// [`RpcError`](shekyl_rpc_client::RpcError).
+pub fn from_daemon_rpc_error(err: &shekyl_rpc_client::RpcError) -> WalletRpcError {
     from_daemon_fault(err.fault(), &err.to_string())
 }
 
@@ -2094,7 +2108,7 @@ impl From<shekyl_engine_core::AbandonTxError> for WalletRpcError {
             E::NotFound => Self::UnknownTransferId,
             E::StateForbids { state } => Self::AbandonStateForbids {
                 // Single owner of the journal → wire map (`project`).
-                state: crate::project::outgoing_transfer_state_of(state),
+                state: crate::outgoing_transfer_state_of(state),
             },
             // Fail-closed rollback already ran; what is left is the storage
             // failure, named by its cause (paths stay in the log).
@@ -2362,7 +2376,7 @@ mod tests {
         use shekyl_engine_core::AbandonTxError;
         use shekyl_engine_state::SendState;
 
-        use crate::types::TransferState;
+        use crate::TransferState;
 
         let err: WalletRpcError = AbandonTxError::NotFound.into();
         assert_eq!(err.code(), WalletRpcErrorCode::UnknownTransferId);
@@ -3365,6 +3379,8 @@ mod tests {
             .expect("the contract declares WalletRpcErrorCode");
         let after = &contract[schema..];
         let list = after.find("enum:").expect("an enum list") + "enum:".len();
+        // Each entry is `- <code>   # <NAME>[ — prose]`: the name is the
+        // comment's first word.
         let mut listed = std::collections::BTreeSet::new();
         for line in after[list..].lines().skip(1) {
             let t = line.trim();
@@ -3374,12 +3390,18 @@ mod tests {
             let Some(rest) = t.strip_prefix("- ") else {
                 break;
             };
-            let number = rest.split('#').next().expect("a value").trim();
-            listed.insert(number.parse::<i32>().expect("a numeric code"));
+            let (number, comment) = rest.split_once('#').expect("a named entry");
+            let name = comment.split_whitespace().next().expect("a name");
+            listed.insert((
+                number.trim().parse::<i32>().expect("a numeric code"),
+                name.to_owned(),
+            ));
         }
         assert!(listed.len() > 50, "the parse found the list: {listed:?}");
-        let emitted: std::collections::BTreeSet<i32> =
-            WalletRpcErrorCode::ALL.iter().map(|c| c.as_i32()).collect();
+        let emitted: std::collections::BTreeSet<(i32, String)> = WalletRpcErrorCode::ALL
+            .iter()
+            .map(|c| (c.as_i32(), c.name().to_owned()))
+            .collect();
         let unlisted: Vec<_> = emitted.difference(&listed).collect();
         let unbacked: Vec<_> = listed.difference(&emitted).collect();
         assert!(
