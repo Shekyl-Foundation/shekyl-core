@@ -648,6 +648,29 @@ impl Zone {
         self.fluff.forget(*id);
     }
 
+    /// Established outbound sessions. Inbound peers are not stem candidates.
+    ///
+    /// The set is this zone's session registry. A handshake-complete peer
+    /// that is still synchronizing is included: recorded height is not a
+    /// filter, and neither is `state_normal`.
+    fn outbound_ids(&self) -> Vec<ConnectionId> {
+        self.contexts
+            .iter()
+            .filter(|(_, peer)| peer.direction == PeerDirection::Outbound)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    /// Drop every outbound session. Tests use this where a stem refresh
+    /// used to be handed an empty candidate list.
+    #[cfg(test)]
+    pub fn drop_outbound_for_test(&mut self) {
+        let ids = self.outbound_ids();
+        for id in ids {
+            self.on_connection_close(&id);
+        }
+    }
+
     /// Merge the currently live outbound connections into the stem map,
     /// **keeping** slots whose peer is still connected.
     ///
@@ -660,12 +683,12 @@ impl Zone {
     /// **Not what an epoch boundary does.** See [`Zone::rebuild_stems`]; the two
     /// are separate methods because collapsing them freezes the stem graph, and
     /// nothing about the merged result looks wrong when it happens.
-    pub fn update_stems<R: RelayRng + ?Sized>(&mut self, outbound: Vec<ConnectionId>, rng: &mut R) {
+    pub fn update_stems<R: RelayRng + ?Sized>(&mut self, rng: &mut R) {
         // `StemMap::update` still returns `StemSetChange` for its own callers
         // and tests; the zone no longer surfaces it — nothing re-points on push.
         // Named bind: the value is `Copy + must_use`, so neither `drop` nor
         // `let _ =` is available under the workspace lint table.
-        let _change = self.map.update(outbound, rng);
+        let _change = self.map.update(self.outbound_ids(), rng);
     }
 
     /// Draw a wholly new stem set over `outbound` — what an epoch rollover does.
@@ -680,12 +703,8 @@ impl Zone {
     /// Post-inversion (§20.3) nothing re-points on this signal — a rebound
     /// channel picks up its new peer at the next send, and a channel the redraw
     /// leaves unbound clears at its next due tick, both read from the map itself.
-    pub fn rebuild_stems<R: RelayRng + ?Sized>(
-        &mut self,
-        outbound: Vec<ConnectionId>,
-        rng: &mut R,
-    ) {
-        self.map = StemMap::new(outbound, self.stems, rng);
+    pub fn rebuild_stems<R: RelayRng + ?Sized>(&mut self, rng: &mut R) {
+        self.map = StemMap::new(self.outbound_ids(), self.stems, rng);
     }
 
     /// Begin a new epoch at `now`: re-draw the fluff/stem role and the end time.
@@ -782,12 +801,11 @@ impl Zone {
         &mut self,
         source: Option<ConnectionId>,
         local_origin: bool,
-        outbound: Vec<ConnectionId>,
         rng: &mut R,
     ) -> RelayPlan {
         match self.plan_relay(source, local_origin, rng) {
             RelayPlan::NoRoute => {
-                self.update_stems(outbound, rng);
+                self.update_stems(rng);
                 self.plan_relay(source, local_origin, rng)
             }
             plan => plan,
@@ -1032,10 +1050,9 @@ impl Zone {
         &mut self,
         source: Option<ConnectionId>,
         local_origin: bool,
-        outbound: Vec<ConnectionId>,
         rng: &mut R,
     ) -> RelayDispatch {
-        let plan = self.plan_relay_with_refresh(source, local_origin, outbound, rng);
+        let plan = self.plan_relay_with_refresh(source, local_origin, rng);
         RelayDispatch {
             carrier: self.carrier_for(plan),
             plan,

@@ -3300,14 +3300,6 @@ typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
 // moment the join landed. Its idempotence note went with it: the effect still
 // fires at every due tick while the slot stays unbound, and `unbind` is
 // idempotent on the Rust side where the state now lives.
-//! Supply the outbound connection set on demand: write the id count through
-//! `out_n` and return a pointer to `*out_n` x 16 bytes valid until the poll
-//! returns (nullptr with `*out_n == 0` for none). shekyl_relay_zone_poll calls
-//! this ONLY at an epoch boundary, so a fluff-release wake never pays for the
-//! connection scan. Must not throw across the FFI boundary.
-//! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll.
-typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out_n);
-
 //! Noise channel `channel` is due to send.
 //!
 //! Carries the BYTES and returns whether they went out. Both halves are new
@@ -3663,7 +3655,7 @@ std::int32_t shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::ui
 //! inside Rust, through NoiseQueues::unbind at the next poll.
 std::int32_t shekyl_relay_zone_plan_relay_with_refresh(
     RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
-    const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest);
+    std::uint8_t* out_dest);
 //! Plan a relay AND the wire that carries it — phase, carrier and slot in
 //! one crossing (rule 40). Return is the same SHEKYL_RELAY_PLAN_* code as
 //! plan_relay_with_refresh. out_carrier is SHEKYL_RELAY_CARRIER_*;
@@ -3675,13 +3667,11 @@ std::int32_t shekyl_relay_zone_plan_relay_with_refresh(
 //! against a caller grep on §1.6's criteria, which still govern deletion.
 std::int32_t shekyl_relay_zone_plan_dispatch_with_refresh(
     RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
-    const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest,
-    std::uint8_t* out_carrier, std::uint32_t* out_channel);
+    std::uint8_t* out_dest, std::uint8_t* out_carrier, std::uint32_t* out_channel);
 //! Merge the current outbound set into the stem map mid-epoch. Used for
 //! connection churn, noise-send recovery, and the forced refresh after a stem
 //! send failure. No callback — see plan_relay_with_refresh.
-void shekyl_relay_zone_update_stems(RelayZoneHandle* handle, const std::uint8_t* outbound,
-                                    std::size_t n);
+void shekyl_relay_zone_update_stems(RelayZoneHandle* handle);
 //! Accept a batch for fluffing to every peer but `source`. Returns how many
 //! peers took it — zero means nothing is connected to fluff to, or a blob span
 //! was invalid (null ptr with non-zero len). Empty blobs (`len == 0`) are valid
@@ -3698,14 +3688,13 @@ std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t
 //! newest. This function holds a mutable borrow of the zone for its whole
 //! body, and a second one of the carrier queue across the dispatch that
 //! delivers the effects. Calling any shekyl_relay_zone_*
-//! function on the same handle from inside gather_outbound, on_fluff,
+//! function on the same handle from inside on_fluff,
 //! on_noise or on_carrier_resolved constructs an aliasing mutable borrow,
 //! which is undefined behaviour. Buffer whatever the callback learns and
 //! apply it after poll returns — the C++ producer did exactly this, recording
 //! a stem observation from the resolution callback, until review caught it.
 //! No callback may throw across the boundary.
 void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
-                            ShekylRelayOutboundCb gather_outbound,
                             ShekylRelayFluffCb on_fluff,
                             ShekylRelayNoiseSendCb on_noise,
                             ShekylRelayCarrierResolvedCb on_carrier_resolved);
@@ -3759,8 +3748,7 @@ void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms
 //! Start a new epoch immediately — what notify::run_epoch() drives. No
 //! callback — the rollover's noise consequences ride the schedule, exactly
 //! as a deadline-crossing rollover's do.
-void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms,
-                                   const std::uint8_t* outbound, std::size_t n);
+void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms);
 
 // ── Levin ingress + emit framing + compression (IMPLEMENTATION_INDEX.md LV row) ──────
 //

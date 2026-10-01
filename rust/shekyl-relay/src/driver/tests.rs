@@ -17,14 +17,6 @@ fn id(byte: u8) -> ConnectionId {
     ConnectionId::from_bytes(b)
 }
 
-/// A `gather_outbound` thunk that must never run. Passed to [`Driver::poll`]
-/// on wakes that do not cross an epoch boundary, so it doubles as the witness
-/// that a fluff-only wake never pays for the outbound scan — poll invoking it
-/// off an epoch boundary would fail here rather than pass quietly.
-fn no_gather() -> Vec<ConnectionId> {
-    unreachable!("a fluff-only wake must not gather the outbound set")
-}
-
 fn driver(rng: &mut SplitMix64) -> Driver {
     Driver::new(
         Zone::new(
@@ -80,13 +72,10 @@ fn polling_releases_a_batch_at_its_deadline_and_not_before() {
     let due = d.zone().fluff_deadline().unwrap();
 
     if due > 0 {
-        assert!(
-            d.poll(due - 1, no_gather, &mut rng).is_empty(),
-            "not due yet"
-        );
+        assert!(d.poll(due - 1, &mut rng).is_empty(), "not due yet");
     }
     assert_eq!(
-        d.poll(due, no_gather, &mut rng),
+        d.poll(due, &mut rng),
         vec![Effect::Fluff {
             peer: id(1),
             blobs: vec![TxBlob::from([7u8].as_slice())]
@@ -102,8 +91,12 @@ fn an_epoch_rollover_redraws_the_stem_set() {
     let mut rng = SplitMix64::new(42);
     let mut d = driver(&mut rng);
     let outbound = vec![id(1), id(2), id(3)];
+    for peer in &outbound {
+        d.zone_mut()
+            .on_session_established(*peer, PeerDirection::Outbound);
+    }
 
-    let effects = d.poll(d.zone().epoch_deadline(), || outbound.clone(), &mut rng);
+    let effects = d.poll(d.zone().epoch_deadline(), &mut rng);
     assert!(
         effects.is_empty(),
         "no fluff pending and covert disabled: a rollover on this zone \
@@ -129,7 +122,12 @@ fn a_mid_epoch_refresh_fills_the_map_without_rolling_the_epoch() {
     assert_eq!(d.zone().live_stems(), 0, "fixture: no peers yet");
 
     d.zone_mut()
-        .update_stems(vec![id(1), id(2), id(3)], &mut rng);
+        .on_session_established(id(1), PeerDirection::Outbound);
+    d.zone_mut()
+        .on_session_established(id(2), PeerDirection::Outbound);
+    d.zone_mut()
+        .on_session_established(id(3), PeerDirection::Outbound);
+    d.zone_mut().update_stems(&mut rng);
     assert_eq!(d.zone().live_stems(), 2, "a first population fills the map");
     assert_eq!(
         d.zone().epoch_deadline(),
@@ -139,7 +137,12 @@ fn a_mid_epoch_refresh_fills_the_map_without_rolling_the_epoch() {
 
     let slots_before = d.zone().stem_slots().to_vec();
     d.zone_mut()
-        .update_stems(vec![id(1), id(2), id(3)], &mut rng);
+        .on_session_established(id(1), PeerDirection::Outbound);
+    d.zone_mut()
+        .on_session_established(id(2), PeerDirection::Outbound);
+    d.zone_mut()
+        .on_session_established(id(3), PeerDirection::Outbound);
+    d.zone_mut().update_stems(&mut rng);
     assert_eq!(
         d.zone().stem_slots(),
         slots_before.as_slice(),
@@ -189,14 +192,20 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
         .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut()
         .on_session_established(id(2), PeerDirection::Outbound);
-    d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
+    d.zone_mut()
+        .on_session_established(id(1), PeerDirection::Outbound);
+    d.zone_mut()
+        .on_session_established(id(2), PeerDirection::Outbound);
+    d.zone_mut().update_stems(&mut rng);
 
     // The hole recipe the CV-2 witness established: close the slot's peer
     // AND re-offer only the survivor, so nothing backfills.
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
     let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
     d.zone_mut().on_connection_close(&slot0_peer);
-    d.zone_mut().update_stems(vec![keep], &mut rng);
+    d.zone_mut()
+        .on_session_established(keep, PeerDirection::Outbound);
+    d.zone_mut().update_stems(&mut rng);
     assert_eq!(
         d.zone().stem_slots()[0],
         None,
@@ -219,7 +228,7 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
             break;
         }
         let wake = d.next_wake();
-        for e in d.poll(wake, no_gather, &mut rng) {
+        for e in d.poll(wake, &mut rng) {
             match e {
                 Effect::NoiseUnbind { channel } => {
                     assert_eq!(
@@ -279,13 +288,21 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
         .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut()
         .on_session_established(id(2), PeerDirection::Outbound);
-    d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
+    d.zone_mut()
+        .on_session_established(id(1), PeerDirection::Outbound);
+    d.zone_mut()
+        .on_session_established(id(2), PeerDirection::Outbound);
+    d.zone_mut().update_stems(&mut rng);
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
     let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
     d.zone_mut().on_connection_close(&slot0_peer);
     d.zone_mut()
         .on_session_established(id(3), PeerDirection::Outbound);
-    d.zone_mut().update_stems(vec![keep, id(3)], &mut rng);
+    d.zone_mut()
+        .on_session_established(keep, PeerDirection::Outbound);
+    d.zone_mut()
+        .on_session_established(id(3), PeerDirection::Outbound);
+    d.zone_mut().update_stems(&mut rng);
     assert_eq!(
         d.zone().stem_slots()[0],
         Some(id(3)),
@@ -297,7 +314,7 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
             break;
         }
         let wake = d.next_wake();
-        for e in d.poll(wake, no_gather, &mut rng) {
+        for e in d.poll(wake, &mut rng) {
             match e {
                 Effect::NoiseSend { .. } => sends += 1,
                 Effect::NoiseUnbind { channel } => panic!(
@@ -320,11 +337,17 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
         .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut()
         .on_session_established(id(2), PeerDirection::Outbound);
-    d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
+    d.zone_mut()
+        .on_session_established(id(1), PeerDirection::Outbound);
+    d.zone_mut()
+        .on_session_established(id(2), PeerDirection::Outbound);
+    d.zone_mut().update_stems(&mut rng);
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
     let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
     d.zone_mut().on_connection_close(&slot0_peer);
-    d.zone_mut().update_stems(vec![keep], &mut rng);
+    d.zone_mut()
+        .on_session_established(keep, PeerDirection::Outbound);
+    d.zone_mut().update_stems(&mut rng);
     assert_eq!(
         d.zone().stem_slots()[0],
         None,
@@ -336,8 +359,7 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
         "no covert schedule ⇒ no tick for an unbind to ride"
     );
     assert!(
-        d.poll(d.zone().epoch_deadline() - 1, no_gather, &mut rng)
-            .is_empty(),
+        d.poll(d.zone().epoch_deadline() - 1, &mut rng).is_empty(),
         "nothing is due before the epoch on a zone without covert channels"
     );
 }
@@ -347,7 +369,7 @@ fn polling_before_the_epoch_boundary_changes_nothing() {
     let mut rng = SplitMix64::new(43);
     let mut d = driver(&mut rng);
     let deadline = d.zone().epoch_deadline();
-    assert!(d.poll(deadline - 1, no_gather, &mut rng).is_empty());
+    assert!(d.poll(deadline - 1, &mut rng).is_empty());
     assert_eq!(d.zone().epoch_deadline(), deadline, "epoch untouched");
 }
 
@@ -362,7 +384,7 @@ fn forcing_runs_the_same_paths_as_the_deadline() {
     d.zone_mut().queue_fluff(&[vec![9]], None, 0, &mut rng);
     let due = d.zone().fluff_deadline().unwrap();
     if due > 0 {
-        assert!(d.poll(0, no_gather, &mut rng).is_empty(), "not due at t=0");
+        assert!(d.poll(0, &mut rng).is_empty(), "not due at t=0");
     }
     assert_eq!(
         d.force_fluff(0),
@@ -374,7 +396,9 @@ fn forcing_runs_the_same_paths_as_the_deadline() {
     );
 
     let before = d.zone().epoch_deadline();
-    d.force_epoch(0, &[id(1), id(2)], &mut rng);
+    d.zone_mut()
+        .on_session_established(id(2), PeerDirection::Outbound);
+    d.force_epoch(0, &mut rng);
     assert_ne!(d.zone().epoch_deadline(), before, "a new epoch was drawn");
 }
 
@@ -431,7 +455,11 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
         .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut()
         .on_session_established(id(2), PeerDirection::Outbound);
-    d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
+    d.zone_mut()
+        .on_session_established(id(1), PeerDirection::Outbound);
+    d.zone_mut()
+        .on_session_established(id(2), PeerDirection::Outbound);
+    d.zone_mut().update_stems(&mut rng);
 
     // Fixture requirement: distinct deadlines, or "one per advance" could
     // hold by coincidence rather than by independence.
@@ -444,7 +472,7 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
     // Advance to the earliest deadline: exactly one channel is due.
     let first = d.next_wake();
     let covert: Vec<usize> = d
-        .poll(first, Vec::new, &mut rng)
+        .poll(first, &mut rng)
         .into_iter()
         .filter_map(|e| match e {
             Effect::NoiseSend { channel, .. } => Some(channel),
@@ -463,7 +491,7 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
     let second = d.next_wake();
     assert!(second > first, "the next wake is strictly later");
     let covert2: Vec<usize> = d
-        .poll(second, Vec::new, &mut rng)
+        .poll(second, &mut rng)
         .into_iter()
         .filter_map(|e| match e {
             Effect::NoiseSend { channel, .. } => Some(channel),
@@ -514,7 +542,11 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
         .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut()
         .on_session_established(id(2), PeerDirection::Outbound);
-    d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
+    d.zone_mut()
+        .on_session_established(id(1), PeerDirection::Outbound);
+    d.zone_mut()
+        .on_session_established(id(2), PeerDirection::Outbound);
+    d.zone_mut().update_stems(&mut rng);
 
     // Ground truth from the owning structure, captured before driving.
     let truth: Vec<Option<ConnectionId>> = d.zone().stem_slots().to_vec();
@@ -533,7 +565,7 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
             break;
         }
         let wake = d.next_wake();
-        for e in d.poll(wake, Vec::new, &mut rng) {
+        for e in d.poll(wake, &mut rng) {
             if let Effect::NoiseSend { channel, peer } = e {
                 assert_eq!(
                     Some(peer),
@@ -587,7 +619,11 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
         .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut()
         .on_session_established(id(2), PeerDirection::Outbound);
-    d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
+    d.zone_mut()
+        .on_session_established(id(1), PeerDirection::Outbound);
+    d.zone_mut()
+        .on_session_established(id(2), PeerDirection::Outbound);
+    d.zone_mut().update_stems(&mut rng);
 
     // Make a hole at index 0 the way the RP-3a seal did: close slot 0's
     // peer AND re-offer only slot 1's, so there is nothing to backfill
@@ -598,7 +634,9 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
     let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
     d.zone_mut().on_connection_close(&slot0_peer);
-    d.zone_mut().update_stems(vec![keep], &mut rng);
+    d.zone_mut()
+        .on_session_established(keep, PeerDirection::Outbound);
+    d.zone_mut().update_stems(&mut rng);
     let truth: Vec<Option<ConnectionId>> = d.zone().stem_slots().to_vec();
     assert_eq!(truth[0], None, "fixture: the hole is at index 0");
     let bound = truth[1].expect("fixture: index 1 still bound");
@@ -609,7 +647,7 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
             break;
         }
         let wake = d.next_wake();
-        for e in d.poll(wake, Vec::new, &mut rng) {
+        for e in d.poll(wake, &mut rng) {
             if let Effect::NoiseSend { channel, peer } = e {
                 emissions.push((channel, peer));
             }
@@ -663,7 +701,11 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
         .on_session_established(id(1), PeerDirection::Outbound);
     d.zone_mut()
         .on_session_established(id(2), PeerDirection::Outbound);
-    d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
+    d.zone_mut()
+        .on_session_established(id(1), PeerDirection::Outbound);
+    d.zone_mut()
+        .on_session_established(id(2), PeerDirection::Outbound);
+    d.zone_mut().update_stems(&mut rng);
 
     let a = d.zone().noise_deadline_at(0).expect("ch0 armed");
     let b = d.zone().noise_deadline_at(1).expect("ch1 armed");
@@ -671,7 +713,7 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
     let late = a.max(b) + 60_000;
 
     let first: Vec<usize> = d
-        .poll(late, no_gather, &mut rng)
+        .poll(late, &mut rng)
         .into_iter()
         .filter_map(|e| match e {
             Effect::NoiseSend { channel, .. } | Effect::NoiseUnbind { channel } => Some(channel),
@@ -696,7 +738,7 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
     // The sibling is still due (its deadline is in the past) and must be the
     // next covert effect — independence, not a permanent single-channel lock.
     let second: Vec<usize> = d
-        .poll(late, no_gather, &mut rng)
+        .poll(late, &mut rng)
         .into_iter()
         .filter_map(|e| match e {
             Effect::NoiseSend { channel, .. } | Effect::NoiseUnbind { channel } => Some(channel),
@@ -750,7 +792,7 @@ fn a_stem_observation_resolves_on_the_poll_clock_and_a_close_drops_it() {
 
     // Before the deadline: polling must not resolve it.
     assert!(d.zone().epoch_deadline() > deadline, "fixture: no rollover");
-    let _ = d.poll(deadline - 1, no_gather, &mut rng);
+    let _ = d.poll(deadline - 1, &mut rng);
     assert_eq!(
         d.zone().stem_observations_in_flight(),
         1,
@@ -759,7 +801,7 @@ fn a_stem_observation_resolves_on_the_poll_clock_and_a_close_drops_it() {
     assert!(d.zone().stem_tally(&id(1)).is_none());
 
     // At the deadline: the poll resolves it as silent.
-    let _ = d.poll(deadline, no_gather, &mut rng);
+    let _ = d.poll(deadline, &mut rng);
     assert_eq!(d.zone().stem_observations_in_flight(), 0);
     let t = d
         .zone()
@@ -813,7 +855,7 @@ fn an_arrival_resolves_the_observation_as_propagated() {
     );
 
     // And the deadline passing afterwards must not double-count it.
-    let _ = d.poll(5_000, no_gather, &mut rng);
+    let _ = d.poll(5_000, &mut rng);
     let t = d.zone().stem_tally(&id(1)).expect("still there");
     assert_eq!(
         (t.propagated, t.silent),

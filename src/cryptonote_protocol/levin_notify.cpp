@@ -183,59 +183,6 @@ namespace levin
       return ids.empty() ? nullptr : reinterpret_cast<const std::uint8_t*>(ids.data());
     }
 
-    //! \return Outbound connections in `state_normal`.
-    //!
-    //! That state is the session's answer to "is this peer caught up?".
-    //! A height comparison is a proxy for the same question, and it goes
-    //! stale for every peer the moment a new block lands, until the next
-    //! timed sync. One block behind for a few seconds is still caught up.
-    //! A session that is still synchronizing is not.
-    //! `local_height` is logged when the filter keeps nobody.
-    std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, uint64_t local_height)
-    {
-      std::vector<boost::uuids::uuid> outs;
-      outs.reserve(connection_id_reserve_size);
-
-      /* The foreach call is serialized with a lock, but should be quick due to
-         the reserve call so a strand is not used. Investigate if there is lots
-         of waiting in here. */
-
-      p2p.foreach_connection([&outs] (detail::p2p_context& context) {
-        if (!context.m_is_income && context.m_state == cryptonote_connection_context::state_normal)
-          outs.emplace_back(context.m_connection_id);
-        return true;
-      });
-
-      if (!outs.empty())
-      {
-        MDEBUG("Found " << outs.size() << " out connections in normal state");
-        return outs;
-      }
-
-      MINFO("relay filter local_height=" << local_height << " rule=state_normal eligible=0");
-      std::size_t candidates = 0;
-      p2p.foreach_connection([&] (detail::p2p_context& context) {
-        ++candidates;
-        const bool eligible = !context.m_is_income
-            && context.m_state == cryptonote_connection_context::state_normal;
-        MINFO("relay candidate direction=" << (context.m_is_income ? "in" : "out")
-            << " state=" << get_protocol_state_string(context.m_state)
-            << " recorded_height=" << context.m_remote_blockchain_height
-            << " local_height=" << local_height
-            << " eligible=" << (eligible ? "yes" : "no")
-            << " height_from=" << remote_height_source_name(context.m_remote_height_source));
-        return true;
-      });
-      if (candidates == 0)
-        MINFO("relay filter candidates=0");
-      return outs;
-    }
-
-    std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, const i_core_events* core)
-    {
-      return get_out_connections(p2p, core->get_current_blockchain_height());
-    }
-
     //! How wide a zone's stem set is and how long its epoch runs.
     struct relay_zone_params
     {
@@ -592,24 +539,11 @@ namespace levin
        across the FFI boundary, where an exception unwinding back into Rust is
        undefined behaviour. So each is `noexcept` and catches internally — a
        dropped relay or a skipped repoint is recoverable; a corrupted unwind is
-       not. `core` and `outs` exist for `on_outbound`, which the epoch branch of
-       `poll` calls back to gather the outbound set lazily. */
+       not. Stem candidates are the zone's own outbound sessions, so this
+       sink no longer carries a connection snapshot or a core pointer. */
     struct relay_effects
     {
       std::shared_ptr<detail::zone> zone;
-      /*! NON-CONST since the carrier producer landed, and the widening is
-          real rather than incidental. This was `const` while the sink only
-          READ core — `on_outbound` filters by blockchain height — and a
-          draft of the producer widened it because `on_carrier_resolved`
-          recorded from inside the callback.
-
-          IT NO LONGER DOES. Buffering the verdicts moved every mutation into
-          `apply_carrier_verdicts`, which takes `core` as its own argument
-          after the poll returns, so this member is back to the one read it
-          started with and says so again. `relay_wake::core_` stays non-const:
-          it is what feeds that call. */
-      const i_core_events* core = nullptr;
-      std::vector<boost::uuids::uuid> outs;
 
       /*! One carrier verdict, buffered for after the poll returns.
 
@@ -833,49 +767,17 @@ namespace levin
         }
       }
 
-      //! Gather the outbound connection set on demand.
-      //!
-      //! `poll` calls this only when a wake crosses an epoch boundary, so the
-      //! locked connection scan and median-height sort are paid at a rollover
-      //! and never on a fluff release. The result is stored in `outs` so the
-      //! returned span outlives the FFI call; an empty set returns nullptr.
-      static const std::uint8_t* on_outbound(void* ctx, std::size_t* out_n) noexcept
-      {
-        assert(ctx != nullptr);
-        relay_effects& self = *static_cast<relay_effects*>(ctx);
-        try
-        {
-          if (self.zone && self.zone->p2p && self.core)
-            self.outs = get_out_connections(*self.zone->p2p, self.core);
-        }
-        catch (const std::exception& e)
-        {
-          // An empty set at a boundary rebuilds the map over no peers — the
-          // already-tolerated no-outbound state, self-healing on the next
-          // update_stems — but log it, since it is otherwise a silent one-epoch
-          // stem/noise dropout.
-          self.outs.clear();
-          MWARNING("relay outbound gather threw, rebuilding over no peers: " << e.what());
-        }
-        catch (...)
-        {
-          self.outs.clear();
-          MWARNING("relay outbound gather threw a non-standard exception, rebuilding over no peers");
-        }
-        *out_n = self.outs.size();
-        return uuid_bytes(self.outs);
-      }
     };
 
     //! \pre Called within `zone->strand`.
-    void relay_update_stems(const std::shared_ptr<detail::zone>& zone, const std::vector<boost::uuids::uuid>& outs)
+    void relay_update_stems(const std::shared_ptr<detail::zone>& zone)
     {
       if (!zone)
         return;
 
       assert(zone->strand.running_in_this_thread());
 
-      shekyl_relay_zone_update_stems(zone->relay.get(), uuid_bytes(outs), outs.size());
+      shekyl_relay_zone_update_stems(zone->relay.get());
     }
 
     //! Runs every relay step that has come due, and re-arms the single timer.
@@ -938,11 +840,11 @@ namespace levin
              deadline lives here. `sink` carries `core_` because `on_outbound`
              needs it to filter by blockchain height. */
           const std::uint64_t at = now_ms();
-          relay_effects sink{zone_, core_};
+          relay_effects sink{zone_};
           sink.reserve_verdicts(*zone_);
           shekyl_relay_zone_poll(
             zone_->relay.get(), at,
-            std::addressof(sink), relay_effects::on_outbound,
+            std::addressof(sink),
             relay_effects::on_fluff, relay_effects::on_noise,
             relay_effects::on_carrier_resolved
           );
@@ -1291,7 +1193,13 @@ namespace levin
            gtest oracle cannot see through. */
         boost::uuids::uuid destination{};
         const bool local_origin = (tx_relay == relay_method::local);
-        std::vector<boost::uuids::uuid> outs = get_out_connections(*zone_->p2p, core_);
+        // Origination is this node's act. A node still synchronising does not
+        // start a stem; a forwarded transaction is someone else's and continues.
+        if (local_origin && !core_->is_synchronized())
+        {
+          MDEBUG("unsynchronised node originates no stem");
+          return;
+        }
 
         /* What the wire does and what the txpool is told are the same thing on
            clearnet and deliberately not the same for an origin on an anonymity
@@ -1325,7 +1233,6 @@ namespace levin
         std::uint32_t channel = 0;
         std::int32_t plan = shekyl_relay_zone_plan_dispatch_with_refresh(
           zone_->relay.get(), uuid_bytes(source_), local_origin,
-          uuid_bytes(outs), outs.size(),
           reinterpret_cast<std::uint8_t*>(std::addressof(destination)),
           std::addressof(carrier), std::addressof(channel)
         );
@@ -1511,8 +1418,7 @@ namespace levin
           // force a mid-epoch map refresh (connection list may be stale) and
           // re-plan once. Transport retry only — refresh policy already lived
           // in the first call for the empty-map case.
-          outs = get_out_connections(*zone_->p2p, core_);
-          relay_update_stems(zone_, outs);
+          relay_update_stems(zone_);
           plan = shekyl_relay_zone_plan_relay(
             zone_->relay.get(), uuid_bytes(source_), local_origin,
             reinterpret_cast<std::uint8_t*>(std::addressof(destination))
@@ -1583,7 +1489,7 @@ namespace levin
        it the connections that already exist and arm the timer on the deadline
        it chose. */
     boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
-      relay_update_stems(z, get_out_connections(*z->p2p, core));
+      relay_update_stems(z);
       relay_wake::arm(z, core);
     });
 
@@ -1634,7 +1540,7 @@ namespace levin
       return;
 
     boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
-      relay_update_stems(z, get_out_connections(*z->p2p, core));
+      relay_update_stems(z);
     });
   }
 
@@ -1669,8 +1575,7 @@ namespace levin
       return;
 
     boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
-      const std::vector<boost::uuids::uuid> outs = get_out_connections(*z->p2p, core);
-      shekyl_relay_zone_force_epoch(z->relay.get(), now_ms(), uuid_bytes(outs), outs.size());
+      shekyl_relay_zone_force_epoch(z->relay.get(), now_ms());
       relay_wake::arm(z, core);
     });
   }
@@ -1728,11 +1633,11 @@ namespace levin
        shape exists to avoid. */
     boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
       const std::uint64_t at = shekyl_relay_zone_next_wake(z->relay.get());
-      relay_effects sink{z, core};
+      relay_effects sink{z};
       sink.reserve_verdicts(*z);
       shekyl_relay_zone_poll(
         z->relay.get(), at,
-        std::addressof(sink), relay_effects::on_outbound,
+        std::addressof(sink),
         relay_effects::on_fluff, relay_effects::on_noise,
         relay_effects::on_carrier_resolved
       );

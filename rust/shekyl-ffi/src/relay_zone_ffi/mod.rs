@@ -228,28 +228,6 @@ pub const SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY: u32 = 1 << 0;
 /// [`SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY`] for why these are bits.
 pub const SHEKYL_RELAY_ZONE_NOISE_ENABLED: u32 = 1 << 1;
 
-/// Supplies the outbound connection set on demand.
-///
-/// [`shekyl_relay_zone_poll`] invokes this **at most once per call, and only
-/// when a wake crosses an epoch boundary** and the stem map must be rebuilt — a
-/// plain fluff-release wake never calls it, so the caller never pays for the
-/// connection scan the inherited fluff path also skipped. It writes the id count
-/// through `out_n` and returns a pointer to `*out_n * 16` readable bytes that
-/// stays valid until the poll returns, or null with `*out_n == 0` for an empty
-/// set.
-///
-/// This is a *pull*, the one this module otherwise forbids (§18.5 finding 3) —
-/// but the hazard there was C++ reaching into the Rust-owned stem map off-strand
-/// while the driver mutates it. This reads the reverse direction: it pulls the
-/// **C++/asio-owned** connection table, synchronously, on the same strand the
-/// wake fired on, and hands the bytes straight back. No Rust zone state is read,
-/// so the race the seal names cannot arise.
-///
-/// Being a C++ callback reached from Rust, it must not unwind: a throw across
-/// this boundary is undefined behaviour, so the C++ side catches internally and
-/// reports an empty set.
-pub type OutboundCb = extern "C" fn(ctx: *mut c_void, out_n: *mut usize) -> *const u8;
-
 /// Opaque zone handle. C++ holds `*mut RelayZoneHandle` and nothing else.
 pub struct RelayZoneHandle {
     driver: Driver,
@@ -467,35 +445,6 @@ extern "C" fn noop_carrier_resolved(_ctx: *mut c_void, _token: u64, _sent: bool,
 extern "C" fn noop_noise(_: *mut c_void, _: usize, _: *const u8, _: *const u8, _: usize) -> bool {
     debug_assert!(false, "force_fluff produced a NoiseSend effect");
     false
-}
-
-/// # Safety
-/// `ids` must point to `n * 16` readable bytes, or be null with `n == 0`.
-unsafe fn read_ids(ids: *const u8, n: usize) -> Vec<ConnectionId> {
-    let Some(len) = n.checked_mul(16) else {
-        debug_assert!(false, "read_ids: n * 16 overflows");
-        return Vec::new();
-    };
-    // Through the crate's FFI-read seam, which owns the `isize::MAX` bound that
-    // `from_raw_parts` requires at the LANGUAGE level — violating it is UB even
-    // when the caller really did provide that much memory, so `checked_mul`
-    // alone was not enough. `slice_from_ptr` also owns the null / zero-length
-    // arms, so those checks come out with it (SA-R-7's residual, closed here
-    // for the two readers this crossing exercises).
-    let Some(bytes) = crate::legacy_util::slice_from_ptr(ids, len) else {
-        debug_assert!(
-            isize::try_from(len).is_ok(),
-            "read_ids: {len} bytes exceeds the isize::MAX slice bound"
-        );
-        return Vec::new();
-    };
-    (0..n)
-        .filter_map(|i| {
-            let mut b = [0u8; 16];
-            b.copy_from_slice(&bytes[i * 16..i * 16 + 16]);
-            (b != NIL).then(|| ConnectionId::from_bytes(b))
-        })
-        .collect()
 }
 
 /// Read `n` packed 32-byte transaction ids.
@@ -1350,20 +1299,17 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay_with_refresh(
     handle: *mut RelayZoneHandle,
     source: *const u8,
     local_origin: bool,
-    outbound: *const u8,
-    n: usize,
     out_dest: *mut u8,
 ) -> i32 {
     if handle.is_null() || out_dest.is_null() {
         return SHEKYL_RELAY_PLAN_NO_ROUTE;
     }
-    let peers = read_ids(outbound, n);
     let h = &mut *handle;
     let source = read_id(source);
     let plan = h
         .driver
         .zone_mut()
-        .plan_relay_with_refresh(source, local_origin, peers, &mut h.rng);
+        .plan_relay_with_refresh(source, local_origin, &mut h.rng);
     h.publish();
     write_plan(plan, out_dest)
 }
@@ -1419,7 +1365,6 @@ unsafe fn write_plan(plan: RelayPlan, out_dest: *mut u8) -> i32 {
 ///
 /// # Safety
 /// `handle` must be live; `source` must point to 16 readable bytes or be null;
-/// `outbound` must point to `n * 16` readable bytes or be null with `n == 0`;
 /// `out_dest` must point to 16 writable bytes; `out_carrier` must point to one
 /// writable byte; `out_channel` must point to a writable `u32`.
 #[no_mangle]
@@ -1427,8 +1372,6 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
     handle: *mut RelayZoneHandle,
     source: *const u8,
     local_origin: bool,
-    outbound: *const u8,
-    n: usize,
     out_dest: *mut u8,
     out_carrier: *mut u8,
     out_channel: *mut u32,
@@ -1450,13 +1393,12 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
         }
         return SHEKYL_RELAY_PLAN_NO_ROUTE;
     }
-    let peers = read_ids(outbound, n);
     let h = &mut *handle;
     let source = read_id(source);
-    let dispatch =
-        h.driver
-            .zone_mut()
-            .plan_dispatch_with_refresh(source, local_origin, peers, &mut h.rng);
+    let dispatch = h
+        .driver
+        .zone_mut()
+        .plan_dispatch_with_refresh(source, local_origin, &mut h.rng);
     h.publish();
     match dispatch.carrier {
         RelayCarrier::Ordinary => {
@@ -1503,19 +1445,14 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
 /// `handle` must be live; `outbound` must point to `n * 16` readable bytes or be
 /// null with `n == 0`.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_relay_zone_update_stems(
-    handle: *mut RelayZoneHandle,
-    outbound: *const u8,
-    n: usize,
-) {
+pub unsafe extern "C" fn shekyl_relay_zone_update_stems(handle: *mut RelayZoneHandle) {
     if handle.is_null() {
         return;
     }
-    let peers = read_ids(outbound, n);
     let h = &mut *handle;
     // Since §20.3 nothing re-points on a push — an unbound channel clears at
-    // its next due tick via `poll`.
-    h.driver.zone_mut().update_stems(peers, &mut h.rng);
+    // its next due tick via `poll`. Candidates are the zone's outbound sessions.
+    h.driver.zone_mut().update_stems(&mut h.rng);
     h.publish();
 }
 
@@ -1592,23 +1529,19 @@ unsafe fn read_blobs(blobs: *const ShekylRelayBlob, n: usize) -> Option<Vec<TxBl
 
 /// Run every step due at `now_ms`, delivering results through the callbacks.
 ///
-/// The outbound set is not passed in: `gather_outbound` is called back **only**
-/// when a wake crosses an epoch boundary and the stem map is rebuilt, so a
-/// fluff-release wake — the common case — never triggers the connection scan.
-/// See [`OutboundCb`] for why this pull is the sanctioned exception to §18.5.
+/// An epoch boundary rebuilds the stem map from the zone's established
+/// outbound sessions. A fluff-release wake does not.
 ///
 /// # Safety
 /// `handle` must be live; the callbacks must be valid for the duration of the
-/// call. `gather_outbound` must honour the [`OutboundCb`] contract: on return,
-/// its pointer covers `*out_n * 16` readable bytes (or is null with `*out_n`
-/// zero), valid until this call returns, and it must not unwind.
+/// call and must not unwind.
 ///
 /// **NO CALLBACK MAY RE-ENTER THIS HANDLE.** This function holds
 /// `&mut RelayZoneHandle` for its whole body — and a mutable borrow of the
 /// carrier queue across `dispatch` — while it invokes every callback. Calling
 /// any `shekyl_relay_zone_*` function on the same handle from inside one
 /// constructs a second `&mut` aliasing those live borrows, which is undefined
-/// behaviour. It applies to **all four**, not only the newest: buffer whatever
+/// behaviour. It applies to **all three**: buffer whatever
 /// the callback learns and act on it after this returns.
 ///
 /// Stated on both sides of the boundary deliberately: a Rust caller reads this
@@ -1622,7 +1555,6 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
     handle: *mut RelayZoneHandle,
     now_ms: u64,
     ctx: *mut c_void,
-    gather_outbound: OutboundCb,
     on_fluff: FluffCb,
     on_noise: NoiseSendCb,
     on_carrier_resolved: CarrierResolvedCb,
@@ -1631,17 +1563,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
         return;
     }
     let h = &mut *handle;
-    let effects = h.driver.poll(
-        now_ms,
-        || {
-            let mut n: usize = 0;
-            let ptr = gather_outbound(ctx, &raw mut n);
-            // SAFETY: the `OutboundCb` contract makes `ptr` cover `n * 16`
-            // readable bytes (or null with `n == 0`), valid for this call.
-            unsafe { read_ids(ptr, n) }
-        },
-        &mut h.rng,
-    );
+    let effects = h.driver.poll(now_ms, &mut h.rng);
     h.publish();
     dispatch(
         effects,
@@ -1688,18 +1610,12 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_fluff(
 /// `handle` must be live; `outbound` must point to `n * 16` readable bytes or be
 /// null with `n == 0`.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_relay_zone_force_epoch(
-    handle: *mut RelayZoneHandle,
-    now_ms: u64,
-    outbound: *const u8,
-    n: usize,
-) {
+pub unsafe extern "C" fn shekyl_relay_zone_force_epoch(handle: *mut RelayZoneHandle, now_ms: u64) {
     if handle.is_null() {
         return;
     }
-    let peers = read_ids(outbound, n);
     let h = &mut *handle;
-    h.driver.force_epoch(now_ms, &peers, &mut h.rng);
+    h.driver.force_epoch(now_ms, &mut h.rng);
     h.publish();
 }
 

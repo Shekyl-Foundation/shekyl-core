@@ -94,13 +94,17 @@ fn live_stems_is_derived_not_cached() {
     let mut z = zone(&mut rng);
     assert_eq!(z.live_stems(), 0);
 
-    z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+    z.on_session_established(id(1), PeerDirection::Outbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
+    z.on_session_established(id(3), PeerDirection::Outbound);
+    z.update_stems(&mut rng);
     assert_eq!(z.live_stems(), 2, "two stem slots at the configured width");
     assert_eq!(z.stem_slots().len(), 2);
 
     // Losing every outbound peer empties the slots, and the derived count
     // follows immediately with no separate update step.
-    z.update_stems(Vec::new(), &mut rng);
+    z.drop_outbound_for_test();
+    z.update_stems(&mut rng);
     assert_eq!(z.live_stems(), 0);
 }
 
@@ -347,7 +351,10 @@ fn a_local_tx_stems_during_a_fluff_epoch_rd4() {
     let mut rng = SplitMix64::new(30);
     let mut z = zone_with_role(true, &mut rng);
     assert!(z.is_fluffing(), "fixture must be in a fluff epoch");
-    z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+    z.on_session_established(id(1), PeerDirection::Outbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
+    z.on_session_established(id(3), PeerDirection::Outbound);
+    z.update_stems(&mut rng);
 
     assert!(
         matches!(z.plan_relay(None, true, &mut rng), RelayPlan::Stem(_)),
@@ -363,7 +370,10 @@ fn a_relayed_tx_fluffs_during_a_fluff_epoch() {
     // be wrong, and in the other direction.
     let mut rng = SplitMix64::new(31);
     let mut z = zone_with_role(true, &mut rng);
-    z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+    z.on_session_established(id(1), PeerDirection::Outbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
+    z.on_session_established(id(3), PeerDirection::Outbound);
+    z.update_stems(&mut rng);
 
     assert_eq!(
         z.plan_relay(Some(id(7)), false, &mut rng),
@@ -376,7 +386,10 @@ fn a_relayed_tx_fluffs_during_a_fluff_epoch() {
 fn everything_stems_during_a_stem_epoch() {
     let mut rng = SplitMix64::new(32);
     let mut z = zone_with_role(false, &mut rng);
-    z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+    z.on_session_established(id(1), PeerDirection::Outbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
+    z.on_session_established(id(3), PeerDirection::Outbound);
+    z.update_stems(&mut rng);
 
     assert!(matches!(
         z.plan_relay(Some(id(7)), false, &mut rng),
@@ -412,7 +425,10 @@ fn an_epoch_rollover_rebuilds_the_stem_map_rather_than_merging_into_it() {
     let mut rng = SplitMix64::new(88);
     let mut z = zone(&mut rng);
     let peers = vec![id(1), id(2), id(3), id(4)];
-    z.update_stems(peers.clone(), &mut rng);
+    for peer in &peers {
+        z.on_session_established(*peer, PeerDirection::Outbound);
+    }
+    z.update_stems(&mut rng);
 
     let _ = z.stem_for(Some(id(9)), &mut rng);
     let _ = z.stem_for(None, &mut rng);
@@ -423,7 +439,7 @@ fn an_epoch_rollover_rebuilds_the_stem_map_rather_than_merging_into_it() {
     );
 
     z.start_epoch(0, &mut rng);
-    z.rebuild_stems(peers, &mut rng);
+    z.rebuild_stems(&mut rng);
     assert_eq!(
         z.pinned_sources(),
         0,
@@ -514,7 +530,10 @@ fn no_routable_slot_reports_no_route_not_a_fluff_epoch() {
     // fluff epoch reports `FluffEpoch` even with slots available, which is
     // the case where a retry would be wasted work.
     let mut z = zone_with_role(true, &mut rng);
-    z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+    z.on_session_established(id(1), PeerDirection::Outbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
+    z.on_session_established(id(3), PeerDirection::Outbound);
+    z.update_stems(&mut rng);
     assert_eq!(
         z.plan_relay(Some(id(7)), false, &mut rng),
         RelayPlan::FluffEpoch,
@@ -531,7 +550,10 @@ fn plan_relay_with_refresh_populates_an_empty_map_once() {
     let mut z = zone_with_role(false, &mut rng);
     assert_eq!(z.live_stems(), 0, "fixture: nothing populated yet");
 
-    let plan = z.plan_relay_with_refresh(None, true, vec![id(1), id(2), id(3)], &mut rng);
+    z.on_session_established(id(1), PeerDirection::Outbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
+    z.on_session_established(id(3), PeerDirection::Outbound);
+    let plan = z.plan_relay_with_refresh(None, true, &mut rng);
     assert!(
         matches!(plan, RelayPlan::Stem(_)),
         "after one refresh a stem-epoch local tx routes"
@@ -543,7 +565,7 @@ fn plan_relay_with_refresh_populates_an_empty_map_once() {
 fn plan_relay_with_refresh_does_not_touch_a_settled_fluff_epoch() {
     let mut rng = SplitMix64::new(35);
     let mut z = zone_with_role(true, &mut rng);
-    let plan = z.plan_relay_with_refresh(Some(id(7)), false, vec![id(1), id(2), id(3)], &mut rng);
+    let plan = z.plan_relay_with_refresh(Some(id(7)), false, &mut rng);
     assert_eq!(plan, RelayPlan::FluffEpoch);
     assert_eq!(z.live_stems(), 0, "outbound was not merged");
 }
@@ -573,7 +595,11 @@ fn fluff_fanout_shares_one_blob_handle_across_peers() {
 fn a_source_pins_to_one_stem_for_the_epoch() {
     let mut rng = SplitMix64::new(6);
     let mut z = zone(&mut rng);
-    z.update_stems(vec![id(1), id(2), id(3), id(4)], &mut rng);
+    z.on_session_established(id(1), PeerDirection::Outbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
+    z.on_session_established(id(3), PeerDirection::Outbound);
+    z.on_session_established(id(4), PeerDirection::Outbound);
+    z.update_stems(&mut rng);
 
     let source = Some(id(9));
     let first = z.stem_for(source, &mut rng).expect("a stem is available");
@@ -713,7 +739,11 @@ fn noise_enabled_pins_stem_width_to_noise_channels() {
 fn noise_carries_the_stem_and_only_the_stem() {
     let mut rng = SplitMix64::new(0xC0BE_0001);
     let mut stem_zone = zone_with_role_cover(false, true, &mut rng);
-    stem_zone.update_stems(vec![id(1), id(2), id(3), id(4)], &mut rng);
+    stem_zone.on_session_established(id(1), PeerDirection::Outbound);
+    stem_zone.on_session_established(id(2), PeerDirection::Outbound);
+    stem_zone.on_session_established(id(3), PeerDirection::Outbound);
+    stem_zone.on_session_established(id(4), PeerDirection::Outbound);
+    stem_zone.update_stems(&mut rng);
     assert!(!stem_zone.is_fluffing(), "fixture must be in a stem epoch");
 
     let d = stem_zone.plan_dispatch(Some(id(9)), false, &mut rng);
@@ -732,7 +762,11 @@ fn noise_carries_the_stem_and_only_the_stem() {
     }
 
     let mut fluff_zone = zone_with_role_cover(true, true, &mut rng);
-    fluff_zone.update_stems(vec![id(1), id(2), id(3), id(4)], &mut rng);
+    fluff_zone.on_session_established(id(1), PeerDirection::Outbound);
+    fluff_zone.on_session_established(id(2), PeerDirection::Outbound);
+    fluff_zone.on_session_established(id(3), PeerDirection::Outbound);
+    fluff_zone.on_session_established(id(4), PeerDirection::Outbound);
+    fluff_zone.update_stems(&mut rng);
     assert!(fluff_zone.is_fluffing(), "fixture must be in a fluff epoch");
     let fluff = fluff_zone.plan_dispatch(Some(id(9)), false, &mut rng);
     assert_eq!(fluff.plan, RelayPlan::FluffEpoch);
@@ -751,7 +785,11 @@ fn noise_disabled_never_selects_a_noise_carrier() {
     let mut rng = SplitMix64::new(0xC0BE_0002);
     for fluffing in [true, false] {
         let mut z = zone_with_role_cover(fluffing, false, &mut rng);
-        z.update_stems(vec![id(1), id(2), id(3), id(4)], &mut rng);
+        z.on_session_established(id(1), PeerDirection::Outbound);
+        z.on_session_established(id(2), PeerDirection::Outbound);
+        z.on_session_established(id(3), PeerDirection::Outbound);
+        z.on_session_established(id(4), PeerDirection::Outbound);
+        z.update_stems(&mut rng);
         for local_origin in [true, false] {
             let d = z.plan_dispatch(Some(id(9)), local_origin, &mut rng);
             assert_eq!(
@@ -812,7 +850,11 @@ fn dispatch_does_not_re_decide_the_phase() {
                     &mut rng,
                 )
                 .unwrap();
-                z.update_stems(vec![id(1), id(2), id(3), id(4)], &mut rng);
+                z.on_session_established(id(1), PeerDirection::Outbound);
+                z.on_session_established(id(2), PeerDirection::Outbound);
+                z.on_session_established(id(3), PeerDirection::Outbound);
+                z.on_session_established(id(4), PeerDirection::Outbound);
+                z.update_stems(&mut rng);
                 (z, rng)
             };
             let (mut za, mut ra) = make();
@@ -858,7 +900,10 @@ fn a_noise_carrier_does_not_change_the_phase() {
             &mut rng,
         )
         .unwrap();
-        z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+        z.on_session_established(id(1), PeerDirection::Outbound);
+        z.on_session_established(id(2), PeerDirection::Outbound);
+        z.on_session_established(id(3), PeerDirection::Outbound);
+        z.update_stems(&mut rng);
         assert_eq!(z.noise_enabled(), noise, "fixture did not take");
         matches!(z.plan_relay(None, true, &mut rng), RelayPlan::Stem(_))
     };
@@ -977,5 +1022,55 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
         )
         .is_ok(),
         "no carrier, no fragment budget to blow"
+    );
+}
+
+#[test]
+fn rollover_candidates_are_established_outbound_sessions() {
+    let mut rng = SplitMix64::new(99);
+    let mut z = zone(&mut rng);
+    z.on_session_established(id(1), PeerDirection::Inbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
+    z.on_session_established(id(3), PeerDirection::Outbound);
+    z.rebuild_stems(&mut rng);
+    let mut chosen: Vec<_> = z.stem_slots().iter().flatten().copied().collect();
+    chosen.sort();
+    assert_eq!(
+        chosen,
+        vec![id(2), id(3)],
+        "a rollover draws every established outbound session and no inbound one"
+    );
+}
+
+#[test]
+fn stem_draws_are_not_biased_toward_one_outbound_peer() {
+    // The registry has no recorded height, so a peer cannot be preferred
+    // for reporting a higher one. Two outbound sessions, one slot: over
+    // many independent epochs each peer is the successor about half the time.
+    let mut rng = SplitMix64::new(100);
+    let mut z = Zone::new(
+        DandelionParams::inherited(),
+        1,
+        FluffReach::EveryPeer,
+        LinkSecrecy::of(RelayZone::Public),
+        false,
+        0,
+        &mut rng,
+    )
+    .unwrap();
+    z.on_session_established(id(1), PeerDirection::Outbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
+    let mut hits = [0u32; 2];
+    for _ in 0..4_000 {
+        z.rebuild_stems(&mut rng);
+        match z.stem_slots()[0] {
+            Some(peer) if peer == id(1) => hits[0] += 1,
+            Some(peer) if peer == id(2) => hits[1] += 1,
+            other => panic!("slot drew {other:?}, not one of the two outbound sessions"),
+        }
+    }
+    assert!(
+        hits[0] > 1_500 && hits[1] > 1_500,
+        "draws bunched on one peer: {hits:?}"
     );
 }

@@ -22,10 +22,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **Stems draw from the zone's own registry.** `get_out_connections` (`levin_notify.cpp`) still snapshots the Levin registry into an `outs` vector on every epoch rollover and filters it by `state_normal`, which is whether *we* are pulling blocks from the peer, not whether it is a peer. The zone already holds `contexts` (`zone/mod.rs`), filled at session-established with direction, and fluff walks it. Stems draw from that registry filtered to `Outbound`; `get_out_connections`, the `outs` argument to `rebuild_stems` / `update_stems` / `force_epoch`, and the C++ walk go; the empty-walk log dies with the walk or moves into Rust. Reviewed 2026-09-29 as not a #909 blocker: `state_normal` removed the steerable height bias and leaves a seconds-scale, non-adversarial residue. Blocker lifted: #909 merged 2026-10-01. Falsify by no `get_out_connections(` under `src/` and a stem-selection test that never reads `m_state`. `get_out_connections_count` is a different job and stays.
-  - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
-  - Target: pre-genesis
-
 - **An honest receiver black-holes a stem from a peer it is pulling from.** `handle_notify_new_transactions` returns before any relay when `m_state != state_normal` (`cryptonote_protocol_handler.inl`), and `Including transaction` logs *before* that check, so the line does not mean the transaction was accepted. D++ §4.4 sizes the embargo on the premise that a dropped stem is a spy's choice; this is an honest drop that fluffs the origin's transaction from the origin. The gate reduces to `state_before_handshake` (`is_synchronized()` already answers "can I validate this"), and the log moves below both gates. The log is `cryptonote_protocol_handler.inl:822` and the return is `:832`. Blocker lifted: #909 merged 2026-10-01. Falsify by a test in which a stem from a peer in `state_synchronizing` enters the receiver's pool.
   - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
