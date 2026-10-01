@@ -424,11 +424,20 @@ a `TraceFault` naming what it found.
 | header | magic `"SHKTRACE"` ‖ version u8 ‖ reserved[7] = 0 | version bump on any layout change; a reader refuses every other value |
 | **facts** × n | tag `0x01` ‖ `height` u64 ‖ `weight` u64 ‖ `long_term_weight` u64 ‖ `coins_generated` u64 ‖ `burned` u64 ‖ `root_after`[32] ‖ `long_term_effective_median` u64 ‖ `cumulative_difficulty` u128 | one 88-byte row per height, consecutive from the first; the six passed-through `ConnectFacts` fields + the accumulator SI-10 reads; `Trace::borrow(h)` yields `Borrowed<Facts>`, convertible only into `ConnectFacts` with every origin `PassedThrough` |
 | **checkpoint** × k | tag `0x02` ‖ `height` u64 ‖ `digest`[32] | the **outer** `digest_v0` of the LMDB state at `height` — `TraceWriter::push_checkpoint_families` computes it from the three families with the function the redb read uses, so the C++ never hashes; anchored (its height has a facts row), unique; `Trace::expect(h)` yields `Expected<Digest>` for the grader only. The exporter writes one, at the tip (RD-F18) |
+| **archival snapshot** × 1 | tag `0x04` ‖ `height` u64 ‖ ten families × (`n_rows` u64 ‖ (`len` u32 ‖ row bytes) × n) | *added 2026-10-01, DRS-E4 commit 6 (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, `ARW-25`), under `TRACE_VERSION 0x01`:* the archival state at the covered tip as rows — the C++ walker's reading over LMDB, compared row by row against `ReadSnapshot::archival_snapshot()` by the grader's snapshot oracle. Exactly one per trace, at the tip, required under `0x01` and refused under `0x00`; the family order and row encodings are E4 §3.8.1's; an empty state is ten zero counts (88 bytes after the tag), never omitted |
 | trailer | tag `0xFF` ‖ `n_facts` u64 ‖ `n_checkpoints` u64 | both counts re-derived by the reader |
 
 Tag `0x03` (**Verdict**, the mutation family's expected verdicts, §7 item 8d)
 is RESERVED: named here so the byte is not re-minted, no code until that PR
-(rule 23).
+(rule 23). *That reservation held once already: E4 §3.8.1's first draft
+minted the snapshot as `0x03` and was corrected to `0x04` at the code
+reading (2026-10-01).*
+
+**`TRACE_VERSION` moved `0x00 → 0x01` with the snapshot record** (E4 commit
+6). Through E4 commit 7 the reader keeps both arms — the six committed
+corpus traces are `0x00` until that commit re-captures them, and a `0x00`
+trace's run reports the snapshot *not compared* — after which the `0x00`
+arm is deleted.
 
 ### 3.10 The mutation family — spec-first expected verdicts (increment 3, §7 item 8d)
 
