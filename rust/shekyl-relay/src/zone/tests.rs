@@ -1069,8 +1069,54 @@ fn stem_draws_are_not_biased_toward_one_outbound_peer() {
             other => panic!("slot drew {other:?}, not one of the two outbound sessions"),
         }
     }
+    // Seed 100, n = 4 000, p = 1/2, σ ≈ 32. 1 950 is about 1.5σ under the
+    // mean, so a 25 % bias fails and this seed does not.
     assert!(
-        hits[0] > 1_500 && hits[1] > 1_500,
+        hits[0] > 1_950 && hits[1] > 1_950,
         "draws bunched on one peer: {hits:?}"
+    );
+}
+
+#[test]
+fn a_two_slot_draw_over_three_peers_uses_each_peer() {
+    // More candidates than slots is the partial Fisher-Yates branch.
+    // Each peer is in two of the three equally likely pairs, so about
+    // two thirds of the epochs include it. Seed 101, n = 3 000, σ ≈ 26;
+    // 1 950 is about 1.9σ under the mean of 2 000.
+    let mut rng = SplitMix64::new(101);
+    let mut z = Zone::new(
+        DandelionParams::inherited(),
+        2,
+        FluffReach::EveryPeer,
+        LinkSecrecy::of(RelayZone::Public),
+        false,
+        0,
+        &mut rng,
+    )
+    .unwrap();
+    z.on_session_established(id(1), PeerDirection::Outbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
+    z.on_session_established(id(3), PeerDirection::Outbound);
+    let mut hits = [0u32; 3];
+    for _ in 0..3_000 {
+        z.rebuild_stems(&mut rng);
+        let slots = z.stem_slots();
+        assert_eq!(slots.len(), 2);
+        let mut seen = [false; 3];
+        for slot in slots.iter().flatten() {
+            let index = match *slot {
+                peer if peer == id(1) => 0,
+                peer if peer == id(2) => 1,
+                peer if peer == id(3) => 2,
+                other => panic!("slot drew {other:?}"),
+            };
+            assert!(!seen[index], "a slot pair repeated a peer");
+            seen[index] = true;
+            hits[index] += 1;
+        }
+    }
+    assert!(
+        hits.iter().all(|count| *count > 1_950),
+        "a peer was left out of the partial draw: {hits:?}"
     );
 }
