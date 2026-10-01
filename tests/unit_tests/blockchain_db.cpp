@@ -258,6 +258,50 @@ TYPED_TEST(BlockchainDBTest, TxpoolOriginZoneSurvivesPersistence)
   ASSERT_NO_THROW(this->m_db->close());
 }
 
+// A block whose miner transaction the serializer refuses is not stored.
+//
+// `add_block` names the block before it touches the miner transaction, and a
+// block's hash is cached. So a block that was named while whole and damaged
+// afterwards reaches the serializer here -- the one place the DB would
+// otherwise write whatever fragment came back as that block's coinbase.
+TYPED_TEST(BlockchainDBTest, AddBlockRefusesAMinerTxThatDoesNotSerialize)
+{
+  boost::filesystem::path tempPath = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path();
+  std::string dirPath = tempPath.string();
+
+  this->set_prefix(dirPath);
+  ASSERT_NO_THROW(this->m_db->open(dirPath));
+  this->get_filenames();
+  this->init_hard_fork();
+
+  db_wtxn_guard guard(this->m_db);
+
+  ASSERT_NO_THROW(this->m_db->add_block(this->m_blocks[0], this->m_block_weights[0], this->m_block_weights[0], t_diffs[0], t_coins[0], 0, {}, this->m_txs[0]));
+  ASSERT_EQ(1u, this->m_db->height());
+
+  // Named while whole, then damaged: the base serializer refuses a
+  // transaction whose encrypted-amount count is not its output count.
+  std::pair<block, blobdata> damaged = this->m_blocks[1];
+  const crypto::hash named = get_block_hash(damaged.first);
+  ASSERT_FALSE(damaged.first.miner_tx.vout.empty());
+  damaged.first.miner_tx.ct_signatures.enc_amounts.clear();
+
+  // The fixture is what it claims: refused by the serializer, still named.
+  blobdata fragment;
+  ASSERT_FALSE(tx_to_blob(damaged.first.miner_tx, fragment));
+  ASSERT_TRUE(damaged.first.is_hash_valid());
+  ASSERT_HASH_EQ(named, get_block_hash(damaged.first));
+
+  EXPECT_THROW(this->m_db->add_block(damaged, this->m_block_weights[1], this->m_block_weights[1], t_diffs[1], t_coins[1], 0, {}, this->m_txs[1]), DB_ERROR);
+
+  // Nothing of it was written, and the store still takes the whole block.
+  EXPECT_EQ(1u, this->m_db->height());
+  EXPECT_FALSE(this->m_db->block_exists(named));
+  ASSERT_NO_THROW(this->m_db->add_block(this->m_blocks[1], this->m_block_weights[1], this->m_block_weights[1], t_diffs[1], t_coins[1], 0, {}, this->m_txs[1]));
+  EXPECT_EQ(2u, this->m_db->height());
+  EXPECT_TRUE(this->m_db->block_exists(named));
+}
+
 TYPED_TEST(BlockchainDBTest, AddBlock)
 {
 
