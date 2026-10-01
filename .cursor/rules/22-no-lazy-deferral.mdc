@@ -108,6 +108,19 @@ issue whose merge lifts it, or a named person's decision. It may **not** be a
 restatement of the blocker: *"blocked until the builder exists"* is the claim
 itself, not a check on it.
 
+Nor may it be a **state** that something other than the owed work could reach.
+A *state-shaped* falsifier — "the six manifests at `format_version: 3`", "the
+schema at v12", "the flag flipped" — goes green when **anything** arrives at
+that state, and a version number is reached by any writer with a reason to
+bump it. A *field-shaped* falsifier — "every manifest carries the injection's
+`height` and `persona`" — can be satisfied only by the change it is about,
+because only that change produces the field. Observed (2026-10-01,
+`DRS_E4_ARCHIVAL_WRITER.md` §6.2 `ARW-16`): PR-b's falsifier was the version;
+an unrelated ruling moved the same files to that version by edit the day
+before PR-b began, and the check reported done for six generator runs that
+had not started. Name the fields the work produces, not the number the work
+would also happen to move.
+
 **If no falsifier can be written, that is the finding.** It means nobody knows
 what would unblock the item, which puts it closer to REJECTED-with-reasoning
 (`23-disposition-visibility.mdc`) than to DEFERRED — a permanent rejection wearing a
