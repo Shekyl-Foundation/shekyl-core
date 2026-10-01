@@ -24,7 +24,6 @@ The archiver's serving store needs a retention rule for a dropped shard, and an 
 `SO-D9` — `ERR_EPOCH_MISMATCH` on the serve-credit admission path is a tautology; RULED (i) 2026-09-13, implementation owed.
 Serve-credit inclusion incentive and archival weight pricing — the fee-and-weight round Q9 names but nothing scheduled.
 Connect-path regression for the hash-gated FCMP++ proof-skip (`CEN-M8` fix wiring).
-Delete `fill_construct_tx_rct_stub`
 The C++ transaction builder is test-only and nothing tracked that.
 `src/device/device_ledger.*` may be the next `device_cold.hpp`
 `get_archival_emission_claim_source` walks the entire serve-credit table per unauthenticated RPC

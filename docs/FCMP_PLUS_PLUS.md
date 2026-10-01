@@ -1845,8 +1845,9 @@ serialized immediately after `enc_amounts` and before `outPk`:
   harmless, since `0x00…00 XOR k_label[..8]` is uniform and §5.7.10 holds for
   it exactly as for the sentinel. What the guard was aimed at is a path that
   writes the field **without encrypting it at all**
-  (`fill_construct_tx_rct_stub` value-initialises `enc_labels` and never calls
-  the label encryption), which puts a literal `00×9` on the wire, identical
+  (`fill_construct_tx_rct_stub`, since deleted, value-initialised `enc_labels`
+  and never called the label encryption), which put a literal `00×9` on the
+  wire, identical
   across every output, with `label_tag` zero where a derived tag is uniform.
 
   The Rust signing path *used to* carry the same shape: `enc_label` was a plain
