@@ -1571,8 +1571,10 @@ ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
 void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
 
 /// Copy the thread-ledger report into `buf`, NUL-terminated.
-/// Returns the bytes written, excluding the NUL. A null `buf` or a
-/// `len` of 0 writes nothing and returns the report length.
+/// Always returns the report's full length, excluding the NUL. A null
+/// `buf` or a `len` of 0 writes nothing. A short buffer is truncated and
+/// still NUL-terminated; a return greater than or equal to `len` means
+/// the caller retries with a larger buffer.
 size_t shekyl_thread_ledger_report(char* buf, size_t len);
 
 // ---------------------------------------------------------------------------

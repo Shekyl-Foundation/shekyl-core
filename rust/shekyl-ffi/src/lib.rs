@@ -147,8 +147,9 @@ pub mod inbound_ceiling_ffi;
 // cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
 pub mod seam_ffi;
 
-// The socketless asio executor. One ledger row. The floor check is
-// ExecutorBudget::above_floor; this module does not reimplement it.
+// The thread ledger at the C boundary: one executor row, and the report
+// of every row. The floor check is ExecutorBudget::above_floor; this
+// module does not reimplement it.
 pub mod executor_ffi;
 
 // Zone listen and dial. The seam stays connector-agnostic; this module is
