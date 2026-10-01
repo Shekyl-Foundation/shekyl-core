@@ -205,7 +205,16 @@ use super::{Canonical, CodecError};
 ///   (`(u64, u32) → slash_log_entry`, `([u8; 32], u64, u64) → Present`);
 ///   `archival_budget_accruing` is born Rust-only. No digest family moves
 ///   yet (`digest_v1` is commit 6's).
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(19);
+/// - `20` — the txid binds the archival length (`SHT-Q2`,
+///   `GENESIS_TX_WIRE_FORMAT.md` §11). **Content, not layout:** no table,
+///   codec or fixture moves, but the bytes a connect stores for the same
+///   chain do — `tx_indices` is keyed by the txid and every block body lists
+///   its transactions by it, and every non-coinbase txid changed. A store
+///   written under `19` names its spends by ids this binary does not
+///   compute, and would halt at its first skeleton rebuild as corruption;
+///   the bump refuses it at open with the true reason. LMDB took `VERSION`
+///   15 → 16 with the same change, for the same reason.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(20);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -262,10 +271,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(19));
-        assert_eq!(SCHEMA_VERSION.encode(), [19, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(20));
+        assert_eq!(SCHEMA_VERSION.encode(), [20, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[19, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[20, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

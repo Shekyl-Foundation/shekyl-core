@@ -32,9 +32,11 @@
   3.38 peer disagrees about every spend's id, not only about this member.
 - **Stores.** LMDB `VERSION` 15 → 16 — content, not layout: a v15 datadir
   indexes its transactions under ids no current node computes, and is
-  refused at open (`LMDB_SCHEMA.md`). Pre-genesis: delete and resync. The
-  redb store's layout does not move, so `SCHEMA_VERSION` stays 18; a store
-  written before this change halts on its first skeleton rebuild.
+  refused at open (`LMDB_SCHEMA.md`). The redb store's `SCHEMA_VERSION`
+  19 → 20 for the same reason: `tx_indices` is keyed by the txid, so a
+  store written before this change is refused at open instead of halting
+  as corruption on its first skeleton rebuild. No snapshot moves.
+  Pre-genesis: delete and resync.
 - Pins and corpora regenerated, because the ids moved:
   `pruned_tx_hash_parity_v1.json` and `serve_credit_tx_parity_v1.json` (now
   pinning the length), `live_oracle_spend_v1.json`, the six captured
