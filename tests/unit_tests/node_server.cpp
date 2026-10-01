@@ -545,8 +545,8 @@ TEST(node_server, operator_onion_is_advertised)
     "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion";
   ASSERT_TRUE(server.init(offline_node_vm(node_dir, {
     // The count is omitted: an explicit count below the embargo floor
-  // refuses to start, and the count is not what this test observes.
-  "--tx-proxy", "tor,127.0.0.1:9050",
+    // refuses to start, and the count is not what this test observes.
+    "--tx-proxy", "tor,127.0.0.1:9050",
     "--anonymous-inbound", onion + ":18080,127.0.0.1:38123,8",
   })));
   const auto announced = server.get_announced_address(epee::net_utils::zone::tor);
@@ -562,8 +562,10 @@ TEST(ban, ignores_port)
   Server server(cprotocol);
   cprotocol.set_p2p_endpoint(&server);
 
+  // The span is the ordinary block time. A duration that does not fit in
+  // nanoseconds is refused, and that refusal is ban.limit's subject.
   ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5)));
-  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5), std::numeric_limits<time_t>::max() - 1));
+  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5)));
   ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5)));
   ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS_PORT(1,2,3,4,6)));
   ASSERT_TRUE(server.unblock_host(MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5)));
