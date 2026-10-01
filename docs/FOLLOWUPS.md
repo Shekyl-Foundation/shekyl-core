@@ -22,11 +22,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **Test that a stem from a peer in `state_synchronizing` enters the receiver's pool.** The ingress gate is `state_before_handshake` and the log is "Transaction accepted for admission", after the duplicate drop and both gates; the pool can still refuse. Falsify by that test.
-  - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
-  - Target: pre-genesis
-
-- **Write the transactions-per-epoch bound the epoch length rests on.** Sharma–Gosain–Diaz §VII-A reconstruct 98.5 % of a static privacy subgraph from about 100 transactions relayed per honest node. Epoch rotation (`rebuild_stems`) is the answer only while transactions per node per epoch stays well under that, which is a claim about Shekyl's rate and the 10-minute epoch that is currently assumed, not derived. Derive it, state the rate at which the epoch must shorten as the reopen criterion. Blocked on nothing but the derivation; scheduled with the two rows above. Falsify by the number and its reopen rate appearing in the owner document.
+- **Write the transactions-per-epoch bound the epoch length rests on.** Sharma–Gosain–Diaz §VII-A reconstruct 98.5 % of a static privacy subgraph from about 100 transactions relayed per honest node. Epoch rotation (`rebuild_stems`) is the answer only while transactions per node per epoch stays well under that, which is a claim about Shekyl's rate and the 10-minute epoch that is currently assumed, not derived. Derive it, state the rate at which the epoch must shorten as the reopen criterion. Blocked on nothing but the derivation. Falsify by the number and its reopen rate appearing in the owner document.
   - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
 
