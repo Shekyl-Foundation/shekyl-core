@@ -983,8 +983,12 @@ namespace cryptonote
       return get_object_hash(t, res, blob_size_ref);
     }
 
-    // Serializing is what sets the three offsets read below.
-    const blobdata blob = tx_to_blob(t);
+    // Serializing is what sets the three offsets read below. Its verdict is
+    // read, not discarded: the offsets are recorded before the prunable
+    // region is written, so a refusal inside that region leaves them in order
+    // over a fragment, and the range check below would pass it.
+    blobdata blob;
+    CHECK_AND_ASSERT_MES(tx_to_blob(t, blob), false, "Failed to serialize transaction for its hash");
     const size_t prefix_size = t.prefix_size;
     const size_t pqc_auths_offset = t.pqc_auths_offset;
     const size_t unprunable_size = t.unprunable_size;

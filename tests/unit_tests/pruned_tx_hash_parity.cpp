@@ -265,6 +265,42 @@ TEST(pruned_tx_hash_parity, pruned_spend_identity_matches_the_rust_oracle)
       << "a pruned body has no archival length to measure and must not be named";
 }
 
+// A transaction its own serializer refuses has no id.
+//
+// `calculate_transaction_hash` cuts the serialized blob at the offsets the
+// serializer recorded, and those offsets are set BEFORE the prunable region
+// is written. So a refusal that arrives inside the prunable region leaves a
+// blob whose three offsets are in order and whose tail is a fragment: every
+// range check passes, and a mixer handed that fragment would return an id for
+// bytes that are not a transaction. The serializer's verdict is the only
+// thing that says so, and it must be read.
+//
+// The shape here is one spend input with two pseudo-outs: the prunable
+// serializer writes the range proof, the tree depth and the membership proof
+// and only then compares the pseudo-out count to the inputs.
+TEST(pruned_tx_hash_parity, a_transaction_the_serializer_refuses_has_no_txid)
+{
+  // Control: the unmodified transaction serializes and is named.
+  transaction tx = build_kat_tx();
+  crypto::hash named;
+  ASSERT_TRUE(calculate_transaction_hash(tx, named, nullptr));
+
+  tx.ct_signatures.p.pseudoOuts.resize(2);
+
+  // The fixture is what it claims: refused, after prunable bytes were written,
+  // with the offsets still in order.
+  blobdata fragment;
+  ASSERT_FALSE(tx_to_blob(tx, fragment)) << "the serializer must refuse this body";
+  ASSERT_LE(tx.prefix_size.load(), tx.pqc_auths_offset.load());
+  ASSERT_LE(tx.pqc_auths_offset.load(), tx.unprunable_size.load());
+  ASSERT_LT(tx.unprunable_size.load(), fragment.size())
+      << "the refusal must arrive after part of the prunable region was written";
+
+  crypto::hash refused;
+  EXPECT_FALSE(calculate_transaction_hash(tx, refused, nullptr))
+      << "a body the serializer refused was given an id over its fragment";
+}
+
 // The cross-language half of the live-oracle pin.
 //
 // The Rust leg re-serializes these bytes and recomputes the txid, which
