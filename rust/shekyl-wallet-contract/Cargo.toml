@@ -20,7 +20,7 @@ shekyl-engine-core = { path = "../shekyl-engine-core" }
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
-shekyl-rpc-client = { path = "../shekyl-rpc-client", features = ["std"] }
+shekyl-rpc-client = { path = "../shekyl-rpc-client" }
 
 [dev-dependencies]
 shekyl-types = { path = "../shekyl-types" }
