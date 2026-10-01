@@ -230,6 +230,14 @@ pub struct TxRecord {
     /// The archival length — `txs_archival_len[id]`, the third operand the
     /// txid binds (`SHT-Q2`); permanent. The row is sparse, present iff the
     /// transaction carries archival good, so a coinbase's reads zero here.
+    ///
+    /// **As recorded, not as verified** — like the two hash rows beside it.
+    /// A row lost from a transaction that carries good also reads zero, and
+    /// this read cannot tell the two apart. A consumer that names a txid
+    /// from this record rebuilds it from these operands and compares it to
+    /// the hash it asked by (`leaf_reads::outputs_at`, the one such consumer
+    /// today); the prune reads the rows directly and holds them to the
+    /// block's cell (SI-24).
     pub archival_len: ArchivalLength,
 }
 
