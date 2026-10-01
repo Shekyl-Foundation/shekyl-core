@@ -3,28 +3,35 @@
 // All rights reserved.
 // BSD-3-Clause
 
-// Cross-language KAT for the PRUNED transaction identity -- the 4-part
-// FCMP++/PQC spend arm of `get_pruned_transaction_hash` against shekyl-wire's
-// `Transaction::hash_with_supplied_prunable` (RK-4c).
+// Cross-language KAT for the FCMP++/PQC spend's bytes and identity, against
+// shekyl-wire's pin (`pruned_tx_hash_parity_v1.json` -- full bytes, pruned
+// bytes, prunable digest, archival length, txid).
 //
-// RK-4c made the pruned identity a trust boundary: the Rust engine recomputes
-// it from an untrusted daemon's bytes and refuses any body whose identity is
-// not the requested txid. Before this file, every Rust test derived its
-// expected txid from the function under test, so both sides of that check
-// could agree on the same wrong value while every real daemon reply got
-// refused. This leg breaks the circle: shekyl-wire authored the fixture
-// (`pruned_tx_hash_parity_v1.json` -- full bytes, pruned bytes, prunable
-// digest, txid), and C++ must reproduce all four with the production
-// serializer and hash functions:
+// What this leg is an independent oracle FOR changed with SHT-Q2. The txid
+// mixes the transaction's archival length, and there is one mixer, in Rust:
+// `calculate_transaction_hash` serializes, cuts the blob at the offsets the
+// serializer recorded, and calls it. So C++ no longer derives the mix a
+// second time, and this file no longer claims to. What C++ still owns, and
+// what this leg pins against bytes Rust authored, is everything that decides
+// WHICH bytes reach the mixer:
 //
 //   - the same transaction, built field-by-field, serializes to `tx_hex`;
-//   - `get_transaction_hash` and `get_pruned_transaction_hash(t, digest)`
-//     both produce `tx_hash_hex` (the 4-part {prefix, base, pqc_auths,
-//     prunable} mix -- format_utils.cpp:1163-1182);
+//   - `get_transaction_hash` produces `tx_hash_hex` -- which holds only if
+//     `prefix_size`, `pqc_auths_offset` and `unprunable_size` cut the blob
+//     where shekyl-wire's own parse puts those four regions (the Rust pin
+//     was authored from the parsed body, not from slices);
 //   - `calculate_transaction_prunable_hash` produces `prunable_hash_hex`;
 //   - `serialize_base` -- the framing `get_pruned_tx_blob` reassembles from
 //     `txs_pruned` + `txs_pqc_auths` and the daemon serves as
-//     `pruned_as_hex` -- produces `pruned_hex`, a prefix of `tx_hex`.
+//     `pruned_as_hex` -- produces `pruned_hex`, a prefix of `tx_hex`;
+//   - the bytes after `pqc_auths_offset` number `archival_len`, the operand
+//     Rust measures from the same two ranges.
+//
+// The mix itself is pinned on the Rust side, where a hand-spelled derivation
+// stands beside the mixer (shekyl-wire/tests/pruned_tx_hash_parity.rs). The
+// pruned identity -- a pruned body, its digest and its length supplied -- is
+// Rust-only (`Transaction::hash_with_supplied_prunable`): C++ has no pruned
+// txid function, because a pruned body has no length here to measure.
 //
 // Structurally parseable, not cryptographically valid: proof bytes are
 // zeroed. The one constraint inherited from `expand_transaction_1` is that
@@ -74,6 +81,7 @@ struct PrunedHashKat {
   std::string pruned_hex;
   std::string prunable_hash_hex;
   std::string tx_hash_hex;
+  uint64_t archival_len;
 };
 
 // The live-oracle capture. Only the bytes and the txid are recorded; every
@@ -113,13 +121,14 @@ PrunedHashKat load_kat()
   rapidjson::IStreamWrapper wrapper(ifs);
   rapidjson::Document doc;
   doc.ParseStream(wrapper);
-  if (doc.HasParseError() || !doc.HasMember("tx_hex"))
+  if (doc.HasParseError() || !doc.HasMember("tx_hex") || !doc.HasMember("archival_len"))
     throw std::runtime_error("invalid pruned-hash parity fixture");
   PrunedHashKat k{};
   k.tx_hex = doc["tx_hex"].GetString();
   k.pruned_hex = doc["pruned_hex"].GetString();
   k.prunable_hash_hex = doc["prunable_hash_hex"].GetString();
   k.tx_hash_hex = doc["tx_hash_hex"].GetString();
+  k.archival_len = doc["archival_len"].GetUint64();
   return k;
 }
 
@@ -212,9 +221,17 @@ TEST(pruned_tx_hash_parity, pruned_spend_identity_matches_the_rust_oracle)
   ASSERT_TRUE(parse_and_validate_tx_from_blob(pinned_blob, parsed))
       << "the Rust-authored bytes must be a transaction C++ can parse";
 
-  // The txid, from the full body.
+  // The txid, from the full body: the blob cut at the serializer's offsets
+  // and mixed in Rust equals the id Rust derived from its own parse.
   EXPECT_EQ(epee::string_tools::pod_to_hex(get_transaction_hash(parsed)), k.tx_hash_hex)
       << "tx id differs across languages";
+
+  // The two ranges whose bytes are the archival length are the ones after
+  // `pqc_auths_offset`. Counted here from the offsets, not asked of Rust:
+  // this is the check that the ranges handed over are the ranges measured.
+  ASSERT_LE(parsed.pqc_auths_offset.load(), pinned_blob.size());
+  EXPECT_EQ(pinned_blob.size() - parsed.pqc_auths_offset.load(), k.archival_len)
+      << "the bytes after pqc_auths_offset are not the pinned archival length";
 
   // The prunable digest, from the production derivation.
   crypto::hash prunable_hash;
@@ -222,14 +239,6 @@ TEST(pruned_tx_hash_parity, pruned_spend_identity_matches_the_rust_oracle)
   ASSERT_TRUE(calculate_transaction_prunable_hash(parsed, &blob_ref, prunable_hash));
   EXPECT_EQ(epee::string_tools::pod_to_hex(prunable_hash), k.prunable_hash_hex)
       << "prunable digest differs across languages";
-
-  // The bound surface: the pruned identity with the digest supplied is the
-  // txid -- the recomputation the Rust engine performs against an untrusted
-  // daemon's pruned reply, and any discard preserves the
-  // operands of (txs_prunable_hash / txs_pqc_auths, LMDB schema v11).
-  EXPECT_EQ(epee::string_tools::pod_to_hex(get_pruned_transaction_hash(parsed, prunable_hash)),
-            k.tx_hash_hex)
-      << "pruned identity (supplied digest) diverged from the txid";
 
   // The pruned framing the daemon serves: `serialize_base` equals the pin
   // and is a prefix of the full blob -- the split identity
@@ -244,26 +253,27 @@ TEST(pruned_tx_hash_parity, pruned_spend_identity_matches_the_rust_oracle)
   EXPECT_EQ(pruned_bytes, blob.substr(0, pruned_bytes.size()))
       << "the pruned form must be a prefix of the full form";
 
-  // And the production pruned parser accepts the pruned bytes and still
-  // derives the same identity.
+  // And the production pruned parser accepts the pruned bytes. It yields no
+  // identity: a pruned body is refused by the txid function, by design.
   transaction pruned_parsed;
   blobdata pruned_pin;
   ASSERT_TRUE(epee::string_tools::parse_hexstr_to_binbuff(k.pruned_hex, pruned_pin));
   ASSERT_TRUE(parse_and_validate_tx_base_from_blob(blobdata_ref(pruned_pin), pruned_parsed))
       << "the served pruned framing must parse through the production pruned entry";
-  EXPECT_EQ(epee::string_tools::pod_to_hex(get_pruned_transaction_hash(pruned_parsed, prunable_hash)),
-            k.tx_hash_hex)
-      << "pruned identity from the pruned body diverged from the txid";
+  crypto::hash refused;
+  EXPECT_FALSE(calculate_transaction_hash(pruned_parsed, refused, nullptr))
+      << "a pruned body has no archival length to measure and must not be named";
 }
 
 // The cross-language half of the live-oracle pin.
 //
 // The Rust leg re-serializes these bytes and recomputes the txid, which
 // catches serializer drift but only within one language. This leg is the
-// independent oracle: C++ parses the same daemon-accepted bytes with the
-// production entry point and derives the same identities with the production
-// hash functions. Agreement here means the two implementations agree about a
-// transaction the network actually took, rather than about one we authored.
+// second parser: C++ parses the same daemon-accepted bytes with the
+// production entry point, re-serializes them byte-exactly, and cuts them at
+// its own offsets for the mixer. Agreement here means the two implementations
+// agree about the regions of a transaction the network actually took, rather
+// than of one we authored.
 //
 // Note what this test does NOT do, unlike its sibling above: it never rebuilds
 // the transaction field by field. A real FCMP++ spend carries a membership
@@ -300,12 +310,4 @@ TEST(pruned_tx_hash_parity, live_oracle_spend_identity_matches_the_accepted_byte
   EXPECT_EQ(epee::string_tools::buff_to_hex_nodelimer(reserialized), k.tx_hex)
       << "C++ re-serialization changed the accepted spend's bytes";
 
-  // The pruned identity with the digest supplied is the txid -- the same bound
-  // surface the synthetic pin checks, now over bytes consensus admitted.
-  crypto::hash prunable_hash;
-  const blobdata_ref blob_ref(blob);
-  ASSERT_TRUE(calculate_transaction_prunable_hash(parsed, &blob_ref, prunable_hash));
-  EXPECT_EQ(epee::string_tools::pod_to_hex(get_pruned_transaction_hash(parsed, prunable_hash)),
-            k.tx_hash_hex)
-      << "pruned identity (supplied digest) diverged from the accepted txid";
 }
