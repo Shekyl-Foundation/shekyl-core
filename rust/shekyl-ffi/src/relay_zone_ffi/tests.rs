@@ -52,27 +52,10 @@ struct GatherState {
     calls: usize,
     /// The ids the next call hands back.
     supply: Vec<[u8; 16]>,
-    /// Backing store the returned pointer borrows; a field so it outlives the
-    /// `poll` call, as the `OutboundCb` "valid until poll returns" contract asks.
-    pool: Vec<u8>,
 }
 
 thread_local! {
     static GATHER: RefCell<GatherState> = RefCell::new(GatherState::default());
-}
-
-extern "C" fn rec_gather(_: *mut c_void, out_n: *mut usize) -> *const u8 {
-    GATHER.with(|g| {
-        let mut g = g.borrow_mut();
-        g.calls += 1;
-        g.pool = g.supply.concat();
-        unsafe { *out_n = g.supply.len() };
-        if g.pool.is_empty() {
-            std::ptr::null()
-        } else {
-            g.pool.as_ptr()
-        }
-    })
 }
 
 thread_local! {
@@ -241,11 +224,9 @@ fn a_peers_batch_crosses_as_one_call_sorted_and_deduplicated() {
 fn an_unbound_slots_due_ticks_cross_as_noise_unbind_at_its_index() {
     reset();
     unsafe {
-        let peers: Vec<u8> = [id(1), id(2)].concat();
         let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
         shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
         shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
-        shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
 
         // Ground truth from the owning structure: which peer holds slot 1.
         let zone = h.as_ref().expect("live zone").driver.zone();
@@ -259,7 +240,7 @@ fn an_unbound_slots_due_ticks_cross_as_noise_unbind_at_its_index() {
         // The hole recipe: close slot 0's peer AND re-offer only the survivor,
         // so nothing backfills.
         shekyl_relay_zone_on_close(h, gone.as_ptr());
-        shekyl_relay_zone_update_stems(h, keep.as_ptr(), 1);
+        shekyl_relay_zone_update_stems(h);
         let zone = h.as_ref().expect("live zone").driver.zone();
         assert_eq!(
             zone.stem_slots()[0],
@@ -281,7 +262,6 @@ fn an_unbound_slots_due_ticks_cross_as_noise_unbind_at_its_index() {
                 h,
                 due,
                 std::ptr::null_mut(),
-                rec_gather,
                 rec_fluff,
                 rec_noise,
                 rec_resolved,
@@ -334,14 +314,19 @@ fn live_stems_atomic_tracks_the_derived_value_after_every_mutation() {
     // this asserts the published value equals the derived one after each
     // kind of mutation — a second writer, or a missed publish, shows here.
     unsafe {
-        let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         assert_eq!(shekyl_relay_zone_live_stems(h), 0, "fresh zone");
 
         shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
-        assert_eq!(shekyl_relay_zone_live_stems(h), 0, "no stems drawn yet");
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
+        assert_eq!(
+            shekyl_relay_zone_live_stems(h),
+            2,
+            "an outbound handshake publishes the filled map"
+        );
 
-        shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3);
+        shekyl_relay_zone_force_epoch(h, 0);
         assert_eq!(
             shekyl_relay_zone_live_stems(h),
             h.as_ref().expect("live zone").driver.zone().live_stems(),
@@ -371,37 +356,95 @@ fn the_three_plan_outcomes_stay_distinct_across_the_boundary() {
         let mut out = [0u8; 16];
 
         assert_eq!(
-            shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, out.as_mut_ptr()),
+            shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, true, out.as_mut_ptr()),
             SHEKYL_RELAY_PLAN_NO_ROUTE,
             "no slots populated yet: transient, and a refresh may fix it"
         );
         assert_eq!(out, NIL, "no successor to report");
 
         // Refresh, exactly as `dandelionpp_notify`'s retry does.
-        let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-        shekyl_relay_zone_update_stems(h, peers.as_ptr(), 3);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
 
         // Drive to a fluff epoch. The role is drawn from OS entropy, so it
         // is reached by re-drawing rather than by construction; at q = 20%
         // the loop bound is astronomically slack.
         let mut rolls = 0;
         while !h.as_ref().expect("live zone").driver.zone().is_fluffing() {
-            shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3);
+            shekyl_relay_zone_force_epoch(h, 0);
             rolls += 1;
             assert!(rolls < 10_000, "no fluff epoch in 10k draws");
         }
 
         assert_eq!(
-            shekyl_relay_zone_plan_relay(h, id(7).as_ptr(), false, out.as_mut_ptr()),
+            shekyl_relay_zone_plan_relay(h, id(7).as_ptr(), false, true, out.as_mut_ptr()),
             SHEKYL_RELAY_PLAN_FLUFF_EPOCH,
             "a relayed tx in a fluff epoch is settled — retrying is wasted work"
         );
         assert_eq!(
-            shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, out.as_mut_ptr()),
+            shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, true, out.as_mut_ptr()),
             SHEKYL_RELAY_PLAN_STEM,
             "RD-4 across the boundary: the origin stems even in a fluff epoch"
         );
         assert_ne!(out, NIL, "a stem plan must carry its successor");
+        shekyl_relay_zone_free(h);
+    }
+}
+
+#[test]
+fn an_unsynchronised_origin_is_withheld_across_the_boundary() {
+    // `node_synchronised == false` is NodeSync::Unsynchronised, not a second
+    // spelling of `local_origin`. A forwarded transaction still routes.
+    unsafe {
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
+        let stems = shekyl_relay_zone_live_stems(h);
+        let mut out = [0xABu8; 16];
+        assert_eq!(
+            shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, false, out.as_mut_ptr()),
+            SHEKYL_RELAY_PLAN_AWAIT_SYNC,
+        );
+        assert_eq!(out, NIL, "a hold names no successor");
+        assert_eq!(
+            shekyl_relay_zone_live_stems(h),
+            stems,
+            "the hold must not redraw"
+        );
+
+        let mut carrier = 0xFFu8;
+        let mut channel = 0xFFFF_FFFFu32;
+        out.fill(0xAB);
+        assert_eq!(
+            shekyl_relay_zone_plan_dispatch_with_refresh(
+                h,
+                std::ptr::null(),
+                true,
+                false,
+                out.as_mut_ptr(),
+                &raw mut carrier,
+                &raw mut channel,
+            ),
+            SHEKYL_RELAY_PLAN_AWAIT_SYNC,
+        );
+        assert_eq!(carrier, SHEKYL_RELAY_CARRIER_ORDINARY);
+        assert_eq!(channel, 0);
+        assert_eq!(
+            shekyl_relay_zone_live_stems(h),
+            stems,
+            "AwaitSync must not refresh"
+        );
+
+        let forwarded =
+            shekyl_relay_zone_plan_relay(h, id(7).as_ptr(), false, false, out.as_mut_ptr());
+        let fluffing = h.as_ref().expect("live zone").driver.zone().is_fluffing();
+        if fluffing {
+            assert_eq!(forwarded, SHEKYL_RELAY_PLAN_FLUFF_EPOCH);
+        } else {
+            assert_eq!(forwarded, SHEKYL_RELAY_PLAN_STEM);
+            assert_ne!(out, NIL);
+        }
         shekyl_relay_zone_free(h);
     }
 }
@@ -425,22 +468,24 @@ fn the_nil_uuid_means_locally_originated_which_is_what_cpp_actually_sends() {
     // nil-source + local_origin must stem during a fluff epoch exactly as
     // the null-source path does.
     unsafe {
-        let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_update_stems(h, peers.as_ptr(), 3);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
 
         let mut rolls = 0;
         while !h.as_ref().expect("live zone").driver.zone().is_fluffing() {
-            shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3);
+            shekyl_relay_zone_force_epoch(h, 0);
             rolls += 1;
             assert!(rolls < 10_000, "no fluff epoch in 10k draws");
         }
 
         let mut from_nil = [0u8; 16];
         let mut from_null = [0u8; 16];
-        let nil_plan = shekyl_relay_zone_plan_relay(h, NIL.as_ptr(), true, from_nil.as_mut_ptr());
+        let nil_plan =
+            shekyl_relay_zone_plan_relay(h, NIL.as_ptr(), true, true, from_nil.as_mut_ptr());
         let null_plan =
-            shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, from_null.as_mut_ptr());
+            shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, true, from_null.as_mut_ptr());
 
         assert_eq!(
             nil_plan, SHEKYL_RELAY_PLAN_STEM,
@@ -500,7 +545,6 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
                 h,
                 due - 1,
                 std::ptr::null_mut(),
-                rec_gather,
                 rec_fluff,
                 rec_noise,
                 rec_resolved,
@@ -512,7 +556,6 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
             h,
             due,
             std::ptr::null_mut(),
-            rec_gather,
             rec_fluff,
             rec_noise,
             rec_resolved,
@@ -551,27 +594,22 @@ fn polling_across_the_epoch_boundary_gathers_and_rebuilds() {
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         assert!(!h.is_null(), "these params build a zone");
 
-        // The set the rollover will draw its two slots from.
-        GATHER.with(|g| g.borrow_mut().supply = vec![id(1), id(2), id(3)]);
+        // The set the rollover draws its two slots from: established outbound
+        // sessions, not a height-filtered snapshot.
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
 
         let due = shekyl_relay_zone_next_wake(h);
         shekyl_relay_zone_poll(
             h,
             due,
             std::ptr::null_mut(),
-            rec_gather,
             rec_fluff,
             rec_noise,
             rec_resolved,
         );
 
-        GATHER.with(|g| {
-            assert_eq!(
-                g.borrow().calls,
-                1,
-                "a wake that crosses the epoch boundary gathers the set exactly once"
-            )
-        });
         assert_eq!(
             shekyl_relay_zone_live_stems(h),
             2,
@@ -607,7 +645,7 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
         assert_eq!(shekyl_relay_zone_next_wake(null), 0);
         let mut out = [0u8; 16];
         assert_eq!(
-            shekyl_relay_zone_plan_relay(null, id(1).as_ptr(), true, out.as_mut_ptr()),
+            shekyl_relay_zone_plan_relay(null, id(1).as_ptr(), true, true, out.as_mut_ptr()),
             SHEKYL_RELAY_PLAN_NO_ROUTE,
             "nothing routes through a zone that does not exist"
         );
@@ -616,8 +654,7 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
                 null,
                 id(1).as_ptr(),
                 true,
-                std::ptr::null(),
-                0,
+                true,
                 out.as_mut_ptr(),
             ),
             SHEKYL_RELAY_PLAN_NO_ROUTE,
@@ -630,8 +667,7 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
                 null,
                 id(1).as_ptr(),
                 true,
-                std::ptr::null(),
-                0,
+                true,
                 out.as_mut_ptr(),
                 &raw mut carrier,
                 &raw mut channel,
@@ -644,13 +680,12 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
             "null handle must not leave a stale covert carrier"
         );
         assert_eq!(channel, 0, "null handle must not leave a stale slot");
-        shekyl_relay_zone_update_stems(null, std::ptr::null(), 0);
-        shekyl_relay_zone_force_epoch(null, 0, std::ptr::null(), 0);
+        shekyl_relay_zone_update_stems(null);
+        shekyl_relay_zone_force_epoch(null, 0);
         shekyl_relay_zone_poll(
             null,
             0,
             std::ptr::null_mut(),
-            rec_gather,
             rec_fluff,
             rec_noise,
             rec_resolved,
@@ -661,28 +696,31 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
 }
 
 #[test]
-fn plan_relay_with_refresh_fills_an_empty_map() {
-    // Production notify path: empty public zone, first plan is NoRoute, one
-    // refresh populates the map and re-plans — without C++ owning that loop.
+fn an_outbound_handshake_fills_the_map_across_the_boundary() {
+    // The handshake is the merge. An empty registry stays empty through
+    // with_refresh; plan_relay then stems.
     reset();
     unsafe {
-        let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         let mut out = [0u8; 16];
-        let plan = shekyl_relay_zone_plan_relay_with_refresh(
-            h,
-            std::ptr::null(),
-            true,
-            peers.as_ptr(),
-            3,
-            out.as_mut_ptr(),
-        );
         assert_eq!(
-            plan, SHEKYL_RELAY_PLAN_STEM,
-            "local origin stems after refresh"
+            shekyl_relay_zone_plan_relay_with_refresh(
+                h,
+                std::ptr::null(),
+                true,
+                true,
+                out.as_mut_ptr(),
+            ),
+            SHEKYL_RELAY_PLAN_NO_ROUTE,
         );
-        assert_ne!(out, NIL, "successor written");
+        assert_eq!(shekyl_relay_zone_live_stems(h), 0);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
         assert_eq!(shekyl_relay_zone_live_stems(h), 2);
+        let plan = shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, true, out.as_mut_ptr());
+        assert_eq!(plan, SHEKYL_RELAY_PLAN_STEM, "local origin stems");
+        assert_ne!(out, NIL, "successor written");
         shekyl_relay_zone_free(h);
     }
 }
@@ -696,8 +734,10 @@ fn plan_relay_with_refresh_fills_an_empty_map() {
 fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
     reset();
     unsafe {
-        let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
         let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
         assert!(
             shekyl_relay_zone_noise_enabled(h),
             "fixture must actually have covert on or the carrier cell is vacuous"
@@ -708,13 +748,15 @@ fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
             h,
             std::ptr::null(),
             true,
-            peers.as_ptr(),
-            3,
+            true,
             dest_plan.as_mut_ptr(),
         );
 
         shekyl_relay_zone_free(h);
         let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
         let mut dest_dispatch = [0u8; 16];
         let mut carrier = 0xFFu8;
         let mut channel = 0xFFFF_FFFFu32;
@@ -722,8 +764,7 @@ fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
             h,
             std::ptr::null(),
             true,
-            peers.as_ptr(),
-            3,
+            true,
             dest_dispatch.as_mut_ptr(),
             &raw mut carrier,
             &raw mut channel,
@@ -1000,7 +1041,6 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
             h,
             3_600_000,
             std::ptr::null_mut(),
-            rec_gather,
             rec_fluff,
             rec_noise,
             rec_resolved,
@@ -1343,10 +1383,8 @@ fn a_zone_without_the_carrier_refuses_to_enqueue() {
 /// # Safety
 /// `h` must be a live zone handle.
 unsafe fn drive_one_noise_send(h: *mut RelayZoneHandle) {
-    let peers: Vec<u8> = [id(1), id(2)].concat();
     shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
     shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
-    shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
 
     let before = REC.with(|r| r.borrow().noise.len());
     // Covert ticks average 5 s (3.333 s + U[0, 3.334 s]) and the epoch minimum
@@ -1360,7 +1398,6 @@ unsafe fn drive_one_noise_send(h: *mut RelayZoneHandle) {
             h,
             due,
             std::ptr::null_mut(),
-            rec_gather,
             rec_fluff,
             rec_noise,
             rec_resolved,
@@ -1624,7 +1661,6 @@ fn a_discarded_carrier_message_resolves_not_sent_across_the_boundary() {
                 h,
                 tick * 1_000,
                 std::ptr::null_mut(),
-                rec_gather,
                 rec_fluff,
                 rec_noise,
                 rec_resolved,
@@ -1655,16 +1691,13 @@ fn a_discarded_carrier_message_resolves_not_sent_across_the_boundary() {
 /// discards what it held. Tests that care about surviving a roll depend on
 /// that overlap, so it is a precondition and not a coincidence.
 unsafe fn drive_one_wake(h: *mut RelayZoneHandle) {
-    let peers: Vec<u8> = [id(1), id(2)].concat();
     shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
     shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
-    shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
     let due = shekyl_relay_zone_next_wake(h);
     shekyl_relay_zone_poll(
         h,
         due,
         std::ptr::null_mut(),
-        rec_gather,
         rec_fluff,
         rec_noise,
         rec_resolved,
@@ -1724,9 +1757,10 @@ fn a_queued_message_survives_an_epoch_roll() {
                 next_token += 1;
                 enqueued += 1;
             }
-            let before = GATHER.with(|g| g.borrow().calls);
+            let due = shekyl_relay_zone_next_wake(h);
             drive_one_wake(h);
-            if GATHER.with(|g| g.borrow().calls) > before {
+            // Minimum epoch is 60 s. A wake at or past that is the rollover.
+            if due >= 60_000 {
                 // SENT, not merely resolved: a discard resolves too, so
                 // counting both would let the discard-at-roll defect satisfy
                 // this guard and fail the vacuity check instead of the

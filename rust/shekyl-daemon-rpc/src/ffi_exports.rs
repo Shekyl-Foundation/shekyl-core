@@ -10,14 +10,27 @@
 //! `shekyl-ffi`) so that `libshekyl_ffi.a` does not pull in daemon-specific
 //! symbols that reference `core_rpc_ffi_*`.
 
+use std::num::NonZeroUsize;
 use std::os::raw::c_char;
+
+use shekyl_runtime::{runtime, Pool, RuntimeBudget, ThreadName};
+
+/// Structural floor, the same pair the transport runtime is built with.
+/// Tokio's unset worker count and its 512 blocking cap are the defaults
+/// D5 refuses. These are not a measured budget; the D5 pin replaces them.
+fn daemon_rpc_budget() -> RuntimeBudget {
+    RuntimeBudget {
+        workers: NonZeroUsize::new(2).expect("workers"),
+        blocking: NonZeroUsize::new(1).expect("blocking"),
+    }
+}
 
 /// Opaque handle returned to C++ for a running daemon RPC server.
 #[repr(C)]
 pub struct ShekylDaemonRpcHandle {
     /// Level-triggered stop signal for every acceptor on this handle.
     shutdown: *const tokio::sync::watch::Sender<bool>,
-    rt: *const tokio::runtime::Runtime,
+    rt: *const Pool,
     /// The serve task's join handle. `shekyl_daemon_rpc_stop` blocks on it so
     /// the graceful-shutdown drain of in-flight handlers (which hold live
     /// references into the C++ core) completes before the runtime — and, on
@@ -159,11 +172,11 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
         }
     };
 
-    let Ok(rt) = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .thread_name("daemon-rpc")
-        .build()
-    else {
+    let Ok(name) = ThreadName::new("daemon-rpc") else {
+        tracing::error!("daemon-rpc: thread name refused");
+        return std::ptr::null_mut();
+    };
+    let Ok(rt) = runtime(daemon_rpc_budget(), &name) else {
         tracing::error!("daemon-rpc: failed to build the tokio runtime");
         return std::ptr::null_mut();
     };

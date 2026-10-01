@@ -356,6 +356,28 @@ bool Daemon::run(bool interactive)
     }
     mp_internals->p2p.apply_inbound_ceiling(rpc_reserved);
 
+    // Every daemon runtime is on the ledger by here: the transport pool
+    // is built at bind, Tor control at its start, and the RPC pools just
+    // above. The D5 pin of those counts is still ahead of any measurement.
+    // The report returns its full length. One retry covers a row that
+    // appeared between the probe and the fill. A second short fill is
+    // not printed.
+    {
+      const std::size_t needed = shekyl_thread_ledger_report(nullptr, 0);
+      std::string budget(needed + 1, '\0');
+      std::size_t full = shekyl_thread_ledger_report(budget.data(), budget.size());
+      if (full >= budget.size())
+      {
+        budget.assign(full + 1, '\0');
+        full = shekyl_thread_ledger_report(budget.data(), budget.size());
+      }
+      if (full < budget.size())
+      {
+        budget.resize(full);
+        MGINFO(budget);
+      }
+    }
+
     MGINFO("Starting p2p net loop...");
     mp_internals->p2p.run(); // blocks until p2p goes down
     MGINFO("p2p net loop stopped");

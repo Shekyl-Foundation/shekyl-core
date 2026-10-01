@@ -819,7 +819,6 @@ namespace cryptonote
     std::unordered_set<blobdata> seen;
     for (const auto &blob: arg.txs)
     {
-      MLOGIF_P2P_MESSAGE(cryptonote::transaction tx; crypto::hash hash; bool ret = cryptonote::parse_and_validate_tx_from_blob(blob, tx, hash);, ret, "Including transaction " << hash);
       if (seen.find(blob) != seen.end())
       {
         LOG_PRINT_CCONTEXT_L1("Duplicate transaction in notification, dropping connection");
@@ -829,7 +828,9 @@ namespace cryptonote
       seen.insert(blob);
     }
 
-    if(context.m_state != cryptonote_connection_context::state_normal)
+    // A handshake-complete peer that is still synchronising may relay.
+    // Only a session that has not finished the handshake is dropped here.
+    if(context.m_state == cryptonote_connection_context::state_before_handshake)
       return 1;
 
     // while syncing, core will lock for a long time, so we ignore
@@ -839,6 +840,13 @@ namespace cryptonote
     {
       LOG_DEBUG_CC(context, "Received new tx while syncing, ignored");
       return 1;
+    }
+
+    // Passed the duplicate drop and both gates. The pool can still refuse.
+    // The parse exists for this line; it is a second pass, after the decision.
+    for (const auto &blob: arg.txs)
+    {
+      MLOGIF_P2P_MESSAGE(cryptonote::transaction tx; crypto::hash hash; bool ret = cryptonote::parse_and_validate_tx_from_blob(blob, tx, hash);, ret, "Transaction accepted for admission " << hash);
     }
 
     /* §46: hand every arrived blob to every zone's stem-observation watch

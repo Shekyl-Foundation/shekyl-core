@@ -229,16 +229,15 @@ The runtime enables the I/O driver and the time driver. `net` and
 
 [`report`](../../rust/shekyl-thread-ledger/src/lib.rs) is the one line:
 each row, then the total of workers, blocking caps, and dedicated
-threads. The daemon prints it once every runtime it builds comes from
-`runtime`. The daemon-RPC builder at `shekyl-daemon-rpc`
-`ffi_exports.rs:162` and the Tor-control builder at
-`shekyl-tor-control-daemon` `blocking.rs:120` still construct their own,
-so the print is not wired. A total taken while those builders are off
-the ledger would omit the pools the sum exists to count. The move and
-the print are one FOLLOWUPS row, owned by this document. The clearnet
-connector is the first caller that keeps a runtime. Its blocking cap,
-shutdown timeout, and handshake span are the caller's, each labelled
-unmeasured; measurement replaces those values.
+threads. Daemon-RPC, Tor-control, and the transport each call
+`runtime`. `daemon.cpp` prints the report once before the p2p loop.
+Tor-control stays one worker on the multi-thread builder (a
+`current_thread` runtime only advances inside `block_on`). The counts
+are a structural floor — transport and daemon-RPC `workers=2`
+`blocking=1`, Tor-control `workers=1` `blocking=1` — labelled
+unmeasured. The D5 pin replaces them before any thread-budget leg.
+The clearnet connector's shutdown timeout and handshake span stay the
+caller's, each labelled unmeasured; measurement replaces those values.
 
 ## Clearnet connector — handshake cryptography (RULED 2026-09-27)
 

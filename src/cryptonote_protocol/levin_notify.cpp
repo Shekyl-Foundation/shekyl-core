@@ -183,59 +183,6 @@ namespace levin
       return ids.empty() ? nullptr : reinterpret_cast<const std::uint8_t*>(ids.data());
     }
 
-    //! \return Outbound connections in `state_normal`.
-    //!
-    //! That state is the session's answer to "is this peer caught up?".
-    //! A height comparison is a proxy for the same question, and it goes
-    //! stale for every peer the moment a new block lands, until the next
-    //! timed sync. One block behind for a few seconds is still caught up.
-    //! A session that is still synchronizing is not.
-    //! `local_height` is logged when the filter keeps nobody.
-    std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, uint64_t local_height)
-    {
-      std::vector<boost::uuids::uuid> outs;
-      outs.reserve(connection_id_reserve_size);
-
-      /* The foreach call is serialized with a lock, but should be quick due to
-         the reserve call so a strand is not used. Investigate if there is lots
-         of waiting in here. */
-
-      p2p.foreach_connection([&outs] (detail::p2p_context& context) {
-        if (!context.m_is_income && context.m_state == cryptonote_connection_context::state_normal)
-          outs.emplace_back(context.m_connection_id);
-        return true;
-      });
-
-      if (!outs.empty())
-      {
-        MDEBUG("Found " << outs.size() << " out connections in normal state");
-        return outs;
-      }
-
-      MINFO("relay filter local_height=" << local_height << " rule=state_normal eligible=0");
-      std::size_t candidates = 0;
-      p2p.foreach_connection([&] (detail::p2p_context& context) {
-        ++candidates;
-        const bool eligible = !context.m_is_income
-            && context.m_state == cryptonote_connection_context::state_normal;
-        MINFO("relay candidate direction=" << (context.m_is_income ? "in" : "out")
-            << " state=" << get_protocol_state_string(context.m_state)
-            << " recorded_height=" << context.m_remote_blockchain_height
-            << " local_height=" << local_height
-            << " eligible=" << (eligible ? "yes" : "no")
-            << " height_from=" << remote_height_source_name(context.m_remote_height_source));
-        return true;
-      });
-      if (candidates == 0)
-        MINFO("relay filter candidates=0");
-      return outs;
-    }
-
-    std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, const i_core_events* core)
-    {
-      return get_out_connections(p2p, core->get_current_blockchain_height());
-    }
-
     //! How wide a zone's stem set is and how long its epoch runs.
     struct relay_zone_params
     {
@@ -592,24 +539,11 @@ namespace levin
        across the FFI boundary, where an exception unwinding back into Rust is
        undefined behaviour. So each is `noexcept` and catches internally — a
        dropped relay or a skipped repoint is recoverable; a corrupted unwind is
-       not. `core` and `outs` exist for `on_outbound`, which the epoch branch of
-       `poll` calls back to gather the outbound set lazily. */
+       not. Stem candidates are the zone's own outbound sessions, so this
+       sink no longer carries a connection snapshot or a core pointer. */
     struct relay_effects
     {
       std::shared_ptr<detail::zone> zone;
-      /*! NON-CONST since the carrier producer landed, and the widening is
-          real rather than incidental. This was `const` while the sink only
-          READ core — `on_outbound` filters by blockchain height — and a
-          draft of the producer widened it because `on_carrier_resolved`
-          recorded from inside the callback.
-
-          IT NO LONGER DOES. Buffering the verdicts moved every mutation into
-          `apply_carrier_verdicts`, which takes `core` as its own argument
-          after the poll returns, so this member is back to the one read it
-          started with and says so again. `relay_wake::core_` stays non-const:
-          it is what feeds that call. */
-      const i_core_events* core = nullptr;
-      std::vector<boost::uuids::uuid> outs;
 
       /*! One carrier verdict, buffered for after the poll returns.
 
@@ -833,49 +767,17 @@ namespace levin
         }
       }
 
-      //! Gather the outbound connection set on demand.
-      //!
-      //! `poll` calls this only when a wake crosses an epoch boundary, so the
-      //! locked connection scan and median-height sort are paid at a rollover
-      //! and never on a fluff release. The result is stored in `outs` so the
-      //! returned span outlives the FFI call; an empty set returns nullptr.
-      static const std::uint8_t* on_outbound(void* ctx, std::size_t* out_n) noexcept
-      {
-        assert(ctx != nullptr);
-        relay_effects& self = *static_cast<relay_effects*>(ctx);
-        try
-        {
-          if (self.zone && self.zone->p2p && self.core)
-            self.outs = get_out_connections(*self.zone->p2p, self.core);
-        }
-        catch (const std::exception& e)
-        {
-          // An empty set at a boundary rebuilds the map over no peers — the
-          // already-tolerated no-outbound state, self-healing on the next
-          // update_stems — but log it, since it is otherwise a silent one-epoch
-          // stem/noise dropout.
-          self.outs.clear();
-          MWARNING("relay outbound gather threw, rebuilding over no peers: " << e.what());
-        }
-        catch (...)
-        {
-          self.outs.clear();
-          MWARNING("relay outbound gather threw a non-standard exception, rebuilding over no peers");
-        }
-        *out_n = self.outs.size();
-        return uuid_bytes(self.outs);
-      }
     };
 
     //! \pre Called within `zone->strand`.
-    void relay_update_stems(const std::shared_ptr<detail::zone>& zone, const std::vector<boost::uuids::uuid>& outs)
+    void relay_update_stems(const std::shared_ptr<detail::zone>& zone)
     {
       if (!zone)
         return;
 
       assert(zone->strand.running_in_this_thread());
 
-      shekyl_relay_zone_update_stems(zone->relay.get(), uuid_bytes(outs), outs.size());
+      shekyl_relay_zone_update_stems(zone->relay.get());
     }
 
     //! Runs every relay step that has come due, and re-arms the single timer.
@@ -929,20 +831,16 @@ namespace levin
            keeps a single poisoned verdict from taking the verdicts behind it. */
         try
         {
-          /* The connection set is gathered lazily: `poll` calls `on_outbound`
-             back only when this wake crosses an epoch boundary and the stem map
-             must be rebuilt. A fluff-release wake — the common case — never pays
-             for the locked connection scan and median-height sort the inherited
-             fluff path also skipped. The epoch deadline stays the zone's; this
-             side answers "give me the set", never "is it time", so no copy of the
-             deadline lives here. `sink` carries `core_` because `on_outbound`
-             needs it to filter by blockchain height. */
+          /* The stem set is the zone's established outbound sessions. An epoch
+             boundary rebuilds it there; a fluff release does not scan
+             connections or filter by recorded height. `sink` carries the
+             verdicts this wake will record after Rust releases the zone. */
           const std::uint64_t at = now_ms();
-          relay_effects sink{zone_, core_};
+          relay_effects sink{zone_};
           sink.reserve_verdicts(*zone_);
           shekyl_relay_zone_poll(
             zone_->relay.get(), at,
-            std::addressof(sink), relay_effects::on_outbound,
+            std::addressof(sink),
             relay_effects::on_fluff, relay_effects::on_noise,
             relay_effects::on_carrier_resolved
           );
@@ -1284,14 +1182,14 @@ namespace levin
 
         assert(zone_->strand.running_in_this_thread());
 
-        /* Stem-or-fluff is the zone's call, including "the origin always stems"
-           (RD-4) and the one NoRoute refresh. This offers the outbound snapshot
-           and performs transport; re-deriving `!fluffing || local` or owning
-           the refresh loop here would put zone scheduling in the one layer the
-           gtest oracle cannot see through. */
+        /* Stem-or-fluff, the one NoRoute refresh, and the unsynchronised-origin
+           hold are the zone's call. This performs transport. Re-deriving
+           `!fluffing || local`, owning the refresh loop, or deciding the hold
+           here would put zone scheduling in the one layer the gtest oracle
+           cannot see through. */
         boost::uuids::uuid destination{};
         const bool local_origin = (tx_relay == relay_method::local);
-        std::vector<boost::uuids::uuid> outs = get_out_connections(*zone_->p2p, core_);
+        const bool node_synchronised = core_->is_synchronized();
 
         /* What the wire does and what the txpool is told are the same thing on
            clearnet and deliberately not the same for an origin on an anonymity
@@ -1324,11 +1222,17 @@ namespace levin
         std::uint8_t carrier = SHEKYL_RELAY_CARRIER_ORDINARY;
         std::uint32_t channel = 0;
         std::int32_t plan = shekyl_relay_zone_plan_dispatch_with_refresh(
-          zone_->relay.get(), uuid_bytes(source_), local_origin,
-          uuid_bytes(outs), outs.size(),
+          zone_->relay.get(), uuid_bytes(source_), local_origin, node_synchronised,
           reinterpret_cast<std::uint8_t*>(std::addressof(destination)),
           std::addressof(carrier), std::addressof(channel)
         );
+        if (plan == SHEKYL_RELAY_PLAN_AWAIT_SYNC)
+        {
+          // The zone withheld a local origin. Nothing was sent and nothing is
+          // recorded, so the pool retries after this node synchronises.
+          MDEBUG("unsynchronised node originates no stem");
+          return;
+        }
 
         /* What still needs the ordinary wire. The carrier takes transactions
            out of this; whatever it refuses stays, and the existing stem path
@@ -1511,12 +1415,16 @@ namespace levin
           // force a mid-epoch map refresh (connection list may be stale) and
           // re-plan once. Transport retry only — refresh policy already lived
           // in the first call for the empty-map case.
-          outs = get_out_connections(*zone_->p2p, core_);
-          relay_update_stems(zone_, outs);
+          relay_update_stems(zone_);
           plan = shekyl_relay_zone_plan_relay(
-            zone_->relay.get(), uuid_bytes(source_), local_origin,
+            zone_->relay.get(), uuid_bytes(source_), local_origin, node_synchronised,
             reinterpret_cast<std::uint8_t*>(std::addressof(destination))
           );
+          if (plan == SHEKYL_RELAY_PLAN_AWAIT_SYNC)
+          {
+            MDEBUG("unsynchronised node originates no stem");
+            return;
+          }
           if (plan == SHEKYL_RELAY_PLAN_STEM &&
               make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{to_send}, destination, zone_->pad_txs, false))
           {
@@ -1579,11 +1487,11 @@ namespace levin
        is no transport question left to ask here.
 
        The zone drew its first epoch when it was constructed, matching the
-       inherited `start_epoch` running once here. All that is left is to offer
-       it the connections that already exist and arm the timer on the deadline
-       it chose. */
+       inherited `start_epoch` running once here. Production builds the
+       notifier before any handshake, so there is no session to merge yet:
+       an outbound handshake does that. Arm the timer on the deadline the
+       zone chose. */
     boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
-      relay_update_stems(z, get_out_connections(*z->p2p, core));
       relay_wake::arm(z, core);
     });
 
@@ -1609,33 +1517,6 @@ namespace levin
     if (!noise)
       has_outgoing = zone_->p2p->get_out_connections_count();
     return {noise, CRYPTONOTE_NOISE_CHANNELS <= connection_count, has_outgoing};
-  }
-
-  void notify::new_out_connection()
-  {
-    /* GATE 2 of 3, deleted at §89.5 — and the predicate went with it rather
-       than being rewritten.
-
-       This read `!covert_enabled || CRYPTONOTE_NOISE_CHANNELS <= live_stems`,
-       so a new peer triggered a stem-map refresh only on a covert zone. That
-       under-maintained every other zone including the public one: the map
-       self-populates on `NoRoute` and on send failure, so what was lost was
-       the *proactive* refresh, not liveness.
-
-       The obvious repair was to swap the covert throttle for the zone's own
-       stem width. That would have left C++ deciding a relay question, which
-       §18 gives to Rust. Instead the decision moves down: `update_stems` is
-       already a no-op when nothing needs doing — `StemMap::update` returns
-       `Unchanged` when every slot is live at full width, and a bound slot is
-       taken out of the candidate pool rather than re-drawn, so an
-       unconditional call cannot re-point an existing stem. The throttle was
-       C++ guessing at a condition Rust already evaluates exactly. */
-    if (!zone_)
-      return;
-
-    boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
-      relay_update_stems(z, get_out_connections(*z->p2p, core));
-    });
   }
 
   void notify::on_session_established(const boost::uuids::uuid &id, bool is_income)
@@ -1669,8 +1550,7 @@ namespace levin
       return;
 
     boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
-      const std::vector<boost::uuids::uuid> outs = get_out_connections(*z->p2p, core);
-      shekyl_relay_zone_force_epoch(z->relay.get(), now_ms(), uuid_bytes(outs), outs.size());
+      shekyl_relay_zone_force_epoch(z->relay.get(), now_ms());
       relay_wake::arm(z, core);
     });
   }
@@ -1728,11 +1608,11 @@ namespace levin
        shape exists to avoid. */
     boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
       const std::uint64_t at = shekyl_relay_zone_next_wake(z->relay.get());
-      relay_effects sink{z, core};
+      relay_effects sink{z};
       sink.reserve_verdicts(*z);
       shekyl_relay_zone_poll(
         z->relay.get(), at,
-        std::addressof(sink), relay_effects::on_outbound,
+        std::addressof(sink),
         relay_effects::on_fluff, relay_effects::on_noise,
         relay_effects::on_carrier_resolved
       );
