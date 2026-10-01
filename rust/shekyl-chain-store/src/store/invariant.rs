@@ -229,9 +229,15 @@ pub enum StoreInvariant {
     /// the delta implies: after the block's record writes, the new sum is
     /// the old sum minus the pre-images the writes displaced plus the
     /// post-images they left. A disagreement is a writer that changed a
-    /// record the delta did not describe, or a sum that would not fit.
-    /// Armed by the archival writer's phase 2 after its record writes and
-    /// by phase 9 after the slashes' (DRS-E4 `ARW-7`, `ARW-Q9`).
+    /// record the delta did not describe (an `Update` of a record the
+    /// table does not hold reads the same way: the displaced side is short
+    /// by a whole post-image). Armed **once** by the archival writer's
+    /// phase 2, after the block's record writes: the verdict's delta
+    /// carries each persona's *final* post-image with the slashes already
+    /// folded in, so the plan's second arming after phase 9 has nothing
+    /// left to check (DRS-E4 `ARW-7`, `ARW-Q9`; §6 row 5 records the
+    /// move). A sum that would not fit is not this row — it is SI-8's
+    /// [`Self::FoldOverflow`] on `archival_bond.bonded_total`.
     BondedTotalDisagrees {
         /// The sum the writes imply.
         expected: shekyl_units::AtomicUnits,

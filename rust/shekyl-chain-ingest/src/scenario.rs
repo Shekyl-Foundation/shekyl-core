@@ -61,14 +61,16 @@ use shekyl_crypto_pq::kem::{HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulat
 use shekyl_economics::EconomicParams;
 use shekyl_types::archival::BondRecord;
 use shekyl_types::{
-    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, PowHash, Timestamp,
+    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, PowHash, SettlementEpoch,
+    Timestamp,
 };
+use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 use zeroize::Zeroizing;
 
 use crate::connector::{
-    Apply, BondRecordOf, ChainFacts, Connector, ConnectorArgs, HashAt, Rewind, Rewound, RootAt,
-    RunFault, TemplateFacts,
+    Apply, BondRecordOf, BudgetAccruingOf, ChainFacts, Connector, ConnectorArgs, HashAt, Rewind,
+    Rewound, RootAt, RunFault, TemplateFacts,
 };
 use crate::schedule::ChainRules;
 use crate::test_support::{cleanup, open_store, tmp};
@@ -360,6 +362,17 @@ where
     pub async fn bond_record(&self, persona: PCanonicalId) -> Result<Option<BondRecord>, RunFault> {
         self.connector
             .ask(BondRecordOf { persona })
+            .await
+            .map_err(handler_error)
+    }
+
+    /// `epoch`'s accruing budget as the store holds it (`BudgetAccruingOf`).
+    pub async fn budget_accruing(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<AtomicUnits>, RunFault> {
+        self.connector
+            .ask(BudgetAccruingOf { epoch })
             .await
             .map_err(handler_error)
     }

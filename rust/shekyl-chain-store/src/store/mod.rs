@@ -91,6 +91,7 @@
 mod alt;
 mod alt_reads;
 mod archival_reads;
+mod archival_write;
 mod at_index;
 mod chain_reads;
 mod connect;
@@ -661,6 +662,19 @@ mod curve_read_tests;
 #[cfg(test)]
 #[path = "archival_read_tests.rs"]
 mod archival_read_tests;
+
+/// DRS-E4 commit 5: the archival writer's rows, read back against the
+/// verdict; the injector door; ARW-9; CEN-L7 over a persisted record.
+#[cfg(test)]
+#[path = "archival_write_tests.rs"]
+mod archival_write_tests;
+
+/// DRS-E4 commit 5 (B9): the slash-scan bench (`#[ignore]`d; times the
+/// slashing deadline's connect against an ordinary one on whatever runs
+/// it, and is the one path to the 9b writes).
+#[cfg(test)]
+#[path = "slash_scan_bench_tests.rs"]
+mod slash_scan_bench_tests;
 
 #[cfg(test)]
 #[path = "alt_tests.rs"]

@@ -35,7 +35,7 @@
 
 use crate::apply_policy::ArchivalFamily;
 use shekyl_chain_rules::RuleSet;
-use shekyl_types::{BlockHash, TxHash};
+use shekyl_types::{BlockHash, PCanonicalId, TxHash};
 
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
@@ -361,8 +361,30 @@ pub enum StoreCannot {
         /// The rule set the caller says is in force at `height`.
         in_force: Box<RuleSet>,
     },
-    /// `pop` on a store with no block recorded.
+    /// `pop`, or the regtest injection, on a store with no block recorded
+    /// (nothing to pop; no tip to attribute an injected bit to).
     ChainEmpty,
+    /// The regtest serve-credit injection
+    /// (`ChainStore::regtest_inject_serve_credit`, DRS-E4 §3.8 item 3) was
+    /// asked for under a [`Trust`](shekyl_chain_rules::Trust) that carries
+    /// a release's anchors — a public network's posture. The door writes
+    /// a bit the rules did not admit and opens on Fakechain only, as the
+    /// C++'s `regtest_inject_archival_serve_credit` refuses off
+    /// `FAKECHAIN` (`blockchain.cpp:4715`).
+    InjectionOffFakechain,
+    /// The regtest serve-credit injection named a persona with no bond
+    /// record. The door writes the one row the rules did not admit, but
+    /// it does not mint a file the reads refuse: every serve-credit read
+    /// arms SI-15 (a credit names a persona with a record), so a bit for a
+    /// stranger would be [`StoreInvariant::ServeCreditWithoutBond`] at the
+    /// next `pass_count`. The C++'s injector has no such check because
+    /// the C++ has no such read belt; the refusal is the belt's, not a
+    /// deviation to grade (rule 16 — the check is read at the
+    /// implementation, not inherited from the absence of one).
+    InjectionForUnbondedPersona {
+        /// The persona the injection named.
+        persona: PCanonicalId,
+    },
     /// `pop` at `tip` cannot run: the height is below the pop floor
     /// (S-CHAIN-W §5.4, SCW-7).
     ///
@@ -532,7 +554,16 @@ impl core::fmt::Display for StoreCannot {
                 "the block was judged under rule set {judged:?} but rule set {in_force:?} is in \
                  force at height {height}; re-validate under the rule set in force"
             ),
-            Self::ChainEmpty => f.write_str("pop on a chain store with no block recorded"),
+            Self::ChainEmpty => f.write_str("the chain store has no block recorded"),
+            Self::InjectionOffFakechain => f.write_str(
+                "regtest serve-credit injection refused: the node's trust carries a release's \
+                 anchors, so this is not a Fakechain",
+            ),
+            Self::InjectionForUnbondedPersona { persona } => write!(
+                f,
+                "regtest serve-credit injection refused: persona {persona} has no bond record, \
+                 and a credit without one is SI-15 at the next read"
+            ),
             Self::PopBelowFloor { tip, floor } => write!(
                 f,
                 "cannot pop height {tip}: the pop floor is {floor} (genesis is never poppable; \

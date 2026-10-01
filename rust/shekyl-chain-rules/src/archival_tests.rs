@@ -23,37 +23,23 @@
 //! about a chain; rule 50's third job was minted for exactly that. Their
 //! witness is `shekyl-chain-ingest::scenario_archival_tests`: posts a
 //! persona's keys built and signed, riding the driver's real spend, judged
-//! over the redb store's view. A claim by a persona with no bond is
-//! witnessed on redb by the `emission-claim` corpus vector
-//! (`vectors_tests`, the disclosed red pinned exactly at L7).
-//!
-//! # The interim pile — INTERIM, replaced by commit 5
-//!
-//! The cases under "same-block record" run an arm whose premise is a
-//! record **written by an earlier post in the same block** — a join, then
-//! a release / reinstate / second join / claim for the same persona, in
-//! one block. Through the production stack that premise is unreachable for
-//! the posts: CEN-G10 refuses a second bond post for a `P` in a block
-//! before the transition runs, so those arms only ever see a *persisted*
-//! record; and the claim needs an emission body the driver cannot yet
-//! produce. They are the transition's only witness for those arms until
-//! the writer lands, and they are labeled as such rather than dressed as
-//! exemptions. **Blocked on** E4 commit 5 (`DRS_E4_ARCHIVAL_WRITER.md` §6
-//! row 5: the writer, and the scenario driver's phase bodies). **Falsify
-//! by** `scenario_archival_tests::a_join_is_the_records_insert_and_the_store_does_not_yet_hold_it`
-//! — when its `bond_record` read turns `Some`, the redb witness for these
-//! arms can be written and this pile is deleted with it.
+//! over the redb store's view. Nor the multi-block arms — a release, a
+//! reinstate, a second join, a credit or a claim for a persona whose
+//! record an earlier block wrote: since DRS-E4 commit 5 the store writes
+//! the record, and those arms are witnessed over redb (the scenario
+//! driver's chain in `scenario_archival_tests`; the store's own
+//! `archival_write_tests` for the claim, whose emission body the driver
+//! does not produce; the `emission-claim` corpus vector for a settled
+//! claim that pays). The same-block pile that stood in for them until the
+//! writer landed is gone with it.
 
 use super::*;
 use crate::harness::assert_refused;
-use crate::harness::fixture::{candidate_on, chain_of, listed, recorded, root, serve_credit_vin};
+use crate::harness::fixture::{candidate_on, chain_of, listed, recorded, root};
 use crate::rules::miner::closed_shards_before;
 use crate::view::RecordedBlock;
-use shekyl_archival_retention::{
-    p_canonical_id_from_hybrid_pubkey, BondPostKind as PostKind, HoldingsDescriptor, HoldingsKind,
-    ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC,
-};
-use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
+use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
+use shekyl_crypto_pq::multisig::SINGLE_KEY_CANONICAL_LEN;
 use shekyl_types::archival::BadInterval;
 use shekyl_types::archival::{HeldShard, SlashLogEntry, SlashedHolding};
 use shekyl_types::{ArchivalLength, SHARD_LENGTH};
@@ -67,50 +53,6 @@ const FLOOR: u64 = ARCHIVAL_BOND_FLOOR_ATOMIC;
 
 fn persona(p: [u8; 32]) -> PCanonicalId {
     PCanonicalId::from_bytes(p)
-}
-
-/// The emission vin's persona is derived from its pubkey; `claimant`
-/// returns the persona a `[fill; LEN]` pubkey derives to so a JoinMarket
-/// can precede the claim.
-fn claimant(p_pubkey_fill: u8) -> PCanonicalId {
-    p_canonical_id_from_hybrid_pubkey(&vec![p_pubkey_fill; SINGLE_KEY_CANONICAL_LEN])
-}
-
-fn emission_vin(p_pubkey_fill: u8, epochs: &[u64]) -> Input {
-    use shekyl_archival_retention::{
-        ArchivalRewardEmissionVin, MembershipOnlyBacking, ShardWorkEntry, WorkEpochClaim,
-    };
-    let vin = ArchivalRewardEmissionVin {
-        p_pubkey: vec![p_pubkey_fill; SINGLE_KEY_CANONICAL_LEN],
-        holdings: HoldingsDescriptor {
-            kind: HoldingsKind::ShardSetCompact,
-            shard_ids: ShardSet::new(vec![7]).expect("one shard"),
-        },
-        settlement_epochs: epochs.to_vec(),
-        work_claim: epochs
-            .iter()
-            .map(|&epoch| WorkEpochClaim {
-                epoch,
-                shard_entries: vec![ShardWorkEntry {
-                    shard_id: 7,
-                    serve_credit_bit: true,
-                    scarcity_micro: 1_000,
-                }],
-            })
-            .collect(),
-        backing: MembershipOnlyBacking {
-            proof: vec![0xee; 64],
-            pseudo_out: [0x22; 32],
-            backing_pubkey: vec![0xb2; SINGLE_KEY_CANONICAL_LEN],
-            tree_depth: 3,
-        },
-        reward_amount_plain: epochs.iter().map(|_| 1_000_000).collect(),
-        auth_backing: vec![0xc3; SINGLE_SIG_CANONICAL_LEN],
-        auth_claim: vec![0xd4; SINGLE_SIG_CANONICAL_LEN],
-    };
-    Input::ArchivalRewardEmission {
-        canonical_bytes: vin.serialize().expect("an emission vin serializes"),
-    }
 }
 
 fn post(p: PCanonicalId, kind: WireKind, holdings: WireHoldings, total: u64, debit: u64) -> Input {
@@ -137,10 +79,6 @@ fn join(p: PCanonicalId, shards: &[u64]) -> Input {
         FLOOR * shards.len() as u64,
         0,
     )
-}
-
-fn other(p: PCanonicalId, kind: u8, holdings: WireHoldings, debit: u64) -> Input {
-    post(p, WireKind::Other(kind), holdings, 0, debit)
 }
 
 /// A body carrying exactly `inputs`.
@@ -185,10 +123,6 @@ fn at(slot: usize, input: usize) -> Locus {
     }
 }
 
-fn open_epoch() -> SettlementEpoch {
-    SettlementEpoch::from_raw(SettlementSchedule::GENESIS.epoch_at_height(3))
-}
-
 // ---- exemption 3: a holding the wire refuses to carry -------------------
 
 /// Exemption 3. `shekyl_wire::Holdings::read` refuses a repeated shard id,
@@ -201,116 +135,6 @@ fn a_compact_join_with_a_duplicate_shard_is_refused() {
         run(vec![body_with(vec![join(persona(P1), &[3, 3])])]),
         CenRow::L7,
         at(0, 0),
-    );
-}
-
-// ---- INTERIM: same-block record (module docs) — replaced by commit 5 ----
-
-/// INTERIM. A second join for a persona whose record was inserted earlier
-/// in the block: G10 refuses this block in production (two bond posts, one
-/// `P`), so the arm — a join over an existing record — is seen only over a
-/// persisted record, commit 5's witness.
-#[test]
-fn a_second_join_for_the_same_persona_is_refused_at_its_input() {
-    let p = persona(P1);
-    assert_refused(
-        run(vec![
-            body_with(vec![join(p, &[3])]),
-            body_with(vec![serve_credit_vin(P1, 3, 0), join(p, &[4])]),
-        ]),
-        CenRow::L7,
-        at(1, 1),
-    );
-}
-
-/// INTERIM. A release of a record inserted earlier in the block (G10 in
-/// production; the release of a persisted record is commit 5's).
-#[test]
-fn a_release_empties_the_record_and_closes_the_interval_cleanly() {
-    let p = persona(P1);
-    let delta = run(vec![body_with(vec![
-        join(p, &[3, 5]),
-        other(
-            p,
-            PostKind::Release as u8,
-            WireHoldings::CompleteTree,
-            2 * FLOOR,
-        ),
-    ])])
-    .expect("passes");
-    let [write] = delta.records() else {
-        panic!("one record write");
-    };
-    // The join's insert survives the release's update: one write, inserted.
-    assert_eq!(write.kind(), RecordWriteKind::Insert);
-    let record = write.record();
-    assert_eq!(record.bonded_total, AtomicUnits::ZERO);
-    assert_eq!(record.holdings, emptied());
-    let epoch = open_epoch().to_raw();
-    assert_eq!(
-        record.bad_intervals,
-        vec![BadInterval {
-            start_epoch: epoch,
-            end_exclusive: epoch,
-        }]
-    );
-}
-
-/// INTERIM. Same premise as the release above.
-#[test]
-fn a_release_whose_debit_is_not_the_record_total_is_refused() {
-    let p = persona(P1);
-    assert_refused(
-        run(vec![body_with(vec![
-            join(p, &[3, 5]),
-            other(
-                p,
-                PostKind::Release as u8,
-                WireHoldings::CompleteTree,
-                FLOOR,
-            ),
-        ])]),
-        CenRow::L7,
-        at(0, 1),
-    );
-}
-
-/// INTERIM. A reinstate over a record inserted earlier in the block (G10
-/// in production). No wallet producer emits a Reinstate yet either.
-#[test]
-fn a_reinstate_with_no_open_interval_is_refused() {
-    let p = persona(P1);
-    assert_refused(
-        run(vec![body_with(vec![
-            join(p, &[3]),
-            other(
-                p,
-                PostKind::Reinstate as u8,
-                WireHoldings::ShardSetCompact(vec![3]),
-                0,
-            ),
-        ])]),
-        CenRow::L7,
-        at(0, 1),
-    );
-}
-
-/// INTERIM. A claim on the open epoch by a persona whose record was
-/// inserted earlier in the block: the driver has no emission body yet
-/// (`emission-claim` is the corpus vector's, and it is the no-bond arm).
-/// The `NotSettled` arm over a persisted record is commit 5's.
-#[test]
-fn a_claim_for_an_epoch_not_yet_settled_is_refused() {
-    let p = claimant(0xc1);
-    // The open epoch is not settled; a claim on it is `NotSettled`.
-    let epoch = open_epoch().to_raw();
-    assert_refused(
-        run(vec![body_with(vec![
-            join(p, &[7]),
-            emission_vin(0xc1, &[epoch]),
-        ])]),
-        CenRow::L7,
-        at(0, 1),
     );
 }
 

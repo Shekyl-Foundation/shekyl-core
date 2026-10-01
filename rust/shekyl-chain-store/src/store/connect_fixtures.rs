@@ -17,7 +17,7 @@ use shekyl_chain_rules::{
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Input, Transaction};
+use shekyl_wire::{Block, BlockHeader, Ct, Input, Prunable, Transaction};
 
 use super::store_tests::TestErr;
 use super::view::BatchView;
@@ -59,11 +59,37 @@ pub(super) fn spend(key_image: usize, outputs: usize) -> Transaction {
 /// `TxShape::precedents`, restated for the store. The join spends, so the
 /// pair sits no lower than [`FIRST_SPEND_HEIGHT`], and it is listed in
 /// this order.
+///
+/// The credit is the **`RF-D1`** shape: a prunable region present and
+/// holding one non-empty pruned pass record per serve-credit vin, nothing
+/// else. The rules harness's `serve_credit_only` still builds the
+/// pre-`RF-D1` body — `prunable: None` — which `SHT-9` records as a shape
+/// wire's `validate_context_free_pruned` refuses; H20 admits it, and the
+/// store then cannot hold it: a `Ct::Fcmp { prunable: None }` body's txid
+/// mixes the **null hash** as its prunable component while its
+/// `txs_prunable_hash` row is `keccak256("")`, so
+/// `Transaction::hash_with_supplied_components` — which mixes the row —
+/// rebuilds a different txid, and the drain's `outputs_at` arms SI-7 on the
+/// block ten heights later (`tx_spendable_age`). Verified 2026-09-30 while
+/// landing DRS-E4 commit 5: a chain connecting this pair at height 10 halted
+/// at 20 with *"the pruned segment is not the transaction the block
+/// names"*. Every fixture that runs a connected credit past that age needs
+/// the conforming region, and the reconstruction has no other way to be
+/// right. Recorded against `SHT-9` in `docs/FOLLOWUPS.md`.
 pub(super) fn credited(key_image: usize, p: [u8; 32]) -> [Transaction; 2] {
-    [
-        fixture::join_market(fixture::point(key_image), p),
-        fixture::serve_credit_only(p),
-    ]
+    let mut credit = fixture::serve_credit_only(p);
+    let Ct::Fcmp { prunable, .. } = &mut credit.ct else {
+        unreachable!("the harness's serve credit is an `Fcmp` body");
+    };
+    let per_vin = credit.prefix.inputs.len();
+    *prunable = Some(Prunable {
+        bulletproofs: Vec::new(),
+        tree_depth: 0,
+        fcmp_proof: Vec::new(),
+        pseudo_outs: Vec::new(),
+        serve_credit_pruned: vec![vec![0xA5; 8]; per_vin],
+    });
+    [fixture::join_market(fixture::point(key_image), p), credit]
 }
 
 /// A candidate for a height **nothing has drained into**: its header carries

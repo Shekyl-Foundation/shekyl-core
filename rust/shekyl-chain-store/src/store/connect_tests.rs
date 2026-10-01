@@ -51,8 +51,10 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     // miner tx: spent_keys 0, tx_indices 1, txs_pruned 1, txs_prunable 1,
     // txs_prunable_hash 1, output_txs 1, output_amounts 1, tx_outputs 1;
     // leaf count 1 (DRS-E3, every connect); root 1; blocks 1,
-    // block_heights 1, block_info 1; hf_versions 1.
-    assert_eq!(connected.journaled, 13, "no pqc_auths row, no burn rows");
+    // block_heights 1, block_info 1; hf_versions 1; the open epoch's
+    // `archival_budget_accruing` upsert 1 (DRS-E4 commit 5, every connect
+    // that is not a close).
+    assert_eq!(connected.journaled, 14, "no pqc_auths row, no burn rows");
 
     let miner = &block.miner_transaction;
     let miner_hash = Hash32::from(miner.hash());
@@ -275,7 +277,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         .value()
         .decode()
         .expect("decodes");
-    assert_eq!(undo.0.len(), 13);
+    assert_eq!(undo.0.len(), 14);
     cleanup(&path);
 }
 
@@ -323,11 +325,12 @@ fn two_blocks_in_one_batch_with_a_spend() {
     // image + the same 4 tx rows + the 4-part txid's txs_pqc_auths segment
     // and txs_pqc_auth_hash row + its txs_archival_len row (`SHT-Q2`; the
     // coinbase carries no length and writes none) + 2 outputs × (output_txs
-    // + member) + tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 =
-    // 26. Nothing has matured at this height, so the tree tables write no
-    // row; nothing burned (no fee, no volume), so no burn row and no fold
-    // pre-image.
-    assert_eq!(c1.journaled, 26);
+    // + member) + tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 +
+    // the open epoch's `archival_budget_accruing` upsert 1 (DRS-E4 commit
+    // 5) = 27. Nothing has matured at this height, so the tree tables write
+    // no row; nothing burned (no fee, no volume), so no burn row and no
+    // fold pre-image.
+    assert_eq!(c1.journaled, 27);
     // Dense store ids: one coinbase per block through the spend block
     // (tx_ids `0..=s`, output_ids likewise), then the spend (tx_id `s + 1`,
     // output_ids `s + 1`, `s + 2`); amount_index under 0 equals output_id.
