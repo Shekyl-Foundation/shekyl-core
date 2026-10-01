@@ -18,6 +18,77 @@ gate**, which is therefore a reopening trigger for this document (§31.6).
 > protocol-level constant-rate cover. This document's Round-3 / RP port
 > status is unchanged.
 
+**Status:** ROUND 3 dispositioned — clean break; the RP-1…RP-3b port arc is
+**structurally complete** (§20.10), and the mechanism's definition of done is
+scored at **2/8 parameters derived** (§21 — the live ledger the remaining
+rounds tick; denominator widened by the Q-11 Unit 0 census, §22). Q-11 is in
+flight — Unit 0 (feasible-region census, §22) and Unit 1 (adversary and
+capability, §23) landed, with Unit 1's review producing **F-6: the covert
+path has no black-hole backstop** (§24.1 — the derived embargo arms only on
+`dandelionpp_stem`, which the noise zone's stem→local demotion clears, so the
+privacy-maximal path carries *weaker* censorship resistance than clearnet) and
+reframing Unit 2's target as an **active prober** (§24.2). **F-6 is CLOSED in
+its shipped form as of 2026-08-01 — configuration B is deleted (§41), covert
+channels default off, and no deployed configuration reaches the origin oracle.
+F-7 is now the top item, because C is the only anonymity configuration and its
+embargo is provisioned from the defective `F`.** Historical form: **Read F-6 at
+§25.1: `proxy.noise` defaults true, so the DEFAULT Tor
+deployment (configuration B) runs neither Dandelion++ nor the embargo** — the
+arc's entire output is bypassed on the deployment a privacy-motivated user
+selects, and two live §6 claims are false there. That outranks the cadence
+work — as does **F-7** (§26) — **CLOSED 2026-08-01, §44: `fluff_return_ms = 3250` landed with the re-derived 190 s embargo and the measured set re-recorded**; Corollary 5.1 puts configuration B's ranking on a literature footing (§28.5): `F = 2250` was an undirected/`EveryPeer`
+measurement fed to the embargo derivation for *every* transport, so
+configuration C's embargo is under-provisioned in the direction the policy
+itself calls a privacy loss. **Q-12 is registered and live** (§22.2). The measurement that motivates this document landed alongside it
+in the same PR (`rust/shekyl-relay-privacy`, 19 measurement tests + the
+suite), so every number below is reproducible rather than asserted. **Round 3 outcome:** reshape is adopted unconditionally as a strict
+priority-order improvement (§14); the embargo derivation is held block-time-*unaware*
+by construction, with the block-time boundary reconciled at the integration layer
+(§15); the W3 residual is measured as `W3(g)` (§12.6); and **`ρ` is
+*underspecified*, blocked on Q-10 — the outbound-selection eclipse bound `g_max`**,
+which is a **p2p-subsystem** grounding (anchors, white/gray discipline, IP-group
+diversity, churn resistance), not a relay-timing one (§7, §13.5). The seal is in the
+open where the p2p round owns it. **Scope boundary (§6.9 — PENDING, not settled: §31.5 opened a counter-hypothesis that the concession may be about *identification* rather than *enumeration*, and §32.2 shows the check is blocked on Q-10):** this mechanism
+defends the *active* adversary (must misbehave or actively position); the *passive,
+correctly-behaving* observer is explicitly **not defended** — a known limitation
+shared with Dandelion++ and Tor. **Closable only by p2p redesign (mixnet /
+cryptographic sender-anonymity) — NOT by cover traffic**, which an earlier
+version of this line listed: cover traffic denies the *wire* observer's count
+and does nothing against the *peer* first-successor, and treating it as a
+closer here is precisely the substitution §29 and §31 refuted. Deliberately out
+of scope. §6.10 records
+the one thing that reaches it: an *economic* deterrent (behaviour-floor + pinning
+taxes the observer into being infrastructure, un-budgetable for most covert
+institutional adversaries) — effective-population, not theoretical; economics, not
+protocol; carve-outs (unconstrained tier, overt participant) intact. Rounds 1–2 raised
+findings RD-1…RD-4; **all are accepted and dispositioned in §10**, and their
+consequences are folded into the body rather than appended as errata.
+RD-1 moved the adopted embargo (31 s → 112 s) and surfaced a fifth defect
+(F-5); RD-4 then corrected a stem-length error in the model that both this
+crate and the review shared, moving it again to **144 s** (§10.5). Its
+follow-on built the preemption-profile and black-hole instruments, inverted the
+drafted Q-8 premise, and established that the embargo *mean does not defend the
+binding channel* (§10.4, §10.6). RD-2 resolved Q-2. A later pass anchored the *adversary's position* at source
+(§6): the origin is the submitting daemon, the wallet↔daemon boundary is out of
+scope, and fluff visibility is transport-gated — which makes the passive
+adversary **clearnet-only** and the black-hole adversary transport-independent
+(§10.8). §6.5 then *quantifies* the Tor benefit — the paper's supernode observer
+collapses from π₀≈0.45 (clearnet, 30 % attack) to 0.000 (Tor) — so the Tor
+recommendation rests on a measurement, not on reasoning. §11 anchors every finding against the Dandelion++ paper and the Bitcoin
+Core source. Decisions D-1…D-7 stand as amended; §7 is the Round-3 agenda.
+**Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+(FFI-boundary-moving), and
+[`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+§"Migration is a planning activity" — this document exists so the port is not
+folded into feature work.
+**Spec-first per** [`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc).
+**Timeframes (rule 05):** *now* — the relay layer is the only privacy
+mechanism protecting transaction origin at the network layer, and three of its
+four randomized quantities are mis-specified; *mining-era end* — nothing here
+carries reward-era assumptions, the parameters are network-topology-driven;
+*V4 lattice-only* — relay timing is cryptography-agnostic and survives any
+membership-proof successor untouched.
+
 ## Relay-lane acceptance — RULED 2026-10-01
 
 Ruled so LV-3 and the zone-enum pull request do not choose shapes this
@@ -98,77 +169,6 @@ with this lane. The zone-enum change and this lane agree on criterion
    embargo and the epoch length. They are taken against the head that
    contains the stem-registry draw, not against the C++ filter they
    replace.
-
-**Status:** ROUND 3 dispositioned — clean break; the RP-1…RP-3b port arc is
-**structurally complete** (§20.10), and the mechanism's definition of done is
-scored at **2/8 parameters derived** (§21 — the live ledger the remaining
-rounds tick; denominator widened by the Q-11 Unit 0 census, §22). Q-11 is in
-flight — Unit 0 (feasible-region census, §22) and Unit 1 (adversary and
-capability, §23) landed, with Unit 1's review producing **F-6: the covert
-path has no black-hole backstop** (§24.1 — the derived embargo arms only on
-`dandelionpp_stem`, which the noise zone's stem→local demotion clears, so the
-privacy-maximal path carries *weaker* censorship resistance than clearnet) and
-reframing Unit 2's target as an **active prober** (§24.2). **F-6 is CLOSED in
-its shipped form as of 2026-08-01 — configuration B is deleted (§41), covert
-channels default off, and no deployed configuration reaches the origin oracle.
-F-7 is now the top item, because C is the only anonymity configuration and its
-embargo is provisioned from the defective `F`.** Historical form: **Read F-6 at
-§25.1: `proxy.noise` defaults true, so the DEFAULT Tor
-deployment (configuration B) runs neither Dandelion++ nor the embargo** — the
-arc's entire output is bypassed on the deployment a privacy-motivated user
-selects, and two live §6 claims are false there. That outranks the cadence
-work — as does **F-7** (§26) — **CLOSED 2026-08-01, §44: `fluff_return_ms = 3250` landed with the re-derived 190 s embargo and the measured set re-recorded**; Corollary 5.1 puts configuration B's ranking on a literature footing (§28.5): `F = 2250` was an undirected/`EveryPeer`
-measurement fed to the embargo derivation for *every* transport, so
-configuration C's embargo is under-provisioned in the direction the policy
-itself calls a privacy loss. **Q-12 is registered and live** (§22.2). The measurement that motivates this document landed alongside it
-in the same PR (`rust/shekyl-relay-privacy`, 19 measurement tests + the
-suite), so every number below is reproducible rather than asserted. **Round 3 outcome:** reshape is adopted unconditionally as a strict
-priority-order improvement (§14); the embargo derivation is held block-time-*unaware*
-by construction, with the block-time boundary reconciled at the integration layer
-(§15); the W3 residual is measured as `W3(g)` (§12.6); and **`ρ` is
-*underspecified*, blocked on Q-10 — the outbound-selection eclipse bound `g_max`**,
-which is a **p2p-subsystem** grounding (anchors, white/gray discipline, IP-group
-diversity, churn resistance), not a relay-timing one (§7, §13.5). The seal is in the
-open where the p2p round owns it. **Scope boundary (§6.9 — PENDING, not settled: §31.5 opened a counter-hypothesis that the concession may be about *identification* rather than *enumeration*, and §32.2 shows the check is blocked on Q-10):** this mechanism
-defends the *active* adversary (must misbehave or actively position); the *passive,
-correctly-behaving* observer is explicitly **not defended** — a known limitation
-shared with Dandelion++ and Tor. **Closable only by p2p redesign (mixnet /
-cryptographic sender-anonymity) — NOT by cover traffic**, which an earlier
-version of this line listed: cover traffic denies the *wire* observer's count
-and does nothing against the *peer* first-successor, and treating it as a
-closer here is precisely the substitution §29 and §31 refuted. Deliberately out
-of scope. §6.10 records
-the one thing that reaches it: an *economic* deterrent (behaviour-floor + pinning
-taxes the observer into being infrastructure, un-budgetable for most covert
-institutional adversaries) — effective-population, not theoretical; economics, not
-protocol; carve-outs (unconstrained tier, overt participant) intact. Rounds 1–2 raised
-findings RD-1…RD-4; **all are accepted and dispositioned in §10**, and their
-consequences are folded into the body rather than appended as errata.
-RD-1 moved the adopted embargo (31 s → 112 s) and surfaced a fifth defect
-(F-5); RD-4 then corrected a stem-length error in the model that both this
-crate and the review shared, moving it again to **144 s** (§10.5). Its
-follow-on built the preemption-profile and black-hole instruments, inverted the
-drafted Q-8 premise, and established that the embargo *mean does not defend the
-binding channel* (§10.4, §10.6). RD-2 resolved Q-2. A later pass anchored the *adversary's position* at source
-(§6): the origin is the submitting daemon, the wallet↔daemon boundary is out of
-scope, and fluff visibility is transport-gated — which makes the passive
-adversary **clearnet-only** and the black-hole adversary transport-independent
-(§10.8). §6.5 then *quantifies* the Tor benefit — the paper's supernode observer
-collapses from π₀≈0.45 (clearnet, 30 % attack) to 0.000 (Tor) — so the Tor
-recommendation rests on a measurement, not on reasoning. §11 anchors every finding against the Dandelion++ paper and the Bitcoin
-Core source. Decisions D-1…D-7 stand as amended; §7 is the Round-3 agenda.
-**Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
-(FFI-boundary-moving), and
-[`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
-§"Migration is a planning activity" — this document exists so the port is not
-folded into feature work.
-**Spec-first per** [`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc).
-**Timeframes (rule 05):** *now* — the relay layer is the only privacy
-mechanism protecting transaction origin at the network layer, and three of its
-four randomized quantities are mis-specified; *mining-era end* — nothing here
-carries reward-era assumptions, the parameters are network-topology-driven;
-*V4 lattice-only* — relay timing is cryptography-agnostic and survives any
-membership-proof successor untouched.
 
 **Not consensus.** Every quantity in this document is node-local relay policy.
 Nodes running different delays do not fork, no rule reads these values, and
