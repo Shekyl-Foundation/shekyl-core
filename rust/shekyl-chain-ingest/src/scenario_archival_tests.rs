@@ -25,8 +25,10 @@
 //! same test with the two assertions inverted: the record is `Some` after
 //! the join, and the next block's credit for it connects. The multi-block
 //! arms follow on the same chain: a release of the persisted record (its
-//! post-image read back), a second join for a bonded persona refused, and
-//! a reinstate against a record whose only interval is a clean close
+//! post-image read back), a release whose debit is not that record's total
+//! refused at L7 before the valid one connects, a second join for a bonded
+//! persona refused, and a reinstate against a record whose only interval is
+//! a clean close
 //! refused — the reinstate arm's *positive* witness needs an open interval,
 //! which only a slash writes, and no fixture chain here reaches the slash
 //! scan (a slash needs `M` epochs of settled misses and one epoch of
@@ -109,9 +111,11 @@ fn refused_at(outcome: Result<crate::scenario::Mined, StepOutcome>, row: CenRow,
 /// credit in the same block is keyed to the post; the accrual is the open
 /// epoch's row plus the block's leg. Then the store: the record is there,
 /// the accrual row is the post-image, and the blocks after read them — a
-/// credit for the persona connects, a release empties the other record
-/// and its post-image is what the store holds, a second join and a
-/// reinstate over a clean close are L7's refusals at their input.
+/// credit for the persona connects, a release whose debit is not the
+/// persisted total is L7 before any connect, a release of that total
+/// empties the record and its post-image is what the store holds, a
+/// second join and a reinstate over a clean close are L7's refusals at
+/// their input.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     let connecting = first_spending_height();
@@ -241,6 +245,27 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     // the other persisted record is its `Update` — bonded to zero, holding
     // nothing, one clean interval close at the open epoch.
     let next = connecting + 1;
+    // A debit that is not the persisted total is L7
+    // (`DebitNotRecordTotal`) at the post input. The block does not
+    // connect, so the valid release below still lands at `next` on the
+    // same coinbase.
+    let wrong_debit = whole.release(whole_record.bonded_total.to_raw() + 1);
+    refused_at(
+        scenario
+            .mine_listing(vec![spender.spend_coinbase_posting(
+                scenario.wallet(),
+                2,
+                next,
+                FEE,
+                Some(&wrong_debit),
+            )])
+            .await,
+        CenRow::L7,
+        Locus::Input {
+            slot: TxSlot::Listed(0),
+            input: 1,
+        },
+    );
     let release_whole = whole.release(whole_record.bonded_total.to_raw());
     let block = scenario
         .mine_listing(vec![
@@ -287,7 +312,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     assert_eq!(
         scenario.bond_record(whole.id()).await.expect("read"),
         Some(released.clone()),
-        "the release's post-image is the store's row (SI-20 journals the pre-image)"
+        "the release's post-image is the store's row (the replace journals the pre-image)"
     );
     assert_eq!(
         scenario.bond_record(compact.id()).await.expect("read"),
