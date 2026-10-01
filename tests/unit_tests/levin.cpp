@@ -160,10 +160,13 @@ namespace
         //! LMDB, so this is the fallible call that runs FIRST in verdict
         //! application — before the recording, before the allocation.
         mutable bool throw_on_pool_check_ = false;
+        //! Origination is refused while this is false. Existing fixtures
+        //! describe a node that may originate, so the default is synchronized.
+        bool synchronized_ = true;
 
         virtual bool is_synchronized() const final
         {
-            return false;
+            return synchronized_;
         }
 
         virtual uint64_t get_current_blockchain_height() const final
@@ -231,6 +234,10 @@ namespace
 
         //! Make the next `pool_has_tx` throw, once.
         void throw_on_next_pool_check() { throw_on_pool_check_ = true; }
+
+        //! An unsynchronised node originates nothing. Forwarded stems are
+        //! unaffected; the gate reads this, not the relay method of a peer.
+        void set_synchronized(bool value) { synchronized_ = value; }
 
         std::size_t relayed_method_size() const noexcept
         {
@@ -488,6 +495,14 @@ namespace
             receiver_.notifier.reset(
               new cryptonote::levin::notify{io_service_, connections_, zone, pad_txs, events_}
             );
+            /* Connections opened before the zone existed never reached
+               `on_session_established` (`on_connection_new` no-ops without a
+               notifier). The stem map is drawn from that registry, so adopt
+               them now and refresh; both land on the strand the caller's poll
+               runs, establishes first. */
+            for (const auto& context : contexts_)
+                receiver_.notifier->on_session_established(context.get_id(), context.is_incoming());
+            receiver_.notifier->new_out_connection();
             return receiver_.notifier;
         }
 
@@ -1436,6 +1451,32 @@ TEST_F(levin_notify, stem_no_outs_without_padding)
         EXPECT_TRUE(notification._.empty());
         EXPECT_TRUE(notification.dandelionpp_fluff);
     }
+}
+
+TEST_F(levin_notify, unsynchronised_node_originates_no_stem)
+{
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
+    auto &notifier = *notifier_ptr;
+
+    for (unsigned count = 0; count < 10; ++count)
+        add_connection(count % 2 == 0);
+    notifier.new_out_connection();
+    io_service_.poll();
+    ASSERT_EQ(10u, contexts_.size());
+
+    events_.set_synchronized(false);
+
+    std::vector<cryptonote::blobdata> mine(1);
+    mine[0].resize(100, 'f');
+    auto context = contexts_.begin();
+    EXPECT_TRUE(notifier.send_txs(mine, context->get_id(), cryptonote::relay_method::local));
+    io_service_.restart();
+    ASSERT_LT(0u, io_service_.poll());
+    EXPECT_EQ(0u, events_.relayed_method_size());
+    EXPECT_EQ(0u, receiver_.notified_size());
+    for (auto queued = contexts_.begin(); queued != contexts_.end(); ++queued)
+        EXPECT_EQ(0u, queued->process_send_queue());
+    // A forwarded stem while unsynchronised is `stem_without_padding`.
 }
 
 TEST_F(levin_notify, local_without_padding)
