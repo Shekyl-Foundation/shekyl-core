@@ -284,6 +284,7 @@ pub(crate) async fn write_budgeted(write: &mut OwnedWriteHalf, conn: u64, bytes:
             }
         }
     }
+    gate.record_message(LinkDirection::Up, conn);
     true
 }
 
@@ -486,5 +487,6 @@ async fn read_budgeted(
         }
         filled = end;
     }
+    gate.record_message(LinkDirection::Down, conn);
     Ok(())
 }

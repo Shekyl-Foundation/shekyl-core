@@ -165,6 +165,7 @@ where
                     }
                     off = end;
                 }
+                gate.record_message(LinkDirection::Up, conn);
                 outbound.release(n);
             }
         }
@@ -240,6 +241,7 @@ where
         if (n as u64) < grant {
             gate.refund(LinkDirection::Down, conn, grant - n as u64, false);
         }
+        gate.record_message(LinkDirection::Down, conn);
         let pieces = match decode(&buf[..n]) {
             Ok(pieces) => pieces,
             Err(kind) => return CloseCause::new(kind),

@@ -307,11 +307,17 @@ impl Lane {
             return;
         }
         self.total.bytes = self.total.bytes.saturating_add(n);
-        self.total.packets = self.total.packets.saturating_add(1);
         let flow = self.per.entry(conn).or_default();
         flow.bytes = flow.bytes.saturating_add(n);
-        flow.packets = flow.packets.saturating_add(1);
         flow.pace.observe(n, now);
+    }
+
+    /// One message finished. A grant is not a message: a rate-limited
+    /// write takes several grants and still counts once.
+    fn record_message(&mut self, conn: u64) {
+        self.total.packets = self.total.packets.saturating_add(1);
+        let flow = self.per.entry(conn).or_default();
+        flow.packets = flow.packets.saturating_add(1);
     }
 
     fn refund(&mut self, conn: u64, n: u64, whole_grant: bool) {
@@ -326,14 +332,10 @@ impl Lane {
         if let Some(flow) = self.per.get_mut(&conn) {
             flow.bytes = flow.bytes.saturating_sub(n);
             if whole_grant {
-                flow.packets = flow.packets.saturating_sub(1);
                 flow.pace.undo();
             } else {
                 flow.pace.shrink(n);
             }
-        }
-        if whole_grant {
-            self.total.packets = self.total.packets.saturating_sub(1);
         }
     }
 
@@ -430,6 +432,11 @@ impl LinkBudget {
         self.down.forget_mark();
     }
 
+    /// One message finished on `direction`. A grant is not a message.
+    pub fn record_message(&mut self, direction: LinkDirection, conn: u64) {
+        self.lane_mut(direction).record_message(conn);
+    }
+
     /// One connection asks to move `want` wire bytes.
     ///
     /// `class` is the schedule's input. With one class, the turn is the
@@ -452,7 +459,9 @@ impl LinkBudget {
     }
 
     /// Give unused tokens back. `whole_grant` means none of that grant
-    /// reached the socket, so the packet count comes back with them.
+    /// reached the socket, so the recent-speed mark for that grant comes
+    /// back with the tokens. A message records its packet when it finishes,
+    /// so a grant that never completed one has nothing to return.
     pub fn refund(&mut self, direction: LinkDirection, conn: u64, bytes: u64, whole_grant: bool) {
         self.lane_mut(direction).refund(conn, bytes, whole_grant);
     }
@@ -705,6 +714,32 @@ mod tests {
         assert_eq!(
             budget.take(LinkDirection::Up, 2, MessageClass::Session, 1_000_000, 0),
             Turn::Granted(1_000_000)
+        );
+    }
+
+    #[test]
+    fn a_message_split_across_grants_counts_as_one_packet() {
+        let mut budget = LinkBudget::new();
+        let conn = 1u64;
+        budget.set(LinkDirection::Up, Some(4), 0);
+        assert_eq!(
+            budget.take(LinkDirection::Up, conn, MessageClass::Session, 10, 0),
+            Turn::Granted(4)
+        );
+        assert_eq!(
+            budget.take(LinkDirection::Up, conn, MessageClass::Session, 6, SEC),
+            Turn::Granted(4)
+        );
+        assert_eq!(budget.totals().packets_up, 0);
+        assert_eq!(budget.connection(conn).bytes_up, 8);
+        budget.record_message(LinkDirection::Up, conn);
+        assert_eq!(budget.totals().packets_up, 1);
+        assert_eq!(budget.connection(conn).packets_up, 1);
+        budget.refund(LinkDirection::Up, conn, 4, true);
+        assert_eq!(
+            budget.totals().packets_up,
+            1,
+            "a refund returns bytes, not the message"
         );
     }
 }

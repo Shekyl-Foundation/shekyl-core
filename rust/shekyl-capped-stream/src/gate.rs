@@ -148,6 +148,15 @@ impl LinkGate {
         }
     }
 
+    /// One message finished. Grants of a rate-limited message stay one count.
+    pub fn record_message(&self, direction: LinkDirection, conn: u64) {
+        self.inner
+            .budget
+            .lock()
+            .expect("link budget")
+            .record_message(direction, conn);
+    }
+
     pub fn refund(&self, direction: LinkDirection, conn: u64, bytes: u64, whole_grant: bool) {
         self.inner
             .budget
