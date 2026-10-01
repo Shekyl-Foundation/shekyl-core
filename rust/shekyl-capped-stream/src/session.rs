@@ -46,8 +46,10 @@ impl SendHalf {
     /// inbound drive, parked in [`Session::recv`] waiting for that frame.
     ///
     /// The tail is discarded, not drained: a ban, a protocol refusal, or
-    /// `del_in_connections` has nothing queued that it needs delivered. See
-    /// [`crate::ByteQueue::discard`] for what this does not bound.
+    /// `del_in_connections` has nothing queued that it needs delivered.
+    /// A write already taken by the writer is not part of that tail. That
+    /// frame runs to completion, or the socket errors. A stalled in-flight
+    /// write is not bounded here.
     pub fn discard(&self) {
         self.queue.discard();
     }
