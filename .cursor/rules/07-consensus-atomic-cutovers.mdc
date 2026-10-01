@@ -274,6 +274,43 @@ invocations:
   the JoinMarket producer, fixtures, docs. Rollback: revert the merge commit;
   a reverted build refuses a v13 datadir at open (pre-genesis, free).
 
+- **The txid binds the archival length** (`SHT-Q2`,
+  `docs/design/ARCHIVAL_SHARD_T_DERIVATION.md` §8.6 and §10.3; landed on
+  `dev` 2026-10-01 as PR #923, merge commit `ecdcbffec`; branch tip archived
+  as tag `archive/sht-q2-txid-length-cutover-2026-10-01` at `4456a63cd`).
+  Every non-coinbase transaction id mixes one more word, the transaction's
+  archival length; the C++ mixers are deleted and
+  `calculate_transaction_hash` calls the Rust one over FFI; LMDB `VERSION`
+  15 → 16 and the redb `SCHEMA_VERSION` 20 → 21 with it. Criterion 1: a
+  block's transaction list and Merkle root are built from the id, so every
+  node reproduces it byte-identically. Criterion 2: a daemon on one mixer and
+  a wallet on the other name one transaction two ways — no flag state is
+  simultaneously valid. Criterion 3: six `git grep` queries against the base
+  commit pasted into the PR description, checked against the list of tests
+  the mixer term alone turned red. Criterion 4: the PR description carries
+  the reviewer map — consensus-affecting: `rust/shekyl-wire/src/transaction/
+  txid.rs` and `transaction.rs`, `cryptonote_format_utils.cpp`, the FFI
+  entry (`rust/shekyl-ffi/src/txid_ffi.rs`, `shekyl_ffi.h`), the chain
+  store's skeleton rebuild (`tx_reads.rs`, `leaf_reads.rs`) and the two
+  version pins; trust-boundary: the `get_transactions` entry and its three
+  consumers; the rest mechanical, regenerated data, deletions and docs.
+  Rollback: revert the merge commit, with the manual fallback named per file;
+  a reverted build refuses both stores at open (pre-genesis, free).
+
+  *In-flight lessons.* (1) The PR opened at its eighth commit, not its
+  first: criterion 3 needs a code surface to enumerate, and the first commit
+  recorded rulings. The branch was pushed at every commit, so nothing was
+  held back by opening late. (2) `dev` moved twice while the PR was open.
+  The enumeration stayed anchored at the base it was run against, and each
+  merge was checked to touch none of the enumerated symbols — a merge is not
+  scope growth, but it is the moment to ask. (3) One review fix landed after
+  open, inside the enumerated files (the serializer's result read before the
+  blob is cut). Two wider findings the review exposed — a serializer
+  overload that discards its verdict, a dead pruned serve arm — were
+  **filed, not fixed**, because they lie outside the enumerated surface;
+  that is what "scope-creep loses the exception" asks for, and the cost is a
+  follow-up PR.
+
 ### Cases that might appear analogous but are not
 
 These cases share surface features with consensus-atomic
