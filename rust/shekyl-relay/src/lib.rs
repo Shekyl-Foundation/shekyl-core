@@ -80,7 +80,8 @@ pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend};
 pub use shekyl_relay_privacy::{LinkSecrecy, SlotIndex};
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
 pub use zone::{
-    FluffReach, PeerFluff, RelayCarrier, RelayDispatch, RelayPlan, TxBlob, Zone, ZoneNewError,
+    FluffReach, NodeSync, PeerFluff, RelayCarrier, RelayDispatch, RelayPlan, TxBlob, Zone,
+    ZoneNewError,
 };
 pub use zone_route::{
     is_pre_fluff_relay, once_at_origin_route, originated_stays_in_zone,

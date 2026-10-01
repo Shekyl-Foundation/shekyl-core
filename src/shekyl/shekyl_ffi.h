@@ -3414,6 +3414,9 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 #define SHEKYL_RELAY_PLAN_NO_ROUTE    1
 //! Settled for this epoch: fluff. Retrying cannot change the answer.
 #define SHEKYL_RELAY_PLAN_FLUFF_EPOCH 2
+//! Local origin while this node is unsynchronised. Send nothing and record
+//! nothing; the pool retries after sync. Not a refresh, and not a fluff.
+#define SHEKYL_RELAY_PLAN_AWAIT_SYNC  3
 
 //! Carrier: the zone's ordinary connection.
 #define SHEKYL_RELAY_CARRIER_ORDINARY 0
@@ -3638,36 +3641,43 @@ std::size_t shekyl_relay_zone_live_stems(const RelayZoneHandle* handle);
 std::size_t shekyl_relay_zone_stem_width(const RelayZoneHandle* handle);
 //! Earliest time the zone has work; what the asio timer is armed against.
 std::uint64_t shekyl_relay_zone_next_wake(const RelayZoneHandle* handle);
-//! One of the SHEKYL_RELAY_PLAN_* codes. Three-way, not a bool: a transient
-//! routing failure (retry after a refresh) and a settled fluff epoch (do not)
-//! also report different relay_method events. Deciding between them in C++
-//! would mean a second copy of the RD-4 predicate `!fluffing || local_origin`.
-//! A null handle reports NO_ROUTE. Pure plan — production notify prefers
-//! shekyl_relay_zone_plan_relay_with_refresh, which owns the one NoRoute
-//! refresh; keep this for a forced refresh already performed (send-failure
-//! retry) and for tests.
+//! One of the SHEKYL_RELAY_PLAN_* codes. Not a bool: a transient routing
+//! failure (retry after a refresh), a settled fluff epoch (do not), and a
+//! withheld local origin (AWAIT_SYNC: send nothing, record nothing) are
+//! different. The routable outcomes also report different relay_method events.
+//! Deciding between them in C++ would mean a second copy of the RD-4
+//! predicate `!fluffing || local_origin`. `node_synchronised` is this node's
+//! chain sync, not a second spelling of `local_origin`. A null handle reports
+//! NO_ROUTE, not AWAIT_SYNC. Pure plan — production notify prefers
+//! shekyl_relay_zone_plan_dispatch_with_refresh. plan_relay_with_refresh owns
+//! the one NoRoute refresh; keep this pure plan for a forced refresh already
+//! performed (send-failure retry) and for tests. AWAIT_SYNC does not refresh.
 std::int32_t shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::uint8_t* source,
-                                          bool local_origin, std::uint8_t* out_dest);
-//! Plan a relay; on NO_ROUTE merge `outbound` once and re-plan. Settled fluff
-//! epochs do not refresh. This is the production notify path: the refresh
-//! policy lives in Rust with the zone. No callback — commands return nothing;
-//! a noise channel the refresh leaves unbound clears at its next due tick
-//! inside Rust, through NoiseQueues::unbind at the next poll.
+                                          bool local_origin, bool node_synchronised,
+                                          std::uint8_t* out_dest);
+//! Plan a relay; on NO_ROUTE merge this zone's established outbound sessions
+//! once and re-plan. Settled fluff epochs do not refresh, and neither does
+//! AWAIT_SYNC. The candidates are the session registry. No callback — commands
+//! return nothing; a noise channel the refresh leaves unbound clears at its
+//! next due tick inside Rust, through NoiseQueues::unbind at the next poll.
 std::int32_t shekyl_relay_zone_plan_relay_with_refresh(
     RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
-    std::uint8_t* out_dest);
+    bool node_synchronised, std::uint8_t* out_dest);
 //! Plan a relay AND the wire that carries it — phase, carrier and slot in
 //! one crossing (rule 40). Return is the same SHEKYL_RELAY_PLAN_* code as
 //! plan_relay_with_refresh. out_carrier is SHEKYL_RELAY_CARRIER_*;
 //! out_channel is the stem slot and is meaningful only when the carrier is
-//! noise (written 0 otherwise). Every out-param is written on the
-//! null-handle path so a mishandled NO_ROUTE cannot be read as a noise
-//! stem. `dandelionpp_notify` is its production caller as of 2026-08-29 —
-//! COVER_TRAFFIC_RESTORATION.md §3.1a. It stood unused before that, kept
-//! against a caller grep on §1.6's criteria, which still govern deletion.
+//! noise (written 0 otherwise). On AWAIT_SYNC the carrier is ordinary and
+//! unread: the plan is the refusal, and the caller returns before any send.
+//! Every out-param is written on the null-handle path so a mishandled
+//! NO_ROUTE cannot be read as a noise stem. `dandelionpp_notify` is its
+//! production caller as of 2026-08-29 — COVER_TRAFFIC_RESTORATION.md §3.1a.
+//! It stood unused before that, kept against a caller grep on §1.6's
+//! criteria, which still govern deletion.
 std::int32_t shekyl_relay_zone_plan_dispatch_with_refresh(
     RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
-    std::uint8_t* out_dest, std::uint8_t* out_carrier, std::uint32_t* out_channel);
+    bool node_synchronised, std::uint8_t* out_dest, std::uint8_t* out_carrier,
+    std::uint32_t* out_channel);
 //! Merge the current outbound set into the stem map mid-epoch. Used for
 //! connection churn, noise-send recovery, and the forced refresh after a stem
 //! send failure. No callback — see plan_relay_with_refresh.

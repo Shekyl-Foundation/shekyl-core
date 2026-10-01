@@ -69,12 +69,25 @@ impl PeerFluff {
     }
 }
 
+/// Whether this node has finished synchronizing its chain.
+///
+/// Origination reads this once, as its own type, so it cannot be transposed
+/// with `local_origin`. The FFI boundary is a `bool`; the conversion happens
+/// once, there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeSync {
+    /// The node may originate. A local transaction enters the stem graph.
+    Synchronised,
+    /// The node is still synchronizing. A local origin is withheld.
+    Unsynchronised,
+}
+
 /// What the relay path should do with a batch of transactions.
 ///
 /// The zone decides; the caller performs. Framing and the socket stay C++,
 /// so this returns a destination rather than sending to one.
 ///
-/// # Why the two non-stem outcomes are distinct
+/// # Why the non-stem outcomes are distinct
 ///
 /// They differ in what the caller must do next, so collapsing them to one
 /// "fluff" answer would lose the distinction the relay path is built on:
@@ -84,13 +97,18 @@ impl PeerFluff {
 ///   set and re-plan before accepting the fallback.
 /// - [`RelayPlan::FluffEpoch`] is *settled for the epoch*. Refreshing changes
 ///   nothing, so a retry would be wasted work.
+/// - [`RelayPlan::AwaitSync`] is a *hold*. The batch is this node's own and
+///   the node has not caught up. Nothing is sent and nothing is recorded, so
+///   the pool retries after sync. A refresh cannot make it routable, and
+///   falling through to fluff would publish it early.
 ///
-/// The daemon also reports them differently: the inherited `dandelionpp_notify`
-/// emits `relay_method::stem` on *entering* the stem-eligible branch, before any
-/// routing is attempted, and `relay_method::fluff` only on falling through. A
-/// caller holding one bool cannot reconstruct which event to emit, and would
-/// have to re-evaluate `!fluffing || local_origin` itself — a second copy of the
-/// RD-4 predicate this type exists to keep single-owned.
+/// The daemon also reports the routable outcomes differently: the inherited
+/// `dandelionpp_notify` emits `relay_method::stem` on *entering* the
+/// stem-eligible branch, before any routing is attempted, and
+/// `relay_method::fluff` only on falling through. A caller holding one bool
+/// cannot reconstruct which event to emit, and would have to re-evaluate
+/// `!fluffing || local_origin` itself — a second copy of the RD-4 predicate
+/// this type exists to keep single-owned. `AwaitSync` emits nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayPlan {
     /// Forward to this stem successor.
@@ -101,6 +119,13 @@ pub enum RelayPlan {
     /// This zone is fluffing this epoch and the transaction is not locally
     /// originated. Fluff: batch to every peer but the source.
     FluffEpoch,
+    /// Locally originated while this node is unsynchronised. Send nothing
+    /// and record nothing.
+    ///
+    /// The plan is the refusal. [`Zone::carrier_for`] still names an ordinary
+    /// carrier so the match stays total, and the caller must not read it:
+    /// there is no send.
+    AwaitSync,
 }
 
 /// Why [`Zone::new`] refused a configuration.
@@ -769,12 +794,21 @@ impl Zone {
     /// Reporting [`RelayPlan::NoRoute`] rather than a bare fluff when no slot is
     /// routable is what lets the caller mirror the inherited retry-then-fluff:
     /// re-offer connections, ask again, and only then accept the fallback.
+    ///
+    /// [`NodeSync::Unsynchronised`] combined with `local_origin` is checked
+    /// *before* that predicate. The hold must not draw a stem, pin a source,
+    /// or consume `rng`. A fluff epoch does not override it: publishing now
+    /// is the outcome the hold exists to prevent.
     pub fn plan_relay<R: RelayRng + ?Sized>(
         &mut self,
         source: Option<ConnectionId>,
         local_origin: bool,
+        node_sync: NodeSync,
         rng: &mut R,
     ) -> RelayPlan {
+        if local_origin && node_sync == NodeSync::Unsynchronised {
+            return RelayPlan::AwaitSync;
+        }
         // The inherited predicate, transcribed rather than restated:
         // `if (!zone_->fluffing || tx_relay == relay_method::local)`.
         if !self.fluffing || local_origin {
@@ -786,27 +820,28 @@ impl Zone {
         RelayPlan::FluffEpoch
     }
 
-    /// Plan a relay; on a transient [`RelayPlan::NoRoute`], merge `outbound`
-    /// into the stem map once and re-plan.
+    /// Plan a relay; on a transient [`RelayPlan::NoRoute`], merge this zone's
+    /// established outbound sessions into the stem map once and re-plan.
     ///
-    /// This is the refresh policy the inherited `dandelionpp_notify` looped in
-    /// C++ (`plan` → empty map → `update` → `plan`). Keeping it here means the
-    /// shim only offers the connection snapshot and performs transport — it does
-    /// not own "empty / stale map ⇒ refresh" scheduling, which is zone logic the
-    /// 33-gtest oracle cannot see through the FFI (§18.4a).
+    /// The candidates are the session registry, not a snapshot the shim
+    /// passes in. Keeping the refresh here means the shim performs transport
+    /// and does not own "empty map ⇒ refresh", which is zone logic the
+    /// gtest oracle cannot see through the FFI (§18.4a).
     ///
-    /// A settled [`RelayPlan::FluffEpoch`] does **not** refresh: retrying cannot
-    /// change an epoch decision.
+    /// A settled [`RelayPlan::FluffEpoch`] does not refresh: retrying cannot
+    /// change an epoch decision. [`RelayPlan::AwaitSync`] does not either:
+    /// the map is not what is withholding the batch.
     pub fn plan_relay_with_refresh<R: RelayRng + ?Sized>(
         &mut self,
         source: Option<ConnectionId>,
         local_origin: bool,
+        node_sync: NodeSync,
         rng: &mut R,
     ) -> RelayPlan {
-        match self.plan_relay(source, local_origin, rng) {
+        match self.plan_relay(source, local_origin, node_sync, rng) {
             RelayPlan::NoRoute => {
                 self.update_stems(rng);
-                self.plan_relay(source, local_origin, rng)
+                self.plan_relay(source, local_origin, node_sync, rng)
             }
             plan => plan,
         }
@@ -997,6 +1032,10 @@ impl Zone {
     /// ordinary connection: fluff by §42.3's design, no-route because there is
     /// nothing to carry.
     ///
+    /// [`RelayPlan::AwaitSync`] names [`RelayCarrier::Ordinary`] so the match
+    /// is total. That carrier is unread: the plan is the refusal, and the
+    /// caller returns before any send.
+    ///
     /// The slot lookup is consistent by construction — the destination came
     /// from this same map in this same call, so `slot_of` cannot miss it, and
     /// the `None` arm is unreachable rather than a fallback.
@@ -1024,7 +1063,12 @@ impl Zone {
                     }
                 }
             }
-            _ => RelayCarrier::Ordinary,
+            // The plan is the refusal. Ordinary keeps the match total; the
+            // caller returns before it reads the carrier.
+            RelayPlan::AwaitSync => RelayCarrier::Ordinary,
+            RelayPlan::Stem(_) | RelayPlan::NoRoute | RelayPlan::FluffEpoch => {
+                RelayCarrier::Ordinary
+            }
         }
     }
 
@@ -1033,9 +1077,10 @@ impl Zone {
         &mut self,
         source: Option<ConnectionId>,
         local_origin: bool,
+        node_sync: NodeSync,
         rng: &mut R,
     ) -> RelayDispatch {
-        let plan = self.plan_relay(source, local_origin, rng);
+        let plan = self.plan_relay(source, local_origin, node_sync, rng);
         RelayDispatch {
             carrier: self.carrier_for(plan),
             plan,
@@ -1050,9 +1095,10 @@ impl Zone {
         &mut self,
         source: Option<ConnectionId>,
         local_origin: bool,
+        node_sync: NodeSync,
         rng: &mut R,
     ) -> RelayDispatch {
-        let plan = self.plan_relay_with_refresh(source, local_origin, rng);
+        let plan = self.plan_relay_with_refresh(source, local_origin, node_sync, rng);
         RelayDispatch {
             carrier: self.carrier_for(plan),
             plan,

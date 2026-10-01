@@ -1476,7 +1476,10 @@ TEST_F(levin_notify, unsynchronised_node_originates_no_stem)
     EXPECT_EQ(0u, receiver_.notified_size());
     for (auto queued = contexts_.begin(); queued != contexts_.end(); ++queued)
         EXPECT_EQ(0u, queued->process_send_queue());
-    // A forwarded stem while unsynchronised is `stem_without_padding`.
+    // The forward arm (a relayed transaction while this node is
+    // unsynchronised) is the zone test
+    // `an_unsynchronised_origin_is_withheld_without_touching_the_map`.
+    // `stem_without_padding` runs synchronised, with `relay_method::stem`.
 }
 
 TEST_F(levin_notify, local_without_padding)

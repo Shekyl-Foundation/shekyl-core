@@ -1186,20 +1186,14 @@ namespace levin
 
         assert(zone_->strand.running_in_this_thread());
 
-        /* Stem-or-fluff is the zone's call, including "the origin always stems"
-           (RD-4) and the one NoRoute refresh. This offers the outbound snapshot
-           and performs transport; re-deriving `!fluffing || local` or owning
-           the refresh loop here would put zone scheduling in the one layer the
-           gtest oracle cannot see through. */
+        /* Stem-or-fluff, the one NoRoute refresh, and the unsynchronised-origin
+           hold are the zone's call. This performs transport. Re-deriving
+           `!fluffing || local`, owning the refresh loop, or deciding the hold
+           here would put zone scheduling in the one layer the gtest oracle
+           cannot see through. */
         boost::uuids::uuid destination{};
         const bool local_origin = (tx_relay == relay_method::local);
-        // Origination is this node's act. A node still synchronising does not
-        // start a stem; a forwarded transaction is someone else's and continues.
-        if (local_origin && !core_->is_synchronized())
-        {
-          MDEBUG("unsynchronised node originates no stem");
-          return;
-        }
+        const bool node_synchronised = core_->is_synchronized();
 
         /* What the wire does and what the txpool is told are the same thing on
            clearnet and deliberately not the same for an origin on an anonymity
@@ -1232,10 +1226,17 @@ namespace levin
         std::uint8_t carrier = SHEKYL_RELAY_CARRIER_ORDINARY;
         std::uint32_t channel = 0;
         std::int32_t plan = shekyl_relay_zone_plan_dispatch_with_refresh(
-          zone_->relay.get(), uuid_bytes(source_), local_origin,
+          zone_->relay.get(), uuid_bytes(source_), local_origin, node_synchronised,
           reinterpret_cast<std::uint8_t*>(std::addressof(destination)),
           std::addressof(carrier), std::addressof(channel)
         );
+        if (plan == SHEKYL_RELAY_PLAN_AWAIT_SYNC)
+        {
+          // The zone withheld a local origin. Nothing was sent and nothing is
+          // recorded, so the pool retries after this node synchronises.
+          MDEBUG("unsynchronised node originates no stem");
+          return;
+        }
 
         /* What still needs the ordinary wire. The carrier takes transactions
            out of this; whatever it refuses stays, and the existing stem path
@@ -1420,9 +1421,14 @@ namespace levin
           // in the first call for the empty-map case.
           relay_update_stems(zone_);
           plan = shekyl_relay_zone_plan_relay(
-            zone_->relay.get(), uuid_bytes(source_), local_origin,
+            zone_->relay.get(), uuid_bytes(source_), local_origin, node_synchronised,
             reinterpret_cast<std::uint8_t*>(std::addressof(destination))
           );
+          if (plan == SHEKYL_RELAY_PLAN_AWAIT_SYNC)
+          {
+            MDEBUG("unsynchronised node originates no stem");
+            return;
+          }
           if (plan == SHEKYL_RELAY_PLAN_STEM &&
               make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{to_send}, destination, zone_->pad_txs, false))
           {

@@ -353,7 +353,7 @@ fn the_three_plan_outcomes_stay_distinct_across_the_boundary() {
         let mut out = [0u8; 16];
 
         assert_eq!(
-            shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, out.as_mut_ptr()),
+            shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, true, out.as_mut_ptr()),
             SHEKYL_RELAY_PLAN_NO_ROUTE,
             "no slots populated yet: transient, and a refresh may fix it"
         );
@@ -376,16 +376,74 @@ fn the_three_plan_outcomes_stay_distinct_across_the_boundary() {
         }
 
         assert_eq!(
-            shekyl_relay_zone_plan_relay(h, id(7).as_ptr(), false, out.as_mut_ptr()),
+            shekyl_relay_zone_plan_relay(h, id(7).as_ptr(), false, true, out.as_mut_ptr()),
             SHEKYL_RELAY_PLAN_FLUFF_EPOCH,
             "a relayed tx in a fluff epoch is settled — retrying is wasted work"
         );
         assert_eq!(
-            shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, out.as_mut_ptr()),
+            shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, true, out.as_mut_ptr()),
             SHEKYL_RELAY_PLAN_STEM,
             "RD-4 across the boundary: the origin stems even in a fluff epoch"
         );
         assert_ne!(out, NIL, "a stem plan must carry its successor");
+        shekyl_relay_zone_free(h);
+    }
+}
+
+#[test]
+fn an_unsynchronised_origin_is_withheld_across_the_boundary() {
+    // `node_synchronised == false` is NodeSync::Unsynchronised, not a second
+    // spelling of `local_origin`. A forwarded transaction still routes.
+    unsafe {
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
+        shekyl_relay_zone_update_stems(h);
+        let stems = shekyl_relay_zone_live_stems(h);
+        let mut out = [0xABu8; 16];
+        assert_eq!(
+            shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, false, out.as_mut_ptr()),
+            SHEKYL_RELAY_PLAN_AWAIT_SYNC,
+        );
+        assert_eq!(out, NIL, "a hold names no successor");
+        assert_eq!(
+            shekyl_relay_zone_live_stems(h),
+            stems,
+            "the hold must not redraw"
+        );
+
+        let mut carrier = 0xFFu8;
+        let mut channel = 0xFFFF_FFFFu32;
+        out.fill(0xAB);
+        assert_eq!(
+            shekyl_relay_zone_plan_dispatch_with_refresh(
+                h,
+                std::ptr::null(),
+                true,
+                false,
+                out.as_mut_ptr(),
+                &raw mut carrier,
+                &raw mut channel,
+            ),
+            SHEKYL_RELAY_PLAN_AWAIT_SYNC,
+        );
+        assert_eq!(carrier, SHEKYL_RELAY_CARRIER_ORDINARY);
+        assert_eq!(channel, 0);
+        assert_eq!(
+            shekyl_relay_zone_live_stems(h),
+            stems,
+            "AwaitSync must not refresh"
+        );
+
+        let forwarded =
+            shekyl_relay_zone_plan_relay(h, id(7).as_ptr(), false, false, out.as_mut_ptr());
+        let fluffing = h.as_ref().expect("live zone").driver.zone().is_fluffing();
+        if fluffing {
+            assert_eq!(forwarded, SHEKYL_RELAY_PLAN_FLUFF_EPOCH);
+        } else {
+            assert_eq!(forwarded, SHEKYL_RELAY_PLAN_STEM);
+            assert_ne!(out, NIL);
+        }
         shekyl_relay_zone_free(h);
     }
 }
@@ -424,9 +482,10 @@ fn the_nil_uuid_means_locally_originated_which_is_what_cpp_actually_sends() {
 
         let mut from_nil = [0u8; 16];
         let mut from_null = [0u8; 16];
-        let nil_plan = shekyl_relay_zone_plan_relay(h, NIL.as_ptr(), true, from_nil.as_mut_ptr());
+        let nil_plan =
+            shekyl_relay_zone_plan_relay(h, NIL.as_ptr(), true, true, from_nil.as_mut_ptr());
         let null_plan =
-            shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, from_null.as_mut_ptr());
+            shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, true, from_null.as_mut_ptr());
 
         assert_eq!(
             nil_plan, SHEKYL_RELAY_PLAN_STEM,
@@ -586,12 +645,18 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
         assert_eq!(shekyl_relay_zone_next_wake(null), 0);
         let mut out = [0u8; 16];
         assert_eq!(
-            shekyl_relay_zone_plan_relay(null, id(1).as_ptr(), true, out.as_mut_ptr()),
+            shekyl_relay_zone_plan_relay(null, id(1).as_ptr(), true, true, out.as_mut_ptr()),
             SHEKYL_RELAY_PLAN_NO_ROUTE,
             "nothing routes through a zone that does not exist"
         );
         assert_eq!(
-            shekyl_relay_zone_plan_relay_with_refresh(null, id(1).as_ptr(), true, out.as_mut_ptr(),),
+            shekyl_relay_zone_plan_relay_with_refresh(
+                null,
+                id(1).as_ptr(),
+                true,
+                true,
+                out.as_mut_ptr(),
+            ),
             SHEKYL_RELAY_PLAN_NO_ROUTE,
         );
         let mut carrier = 0xFFu8;
@@ -601,6 +666,7 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
             shekyl_relay_zone_plan_dispatch_with_refresh(
                 null,
                 id(1).as_ptr(),
+                true,
                 true,
                 out.as_mut_ptr(),
                 &raw mut carrier,
@@ -640,8 +706,13 @@ fn plan_relay_with_refresh_fills_an_empty_map() {
         shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
         shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
         let mut out = [0u8; 16];
-        let plan =
-            shekyl_relay_zone_plan_relay_with_refresh(h, std::ptr::null(), true, out.as_mut_ptr());
+        let plan = shekyl_relay_zone_plan_relay_with_refresh(
+            h,
+            std::ptr::null(),
+            true,
+            true,
+            out.as_mut_ptr(),
+        );
         assert_eq!(
             plan, SHEKYL_RELAY_PLAN_STEM,
             "local origin stems after refresh"
@@ -675,6 +746,7 @@ fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
             h,
             std::ptr::null(),
             true,
+            true,
             dest_plan.as_mut_ptr(),
         );
 
@@ -689,6 +761,7 @@ fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
         let via_dispatch = shekyl_relay_zone_plan_dispatch_with_refresh(
             h,
             std::ptr::null(),
+            true,
             true,
             dest_dispatch.as_mut_ptr(),
             &raw mut carrier,

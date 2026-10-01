@@ -65,7 +65,7 @@ use std::sync::{Arc, Mutex};
 use shekyl_levin::{NewTransactions, PortableMap, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay::{
     AchievedOutConnections, CarrierToken, Driver, Effect, FloorTransition, FloorWatch, FluffReach,
-    NoiseQueues, RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
+    NodeSync, NoiseQueues, RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
 };
 use shekyl_relay_privacy::params::{carrier, DandelionParams};
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -83,6 +83,16 @@ pub const SHEKYL_RELAY_PLAN_STEM: i32 = 0;
 pub const SHEKYL_RELAY_PLAN_NO_ROUTE: i32 = 1;
 /// Settled for this epoch: fluff. Retrying cannot change the answer.
 pub const SHEKYL_RELAY_PLAN_FLUFF_EPOCH: i32 = 2;
+/// Local origin while this node is unsynchronised. Send nothing, record nothing.
+pub const SHEKYL_RELAY_PLAN_AWAIT_SYNC: i32 = 3;
+
+fn node_sync_from_ffi(node_synchronised: bool) -> NodeSync {
+    if node_synchronised {
+        NodeSync::Synchronised
+    } else {
+        NodeSync::Unsynchronised
+    }
+}
 
 /// Carrier: the zone's ordinary connection.
 pub const SHEKYL_RELAY_CARRIER_ORDINARY: u8 = 0;
@@ -1236,25 +1246,31 @@ pub unsafe extern "C" fn shekyl_relay_zone_next_wake(handle: *const RelayZoneHan
 }
 
 /// Decide what to do with a batch: `SHEKYL_RELAY_PLAN_STEM` (writing the
-/// successor into `out_dest`), `..._NO_ROUTE`, or `..._FLUFF_EPOCH`.
+/// successor into `out_dest`), `..._NO_ROUTE`, `..._FLUFF_EPOCH`, or
+/// `..._AWAIT_SYNC`.
 ///
-/// Three-way rather than a bool because the caller must distinguish a
-/// *transient* failure to route — refresh connections and re-plan — from an
-/// epoch decision no refresh can change, and because the two produce different
-/// `relay_method` events. The alternative is C++ re-evaluating
-/// `!fluffing || local_origin` for itself, which duplicates the RD-4 predicate
-/// (§16.1); see [`RelayPlan`] for the full reasoning.
+/// Not a bool, because the caller must distinguish a *transient* failure to
+/// route — refresh connections and re-plan — from an epoch decision no
+/// refresh can change, and from a hold that sends nothing. The routable
+/// outcomes also produce different `relay_method` events. The alternative is
+/// C++ re-evaluating `!fluffing || local_origin` for itself, which duplicates
+/// the RD-4 predicate (§16.1); see [`RelayPlan`] for the full reasoning.
+///
+/// `node_synchronised` is this node's chain sync, converted once here into
+/// [`NodeSync`]. It is not a second spelling of `local_origin`.
 ///
 /// A null handle reports `NO_ROUTE`: nothing is routable through a zone that
-/// does not exist, and the caller's fallback is then the safe one.
+/// does not exist, and the caller's fallback is then the safe one. That is
+/// not an `AWAIT_SYNC` decision — there is no zone to withhold for.
 ///
 /// `source` is the relaying peer, or the **nil UUID** for a transaction this
 /// node originated — the distinction RD-4 turns on, so it is a contract rather
 /// than a convention. Null is accepted and means the same thing.
 ///
-/// Production notify prefers [`shekyl_relay_zone_plan_relay_with_refresh`],
-/// which owns the one mid-call refresh on `NO_ROUTE`. This pure plan remains
-/// for callers that already refreshed (send-failure retry) and for tests.
+/// Production notify prefers [`shekyl_relay_zone_plan_dispatch_with_refresh`].
+/// [`shekyl_relay_zone_plan_relay_with_refresh`] owns the one mid-call refresh
+/// on `NO_ROUTE`. This pure plan remains for callers that already refreshed
+/// (send-failure retry) and for tests. `AWAIT_SYNC` does not refresh.
 ///
 /// # Safety
 /// `handle` must be live; `source` must point to 16 readable bytes or be null;
@@ -1264,6 +1280,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay(
     handle: *mut RelayZoneHandle,
     source: *const u8,
     local_origin: bool,
+    node_synchronised: bool,
     out_dest: *mut u8,
 ) -> i32 {
     if handle.is_null() || out_dest.is_null() {
@@ -1271,34 +1288,35 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay(
     }
     let h = &mut *handle;
     let source = read_id(source);
-    let plan = h
-        .driver
-        .zone_mut()
-        .plan_relay(source, local_origin, &mut h.rng);
+    let plan = h.driver.zone_mut().plan_relay(
+        source,
+        local_origin,
+        node_sync_from_ffi(node_synchronised),
+        &mut h.rng,
+    );
     h.publish();
     write_plan(plan, out_dest)
 }
 
-/// Plan a relay; on `NO_ROUTE`, merge `outbound` into the stem map once and
-/// re-plan.
+/// Plan a relay; on `NO_ROUTE`, merge this zone's established outbound
+/// sessions into the stem map once and re-plan.
 ///
-/// This is the production path for `dandelionpp_notify`: the refresh policy
-/// lives in Rust with the rest of zone scheduling, so the C++ shim only offers
-/// the outbound snapshot and performs transport. A settled fluff epoch does not
-/// refresh. See [`shekyl_relay::Zone::plan_relay_with_refresh`]. No callback:
-/// commands return nothing, and a covert channel the refresh leaves unbound
-/// clears at its next due tick through [`shekyl_relay_zone_poll`]'s
-/// `on_unbind`.
+/// The refresh policy lives in Rust with the rest of zone scheduling. The
+/// candidates are the session registry. A settled fluff epoch does not
+/// refresh, and neither does `AWAIT_SYNC`. See
+/// [`shekyl_relay::Zone::plan_relay_with_refresh`]. No callback: commands
+/// return nothing, and a covert channel the refresh leaves unbound clears at
+/// its next due tick through [`shekyl_relay_zone_poll`]'s `on_unbind`.
 ///
 /// # Safety
 /// `handle` must be live; `source` must point to 16 readable bytes or be null;
-/// `outbound` must point to `n * 16` readable bytes or be null with `n == 0`;
 /// `out_dest` must point to 16 writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_plan_relay_with_refresh(
     handle: *mut RelayZoneHandle,
     source: *const u8,
     local_origin: bool,
+    node_synchronised: bool,
     out_dest: *mut u8,
 ) -> i32 {
     if handle.is_null() || out_dest.is_null() {
@@ -1306,10 +1324,12 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay_with_refresh(
     }
     let h = &mut *handle;
     let source = read_id(source);
-    let plan = h
-        .driver
-        .zone_mut()
-        .plan_relay_with_refresh(source, local_origin, &mut h.rng);
+    let plan = h.driver.zone_mut().plan_relay_with_refresh(
+        source,
+        local_origin,
+        node_sync_from_ffi(node_synchronised),
+        &mut h.rng,
+    );
     h.publish();
     write_plan(plan, out_dest)
 }
@@ -1331,6 +1351,10 @@ unsafe fn write_plan(plan: RelayPlan, out_dest: *mut u8) -> i32 {
         RelayPlan::FluffEpoch => {
             std::ptr::copy_nonoverlapping(NIL.as_ptr(), out_dest, 16);
             SHEKYL_RELAY_PLAN_FLUFF_EPOCH
+        }
+        RelayPlan::AwaitSync => {
+            std::ptr::copy_nonoverlapping(NIL.as_ptr(), out_dest, 16);
+            SHEKYL_RELAY_PLAN_AWAIT_SYNC
         }
     }
 }
@@ -1372,6 +1396,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
     handle: *mut RelayZoneHandle,
     source: *const u8,
     local_origin: bool,
+    node_synchronised: bool,
     out_dest: *mut u8,
     out_carrier: *mut u8,
     out_channel: *mut u32,
@@ -1395,10 +1420,12 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
     }
     let h = &mut *handle;
     let source = read_id(source);
-    let dispatch = h
-        .driver
-        .zone_mut()
-        .plan_dispatch_with_refresh(source, local_origin, &mut h.rng);
+    let dispatch = h.driver.zone_mut().plan_dispatch_with_refresh(
+        source,
+        local_origin,
+        node_sync_from_ffi(node_synchronised),
+        &mut h.rng,
+    );
     h.publish();
     match dispatch.carrier {
         RelayCarrier::Ordinary => {

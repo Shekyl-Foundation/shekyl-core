@@ -45,7 +45,7 @@ fn a_new_zone_owns_nothing_and_routes_nothing() {
     // Through the production path: a local-origin tx always attempts a stem
     // (RD-4), and with no peers connected there is nothing to route to.
     assert_eq!(
-        z.plan_relay(None, true, &mut rng),
+        z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
         RelayPlan::NoRoute,
         "no route before peers"
     );
@@ -357,7 +357,10 @@ fn a_local_tx_stems_during_a_fluff_epoch_rd4() {
     z.update_stems(&mut rng);
 
     assert!(
-        matches!(z.plan_relay(None, true, &mut rng), RelayPlan::Stem(_)),
+        matches!(
+            z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+            RelayPlan::Stem(_)
+        ),
         "RD-4: the origin stems even during a fluff epoch — if this fails, \
          check whether the `local_origin` arm was removed as redundant"
     );
@@ -376,7 +379,7 @@ fn a_relayed_tx_fluffs_during_a_fluff_epoch() {
     z.update_stems(&mut rng);
 
     assert_eq!(
-        z.plan_relay(Some(id(7)), false, &mut rng),
+        z.plan_relay(Some(id(7)), false, NodeSync::Synchronised, &mut rng),
         RelayPlan::FluffEpoch,
         "a relayed tx must fluff during a fluff epoch"
     );
@@ -392,13 +395,69 @@ fn everything_stems_during_a_stem_epoch() {
     z.update_stems(&mut rng);
 
     assert!(matches!(
-        z.plan_relay(Some(id(7)), false, &mut rng),
+        z.plan_relay(Some(id(7)), false, NodeSync::Synchronised, &mut rng),
         RelayPlan::Stem(_)
     ));
     assert!(matches!(
-        z.plan_relay(None, true, &mut rng),
+        z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
         RelayPlan::Stem(_)
     ));
+}
+
+#[test]
+fn an_unsynchronised_origin_is_withheld_without_touching_the_map() {
+    // The hold is checked before RD-4, so a fluff epoch cannot publish it
+    // and the stem map is not consulted: no pin, no rng draw, no refresh.
+    let mut rng = SplitMix64::new(33);
+    let mut z = zone_with_role(false, &mut rng);
+    z.on_session_established(id(1), PeerDirection::Outbound);
+    z.on_session_established(id(2), PeerDirection::Outbound);
+    z.update_stems(&mut rng);
+    let stems = z.live_stems();
+    let slots = z.stem_slots().to_vec();
+    assert_eq!(z.pinned_sources(), 0);
+
+    assert_eq!(
+        z.plan_relay(None, true, NodeSync::Unsynchronised, &mut rng),
+        RelayPlan::AwaitSync,
+        "a local origin while unsynchronised is withheld"
+    );
+    assert_eq!(z.live_stems(), stems);
+    assert_eq!(z.stem_slots(), slots.as_slice());
+    assert_eq!(z.pinned_sources(), 0, "the hold must not pin a stem");
+    assert!(
+        matches!(
+            z.plan_relay(Some(id(7)), false, NodeSync::Unsynchronised, &mut rng),
+            RelayPlan::Stem(_)
+        ),
+        "a forwarded transaction still stems while this node synchronises"
+    );
+
+    let mut fluff = zone_with_role(true, &mut rng);
+    fluff.on_session_established(id(1), PeerDirection::Outbound);
+    fluff.on_session_established(id(2), PeerDirection::Outbound);
+    fluff.update_stems(&mut rng);
+    assert_eq!(
+        fluff.plan_relay(None, true, NodeSync::Unsynchronised, &mut rng),
+        RelayPlan::AwaitSync,
+        "a fluff epoch does not publish an unsynchronised origin"
+    );
+    assert_eq!(
+        fluff.plan_relay(Some(id(7)), false, NodeSync::Unsynchronised, &mut rng),
+        RelayPlan::FluffEpoch,
+        "a forwarded transaction still fluffs in a fluff epoch"
+    );
+
+    let mut empty = zone(&mut rng);
+    assert_eq!(
+        empty.plan_relay_with_refresh(None, true, NodeSync::Unsynchronised, &mut rng),
+        RelayPlan::AwaitSync,
+    );
+    assert_eq!(
+        empty.live_stems(),
+        0,
+        "AwaitSync must not refresh an empty map"
+    );
 }
 
 #[test]
@@ -521,7 +580,7 @@ fn no_routable_slot_reports_no_route_not_a_fluff_epoch() {
     let mut rng = SplitMix64::new(33);
     let mut z = zone_with_role(false, &mut rng);
     assert_eq!(
-        z.plan_relay(None, true, &mut rng),
+        z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
         RelayPlan::NoRoute,
         "a stem epoch with no slots is unroutable, not a fluff epoch"
     );
@@ -535,7 +594,7 @@ fn no_routable_slot_reports_no_route_not_a_fluff_epoch() {
     z.on_session_established(id(3), PeerDirection::Outbound);
     z.update_stems(&mut rng);
     assert_eq!(
-        z.plan_relay(Some(id(7)), false, &mut rng),
+        z.plan_relay(Some(id(7)), false, NodeSync::Synchronised, &mut rng),
         RelayPlan::FluffEpoch,
         "a routable fluff epoch is settled, not merely unroutable"
     );
@@ -553,7 +612,7 @@ fn plan_relay_with_refresh_populates_an_empty_map_once() {
     z.on_session_established(id(1), PeerDirection::Outbound);
     z.on_session_established(id(2), PeerDirection::Outbound);
     z.on_session_established(id(3), PeerDirection::Outbound);
-    let plan = z.plan_relay_with_refresh(None, true, &mut rng);
+    let plan = z.plan_relay_with_refresh(None, true, NodeSync::Synchronised, &mut rng);
     assert!(
         matches!(plan, RelayPlan::Stem(_)),
         "after one refresh a stem-epoch local tx routes"
@@ -565,7 +624,7 @@ fn plan_relay_with_refresh_populates_an_empty_map_once() {
 fn plan_relay_with_refresh_does_not_touch_a_settled_fluff_epoch() {
     let mut rng = SplitMix64::new(35);
     let mut z = zone_with_role(true, &mut rng);
-    let plan = z.plan_relay_with_refresh(Some(id(7)), false, &mut rng);
+    let plan = z.plan_relay_with_refresh(Some(id(7)), false, NodeSync::Synchronised, &mut rng);
     assert_eq!(plan, RelayPlan::FluffEpoch);
     assert_eq!(z.live_stems(), 0, "outbound was not merged");
 }
@@ -746,7 +805,7 @@ fn noise_carries_the_stem_and_only_the_stem() {
     stem_zone.update_stems(&mut rng);
     assert!(!stem_zone.is_fluffing(), "fixture must be in a stem epoch");
 
-    let d = stem_zone.plan_dispatch(Some(id(9)), false, &mut rng);
+    let d = stem_zone.plan_dispatch(Some(id(9)), false, NodeSync::Synchronised, &mut rng);
     match (d.plan, d.carrier) {
         (RelayPlan::Stem(_), RelayCarrier::Noise { channel }) => {
             assert!(
@@ -768,7 +827,7 @@ fn noise_carries_the_stem_and_only_the_stem() {
     fluff_zone.on_session_established(id(4), PeerDirection::Outbound);
     fluff_zone.update_stems(&mut rng);
     assert!(fluff_zone.is_fluffing(), "fixture must be in a fluff epoch");
-    let fluff = fluff_zone.plan_dispatch(Some(id(9)), false, &mut rng);
+    let fluff = fluff_zone.plan_dispatch(Some(id(9)), false, NodeSync::Synchronised, &mut rng);
     assert_eq!(fluff.plan, RelayPlan::FluffEpoch);
     assert_eq!(
         fluff.carrier,
@@ -791,7 +850,7 @@ fn noise_disabled_never_selects_a_noise_carrier() {
         z.on_session_established(id(4), PeerDirection::Outbound);
         z.update_stems(&mut rng);
         for local_origin in [true, false] {
-            let d = z.plan_dispatch(Some(id(9)), local_origin, &mut rng);
+            let d = z.plan_dispatch(Some(id(9)), local_origin, NodeSync::Synchronised, &mut rng);
             assert_eq!(
                 d.carrier,
                 RelayCarrier::Ordinary,
@@ -859,8 +918,11 @@ fn dispatch_does_not_re_decide_the_phase() {
             };
             let (mut za, mut ra) = make();
             let (mut zb, mut rb) = make();
-            let via_dispatch = za.plan_dispatch(Some(id(9)), local_origin, &mut ra).plan;
-            let via_plan = zb.plan_relay(Some(id(9)), local_origin, &mut rb);
+            let via_dispatch = za
+                .plan_dispatch(Some(id(9)), local_origin, NodeSync::Synchronised, &mut ra)
+                .plan;
+            let via_plan =
+                zb.plan_relay(Some(id(9)), local_origin, NodeSync::Synchronised, &mut rb);
             assert_eq!(
                 via_dispatch, via_plan,
                 "fluffing={fluffing} local_origin={local_origin}"
@@ -905,7 +967,10 @@ fn a_noise_carrier_does_not_change_the_phase() {
         z.on_session_established(id(3), PeerDirection::Outbound);
         z.update_stems(&mut rng);
         assert_eq!(z.noise_enabled(), noise, "fixture did not take");
-        matches!(z.plan_relay(None, true, &mut rng), RelayPlan::Stem(_))
+        matches!(
+            z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+            RelayPlan::Stem(_)
+        )
     };
 
     assert!(
