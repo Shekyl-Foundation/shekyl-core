@@ -300,7 +300,7 @@ fn zone_with_role(fluffing: bool, rng: &mut SplitMix64) -> Zone {
 }
 
 /// Same as [`zone_with_role`], with noise on a production-shaped encrypted
-/// zone. Reach is **not** a function of the carrier: this is the i2p/tor
+/// zone. Reach is **not** a function of the carrier: this is the Tor
 /// pairing production forms (`OutboundOnly` + encrypted). Tests that need
 /// encrypted-clearnet (`EveryPeer` + encrypted) construct that pair
 /// explicitly — see `a_noise_carrier_is_refused_where_it_buys_nothing`.
@@ -434,7 +434,7 @@ fn an_epoch_rollover_rebuilds_the_stem_map_rather_than_merging_into_it() {
 #[test]
 fn a_private_zone_fluffs_only_to_outbound_peers() {
     // The rule the first port dropped, and the `levin_notify.private_*`
-    // gtests caught: eight failures, all on i2p/tor zones, all "9 peers
+    // gtests caught: eight failures, all on Tor zones, all "9 peers
     // notified where 5 were expected".
     //
     // It is a *privacy* rule wearing the clothes of a delivery detail. On a
@@ -466,7 +466,7 @@ fn a_private_zone_fluffs_only_to_outbound_peers() {
     );
     assert!(
         z.peer(&id(1)).unwrap().queued.is_empty() && z.peer(&id(3)).unwrap().queued.is_empty(),
-        "an inbound peer on i2p/tor must receive nothing"
+        "an inbound peer on Tor must receive nothing"
     );
     assert_eq!(z.peer(&id(2)).unwrap().queued.len(), 1);
 
@@ -919,7 +919,7 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
     );
     assert!(
         build(RelayZone::Tor, FluffReach::OutboundOnly, CHANNELS, true).is_ok(),
-        "production i2p/tor pairing still builds"
+        "production Tor pairing still builds"
     );
     assert!(
         build(RelayZone::Public, FluffReach::EveryPeer, CHANNELS, false).is_ok(),

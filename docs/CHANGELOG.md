@@ -116,6 +116,52 @@
   both directions. The Rust table is declared once, and `ALL` is generated
   from it. `IoError::Ledger`, which nothing constructed, is deleted.
 
+### P2P zones listen through the seam
+
+- Each zone's server is the seam: clearnet and Tor bind there, and a
+  bind failure fails that zone's start. The Levin connection registry
+  is unchanged. `--clearnet-transport-encrypt` stays, off by default,
+  as the clearnet connector's channel option. The pipe that used to
+  implement it is gone, and so is epee's TCP server. The I2P address
+  type is deleted with that server; Tor's address and zone
+  discriminants stay. The harness
+  checks the seam against the option-off parity goldens. The flip
+  deletes the option and re-records those goldens.
+- `--limit-rate-up`, `--limit-rate-down`, and `--limit-rate` reach one
+  token bucket per direction for the whole node. The default is
+  unlimited (`-1`). `0` is refused at startup. A set rate counts wire
+  bytes, including Noise overhead when the clearnet option is on. An
+  empty bucket pauses the writer and the reader. It does not close the
+  connection. `set_limit` and `get_limit` use the same budget. A
+  connection's current speed is the last ten seconds, in ten
+  one-second buckets, newest weighted most. The divisor is the
+  time the connection has actually occupied, so a new connection
+  and the current second are not charged for time they did not
+  use. A quiet connection reads zero once that window has passed.
+  The lifetime average stays the separate average.
+- Socket admission reads the transport's inbound count. `setbans` and
+  misbehaviour scoring write the Rust ban list as a duration on the
+  monotonic clock, and `getbans` returns the seconds left on that
+  deadline. A duration that does not fit is refused by `setbans`.
+  `--ban-list` entries are permanent, and `getbans` reports them
+  that way. A managed Tor address is advertised only after publication
+  succeeds. An `--anonymous-inbound` onion is advertised from the
+  operator's configuration. `get_info` reports per-connector socket
+  counts beside the session counts. A seam close logs its cause.
+  The clearnet cross-build record is
+  `docs/benchmarks/p2p_cutover_crossbuild_20260929.md`: sync, block
+  relay, and both dial directions passed against the pre-cutover
+  peer; transaction stem and fluff did not cross. The same record's
+  epee-to-epee control crossed the stem with the relay filter empty;
+  fluff found nobody. An accepted block raises that peer's recorded
+  chain length and never lowers it. Relay eligibility is the session's
+  normal state. An explicit `--in-peers` is enforced at accept, and a
+  cap above the descriptor ceiling is refused at startup.
+- **API.** `CORE_RPC_VERSION` 3.37 → 3.38. `get_info` gains
+  `public_incoming_socket_count`, `public_outgoing_socket_count`,
+  `tor_incoming_socket_count`, and `tor_outgoing_socket_count`. `get_bans`
+  and `banned` gain `permanent`. `get_version` gains nothing.
+
 ### Crypto — vendored FCMP++ subtree resynced to `2485a176`
 
 - Helios/Selene `from_bytes` still accepts the canonical identity (`x == 0`

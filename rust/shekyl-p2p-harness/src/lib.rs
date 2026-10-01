@@ -5,15 +5,13 @@
 
 //! The p2p conformance harness.
 //!
-//! One scripted peer, one seam host, a comparator, and a driver that
-//! runs every seed against both stacks. The epee host is a separate C++
-//! recording binary: it takes [`script::AfterHandshake`] on the command
-//! line and does not own the seed table. This crate does not link epee.
-//! Before cutover the comparator diffs the two hosts. At cutover the
-//! epee transcripts for the parity fields become goldens. After cutover
-//! the same peer stays as the CI check on the Rust transport;
-//! [`compare::DeferredInvariant`] is the vocabulary those later checks
-//! use. A golden changes only with a ruling, in that ruling's pull request.
+//! One scripted peer, one seam host, a comparator, and a driver.
+//! The epee host was the C++ recording binary. It is deleted. CI is
+//! [`check_goldens`] against the option-off parity goldens.
+//! This crate does not link epee.
+//! [`compare::DeferredInvariant`] is the vocabulary of the checks that
+//! need no epee reference. A golden changes only with a ruling, in
+//! that ruling's pull request.
 
 #![deny(unsafe_code)]
 
@@ -25,8 +23,10 @@ mod script;
 mod seam_host;
 mod transcript;
 
-pub use compare::{diff, run_agrees, run_matches_script, DeferredInvariant, Field, Finding, Run};
-pub use driver::{epee_cli_args, host_wait_ms, run_all};
+pub use compare::{
+    diff, parity_transcript, run_agrees, run_matches_script, DeferredInvariant, Field, Finding, Run,
+};
+pub use driver::{check_goldens, epee_cli_args, host_wait_ms, record_goldens, run_all};
 pub use handshake::{handshake, Handshake};
 pub use peer::run_peer;
 pub use script::{

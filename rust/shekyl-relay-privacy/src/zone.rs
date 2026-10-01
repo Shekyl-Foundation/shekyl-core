@@ -96,9 +96,7 @@ relay_zones! {
         Invalid = 0,
         /// `zone::public_` — clearnet.
         Public = 1,
-        /// `zone::i2p`.
-        I2p = 2,
-        /// `zone::tor`.
+        /// `zone::tor`. Discriminant 2 is unused so this value stays 3.
         Tor = 3,
     }
 }
@@ -128,8 +126,8 @@ impl RelayZone {
     /// protection — which is why they point opposite ways.
     ///
     /// **The hop that matters is the overlay leaving the machine.** A loopback
-    /// SOCKS into a local Tor/i2p daemon (`--tx-proxy tor,127.0.0.1:9050`) is
-    /// the standard first hop and is not a wire observer: Tor/i2p encrypts
+    /// SOCKS into a local Tor daemon (`--tx-proxy tor,127.0.0.1:9050`) is
+    /// the standard first hop and is not a wire observer: Tor encrypts
     /// what leaves. Do not re-key this predicate on the SOCKS endpoint's
     /// address — that collapses overlay secrecy into first-hop locality, which
     /// is a connect-path concern and a different axis.
@@ -139,7 +137,7 @@ impl RelayZone {
     /// to mint one. This predicate stays the defining function.
     #[must_use]
     pub const fn is_encrypted(self) -> bool {
-        matches!(self, Self::I2p | Self::Tor)
+        matches!(self, Self::Tor)
     }
 
     /// The discriminant as a byte — array index into the per-zone embargo
@@ -196,17 +194,18 @@ impl LinkSecrecy {
 }
 
 const _: () = {
-    // Declaration order matches discriminant order. That is ALL this checks —
-    // `from_ffi_u8` is generated from the same list now, so the decode
-    // contract is the macro's to keep, and an assertion here claiming to
-    // enforce it would be a check citing a guarantee it does not provide.
-    // What this catches is a variant declared out of order, which would make
-    // `ALL[i]` and the FFI byte disagree for readers who index by position.
-    let mut i = 0;
+    // Discriminants increase in declaration order. `from_ffi_u8` is generated
+    // from the same list, so this does not re-check the decoder. What it
+    // catches is a variant declared out of order. Discriminant 2 is unused,
+    // so Tor stays 3 and `ALL[i]` is not the FFI byte.
+    assert!(RelayZone::Invalid as u8 == 0);
+    assert!(RelayZone::Public as u8 == 1);
+    assert!(RelayZone::Tor as u8 == 3);
+    let mut i = 1;
     while i < RelayZone::ALL.len() {
         assert!(
-            RelayZone::ALL[i] as u8 as usize == i,
-            "RelayZone declaration order no longer matches its discriminants"
+            (RelayZone::ALL[i] as u8) > (RelayZone::ALL[i - 1] as u8),
+            "RelayZone discriminants are not in declaration order"
         );
         i += 1;
     }
@@ -243,28 +242,27 @@ mod tests {
                 "raw {raw} decoded to something provisioned no better than clearnet"
             );
         }
-        for raw in 0_u8..=3 {
-            assert_eq!(RelayZone::from_ffi_u8(raw).as_u8(), raw);
-        }
+        assert_eq!(RelayZone::from_ffi_u8(0), RelayZone::Invalid);
+        assert_eq!(RelayZone::from_ffi_u8(1), RelayZone::Public);
+        assert_eq!(RelayZone::from_ffi_u8(2), RelayZone::Invalid);
+        assert_eq!(RelayZone::from_ffi_u8(3), RelayZone::Tor);
     }
 
     #[test]
     fn invalid_is_not_clearnet() {
         assert!(!RelayZone::Invalid.is_clearnet());
         assert!(RelayZone::Public.is_clearnet());
-        assert!(!RelayZone::I2p.is_clearnet());
         assert!(!RelayZone::Tor.is_clearnet());
     }
 
     #[test]
-    fn invalid_is_not_encrypted_and_tor_i2p_are() {
+    fn invalid_is_not_encrypted_and_tor_is() {
         // The fail-safe opposite of `from_ffi_u8`: unknown zone → longest
         // embargo (safe for anonymity parameters) but NOT presumed encrypted
         // (an unknown link earns no noise). Both pick the answer that cannot
         // silently weaken a protection.
         assert!(!RelayZone::Invalid.is_encrypted());
         assert!(!RelayZone::Public.is_encrypted());
-        assert!(RelayZone::I2p.is_encrypted());
         assert!(RelayZone::Tor.is_encrypted());
     }
 
@@ -272,13 +270,7 @@ mod tests {
     fn link_secrecy_is_a_function_of_the_zone_and_nothing_else() {
         assert!(!LinkSecrecy::of(RelayZone::Invalid).is_encrypted());
         assert!(!LinkSecrecy::of(RelayZone::Public).is_encrypted());
-        assert!(LinkSecrecy::of(RelayZone::I2p).is_encrypted());
         assert!(LinkSecrecy::of(RelayZone::Tor).is_encrypted());
-        assert_eq!(
-            LinkSecrecy::of(RelayZone::Tor),
-            LinkSecrecy::of(RelayZone::I2p),
-            "both encrypted networks are the same secrecy value — identity is not this axis"
-        );
         assert_ne!(
             LinkSecrecy::of(RelayZone::Tor),
             LinkSecrecy::of(RelayZone::Public)

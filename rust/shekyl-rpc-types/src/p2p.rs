@@ -103,7 +103,7 @@ const fn is_false(b: &bool) -> bool {
 ///
 /// `host` means three different things depending on the address arm the
 /// daemon built it from — the ip string for ipv4, the bare host for ipv6, and
-/// the whole `address:port` rendering for anything else (tor, i2p). That
+/// the whole `address:port` rendering for Tor. That
 /// branch is resolved daemon-side, so this type carries a string and no
 /// discriminator; `ip` and `port` are zero on the arms that do not carry
 /// them.

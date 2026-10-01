@@ -464,7 +464,7 @@ impl SpecVerifyCost {
 /// under-estimating shortens the embargo, the privacy-losing direction.
 pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 
-/// The transit assumption for the **anonymity zones** (i2p/tor), in
+/// The transit assumption for the **anonymity zones** (Tor), in
 /// milliseconds.
 ///
 /// # THE PREMISE THIS IS DERIVED ON — re-grounded 2026-08-23, see §89.8.4
@@ -567,7 +567,7 @@ pub fn adopted_hop_ms(n_in: usize, depth: u32) -> Result<u32, VerifyCostRefusal>
 /// prose, `hop` being transport-bound while the cost inside it is not.
 ///
 /// Callers pass [`ADOPTED_TRANSIT_ASSUMPTION_MS`] for clearnet or
-/// [`ANON_ZONE_TRANSIT_ASSUMPTION_MS`] for i2p/tor; prefer
+/// [`ANON_ZONE_TRANSIT_ASSUMPTION_MS`] for Tor; prefer
 /// [`crate::params::DandelionParams::adopted_for`] over calling this directly,
 /// so the zone chooses the constant rather than the call site.
 ///

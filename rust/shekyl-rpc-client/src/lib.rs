@@ -396,7 +396,7 @@ pub fn content_type_for(route: &str) -> &'static str {
 /// An RPC connection to a Monero daemon.
 ///
 /// This is abstract such that users can use an HTTP library (which being their choice), a
-/// Tor/i2p-based transport, or even a memory buffer an external service somehow routes.
+/// Tor-based transport, or even a memory buffer an external service somehow routes.
 ///
 /// While no implementors are directly provided here, the first-party
 /// `shekyl-rpc-transport` crate (a hyper transport with optional SOCKS5h) is recommended.

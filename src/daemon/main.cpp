@@ -41,6 +41,7 @@
 #include "daemon/daemon.h"
 #include "misc_log_ex.h"
 #include "p2p/net_node.h"
+#include "string_tools_lexical.h"
 #include "rpc/core_rpc_server.h"
 #include "rpc/rpc_args.h"
 #include "daemon/command_line_args.h"

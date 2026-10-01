@@ -15,6 +15,8 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock};
 
+use tokio::sync::oneshot;
+
 use shekyl_capped_stream::{SendHalf, Session};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
@@ -41,6 +43,10 @@ pub enum Post {
     Deliver {
         /// The admission id.
         id: SocketId,
+        /// The connector this id was established on. The adapter keeps one
+        /// binding per connector and routes by this; a post without it went
+        /// to the clearnet binding, which dropped every Tor delivery.
+        connector: ConnectorId,
         /// One whole message.
         bytes: Vec<u8>,
     },
@@ -48,6 +54,8 @@ pub enum Post {
     Closed {
         /// The admission id.
         id: SocketId,
+        /// The connector this id was established on, as on `Deliver`.
+        connector: ConnectorId,
         /// The cause that won.
         cause: CloseCause,
     },
@@ -91,10 +99,24 @@ struct Conn {
     send: Option<SendHalf>,
     cause: Option<CloseCause>,
     phase: Phase,
+    /// The connector of the endpoint this row was adopted with. Every post
+    /// for the row names it.
+    connector: ConnectorId,
+    /// Wakes this row's inbound drive, and only it. A hub-wide wake would
+    /// wake every waiting driver on every strand answer, O(N) per delivery
+    /// on the zone whose N is adversarial. `notify_one` stores a permit when
+    /// no driver is waiting, so a change between the driver dropping the
+    /// table lock and awaiting is not lost.
+    notify: Arc<tokio::sync::Notify>,
     /// How many `Deliver` posts have been queued. The injector waits on this.
     posted_deliveries: u64,
     /// The strand has entered `closed`. A late refusal records nothing.
     strand_closed: bool,
+    /// Fires when the Levin handshake completes. Dropped when the row
+    /// closes, which is what ends the connector's gap wait. The sender
+    /// lives here, on the row, so a connection that never finishes the
+    /// handshake does not leave one behind in a side table.
+    gap: Option<oneshot::Sender<()>>,
 }
 
 struct Inner {
@@ -103,14 +125,29 @@ struct Inner {
     ceiling: InboundCeiling,
 }
 
+/// What one locked look at a row told [`Hub::deliver_async`].
+enum DeliverStep {
+    Done(bool),
+    Wait,
+}
+
 /// One seam. Clones share the table.
 #[derive(Clone)]
 pub struct Hub {
     inner: Arc<Mutex<Inner>>,
+    /// Wakes the thread waiters: the harness pump and the open path. Task
+    /// waiters have one [`tokio::sync::Notify`] per row.
     ready: Arc<Condvar>,
     post: Arc<dyn Fn(Post) + Send + Sync>,
     clock: Arc<dyn Clock + Send + Sync>,
     dial: Arc<RwLock<Option<Arc<dyn Dial>>>>,
+}
+
+/// What one `send` did. `found` is whether the registry held the id.
+pub struct SendReport {
+    pub accepted: bool,
+    pub found: bool,
+    pub cause: Option<CloseKind>,
 }
 
 impl Hub {
@@ -138,6 +175,16 @@ impl Hub {
             clock,
             dial: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Wake every thread waiter.
+    fn wake(&self) {
+        self.ready.notify_all();
+    }
+
+    /// Wake one row's inbound drive.
+    fn wake_row(conn: &Conn) {
+        conn.notify.notify_one();
     }
 
     /// [`Self::new`] with the monotonic clock.
@@ -189,7 +236,7 @@ impl Hub {
         };
         drop(previous);
         self.lock().conns.clear();
-        self.ready.notify_all();
+        self.wake();
     }
 
     fn now(&self) -> Tick {
@@ -211,7 +258,7 @@ impl Hub {
         let ceiling = self.lock().ceiling;
         let now = self.now();
         let channel = dial.connect(endpoint, ceiling, now)?;
-        self.adopt(channel.open, channel.session, channel.endpoint)
+        self.adopt(channel.open, channel.session, channel.endpoint, channel.gap)
     }
 
     /// Register a channel the connector already admitted.
@@ -223,6 +270,7 @@ impl Hub {
         open: OpenSocket,
         session: Session,
         endpoint: Endpoint,
+        gap: Option<oneshot::Sender<()>>,
     ) -> Result<Attached, CloseCause> {
         let id = open.id();
         let send = session.send_half();
@@ -240,8 +288,11 @@ impl Hub {
                 send: Some(send),
                 cause: None,
                 phase: Phase::Arming,
+                connector: endpoint.connector(),
+                notify: Arc::new(tokio::sync::Notify::new()),
                 posted_deliveries: 0,
                 strand_closed: false,
+                gap,
             },
         );
         poster(Post::Established { id, endpoint });
@@ -276,8 +327,9 @@ impl Hub {
             if conn.cause.is_none() && matches!(conn.phase, Phase::Arming) {
                 conn.phase = Phase::Open;
             }
+            Self::wake_row(conn);
         }
-        self.ready.notify_all();
+        self.wake();
     }
 
     /// How many `Deliver` posts have been queued for `id`.
@@ -324,40 +376,83 @@ impl Hub {
     /// Post one frame and wait until the strand accepts it or the id closes.
     ///
     /// The caller is the inbound pump. It does not take the next frame
-    /// until this returns.
+    /// until this returns. The wait is the hub condvar. [`Self::deliver_async`]
+    /// is the same step on the row's [`tokio::sync::Notify`].
     #[must_use]
     pub fn deliver(&self, id: SocketId, bytes: Vec<u8>) -> bool {
-        let poster = Arc::clone(&self.post);
+        let mut bytes = Some(bytes);
         let mut inner = self.lock();
         loop {
-            let Some(conn) = inner.conns.get(&id) else {
-                return false;
-            };
-            match conn.phase {
-                Phase::Closed => return false,
-                Phase::Open => break,
-                Phase::Arming | Phase::Delivering => inner = self.wait(inner),
+            match self.deliver_step(&mut inner, id, &mut bytes) {
+                DeliverStep::Done(result) => return result,
+                DeliverStep::Wait => inner = self.wait(inner),
             }
         }
-        let Some(conn) = inner.conns.get_mut(&id) else {
+    }
+
+    /// [`Self::deliver`] for a task. The wait is the row's own
+    /// [`tokio::sync::Notify`], so the task holds no thread while the strand
+    /// parses and a strand answer wakes one driver, not every driver. A zone
+    /// with one blocking lane drove one connection at a time when this was a
+    /// blocking call; every later connection sat deaf in the pool's queue
+    /// until the first one closed.
+    pub async fn deliver_async(&self, id: SocketId, bytes: Vec<u8>) -> bool {
+        let mut bytes = Some(bytes);
+        let Some(notify) = self
+            .lock()
+            .conns
+            .get(&id)
+            .map(|conn| Arc::clone(&conn.notify))
+        else {
             return false;
         };
-        if conn.cause.is_some() || !matches!(conn.phase, Phase::Open) {
-            return false;
-        }
-        conn.phase = Phase::Delivering;
-        conn.posted_deliveries = conn.posted_deliveries.saturating_add(1);
-        poster(Post::Deliver { id, bytes });
-        self.ready.notify_all();
         loop {
-            let Some(conn) = inner.conns.get(&id) else {
-                return false;
+            let step = {
+                let mut inner = self.lock();
+                self.deliver_step(&mut inner, id, &mut bytes)
             };
-            match conn.phase {
-                Phase::Open => return true,
-                Phase::Closed => return false,
-                Phase::Delivering | Phase::Arming => inner = self.wait(inner),
+            match step {
+                DeliverStep::Done(result) => return result,
+                // A wake between the lock drop and this await is a stored
+                // permit, so it is not lost; a stale permit costs one more
+                // look under the lock.
+                DeliverStep::Wait => notify.notified().await,
             }
+        }
+    }
+
+    /// One look at the row under the lock. Posts the frame when the row is
+    /// open and the frame is still in hand; reports the outcome once the
+    /// frame is out and the row is open again.
+    fn deliver_step(
+        &self,
+        inner: &mut Inner,
+        id: SocketId,
+        bytes: &mut Option<Vec<u8>>,
+    ) -> DeliverStep {
+        let Some(conn) = inner.conns.get_mut(&id) else {
+            return DeliverStep::Done(false);
+        };
+        match (conn.phase, bytes.is_some()) {
+            (Phase::Closed, _) => DeliverStep::Done(false),
+            (Phase::Open, false) => DeliverStep::Done(true),
+            (Phase::Open, true) => {
+                if conn.cause.is_some() {
+                    return DeliverStep::Done(false);
+                }
+                conn.phase = Phase::Delivering;
+                conn.posted_deliveries = conn.posted_deliveries.saturating_add(1);
+                let connector = conn.connector;
+                let frame = bytes.take().expect("checked above");
+                (self.post)(Post::Deliver {
+                    id,
+                    connector,
+                    bytes: frame,
+                });
+                self.wake();
+                DeliverStep::Wait
+            }
+            (Phase::Arming | Phase::Delivering, _) => DeliverStep::Wait,
         }
     }
 
@@ -377,7 +472,7 @@ impl Hub {
             if record_refusal {
                 self.finish(id, CloseCause::new(CloseKind::SessionRefused));
             } else {
-                self.ready.notify_all();
+                self.wake();
             }
             return;
         }
@@ -386,8 +481,9 @@ impl Hub {
             if conn.cause.is_none() && matches!(conn.phase, Phase::Delivering) {
                 conn.phase = Phase::Open;
             }
+            Self::wake_row(conn);
         }
-        self.ready.notify_all();
+        self.wake();
     }
 
     /// One whole message. A buffer that does not fit is not stored.
@@ -395,26 +491,55 @@ impl Hub {
     /// [`CloseKind::SendQueueFull`] is recorded before this returns.
     #[must_use]
     pub fn send(&self, id: SocketId, bytes: Vec<u8>) -> bool {
+        self.send_report(id, bytes).accepted
+    }
+
+    /// The same send, with whether the registry held `id` and any cause.
+    pub fn send_report(&self, id: SocketId, bytes: Vec<u8>) -> SendReport {
         let outcome = {
             let inner = self.lock();
             let Some(conn) = inner.conns.get(&id) else {
-                return false;
+                return SendReport {
+                    accepted: false,
+                    found: false,
+                    cause: None,
+                };
             };
-            if conn.cause.is_some() {
-                return false;
+            if let Some(cause) = conn.cause {
+                return SendReport {
+                    accepted: false,
+                    found: true,
+                    cause: Some(cause.kind()),
+                };
             }
             let Some(send) = conn.send.as_ref() else {
-                return false;
+                return SendReport {
+                    accepted: false,
+                    found: true,
+                    cause: None,
+                };
             };
             send.try_send(bytes)
         };
         match outcome {
-            Ok(()) => true,
+            Ok(()) => SendReport {
+                accepted: true,
+                found: true,
+                cause: None,
+            },
             Err(CloseKind::SendQueueFull) => {
                 self.finish(id, CloseCause::new(CloseKind::SendQueueFull));
-                false
+                SendReport {
+                    accepted: false,
+                    found: true,
+                    cause: Some(CloseKind::SendQueueFull),
+                }
             }
-            Err(_) => false,
+            Err(kind) => SendReport {
+                accepted: false,
+                found: true,
+                cause: Some(kind),
+            },
         }
     }
 
@@ -431,6 +556,27 @@ impl Hub {
         self.record(id, cause)
     }
 
+    /// The Levin handshake finished. Fires this row's gap sender, if it
+    /// still has one. A row that already closed has nothing to fire.
+    pub fn session_established(&self, id: SocketId) {
+        let sender = {
+            let mut inner = self.lock();
+            inner.conns.get_mut(&id).and_then(|conn| conn.gap.take())
+        };
+        if let Some(sender) = sender {
+            match sender.send(()) {
+                Ok(()) | Err(()) => {}
+            }
+        }
+    }
+
+    /// The inbound ceiling the next accept reads. One value: the zone host
+    /// does not keep a second copy.
+    #[must_use]
+    pub fn ceiling(&self) -> InboundCeiling {
+        self.lock().ceiling
+    }
+
     /// The strand has started `closed`. A later refusal records nothing.
     pub fn handler_gone(&self, id: SocketId) {
         let mut inner = self.lock();
@@ -444,8 +590,10 @@ impl Hub {
         let dial = self.current_dial();
         {
             let mut inner = self.lock();
-            inner.conns.remove(&id);
-            self.ready.notify_all();
+            if let Some(conn) = inner.conns.remove(&id) {
+                Self::wake_row(&conn);
+            }
+            self.wake();
         }
         if let Some(dial) = dial {
             dial.retired(id);
@@ -479,6 +627,26 @@ impl Hub {
         ids
     }
 
+    /// Ban `host` until it is lifted, and post `closed` for each live socket
+    /// the ban drops. A ban that is already permanent drops nothing new.
+    pub fn ban_host_permanent(&self, host: IpAddr) -> Vec<SocketId> {
+        let ids = self.lock().sockets.ban_host_permanent(host);
+        for id in &ids {
+            self.finish(*id, CloseCause::new(CloseKind::LocalClose));
+        }
+        ids
+    }
+
+    /// Ban an IPv4 subnet until it is lifted, the same way as
+    /// [`Self::ban_host_permanent`].
+    pub fn ban_subnet_permanent(&self, subnet: Ipv4Subnet) -> Vec<SocketId> {
+        let ids = self.lock().sockets.ban_subnet_permanent(subnet);
+        for id in &ids {
+            self.finish(*id, CloseCause::new(CloseKind::LocalClose));
+        }
+        ids
+    }
+
     /// Per-connector socket count. Accept does not read this.
     #[must_use]
     pub fn socket_count(&self, connector: ConnectorId, direction: Direction) -> u64 {
@@ -501,7 +669,7 @@ impl Hub {
     fn record(&self, id: SocketId, cause: CloseCause) -> CloseResult {
         let poster = Arc::clone(&self.post);
         let dial = self.current_dial();
-        let open = {
+        let (open, send, gap) = {
             let mut inner = self.lock();
             let Some(conn) = inner.conns.get_mut(&id) else {
                 return CloseResult::AlreadyClosed;
@@ -512,12 +680,37 @@ impl Hub {
             conn.cause = Some(cause);
             conn.phase = Phase::Closed;
             let open = conn.open.take();
-            poster(Post::Closed { id, cause });
-            self.ready.notify_all();
-            open
+            let send = conn.send.take();
+            let gap = conn.gap.take();
+            let connector = conn.connector;
+            poster(Post::Closed {
+                id,
+                connector,
+                cause,
+            });
+            Self::wake_row(conn);
+            self.wake();
+            (open, send, gap)
         };
+        // The sender is dropped off the table lock: the connector task it
+        // wakes may call back into the hub.
+        drop(gap);
         if let Some(open) = open {
             let _ = open.close(cause);
+        }
+        // The cause is recorded whichever side it came from; the socket
+        // has to follow. Discarding the send queue ends the connector's
+        // writer (its next `pop` is the close reason), which ends its connection
+        // task, which drops the socket. Measured before this (clearnet, LAN,
+        // 2026-09-30): after a local close the socket stayed open until the
+        // peer's next frame arrived, 54 s later on the timed-sync cadence.
+        // Nothing else here reaches the wire: `open.close` releases the
+        // admission slot, and the session whose drop closes the queue is
+        // parked in the inbound drive. The tail is dropped, not flushed —
+        // every cause this path records (ban, refusal, del_in_connections,
+        // peer-gone) has nothing queued it needs delivered.
+        if let Some(send) = send {
+            send.discard();
         }
         if let Some(dial) = dial {
             dial.reader_stopped(id);
@@ -537,352 +730,5 @@ impl Hub {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::VecDeque;
-    use std::net::{IpAddr, Ipv4Addr};
-    use std::sync::{Arc, Mutex};
-    use std::thread;
-
-    use shekyl_capped_stream::{FrameSender, StreamEnds};
-    use shekyl_peer_policy::InboundCeiling;
-    use shekyl_timing_engine::{Clock, ManualClock, Tick};
-    use shekyl_transport_layer::{
-        CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Sockets,
-    };
-
-    use super::{Hub, Phase, Post};
-    use crate::drive_inbound;
-    use crate::endpoint::{admit, Endpoint};
-
-    fn endpoint(ip: Ipv4Addr, direction: Direction) -> Endpoint {
-        Endpoint::Clearnet {
-            ip: IpAddr::V4(ip),
-            port: 18080,
-            direction,
-        }
-    }
-
-    struct Rig {
-        hub: Hub,
-        posts: Arc<Mutex<VecDeque<Post>>>,
-        clock: ManualClock,
-    }
-
-    fn rig() -> Rig {
-        let posts = Arc::new(Mutex::new(VecDeque::new()));
-        let clock = ManualClock::new(Tick::new(1));
-        let hub = Hub::new(
-            Sockets::new(),
-            InboundCeiling::Bounded(8),
-            queue_poster(&posts),
-            Arc::new(clock.clone()),
-        );
-        Rig { hub, posts, clock }
-    }
-
-    fn queue_poster(queue: &Arc<Mutex<VecDeque<Post>>>) -> Arc<dyn Fn(Post) + Send + Sync> {
-        let queue = Arc::clone(queue);
-        Arc::new(move |post| {
-            queue.lock().expect("posts").push_back(post);
-        })
-    }
-
-    fn doc_ip() -> Ipv4Addr {
-        Ipv4Addr::new(203, 0, 113, 10)
-    }
-
-    struct Opened {
-        id: shekyl_transport_layer::SocketId,
-        inbound: FrameSender,
-        writer: shekyl_capped_stream::ByteQueue,
-        _hold: shekyl_capped_stream::QueueHold,
-        session: Option<shekyl_capped_stream::Session>,
-    }
-
-    fn adopt(rig: &Rig, direction: Direction, cap: usize) -> Opened {
-        let ends = StreamEnds::open(cap);
-        let inbound = ends.inbound.clone();
-        let writer = ends.writer_queue.clone();
-        let hold = ends.hold;
-        let endpoint = endpoint(doc_ip(), direction);
-        let now = rig.clock.now();
-        let ceiling = rig.hub.lock().ceiling;
-        let sockets = rig.hub.lock().sockets.clone();
-        let open = admit(&sockets, &endpoint, now, ceiling).expect("admit");
-        let attached = rig.hub.adopt(open, ends.session, endpoint).expect("adopt");
-        Opened {
-            id: attached.id,
-            inbound,
-            writer,
-            _hold: hold,
-            session: Some(attached.session),
-        }
-    }
-
-    fn service(rig: &Rig, accepted: bool) {
-        let next = rig.posts.lock().expect("posts").pop_front();
-        let Some(post) = next else {
-            return;
-        };
-        match post {
-            Post::Established { id, .. } => rig.hub.handler_armed(id, true),
-            Post::Deliver { id, .. } => rig.hub.delivery_finished(id, accepted),
-            Post::Closed { id, .. } => {
-                rig.hub.handler_gone(id);
-                rig.hub.reap(id);
-            }
-        }
-    }
-
-    #[test]
-    fn a_delivery_posted_before_closed_is_parsed() {
-        let rig = rig();
-        let mut opened = adopt(&rig, Direction::Outbound, 32);
-        service(&rig, true);
-        let session = opened.session.take().expect("session");
-        let hub = rig.hub.clone();
-        let id = opened.id;
-        let pump = thread::spawn(move || drive_inbound(&hub, id, session));
-        opened
-            .inbound
-            .blocking_send(b"hello".to_vec())
-            .expect("inject");
-        let before = 0;
-        assert!(rig.hub.wait_delivery_posted(id, before));
-        rig.hub.close(id);
-        let kinds: Vec<_> = rig
-            .posts
-            .lock()
-            .expect("posts")
-            .iter()
-            .map(|post| match post {
-                Post::Deliver { .. } => Phase::Delivering,
-                Post::Closed { .. } => Phase::Closed,
-                Post::Established { .. } => Phase::Arming,
-            })
-            .collect();
-        assert_eq!(kinds, vec![Phase::Delivering, Phase::Closed]);
-        service(&rig, true);
-        service(&rig, true);
-        pump.join().expect("pump");
-        assert!(rig.hub.cause(id).is_none());
-    }
-
-    #[test]
-    fn send_after_close_keeps_the_first_cause() {
-        let rig = rig();
-        let opened = adopt(&rig, Direction::Outbound, 32);
-        rig.hub.close(opened.id);
-        assert!(!rig.hub.send(opened.id, b"more".to_vec()));
-        rig.hub.close(opened.id);
-        assert_eq!(
-            rig.hub.cause(opened.id).map(CloseCause::kind),
-            Some(CloseKind::LocalClose)
-        );
-    }
-
-    #[test]
-    fn a_message_that_does_not_fit_is_send_queue_full() {
-        let rig = rig();
-        let opened = adopt(&rig, Direction::Outbound, 4);
-        assert!(rig.hub.send(opened.id, b"ab".to_vec()));
-        assert!(!rig.hub.send(opened.id, b"cdef".to_vec()));
-        assert_eq!(
-            rig.hub.cause(opened.id).map(CloseCause::kind),
-            Some(CloseKind::SendQueueFull)
-        );
-        rig.hub.delivery_finished(opened.id, false);
-        assert_eq!(
-            rig.hub.cause(opened.id).map(CloseCause::kind),
-            Some(CloseKind::SendQueueFull)
-        );
-    }
-
-    #[test]
-    fn a_refused_delivery_is_session_refused() {
-        let rig = rig();
-        let mut opened = adopt(&rig, Direction::Inbound, 32);
-        service(&rig, true);
-        let session = opened.session.take().expect("session");
-        let hub = rig.hub.clone();
-        let id = opened.id;
-        let pump = thread::spawn(move || drive_inbound(&hub, id, session));
-        opened
-            .inbound
-            .blocking_send(b"no".to_vec())
-            .expect("inject");
-        assert!(rig.hub.wait_delivery_posted(id, 0));
-        service(&rig, false);
-        pump.join().expect("pump");
-        assert_eq!(
-            rig.hub.cause(id).map(CloseCause::kind),
-            Some(CloseKind::SessionRefused)
-        );
-    }
-
-    #[test]
-    fn socket_count_is_outbound_and_inbound_held_leaves_it_out() {
-        let rig = rig();
-        let _opened = adopt(&rig, Direction::Outbound, 32);
-        assert_eq!(
-            rig.hub
-                .socket_count(ConnectorId::Clearnet, Direction::Outbound),
-            1
-        );
-        assert_eq!(rig.hub.inbound_held(), 0);
-    }
-
-    #[test]
-    fn a_zero_ceiling_refuses_inbound() {
-        let rig = rig();
-        rig.hub.set_ceiling(InboundCeiling::Bounded(0));
-        let ends = StreamEnds::open(32);
-        let endpoint = endpoint(doc_ip(), Direction::Inbound);
-        let now = rig.clock.now();
-        let err = admit(
-            &rig.hub.lock().sockets,
-            &endpoint,
-            now,
-            InboundCeiling::Bounded(0),
-        )
-        .expect_err("ceiling");
-        assert_eq!(err.kind(), CloseKind::AdmissionRefused);
-        drop(ends);
-    }
-
-    #[test]
-    fn replacing_the_dialer_joins_the_pump_and_the_next_hub_keeps_the_id() {
-        let sockets = Sockets::new();
-        let posts = Arc::new(Mutex::new(VecDeque::new()));
-        let clock = ManualClock::new(Tick::new(1));
-        let first = Hub::new(
-            sockets.clone(),
-            InboundCeiling::Bounded(8),
-            queue_poster(&posts),
-            Arc::new(clock.clone()),
-        );
-        first.install_loopback(32);
-        let endpoint = endpoint(doc_ip(), Direction::Outbound);
-        let attached = first.connect(&endpoint).expect("open");
-        let id = attached.id;
-        let hub = first.clone();
-        let pump = thread::spawn(move || drive_inbound(&hub, id, attached.session));
-        first.track_pump(id, pump);
-        first.install_loopback(32);
-        first.shutdown();
-        assert!(first.cause(id).is_none());
-        let second = Hub::new(
-            sockets,
-            InboundCeiling::Bounded(8),
-            queue_poster(&posts),
-            Arc::new(clock),
-        );
-        second.install_loopback(32);
-        let again = second.connect(&endpoint).expect("next id");
-        assert_ne!(again.id, id);
-        drop(again);
-        second.shutdown();
-    }
-
-    #[test]
-    fn a_banned_clearnet_host_is_admission_refused_until_the_deadline() {
-        let rig = rig();
-        rig.hub.install_loopback(32);
-        let endpoint = endpoint(doc_ip(), Direction::Outbound);
-        let first = rig.hub.connect(&endpoint).expect("open");
-        let closed = rig.hub.ban_host(IpAddr::V4(doc_ip()), Tick::new(50));
-        assert_eq!(closed, vec![first.id]);
-        drop(first);
-        let Err(banned) = rig.hub.connect(&endpoint) else {
-            panic!("a banned host was admitted");
-        };
-        assert_eq!(banned.kind(), CloseKind::AdmissionRefused);
-        rig.clock.set(Tick::new(50));
-        let again = rig.hub.connect(&endpoint).expect("expired");
-        drop(again);
-    }
-
-    #[test]
-    fn a_transport_close_does_not_ban_the_host() {
-        let host = doc_ip();
-        for kind in CloseKind::ALL {
-            let rig = rig();
-            let opened = adopt(&rig, Direction::Outbound, 32);
-            let cause = if *kind == CloseKind::ProxyRefused {
-                CloseCause::proxy_refused(1)
-            } else {
-                CloseCause::new(*kind)
-            };
-            assert!(matches!(
-                rig.hub.finish(opened.id, cause),
-                CloseResult::Recorded(_)
-            ));
-            assert!(
-                !rig.hub.is_banned(IpAddr::V4(host)),
-                "{kind:?} banned the host"
-            );
-        }
-    }
-
-    #[test]
-    fn established_carries_the_endpoint() {
-        let rig = rig();
-        let _opened = adopt(&rig, Direction::Outbound, 32);
-        let post = rig.posts.lock().expect("posts").pop_front().expect("post");
-        let Post::Established {
-            endpoint: observed, ..
-        } = post
-        else {
-            panic!("established is the first post");
-        };
-        assert_eq!(observed, endpoint(doc_ip(), Direction::Outbound));
-    }
-
-    #[test]
-    fn send_is_readable_by_the_connector_writer() {
-        let rig = rig();
-        let opened = adopt(&rig, Direction::Outbound, 32);
-        assert!(rig.hub.send(opened.id, b"hello".to_vec()));
-        let bytes = opened.writer.try_pop().expect("queued");
-        opened.writer.release(bytes.len());
-        assert_eq!(bytes, b"hello");
-    }
-
-    #[test]
-    fn a_failed_arm_unblocks_the_waiter() {
-        let rig = rig();
-        let opened = adopt(&rig, Direction::Outbound, 32);
-        let hub = rig.hub.clone();
-        let id = opened.id;
-        let waiter = thread::spawn(move || hub.await_armed(id));
-        let post = rig.posts.lock().expect("posts").pop_front().expect("post");
-        let Post::Established { id, .. } = post else {
-            panic!("established");
-        };
-        rig.hub.handler_armed(id, false);
-        assert!(!waiter.join().expect("waiter"));
-        assert_eq!(
-            rig.hub.cause(id).map(CloseCause::kind),
-            Some(CloseKind::LocalClose)
-        );
-    }
-
-    #[test]
-    fn reap_forgets_the_row() {
-        let rig = rig();
-        let opened = adopt(&rig, Direction::Outbound, 32);
-        rig.hub.close(opened.id);
-        rig.hub.reap(opened.id);
-        assert!(rig.hub.cause(opened.id).is_none());
-        assert!(!rig.hub.send(opened.id, b"late".to_vec()));
-    }
-
-    #[test]
-    fn connect_without_a_dialer_is_dial_failed() {
-        let rig = rig();
-        let Err(err) = rig.hub.connect(&endpoint(doc_ip(), Direction::Outbound)) else {
-            panic!("connect without a dialer admitted a channel");
-        };
-        assert_eq!(err.kind(), CloseKind::DialFailed);
-    }
-}
+#[path = "hub_tests.rs"]
+mod tests;

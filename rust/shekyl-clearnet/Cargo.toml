@@ -23,6 +23,7 @@ shekyl-runtime = { path = "../shekyl-runtime" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tracing = "0.1"
 
 [lints]
 workspace = true

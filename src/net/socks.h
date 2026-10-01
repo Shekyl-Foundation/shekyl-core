@@ -183,11 +183,6 @@ namespace socks
             const net::tor_address& address,
             const user_and_pass* userinfo = nullptr);
 
-        //! Try to set `address` as remote i2p hidden service connection request.
-        bool set_connect_command(
-            const net::i2p_address& address,
-            const user_and_pass* userinfo = nullptr);
-
         //! Try to set `domain` as remote DNS A record lookup request.
         bool set_resolve_command(boost::string_ref domain);
 

@@ -1187,16 +1187,8 @@ int shekyl_rpc_net_stats(core_rpc_handle* h, shekyl_rpc_net_stats_facts* out)
   {
     std::memset(out, 0, sizeof(*out));
     out->start_time = static_cast<uint64_t>(h->rpc->get_core().get_start_time());
-    {
-      CRITICAL_REGION_LOCAL(epee::net_utils::network_throttle_manager::m_lock_get_global_throttle_in);
-      epee::net_utils::network_throttle_manager::get_global_throttle_in()
-        .get_stats(out->total_packets_in, out->total_bytes_in);
-    }
-    {
-      CRITICAL_REGION_LOCAL(epee::net_utils::network_throttle_manager::m_lock_get_global_throttle_out);
-      epee::net_utils::network_throttle_manager::get_global_throttle_out()
-        .get_stats(out->total_packets_out, out->total_bytes_out);
-    }
+    shekyl_link_totals(&out->total_bytes_in, &out->total_packets_in,
+      &out->total_bytes_out, &out->total_packets_out);
     return SHEKYL_RPC_FACTS_OK;
   }
   catch (const std::exception& e)
@@ -1255,6 +1247,26 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
       e.send_count = ctx.m_send_cnt;
       e.current_speed_down = ctx.m_current_speed_down;
       e.current_speed_up = ctx.m_current_speed_up;
+      {
+        // Totals feed the lifetime average. Current speed is the
+        // budget's recent window, from the engine's clock. It is not
+        // a second limit.
+        std::uint64_t socket_id = 0;
+        std::memcpy(&socket_id, ctx.m_connection_id.data + 8, sizeof(socket_id));
+        if (socket_id != 0)
+        {
+          std::uint64_t up = 0;
+          std::uint64_t down = 0;
+          shekyl_link_connection(socket_id, &up, &down);
+          e.send_count = up;
+          e.recv_count = down;
+          std::uint64_t speed_up = 0;
+          std::uint64_t speed_down = 0;
+          shekyl_link_speed(socket_id, &speed_up, &speed_down);
+          e.current_speed_up = static_cast<double>(speed_up);
+          e.current_speed_down = static_cast<double>(speed_down);
+        }
+      }
       e.height = ctx.m_remote_blockchain_height;
       e.support_flags = support_flags;
       e.port = ctx.m_remote_address.port();

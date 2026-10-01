@@ -211,14 +211,14 @@ pub type CarrierResolvedCb =
 /// adjacent `bool`s at the end of a C signature, where a transposition
 /// compiles cleanly on both sides and is silent at runtime.
 ///
-/// Transposing *these two* is not a generic footgun — it swaps the i2p/tor
+/// Transposing *these two* is not a generic footgun — it swaps the Tor
 /// outbound-only fluff rule with the covert enable, which is exactly the
 /// regression RP-3a's first pass shipped and the eight `private_*` gtests
 /// caught (§18.4c). The header is hand-written rather than cbindgen-generated,
 /// so nothing mechanically checks the C++ declaration against this definition;
 /// a bitmask removes the ordering question rather than relying on that check.
 ///
-/// The i2p/tor rule: fluff to outbound connections only, never to an inbound
+/// The Tor rule: fluff to outbound connections only, never to an inbound
 /// peer, who on a hidden service is a stranger that dialled us. It follows the
 /// **network**, not covert mode — a hidden-service zone with covert disabled
 /// still needs it, which is why the two bits are independent.
@@ -569,7 +569,7 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// may pass another. Passing the choice through keeps one owner of it
 /// rather than a second copy of the rule here.
 ///
-/// `outbound_fluff_only` is the i2p/tor rule: fluff to outbound connections
+/// `outbound_fluff_only` is the Tor rule: fluff to outbound connections
 /// only, never to an inbound peer. It is a property of the *network* rather than
 /// of noise mode — a hidden-service zone with noise disabled still needs it — so
 /// it is passed rather than derived from the epoch parameters. See

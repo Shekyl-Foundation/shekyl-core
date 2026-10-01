@@ -12,7 +12,7 @@
 //! # The retired reading, and the reason it is worth keeping visible
 //!
 //! §63 established that `dandelionpp_notify` dispatched only when
-//! `nzone == public_`, so `stem`/`forward`/`local` on i2p/tor fell through to
+//! `nzone == public_`, so `stem`/`forward`/`local` on Tor fell through to
 //! an outbound-only diffusion. From a Tor-configured origin the stem length
 //! was therefore **1 with certainty**, and the shipped embargo over-provisioned
 //! that path by ≥75 %. F-12's sign was backwards and the finding retracted.
@@ -124,7 +124,7 @@ fn hop_sensitivity() {
 /// is how the last one went wrong. The fact lives in C++ dispatch — whether
 /// `dandelionpp_notify` runs for a non-public zone — and the oracle for it is
 /// `tests/unit_tests/levin.cpp`'s six `private_*` cases, which assert a stem
-/// send on i2p reaches one successor with `dandelionpp_fluff == false`. If the
+/// send on Tor reaches one successor with `dandelionpp_fluff == false`. If the
 /// transport gate came back, those fail. This test names them rather than
 /// faking a local copy of what they check.
 ///

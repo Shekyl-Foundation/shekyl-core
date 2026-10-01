@@ -92,10 +92,12 @@ The engine-service addendum in
 [`P2P_TIMING_ENGINE.md`](P2P_TIMING_ENGINE.md) is the concurrency
 contract the first line calls. C5 is recorded: the responder handshake
 is 685 µs, one rekey is 5.06 µs, seal and open of a 65,535-byte record
-is 889 µs. No accept-rate (D10.3), no per-connector deadline (D9), no
-transport-runtime thread count (D5), and no every-record rekey (D14
-item 4, decided with C9's window) is written. The implementation does
-not invent those numbers.
+is 889 µs. The D9 deadlines are written by `transport_spans`:
+clearnet dial 1.415 s (a SOCKS proxy borrows the Tor dial's 9.1 s),
+handshake 1.426 s, gap 1.430 s, Tor dial 9.1 s, gap 2.6 s. No
+accept-rate (D10.3), no transport-runtime thread count
+(D5), and no every-record rekey (D14 item 4, decided with C9's window)
+is written. The implementation does not invent those numbers.
 
 **The tree matches the citations that the first line will rely on.**
 Fifty-six `file:line` citations in this document fall inside their
@@ -497,13 +499,11 @@ connection.
 construct `boosted_tcp_server`. Public and Tor switch in the same
 cutover (D14). A bind failure, a publish failure, or a seam error
 does not start epee for that zone. Tor bind failure still drops the
-zone. Publish failure still leaves it outbound-only. The epee server
-stays in the tree as the harness reference until D13, and production
-keeps calling it until the cutover replaces that call. The reference
-is a separate server. It is not a branch inside a zone that already
-started on the seam. I2P gets no seam server and no new epee server.
-The cutover states that I2P support is removed until an I2P connector
-exists.
+zone. Publish failure still leaves it outbound-only. UPDATE
+2026-09-30: the epee server is deleted (D13). The harness reference
+is the parity goldens, checked by `check-goldens`. It is not a
+branch inside a zone that already started on the seam. The I2P
+address type is deleted. An I2P connector reopens it.
 
 **The FFI is the posts, the completions, and the synchronous connect.**
 
@@ -641,7 +641,10 @@ records the new count.
   seconds, and `getbans` returns seconds remaining. At cutover the
   conversion is `now + duration` onto the monotonic clock, and the
   remaining time is computed back from it. No `time_t` crosses the
-  boundary. A duration that does not fit a `Tick` is refused. The
+  boundary. A duration that does not fit a `Tick` is refused by
+  `setbans`. `--ban-list` is a different kind: those entries are
+  permanent, with no deadline, and `getbans` reports them as
+  permanent rather than as a number of seconds. The
   session layer is the second writer, through the same duration: ban
   this host for this long. A transport close does not write the list
   and does not call `add_host_fail`.
@@ -655,16 +658,16 @@ records the new count.
   Outbound sockets stay in the process fd count. Their cap is what
   `reserved` subtracts (D8).
 - A `Published` onion is written to the Tor zone's `m_our_address`.
-  `OutboundOnly` leaves the address unset. `OperatorInbound` is not
-  a publish result and is not written there.
+  `OutboundOnly` leaves the address unset. An onion from
+  `--anonymous-inbound` is written there as well: the operator runs
+  that service, and the address is configuration.
 - `get_info` keeps `incoming_connections_count` and
   `outgoing_connections_count` as the public zone's session counts,
-  from the Levin registry. Socket counts
-  (`public_incoming_socket_count`, `public_outgoing_socket_count`,
-  `tor_incoming_socket_count`, `tor_outgoing_socket_count`) are not
-  on `get_info` until the daemon binds the seam. A zero while epee
-  still holds the sockets would read as no connections. A restricted
-  caller receives zero for the session counts, as it does today.
+  from the Levin registry. Socket counts are
+  `public_incoming_socket_count`, `public_outgoing_socket_count`,
+  `tor_incoming_socket_count`, and `tor_outgoing_socket_count`, read
+  from the admission table. A restricted caller receives zero for
+  the session counts and for the socket counts.
 
 The seam's tests are the close races and the floor. Recording a
 transport cause, including `PrefixMismatch`, `RecordRejected`,
@@ -685,12 +688,10 @@ below the floor returns `BelowFloor` and records no row.
 `inbound_held` counts inbound rows and leaves outbound out. The
 differential harness is
 [`P2P_DIFFERENTIAL_HARNESS.md`](P2P_DIFFERENTIAL_HARNESS.md), crate
-`shekyl-p2p-harness`. Seed 1 is the handshake invoke. `run-seeds` drives
-every seed against both hosts; `epee-host` is the C++ recorder and
-takes the typed plan on its command line. The cross-build run waits
-on the zone-binding commit. Cutover waits on the thread budget and the per-connector
-deadlines, measured on this build and written down. The budget is
-at least the floor.
+`shekyl-p2p-harness`. Seed 1 is the handshake invoke. UPDATE
+2026-09-30: the epee recorder is deleted. `check-goldens` runs every
+seed against the seam and compares the parity goldens. The
+per-connector deadlines are written. The budget is at least the floor.
 
 ---
 
@@ -910,7 +911,7 @@ and the mechanism does not. "Refuse" means it does not survive.
 | Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | **Enforce socket admission at accept, in Rust, with no C++ call.** The ceiling comes from `shekyl-peer-policy`. Ban entries come from the operator and from the session layer's ban call. The transport layer does not own those values and does not score. It does not call into C++ admission. |
 | Ban list | `block_host` at `net_node.inl:256`. The registry sweep that drops live connections is `foreach_connection` at `:302`. RPC callers: `core_rpc_server.cpp:193`, `:997` (`get_blocked_hosts`), `:1101`, `:1103`. Discovery's pre-dial check is `is_remote_host_allowed` at `net_node.inl:1902`. Automatic scoring is `add_host_fail` at `net_node.inl:413` | **Move the list to Rust**, keyed on the observed host, carrying IPv4 subnets and expiry. Two writers, both in durations (corrected 2026-09-28): the operator's RPC (`block_host`, `unblock_host`, `get_blocked_hosts`) and the session layer's call to ban a host for a duration. A ban closes existing sockets to that host directly. It does not sweep the Levin registry. Discovery's pre-dial check reads the same list. A transport close does not write the list. |
 | Outbound dial | `P2P_DEFAULT_CONNECTION_TIMEOUT` = 5 s (`cryptonote_config.h:189`); remote new-connection timer = 10 s (`abstract_tcp_server2.inl:61`) | Carry the dial. Re-derive both clocks (D9). They are not one number. |
-| SOCKS dial clock | A SOCKS dial is the proxy handshake, then the overlay circuit build and rendezvous. `src/net/socks*` has its own timeout | **Its own per-connector clock, derived under D9.** It does not inherit the timeout from `src/net/socks`. |
+| SOCKS dial clock | A SOCKS dial is the proxy handshake, then the overlay circuit build and rendezvous. `src/net/socks*` has its own timeout | **A proxied clearnet dial uses the Tor dial clock (9.1 s): the worst measured SOCKS path, pending its own D9 distribution.** The three clearnet legs had no proxy, and a Tor-exit dial is 3–6 s. It does not inherit the timeout from `src/net/socks`. |
 | SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust through `shekyl-socks`. `shekyl-p-fetch` and `shekyl-rpc-transport` call it with `Isolation::Principal`. `shekyl-p-transport` still enables `ureq/socks-proxy` (`socks` 0.3.4). Moving that HTTP client is a FOLLOWUPS row. |
 | Overlay inbound attribution | `set_default_remote` at `net_node.inl:678` (`--anonymous-inbound`) and `:885` (`tor_address::unknown()`); applied at `abstract_tcp_server2.inl:1905-1908` | **Carry for Tor now, and for I2P when an I2P connector exists (D14 item 2).** Do not attribute from the socket. Inbound arrives on the local router's loopback socket. The observed endpoint is "this zone, no address", never `127.0.0.1`. Attributing from the socket would collapse admission's per-host view into one host. This is where LV-3's OBSERVED endpoint originates. |
 | Tor forward listener | `net_node.inl:863-880` | Carry. Bound to `127.0.0.1` on port 0. The OS-assigned port is read back with `get_binded_port` (`:881`) and handed to Tor control. Bind failure erases the zone (`:878`). |
@@ -949,9 +950,9 @@ open design.
 
 **The operator's budget is the carried duty.** `--limit-rate-up`,
 `--limit-rate-down`, and `--limit-rate` (`net_node.cpp:184-186`) keep
-working. The default is unlimited. `P2P_DEFAULT_LIMIT_RATE_UP` (8192)
-and `P2P_DEFAULT_LIMIT_RATE_DOWN` (32768) are inherited numbers, not
-the policy. An operator sets a budget when the link needs one. The
+working. The default is unlimited. 8192 and 32768 KiB/s were the
+inherited defaults; they are not the policy. An operator sets a budget
+when the link needs one. The
 budget is the operator's bandwidth preference. It has no security role.
 
 A token bucket per direction, for the whole node. The refill is the
@@ -1003,8 +1004,8 @@ a class fills the argument the writer already takes.
 **Cutover order, after the harness merges.** One branch, one merge,
 when the run records are in: the zone binding, this budget, the call
 sites that move with them, the cross-build run and the measurements on
-that build, then D13's deletions, the epee goldens, I2P recorded as
-removed, and the pipe branch deleted.
+that build, then D13's deletions, the epee goldens, the I2P address
+type deleted, and the pipe branch deleted.
 
 ---
 
@@ -1068,6 +1069,13 @@ gets its own runtime, with a stated thread budget. The budgets are
 explicit and have to add up to something the Pi-4 can carry. The
 numbers come from measurement, not from this ruling.
 
+UPDATE 2026-09-29: the sum is the daemon's own pools against four
+cores. The RandomX miner is outside it. Mining is the operator's
+choice, its threads are the operator's, and they compete with these
+pools for the same cores. The budget record states that the miner
+was off. A mining floor device is measured as its own record, and its
+executor tail is compared to the idle one (D9).
+
 The transport layer faces attackers: any peer can drive its load. The
 RPC and Tor-control runtimes serve the operator. A tokio multi-thread
 runtime has no task priorities, so a shared pool would let a peer flood
@@ -1091,6 +1099,74 @@ would omit the pools the sum exists to count. The move and the print
 are one FOLLOWUPS row, owned by this document. `Pool::shutdown` bounds
 the wait for a blocking task. Drop remains the unbounded fallback and
 is never taken from inside a task.
+
+UPDATE 2026-09-30, thread-budget measurement conditions. The budget is
+three counts, each an editable placeholder today, each "the run record
+replaces this value": the transport runtime's `workers` and `blocking`
+(`transport_spans`, `net_node.inl:3671-3672`, `2` and `1`) and the
+interim executor's `executor_workers` (`net_node.inl:1173`, `2`). A
+count is changed by editing the placeholder and relinking the daemon;
+none is a runtime knob, so a sweep is one relink per count, C++ only.
+The RPC runtime (one worker per core), the Tor-control runtime (one
+worker), and the timing engine's dedicated thread are fixed pools no
+attacker leg minimises; they enter the sum, not the sweep.
+
+- **What is derived.** For each swept pool, the **smallest** count at
+  which it meets its duty under the load that pool faces — found by
+  reducing the count until the duty fails, and taking the smallest that
+  still passes, not the largest the cores hold. Over-provisioning is
+  budget the ledger has to carry forever; under-provisioning is the
+  starvation the separate-runtimes ruling exists to prevent. Per D5 the
+  budget is the sum of every live pool's threads — swept counts plus the
+  fixed pools plus the dedicated thread — against four cores, read from
+  `shekyl-thread-ledger`, with the miner outside it.
+
+- **The legs.** Each is one record.
+  1. **Steady sync (baseline).** The floor device syncing and relaying
+     against one honest peer, no attack. Establishes idle pool occupancy
+     and the idle timer lateness the mining-floor and flood records are
+     compared against. This is the idle record D9's mining comparison
+     and leg 4 below both read.
+  2. **Accept flood** (transport `workers`). Many inbound connections
+     churning admission — dial, admit, close — from the other end.
+     Duty: admissions and deliveries keep pace (no D9 deadline missed
+     for want of a worker) **and** the operator pools are not starved —
+     RPC still answers within its own idle budget while the flood runs.
+     The second half is the isolation property D5 is for; a worker count
+     that serves the flood but stalls RPC has not met the duty.
+  3. **NNhfs handshake flood** (transport `blocking`). Many concurrent
+     inbound handshakes, so the DH compute queues on the blocking lane.
+     Duty: honest handshakes still finish inside the D9 handshake
+     deadline. This leg needs no new instrumentation — the responder's
+     `queue_ns` span is the lane wait, and the smallest `blocking` that
+     keeps `queue_ns + compute_ns` under the deadline at the target
+     accept rate (D10.3) is the answer. The accept rate is stated with
+     the record, not assumed.
+  4. **Timer lateness under load** (`executor_workers`). D6's evidence
+     step 7: how late the relay `Driver`'s wake and the 1 s idle
+     cadences fire while an attacker drives message and admission load
+     on the executor. Duty: lateness stays small against the
+     Dandelion++ embargo D6 isolates, so stem and fluff timing is not
+     moved by peer load. Taken on the interim executor now and again
+     after the timing-engine round (D6); the interim is the asio sleep,
+     the later run is the Rust `Driver`. The bound it compares to comes
+     from the relay spec, not from this document.
+
+- **The pins, per D9.** Floor device (Pi-4, aarch64, 4 cores), miner
+  off. Each record states its swept count, the leg, the load generator
+  (how many concurrent dialers or streams and from where), the sample
+  count or duration, the binary pin at each end, the link, and what
+  else shares the four cores (the idle regtest daemon, named). A later
+  record on another device or at another count is compared to this one,
+  not written over it.
+
+- **Reopen, per pool.** A later run under these conditions whose
+  smallest passing count for a pool exceeds the pinned budget reopens
+  that pool's budget, re-derived from the larger run. A mining floor
+  device is its own record and the standing reopen, the same shape D5
+  and D9 give it: when the miner's threads on the same four cores push
+  a pool's smallest passing count above the idle-floor budget, the
+  budget is re-derived with the miner on.
 
 ---
 
@@ -1189,7 +1265,9 @@ a hard-coded 10 threads (`:1150`). It hosts:
 - Timer lateness under load. Step 7 measures how
   late relay timers fire under peer-driven load, taken both on the
   interim and after the timing engine lands. The interim's pool budget
-  and the blocking pool's budget both come from it.
+  and the blocking pool's budget both come from it. Its conditions are
+  pinned as leg 4 of D5's thread-budget measurement conditions
+  (2026-09-30); this is the same leg, not a second one.
 
 **The register.** P2P-3 §4.2's timing-engine row is two pieces
 (updated 2026-09-25). The core precedes the transport layer, so
@@ -1379,11 +1457,10 @@ what socket admission and the descriptor ceiling need.
 per network key and direction. Until LV-3 that count is the Levin
 registry's. It is what the outbound-fill logic is really about.
 
-Today the C++ blurs them. `get_outgoing_connections_count` and
-`census_inbound` both walk the Levin registry and count whatever
-contexts are in it (`net_node.inl:2021-2069`, `:2117-2129`, `:3158`).
-Once pre-channel sockets never appear in the registry, that walk
-cannot serve socket admission.
+Session counts still walk the Levin registry
+(`get_outgoing_connections_count`, the once-a-second monitor).
+Socket admission does not. The ceiling's `inbound_held` is
+`Sockets::inbound_held`, and `census_inbound` is gone.
 
 The check and the increment are one step. Today's ceiling compares a
 snapshot: a live walk, plus a separately maintained atomic rewritten
@@ -1433,16 +1510,89 @@ Deadlines are derived **per connector**. Inputs, when they exist:
 flight sizes (1,224 and 1,160 bytes on the wire, prefix included), the
 Pi-4 crypto cost from step 3, and RTT measured on that connector. A
 single global handshake deadline would break on a network whose mixing
-delay is seconds. No deadline is written into this document before that
-measurement. Rule 26 B9.
+delay is seconds. Clearnet deadlines are the 2026-09-30 update below;
+Tor's are in the benchmark record. Rule 26 B9.
 
 Pi-4 C5 run, 2026-09-26, the floor device (aarch64, 4 cores), about 90 seconds:
 [`p2p_c5_pi4_20260926T005507Z.txt`](../benchmarks/p2p_c5_pi4_20260926T005507Z.txt).
 Initiator 928 µs, responder 685 µs, one rekey 5.06 µs, seal/open of
 65,535 bytes 889 µs. The responder figure is the per-connection cost
 D10.3's clearnet accept-rate bound is derived from. The bound waits on
-a stated CPU budget. No rate is written here. Deadlines are not written
-here either.
+a stated CPU budget. No rate is written here. Clearnet deadline milliseconds are the
+2026-09-30 update below. Tor's stay in the benchmark record.
+
+UPDATE 2026-09-29: each deadline is the p99 of honest completions on
+the floor device, over real links, for that connector, times two.
+p99 is about one honest attempt in a hundred timing out; the node
+tries another peer. SUPERSEDED 2026-09-30 for clearnet: the factor of
+two does not cover a longer honest path (mobile, satellite). Tor keeps
+this form, because Tor's delay is the overlay. The distributions
+produce the p99; they do not produce the factor.
+
+UPDATE 2026-09-29, measurement conditions. Each distribution is taken
+on the configuration that ships, or it is a distribution of a link
+that will not exist:
+
+- The clearnet handshake is measured through NNhfs, with
+  `--clearnet-transport-encrypt` on at both ends. The plaintext path
+  is deleted at the flip and is not the one the deadline guards.
+- The Tor dial is the SOCKS exchange, the circuit build, and the
+  rendezvous (D3's clock), against an onion service published with
+  proof-of-work on (D10). Our own onion is published that way by
+  default, so the peer is a daemon on the same pin. A distribution
+  taken against a service without proof-of-work is not this
+  distribution.
+- The daemon's pools are the only load on the four cores. The
+  RandomX miner is off (D5). A mining node is a second distribution
+  with its own record, and it is the reopen criterion: when that
+  record's p99 exceeds a derived deadline, the deadline is re-derived
+  from it.
+- Every distribution states its sample count, both endpoints and
+  their roles, the link (loopback is not a link; LAN and internet are
+  named as such; Tor names the circuit set and the Tor version), the
+  binary pin at each end, the option state, the proof-of-work state,
+  and the miner state. A later distribution on another device or
+  circuit set is compared to this one, not written over it.
+- The p99 is the value at rank ⌈0.99 n⌉ of the sorted samples; at
+  n = 100 that is the second-largest observation, one sample from the
+  max. Twice it is rounded **up** to the precision the deadline is
+  stated in. Rounding down spends the margin the factor of two is.
+- Reopen, per deadline: a later distribution taken under these
+  conditions whose p99 exceeds the derived deadline reopens it, and
+  the deadline is re-derived from the larger run. The same shape D5
+  gives a mining floor device.
+
+UPDATE 2026-09-30, clearnet form. A clearnet deadline is twice the sum
+of two terms. The first is a stated RTT ceiling for the farthest honest
+link Shekyl intends to serve: 700 ms, a GEO-satellite round trip taken
+at the top of the ~600–700 ms range. A phone tether sits inside that
+ceiling. The second is the node-local p99 from the floor legs, the
+larger residual (span p99 minus that leg's RTT) so the term is not
+under-stated: connect 7.2 ms, gap 14.7 ms. The handshake term is the
+median residual of the body, 12.6 ms, measured. Rank ⌈0.99 n⌉ of the
+New York leg is a tail and is not this term. The derivation was
+complete when that leg landed: LAN, South America, and New York, n =
+100 each, slope about 1, this residual, and the ceiling. The factor of
+two is jitter and congestion on the ceiling link. Twice the p99 of a
+shorter honest path is not a deadline: every dial on a longer honest
+path fails, and a failed clearnet dial marks the address for up to
+`P2P_FAILED_ADDR_FORGET_SECONDS` (1 h). Rounded up to 1 ms: connect
+1.415 s, initiator handshake 1.426 s, gap 1.430 s. A ~700 ms handshake
+tail (715 ms on the LAN VM, 676.6 ms on the morning datacenter leg,
+and 115.7 ms beside it) is an open item, not an input. Instrumented
+runs ruled out retransmission, responder runtime, CPU saturation, and
+memory pressure; the cause is unknown. `clearnet responder message2`
+stays on every inbound session, and the next occurrence reports its
+own `wait_before_write_ns` and `total_retrans`. No millisecond here
+depends on that event. The three legs, and the New
+York leg that confirms the slope is about 1, are in the benchmark
+record. A measured satellite-class link whose RTT exceeds 700 ms
+reopens the ceiling. These milliseconds, the Tor dial of 9.1 s, and the
+Tor gap of 2.6 s are what `transport_spans` writes. A clearnet dial
+through a SOCKS proxy uses the Tor dial clock: the three clearnet
+legs had no proxy, a Tor-exit dial is 3–6 s, and a longer deadline
+costs only the dialer. Shutdown waits out the longest of them, the
+Tor dial.
 
 One rekey is 5.06 µs against 889 µs to seal and open a 65,535-byte
 record, under one percent at that size. Fixed windows are smaller than
@@ -1604,15 +1754,22 @@ round can reject them.
   commit, not on this harness. Seed 32's send-queue suffix is classified
   `byte-bounds` when the handshake prefix still matches; the other
   listed divergences are post-cutover CI invariants, not a comparator
-  swallow list. The current server stays in the tree as the wire
-  reference until this passes. It is not a test host for the option.
+  swallow list. UPDATE 2026-09-30: the server is deleted. ctest
+  `p2p-harness-seeds` is `check-goldens` on the parity goldens. It
+  is not a test host for the option.
 - **Cross-build interop.** A connector node and an epee node, option
   off, peering on testnet through sync, relay, and both dial
-  directions. It waits on the zone-binding commit: production still
-  uses epee, so a daemon whose zones use the seam does not exist yet.
-  The in-process harness is not what blocks it. The loopback harness
-  is one build. The claim that cutover is not a flag day is about two
-  builds talking to each other.
+  directions. The loopback harness is one build. The claim that
+  cutover is not a flag day is about two builds talking to each
+  other. UPDATE 2026-09-30: the clearnet pair, the Tor dial and inbound
+  distributions, the South America and New York clearnet figures
+  (the clearnet deadlines are the D9 ceiling form, 1.415 / 1.426 /
+  1.430 s, written by `transport_spans` with the Tor dial 9.1 s and gap
+  2.6 s) and one Tor stem hop are in
+  [`p2p_cutover_crossbuild_20260929.md`](../benchmarks/p2p_cutover_crossbuild_20260929.md).
+  The epee-to-epee stem still did not cross in the first cross-build.
+  The thread-budget legs are not in it; they wait on the ledger row.
+  Deadline wiring is that write. D13 is not done.
 - **One descriptor per connection.** Count `readlink` results equal to
   that socket's `socket:[inode]`. Assert one. Do not count
   `/proc/self/fd` for the whole process.
@@ -1659,6 +1816,10 @@ on the pipe. A failure an operator can act on is one of these values
 
 ## D13 — deletions at cutover (RULED 2026-09-25)
 
+UPDATE 2026-09-30: this set is deleted. `rg boosted_tcp_server` in
+code returns nothing. The harness gate after the deletion is
+`check-goldens` against the parity goldens.
+
 Each of these goes at step 6, after the differential harness passes.
 The check is an `rg` that returns nothing, and that `rg` is written
 into the cutover PR only after a search shows no other consumer.
@@ -1677,11 +1838,11 @@ The set:
 `noise.rs`, `channel.rs`, `prefix.rs`, and `aead.rs` are not in this
 list. They are the crypto core.
 
-Deleting the SOCKS dial removes the C++ I2P path (`zone::i2p` and the
-`--tx-proxy` handling that dials it). I2P support is removed until an
-I2P connector is built. The cutover PR states that. It is not a silent
-deletion (rule 15). D14 records the same ruling: clearnet and Tor cut
-over together.
+The I2P address type, its parser, and `zone::i2p` are deleted with
+the SOCKS dial. Discriminant 2 stays unused so `zone::tor` remains 3.
+An I2P connector reopens the address type and that discriminant in
+the connector's pull request. D14 records the same ruling: clearnet
+and Tor cut over together.
 
 ---
 
@@ -1692,8 +1853,8 @@ over together.
    budget. The numbers are measured against the Pi-4 floor.
 2. **Overlays.** Clearnet and Tor cut over together. Staging would
    leave epee's socket-bearing server beside the transport layer.
-   I2P's C++ path is removed with epee's SOCKS code, and the cutover
-   PR says so, until an I2P connector exists.
+   The I2P address type and zone arm are deleted with epee's SOCKS
+   code. An I2P connector reopens them.
 3. **Levin framing stays C++ through cutover and moves with LV-3.**
    The adapter already passes bytes, so the transport layer never sees
    a command. Moving framing now would edit `async_protocol_handler`

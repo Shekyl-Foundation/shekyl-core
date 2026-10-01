@@ -46,8 +46,7 @@ pub fn check_dial(connector: ConnectorId, address: &NetworkAddress) -> Result<()
 fn endpoint_matches(addressing: Addressing, address: &NetworkAddress) -> bool {
     match (addressing, address) {
         (Addressing::OnionV3, NetworkAddress::Tor { host, .. }) => is_v3_onion_hostname(host),
-        (Addressing::Ip, NetworkAddress::Ipv4 { .. } | NetworkAddress::Ipv6 { .. })
-        | (Addressing::B32I2p, NetworkAddress::I2p { .. }) => true,
+        (Addressing::Ip, NetworkAddress::Ipv4 { .. } | NetworkAddress::Ipv6 { .. }) => true,
         _ => false,
     }
 }
@@ -84,13 +83,6 @@ mod tests {
                 NetworkAddress::Ipv6 {
                     ip: Ipv6Addr::LOCALHOST,
                     port: 18080,
-                },
-            ),
-            (
-                ConnectorId::Tor,
-                NetworkAddress::I2p {
-                    host: "example.b32.i2p".to_owned(),
-                    port: 0,
                 },
             ),
             (

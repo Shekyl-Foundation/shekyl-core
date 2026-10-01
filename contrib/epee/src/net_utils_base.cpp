@@ -178,8 +178,6 @@ namespace epee { namespace net_utils
     {
     case zone::public_:
       return "public";
-    case zone::i2p:
-      return "i2p";
     case zone::tor:
       return "tor";
     default:
@@ -192,8 +190,6 @@ namespace epee { namespace net_utils
   {
     if (value == "public")
       return zone::public_;
-    if (value == "i2p")
-      return zone::i2p;
     if (value == "tor")
       return zone::tor;
     return zone::invalid;

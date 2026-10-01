@@ -215,6 +215,12 @@ namespace cryptonote
     uint64_t total_conn = restricted ? 0 : m_p2p.get_public_connections_count();
     res.outgoing_connections_count = restricted ? 0 : m_p2p.get_public_outgoing_connections_count();
     res.incoming_connections_count = restricted ? 0 : (total_conn - res.outgoing_connections_count);
+    // Socket counts are the transport's, per connector. A restricted caller
+    // receives zero, the same gate as the session counts above.
+    res.public_incoming_socket_count = restricted ? 0 : shekyl_seam_socket_count(0, 0);
+    res.public_outgoing_socket_count = restricted ? 0 : shekyl_seam_socket_count(0, 1);
+    res.tor_incoming_socket_count = restricted ? 0 : shekyl_seam_socket_count(1, 0);
+    res.tor_outgoing_socket_count = restricted ? 0 : shekyl_seam_socket_count(1, 1);
     // Always zero, and the reason is not the restriction. The C++ server has
     // not owned the RPC connections since the Axum cutover, so the accessor
     // this read was a literal `return 0` with two identical arms — a dead
@@ -993,31 +999,27 @@ namespace cryptonote
   {
     RPC_TRACKER(get_bans);
 
-    auto now = time(nullptr);
-    std::map<std::string, time_t> blocked_hosts = m_p2p.get_blocked_hosts();
-    for (std::map<std::string, time_t>::const_iterator i = blocked_hosts.begin(); i != blocked_hosts.end(); ++i)
+    for (const auto& row : m_p2p.ban_list())
     {
-      if (i->second > now) {
-        COMMAND_RPC_GETBANS::ban b;
-        b.host = i->first;
-        b.ip = 0;
-        uint32_t ip;
-        if (epee::string_tools::get_ip_int32_from_string(ip, b.host))
-          b.ip = ip;
-        b.seconds = i->second - now;
-        res.bans.push_back(b);
+      COMMAND_RPC_GETBANS::ban b;
+      b.host = row.text;
+      b.ip = 0;
+      uint32_t ip;
+      if (epee::string_tools::get_ip_int32_from_string(ip, b.host))
+        b.ip = ip;
+      b.permanent = row.permanent != 0;
+      if (b.permanent)
+        b.seconds = 0;
+      else if (row.remaining_ns == 0)
+        continue;
+      else
+      {
+        const std::uint64_t sec = (row.remaining_ns + 999999999ull) / 1000000000ull;
+        b.seconds = sec > std::numeric_limits<std::uint32_t>::max()
+          ? std::numeric_limits<std::uint32_t>::max()
+          : static_cast<std::uint32_t>(sec);
       }
-    }
-    std::map<epee::net_utils::ipv4_network_subnet, time_t> blocked_subnets = m_p2p.get_blocked_subnets();
-    for (std::map<epee::net_utils::ipv4_network_subnet, time_t>::const_iterator i = blocked_subnets.begin(); i != blocked_subnets.end(); ++i)
-    {
-      if (i->second > now) {
-        COMMAND_RPC_GETBANS::ban b;
-        b.host = i->first.host_str();
-        b.ip = 0;
-        b.seconds = i->second - now;
-        res.bans.push_back(b);
-      }
+      res.bans.push_back(std::move(b));
     }
 
     res.status = CORE_RPC_STATUS_OK;
@@ -1041,11 +1043,14 @@ namespace cryptonote
     if (m_p2p.is_host_blocked(na, &seconds))
     {
       res.banned = true;
-      res.seconds = seconds;
+      res.permanent = m_p2p.host_ban_is_permanent(na);
+      res.seconds = res.permanent ? 0 : static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        static_cast<std::uint64_t>(seconds), std::numeric_limits<std::uint32_t>::max()));
     }
     else
     {
       res.banned = false;
+      res.permanent = false;
       res.seconds = 0;
     }
 
@@ -1068,7 +1073,14 @@ namespace cryptonote
         if (ns_parsed)
         {
           if (i->ban)
-            m_p2p.block_subnet(*ns_parsed, i->seconds);
+          {
+            if (!m_p2p.block_subnet(*ns_parsed, i->seconds))
+            {
+              error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+              error_resp.message = "Ban duration does not fit the clock";
+              return false;
+            }
+          }
           else
             m_p2p.unblock_subnet(*ns_parsed);
           continue;
@@ -1098,7 +1110,14 @@ namespace cryptonote
         na = epee::net_utils::ipv4_network_address{i->ip, 0};
       }
       if (i->ban)
-        m_p2p.block_host(na, i->seconds);
+      {
+        if (!m_p2p.block_host(na, i->seconds))
+        {
+          error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+          error_resp.message = "Ban duration does not fit the clock";
+          return false;
+        }
+      }
       else
         m_p2p.unblock_host(na);
     }
@@ -1215,8 +1234,8 @@ namespace cryptonote
   {
     RPC_TRACKER(get_limit);
 
-    res.limit_down = epee::net_utils::connection_basic::get_rate_down_limit();
-    res.limit_up = epee::net_utils::connection_basic::get_rate_up_limit();
+    res.limit_down = shekyl_link_get_down();
+    res.limit_up = shekyl_link_get_up();
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -1224,12 +1243,12 @@ namespace cryptonote
   bool core_rpc_server::on_set_limit(const COMMAND_RPC_SET_LIMIT::request& req, COMMAND_RPC_SET_LIMIT::response& res, const connection_context *ctx)
   {
     RPC_TRACKER(set_limit);
-    // -1 = reset to default
+    // -1 = unlimited
     //  0 = do not modify
 
     if (req.limit_down > 0)
     {
-      epee::net_utils::connection_basic::set_rate_down_limit(req.limit_down);
+      shekyl_link_set_down(req.limit_down);
     }
     else if (req.limit_down < 0)
     {
@@ -1238,12 +1257,12 @@ namespace cryptonote
         res.status = "Invalid parameter";
         return true;
       }
-      epee::net_utils::connection_basic::set_rate_down_limit(nodetool::default_limit_down);
+      shekyl_link_set_down(-1);
     }
 
     if (req.limit_up > 0)
     {
-      epee::net_utils::connection_basic::set_rate_up_limit(req.limit_up);
+      shekyl_link_set_up(req.limit_up);
     }
     else if (req.limit_up < 0)
     {
@@ -1252,11 +1271,11 @@ namespace cryptonote
         res.status = "Invalid parameter";
         return true;
       }
-      epee::net_utils::connection_basic::set_rate_up_limit(nodetool::default_limit_up);
+      shekyl_link_set_up(-1);
     }
 
-    res.limit_down = epee::net_utils::connection_basic::get_rate_down_limit();
-    res.limit_up = epee::net_utils::connection_basic::get_rate_up_limit();
+    res.limit_down = shekyl_link_get_down();
+    res.limit_up = shekyl_link_get_up();
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }

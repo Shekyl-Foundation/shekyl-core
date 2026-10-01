@@ -100,7 +100,7 @@ namespace net
     };
 
     /*!
-     * \brief Takes a valid address string (IP, Tor, I2P, or DNS name) and splits it into host and port
+     * \brief Takes a valid address string (IP, Tor, or DNS name) and splits it into host and port
      *
      * The host of an IPv6 addresses in the format "[x:x:..:x]:port" will have the braces stripped.
      * For example, when the address is "[ffff::2023]", host will be set to "ffff::2023".
@@ -112,11 +112,11 @@ namespace net
     void get_network_address_host_and_port(const std::string& address, std::string& host, std::string& port);
 
     /*!
-      Identifies onion, i2p and IPv4 addresses and returns them as a generic
+      Identifies onion and IPv4 addresses and returns them as a generic
       `network_address`. If the type is unsupported, it might be a hostname,
       and `error() == net::error::kUnsupportedAddress` is returned.
 
-      \param address An onion address, i2p address, ipv4 address or hostname. Hostname
+      \param address An onion address, ipv4 address or hostname. Hostname
           will return an error.
       \param default_port If `address` does not specify a port, this value
           will be used.

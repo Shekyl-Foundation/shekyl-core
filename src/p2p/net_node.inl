@@ -175,139 +175,89 @@ namespace nodetool
     return false;
   }
   //-----------------------------------------------------------------------------------
+  namespace
+  {
+    bool ban_duration_ns(time_t seconds, std::uint64_t* out)
+    {
+      if (seconds <= 0)
+        return false;
+      const auto whole = static_cast<std::uint64_t>(seconds);
+      if (whole > std::numeric_limits<std::uint64_t>::max() / 1000000000ull)
+        return false;
+      *out = whole * 1000000000ull;
+      return true;
+    }
+
+    time_t remaining_seconds(std::uint64_t ns)
+    {
+      const std::uint64_t sec = (ns + 999999999ull) / 1000000000ull;
+      if (sec > static_cast<std::uint64_t>(std::numeric_limits<time_t>::max()))
+        return std::numeric_limits<time_t>::max();
+      return static_cast<time_t>(sec);
+    }
+
+    std::vector<shekyl_ban_view> copy_bans()
+    {
+      std::vector<shekyl_ban_view> views;
+      for (int attempt = 0; attempt < 3; ++attempt)
+      {
+        std::size_t count = 0;
+        if (shekyl_bans_copy(nullptr, 0, &count) != 0 && count == 0)
+          return {};
+        views.resize(count);
+        if (count == 0)
+          return views;
+        std::size_t again = 0;
+        shekyl_bans_copy(views.data(), views.size(), &again);
+        if (again <= views.size())
+        {
+          views.resize(again);
+          return views;
+        }
+      }
+      return {};
+    }
+  }
+
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::is_remote_host_allowed(const epee::net_utils::network_address &address, time_t *t)
   {
-    CRITICAL_REGION_LOCAL(m_blocked_hosts_lock);
-
-    const time_t now = time(nullptr);
-
-    // look in the hosts list
-    auto it = m_blocked_hosts.find(address.host_str());
-    if (it != m_blocked_hosts.end())
-    {
-      if (now >= it->second)
-      {
-        m_blocked_hosts.erase(it);
-        MCLOG_CYAN(el::Level::Info, "global", "Host " << address.host_str() << " unblocked.");
-        it = m_blocked_hosts.end();
-      }
-      else
-      {
-        if (t)
-          *t = it->second - now;
-        return false;
-      }
-    }
-
-    // manually loop in subnets
-    if (address.get_type_id() == epee::net_utils::address_type::ipv4)
-    {
-      auto ipv4_address = address.template as<epee::net_utils::ipv4_network_address>();
-      std::map<epee::net_utils::ipv4_network_subnet, time_t>::iterator it;
-      for (it = m_blocked_subnets.begin(); it != m_blocked_subnets.end(); )
-      {
-        if (now >= it->second)
-        {
-          it = m_blocked_subnets.erase(it);
-          MCLOG_CYAN(el::Level::Info, "global", "Subnet " << it->first.host_str() << " unblocked.");
-          continue;
-        }
-        if (it->first.matches(ipv4_address))
-        {
-          if (t)
-            *t = it->second - now;
-          return false;
-        }
-        ++it;
-      }
-    }
-
-    // not found in hosts or subnets, allowed
-    return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::is_host_limit(const epee::net_utils::network_address &address)
-  {
-    // Live walk, same reason `get_outgoing_connections_count` refreshes its
-    // counter itself: `m_current_number_of_in_peers` is rewritten once a
-    // second and is not incremented on accept. The candidate is not in the
-    // list yet — this runs before the connection is inserted.
-    const inbound_census census = census_inbound(address.get_zone());
-    const network_zone& zone = m_network_zones.at(address.get_zone());
-    if (zone.m_inbound_cap_explicit
-        && census.zone >= zone.m_config.m_net_config.max_in_connection_count)
-    {
-      MWARNING("Exceeded max incoming connections, so dropping this one.");
+    if (!address.is_blockable())
       return true;
-    }
-    if (m_process_inbound_ceiling && census.process >= *m_process_inbound_ceiling)
+    const std::string host = address.host_str();
+    std::uint64_t left = 0;
+    const int rc = shekyl_ban_remaining_ns(host.c_str(), &left);
+    if (rc == 2)
     {
-      MWARNING("Exceeded the inbound descriptor ceiling (" << *m_process_inbound_ceiling
-               << "), so dropping this one.");
-      return true;
+      if (t)
+        *t = 0;
+      return false;
     }
+    if (rc != 1)
+      return true;
+    if (t)
+      *t = remaining_seconds(left);
     return false;
   }
-
+  //-----------------------------------------------------------------------------------
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::block_host(epee::net_utils::network_address addr, time_t seconds, bool add_only)
+  bool node_server<t_payload_net_handler>::block_host(epee::net_utils::network_address addr, time_t seconds, bool /*add_only*/)
   {
     if(!addr.is_blockable())
       return false;
 
-    const time_t now = time(nullptr);
-    bool added = false;
-
-    CRITICAL_REGION_LOCAL(m_blocked_hosts_lock);
-    time_t limit;
-    if (now > std::numeric_limits<time_t>::max() - seconds)
-      limit = std::numeric_limits<time_t>::max();
-    else
-      limit = now + seconds;
+    std::uint64_t duration_ns = 0;
+    if (!ban_duration_ns(seconds, &duration_ns))
+      return false;
     const std::string host_str = addr.host_str();
-    auto it = m_blocked_hosts.find(host_str);
-    if (it == m_blocked_hosts.end())
-    {
-      m_blocked_hosts[host_str] = limit;
+    // The list closes the sockets it drops. This does not walk the Levin
+    // registry. A shorter duration does not shorten a ban already stored.
+    if (shekyl_ban_for(host_str.c_str(), 0, duration_ns) != 0)
+      return false;
 
-      // if the host was already blocked due to being in a blocked subnet, let it be silent
-      bool matches_blocked_subnet = false;
-      if (addr.get_type_id() == epee::net_utils::address_type::ipv4)
-      {
-        auto ipv4_address = addr.template as<epee::net_utils::ipv4_network_address>();
-        for (auto jt = m_blocked_subnets.begin(); jt != m_blocked_subnets.end(); ++jt)
-        {
-          if (jt->first.matches(ipv4_address))
-          {
-            matches_blocked_subnet = true;
-            break;
-          }
-        }
-      }
-      if (!matches_blocked_subnet)
-        added = true;
-    }
-    else if (it->second < limit || !add_only)
-      it->second = limit;
-
-    // drop any connection to that address. This should only have to look into
-    // the zone related to the connection, but really make sure everything is
-    // swept ...
-    std::vector<boost::uuids::uuid> conns;
     for(auto& zone : m_network_zones)
     {
-      zone.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-      {
-        if (cntxt.m_remote_address.is_same_host(addr))
-        {
-          conns.push_back(cntxt.m_connection_id);
-        }
-        return true;
-      });
-
       peerlist_entry pe{};
       pe.adr = addr;
       if (addr.port() == 0)
@@ -319,94 +269,162 @@ namespace nodetool
       {
         zone.second.m_peerlist.remove_from_peer_white(pe);
         zone.second.m_peerlist.remove_from_peer_gray(pe);
-     }
-
-      for (const auto &c: conns)
-        zone.second.m_net_server.get_config_object().close(c);
-
-      conns.clear();
+      }
     }
 
-    if (added)
-      MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " blocked.");
-    else
-      MINFO("Host " << host_str << " block time updated.");
+    MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " blocked.");
     return true;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::unblock_host(const epee::net_utils::network_address &address)
   {
-    CRITICAL_REGION_LOCAL(m_blocked_hosts_lock);
-    auto i = m_blocked_hosts.find(address.host_str());
-    if (i == m_blocked_hosts.end())
+    const std::string host_str = address.host_str();
+    if (shekyl_ban_lift(host_str.c_str(), 0) != 0)
       return false;
-    m_blocked_hosts.erase(i);
-    MCLOG_CYAN(el::Level::Info, "global", "Host " << address.host_str() << " unblocked.");
+    MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " unblocked.");
     return true;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::block_subnet(const epee::net_utils::ipv4_network_subnet &subnet, time_t seconds)
   {
-    const time_t now = time(nullptr);
+    std::uint64_t duration_ns = 0;
+    if (!ban_duration_ns(seconds, &duration_ns))
+      return false;
+    const std::string host_str = subnet.host_str();
+    if (shekyl_ban_for(host_str.c_str(), 1, duration_ns) != 0)
+      return false;
 
-    CRITICAL_REGION_LOCAL(m_blocked_hosts_lock);
-    time_t limit;
-    if (now > std::numeric_limits<time_t>::max() - seconds)
-      limit = std::numeric_limits<time_t>::max();
-    else
-      limit = now + seconds;
-    const bool added = m_blocked_subnets.find(subnet) == m_blocked_subnets.end();
-    m_blocked_subnets[subnet] = limit;
-
-    // drop any connection to that subnet. This should only have to look into
-    // the zone related to the connection, but really make sure everything is
-    // swept ...
-    std::vector<boost::uuids::uuid> conns;
     for(auto& zone : m_network_zones)
     {
-      zone.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-      {
-        if (cntxt.m_remote_address.get_type_id() != epee::net_utils::ipv4_network_address::get_type_id())
-          return true;
-        auto ipv4_address = cntxt.m_remote_address.template as<epee::net_utils::ipv4_network_address>();
-        if (subnet.matches(ipv4_address))
-        {
-          conns.push_back(cntxt.m_connection_id);
-        }
-        return true;
-      });
-      for (const auto &c: conns)
-        zone.second.m_net_server.get_config_object().close(c);
-
       for (int i = 0; i < 2; ++i)
         zone.second.m_peerlist.filter(i == 0, [&subnet](const peerlist_entry &pe){
           if (pe.adr.get_type_id() != epee::net_utils::ipv4_network_address::get_type_id())
             return false;
           return subnet.matches(pe.adr.as<const epee::net_utils::ipv4_network_address>());
         });
-
-      conns.clear();
     }
 
-    if (added)
-      MCLOG_CYAN(el::Level::Info, "global", "Subnet " << subnet.host_str() << " blocked.");
-    else
-      MINFO("Subnet " << subnet.host_str() << " blocked.");
+    MCLOG_CYAN(el::Level::Info, "global", "Subnet " << host_str << " blocked.");
     return true;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::unblock_subnet(const epee::net_utils::ipv4_network_subnet &subnet)
   {
-    CRITICAL_REGION_LOCAL(m_blocked_hosts_lock);
-    auto i = m_blocked_subnets.find(subnet);
-    if (i == m_blocked_subnets.end())
+    const std::string host_str = subnet.host_str();
+    if (shekyl_ban_lift(host_str.c_str(), 1) != 0)
       return false;
-    m_blocked_subnets.erase(i);
-    MCLOG_CYAN(el::Level::Info, "global", "Subnet " << subnet.host_str() << " unblocked.");
+    MCLOG_CYAN(el::Level::Info, "global", "Subnet " << host_str << " unblocked.");
     return true;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  bool node_server<t_payload_net_handler>::block_host_permanent(epee::net_utils::network_address addr)
+  {
+    if (!addr.is_blockable())
+      return false;
+    const std::string host_str = addr.host_str();
+    if (shekyl_ban_permanent(host_str.c_str(), 0) != 0)
+      return false;
+    for (auto& zone : m_network_zones)
+    {
+      peerlist_entry pe{};
+      pe.adr = addr;
+      if (addr.port() == 0)
+      {
+        zone.second.m_peerlist.evict_host_from_peerlist(true, pe);
+        zone.second.m_peerlist.evict_host_from_peerlist(false, pe);
+      }
+      else
+      {
+        zone.second.m_peerlist.remove_from_peer_white(pe);
+        zone.second.m_peerlist.remove_from_peer_gray(pe);
+      }
+    }
+    MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " blocked.");
+    return true;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  bool node_server<t_payload_net_handler>::block_subnet_permanent(const epee::net_utils::ipv4_network_subnet &subnet)
+  {
+    const std::string host_str = subnet.host_str();
+    if (shekyl_ban_permanent(host_str.c_str(), 1) != 0)
+      return false;
+    for (auto& zone : m_network_zones)
+    {
+      for (int i = 0; i < 2; ++i)
+        zone.second.m_peerlist.filter(i == 0, [&subnet](const peerlist_entry &pe){
+          if (pe.adr.get_type_id() != epee::net_utils::ipv4_network_address::get_type_id())
+            return false;
+          return subnet.matches(pe.adr.as<const epee::net_utils::ipv4_network_address>());
+        });
+    }
+    MCLOG_CYAN(el::Level::Info, "global", "Subnet " << host_str << " blocked.");
+    return true;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  bool node_server<t_payload_net_handler>::host_ban_is_permanent(const epee::net_utils::network_address &address) const
+  {
+    if (!address.is_blockable())
+      return false;
+    std::uint64_t left = 0;
+    return shekyl_ban_remaining_ns(address.host_str().c_str(), &left) == 2;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  std::vector<shekyl_ban_view> node_server<t_payload_net_handler>::ban_list()
+  {
+    return copy_bans();
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  void node_server<t_payload_net_handler>::apply_managed_onion_publish(network_zone& zone, int publish_rc, const char* service_id, std::uint16_t virtual_port)
+  {
+    if (publish_rc != SHEKYL_DAEMON_TOR_OK || service_id == nullptr || service_id[0] == '\0')
+      return;
+    const auto our_address = net::tor_address::make(std::string{service_id} + ".onion", virtual_port);
+    if (!our_address)
+      return;
+    zone.m_our_address = *our_address;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  bool node_server<t_payload_net_handler>::is_host_blocked(const epee::net_utils::network_address &address, time_t *seconds)
+  {
+    return !is_remote_host_allowed(address, seconds);
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  std::map<std::string, time_t> node_server<t_payload_net_handler>::get_blocked_hosts()
+  {
+    std::map<std::string, time_t> hosts;
+    for (const auto& row : copy_bans())
+    {
+      if (row.kind != 1)
+        continue;
+      hosts.emplace(row.text, remaining_seconds(row.remaining_ns));
+    }
+    return hosts;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  std::map<epee::net_utils::ipv4_network_subnet, time_t> node_server<t_payload_net_handler>::get_blocked_subnets()
+  {
+    std::map<epee::net_utils::ipv4_network_subnet, time_t> subnets;
+    for (const auto& row : copy_bans())
+    {
+      if (row.kind != 2)
+        continue;
+      const auto parsed = net::get_ipv4_subnet_address(row.text);
+      if (!parsed)
+        continue;
+      subnets.emplace(*parsed, remaining_seconds(row.remaining_ns));
+    }
+    return subnets;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -566,13 +584,15 @@ namespace nodetool
         auto subnet = net::get_ipv4_subnet_address(line);
         if (subnet)
         {
-          block_subnet(*subnet, std::numeric_limits<time_t>::max());
+          if (!block_subnet_permanent(*subnet))
+            MERROR("Could not ban " << line);
           continue;
         }
         const expect<epee::net_utils::network_address> parsed_addr = net::get_network_address(line, 0);
         if (parsed_addr)
         {
-          block_host(*parsed_addr, std::numeric_limits<time_t>::max());
+          if (!block_host_permanent(*parsed_addr))
+            MERROR("Could not ban " << line);
           continue;
         }
         MERROR("Invalid IP address or IPv4 subnet: " << line);
@@ -619,7 +639,7 @@ namespace nodetool
         MERROR("Listed --" << arg_tx_proxy.name << " twice with " << epee::net_utils::zone_to_string(proxy.zone));
         return false;
       }
-      zone.m_connect = &socks_connect;
+      zone.m_connect = &public_connect;
       zone.m_proxy_address = std::move(proxy.address);
 
       if (!set_max_out_peers(zone, proxy.max_connections))
@@ -675,7 +695,8 @@ namespace nodetool
 
       zone.m_bind_ip = std::move(inbound.local_ip);
       zone.m_port = std::move(inbound.local_port);
-      zone.m_net_server.set_default_remote(std::move(inbound.default_remote));
+      // The operator runs this onion and hands us its address. That is
+      // configuration, not a publish result, and it is what peers are told.
       zone.m_our_address = std::move(inbound.our_address);
 
       if (!set_max_in_peers(zone, inbound.max_connections))
@@ -778,7 +799,7 @@ namespace nodetool
        that is a manual step and not a default. Q12-R1 generates the addresses
        and lands them here; nothing about Tor on mainnet works until it does.
 
-       These lists previously held MONERO's onion and i2p seeds, which is worse
+       These lists previously held MONERO's onion and Tor seeds, which is worse
        than empty rather than better. A Shekyl node started with `--tx-proxy
        tor` dialed six Monero hidden services, failed the network-ID handshake
        at each, and had nowhere else to go — the same dead zone, reached more
@@ -786,7 +807,6 @@ namespace nodetool
        seed operators on the way. An unbootstrapped zone is at least visible as
        what it is. */
     case epee::net_utils::zone::tor:
-    case epee::net_utils::zone::i2p:
       return {};
     default:
       break;
@@ -868,10 +888,9 @@ namespace nodetool
     // zone whose public bind may still succeed.
     const bool pad_txs = command_line::get_arg(vm, arg_pad_transactions);
     network_zone& zone = add_zone(epee::net_utils::zone::tor);
-    zone.m_net_server.set_connection_filter(this);
-    zone.m_net_server.set_connection_limit(this);
-    if (!zone.m_net_server.init_server("0", "127.0.0.1", "", "", false, true,
-        epee::net_utils::ssl_support_t::e_ssl_support_disabled))
+    zone.m_proxy_address = *proxy_endpoint;
+    if (!zone.m_net_server.listen_tor(proxy_endpoint->address, "", "", false,
+        reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling(), transport_spans()))
     {
       MERROR("Cannot bind the ephemeral tor forward listener on 127.0.0.1 (OS-assigned port); tearing tor down");
       shekyl_daemon_tor_shutdown();
@@ -880,9 +899,7 @@ namespace nodetool
     }
     const uint16_t local_port = static_cast<uint16_t>(zone.m_net_server.get_binded_port());
 
-    zone.m_connect = &socks_connect;
-    zone.m_proxy_address = *proxy_endpoint;
-    zone.m_net_server.set_default_remote(net::tor_address::unknown());
+    zone.m_connect = &public_connect;
     set_max_out_peers(zone, -1);
     m_payload_handler.set_max_out_peers(epee::net_utils::zone::tor, zone.m_config.m_net_config.max_out_connection_count);
     set_max_in_peers(zone, -1);
@@ -905,14 +922,14 @@ namespace nodetool
           << "); the tor zone stays outbound-only this boot (no overlay inbound; PWD-E7 ruled degrade)");
       return;
     }
-    const auto our_address = net::tor_address::make(std::string{service_id} + ".onion", virtual_port);
-    if (!our_address)
+    const auto before = zone.m_our_address;
+    apply_managed_onion_publish(zone, publish_rc, service_id, virtual_port);
+    if (zone.m_our_address == before)
     {
       MERROR("Ephemeral tor returned an unparseable service id ('" << service_id
           << "'); the tor zone stays outbound-only this boot");
       return;
     }
-    zone.m_our_address = *our_address;
     m_ephemeral_tor_service_id = service_id;
 
     MLOG_GREEN(el::Level::Info, "Ephemeral overlay inbound published: " << service_id << ".onion:" << virtual_port
@@ -929,7 +946,7 @@ namespace nodetool
       const auto endpoint = net::socks::endpoint::get(proxy);
       CHECK_AND_ASSERT_MES(endpoint, false, "Failed to parse proxy: " << proxy << " - " << endpoint.error().message());
       network_zone& public_zone = m_network_zones[epee::net_utils::zone::public_];
-      public_zone.m_connect = &socks_connect;
+      public_zone.m_connect = &public_connect;
       public_zone.m_proxy_address = *endpoint;
       public_zone.m_can_announce = false;
     }
@@ -949,28 +966,6 @@ namespace nodetool
 
     m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);
     network_zone& public_zone = m_network_zones.at(epee::net_utils::zone::public_);
-    {
-      const bool encrypt = command_line::get_arg(vm, arg_clearnet_transport_encrypt);
-      if (encrypt)
-      {
-        static const epee::net_utils::network_pipe_ops clearnet_noise_pipe = {
-          &shekyl_clearnet_attach,
-          &shekyl_clearnet_start,
-          &shekyl_clearnet_pin,
-          &shekyl_clearnet_unpin,
-          &shekyl_clearnet_write,
-          &shekyl_clearnet_detach,
-          &shekyl_clearnet_read_done,
-        };
-        public_zone.m_net_server.set_network_pipe(
-          reinterpret_cast<const uint8_t*>(&m_network_id), &clearnet_noise_pipe);
-        MINFO("public-zone clearnet transport encryption is on (Noise NNhfs test gate)");
-      }
-      else
-      {
-        MINFO("public-zone clearnet channel is unencrypted; this is temporary and the off path is deleted before genesis");
-      }
-    }
 
     if ((m_nettype == cryptonote::MAINNET && public_zone.m_port != std::to_string(::config::P2P_DEFAULT_PORT))
         || (m_nettype == cryptonote::TESTNET && public_zone.m_port != std::to_string(::config::testnet::P2P_DEFAULT_PORT))
@@ -1037,13 +1032,15 @@ namespace nodetool
     // from here onwards, it's online stuff
     if (m_offline)
     {
-      apply_inbound_ceiling(0);
+      if (!apply_inbound_ceiling(0))
+        return false;
       ephemeral_tor_guard.armed = false;
       return res;
     }
 
     //try to bind
-    m_ssl_support = epee::net_utils::ssl_support_t::e_ssl_support_disabled;
+    // D7 ruling 4. Off through cutover. The flip deletes the option.
+    const bool clearnet_encrypt = command_line::get_arg(vm, arg_clearnet_transport_encrypt);
     for (auto& zone : m_network_zones)
     {
       zone.second.m_net_server.get_config_object().set_handler(this);
@@ -1051,19 +1048,40 @@ namespace nodetool
 
       if (!zone.second.m_bind_ip.empty())
       {
-        std::string ipv6_addr = "";
-        std::string ipv6_port = "";
-        zone.second.m_net_server.set_connection_filter(this);
-        zone.second.m_net_server.set_connection_limit(this);
-        MINFO("Binding (IPv4) on " << zone.second.m_bind_ip << ":" << zone.second.m_port);
-        if (!zone.second.m_bind_ipv6_address.empty() && m_use_ipv6)
+        const shekyl_inbound_ceiling ceiling = transport_ceiling();
+        const shekyl_zone_params spans = transport_spans();
+        const std::uint8_t* network_id = reinterpret_cast<const std::uint8_t*>(&m_network_id);
+        if (zone.first == epee::net_utils::zone::tor)
         {
-          ipv6_addr = zone.second.m_bind_ipv6_address;
-          ipv6_port = zone.second.m_port_ipv6;
-          MINFO("Binding (IPv6) on " << zone.second.m_bind_ipv6_address << ":" << zone.second.m_port_ipv6);
+          MINFO("Binding tor forward on " << zone.second.m_bind_ip << ":" << zone.second.m_port);
+          res = zone.second.m_net_server.listen_tor(zone.second.m_proxy_address.address, zone.second.m_bind_ip, zone.second.m_port, true, network_id, ceiling, spans);
         }
-        res = zone.second.m_net_server.init_server(zone.second.m_port, zone.second.m_bind_ip, ipv6_port, ipv6_addr, m_use_ipv6, m_require_ipv4, epee::net_utils::ssl_support_t::e_ssl_support_disabled);
+        else
+        {
+          std::string ipv6_addr;
+          std::string ipv6_port;
+          MINFO("Binding (IPv4) on " << zone.second.m_bind_ip << ":" << zone.second.m_port);
+          if (!zone.second.m_bind_ipv6_address.empty() && m_use_ipv6)
+          {
+            ipv6_addr = zone.second.m_bind_ipv6_address;
+            ipv6_port = zone.second.m_port_ipv6;
+            MINFO("Binding (IPv6) on " << zone.second.m_bind_ipv6_address << ":" << zone.second.m_port_ipv6);
+          }
+          const bool have_proxy = zone.second.m_proxy_address.address.port() != 0;
+          res = zone.second.m_net_server.listen_clearnet(zone.second.m_bind_ip, zone.second.m_port, ipv6_addr, ipv6_port, m_use_ipv6 && !ipv6_addr.empty(),
+              have_proxy ? &zone.second.m_proxy_address.address : nullptr, clearnet_encrypt, network_id, ceiling, spans);
+        }
         CHECK_AND_ASSERT_MES(res, false, "Failed to bind server");
+      }
+      else if (zone.first == epee::net_utils::zone::tor && zone.second.m_proxy_address.address.port() != 0)
+      {
+        // `--tx-proxy tor,...` without `--anonymous-inbound`: no listener,
+        // and the dials still go through the seam, which needs the SOCKS
+        // address and a tor binding for the connections it establishes.
+        MINFO("Tor zone dials through " << zone.second.m_proxy_address.address << " with no inbound");
+        res = zone.second.m_net_server.dial_through_tor(zone.second.m_proxy_address.address,
+            reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling(), transport_spans());
+        CHECK_AND_ASSERT_MES(res, false, "Failed to install the tor proxy");
       }
     }
 
@@ -1096,7 +1114,8 @@ namespace nodetool
       }
     }
 
-    apply_inbound_ceiling(0);
+    if (!apply_inbound_ceiling(0))
+      return false;
     ephemeral_tor_guard.armed = false;
     return res;
   }
@@ -1146,13 +1165,13 @@ namespace nodetool
     public_zone.m_net_server.add_idle_handler(boost::bind(&node_server<t_payload_net_handler>::idle_worker, this), std::chrono::seconds{1});
     public_zone.m_net_server.add_idle_handler(boost::bind(&t_payload_net_handler::on_idle, &m_payload_handler), std::chrono::seconds{1});
 
-    //here you can set worker threads count
-    int thrds_count = 10;
+    // Structural floor: one worker besides the lane idle_worker blocks on.
+    // Unmeasured. The run record replaces this count.
+    constexpr std::size_t executor_workers = 2;
     boost::thread::attributes attrs;
     attrs.set_stack_size(THREAD_STACK_SIZE);
-    //go to loop
-    MINFO("Run net_service loop( " << thrds_count << " threads)...");
-    if(!public_zone.m_net_server.run_server(thrds_count, true, attrs))
+    MINFO("Run net_service loop( " << executor_workers << " threads)...");
+    if(!public_zone.m_net_server.run(executor_workers, attrs))
     {
       LOG_ERROR("Failed to run net tcp server!");
     }
@@ -1569,7 +1588,7 @@ namespace nodetool
         << (last_seen_stamp ? epee::misc_utils::get_time_interval_string(time(NULL) - last_seen_stamp):"never")
         << ")...");
 
-    auto con = zone.m_connect(zone, na, m_ssl_support);
+    auto con = zone.m_connect(zone, na);
     if(!con)
     {
       bool is_priority = is_priority_node(na);
@@ -1612,6 +1631,11 @@ namespace nodetool
     //update last seen and push it to peerlist manager
 
     zone.m_notifier.on_session_established(con->m_connection_id, con->m_is_income);
+    {
+      std::uint64_t socket_id = 0;
+      std::memcpy(&socket_id, con->m_connection_id.data + 8, sizeof(socket_id));
+      shekyl_zone_session_established(socket_id);
+    }
     zone.m_notifier.new_out_connection();
 
     LOG_DEBUG_CC(*con, "CONNECTION HANDSHAKED OK.");
@@ -1629,7 +1653,7 @@ namespace nodetool
                                   << (last_seen_stamp ? epee::misc_utils::get_time_interval_string(time(NULL) - last_seen_stamp):"never")
                                   << ")...");
 
-    auto con = zone.m_connect(zone, na, m_ssl_support);
+    auto con = zone.m_connect(zone, na);
     if (!con) {
       bool is_priority = is_priority_node(na);
 
@@ -2384,7 +2408,6 @@ namespace nodetool
 
     LOG_DEBUG_CC(context, "REMOTE PEERLIST: remote peerlist size=" << peerlist_.size());
     LOG_TRACE_CC(context, "REMOTE PEERLIST: " << ENDL << print_peerlist_to_string(peerlist_));
-    CRITICAL_REGION_LOCAL(m_blocked_hosts_lock);
     return m_network_zones.at(context.m_remote_address.get_zone()).m_peerlist.merge_peerlist(peerlist_, [this](const peerlist_entry &pe) {
       return !is_addr_recently_failed(pe.adr) && is_remote_host_allowed(pe.adr);
     });
@@ -2432,9 +2455,6 @@ namespace nodetool
       {
         case epee::net_utils::zone::tor:
           node_data.address = net::tor_address::unknown();
-          break;
-        case epee::net_utils::zone::i2p:
-          node_data.address = net::i2p_address::unknown();
           break;
         default:
           node_data.address = epee::net_utils::network_address{epee::net_utils::ipv4_network_address(0, 0)};
@@ -2595,17 +2615,12 @@ namespace nodetool
     /* Anonymity-zone selection for originated traffic that chose the zone.
        The mix is only a mix if originated and relayed (coherence-held)
        classes land on the same zone: a helper that always took rbegin()
-       (tor) while dual-stack origins preferred i2p would leave i2p carrying
-       originated traffic only — F-6's oracle, still, on the preferred zone
-       (§30.1 / §59.6).
-
-       Order is pinned: public_ < i2p < tor. With one anonymity zone, rbegin()
-       is that zone. With both, i2p wins when noise-filled, else outbound,
-       then tor. m_network_zones is a sorted map. */
+       Tor is the anonymity zone, and it is the greatest zone discriminant,
+       so rbegin() on the sorted map is that zone when one is configured.
+       m_network_zones is a sorted map. */
     static_assert(std::is_same<std::underlying_type<enet::zone>::type, std::uint8_t>{}, "expected uint8_t zone");
     static_assert(unsigned(enet::zone::invalid) == 0, "invalid expected to be 0");
     static_assert(unsigned(enet::zone::public_) == 1, "public_ expected to be 1");
-    static_assert(unsigned(enet::zone::i2p) == 2, "i2p expected to be 2");
     static_assert(unsigned(enet::zone::tor) == 3, "tor expected to be 3");
 
     /* Anonymity-zone pick for originated traffic that chose the zone (or a
@@ -2842,7 +2857,7 @@ namespace nodetool
     std::vector<peerlist_entry> local_peerlist_new;
     zone.m_peerlist.get_peerlist_head(local_peerlist_new, true, max_peerlist_size);
 
-    /* Tor/I2P nodes receiving connections via forwarding (from tor/i2p daemon)
+    /* Tor nodes receiving connections via forwarding (from Tor daemon)
     do not know the address of the connecting peer. This is relayed to them,
     iff the node has setup an inbound hidden service.
 
@@ -2923,6 +2938,11 @@ namespace nodetool
     }
 
     zone.m_notifier.on_session_established(context.m_connection_id, context.m_is_income);
+    {
+      std::uint64_t socket_id = 0;
+      std::memcpy(&socket_id, context.m_connection_id.data + 8, sizeof(socket_id));
+      shekyl_zone_session_established(socket_id);
+    }
 
     context.m_in_timedsync = false;
     context.support_flags = arg.node_data.support_flags;
@@ -3137,83 +3157,81 @@ namespace nodetool
     };
     // RESERVE WHAT CANNOT BE COUNTED; COUNT WHAT CAN.
     //
-    // Outbound sockets are promised but not yet open, and `census_inbound`
-    // never sees them, so the only way to keep descriptors for them is to
-    // subtract them here.
+    // Outbound sockets are promised but not yet open, so the only way to
+    // keep descriptors for them is to subtract them here.
     //
     // Inbound on a non-public zone is the opposite case and must NOT be
-    // reserved: `census_inbound` walks every zone, so those connections are
-    // already charged against the ceiling as they are accepted. Reserving
+    // reserved: the Rust admission table already charges every connector's
+    // inbound sockets against the ceiling as they are accepted. Reserving
     // them too would subtract the same descriptors twice -- an
     // `--anonymous-inbound` cap of N would cost the process N descriptors of
     // headroom AND still consume N as the connections arrived, squeezing
-    // public inbound by 2N. Each zone with an explicit cap is bounded by that
-    // cap in `is_host_limit`; the ceiling bounds the pool they all draw from.
+    // public inbound by 2N. Each zone with an explicit cap is bounded by the
+    // Rust admission table; the ceiling bounds the pool they all draw from.
     for (const auto& entry : m_network_zones)
       add(entry.second.m_config.m_net_config.max_out_connection_count);
     return reserved;
   }
 
   template<class t_payload_net_handler>
-  auto node_server<t_payload_net_handler>::census_inbound(epee::net_utils::zone which) -> inbound_census
-  {
-    inbound_census census{};
-    for (auto& entry : m_network_zones)
-    {
-      std::size_t count = 0;
-      entry.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-      {
-        if (cntxt.m_is_income)
-          ++count;
-        return true;
-      });
-      entry.second.m_current_number_of_in_peers = count > std::numeric_limits<unsigned int>::max()
-        ? std::numeric_limits<unsigned int>::max()
-        : static_cast<unsigned int>(count);
-      census.process += count;
-      if (entry.first == which)
-        census.zone = count;
-    }
-    return census;
-  }
-
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::apply_inbound_ceiling(std::uint64_t reserved_beyond_p2p)
+  bool node_server<t_payload_net_handler>::apply_inbound_ceiling(std::uint64_t reserved_beyond_p2p)
   {
     const auto found = m_network_zones.find(epee::net_utils::zone::public_);
     if (found == m_network_zones.end())
-      return;
+      return true;
     network_zone& public_zone = found->second;
-    if (public_zone.m_inbound_cap_explicit)
-    {
-      m_process_inbound_ceiling.reset();
-      return;
-    }
 
-    // Remembered so a later re-derive (an `out_peers` change, say) does not
-    // need to know what the daemon reserved beyond p2p.
     m_reserved_beyond_p2p = reserved_beyond_p2p;
     const std::uint64_t reserved = descriptor_reservations(reserved_beyond_p2p);
+    const std::uint64_t inbound_held = shekyl_seam_inbound_held();
+    shekyl_inbound_ceiling decision{};
+    shekyl_inbound_ceiling_resolve(reserved, inbound_held, &decision);
+
+    for (const auto& entry : m_network_zones)
+    {
+      if (!entry.second.m_inbound_cap_explicit)
+        continue;
+      const std::uint32_t cap = entry.second.m_config.m_net_config.max_in_connection_count;
+      if (decision.kind == SHEKYL_INBOUND_CEILING_BOUNDED && cap > decision.ceiling)
+      {
+        MERROR("Inbound cap " << cap << " for " << epee::net_utils::zone_to_string(entry.first)
+            << " exceeds the descriptor ceiling " << decision.ceiling
+            << "; refusing to start.");
+        return false;
+      }
+      std::uint32_t connector = SHEKYL_CONNECTOR_CLEARNET;
+      if (entry.first == epee::net_utils::zone::tor)
+        connector = SHEKYL_CONNECTOR_TOR;
+      else if (entry.first != epee::net_utils::zone::public_)
+        continue;
+      shekyl_zone_set_connector_cap(connector, cap);
+    }
+
+    const bool announce = decision.kind != m_applied_ceiling_kind
+      || decision.ceiling != m_applied_ceiling_value;
+    m_applied_ceiling_kind = decision.kind;
+    m_applied_ceiling_value = decision.ceiling;
+    if (public_zone.m_inbound_cap_explicit)
+    {
+      // The operator cap bounds this connector. The derived decision still
+      // bounds the sum of every connector, in the Rust admission table.
+      shekyl_seam_set_ceiling(&decision);
+      shekyl_zone_set_ceiling(&decision);
+      return true;
+    }
+
     // Descriptors already spent on ACCEPTED inbound connections are excluded
-    // from the observation, because this ceiling is what measures them. At
-    // startup the count is zero and it made no difference; a runtime
+    // from the observation above, because this ceiling is what measures them.
+    // At startup the count is zero and it made no difference; a runtime
     // re-derive (an `out_peers` change) runs with peers connected, and
     // leaving them inside the observed count would subtract each one from the
     // headroom AND then compare it against the smaller result — the ceiling
     // would fall as the node filled, so a routine outbound change on a busy
     // node could start refusing every new peer.
-    const std::uint64_t inbound_held = census_inbound(epee::net_utils::zone::public_).process;
-    shekyl_inbound_ceiling decision{};
-    shekyl_inbound_ceiling_resolve(reserved, inbound_held, &decision);
-    const bool announce = decision.kind != m_applied_ceiling_kind
-      || decision.ceiling != m_applied_ceiling_value;
-    m_applied_ceiling_kind = decision.kind;
-    m_applied_ceiling_value = decision.ceiling;
     switch (decision.kind)
     {
       case SHEKYL_INBOUND_CEILING_BOUNDED:
         public_zone.m_config.m_net_config.max_in_connection_count = decision.ceiling;
-        m_process_inbound_ceiling = decision.ceiling;
         if (announce)
         {
           MGINFO("Inbound ceiling derived from the descriptor limit: " << decision.ceiling
@@ -3226,46 +3244,43 @@ namespace nodetool
         break;
       case SHEKYL_INBOUND_CEILING_NO_PER_PROCESS_LIMIT:
         public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
-        m_process_inbound_ceiling.reset();
         if (announce)
           MWARNING("This platform exposes no per-process descriptor limit, so the "
                    "inbound ceiling is unbounded. Set --in-peers explicitly to bound it.");
         break;
       case SHEKYL_INBOUND_CEILING_UNLIMITED:
         public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
-        m_process_inbound_ceiling.reset();
         if (announce)
           MWARNING("RLIMIT_NOFILE is unlimited, so no descriptor ceiling can be derived. "
                    "Set --in-peers explicitly to bound inbound.");
         break;
       case SHEKYL_INBOUND_CEILING_LIMIT_UNREADABLE:
         public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
-        m_process_inbound_ceiling.reset();
         if (announce)
           MWARNING("Cannot read this platform's descriptor limit, so the inbound ceiling "
                    "is unbounded. Set --in-peers explicitly to bound it.");
         break;
       case SHEKYL_INBOUND_CEILING_COUNT_UNREADABLE:
         public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
-        m_process_inbound_ceiling.reset();
         if (announce)
           MWARNING("Cannot count this process's open descriptors, so the inbound ceiling "
                    "is unbounded. Set --in-peers explicitly to bound it.");
         break;
       case SHEKYL_INBOUND_CEILING_EXCEEDS_COUNTER:
         public_zone.m_config.m_net_config.max_in_connection_count = std::numeric_limits<uint32_t>::max();
-        m_process_inbound_ceiling.reset();
         if (announce)
           MWARNING("Descriptor headroom does not fit the inbound counter, so a derived "
                    "ceiling would never fire. Set --in-peers explicitly to bound it.");
         break;
       default:
         public_zone.m_config.m_net_config.max_in_connection_count = 0;
-        m_process_inbound_ceiling = 0;
         if (announce)
           MERROR("Unrecognized inbound ceiling kind " << decision.kind << "; refusing inbound.");
         break;
     }
+    shekyl_seam_set_ceiling(&decision);
+    shekyl_zone_set_ceiling(&decision);
+    return true;
   }
 
   template<class t_payload_net_handler>
@@ -3288,6 +3303,7 @@ namespace nodetool
     if (public_zone != m_network_zones.end())
     {
       const auto current = public_zone->second.m_net_server.get_config_object().get_out_connections_count();
+      const size_t previous = public_zone->second.m_config.m_net_config.max_out_connection_count;
       public_zone->second.m_config.m_net_config.max_out_connection_count = count;
       if(current > count)
         public_zone->second.m_net_server.get_config_object().del_out_connections(current - count);
@@ -3299,8 +3315,15 @@ namespace nodetool
       // exceed the descriptor limit -- the exact exhaustion the ceiling
       // exists to prevent. Re-derives against the same non-p2p reservation
       // the last call used, so a caller that never knew the RPC budget does
-      // not have to learn it.
-      apply_inbound_ceiling(m_reserved_beyond_p2p);
+      // not have to learn it. A cap the new ceiling cannot hold is refused
+      // and the previous outbound cap is put back; lowering the cap is the
+      // path that drops live connections, and that path widens the ceiling.
+      if (!apply_inbound_ceiling(m_reserved_beyond_p2p))
+      {
+        public_zone->second.m_config.m_net_config.max_out_connection_count = previous;
+        m_payload_handler.set_max_out_peers(epee::net_utils::zone::public_, previous);
+        apply_inbound_ceiling(m_reserved_beyond_p2p);
+      }
     }
   }
 
@@ -3354,10 +3377,17 @@ namespace nodetool
       const uint32_t cap = count > std::numeric_limits<uint32_t>::max()
         ? std::numeric_limits<uint32_t>::max()
         : static_cast<uint32_t>(count);
-      // A runtime change is an explicit cap. The derived process backstop
-      // stops applying, matching an explicit `--in-peers` at startup.
+      if (m_applied_ceiling_kind == SHEKYL_INBOUND_CEILING_BOUNDED && cap > m_applied_ceiling_value)
+      {
+        MERROR("Inbound cap " << cap << " exceeds the descriptor ceiling "
+            << m_applied_ceiling_value << "; leaving the previous cap.");
+        return;
+      }
+      // A runtime change is an explicit cap for this connector. The
+      // descriptor ceiling still bounds the sum. A cap the descriptors
+      // cannot hold was refused above, and the previous cap stays.
       public_zone->second.m_inbound_cap_explicit = true;
-      m_process_inbound_ceiling.reset();
+      shekyl_zone_set_connector_cap(SHEKYL_CONNECTOR_CLEARNET, cap);
       const auto current = public_zone->second.m_net_server.get_config_object().get_in_connections_count();
       public_zone->second.m_config.m_net_config.max_in_connection_count = cap;
       if(current > cap)
@@ -3377,65 +3407,61 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::set_tos_flag(const boost::program_options::variables_map& vm, int flag)
   {
-    if(flag==-1){
+    (void)vm;
+    if (flag == -1)
       return true;
-    }
-    epee::net_utils::connection<epee::levin::async_protocol_handler<p2p_connection_context> >::set_tos_flag(flag);
-    _dbg1("Set ToS flag  " << flag);
-    return true;
+    MERROR("--tos-flag is not offered");
+    return false;
   }
 
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::set_rate_up_limit(const boost::program_options::variables_map& vm, int64_t limit)
   {
-    this->islimitup=(limit != -1) && (limit != default_limit_up);
-
-    if (limit==-1) {
-      limit=default_limit_up;
+    if (limit == 0 || limit < -1)
+    {
+      MERROR("--limit-rate-up " << limit << " is not a rate. Use -1 for unlimited.");
+      return false;
     }
-
-    epee::net_utils::connection<epee::levin::async_protocol_handler<p2p_connection_context> >::set_rate_up_limit( limit );
-    MINFO("Set limit-up to " << limit << " kB/s");
+    this->islimitup = limit >= 0;
+    shekyl_link_set_up(limit);
+    if (limit < 0)
+      MINFO("Set limit-up to unlimited");
+    else
+      MINFO("Set limit-up to " << limit << " KiB/s");
     return true;
   }
 
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::set_rate_down_limit(const boost::program_options::variables_map& vm, int64_t limit)
   {
-    this->islimitdown=(limit != -1) && (limit != default_limit_down);
-    if(limit==-1) {
-      limit=default_limit_down;
+    if (limit == 0 || limit < -1)
+    {
+      MERROR("--limit-rate-down " << limit << " is not a rate. Use -1 for unlimited.");
+      return false;
     }
-    epee::net_utils::connection<epee::levin::async_protocol_handler<p2p_connection_context> >::set_rate_down_limit( limit );
-    MINFO("Set limit-down to " << limit << " kB/s");
+    this->islimitdown = limit >= 0;
+    shekyl_link_set_down(limit);
+    if (limit < 0)
+      MINFO("Set limit-down to unlimited");
+    else
+      MINFO("Set limit-down to " << limit << " KiB/s");
     return true;
   }
 
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::set_rate_limit(const boost::program_options::variables_map& vm, int64_t limit)
   {
-    int64_t limit_up = 0;
-    int64_t limit_down = 0;
-
-    if(limit == -1)
+    // Applies only to a direction the operator did not set on its own.
+    // -1 is unlimited. Zero is not a rate.
+    if (limit == 0 || limit < -1)
     {
-      limit_up = default_limit_up;
-      limit_down = default_limit_down;
+      MERROR("--limit-rate " << limit << " is not a rate. Use -1 for unlimited.");
+      return false;
     }
-    else
-    {
-      limit_up = limit;
-      limit_down = limit;
-    }
-    if(!this->islimitup) {
-      epee::net_utils::connection<epee::levin::async_protocol_handler<p2p_connection_context> >::set_rate_up_limit(limit_up);
-      MINFO("Set limit-up to " << limit_up << " kB/s");
-    }
-    if(!this->islimitdown) {
-      epee::net_utils::connection<epee::levin::async_protocol_handler<p2p_connection_context> >::set_rate_down_limit(limit_down);
-      MINFO("Set limit-down to " << limit_down << " kB/s");
-    }
-
+    if(!this->islimitup)
+      set_rate_up_limit(vm, limit);
+    if(!this->islimitdown)
+      set_rate_down_limit(vm, limit);
     return true;
   }
 
@@ -3607,57 +3633,56 @@ namespace nodetool
     delete_upnp_port_mapping_v6(port);
   }
 
-  template<typename t_payload_net_handler>
-  std::optional<p2p_connection_context_t<typename t_payload_net_handler::connection_context>>
-  node_server<t_payload_net_handler>::socks_connect(network_zone& zone, const epee::net_utils::network_address& remote, epee::net_utils::ssl_support_t ssl_support)
+  template<class t_payload_net_handler>
+  shekyl_zone_params node_server<t_payload_net_handler>::transport_spans() const
   {
-    auto result = socks_connect_internal(zone.m_net_server.get_stop_signal(), zone.m_net_server.get_io_context(), zone.m_proxy_address, remote);
-    if (result) // if no error
-    {
-      p2p_connection_context context{};
-      if (zone.m_net_server.add_connection(context, std::move(*result), remote, ssl_support))
-        return {std::move(context)};
-    }
-    return std::nullopt;
+    // Clearnet dial, handshake, and gap: 2 x (700 ms GEO-satellite RTT
+    // ceiling + the node-local residual), rounded up to 1 ms. Residuals
+    // are the larger of the LAN, South America (~170 ms), and New York
+    // (~24 ms) legs in docs/benchmarks/p2p_cutover_crossbuild_20260929.md.
+    // Dial 1.415 s (residual 7.2 ms), handshake 1.426 s (12.6 ms, the
+    // measured median of the body), gap 1.430 s (residual 14.7 ms). The
+    // ~700 ms handshake tail is not a term in any of these.
+    // Tor dial 9.1 s: 2 x p99 (4.54 s) of the floor dial distribution,
+    // South America circuit, proof-of-work on. A clearnet dial through a
+    // SOCKS proxy uses this clock: the worst measured SOCKS path, pending
+    // its own distribution. The three clearnet legs had no proxy.
+    // Tor gap 2.6 s: the outbound
+    // direction, the larger of the two distant-circuit gaps.
+    // Shutdown waits out the longest armed deadline, the Tor dial.
+    // Send queue: one admitted packet, room for the largest legitimate message.
+    // workers and blocking: the structural floor. The thread-budget leg
+    // replaces them after the ledger row.
+    shekyl_zone_params spans{};
+    spans.network_id = nullptr;
+    spans.clearnet_dial_within_ns = 1415000000ull;
+    spans.clearnet_handshake_within_ns = 1426000000ull;
+    spans.clearnet_gap_within_ns = 1430000000ull;
+    spans.tor_dial_within_ns = 9100000000ull;
+    spans.tor_gap_within_ns = 2600000000ull;
+    spans.send_queue_bytes = LEVIN_DEFAULT_MAX_PACKET_SIZE;
+    spans.shutdown_timeout_ns = 9100000000ull;
+    spans.workers = 2;
+    spans.blocking = 1;
+    return spans;
+  }
+
+  template<class t_payload_net_handler>
+  shekyl_inbound_ceiling node_server<t_payload_net_handler>::transport_ceiling() const
+  {
+    shekyl_inbound_ceiling ceiling{};
+    const std::uint64_t reserved = descriptor_reservations(m_reserved_beyond_p2p);
+    shekyl_inbound_ceiling_resolve(reserved, 0, &ceiling);
+    return ceiling;
   }
 
   template<typename t_payload_net_handler>
   std::optional<p2p_connection_context_t<typename t_payload_net_handler::connection_context>>
-  node_server<t_payload_net_handler>::public_connect(network_zone& zone, epee::net_utils::network_address const& na, epee::net_utils::ssl_support_t ssl_support)
+  node_server<t_payload_net_handler>::public_connect(network_zone& zone, epee::net_utils::network_address const& na)
   {
-    bool is_ipv4 = na.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id();
-    bool is_ipv6 = na.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id();
-    CHECK_AND_ASSERT_MES(is_ipv4 || is_ipv6, std::nullopt,
-      "Only IPv4 or IPv6 addresses are supported here");
-
-    std::string address;
-    std::string port;
-
-    if (is_ipv4)
-    {
-      const epee::net_utils::ipv4_network_address &ipv4 = na.as<const epee::net_utils::ipv4_network_address>();
-      address = epee::string_tools::get_ip_string_from_int32(ipv4.ip());
-      port = epee::string_tools::num_to_string_fast(ipv4.port());
-    }
-    else if (is_ipv6)
-    {
-      const epee::net_utils::ipv6_network_address &ipv6 = na.as<const epee::net_utils::ipv6_network_address>();
-      address = ipv6.ip().to_string();
-      port = epee::string_tools::num_to_string_fast(ipv6.port());
-    }
-    else
-    {
-      LOG_ERROR("Only IPv4 or IPv6 addresses are supported here");
+    p2p_connection_context con{};
+    if (!zone.m_net_server.open(na, con))
       return std::nullopt;
-    }
-
-    typename net_server::t_connection_context con{};
-    const bool res = zone.m_net_server.connect(address, port,
-      zone.m_config.m_net_config.connection_timeout,
-      con, "0.0.0.0", ssl_support);
-
-    if (res)
-      return {std::move(con)};
-    return std::nullopt;
+    return {std::move(con)};
   }
 }

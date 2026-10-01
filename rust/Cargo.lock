@@ -3917,6 +3917,7 @@ dependencies = [
  "shekyl-timing-engine",
  "shekyl-transport-layer",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4363,9 +4364,11 @@ dependencies = [
  "shekyl-address",
  "shekyl-archival-retention",
  "shekyl-bulletproofs",
+ "shekyl-capped-stream",
  "shekyl-chacha",
  "shekyl-chain-ingest",
  "shekyl-chain-store",
+ "shekyl-clearnet",
  "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
@@ -4381,20 +4384,25 @@ dependencies = [
  "shekyl-fcmp-proofs",
  "shekyl-levin",
  "shekyl-logging",
+ "shekyl-net-address",
  "shekyl-p2p-transport",
  "shekyl-peer-policy",
  "shekyl-pow-randomx",
  "shekyl-proofs",
  "shekyl-relay",
  "shekyl-relay-privacy",
+ "shekyl-runtime",
  "shekyl-seam",
  "shekyl-thread-ledger",
+ "shekyl-timing-engine",
+ "shekyl-tor",
  "shekyl-tor-control-daemon",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
  "tempfile",
+ "tokio",
  "tracing",
  "zeroize",
 ]
@@ -4750,6 +4758,7 @@ dependencies = [
  "shekyl-peer-policy",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
+ "tokio",
 ]
 
 [[package]]
@@ -4864,6 +4873,7 @@ dependencies = [
  "shekyl-tor-control-daemon",
  "shekyl-transport-layer",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

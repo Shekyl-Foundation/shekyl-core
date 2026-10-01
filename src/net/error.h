@@ -41,7 +41,6 @@ namespace net
         expected_tld = 1,   //!< Expected a tld
         invalid_encoding,   //!< Invalid percent encoding
         invalid_host,       //!< Hostname is not valid
-        invalid_i2p_address,
         invalid_mask,       //!< Outside of 0-32 range
         invalid_port,       //!< Outside of 0-65535 range
         invalid_scheme,     //!< Provided URI scheme was unspported
