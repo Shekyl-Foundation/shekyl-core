@@ -65,6 +65,10 @@ rand_core = { version = "0.6", features = ["std"] }
 # `shekyl-rpc-client` supplies the `Rpc` trait that names `post`.
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client", default-features = false, features = ["std"] }
+# The one daemon runtime constructor. Worker and blocking counts are this
+# caller's structural floor (the transport's 2 and 1), not Tokio's unset
+# defaults. The D5 pin replaces them.
+shekyl-runtime = { path = "../shekyl-runtime" }
 
 [dev-dependencies]
 # Real consensus-valid spend fixture for the production-verifier oracle test

@@ -3,10 +3,13 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The socketless asio executor, as one ledger row.
+//! The thread ledger's C surface.
 //!
-//! [`ExecutorBudget::above_floor`] is the floor. This module records the
+//! The socketless asio executor is one row.
+//! [`ExecutorBudget::above_floor`] is its floor. This module records that
 //! row and does not spawn or join. The threads are the caller's.
+//! [`shekyl_thread_ledger_report`] copies every row: dedicated threads,
+//! executor rows, and Tokio runtimes.
 
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
@@ -62,4 +65,74 @@ pub unsafe extern "C" fn shekyl_executor_record(
 #[no_mangle]
 pub extern "C" fn shekyl_executor_release(handle: u64) {
     EXECUTORS.lock().expect("executor table").remove(&handle);
+}
+
+/// Copy the thread-ledger report into `buf`, NUL-terminated.
+///
+/// Always returns the report's full byte length, excluding the NUL. A
+/// null `buf` or a `len` of 0 writes nothing. A short buffer is truncated
+/// and still NUL-terminated. A return greater than or equal to `len`
+/// means the caller retries with a larger buffer: the return is the full
+/// length, so a truncated fill is distinguishable from an exact fit.
+///
+/// # Safety
+///
+/// `buf`, when non-null and `len` is non-zero, points at `len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_thread_ledger_report(buf: *mut c_char, len: usize) -> usize {
+    let report = shekyl_thread_ledger::report();
+    let bytes = report.as_bytes();
+    if !buf.is_null() && len > 0 {
+        let n = bytes.len().min(len - 1);
+        // The report is not a secret. A short copy is the caller's signal
+        // to retry, and the NUL keeps a C string well-formed either way.
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.cast(), n);
+            *buf.add(n) = 0;
+        }
+    }
+    bytes.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shekyl_thread_ledger_report;
+
+    /// A one-byte buffer writes only the NUL. Returning that written count
+    /// (zero) is the contract this replaced. The edit that makes this red
+    /// is returning the truncated count instead of the full length.
+    #[test]
+    fn a_short_buffer_returns_the_full_length() {
+        for _ in 0..8 {
+            let report = shekyl_thread_ledger::report();
+            let full = report.len();
+            let probed = unsafe { shekyl_thread_ledger_report(std::ptr::null_mut(), 0) };
+            let mut one = [0xFFu8; 1];
+            let short = unsafe { shekyl_thread_ledger_report(one.as_mut_ptr().cast(), one.len()) };
+            let mut prefix = [0xFFu8; 4];
+            let truncated =
+                unsafe { shekyl_thread_ledger_report(prefix.as_mut_ptr().cast(), prefix.len()) };
+            let mut fitted = vec![0xFFu8; full + 1];
+            let written =
+                unsafe { shekyl_thread_ledger_report(fitted.as_mut_ptr().cast(), fitted.len()) };
+            if shekyl_thread_ledger::report() != report {
+                continue;
+            }
+            assert!(
+                full > prefix.len(),
+                "the fixture report is longer than the short buffer"
+            );
+            assert_eq!(probed, full);
+            assert_eq!(short, full);
+            assert_eq!(truncated, full);
+            assert_eq!(written, full);
+            assert_eq!(one[0], 0, "a one-byte buffer still ends in NUL");
+            assert_eq!(&prefix[..3], &report.as_bytes()[..3]);
+            assert_eq!(prefix[3], 0);
+            assert_eq!(&fitted[..full], report.as_bytes());
+            assert_eq!(fitted[full], 0);
+            return;
+        }
+        panic!("the ledger changed on every attempt");
+    }
 }

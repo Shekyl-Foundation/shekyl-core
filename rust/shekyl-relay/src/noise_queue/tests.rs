@@ -7,6 +7,7 @@ use super::*;
 use crate::{Driver, Effect, FluffReach, LinkSecrecy, Zone};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
+use shekyl_relay_privacy::schedule::PeerDirection;
 use shekyl_relay_privacy::RelayZone;
 
 const W: usize = 64; // the window, via the dummy's length
@@ -304,13 +305,17 @@ fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64,
     );
     let mut driver = Driver::new(zone);
     let peers = vec![id(1), id(2), id(3), id(4)];
-    driver.zone_mut().update_stems(peers.clone(), &mut rng);
+    for peer in &peers {
+        driver
+            .zone_mut()
+            .on_session_established(*peer, PeerDirection::Outbound, &mut rng);
+    }
 
     let mut out = Vec::new();
     let mut now = 0u64;
     for _ in 0..polls {
         now += 1_000;
-        for effect in driver.poll(now, || peers.clone(), &mut rng) {
+        for effect in driver.poll(now, &mut rng) {
             match effect {
                 Effect::NoiseSend { channel, .. } => out.push((now, channel, true)),
                 Effect::NoiseUnbind { channel } => out.push((now, channel, false)),

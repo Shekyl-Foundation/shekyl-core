@@ -18,23 +18,11 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **Move daemon RPC and Tor control onto `shekyl-runtime::runtime`, then print the thread ledger once at startup.** Both still build their own (`shekyl-daemon-rpc` `ffi_exports.rs:162`, `shekyl-tor-control-daemon` `blocking.rs:120`). A startup total taken before that move omits those pools. After both call `runtime`, `shekyld` prints `shekyl_thread_ledger::report` once before the p2p loop. Falsify by: those two builders call `runtime`, and `daemon.cpp` logs the report before the p2p loop. Reopen if another `Builder::new_multi_thread` appears outside `shekyl-runtime`.
-  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
-  - Target: pre-genesis
-
 - **Move `shekyl-p-transport` onto `shekyl-socks`.** The handshake there already requires `Isolation::Principal` or `Isolation::Persona`, offers a persona only username/password, and fails closed if the proxy selects anything else. What remains is ureq's `socks` 0.3.4 connector, which is that crate's HTTP client. Falsify by `shekyl-p-transport` dialing through `shekyl_socks::connect` with `Isolation::Persona` and no longer enabling ureq's `socks-proxy`.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **Stems draw from the zone's own registry.** `get_out_connections` (`levin_notify.cpp`) still snapshots the Levin registry into an `outs` vector on every epoch rollover and filters it by `state_normal`, which is whether *we* are pulling blocks from the peer, not whether it is a peer. The zone already holds `contexts` (`zone/mod.rs`), filled at session-established with direction, and fluff walks it. Stems draw from that registry filtered to `Outbound`; `get_out_connections`, the `outs` argument to `rebuild_stems` / `update_stems` / `force_epoch`, and the C++ walk go; the empty-walk log dies with the walk or moves into Rust. Reviewed 2026-09-29 as not a #909 blocker: `state_normal` removed the steerable height bias and leaves a seconds-scale, non-adversarial residue. Blocker lifted: #909 merged 2026-10-01. Falsify by no `get_out_connections(` under `src/` and a stem-selection test that never reads `m_state`. `get_out_connections_count` is a different job and stays.
-  - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
-  - Target: pre-genesis
-
-- **An honest receiver black-holes a stem from a peer it is pulling from.** `handle_notify_new_transactions` returns before any relay when `m_state != state_normal` (`cryptonote_protocol_handler.inl`), and `Including transaction` logs *before* that check, so the line does not mean the transaction was accepted. D++ §4.4 sizes the embargo on the premise that a dropped stem is a spy's choice; this is an honest drop that fluffs the origin's transaction from the origin. The gate reduces to `state_before_handshake` (`is_synchronized()` already answers "can I validate this"), and the log moves below both gates. The log is `cryptonote_protocol_handler.inl:822` and the return is `:832`. Blocker lifted: #909 merged 2026-10-01. Falsify by a test in which a stem from a peer in `state_synchronizing` enters the receiver's pool.
-  - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
-  - Target: pre-genesis
-
-- **Write the transactions-per-epoch bound the epoch length rests on.** Sharma–Gosain–Diaz §VII-A reconstruct 98.5 % of a static privacy subgraph from about 100 transactions relayed per honest node. Epoch rotation (`rebuild_stems`) is the answer only while transactions per node per epoch stays well under that, which is a claim about Shekyl's rate and the 10-minute epoch that is currently assumed, not derived. Derive it, state the rate at which the epoch must shorten as the reopen criterion. Blocked on nothing but the derivation; scheduled with the two rows above. Falsify by the number and its reopen rate appearing in the owner document.
+- **Write the transactions-per-epoch bound the epoch length rests on.** Sharma–Gosain–Diaz §VII-A reconstruct 98.5 % of a static privacy subgraph from about 100 transactions relayed per honest node. Epoch rotation (`rebuild_stems`) is the answer only while transactions per node per epoch stays well under that, which is a claim about Shekyl's rate and the 10-minute epoch that is currently assumed, not derived. Derive it, state the rate at which the epoch must shorten as the reopen criterion. Blocked on nothing but the derivation. Falsify by the number and its reopen rate appearing in the owner document.
   - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
 
@@ -54,7 +42,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **Run the D5 thread-budget legs once the ledger prints.** The conditions are pinned (D5, 2026-09-30): the smallest worker count, blocking cap and executor count that meet each leg's duty, summed against four cores on the floor device with the miner off. A total taken before daemon RPC and Tor control construct through `shekyl-runtime::runtime` omits two of the pools the sum exists to count, so this waits on that row. Falsify by one record per leg, each naming its count and the ledger line it was read from.
+- **Run the D5 thread-budget legs once the conditions are pinned.** The ledger prints before the p2p loop. The conditions (D5, 2026-09-30) are the smallest worker count, blocking cap and executor count that meet each leg's duty, summed against four cores on the floor device with the miner off. The floors now on the ledger (transport and daemon-RPC 2/1, Tor-control 1/1) are unmeasured. The pin is the draft of those conditions, and it comes before any leg. Falsify by one record per leg, each naming its count and the ledger line it was read from.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D5
   - Target: pre-genesis
 
