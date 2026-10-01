@@ -42,7 +42,8 @@ use std::fmt;
 use serde_json::{json, Value};
 use shekyl_archival_retention::{
     settlement_epoch_at_height, BadInterval, ClaimantBondRecord, CreditPair, EmissionEpochSource,
-    EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, ShardSet,
+    EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
+    ShardClose, ShardSet,
 };
 use shekyl_rpc_client::{Rpc, RpcError};
 
@@ -409,10 +410,14 @@ fn decode_epoch(v: &Value) -> Result<EpochSnapshot, EmissionSourceError> {
     let shards = opt_array(v, "shards")?
         .iter()
         .map(|s| {
+            // The daemon RPC carries the C++ LMDB validator's segment-keyed
+            // pair (CEN-L10); the JSON keys are its, folded here.
             Ok(EpochCloseShard {
                 shard_id: req_u64(s, "shard_id")?,
-                freeze_height: req_u64(s, "freeze_height")?,
-                has_segment: req_bool(s, "has_segment")?,
+                close: ShardClose::from_wire(
+                    req_bool(s, "has_segment")?,
+                    req_u64(s, "freeze_height")?,
+                ),
             })
         })
         .collect::<Result<Vec<_>, EmissionSourceError>>()?;

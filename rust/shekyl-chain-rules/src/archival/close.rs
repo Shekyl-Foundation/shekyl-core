@@ -7,7 +7,7 @@
 //! included, and freezes the accrual's post-image as `budget(E)`.
 
 use shekyl_archival_retention::{
-    epoch_close_compute, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
+    epoch_close_compute, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard, ShardClose,
 };
 use shekyl_types::archival::{RMarket, SigmaWorkMilli};
 use shekyl_types::{
@@ -25,8 +25,9 @@ use super::{Accrual, EpochClose};
 /// The height at which closed shard `shard` closed, for a non-decreasing
 /// archival fold: the smallest `h ≤ parent` with
 /// `cumulative_archival_len(h) ≥ (shard + 1) · W`
-/// (`DRS_E4_ARCHIVAL_WRITER.md` §3.7, on `SHT-Q2`'s partition). The close's
-/// age operand (`EpochCloseShard::freeze_height`).
+/// (`DRS_E4_ARCHIVAL_WRITER.md` §3.7, on `SHT-Q2`'s partition). The height
+/// inside `g(age)`'s operand, [`ShardClose::ClosedAt`]; [`shard_close`]
+/// decides which shards have one.
 ///
 /// Public for the one reason [`closed_shards_before`] is: the producer
 /// composing a close reads the operand here, never from a second copy of
@@ -79,6 +80,32 @@ pub fn shard_close_height<'id, V: ChainView<'id>>(
         return Err(unplaced(lo));
     }
     Ok(BlockHeight::from_raw(lo))
+}
+
+/// `g(age)`'s operand for one shard, keyed on the fold (`SHT-Q2`): a shard
+/// below the `universe` of closed shards is [`ShardClose::ClosedAt`] the
+/// height [`shard_close_height`] places; one at or beyond it is still
+/// [`ShardClose::Open`] and ages nothing. No height closes a shard — only
+/// the fold reaching the shard's end does — so this is `SHT-Q1`'s falsifier
+/// (i) run on the Rust reward path: `g(age)` needs no height-driven
+/// closure. `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F's `g(age)` row.
+///
+/// # Errors
+///
+/// Those of [`shard_close_height`] for a closed shard.
+pub fn shard_close<'id, V: ChainView<'id>>(
+    view: &V,
+    shard: ShardId,
+    parent: BlockHeight,
+    universe: u64,
+) -> Result<ShardClose, ViewRead<V::Fault>> {
+    if shard.to_raw() < universe {
+        Ok(ShardClose::ClosedAt(
+            shard_close_height(view, shard, parent)?.to_raw(),
+        ))
+    } else {
+        Ok(ShardClose::Open)
+    }
 }
 
 /// The open epoch's accruing budget after adding this block's inflow
@@ -138,22 +165,21 @@ impl super::Transition {
         // The snapshot's shards: every closed shard (ARW-Q4), with the
         // close height its age is measured from.
         let universe = closed_shards_before(view, self.connecting)?.get();
+        // `universe > 0` needs a fold of at least `W`, so a parent exists;
+        // `saturating_sub` only spells that.
+        let parent = BlockHeight::from_raw(self.connecting.to_raw().saturating_sub(1));
         let mut shards = Vec::new();
         for k in 0..universe {
-            // `universe > 0` needs a fold of at least `W`, so a parent
-            // exists; `saturating_sub` only spells that.
-            let parent = BlockHeight::from_raw(self.connecting.to_raw().saturating_sub(1));
             shards.push(EpochCloseShard {
                 shard_id: k,
-                has_segment: true,
-                freeze_height: shard_close_height(view, ShardId::from_raw(k), parent)?.to_raw(),
+                close: shard_close(view, ShardId::from_raw(k), parent, universe)?,
             });
         }
 
         // The snapshot's bonds: every record with a credit at `epoch`, in
         // persona-key order, after this block's slashes; a credit on a
-        // shard beyond the closed count names a shard without a segment
-        // (the C++'s `has_segment = false`: it counts, it has no age).
+        // shard beyond the closed count names a shard still open (it
+        // counts toward scarcity, it has no age).
         let snapshot = self.merged(view)?;
         let mut bonds = Vec::new();
         let mut pairs = Vec::new();
@@ -174,8 +200,7 @@ impl super::Transition {
                     None => {
                         shards.push(EpochCloseShard {
                             shard_id: shard,
-                            has_segment: false,
-                            freeze_height: 0,
+                            close: shard_close(view, ShardId::from_raw(shard), parent, universe)?,
                         });
                         shards.len() - 1
                     }

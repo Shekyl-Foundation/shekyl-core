@@ -13,7 +13,7 @@ use std::os::raw::c_char;
 
 use shekyl_archival_retention::{
     admission_code_cstr, admission_codes, check_admission_of, last_settled_epoch_as_of_parent,
-    parent_state_shards_from_gather, HoldingsKind, ParentStateHoldings,
+    parent_state_shards_from_gather, HoldingsKind, ParentStateHoldings, ShardClose,
 };
 use shekyl_peer_policy::DropVerdict;
 
@@ -88,13 +88,19 @@ fn archival_admission_drop_verdict(code: u8) -> DropVerdict {
 /// with no `r_market` row marshals as `0` (load-bearing: Rust scores
 /// `r_market + 1`, so a never-served shard is maximal scarcity, not a zero).
 ///
+/// The `freeze_height` / `has_segment` pair is the C++ LMDB validator's
+/// segment-keyed reading of a shard's close (CEN-L10's ruled divergence:
+/// the Rust validator keys the close on the archival fold, `SHT-Q2`). This
+/// ABI is that validator's, so the pair stays; it is folded into
+/// `ShardClose` by [`ShardClose::from_wire`] here and nowhere else.
+///
 /// **`has_segment_*` is required and must be the real presence bit** — i.e. the
 /// return value of `archival_shard_freeze_height`, not a guess derived from the
-/// height. A shard with no frozen segment scores `age_milli = 0`, matching
-/// `shard_contribution_micro`; and `freeze_height = 0` is a *legitimate*
-/// genesis-band value, so presence cannot be recovered from the height. Passing
-/// `true` with a defaulted `0` height would score the **maximum** age where the
-/// reward path scores zero, over-scoring the holding.
+/// height. A shard with no frozen segment is `ShardClose::Open` and scores
+/// `age_milli = 0`, matching `shard_contribution_micro`; and `freeze_height = 0`
+/// is a *legitimate* genesis-band value, so presence cannot be recovered from
+/// the height. Passing `true` with a defaulted `0` height would score the
+/// **maximum** age where the reward path scores zero, over-scoring the holding.
 ///
 /// **`parent_height` must be the parent block's height (`chain_height − 1`).**
 /// `chain_height` at the dispatch is `m_db->height()`, the block being
@@ -152,21 +158,23 @@ pub unsafe extern "C" fn shekyl_archival_check_bond_admission(
     } else {
         unsafe { std::slice::from_raw_parts(freeze_height_ptr, freeze_height_len) }
     };
-    let has_segment: Vec<bool> = if has_segment_len == 0 {
-        Vec::new()
+    let has_segment = if has_segment_len == 0 {
+        &[][..]
     } else {
         unsafe { std::slice::from_raw_parts(has_segment_ptr, has_segment_len) }
-            .iter()
-            .map(|&b| b != 0)
-            .collect()
     };
+    // The wire's two columns are one `ShardClose` column; a ragged pair is
+    // the same marshal fault as a ragged `r_market`.
+    if freeze_heights.len() != has_segment.len() {
+        return SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_COLUMNS;
+    }
+    let closes: Vec<ShardClose> = freeze_heights
+        .iter()
+        .zip(has_segment)
+        .map(|(&height, &present)| ShardClose::from_wire(present != 0, height))
+        .collect();
 
-    let shards = match parent_state_shards_from_gather(
-        r_market,
-        freeze_heights,
-        &has_segment,
-        parent_height,
-    ) {
+    let shards = match parent_state_shards_from_gather(r_market, &closes, parent_height) {
         Ok(s) => s,
         Err(e) => return e.code(),
     };
@@ -251,17 +259,37 @@ mod tests {
             SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_COLUMNS,
             "parallel gather arrays of different lengths"
         );
+        // Two closes, one r_market: the ragged pair is caught whichever
+        // column is short.
+        let closes_two = [0u64, 0];
         assert_eq!(
             unsafe {
                 shekyl_archival_check_bond_admission(
                     kind,
                     1,
                     r.as_ptr(),
-                    2,
-                    freeze.as_ptr(),
-                    2,
+                    1,
+                    closes_two.as_ptr(),
+                    closes_two.len(),
                     seg.as_ptr(),
-                    2,
+                    seg.len(),
+                    0,
+                )
+            },
+            SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_COLUMNS,
+            "closes longer than r_market"
+        );
+        assert_eq!(
+            unsafe {
+                shekyl_archival_check_bond_admission(
+                    kind,
+                    1,
+                    r.as_ptr(),
+                    r.len(),
+                    closes_two.as_ptr(),
+                    closes_two.len(),
+                    seg.as_ptr(),
+                    seg.len(),
                     0,
                 )
             },

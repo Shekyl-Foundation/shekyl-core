@@ -33,9 +33,9 @@ pub struct EmissionKatShape {
     pub shard_a: u64,
     /// The other-bond-only shard (`R_market = 1`).
     pub shard_b: u64,
-    /// `h_close(E) − freeze_height` for shard A.
+    /// `h_close(E) − shard_close_height` for shard A (the wire's `freeze_height`).
     pub shard_a_freeze_offset: u64,
-    /// `h_close(E) − freeze_height` for shard B.
+    /// `h_close(E) − shard_close_height` for shard B (the wire's `freeze_height`).
     pub shard_b_freeze_offset: u64,
     /// Serve credits: {claimant→A, other→A, other→B}.
     pub credit_pairs: [(usize, usize); 3],

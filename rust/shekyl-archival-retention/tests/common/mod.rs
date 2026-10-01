@@ -20,7 +20,7 @@
 
 use serde_json::Value;
 use shekyl_archival_retention::{
-    BadInterval, CreditPair, EpochCloseBond, EpochCloseResult, EpochCloseShard,
+    BadInterval, CreditPair, EpochCloseBond, EpochCloseResult, EpochCloseShard, ShardClose,
 };
 
 /// Owned bond storage. `EpochCloseBond` borrows its interval slice, so the
@@ -76,8 +76,11 @@ pub fn parse_shards(v: &Value) -> Vec<EpochCloseShard> {
         .iter()
         .map(|s| EpochCloseShard {
             shard_id: s["shard_id"].as_u64().expect("shard_id"),
-            has_segment: s["has_segment"].as_bool().expect("has_segment"),
-            freeze_height: s["freeze_height"].as_u64().expect("freeze_height"),
+            // The KAT vectors carry the wire's pair (the C++ RPC's names).
+            close: ShardClose::from_wire(
+                s["has_segment"].as_bool().expect("has_segment"),
+                s["freeze_height"].as_u64().expect("freeze_height"),
+            ),
         })
         .collect()
 }

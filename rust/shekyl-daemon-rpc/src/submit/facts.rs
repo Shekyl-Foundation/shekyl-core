@@ -13,7 +13,7 @@
 //! the engine decides. Zero verdict logic lives behind this trait.
 
 use shekyl_archival_retention::{
-    BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindScan, LastServedScan,
+    BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindScan, LastServedScan, ShardClose,
 };
 use shekyl_types::{BlockHash, BlockHeight, ChainCount, PCanonicalId, TxHash};
 
@@ -454,13 +454,14 @@ pub struct EmissionCloseBondFacts {
     pub bad_intervals: Vec<BadInterval>,
 }
 
-/// One frozen shard registry row (owned `EpochCloseShard` — mirrored
-/// because the retention type carries no `Eq`).
+/// One frozen shard registry row (owned mirror of `EpochCloseShard`, kept
+/// so the facts module names its own types). The close crosses the C++
+/// shim as the LMDB validator's `has_segment` / `freeze_height` pair
+/// (CEN-L10) and is folded into [`ShardClose`] there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EmissionShardFacts {
     pub shard_id: u64,
-    pub has_segment: bool,
-    pub freeze_height: u64,
+    pub close: ShardClose,
 }
 
 /// One frozen serve-credit pair (owned `CreditPair` mirror).

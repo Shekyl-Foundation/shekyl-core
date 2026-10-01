@@ -75,7 +75,10 @@
 //!   cumulative archival fold reaches the shard's end, a binary search
 //!   over that fold (`DRS_E4_ARCHIVAL_WRITER.md` §3.7). SI-13, enforced
 //!   when the store connects each block, keeps the fold non-decreasing,
-//!   and under it the landing height is the close.
+//!   and under it the landing height is the close. [`shard_close`] wraps
+//!   it as `g(age)`'s operand: `ClosedAt(height)` below the universe,
+//!   `Open` at or beyond it — the fold, never a height, closes a shard
+//!   (`SHT-Q1` falsifier (i); `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F).
 //! - **The stale eligibility copy is deliberate.** The C++ slash scan
 //!   judged every shard of a record against the record *as the epoch's
 //!   scan began* while applying each slash to the live row, so an offline
@@ -100,7 +103,7 @@ mod inputs;
 mod slash;
 
 pub(crate) use close::accrue;
-pub use close::shard_close_height;
+pub use close::{shard_close, shard_close_height};
 pub use delta::{
     Accrual, ArchivalDelta, EpochClose, RecordWrite, RecordWriteKind, ServeCreditKey, Slash,
 };

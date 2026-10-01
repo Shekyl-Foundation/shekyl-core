@@ -329,6 +329,57 @@ fn shard_close_height_is_the_block_whose_fold_reached_the_shards_end() {
     });
 }
 
+/// Exemption 1. `SHT-Q1`'s falsifier (i), run on `g(age)`'s operand
+/// (`SHT-8` item 2; `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F's `g(age)` row):
+/// the operand is keyed on the fold alone. Shards 0 and 1 are `ClosedAt`
+/// the heights whose fold reached their ends; shard 2 — at the universe,
+/// with a fold short of its end — is `Open`, and the parent height, which
+/// would be the operand under a height-driven closure, never enters. The
+/// same fixture as the search above, so the two cannot drift apart.
+#[test]
+fn shard_close_is_the_fold_height_below_the_universe_and_open_at_it() {
+    use shekyl_archival_retention::ShardClose;
+    let w = SHARD_LENGTH.to_raw();
+    let folds = [0, w, w + 3, 2 * w + 4, 2 * w + 4];
+    let chain =
+        folds
+            .iter()
+            .enumerate()
+            .fold(crate::harness::MockChain::default(), |chain, (h, &fold)| {
+                chain.push(
+                    RecordedBlock {
+                        cumulative_archival_len: ArchivalLength::from_raw(fold),
+                        ..recorded(1_000 + h as u64)
+                    },
+                    root(0x11),
+                )
+            });
+    let parent = BlockHeight::from_raw(4);
+    let universe = 2;
+    chain.with_view(|view| {
+        assert_eq!(
+            shard_close(&view, ShardId::from_raw(0), parent, universe),
+            Ok(ShardClose::ClosedAt(1))
+        );
+        assert_eq!(
+            shard_close(&view, ShardId::from_raw(1), parent, universe),
+            Ok(ShardClose::ClosedAt(3))
+        );
+        assert_eq!(
+            shard_close(&view, ShardId::from_raw(2), parent, universe),
+            Ok(ShardClose::Open)
+        );
+        // An open shard ages nothing at any height; a closed one ages from
+        // its fold height, not from the parent.
+        let seb = 10;
+        assert_eq!(ShardClose::Open.age_milli(parent.to_raw(), seb), 0);
+        assert_eq!(
+            ShardClose::ClosedAt(1).age_milli(parent.to_raw(), seb),
+            shekyl_archival_retention::shard_age_milli(parent.to_raw(), 1, seb)
+        );
+    });
+}
+
 /// Exemption 3. A fold that fell back below a shard's end after reaching
 /// it — a sequence the store's monotone `cumulative_archival_len` cannot
 /// hold — is the cut the search cannot verify (SI-13): height 0 reached the end, the later
