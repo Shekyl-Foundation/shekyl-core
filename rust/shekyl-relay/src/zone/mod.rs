@@ -1127,4 +1127,6 @@ impl Zone {
 }
 
 #[cfg(test)]
+mod stem_draw;
+#[cfg(test)]
 mod tests;
