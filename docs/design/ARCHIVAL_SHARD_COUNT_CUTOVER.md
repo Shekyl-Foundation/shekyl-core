@@ -290,9 +290,12 @@ above.
 
 **Order within the effort:**
 
-1. **Counts defined once** in `shekyl-types` — one home for the domain ordinal, as
-   `SHARD_LENGTH` is for `W` (*was `SHARD_TX_COUNT` for `T`; deleted by the
-   `SHT-Q2` build, PR #910*) (and `SCC-4` folded in).
+1. **Counts defined once** in `shekyl-types` — one home for the domain
+   ordinal, the way the partition input already has one: `SHARD_LENGTH`
+   (`W`, archival bytes — a length, not a count or an ordinal) is defined
+   once there and read everywhere (*it replaced `SHARD_TX_COUNT` for `T`,
+   which the `SHT-Q2` build deleted, PR #910*). `SCC-4`'s duplicated cap
+   folds into the same home.
 2. **Constants re-derived** in their new units (§D) — `knee_n` in transactions
    before anything reads it.
 3. **Sims re-baselined** against the re-derived constants, so the economics

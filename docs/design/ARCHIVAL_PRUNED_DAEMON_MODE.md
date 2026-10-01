@@ -154,8 +154,9 @@ row graded CACHE (this is also Q6's reversion (b)).
 (the undo floor is `1` until a prune deletes undo rows),
 `rust/shekyl-archival-retention/src/bond_wire.rs:47-51` (`BondPostKind` is
 `JoinMarket | Reinstate | Release`). Q6 items 1–4 and item 5 (shards
-`[k·T, (k+1)·T)` — fixed cardinality since 2026-09-23, F32's byte bound
-superseded — discarded whole) and Q11 (`D_max`) stand beneath this ruling.
+`[k·W, (k+1)·W)` of cumulative archival length since `SHT-Q2` 2026-09-29 —
+*was* `[k·T, (k+1)·T)`, fixed cardinality, 2026-09-23 → 2026-09-29 —
+discarded whole) and Q11 (`D_max`) stand beneath this ruling.
 
 **Why a re-ruling and not an amendment.** The 2026-09-18 ruling fixed the
 shape as `b_{k+1} ≤ first_tx_id(tip − W) ∧ close_height(k) + SEB < tip` — a
@@ -213,14 +214,17 @@ arithmetic — the discipline the 2026-09-18 text had for `tip − W`, kept
 stays correct: a launch-window discard is a bug, not a zero). Bodies
 retire **at the epoch boundary after the freeze epoch**: at the first
 block of `close_epoch(k) + 2`, every daemon discards `k`. There is no
-per-daemon input (Q9: no exceptions). The frontier shard — tx `(k+1)·T`
-not yet recorded — has no `close_epoch` and is never a candidate.
+per-daemon input (Q9: no exceptions). The frontier shard — cumulative
+archival length `(k+1)·W` not yet reached (`SHT-Q2`; *was* tx `(k+1)·T`
+not yet recorded) — has no `close_epoch` and is never a candidate.
 
 **Enforcement point** unchanged: asserted where the discard is decided —
 S-PRUNE's per-epoch batch, whose set at boundary `E` is **named by `E`** —
 `{k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3}`, read off
-the storage-id total — `cumulative_tx_count` (listed transactions) plus one
-coinbase per block, `storage_ids_through` (SPR-1);
+the `block_info.cumulative_archival_len` cells (`SHT-Q2`, 2026-09-29: the
+fold placed over storage ids — `cumulative_tx_count` plus one coinbase per
+block, `storage_ids_through`, SPR-1 — and summed from the `txs_archival_len`
+rows; *was* the storage-id total alone, 2026-09-25 → 2026-09-29);
 no frontier, no search over disk — and which runs **inside the boundary
 block's connect transaction**, so "connected past `E·SEB` with the batch
 un-run" is unrepresentable (skeleton §4) — never discovered downstream; a violated predicate is a
@@ -587,7 +591,11 @@ item 3 on S-CHAIN-R's layout commit (PR #772). Items 1 and 2 are one ruling: ~95
 bytes jointly, neither defensible alone (`PDM-Q-F14`). No tx blob byte
 and no txid changes.
 
-**Item 3 — shard membership.** A shard is a **`tx_id` range**
+**Item 3 — shard membership — as RULED 2026-09-17; the boundary was
+re-keyed by F32 (2026-09-18), item 5 (2026-09-23) and `SHT-Q2`
+(2026-09-29, `[k·W, (k+1)·W)` of cumulative archival length) — see item 5.
+The paragraph below is the record of the ruling, not the live boundary.**
+A shard is a **`tx_id` range**
 `[k·T, (k+1)·T)` over the store's monotone transaction index
 (`tx_id = get_tx_count()` at insert, KEEP-C). Membership is derived —
 `tx ∈ s ⇔ ⌊tx_id / T⌋ = k` — and nothing joins the retained set for
@@ -1186,7 +1194,8 @@ wire; #775's criterion looks at the disk, and is the stronger one.
 
 **The one sentence Q9 still owed — the specified-to-scarce window is
 when the wallet fills its store from the local daemon.** Shard `k`
-closes at tx `(k+1)·T` (item 5; `b_{k+1}` under F32); the archiver's
+closes where cumulative archival length reaches `(k+1)·W` (`SHT-Q2`,
+2026-09-29; *was* tx `(k+1)·T` under item 5, `b_{k+1}` under F32); the archiver's
 wallet pulls `k`'s bodies over the operator leg while its daemon still
 holds them in-window; the daemon
 then discards `k` at the boundary after its freeze epoch like every other
@@ -1485,7 +1494,7 @@ txid** — *amended 2026-09-19 by the wallet lane's `WSS-Q5` ruling
 ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.4): a filler holds the whole
 transaction, so it recomputes the consensus commitment itself rather than
 trusting a supplied digest; the hash rows remain the **discarding daemon's**
-own need for `DRS-D10` skeleton replay*; key by shard over `[k·T, (k+1)·T)` (item 5, 2026-09-23; `[b_k, b_{k+1})` at ruling); serve **whole-shard**
+own need for `DRS-D10` skeleton replay*; key by shard over `[k·W, (k+1)·W)` of cumulative archival length (`SHT-Q2`, 2026-09-29; *was* `[k·T, (k+1)·T)` under item 5, 2026-09-23, and `[b_k, b_{k+1})` at ruling); serve **whole-shard**
 (`WSS-Q7`, 2026-09-19 — `SF-D1`'s whole-shard read stands; it is *verification*
 that Q6 made per-tx)
 through `shekyl-p-serve` (`SF-D8`'s content half, sub-PR 2); carry its
