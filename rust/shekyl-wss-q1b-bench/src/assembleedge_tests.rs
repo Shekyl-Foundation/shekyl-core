@@ -29,8 +29,8 @@ fn ms(n: u64) -> Duration {
 }
 
 #[test]
-fn plan_derives_four_arms_from_the_ladder() {
-    let arms = plan();
+fn the_window_plan_derives_four_arms_from_the_ladder() {
+    let arms = plan_at_replay_window();
     assert_eq!(arms.len(), 4, "the plan is four arms");
     assert_eq!(arms[0].role, ArmRole::RungBelow);
     assert_eq!(arms[1].role, ArmRole::RungFloor);
@@ -40,7 +40,7 @@ fn plan_derives_four_arms_from_the_ladder() {
 
 #[test]
 fn the_cross_rung_pair_is_adjacent_in_n_and_one_layer_apart() {
-    let arms = plan();
+    let arms = plan_at_replay_window();
     let below = arms[0].population;
     let floor = arms[1].population;
     assert_eq!(
@@ -58,7 +58,7 @@ fn the_cross_rung_pair_is_adjacent_in_n_and_one_layer_apart() {
 
 #[test]
 fn the_same_rung_pair_shares_a_depth_and_separates_enough_to_discriminate() {
-    let arms = plan();
+    let arms = plan_at_replay_window();
     let floor = arms[1].population;
     let top = arms[2].population;
     assert_eq!(
@@ -79,7 +79,7 @@ fn the_same_rung_pair_shares_a_depth_and_separates_enough_to_discriminate() {
 
 #[test]
 fn the_input_cap_arm_holds_the_population_and_raises_only_k() {
-    let arms = plan();
+    let arms = plan_at_replay_window();
     assert_eq!(arms[3].population, arms[2].population);
     assert_eq!(arms[2].owned_inputs, CANONICAL_OWNED_INPUTS);
     assert_eq!(arms[3].owned_inputs, MAX_INPUTS);
@@ -242,35 +242,35 @@ fn the_windows_tree_depth_does_not_depend_on_the_rate_model() {
 }
 
 #[test]
-fn the_graded_arms_depth_comes_from_the_population_not_the_rate_model() {
-    let arms = plan();
+fn an_arms_depth_comes_from_its_population_not_the_rate_model() {
+    let arms = plan_at_replay_window();
     let top = arms[2].population;
     assert_eq!(
         top.depth,
         layer_count_for_leaves(top.leaf_count),
-        "the graded arm's depth must be read from its leaf count"
+        "an arm's depth must be read from its leaf count"
     );
 }
 
 #[test]
-fn a_shape_rung_carries_the_same_four_roles_as_the_graded_rung() {
+fn a_shape_rung_carries_the_same_four_roles_as_the_window_rung() {
     let shape = plan_at_depth(4);
-    let graded = plan();
+    let window = plan_at_replay_window();
     let roles: Vec<ArmRole> = shape.iter().map(|a| a.role).collect();
-    let graded_roles: Vec<ArmRole> = graded.iter().map(|a| a.role).collect();
+    let window_roles: Vec<ArmRole> = window.iter().map(|a| a.role).collect();
     assert_eq!(
-        roles, graded_roles,
+        roles, window_roles,
         "a shape run must exercise the same comparisons, or it establishes a \
          different claim than the one it is standing in for"
     );
 }
 
 #[test]
-fn a_shape_rung_is_cheaper_than_the_graded_one_but_separates_as_much() {
+fn a_shape_rung_is_cheaper_than_the_window_one_but_separates_as_much() {
     let shape = plan_at_depth(4);
-    let graded = plan();
+    let window = plan_at_replay_window();
     assert!(
-        shape[2].population.leaf_count < graded[2].population.leaf_count,
+        shape[2].population.leaf_count < window[2].population.leaf_count,
         "a shape rung that is not cheaper buys nothing"
     );
     let separation = shape[2].population.leaf_count as f64 / shape[1].population.leaf_count as f64;
@@ -282,5 +282,45 @@ fn a_shape_rung_is_cheaper_than_the_graded_one_but_separates_as_much() {
         shape[0].population.depth + 1,
         shape[1].population.depth,
         "the shape rung must still straddle a boundary"
+    );
+}
+
+#[test]
+fn the_replay_window_never_reaches_the_rate_models_depth() {
+    // The window is not the chain, and `assemble.rs`'s docstring reached for
+    // the window's figure ("765 600 at the graded worst case") to describe a
+    // population that is not windowed at all. Pinned as a set relation rather
+    // than as two numbers: the window's leaf count sits BELOW the floor of the
+    // rung the rate model is parameterised at, so the two can never be read as
+    // one reading of one quantity.
+    let window = worst_case_window_leaves(LEAF_RATE_MODEL_DEPTH);
+    let model_rung_floor = min_leaves_for_depth(LEAF_RATE_MODEL_DEPTH)
+        .expect("the rate model's depth has a rung floor");
+    assert!(
+        window < model_rung_floor,
+        "the replay window ({window} leaves) has reached the rate model's rung \
+         ({model_rung_floor}); the window and the chain are no longer trivially \
+         distinguishable and every figure derived from either needs re-reading"
+    );
+}
+
+#[test]
+fn no_plan_here_claims_to_be_the_graded_one() {
+    // Rule 22's named blocker, kept honest by a test: assembly's cost grows
+    // without bound in chain length, so a graded population is a ruling about
+    // chain age and not something this module may derive. If a `plan` function
+    // ever appears that is neither the window's nor a shape rung's, this test
+    // is where the claim has to be justified.
+    let window = plan_at_replay_window();
+    let shape = plan_at_depth(4);
+    assert!(
+        shape[2].population.leaf_count < window[2].population.leaf_count,
+        "the shape rung must sit below the window rung"
+    );
+    assert!(
+        window[2].population.leaf_count
+            < min_leaves_for_depth(LEAF_RATE_MODEL_DEPTH).expect("rate model rung floor"),
+        "the window plan must stay below the rate model's rung, or it has quietly \
+         become a claim about the chain"
     );
 }

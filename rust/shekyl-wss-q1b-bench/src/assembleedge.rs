@@ -24,9 +24,37 @@
 //! let layers = build_layers(&stream);
 //! ```
 //!
-//! — `n` work for `k <= MAX_INPUTS` paths, where `n` is the drained leaf count
-//! (765 600 at the graded worst case). Increment 3 hoisted that out of the
+//! — `n` work for `k <= MAX_INPUTS` paths. Increment 3 hoisted that out of the
 //! per-input loop, taking `k · n` to `n + k`; the `n` remains.
+//!
+//! ## `n` is the chain, not a window
+//!
+//! `CurveTreeClient::entries` is append-only — `extend` on ingest, replaced
+//! wholesale only by a rollback's rebuild, and never `retain`ed, `drain`ed or
+//! `truncate`d. `rebuild_from_store` reloads the **whole** drained set, and a
+//! resume from a store whose frozen segments were pruned is refused outright
+//! (`ClientError::ResumeFromPrunedStore`, F5) rather than resumed from a
+//! partial one. So every drained leaf since genesis is in memory, and
+//! `assemble_paths` rebuilds every layer over all of them for every spend.
+//!
+//! This matters because every *neighbouring* figure in this harness is
+//! windowed, and `assemble.rs`'s own docstring reaches for one of them —
+//! "765 600 at the graded worst case" is `worst_case_window_leaves`, the
+//! 725-block replay window, which is about **one day** of chain at a 120 s
+//! target. Assembly is not bounded by that window. At 760 320 leaves/day and
+//! the ~102 µs/leaf this instrument measures:
+//!
+//! | assembly population | `n` | cost per spend |
+//! | --- | --- | --- |
+//! | replay window, ~1 day of chain | 765 600 | ~78 s |
+//! | depth-6 floor, ~23 days | 17 778 529 | ~30 min |
+//! | one year of chain | 277 516 800 | ~7.9 h |
+//!
+//! An O(chain) spend cost fails the mission's third commitment — the system
+//! must outlast the team — whatever today's budget says, which is the whole
+//! argument for capture. It also means "worst case" cannot be derived here:
+//! it is a ruling about how old a chain the wallet must still spend on. See
+//! [`plan_at_replay_window`].
 //!
 //! ## The claim, stated so it can fail
 //!
@@ -81,22 +109,27 @@ use crate::timing::DEFAULT_TOLERANCE_PCT;
 /// [`worst_case_window_leaves`] prices a path's proof weight at, which fixes
 /// how many leaf-producing transactions a block holds.
 ///
-/// ## This is not the depth of the resulting tree
+/// ## Three different depths, and they are not interchangeable
 ///
-/// The two are different axes and they currently disagree. The rate model is
-/// parameterised at [`GRADED_TREE_DEPTH`] = 6; the window it produces holds
-/// 765 600 leaves, and `layer_count_for_leaves(765_600)` is **5**. The
-/// disagreement is not a rounding artefact — the window is a depth-5 tree at
-/// every model depth from 3 to 7, because the leaf rate barely moves across
-/// them (765 600 … 800 400, a 4.5 % spread) while a depth change needs 38×.
-/// `the_windows_tree_depth_does_not_depend_on_the_rate_model` pins that
-/// independence.
+/// - The **rate model's** depth, this constant: 6, what a path's proof weight
+///   is priced at.
+/// - The **replay window's** depth: the window that rate produces holds
+///   765 600 leaves, which is a depth-**5** tree. It is depth 5 at every model
+///   depth from 3 to 7, because the leaf rate moves only 4.5 % across them
+///   (765 600 … 800 400) while a rung needs 38×.
+///   `the_windows_tree_depth_does_not_depend_on_the_rate_model` pins that.
+/// - The **chain's** depth, which is what the curve tree actually is. At
+///   760 320 leaves/day the chain crosses `min_leaves_for_depth(6)` =
+///   17 778 529 after about 23 days, so [`GRADED_TREE_DEPTH`]'s stated band is
+///   satisfied in weeks. Its judgment is sound; it simply is not a statement
+///   about the window.
 ///
-/// So this module never reads a depth from the model. [`Population::depth`]
-/// comes from the leaf count through the production arithmetic, and the rig
-/// asserts the client agrees with it. A rung is a property of `n`, and
-/// attributing a cost to the wrong rung is evidence for the wrong half of the
-/// claim.
+/// The window is not the chain, and for path assembly the chain is what
+/// counts — see the module header. This module therefore never reads a depth
+/// from any of the three: [`Population::depth`] comes from the population's
+/// own leaf count, and the rig asserts the client agrees with it. A rung is a
+/// property of `n`, and attributing a cost to the wrong rung is evidence for
+/// the wrong half of the claim.
 pub use crate::corpus::GRADED_TREE_DEPTH as LEAF_RATE_MODEL_DEPTH;
 
 /// Owned outputs a canonical spend holds. The fixed term in "flat in chain
@@ -186,13 +219,21 @@ pub struct Arm {
 /// against this rather than set by it.
 pub const SAME_RUNG_SEPARATION: f64 = 1.5;
 
-/// The graded arms: the real worst-case window, on its own rung.
+/// The arms at one replay window's worth of leaves — **not** the graded
+/// assembly population.
 ///
-/// This is the plan increment 6 re-grades. Its top population is the chain the
-/// wallet actually has to spend on, so the arms carry absolute seconds a human
-/// waits — which rule 76 pins to the floor device, not to whatever board is
-/// handy. For establishing the *shape* off-rig, [`plan_at_depth`] runs the same
-/// four roles on a cheaper rung.
+/// 725 blocks is about one day of chain at a 120 s target. Assembly's `n` is
+/// not windowed (module header), so this plan measures a one-day-old chain and
+/// nothing more. It is kept because it is the population every *neighbouring*
+/// figure in this harness is expressed in, which makes it the right arm to
+/// compare a spend-edge record against — and because naming it honestly is
+/// what stops the window's figure being read as the graded one.
+///
+/// **The graded assembly population is blocked on a ruled chain age** (rule
+/// 22's named blocker): the cost grows without bound in chain length, so
+/// "worst case" is a policy choice about how old a chain the wallet must still
+/// spend on, not something this module can derive. Until that is ruled, no
+/// plan here is the graded plan, and `AssembleEdgeRecord::plan` says so.
 ///
 /// Every population comes from a function that owns it:
 /// [`worst_case_window_leaves`] for the graded top, and
@@ -207,13 +248,13 @@ pub const SAME_RUNG_SEPARATION: f64 = 1.5;
 /// shape under the plan, which must stop a run rather than silently leave it
 /// with a comparison that cannot discriminate.
 #[must_use]
-pub fn plan() -> Vec<Arm> {
+pub fn plan_at_replay_window() -> Vec<Arm> {
     let top = Population::at(worst_case_window_leaves(LEAF_RATE_MODEL_DEPTH));
     let floor_leaves =
         min_leaves_for_depth(top.depth).expect("the graded worst case sits on a rung with a floor");
     assert!(
         top.leaf_count as f64 >= floor_leaves as f64 * SAME_RUNG_SEPARATION,
-        "the graded window ({} leaves) is less than {SAME_RUNG_SEPARATION}x its rung floor          ({floor_leaves}); the same-rung pair could not tell a slope from noise",
+        "the replay window ({} leaves) is less than {SAME_RUNG_SEPARATION}x its rung floor          ({floor_leaves}); the same-rung pair could not tell a slope from noise",
         top.leaf_count
     );
     arms_for(top, floor_leaves)
@@ -225,8 +266,7 @@ pub fn plan() -> Vec<Arm> {
 /// The claim is about *shape*, and shape is a property of a rung, not of the
 /// graded rung in particular: a cost constant across one rung and stepping by
 /// one layer at its boundary is the same evidence wherever it is measured.
-/// What does **not** travel is the absolute figure, which is why [`plan`]
-/// stays the graded plan and this is explicitly not it.
+/// What does **not** travel is the absolute figure.
 ///
 /// # Panics
 ///

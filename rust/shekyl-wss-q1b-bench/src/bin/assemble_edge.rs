@@ -23,8 +23,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use shekyl_wss_q1b_bench::assembleedge::{
-    expected_cross_rung_ratio, grade, plan, plan_at_depth, spread_pct, Arm, ArmRole, AssembleRig,
-    FlatnessCriterion, LEAF_RATE_MODEL_DEPTH,
+    expected_cross_rung_ratio, grade, plan_at_depth, plan_at_replay_window, spread_pct, Arm,
+    ArmRole, AssembleRig, FlatnessCriterion, LEAF_RATE_MODEL_DEPTH,
 };
 use shekyl_wss_q1b_bench::corpus::worst_case_leaves_per_block;
 use shekyl_wss_q1b_bench::report::{
@@ -111,7 +111,7 @@ fn arm_record(arm: Arm, series: Series) -> AssembleArmRecord {
 }
 
 fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
-    let arms = args.rung.map_or_else(plan, plan_at_depth);
+    let arms = args.rung.map_or_else(plan_at_replay_window, plan_at_depth);
     let leaves_per_block = args
         .leaves_per_block
         .unwrap_or_else(|| worst_case_leaves_per_block(LEAF_RATE_MODEL_DEPTH).leaves_per_block);
@@ -174,10 +174,11 @@ fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
                     reached from the CT-5c send path once per spend",
         plan: if args.rung.is_some() {
             "SHAPE — a rung chosen to run in minutes. Flatness across the rung and the one-layer \
-             step at its boundary travel; the absolute seconds do NOT, and are not this chain's."
+             step at its boundary travel; the absolute seconds do NOT."
         } else {
-            "GRADED — the real worst-case replay window. This is the plan CT-6 increment 6 \
-             re-grades, and the only one whose seconds are the chain's."
+            "REPLAY WINDOW — 725 blocks, about one day of chain. NOT the graded assembly \
+             population: assembly's n is the whole chain, so the graded figure is blocked on a \
+             ruled chain age. These seconds are a one-day-old chain's."
         },
         criterion,
         same_rung_spread_pct: spread_pct(same_rung.0, same_rung.1),
@@ -245,7 +246,7 @@ fn main() -> ExitCode {
             "leaf rate modelled at depth {LEAF_RATE_MODEL_DEPTH} (proof weight); each arm's \
              tree depth is read from its own leaf count"
         );
-        for arm in plan() {
+        for arm in args.rung.map_or_else(plan_at_replay_window, plan_at_depth) {
             eprintln!(
                 "  {:>11}  n={:<10} depth={}  k={}",
                 arm.role.as_str(),
