@@ -369,6 +369,25 @@ impl Default for FlatnessCriterion {
 /// Post-capture, assembling a path walks the path's layers, so depth
 /// `deep_depth` costs `deep_depth / shallow_depth` of depth `shallow_depth`.
 /// Derived from the depths the populations actually reached, never stated.
+///
+/// ## A uniform-layer model, and where it stops being one
+///
+/// This treats every layer as costing the same, and they do not: a Selene
+/// node hashes [`SELENE_CHUNK_WIDTH`] = 38 children, a Helios node
+/// [`shekyl_fcmp::tree::HELIOS_CHUNK_WIDTH`] = 18, and the layers alternate. The added layer is
+/// one or the other, so the true ratio is
+/// `(walked + added) / walked` in *chunk work*, not in layer count.
+///
+/// The approximation is kept here because it is the right shape for the
+/// question this commit asks — is the cost flat, or does it track `n`? — where
+/// the two hypotheses differ by orders of magnitude and a 2× model error in
+/// one layer's share changes nothing. It is **not** good enough to grade a
+/// *passing* capture against: a correct capture could overshoot
+/// [`FlatnessCriterion::cross_rung_tolerance_pct`] on model error rather than
+/// on its own cost. Increment 6 must either widen that bound explicitly or
+/// derive the expectation from [`shekyl_fcmp::tree::chunk_width`] of the layer
+/// actually added;
+/// this docstring is the named blocker for that choice (rule 22).
 #[must_use]
 pub fn expected_cross_rung_ratio(shallow_depth: u8, deep_depth: u8) -> f64 {
     f64::from(deep_depth) / f64::from(shallow_depth)
