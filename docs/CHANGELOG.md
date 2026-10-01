@@ -49,6 +49,29 @@
   decode. Pre-genesis, rebuild-never-migrate.
   (`DRS_E4_ARCHIVAL_WRITER.md` §3.2, §6 row 5.)
 
+### Consensus — the archival slash grace is one settlement epoch by construction (DRS-E4 commit 5, ruling)
+
+- The slash deadline for epoch `E` is `last_block(E) + SLASH_GRACE_EPOCHS ·
+  SEB` with `SLASH_GRACE_EPOCHS = 1` (`shekyl-archival-retention`,
+  `SettlementSchedule::slash_grace_blocks`), replacing the independent
+  constant `CHALLENGE_RESOLUTION_BLOCKS = 10_000`. **Behaviour-neutral on
+  the production schedule** (`SEB = 10_000`: the same height). The change is
+  to what a levered schedule does: a Fakechain `SEB` now scales the grace
+  with it — before, a regtest chain at `SEB 100` kept a 10 000-block grace,
+  a hundred epochs, nine times the eleven epochs of settled misses the
+  `11`-of-`13` slash predicate needs, and the release/slash ordering pin
+  `RELEASE_COOLDOWN_EPOCHS > SLASH_GRACE_EPOCHS` inverted under it. The
+  reorg journal horizon is `(SLASH_GRACE_EPOCHS + FAILURE_WINDOW_N) · SEB +
+  cap` (`shekyl-chain-rules::journal_horizon_under`), the same value on the
+  production pin.
+- Contract: `config/consensus_constants.json` loses
+  `challenge_resolution_blocks` (no generator read it); the
+  `shekyl-rpc-types` build's pinned digest of the file moves accordingly. FFI:
+  `shekyl_archival_challenge_resolution_blocks` (no C++ caller) is deleted;
+  `shekyl_archival_epoch_slash_deadline_height` is the deadline's only
+  export. (`ARCHIVAL_TIMING_CONSTANTS.md` §2.2; `DRS_E4_ARCHIVAL_WRITER.md`
+  §10, 2026-09-30.)
+
 ### Consensus — the Rust validator's CEN-F17 operand `n` is the closed archival-shard count (DRS-E4 commit 4)
 
 - The D2 staker-share escalation's operand `n` (`staker_pool_share_at`) in

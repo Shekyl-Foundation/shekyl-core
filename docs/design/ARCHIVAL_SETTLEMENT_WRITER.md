@@ -385,6 +385,10 @@ const _: () = assert!(
 );
 ```
 
+*(The assertion's left side is `SLASH_GRACE_EPOCHS * SETTLEMENT_EPOCH_BLOCKS`
+since 2026-09-30 — the grace is one epoch by construction, the margin and the
+argument unchanged; `CHALLENGE_RESOLUTION_BLOCKS` below is the name it had.)*
+
 *"or in-flight responses read as misses"* is `SO-D7`'s entire argument, written
 before this round opened, **enforced by a const-assert** rather than left to
 prose. `CHALLENGE_RESOLUTION_BLOCKS`'s own doc goes further and states the
