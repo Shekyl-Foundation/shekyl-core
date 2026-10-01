@@ -92,8 +92,31 @@ impl CurveTreeClient {
     /// `gindex` among those leaves. Only the third is per-input. Assembling
     /// per input therefore paid `build_layers` and `drained_sorted` over the
     /// **whole** drained stream once per input — `k · n` where `k` is the
-    /// input count and `n` the drained leaf count (765 600 at the graded
-    /// worst case). Hoisting them makes it `n + k`.
+    /// input count and `n` the drained leaf count. Hoisting them makes it
+    /// `n + k`.
+    ///
+    /// ## `n` is the chain, and that is the unfixed cost
+    ///
+    /// `n` is **every drained leaf since genesis**, not a window:
+    /// [`CurveTreeClient::entries`] only ever grows (`extend` on ingest,
+    /// replaced wholesale only by a rollback's rebuild, which reloads the
+    /// whole drained set), and a resume from a pruned store is refused
+    /// outright ([`ClientError::ResumeFromPrunedStore`], F5) rather than
+    /// resumed from a partial one.
+    ///
+    /// This docstring previously cited `765 600` here as "the graded worst
+    /// case". That figure is `worst_case_window_leaves` — the 725-block
+    /// **replay window**, about one day of chain — and it is the wrong
+    /// quantity for a population that is not windowed. **Corrected
+    /// 2026-10-01** (`CT6_PROVING_STATE.md` §11.2); at ~102 µs/leaf the real
+    /// cost is ~78 s per spend after a day and ~30 min after 23 days.
+    ///
+    /// Hoisting fixed the `k` factor. The `n` is what `CT-6` increment 5's
+    /// capture removes, by making assembly read an owned output's own stored
+    /// path material rather than rebuilding the tree. That is a *structural*
+    /// property, not a faster loop: once it holds, assembly succeeds with
+    /// every foreign leaf absent, which is what
+    /// `capture_assembles_with_no_foreign_leaves` pins.
     ///
     /// **The integrity gate runs once, before any input work**, and a mismatch
     /// returns with **no** paths assembled rather than a partial batch. Every
@@ -150,9 +173,9 @@ impl CurveTreeClient {
         // hoisted, a linear scan per input would be the remaining `k · n` term,
         // so the positions are indexed once instead: `n` inserts against `k`
         // lookups, where `k <= shekyl_fcmp::MAX_INPUTS` (8) and `n` is the
-        // drained leaf count (765 600 at the graded worst case). `Gindex` is
-        // `Hash + Eq` from `scalar_u64!`, so this needs nothing from
-        // `shekyl-types`.
+        // drained leaf count — every leaf since genesis, not a window (see
+        // the method docstring). `Gindex` is `Hash + Eq` from `scalar_u64!`,
+        // so this needs nothing from `shekyl-types`.
         let positions: HashMap<Gindex, usize> = drained
             .iter()
             .enumerate()
