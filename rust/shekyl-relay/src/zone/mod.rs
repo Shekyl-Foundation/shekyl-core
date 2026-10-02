@@ -46,6 +46,23 @@ const _: () = {
     assert!(ConnectorId::Tor.index() == 1);
 };
 
+/// The longest measured connector transit, in milliseconds.
+///
+/// The origin retry does not know which connector carried the stem — the
+/// pool does not store one — so it waits this long rather than naming a
+/// connector. An unmeasured connector is not in the max. A later connector
+/// with a longer measurement raises the wait without a new call site.
+#[must_use]
+pub fn longest_measured_transit() -> f64 {
+    ConnectorId::ALL
+        .iter()
+        .filter_map(|connector| {
+            shekyl_relay_privacy::transit_ms_for_connector_index(connector.index())
+        })
+        .max_by(f64::total_cmp)
+        .expect("a connector with a measured transit")
+}
+
 /// This connector's declaration says the peer does not learn this node's address.
 ///
 /// The cell is the connector's description. A connector that has not assessed

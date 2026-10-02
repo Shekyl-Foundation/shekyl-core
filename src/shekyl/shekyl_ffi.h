@@ -3233,30 +3233,30 @@ uint64_t shekyl_dandelionpp_embargo_draw_seconds(uint8_t zone);
 uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 
 /// How long an ORIGIN waits before re-broadcasting its own still-unseen
-/// transaction -- seconds, per zone.
+/// transaction -- seconds.
 ///
 /// The base of the pool's re-broadcast escalation for a `relay_method::local`
 /// entry that has ALREADY BEEN SENT, replacing `MIN_RELAY_TIME` on that arm
 /// only. Derived rather than chosen: the rate is
 /// `1 / (1 - EMBARGO_FULL_TRAVEL_PROBABILITY)`, so the origin asks "has this
 /// stem probably completed?" at the confidence the network already uses to
-/// answer it. On the anonymity timer that is 1148 s against a 346 s median;
-/// `MIN_RELAY_TIME` at 300 s sat BELOW the median, re-emitting while most
-/// embargoes along the origin's own stem were still running.
+/// answer it. On the longest measured transit that is 1148 s against a 346 s
+/// median; `MIN_RELAY_TIME` at 300 s sat BELOW the median, re-emitting while
+/// most embargoes along the origin's own stem were still running.
 ///
 /// An unsent `local` entry (`relayed == false`) is NOT a caller: no stem was
 /// launched, so there is no completion to wait on, and the pool keeps
 /// `MIN_RELAY_TIME` there. See `local_relay_base` in `tx_pool.cpp`.
 ///
-/// `zone` is `epee::net_utils::zone` as a byte. The pool does not store an
-/// arrival connector; a surviving `local` origin passes 0 (`invalid`), which
-/// selects the Tor connector's measured transit. That is the longer wait.
+/// Takes no connector. The pool does not store the one that carried the
+/// stem, so the wait is the longest measured transit: unknown origin
+/// connector, the conservative wait.
 ///
 /// CONTRACT: never zero, and never below the pool's own `MIN_RELAY_TIME`
-/// (300 s) for any zone -- the value is a pure function of shipped constants,
-/// and `every_parameter_class_clears_the_pool_floor` pins both bounds for
-/// every parameter class. The divisor in `get_relay_delay` rests on the first.
-uint64_t shekyl_dandelionpp_origin_retry_interval_seconds(uint8_t zone);
+/// (300 s). The value is a pure function of the measured transit terms,
+/// and `the_unknown_origin_retry_clears_the_pool_floor` pins the bound.
+/// The divisor in `get_relay_delay` rests on the first.
+uint64_t shekyl_dandelionpp_origin_retry_interval_seconds(void);
 
 
 // ── Live relay zone (RP-3a, DAEMON_RELAY_PRIVACY.md sec 18) ────────────────

@@ -190,7 +190,7 @@ pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
 }
 
 /// How long an **origin** waits before re-broadcasting its own still-unseen
-/// transaction — **seconds**, per zone.
+/// transaction — **seconds**.
 ///
 /// The pool's inherited re-broadcast loop escalates: this value is the base
 /// wait, and each subsequent gap is the entry's age rounded to it, capped at
@@ -211,7 +211,7 @@ pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
 /// [`shekyl_relay_privacy::params::origin_retry_one_in`] is
 /// `1 / (1 - EMBARGO_FULL_TRAVEL_PROBABILITY)`: the
 /// origin asks *"has my stem probably completed?"* at the confidence the
-/// network already uses to answer it. On the adopted anonymity timer that is
+/// network already uses to answer it. On the longest measured transit that is
 /// the 1-in-10 survival quantile, **1148 s**, against a 346 s median — so the
 /// retry no longer fires while most embargoes along its own stem are running,
 /// which the shipped 300 s did.
@@ -226,31 +226,30 @@ pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
 /// it exists, this interval is doing both jobs: when to retry, and, by its
 /// escalation, how long to keep trying.
 ///
-/// # Zone argument
+/// # No connector argument
 ///
-/// `zone` is `epee::net_utils::zone` as a byte, as elsewhere in this module.
-/// A surviving `local` record is a hidden-address origin. The pool does not
-/// store an arrival connector; it passes byte 0 (`invalid`), which selects
-/// the Tor connector's measured transit. That is the longer wait, and the
-/// fail-safe one.
+/// The pool does not store the connector that carried the stem, so this
+/// call does not name one. The wait is the 1-in-10 quantile of
+/// [`shekyl_relay::longest_measured_transit`]: unknown origin connector,
+/// so the conservative wait. A connector measured longer than today's
+/// longest raises the interval without a new argument.
 /// # Cost
 ///
-/// Cached per parameter class, like the timers themselves: the relay loop asks
-/// once per `local` entry per pass, and the answer is a pure function of the
-/// shipped parameters. Computing a survival quantile per entry per pass would
-/// be work the pool lock is holding for no new information.
+/// Cached once. The relay loop asks once per `local` entry per pass, and
+/// the answer is a pure function of the shipped transit terms. Computing a
+/// survival quantile per entry per pass would be work the pool lock is
+/// holding for no new information.
 #[no_mangle]
-pub extern "C" fn shekyl_dandelionpp_origin_retry_interval_seconds(zone: u8) -> u64 {
-    static RETRY_SECS: OnceLock<[u64; DandelionParams::ADOPTED_CLASSES]> = OnceLock::new();
-    let by_class = RETRY_SECS.get_or_init(|| {
-        DandelionParams::CLASS_REPRESENTATIVES.map(|class| {
-            u64::from(
-                embargo_timer(class)
-                    .judge_failed_after_secs(shekyl_relay_privacy::params::origin_retry_one_in()),
-            )
-        })
-    });
-    by_class[DandelionParams::adopted_class(RelayZone::from_ffi_u8(zone))]
+pub extern "C" fn shekyl_dandelionpp_origin_retry_interval_seconds() -> u64 {
+    static RETRY_SECS: OnceLock<u64> = OnceLock::new();
+    *RETRY_SECS.get_or_init(|| {
+        let params =
+            DandelionParams::adopted_for_transit_ms(shekyl_relay::longest_measured_transit());
+        u64::from(
+            EmbargoTimer::adopted(&params)
+                .judge_failed_after_secs(shekyl_relay_privacy::params::origin_retry_one_in()),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -280,10 +279,10 @@ mod tests {
 
     /// The defect this constant exists to fix, asserted rather than described.
     ///
-    /// What edit reds it: move the exported quantile to or below the anonymity
-    /// median. Concretely, DECREASE
+    /// What edit reds it: move the exported quantile to or below the longest
+    /// measured transit's median. Concretely, DECREASE
     /// [`shekyl_relay_privacy::params::origin_retry_one_in`] — at `one_in == 2`
-    /// the export IS the median and `anon > median` fails — or shrink the
+    /// the export IS the median and `retry > median` fails — or shrink the
     /// adopted timer.
     ///
     /// Stated as the integer rather than as a "rate", because the first
@@ -301,20 +300,25 @@ mod tests {
     /// tests are not substitutes: this one says the VALUE is right, that one
     /// says the value is USED.
     #[test]
-    fn the_origin_retry_clears_the_anonymity_embargo_median() {
-        let anon = shekyl_dandelionpp_origin_retry_interval_seconds(RelayZone::Tor.as_u8());
-        let median = u64::from(embargo_timer(RelayZone::Tor).judge_failed_after_secs(2));
+    fn the_origin_retry_clears_the_longest_measured_embargo_median() {
+        let retry = shekyl_dandelionpp_origin_retry_interval_seconds();
+        let median = u64::from(
+            EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(
+                shekyl_relay::longest_measured_transit(),
+            ))
+            .judge_failed_after_secs(2),
+        );
         assert!(
-            anon > median,
-            "an origin must not re-emit inside its own zone's embargo median: \
-             interval {anon} s against median {median} s"
+            retry > median,
+            "an origin must not re-emit inside the longest measured embargo median: \
+             interval {retry} s against median {median} s"
         );
         assert_eq!(
-            anon, 1_148,
-            "the 1-in-10 quantile of the adopted anonymity timer"
+            retry, 1_148,
+            "the 1-in-10 quantile of the longest measured transit"
         );
         assert!(
-            anon > 300,
+            retry > 300,
             "MIN_RELAY_TIME (300 s) is the value this replaces and is below the median"
         );
     }
@@ -332,42 +336,53 @@ mod tests {
     ///
     /// The bound is the pool's own `MIN_RELAY_TIME` rather than zero, because
     /// that is the real invariant: this constant exists because 300 s was too
-    /// EAGER for an origin, so a parameter change that pushed any class below
+    /// EAGER for an origin, so a parameter change that pushed this interval below
     /// 300 s would re-create the defect in the direction the PR fixed. Zero-
     /// safety falls out of it.
     ///
     /// What edit reds it: lower `EMBARGO_FULL_TRAVEL_PROBABILITY` far enough
     /// that the quantile drops under the floor, or shrink an embargo timer.
     #[test]
-    fn every_parameter_class_clears_the_pool_floor() {
+    fn the_unknown_origin_retry_clears_the_pool_floor() {
         // `MIN_RELAY_TIME`, `src/cryptonote_core/tx_pool.cpp` — quoted here
         // rather than shared, because a cross-language tripwire is the only
         // job this literal has.
         const POOL_MIN_RELAY_TIME_SECS: u64 = 300;
-        for zone in DandelionParams::CLASS_REPRESENTATIVES {
-            let secs = shekyl_dandelionpp_origin_retry_interval_seconds(zone.as_u8());
-            assert!(
-                secs > POOL_MIN_RELAY_TIME_SECS,
-                "{zone:?}: {secs} s is at or below the pool floor                  ({POOL_MIN_RELAY_TIME_SECS} s) this constant exists to raise;                  at 0 it would divide by zero in get_relay_delay"
-            );
-        }
+        let secs = shekyl_dandelionpp_origin_retry_interval_seconds();
+        assert!(
+            secs > POOL_MIN_RELAY_TIME_SECS,
+            "{secs} s is at or below the pool floor ({POOL_MIN_RELAY_TIME_SECS} s) \
+             this constant exists to raise; at 0 it would divide by zero in get_relay_delay"
+        );
     }
 
-    /// `invalid` — what an originated entry actually carries — must resolve to
-    /// the anonymity wait, not the clearnet one.
+    /// The pool does not store a connector, so the retry is the longest
+    /// measured transit and is at least as long as every measured connector.
     #[test]
-    fn an_unknown_origin_zone_gets_the_longer_wait() {
-        let invalid = shekyl_dandelionpp_origin_retry_interval_seconds(RelayZone::Invalid.as_u8());
-        let anon = shekyl_dandelionpp_origin_retry_interval_seconds(RelayZone::Tor.as_u8());
-        let clear = shekyl_dandelionpp_origin_retry_interval_seconds(RelayZone::Public.as_u8());
-        assert_eq!(
-            invalid, anon,
-            "origin-unknown provisions at the anonymity class"
+    fn an_unknown_origin_waits_the_longest_measured_transit() {
+        let retry = shekyl_dandelionpp_origin_retry_interval_seconds();
+        let one_in = origin_retry_one_in();
+        let longest = u64::from(
+            EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(
+                shekyl_relay::longest_measured_transit(),
+            ))
+            .judge_failed_after_secs(one_in),
         );
-        assert!(
-            anon > clear,
-            "the anonymity wait must exceed the clearnet one"
-        );
+        assert_eq!(retry, longest);
+        for connector in shekyl_relay::ConnectorId::ALL {
+            let Some(ms) = shekyl_relay_privacy::transit_ms_for_connector_index(connector.index())
+            else {
+                continue;
+            };
+            let secs = u64::from(
+                EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(ms))
+                    .judge_failed_after_secs(one_in),
+            );
+            assert!(
+                retry >= secs,
+                "{connector:?} at {secs} s exceeds the unknown-origin wait {retry} s"
+            );
+        }
     }
 
     #[test]

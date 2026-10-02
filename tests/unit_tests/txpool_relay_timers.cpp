@@ -290,8 +290,7 @@ TEST(txpool_relay_timers, local_holds_past_min_relay_time)
 {
   const time_t now = time(nullptr);
   const time_t derived =
-    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
-      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds());
   ASSERT_GT(derived, 300) << "the derived origin retry must exceed MIN_RELAY_TIME, "
                              "or this test cannot discriminate";
 
@@ -315,8 +314,7 @@ TEST(txpool_relay_timers, local_is_released_after_the_derived_interval)
 {
   const time_t now = time(nullptr);
   const time_t derived =
-    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
-      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds());
 
   RelayTimerFixture fx;
   ASSERT_TRUE(fx.init());
@@ -372,8 +370,7 @@ TEST(txpool_relay_timers, an_observed_local_stops_re_broadcasting)
 {
   const time_t now = time(nullptr);
   const time_t derived =
-    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
-      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds());
 
   RelayTimerFixture fx;
   ASSERT_TRUE(fx.init());
@@ -391,8 +388,7 @@ TEST(txpool_relay_timers, the_same_local_without_the_verdict_still_relays)
 {
   const time_t now = time(nullptr);
   const time_t derived =
-    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
-      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds());
 
   RelayTimerFixture fx;
   ASSERT_TRUE(fx.init());

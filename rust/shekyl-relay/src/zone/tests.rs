@@ -633,6 +633,26 @@ fn a_tor_stem_records_the_tor_embargo() {
 }
 
 #[test]
+fn the_longest_measured_transit_is_the_max_of_the_measured_entries() {
+    let longest = longest_measured_transit();
+    let mut saw = false;
+    for connector in ConnectorId::ALL {
+        if let Some(ms) = shekyl_relay_privacy::transit_ms_for_connector_index(connector.index()) {
+            saw = true;
+            assert!(
+                longest.total_cmp(&ms).is_ge(),
+                "{connector:?} at {ms} exceeds {longest}"
+            );
+        }
+    }
+    assert!(saw, "no connector has a measured transit");
+    assert_eq!(
+        longest.to_bits(),
+        shekyl_relay_privacy::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS.to_bits()
+    );
+}
+
+#[test]
 fn no_routable_slot_reports_no_route_not_a_fluff_epoch() {
     // The discriminator between the two non-stem outcomes, and the reason
     // `RelayPlan` is three-way rather than a bool. Both mean "did not

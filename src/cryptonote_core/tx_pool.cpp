@@ -133,20 +133,18 @@ namespace cryptonote
         lives on this branch for its whole life, and its retry IS the origin
         asking whether its stem completed. That is the derived quantity.
 
-        The arrival connector is not stored. A surviving `local` record is
-        a hidden-address origin, so the retry passes byte 0. Byte 0 selects
-        the Tor connector's measured transit — the longer wait.
+        The arrival connector is not stored, so the retry does not name
+        one. It waits the longest measured transit — the conservative wait
+        when the origin connector is unknown.
 
-        The Rust side caches one interval per transit term, so this is a
-        lookup rather than a survival-quantile solve per entry per pass. */
+        The Rust side caches that one interval, so this is a lookup rather
+        than a survival-quantile solve per entry per pass. */
     time_t local_relay_base(const txpool_tx_meta_t &meta)
     {
       if (!meta.relayed)
         return MIN_RELAY_TIME;
-      // A surviving `local` record is a hidden-address origin. The arrival
-      // connector is not stored; byte 0 selects the Tor connector's measured
-      // transit — the longer wait.
-      return static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(0));
+      // Unknown origin connector: the longest measured transit.
+      return static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds());
     }
 
     uint64_t template_accept_threshold(uint64_t amount)
