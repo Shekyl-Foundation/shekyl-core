@@ -286,17 +286,23 @@ namespace nodetool
   {
     p2p_connection_context_t()
       : support_flags(0),
-        m_in_timedsync(false)
+        m_in_timedsync(false),
+        m_connector(0xff)
     {}
 
-    p2p_connection_context_t(boost::uuids::uuid connection_id, const epee::net_utils::network_address& remote_address, bool is_income)
+    p2p_connection_context_t(boost::uuids::uuid connection_id, const epee::net_utils::network_address& remote_address, bool is_income, std::uint8_t connector = 0xff)
       : base_type(connection_id, remote_address, is_income),
         support_flags(0),
-        m_in_timedsync(false)
+        m_in_timedsync(false),
+        m_connector(connector)
     {}
 
     uint32_t support_flags;
     bool m_in_timedsync;
+    //! The connector that carried this session, from the seam's observation.
+    //! Not the peer address's zone: a proxied dial's address type and its
+    //! connector need not agree. `0xff` is unnamed.
+    std::uint8_t m_connector;
     std::set<epee::net_utils::network_address> sent_addresses;
   };
 

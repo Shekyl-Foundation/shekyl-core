@@ -169,12 +169,10 @@ this lane.
    belt: link secrecy already refuses noise on cleartext
    (`levin_notify.cpp:308` loses that arm).
 
-   `m_network_zones` is re-keyed by the transport connector identity.
-   The two handshake registrations still pass
-   `connector_byte` of the address zone; the re-key takes the
-   connector from the seam's record of what carried the session,
-   because a proxied dial's address type and its connector need not
-   agree.
+   `m_network_zones` is still keyed by the zone enum. The two handshake
+   registrations pass the connector the seam observed for that session,
+   not the peer address's zone. The enum's deletion is the rest of the
+   re-key; `address_type` stays, and discriminant 2 is not reused.
    Listener, advertised address, seeds, peerlist, and inbound cap stay
    per connector. Collapsing those into one session table is LV-3. The
    protocol handler does not branch on the connector: a session syncs,
