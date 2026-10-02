@@ -205,11 +205,11 @@ added-key case answered in place, as `VC-D12` requires.
 
 | constant | value | unit **today** | where it was derived | on cutover |
 |---|---|---|---|---|
-| `escalation_knee_n` | `100000` (`config/economics_params.json:17`) | **J-segments** (`frozen_segment_count`) ⇒ ~2.6 × 10⁹ leaves ⇒ ~1.3 × 10⁹ transactions at 2 outputs | **sim-derived: the middle of the Stage-2 `KNEE_BAND = [25_000, 100_000, 250_000]`** (`rust/shekyl-economics-sim/src/escalation.rs:63`), swept against `ASYMPTOTE_BAND` but **never selected** — Stage 3 froze the *shape* only | **re-expressed, not ported** (§G `SCC-Q2`): the sweep re-runs with its band in transactions below the discard frontier. Inert today — the ramp is flat |
+| `escalation_knee_n` | **`2250000` — RE-DERIVED 2026-10-01** (`config/economics_params.json`; was `100000`) | **closed byte shards** (`closed_shards_before`, `W = 3,000,000 B`). *Was:* J-segments (`frozen_segment_count`) ⇒ ~2.6 × 10⁹ leaves | **sim-derived: the middle of the re-swept `KNEE_BAND = [500_000, 2_250_000, 10_000_000]`** (`rust/shekyl-economics-sim/src/escalation.rs`: baseline `n` at ~10 y, sustained-growth's final `n`, their geometric mean), swept against `ASYMPTOTE_BAND` but **still never selected** — the ceremony picks it with the asymptote. *Was* the middle of `[25_000, 100_000, 250_000]` in J-segments | **DONE (§F step 3; `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13)**: re-derived in the operand the validator consumes, not converted; digest re-pinned `885f700d… → 05a1ba28…`. Inert today — the ramp is flat. See `SCC-Q2`'s 2026-10-01 note on the unit the sweep ran in |
 | `segment_leaf_count` | `25992` (`config/consensus_constants.json:53`) | leaves per level-2 subtree (`38·18·38`) | the curve-tree widths, const-asserted to the proof topology | **leaves the JSON** with the freeze; the digest re-pins |
 | `T` (`archival_shard_tx_count`) → **`W`** | `200`, PROVISIONAL → **`3,000,000 B`, PROVISIONAL (2026-09-29)** | transactions per shard → **archival bytes per shard** | `3.33 MB ÷ 16.7 KB/tx`, where 3.33 MB is the **retired leaf segment's** size (`SHT-1`) → **re-derived in bytes** (`ARCHIVAL_SHARD_T_DERIVATION.md` §9): the smallest `W` within the overshoot tolerance with `U1a` clear at the heavy end | **the unit changes (`SHT-Q2`)**: renamed with its key and generated names; re-pinned at the Round-2 gate by the tolerance, the multi-size W₂ run and `U1b` |
 | `L` (`archival_attestation_anchor_lag`) | `4` blocks | blocks | its fetch-span component was sized on "~20 s for 3.33 MB" — the same retired byte count (`SHT-7`), which its own page's W₂ measurement contradicts 2.4–4.3× | restate the span **per byte**, or re-pin with `T` |
-| `SHARD_BYTES` (sim only) | `3.33e6` (`rust/shekyl-economics-sim/src/burden.rs:36`) | bytes per **leaf segment** | `SEGMENT_LEAF_COUNT × ~128 B` | a modelling mean for a unit that no longer exists; re-baseline with the sims |
+| `SHARD_BYTES` (sim only) | **DELETED as a literal 2026-10-01** — `burden.rs` reads `shekyl_types::SHARD_LENGTH.to_raw()` (`3,000,000`); *was* `3.33e6` | bytes per **closed shard** (*was* per leaf segment) | the production constant, not a modelling mean; the sim's per-tx archival length comes from `shekyl_tx_weight::predict_archival_len` and its shard count from `shekyl_types::shard_of` — no `/ W` in the sim | **DONE (§F steps 2–3)**: `frozen_shards` deleted, the sims re-baselined and the Stage-2 arms re-measured (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13) |
 | `MAX_HOLDINGS_SHARDS` | `4096` (`config/consensus_constants.json`, `archival_max_holdings_shards`) | **list entries** — not bytes, not operators (`L2`) | the list budget; **no recorded derivation of the 4096 itself** | unchanged by this cutover. Since `SCC-4` it has **one** authority and two generated readers, so §E's couplings can now hold |
 
 ---
@@ -334,9 +334,15 @@ above.
    which the `SHT-Q2` build deleted, PR #910*). `SCC-4`'s duplicated cap
    folds into the same home.
 2. **Constants re-derived** in their new units (§D) — `knee_n` in transactions
-   before anything reads it.
+   before anything reads it. **DONE 2026-10-01**: `knee_n = 2,250,000` closed
+   shards, re-derived by the re-swept band (§D row; §G `SCC-Q2` note).
 3. **Sims re-baselined** against the re-derived constants, so the economics
-   verdicts are not measured in retired units.
+   verdicts are not measured in retired units. **DONE 2026-10-01**: the sim
+   calls `shekyl_types::shard_of` / `SHARD_LENGTH` and the `shekyl-tx-weight`
+   predictors; every Stage-2 arm re-measured in
+   `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13 — including one verdict
+   that **flipped** (A1, high-history / low-activity, now cleared by no
+   candidate), which is the design owner's, not this cutover's.
 4. **Then the two cutovers**, family 2 before family 1: family 2 owns the operand
    family 1's economics read.
 
@@ -369,6 +375,34 @@ Numbered, and none resolved here.
    - Converting the old band (~13k transactions per J-segment) is a **sanity check
      only, not a derivation**: segments counted coinbase leaves and were never a
      burden measure.
+
+   **UPDATE 2026-10-01 — the sweep re-ran; the knee is `2,250,000`; and the
+   unit it ran in is disclosed, not ruled.** The sweep re-derived
+   `KNEE_BAND = [500_000, 2_250_000, 10_000_000]` and the config carries the
+   middle (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13). Its unit is
+   **closed shards at parent state** — `shekyl_chain_rules::closed_shards_before`,
+   the operand the landed validator consumes (CEN-F17) and the unit
+   `economics_params.json`'s own comment has named since 2026-09-30 — **not**
+   `SCC-Q1`'s *"transactions below the discard frontier"*. The two differ by the
+   retention window (a closed shard is below the frontier only once its bodies
+   leave ordinary daemons) and by unit (byte shards, not transactions). The sim
+   measures what the chain reads; so either `SCC-Q1`'s answer is superseded by the
+   operand that landed, or the operand owes a frontier lag. **That is the design
+   owner's ruling, filed here as a finding**; the re-derivation holds under
+   either reading because the band was swept, not selected. The sanity check
+   above also held: ~13k transactions per J-segment ≈ 43 byte shards, so the old
+   middle `100,000` segments ≈ 4.3 M shards — inside the new band.
+
+   **Recommended disposition (#929 review, 2026-10-01): supersede `SCC-Q1`'s
+   answer, for a reason `SCC-Q1` did not have in hand.** `SCC-Q1` dated the
+   burden from *discard* — bodies leaving ordinary daemons. Under **F-G** the
+   burden the escalation compensates is **locked capital**, and capital locks
+   at **close + freeze**, when the shard's bond is posted — *before* discard.
+   `closed_shards_before` therefore counts the burden from the moment it is
+   borne, which is what `SCC-Q1` asked for; a frontier lag would count it
+   late. The operand stays a pure fold, with no frontier term and no `D(E)`
+   read. **Awaiting the design owner's ruling**; until then `SCC-Q1` reads as
+   ANSWERED above and this note is the recommendation.
 
    **Provenance correction.** `100,000` **is** sim-derived — it is the middle of
    the Stage-2 `KNEE_BAND = [25_000, 100_000, 250_000]`, swept against

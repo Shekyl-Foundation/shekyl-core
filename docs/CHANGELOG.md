@@ -79,6 +79,18 @@
 - `PDM-Q-F34` (composition variance) closes by dissolution and has its
   charter row: equal-length shards have no composition to mis-price.
 
+### Economics — the escalation knee re-derived in the shard unit (`SCC` §F)
+
+- `shekyl_escalation_knee_n` `100000 → 2250000`: the Stage-2 sweep re-ran in
+  the operand the validator consumes (closed archival shards,
+  `closed_shards_before`) and the config carries its middle candidate, not a
+  conversion of the J-segment literal. **No behaviour changes**: the
+  escalation ships flat (asymptote = floor), so the knee is inert until the
+  GF-7 ceremony; the consensus-constants digest re-pins
+  (`885f700d… → 05a1ba28…`). The economics sim now calls `shekyl_types::shard_of`
+  and the `shekyl-tx-weight` predictors; its re-measured verdicts, including
+  one that flipped, are in `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13.
+
 ### Wallet contract — one owner for the error codes
 
 - The wallet contract's error vocabulary moves out of the RPC server into

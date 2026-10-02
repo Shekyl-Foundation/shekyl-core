@@ -29,22 +29,23 @@ use shekyl_economics::{
 };
 
 use crate::burden::{
-    bond_opp_cost_skl, burden_cost_fiat_per_year, frozen_shards, KryderRate,
-    BASE_STORAGE_FIAT_PER_BYTE_YEAR, OPP_COST_RATE_BAND, OUTPUTS_PER_TX_NORMAL, REPLICAS_PER_SHARD,
-    SKL_FIAT_PRICE_BAND,
+    bond_opp_cost_skl, burden_cost_fiat_per_year, closed_shards, normal_tx_archival_bytes,
+    KryderRate, BASE_STORAGE_FIAT_PER_BYTE_YEAR, OPP_COST_RATE_BAND, OUTPUTS_PER_TX_NORMAL,
+    REPLICAS_PER_SHARD, SHARD_BYTES, SKL_FIAT_PRICE_BAND,
 };
 use crate::calibration::{
-    leaf_stuffer_cost_per_shard_atomic, rucknium_shards_equivalent, stuffer_tx_fee_atomic,
-    tree_depth_for_leaves, RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB, RUCKNIUM_SPAM_FEES_XMR,
+    rucknium_shards_equivalent, stuffer_campaign, stuffer_cost_per_shard_atomic, stuffer_shape,
+    stuffer_txs_per_shard, sustained_stuffer_cost_per_shard_atomic, tree_depth_for_leaves,
+    RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB, RUCKNIUM_SPAM_FEES_XMR,
 };
 use crate::engine::{ScenarioConfig, SimParams};
-use crate::escalation::{family, flat_25, EscalationCurve};
+use crate::escalation::{family, flat_25, EscalationCurve, KNEE_ARCHIVAL_LEN_BYTES, KNEE_BAND};
 use crate::population::{
     attacker_capped_work_milli, honest_sigma_work_milli, honest_sigma_work_milli_deleted, DQ2H_TAIL,
 };
 use crate::scenarios::all_scenarios;
 use shekyl_archival_retention::{
-    reward_share_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_HOLDINGS_SHARDS, SEGMENT_LEAF_COUNT,
+    reward_share_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_HOLDINGS_SHARDS,
 };
 
 /// Atomic units per SKL (mirrors `engine.rs`).
@@ -55,9 +56,21 @@ const COIN: f64 = 1_000_000_000.0;
 /// the sustained trajectory.
 const A1_RAMP_YEARS: u64 = 2;
 
-/// `frozen_segment_count` sample points for the escalation-candidate preview,
-/// spanning the [`crate::escalation::KNEE_BAND`].
-const ESCALATION_PREVIEW_N: [u64; 5] = [0, 5_000, 25_000, 100_000, 250_000];
+/// Closed-shard sample points for the escalation-candidate preview, spanning
+/// the [`KNEE_BAND`] — derived from it, so the preview follows a re-derivation.
+const ESCALATION_PREVIEW_N: [u64; 5] = [
+    0,
+    KNEE_BAND[0] / 5,
+    KNEE_BAND[0],
+    KNEE_BAND[1],
+    KNEE_BAND[2],
+];
+
+/// The honest chain's leaf count at the top of the knee band — the "deep"
+/// end of every shallow..deep range the reports quote.
+fn deep_chain_leaves() -> u64 {
+    crate::burden::honest_leaves_at_closed_shards(KNEE_BAND[2])
+}
 
 /// One sampled year of a scenario's burden trajectory. Storage cost is reported
 /// across the full DQ-2B Kryder band at the base price; the `SKL/fiat`
@@ -65,10 +78,14 @@ const ESCALATION_PREVIEW_N: [u64; 5] = [0, 5_000, 25_000, 100_000, 250_000];
 #[derive(Debug, Clone, Serialize)]
 pub struct BurdenYearRow {
     pub year: u64,
-    /// Cumulative outputs (leaves) at the end of this year.
+    /// Cumulative outputs (leaves) at the end of this year — drives the
+    /// curve-tree depth, and so each transaction's archival length.
     pub cumulative_outputs: u64,
-    /// `frozen_segment_count` — the D2 operand `n`.
-    pub frozen_shards: u64,
+    /// Cumulative archival length at the end of this year (bytes) — what the
+    /// partition folds.
+    pub cumulative_archival_bytes: u64,
+    /// Closed shards — the D2 operand `n` (`shard_of` of the bytes above).
+    pub closed_shards: u64,
     /// Whole-corpus annual burden cost (fiat), 0%/yr Kryder — the **binding**
     /// clearance case.
     pub burden_fiat_stall: f64,
@@ -85,13 +102,41 @@ pub struct BurdenTrajectory {
     pub description: String,
     pub sim_years: u64,
     /// Final `n` (shards are monotone, so this is the max).
-    pub final_frozen_shards: u64,
+    pub final_closed_shards: u64,
     pub years: Vec<BurdenYearRow>,
 }
 
-/// Simulate a scenario's honest burden: accumulate outputs
-/// (`tx_volume · OUTPUTS_PER_TX_NORMAL`), sample `frozen_shards` and the
-/// Kryder-band burden cost at each year boundary.
+/// The honest fold, one block: `txs` normal-shape transactions add
+/// `txs · OUTPUTS_PER_TX_NORMAL` leaves and `txs · archival_len(depth)` bytes,
+/// where the depth is the curve tree's at the block's start. The two
+/// accumulators are what `shard_of` and `tree_depth_for_leaves` consume.
+#[derive(Debug, Clone, Copy, Default)]
+struct HonestFold {
+    /// f64 so a fractional outputs-per-tx never rounds per block; floored to
+    /// u64 only where a consumer needs an integer.
+    cumulative_outputs: f64,
+    cumulative_archival_bytes: u64,
+}
+
+impl HonestFold {
+    fn add_block(&mut self, txs: u64) {
+        let per_tx = normal_tx_archival_bytes(self.cumulative_outputs as u64);
+        self.cumulative_archival_bytes = self
+            .cumulative_archival_bytes
+            .saturating_add(txs.saturating_mul(per_tx));
+        self.cumulative_outputs += txs as f64 * OUTPUTS_PER_TX_NORMAL;
+    }
+
+    /// The D2 operand at this point of the fold — the partition, not a
+    /// re-derivation.
+    fn closed_shards(&self) -> u64 {
+        closed_shards(self.cumulative_archival_bytes)
+    }
+}
+
+/// Simulate a scenario's honest burden: fold outputs and archival bytes
+/// ([`HonestFold`]), sample `closed_shards` and the Kryder-band burden cost at
+/// each year boundary.
 ///
 /// The Kryder decline runs over **elapsed years** (the base scenarios start at
 /// genesis, `genesis_height_offset == 0`); scenario 9's pre-existing history is
@@ -99,23 +144,22 @@ pub struct BurdenTrajectory {
 #[must_use]
 pub fn burden_trajectory(params: &SimParams, config: &ScenarioConfig) -> BurdenTrajectory {
     let total_blocks = params.blocks_per_year * config.sim_years;
-    // Accumulate in f64 so a fractional outputs-per-tx never rounds per block;
-    // floor to u64 only at the freeze-rule boundary.
-    let mut cumulative_outputs: f64 = 0.0;
+    let mut fold = HonestFold::default();
     let mut years: Vec<BurdenYearRow> = Vec::with_capacity(config.sim_years as usize);
 
     for block in 0..total_blocks {
         let txs = (config.volume.get_volume)(block, params.blocks_per_year);
-        cumulative_outputs += txs as f64 * OUTPUTS_PER_TX_NORMAL;
+        fold.add_block(txs);
 
         if (block + 1) % params.blocks_per_year == 0 {
             let year = (block + 1) / params.blocks_per_year; // 1-indexed
-            let shards = frozen_shards(cumulative_outputs as u64);
+            let shards = fold.closed_shards();
             let year_f = year as f64;
             years.push(BurdenYearRow {
                 year,
-                cumulative_outputs: cumulative_outputs as u64,
-                frozen_shards: shards,
+                cumulative_outputs: fold.cumulative_outputs as u64,
+                cumulative_archival_bytes: fold.cumulative_archival_bytes,
+                closed_shards: shards,
                 burden_fiat_stall: burden_cost_fiat_per_year(
                     shards,
                     year_f,
@@ -138,12 +182,12 @@ pub fn burden_trajectory(params: &SimParams, config: &ScenarioConfig) -> BurdenT
         }
     }
 
-    let final_frozen_shards = years.last().map_or(0, |y| y.frozen_shards);
+    let final_closed_shards = years.last().map_or(0, |y| y.closed_shards);
     BurdenTrajectory {
         scenario: config.name.clone(),
         description: config.description.clone(),
         sim_years: config.sim_years,
-        final_frozen_shards,
+        final_closed_shards,
         years,
     }
 }
@@ -159,8 +203,11 @@ pub fn burden_trajectory(params: &SimParams, config: &ScenarioConfig) -> BurdenT
 #[derive(Debug, Clone, Serialize)]
 pub struct A1YearAgg {
     pub year: u64,
-    /// `frozen_segment_count` at year end (the D2 operand `n`).
+    /// Closed shards at year end (the D2 operand `n`).
     pub n: u64,
+    /// Cumulative outputs (leaves) at year end — the curve-tree depth any
+    /// transaction priced in this year is proved at (A3's claim, A4's stuffer).
+    pub cumulative_outputs: u64,
     /// Staker emission leg accrued over the year, **atomic units** (integer —
     /// the DQ-2G algorithm zone; SKL/f64 conversion is deferred to the reported
     /// clearance ratio). Sum of the production `split_block_emission` staker leg.
@@ -194,7 +241,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
     let mut already_generated: u128 =
         (config.initial_emitted_fraction * params.emission_curve_asymptote as f64) as u128;
     let mut total_burned: u128 = 0;
-    let mut cumulative_outputs: f64 = 0.0;
+    let mut fold = HonestFold::default();
     // Integer atomic accumulators (DQ-2G: the budget quantities never touch f64).
     let mut year_emission_atomic: u128 = 0;
     let mut year_burn_atomic: u128 = 0;
@@ -204,7 +251,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         let abs_height = block + config.genesis_height_offset;
         let ag = already_generated.min(u128::from(u64::MAX)) as u64;
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
-        cumulative_outputs += tx_volume as f64 * OUTPUTS_PER_TX_NORMAL;
+        fold.add_block(tx_volume);
 
         let effective =
             effective_emission(ag, TxVolume::per_block(tx_volume), &economic).unwrap_or(0);
@@ -248,7 +295,8 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
             let year = (block + 1) / params.blocks_per_year;
             aggs.push(A1YearAgg {
                 year,
-                n: frozen_shards(cumulative_outputs as u64),
+                n: fold.closed_shards(),
+                cumulative_outputs: fold.cumulative_outputs as u64,
                 emission_leg_atomic: year_emission_atomic.min(u128::from(u64::MAX)) as u64,
                 whole_burn_atomic: year_burn_atomic.min(u128::from(u64::MAX)) as u64,
             });
@@ -318,6 +366,14 @@ pub struct A1CandidateResult {
     /// rate (`≥ 1` clears). Parallel to [`OPP_COST_RATE_BAND`]; the last member
     /// (10%) is the binding case.
     pub min_ratio_by_rate: Vec<f64>,
+    /// The replica count the budget would sustain at each rate — the
+    /// un-binarised form of the ratio. Both burden terms are linear in
+    /// [`REPLICAS_PER_SHARD`] (`locked_bond_atomic` and the storage term), so
+    /// `ratio(R) = ratio(R_0) · R_0 / R` exactly and this is
+    /// `REPLICAS_PER_SHARD · min_ratio`. `R = 6` is a leaf-era replication
+    /// constant carried as an input; the ceremony reads "clears at R = 2"
+    /// here rather than a binary fail at that constant.
+    pub replicas_sustained_by_rate: Vec<f64>,
 }
 
 /// A1 clearance for one scenario.
@@ -337,9 +393,13 @@ fn a1_candidate_result(
     // Mid price ($0.10) for the minor storage term; the binding bond-opp-cost
     // term is price-independent, so this choice barely moves the verdict (F-G).
     let mid_price = SKL_FIAT_PRICE_BAND[1];
-    let min_ratio_by_rate = OPP_COST_RATE_BAND
+    let min_ratio_by_rate: Vec<f64> = OPP_COST_RATE_BAND
         .iter()
         .map(|&rate| a1_min_clearance_ratio(aggs, curve, rate, mid_price, KryderRate::Stall))
+        .collect();
+    let replicas_sustained_by_rate = min_ratio_by_rate
+        .iter()
+        .map(|r| r * REPLICAS_PER_SHARD as f64)
         .collect();
     A1CandidateResult {
         asymptote_pct: if is_flat {
@@ -353,6 +413,7 @@ fn a1_candidate_result(
             Some(curve.knee_shards)
         },
         min_ratio_by_rate,
+        replicas_sustained_by_rate,
     }
 }
 
@@ -369,14 +430,23 @@ fn a1_clearance_report(
         "\nA1 — burden clearance (§12.2, F-G): min budget / (bond-opp-cost + storage) ratio.\n\
          budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor 0.75 x R{R} x n x rate.\n\
          >=1.0 keeps the staker whole every sustained year. Columns = opp-cost rate {RATES:?} (10% binding).\n\
-         Storage is a minor add-on (F-G: ~100x smaller); the binding term is PRICE-INDEPENDENT (SKL vs SKL).",
+         Storage is a minor add-on (F-G: ~100x smaller); the binding term is PRICE-INDEPENDENT (SKL vs SKL).\n\
+         Knee band {BAND:?} closed shards; the shipped middle is {KNEE_TB:.2} TB of archival at W = {W} B/shard.",
         R = REPLICAS_PER_SHARD,
         RATES = OPP_COST_RATE_BAND,
+        BAND = KNEE_BAND,
+        KNEE_TB = KNEE_ARCHIVAL_LEN_BYTES as f64 / 1e12,
+        W = shekyl_types::SHARD_LENGTH.to_raw(),
     )?;
     writeln!(
         out,
-        "{:<20} {:>12}   {:>24}   {:>24}",
-        "scenario", "best-cand", "flat-25 ratio @rate", "best-cand ratio @rate"
+        "{:<20} {:>12}   {:>24}   {:>24}   {:>17}",
+        "scenario", "best-cand", "flat-25 ratio @rate", "best-cand ratio @rate", "R sustained @10%"
+    )?;
+    writeln!(
+        out,
+        "{:<20} {:>12}   {:>24}   {:>24}   {:>8} {:>8}",
+        "", "", "", "", "flat", "best"
     )?;
 
     let mut results = Vec::new();
@@ -403,7 +473,7 @@ fn a1_clearance_report(
             .unwrap_or_else(|| flat25.clone());
         writeln!(
             out,
-            "{:<20} {:>12}   {:>7.2} {:>7.2} {:>7.2}   {:>7.2} {:>7.2} {:>7.2}",
+            "{:<20} {:>12}   {:>7.2} {:>7.2} {:>7.2}   {:>7.2} {:>7.2} {:>7.2}   {:>8.2} {:>8.2}",
             trunc(&config.name, 20),
             best.asymptote_pct
                 .map(|a| format!("{a:.0}%/{}", best.knee_shards.unwrap_or(0)))
@@ -414,6 +484,8 @@ fn a1_clearance_report(
             best.min_ratio_by_rate[0],
             best.min_ratio_by_rate[1],
             best.min_ratio_by_rate[2],
+            flat25.replicas_sustained_by_rate[binding],
+            best.replicas_sustained_by_rate[binding],
         )?;
 
         results.push(A1ScenarioResult {
@@ -427,9 +499,68 @@ fn a1_clearance_report(
         out,
         "  -> rate cols each = {:?} (10% binding, last). The D2 case is where the\n\
          best candidate clears (>=1.0) at 10% while flat-25 does NOT — escalation\n\
-         earning its keep. A4/A5 then drop any winner that fails W9/W10.",
-        OPP_COST_RATE_BAND
+         earning its keep. A4/A5 then drop any winner that fails W9/W10.\n\
+         'R sustained' = R{R} x ratio: the replica count the budget would carry at\n\
+         10% (both burden terms are linear in R), so a fail reads as a number.\n\
+         The 10%/yr binding rate is EXOGENOUS: SKL bonded for decades in a settled\n\
+         chain at ~{tx} tx/block is where that assumption is strongest and least\n\
+         grounded; the band is kept, the choice of binding member is the owner's.",
+        OPP_COST_RATE_BAND,
+        R = REPLICAS_PER_SHARD,
+        tx = crate::scenarios::SCENARIO_9_TAIL_TX_PER_BLOCK,
     )?;
+    // Verdict, computed: which scenarios no candidate clears at the binding
+    // rate, and which are the D2 case proper (best clears, flat does not).
+    let binding = OPP_COST_RATE_BAND.len() - 1;
+    let uncleared: Vec<&str> = results
+        .iter()
+        .filter(|r| {
+            r.candidates
+                .iter()
+                .all(|c| c.min_ratio_by_rate[binding] < 1.0)
+        })
+        .map(|r| r.scenario.as_str())
+        .collect();
+    let d2_case: Vec<&str> = results
+        .iter()
+        .filter(|r| {
+            r.flat25.min_ratio_by_rate[binding] < 1.0
+                && r.candidates
+                    .iter()
+                    .any(|c| c.min_ratio_by_rate[binding] >= 1.0)
+        })
+        .map(|r| r.scenario.as_str())
+        .collect();
+    writeln!(
+        out,
+        "  -> VERDICT @10%: D2 case (best clears, flat does not): {d2}; cleared by NO\n\
+         candidate in the band: {un}. Byte-keyed, n counts ~10 KB of archival per\n\
+         transaction, not one 128-B leaf per output, so the §6.2 coupled bond per unit\n\
+         of traffic is ~40x the leaf-era figure — a scenario the leaf-era sweep cleared\n\
+         can fail here on the bond term alone, with no change to the escalation.",
+        d2 = if d2_case.is_empty() {
+            "none".to_string()
+        } else {
+            d2_case.join(", ")
+        },
+        un = if uncleared.is_empty() {
+            "none".to_string()
+        } else {
+            uncleared.join(", ")
+        },
+    )?;
+    if d2_case.is_empty() {
+        writeln!(
+            out,
+            "  -> NO DISCRIMINATING SCENARIO: across the whole set, every scenario either\n\
+             clears flat or clears for no candidate — the escalation does no work the\n\
+             flat share does not. The knee band was swept against trajectories that\n\
+             never land in a region where flat fails and best clears. Before the\n\
+             ceremony picks a knee, the next row SOLVES for that region (traffic x\n\
+             corpus) rather than adding a tenth point; if it is empty or razor-thin the\n\
+             lever is dead in this unit (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §12.13)."
+        )?;
+    }
     Ok(results)
 }
 
@@ -442,37 +573,36 @@ fn trunc(s: &str, n: usize) -> String {
 }
 
 /// Preview the §6.1 escalation candidate family (DQ-2D): the staker-share `%`
-/// each `(asymptote, knee)` candidate produces across a span of
-/// `frozen_segment_count`. Shows the shapes A1 will measure for clearance; the
-/// flat 25% status quo is the first column's `n = 0` value (all candidates floor
-/// there).
+/// each `(asymptote, knee)` candidate produces across a span of closed-shard
+/// counts. Shows the shapes A1 will measure for clearance; the flat 25% status
+/// quo is the first column's `n = 0` value (all candidates floor there).
 fn print_escalation_family(out: &mut impl fmt::Write) -> fmt::Result {
     writeln!(
         out,
-        "\nEscalation candidate family (§6.1 / DQ-2D) — staker share % vs n = frozen shards:\n\
+        "\nEscalation candidate family (§6.1 / DQ-2D) — staker share % vs n = closed shards:\n\
          (floor 25% at n=0, saturates to asymptote at the knee; all asymptotes < 100%)"
     )?;
-    write!(out, "{:>8} {:>7}", "asympt%", "knee")?;
+    write!(out, "{:>8} {:>9}", "asympt%", "knee")?;
     for n in ESCALATION_PREVIEW_N {
-        write!(out, "  n={n:>7}")?;
+        write!(out, "  n={n:>9}")?;
     }
     writeln!(out)?;
-    // Status-quo baseline: the frozen 25% share every candidate is measured
+    // Status-quo baseline: the flat 25% share every candidate is measured
     // against in A1 (does escalation clear where the flat share does not?).
-    write!(out, "{:>8} {:>7}", "FLAT", "-")?;
+    write!(out, "{:>8} {:>9}", "FLAT", "-")?;
     for n in ESCALATION_PREVIEW_N {
-        write!(out, "  {:>9.1}", flat_25().share_fraction(n) * 100.0)?;
+        write!(out, "  {:>11.1}", flat_25().share_fraction(n) * 100.0)?;
     }
     writeln!(out)?;
     for c in family() {
         write!(
             out,
-            "{:>8.0} {:>7}",
+            "{:>8.0} {:>9}",
             c.asymptote as f64 / 10_000.0,
             c.knee_shards
         )?;
         for n in ESCALATION_PREVIEW_N {
-            write!(out, "  {:>9.1}", c.share_fraction(n) * 100.0)?;
+            write!(out, "  {:>11.1}", c.share_fraction(n) * 100.0)?;
         }
         writeln!(out)?;
     }
@@ -487,25 +617,36 @@ fn print_escalation_family(out: &mut impl fmt::Write) -> fmt::Result {
     Ok(())
 }
 
-/// A4 (W9) **cost side** — the leaf-stuffer's cost to inflate `n` by one shard,
-/// across chain depth (§12.2, DQ-2C). The *revenue* side and the ROI < 1 gate
-/// land next (cp4b); this establishes the price of a stuffed shard, single-
-/// sourced through the production weight predictor (`calibration.rs`), and the
-/// Monero-replication row (the March-2024 anchor as shards' worth of leaves).
+/// A4 (W9) **cost side** — the stuffer's cost to close one more shard (`W`
+/// archival bytes), across chain depth (§12.2, DQ-2C). The *revenue* side and
+/// the ROI < 1 gate follow; this establishes the price of a stuffed shard,
+/// single-sourced through the production weight + archival-length predictors
+/// (`calibration.rs`), and the Monero-replication row (the March-2024 anchor
+/// as shards' worth of bytes).
 ///
-/// `n` is sampled as **frozen shards**; the curve-tree depth (hence FCMP proof
-/// cost) rides the total leaf count `n · SEGMENT_LEAF_COUNT`, so the cost RISES
-/// with chain size — cheapest early (the binding direction, §11.3).
+/// `n` is sampled as **closed shards**; the curve-tree depth (hence FCMP proof
+/// size) rides the honest chain's leaf count at `n`. Byte-keyed, the proof is
+/// archival good the stuffer is *buying*, so depth moves only the
+/// archival/weight ratio, and only by a few percent (measured 2026-10-01:
+/// one-shot +1.3 %, sustained −2.6 %, depth 1 → 6). The leaf era's "cheapest
+/// early" was a lever; here it is noise. The binding figure is the minimum
+/// over the sampled depths, which this table makes visible.
 fn print_stuffer_cost_curve(out: &mut impl fmt::Write) -> fmt::Result {
     let rep = rucknium_shards_equivalent();
+    let shape0 = stuffer_shape(tree_depth_for_leaves(1));
     writeln!(
         out,
-        "\nA4 (W9) leaf-stuffer cost — 1-in/{OUT}-out, min weight-fee @ {FPB} atomic/byte:\n\
+        "\nA4 (W9) stuffer cost — max-archival-bytes-per-fee shape ({SHAPE}, searched over every\n\
+         builder-legal shape), min weight-fee @ {FPB} atomic/byte, W = {W:.1} MB/shard:\n\
          Monero-replication anchor (DQ-2C): the March-2024 spam bought ~{GB:.2} GB / {DAYS} days\n\
-         for ~{XMR:.1} XMR — that output volume is only ~{REP} Shekyl shards' worth of leaves.\n\
-         Shape is max-leaves-per-fee geometry, NOT decoy poisoning (FCMP++ has no rings).",
-        OUT = crate::calibration::STUFFER_OUTPUTS_PER_TX,
+         for ~{XMR:.1} XMR — that byte volume is ~{REP} Shekyl shards' worth of archival good.\n\
+         Shape is max-archival-per-fee geometry (inputs carry the PQC auth + FCMP share the\n\
+         operand counts; outputs carry unprunable prefix it does not), NOT decoy poisoning\n\
+         (FCMP++ has no rings). 'sustained' prices the cheapest output-conserving\n\
+         producer/consumer cycle — what a campaign that must mint its own inputs pays.",
+        SHAPE = shape0.label(),
         FPB = crate::calibration::FEE_PER_BYTE_ATOMIC,
+        W = SHARD_BYTES / 1.0e6,
         GB = RUCKNIUM_SPAM_BYTES_GB,
         DAYS = RUCKNIUM_DURATION_DAYS,
         XMR = RUCKNIUM_SPAM_FEES_XMR,
@@ -513,26 +654,39 @@ fn print_stuffer_cost_curve(out: &mut impl fmt::Write) -> fmt::Result {
     )?;
     writeln!(
         out,
-        "{:<14} {:>10} {:>16} {:>18}",
-        "chain n(shards)", "tree_depth", "fee/tx (SKL)", "cost/shard (SKL)"
+        "{:<15} {:>5} {:>12} {:>14} {:>9} {:>18} {:>20}",
+        "chain n(shards)",
+        "depth",
+        "shape",
+        "fee/tx (SKL)",
+        "tx/shard",
+        "cost/shard (SKL)",
+        "sustained (SKL)"
     )?;
     for n_shards in ESCALATION_PREVIEW_N {
         // n=0 has no tree; sample the first shard so the depth/cost are defined.
         let n_shards = n_shards.max(1);
-        let chain_leaves = n_shards.saturating_mul(SEGMENT_LEAF_COUNT);
+        let chain_leaves = crate::burden::honest_leaves_at_closed_shards(n_shards);
         let depth = tree_depth_for_leaves(chain_leaves);
-        let fee_tx_skl = stuffer_tx_fee_atomic(depth) as f64 / COIN;
-        let cost_shard_skl = leaf_stuffer_cost_per_shard_atomic(chain_leaves) as f64 / COIN;
+        let shape = stuffer_shape(depth);
+        let fee_tx_skl = shape.tx_fee_atomic(depth) as f64 / COIN;
+        let txs = stuffer_txs_per_shard(depth);
+        let cost_shard_skl = stuffer_cost_per_shard_atomic(chain_leaves) as f64 / COIN;
+        let sustained_skl = sustained_stuffer_cost_per_shard_atomic(chain_leaves) as f64 / COIN;
         writeln!(
             out,
-            "{n_shards:<14} {depth:>10} {fee_tx_skl:>16.6} {cost_shard_skl:>18.4}",
+            "{n_shards:<15} {depth:>5} {:>12} {fee_tx_skl:>14.6} {txs:>9} {cost_shard_skl:>18.4} {sustained_skl:>20.4}",
+            shape.label(),
         )?;
     }
     writeln!(
         out,
-        "  -> cost/shard rises with chain depth (deeper tree = larger FCMP proof).\n\
-         The A4 ROI gate below weighs this against the escalation Delta-pool a\n\
-         stuffing staker captures: a survivor of A1 must ALSO price the stuffer out."
+        "  -> cost/shard is depth-FLAT to within a few percent (the FCMP proof grows with\n\
+         depth, but it is archival good the stuffer is buying, so only the archival/weight\n\
+         ratio moves): one-shot drifts UP ~1%, sustained DOWN ~3%. The leaf era's\n\
+         'cheapest early' is gone with its unit. The A4 ROI gate below weighs the one-shot\n\
+         (binding, attacker-favouring) cost against the escalation Delta-pool a stuffing\n\
+         staker captures: a survivor of A1 must ALSO price the stuffer out."
     )?;
 
     Ok(())
@@ -665,9 +819,14 @@ fn a4_decompose(
     let revenue_skl = (u128::from(revenue_atomic) * u128::from(horizon_years)) as f64 / COIN;
 
     // Cost: one-time stuffing weight-fees + the coupled bond opportunity cost.
-    let chain_leaves = n2.saturating_mul(SEGMENT_LEAF_COUNT);
-    let fee_skl =
-        (leaf_stuffer_cost_per_shard_atomic(chain_leaves) * u128::from(delta)) as f64 / COIN;
+    // The stuffer is priced against the tree the honest chain has at `n`,
+    // each transaction at the depth the tree has when it is built — the
+    // campaign's own outputs can carry it across a layer boundary, and the
+    // integrator prices the two sides at their own depths. One-shot cost —
+    // the binding figure — with the transaction count rounded once.
+    let fee_skl = stuffer_campaign(crate::burden::honest_leaves_at_closed_shards(n), delta)
+        .cost_atomic as f64
+        / COIN;
     let bond_skl = (u128::from(ARCHIVAL_BOND_FLOOR_ATOMIC) * u128::from(delta)) as f64 / COIN
         * A4_OPP_RATE
         * horizon_years as f64;
@@ -990,18 +1149,27 @@ fn a4_print_decomposition(out: &mut impl fmt::Write, rows: &[(String, A4Decomp)]
             d.roi_market_responds,
         )?;
     }
+    let (mult_lo, mult_hi) = rows
+        .iter()
+        .map(|(_, d)| d.fee_mult_to_close)
+        .filter(|m| m.is_finite())
+        .fold((f64::INFINITY, 0.0_f64), |(lo, hi), m| {
+            (lo.min(m), hi.max(m))
+        });
     writeln!(
         out,
         "  -> Read: prem≈1.0 at the realistic end ⇒ NO concentration premium — the attack is\n\
          pure fee-flow-volume leverage (cheap stuffing unlocks a large Δpool; the attacker\n\
          takes only their proportional slice, but the pool dwarfs the stuffing cost). The\n\
-         fee-RATE cancels in fee×→1, so its 2.8→17.8x spread is volume/share-slope variation:\n\
-         one per-output floor sized for late-tail over-charges benign multi-output txs ~6x —\n\
-         the remedy's real cost. Denominate it in WEIGHT (a virtual-weight surcharge rides\n\
-         the fee market over time; an atomic constant rots) — but weight alone can't erase\n\
-         the cross-regime spread. The D3 dodge is load-bearing at the CAPPED-honest end\n\
-         (prem>1, ROI ~2x higher); its undodgeable-cap fix prices concentration in bonded\n\
-         capital THERE. So the pair: fee-floor for the fee-flow regime, D3 for the capped one."
+         fee-RATE cancels in fee×→1, so its {mult_lo:.1}→{mult_hi:.1}x spread is volume/share-slope\n\
+         variation: one fee-floor sized for the worst regime over-charges benign traffic\n\
+         ~{OVER:.0}x in the mildest — the remedy's real cost. Denominate it in WEIGHT (a\n\
+         virtual-weight surcharge rides the fee market over time; an atomic constant rots)\n\
+         — but weight alone can't erase the cross-regime spread. The D3 dodge is load-bearing\n\
+         at the CAPPED-honest end (prem>1, ROI several x higher); its undodgeable-cap fix\n\
+         prices concentration in bonded capital THERE. So the pair: fee-floor for the\n\
+         fee-flow regime, D3 for the capped one.",
+        OVER = mult_hi / mult_lo,
     )?;
 
     Ok(())
@@ -1021,28 +1189,25 @@ const A3_ARCHIVER_BAND: [u64; 3] = [2_000, 20_000, 60_000];
 /// §4). The claim cost is one transaction at the fee floor, priced through the
 /// production weight predictor (`calibration`), not a guessed constant.
 fn a3_stranding_report(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result {
-    // One claim tx (1-in/2-out) at the chain's depth and the fee floor.
-    let claim_cost_atomic = {
-        let n_in = shekyl_tx_weight::InputCount::clamped(1);
-        let n_out = shekyl_tx_weight::OutputCount::clamped(2);
-        let depth = tree_depth_for_leaves(SEGMENT_LEAF_COUNT * 1_000);
-        let mut fee = 0u64;
-        for _ in 0..2 {
-            fee = shekyl_tx_weight::predict_weight(n_in, n_out, depth, fee) as u64
-                * crate::calibration::FEE_PER_BYTE_ATOMIC;
-        }
-        fee
+    // One claim tx (the normal 1-in/2-out shape) at the fee floor, priced at
+    // the curve-tree depth of the year it is claimed in (the proof grows with
+    // the chain, so the claim gets dearer late).
+    let claim_cost_atomic = |chain_leaves: u64| -> u64 {
+        let (n_in, n_out) = crate::burden::normal_tx_shape();
+        crate::calibration::Shape { n_in, n_out }.tx_fee_atomic(tree_depth_for_leaves(chain_leaves))
     };
     writeln!(
         out,
         "\nA3 — budget stranding (§12.2): fraction of budget(E) that NEVER MINTS.\n\
          budget is a minting ENTITLEMENT — unclaimed past MAX_CLAIM_AGE_W=26 is \"supply\n\
          never created\" (ARCHIVAL_BUDGET_SCHEDULE §4). A class claims iff its reward\n\
-         covers one claim tx ({CC:.6} SKL @ the {FPB} atomic/byte floor, via the production\n\
-         predictor). PRE-D1 vs POST-D1 scoring = the §1 Stage-0 coupling claim, measured:\n\
-         pre-D1 zeroes bulk holders past the co-holder cliff (r_market > g_milli ≈ 1000),\n\
-         and a structural-zero cohort's slice never mints.",
-        CC = claim_cost_atomic as f64 / COIN,
+         covers one claim tx ({CC0:.6}..{CC1:.6} SKL early..late @ the {FPB} atomic/byte\n\
+         floor, via the production predictor at each year's tree depth). PRE-D1 vs\n\
+         POST-D1 scoring = the §1 Stage-0 coupling claim, measured: pre-D1 zeroes bulk\n\
+         holders past the co-holder cliff (r_market > g_milli ≈ 1000), and a\n\
+         structural-zero cohort's slice never mints.",
+        CC0 = claim_cost_atomic(1) as f64 / COIN,
+        CC1 = claim_cost_atomic(deep_chain_leaves()) as f64 / COIN,
         FPB = crate::calibration::FEE_PER_BYTE_ATOMIC,
     )?;
     writeln!(
@@ -1076,12 +1241,13 @@ fn a3_stranding_report(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Re
             .emission_leg_atomic
             .saturating_add(mul_scale(a.whole_burn_atomic, flat_25().share(a.n)));
         let budget_per_epoch = (budget_atomic as f64 / epy) as u64;
+        let claim_cost = claim_cost_atomic(a.cumulative_outputs);
         for &archivers in &A3_ARCHIVER_BAND {
             let pre = crate::stranding::measure(
                 budget_per_epoch,
                 a.n,
                 archivers,
-                claim_cost_atomic,
+                claim_cost,
                 crate::stranding::RATIONAL_CLAIM_CADENCE_EPOCHS,
                 crate::stranding::Scoring::PreD1,
             );
@@ -1089,7 +1255,7 @@ fn a3_stranding_report(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Re
                 budget_per_epoch,
                 a.n,
                 archivers,
-                claim_cost_atomic,
+                claim_cost,
                 crate::stranding::RATIONAL_CLAIM_CADENCE_EPOCHS,
                 crate::stranding::Scoring::PostD1,
             );
@@ -1254,17 +1420,29 @@ fn statistical_median(sorted: &[f64]) -> f64 {
     }
 }
 
+/// A trajectory's `n` at its first, middle and last sampled year — the
+/// early / mid / late corpus the OQ-2 admission probe is run against.
+#[must_use]
+fn oq2_corpus_samples(traj: &BurdenTrajectory) -> [u64; 3] {
+    let n_at = |i: usize| traj.years.get(i).map_or(0, |y| y.closed_shards);
+    let last = traj.years.len().saturating_sub(1);
+    [n_at(0), n_at(last / 2), n_at(last)]
+}
+
 /// `--stage2` entry: the burden trajectory across the scenario set. JSON to
 /// stdout, a human-readable summary to stderr.
 pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result {
     writeln!(
         out,
         "Stage-2 archival burden trajectory (§12.1 checkpoint 1)\n\
-         outputs = tx_volume x {OUTPUTS_PER_TX_NORMAL:.0} (1in/2out normal traffic); \
-         n = frozen_segment_count(cumulative outputs)\n\
-         burden = n x {SHARD:.2} MB x storage($/B/yr, Kryder); \
+         outputs = tx_volume x {OUTPUTS_PER_TX_NORMAL:.0} (1in/2out normal traffic, drives tree depth); \
+         archival bytes = Σ tx_volume x archival_len(1in/2out @ depth) ({AB0}..{AB1} B/tx shallow..deep);\n\
+         n = shard_of(cumulative archival bytes), W = {SHARD:.1} MB/shard (SHT-Q2)\n\
+         burden = n x W x storage($/B/yr, Kryder); \
          base = {BASE:.0e} $/B/yr; funding + clearance (A1) land next\n",
-        SHARD = crate::burden::SHARD_BYTES / 1.0e6,
+        AB0 = normal_tx_archival_bytes(1),
+        AB1 = normal_tx_archival_bytes(deep_chain_leaves()),
+        SHARD = SHARD_BYTES / 1.0e6,
         BASE = BASE_STORAGE_FIAT_PER_BYTE_YEAR,
     )?;
     writeln!(out, "Kryder band swept (DQ-2B):")?;
@@ -1274,8 +1452,8 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     writeln!(out)?;
     writeln!(
         out,
-        "{:<22} {:>6} {:>14} {:>10} {:>16}",
-        "scenario", "years", "final_outputs", "final_n", "final_burden$/yr@0%"
+        "{:<22} {:>6} {:>14} {:>14} {:>10} {:>16}",
+        "scenario", "years", "final_outputs", "final_GB", "final_n", "final_burden$/yr@0%"
     )?;
 
     let mut trajectories: Vec<BurdenTrajectory> = Vec::new();
@@ -1283,10 +1461,19 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
         let traj = burden_trajectory(params, &config);
         let final_burden = traj.years.last().map_or(0.0, |y| y.burden_fiat_stall);
         let final_outputs = traj.years.last().map_or(0, |y| y.cumulative_outputs);
+        let final_gb = traj
+            .years
+            .last()
+            .map_or(0.0, |y| y.cumulative_archival_bytes as f64 / 1.0e9);
         writeln!(
             out,
-            "{:<22} {:>6} {:>14} {:>10} {:>16.2}",
-            traj.scenario, traj.sim_years, final_outputs, traj.final_frozen_shards, final_burden,
+            "{:<22} {:>6} {:>14} {:>14.2} {:>10} {:>16.2}",
+            traj.scenario,
+            traj.sim_years,
+            final_outputs,
+            final_gb,
+            traj.final_closed_shards,
+            final_burden,
         )?;
         trajectories.push(traj);
     }
@@ -1304,7 +1491,11 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     let a1 = a1_clearance_report(out, params)?;
     a3_stranding_report(out, params)?;
     crate::distribution::oq1_probe_report(out)?;
-    crate::admission::oq2_report(out, &A3_ARCHIVER_BAND, &[1_011, 6_066, 10_110])?;
+    // OQ-2's corpus samples are the baseline trajectory's early / mid / late
+    // `n` — read off the fold, not literals, so a re-keyed unit cannot leave a
+    // stale band behind.
+    let oq2_n = oq2_corpus_samples(&trajectories[0]);
+    crate::admission::oq2_report(out, &A3_ARCHIVER_BAND, &oq2_n)?;
     oq4_deletion_recheck(out, params)?;
     // A2 (W6) — now unblocked by the D3 closure. Budget from the A1-conditional
     // envelope: the strongest surviving candidate's pool at the scenario's n.
@@ -1413,16 +1604,62 @@ mod tests {
             let mut prev = 0u64;
             for row in &traj.years {
                 assert!(
-                    row.frozen_shards >= prev,
+                    row.closed_shards >= prev,
                     "shards must be monotone in {}: {} < {}",
                     traj.scenario,
-                    row.frozen_shards,
+                    row.closed_shards,
                     prev
                 );
-                prev = row.frozen_shards;
+                // The row's `n` IS the partition of the row's bytes — no second
+                // derivation can drift between the two columns.
+                assert_eq!(
+                    row.closed_shards,
+                    closed_shards(row.cumulative_archival_bytes)
+                );
+                prev = row.closed_shards;
             }
-            assert_eq!(traj.final_frozen_shards, prev);
+            assert_eq!(traj.final_closed_shards, prev);
         }
+    }
+
+    #[test]
+    fn knee_band_brackets_the_sweep_trajectories() {
+        // KNEE_BAND is re-derived in the byte-keyed unit from the sweep itself
+        // (escalation.rs): low ≈ the baseline trajectory's n at ~10 y, high ≈
+        // the sustained-growth trajectory's final n, middle = their geometric
+        // mean. A trajectory change that moved either anchor by more than a
+        // factor of two fails here, so the band cannot silently go stale.
+        let params = SimParams::default();
+        let scenarios = all_scenarios(&params);
+        let baseline = burden_trajectory(&params, &scenarios[0]);
+        let at_10y = baseline
+            .years
+            .iter()
+            .find(|y| y.year == 10)
+            .map_or(baseline.final_closed_shards, |y| y.closed_shards);
+        let max_final = scenarios
+            .iter()
+            .map(|c| burden_trajectory(&params, c).final_closed_shards)
+            .max()
+            .unwrap();
+        let within_2x = |band: u64, anchor: u64| band * 2 >= anchor && band <= anchor * 2;
+        assert!(
+            within_2x(KNEE_BAND[0], at_10y),
+            "low {} vs baseline@10y {at_10y}",
+            KNEE_BAND[0]
+        );
+        assert!(
+            within_2x(KNEE_BAND[2], max_final),
+            "high {} vs max final {max_final}",
+            KNEE_BAND[2]
+        );
+        let geo = ((KNEE_BAND[0] as f64) * (KNEE_BAND[2] as f64)).sqrt() as u64;
+        assert!(
+            within_2x(KNEE_BAND[1], geo),
+            "middle {} vs geometric mean {geo}",
+            KNEE_BAND[1]
+        );
+        assert!(KNEE_BAND[0] < KNEE_BAND[1] && KNEE_BAND[1] < KNEE_BAND[2]);
     }
 
     #[test]
