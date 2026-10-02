@@ -791,14 +791,122 @@ resume from a store whose frozen segments were pruned is refused outright
 one. Every drained leaf since genesis is in memory, and every spend rebuilds
 every layer over all of them.
 
-At 760 320 leaves/day and an illustrative ~102 µs/leaf — one off-rig probe,
-unattested (§11.5):
+**Measured 2026-10-02**
+(`docs/benchmarks/wss-q1b/assemble_edge_20261002T052942Z.json`). The per-leaf
+cost is **flat at 220–221 µs across every arm**, which is the signature of a
+pure linear term:
 
-| assembly population | `n` | cost per spend |
-| --- | --- | --- |
-| replay window, ~1 day of chain | 765 600 | ~78 s |
-| `min_leaves_for_depth(6)`, ~23 days | 17 778 529 | ~30 min |
-| one year of chain | 277 516 800 | ~7.9 h |
+| arm | `n` | depth | `k` | s/call | µs/leaf |
+| --- | --- | --- | --- | --- | --- |
+| `rung_below` | 467 856 | 4 | 2 | 103.43 | 221.1 |
+| `rung_floor` | 467 857 | 5 | 2 | 102.91 | 220.0 |
+| `rung_top` | 765 600 | 5 | 2 | 169.36 | 221.2 |
+| `input_cap` | 765 600 | 5 | 8 | 168.86 | 220.6 |
+
+**The cost is `n`, and almost nothing else.** Three readings say so:
+
+- **Linear in `n`.** The population ratio across the same-rung pair is
+  `1.6364`; the cost ratio is `1.6457` — **0.57 % from perfect linearity**.
+  The criterion read `SameRungSlope` at 64.6 % against its 10 % bound, which
+  is the expected pre-capture reading and now a measured one.
+- **Depth costs nothing measurable.** The cross-rung pair differs by **one
+  leaf** and one whole layer, and by `0.995×` in cost. Isolating depth from
+  population was the point of choosing a rung floor and its predecessor, and
+  the layer term does not survive it.
+- **`k` is lost in `n`.** Raising the owned count from 2 to `MAX_INPUTS` at a
+  fixed population costs **−0.30 %** — cheaper, i.e. inside the noise. That is
+  `#842`'s `n + k` measured for the first time, and it says `k` is not a term
+  at this scale.
+
+### What the control covers, and what it does not
+
+**This is an observational before-figure, not an attested one.** The record's
+`rig.attested` reads `["not requested"]`, and the word *attested* in this
+project means the rule-76 rig pins, which this run neither requested nor
+carries. The claim was overstated when this section first landed and is
+corrected here.
+
+What the run does establish:
+
+- **every series converged** — each arm was internally stable across its own
+  timing window, and `stopped_because` says `converged` for all four;
+- **the board was stable at the close** — `rung_top` was re-timed back to back
+  on the same client, diverging **0.7 %** against a 5 % bound.
+
+What it does **not** establish is the comparability of samples taken hours
+apart. The arms are timed in sequence across 3 h 38 m, and the control brackets
+only the last of them. So the same-rung, cross-rung and `k` readings rest on
+*uncontrolled* between-arm stability. The design makes that deliberate rather
+than accidental: a control spanning the arms would mean holding `rung_top`'s
+client resident while `rung_floor` is timed, which is the residency bias §11.5
+records two discarded runs for.
+
+There is a bracket that escapes that trade, and **increment 6 should carry it**:
+re-time a *small* fixed arm — the depth-4 rung floor is 25 993 leaves, a few
+seconds a call — between every measured arm. Same `assemble_paths` work, so one
+sensitivity profile; a working set around 3 % of the top arm's, so the
+residency it reintroduces is not the residency that biased those runs. That
+brackets each compared sample for minutes, not hours. It is what would turn a
+reading like this one into a controlled one, and it is the control a *graded*
+capture figure will need.
+
+Corroboration, flagged as such: per-leaf cost agrees to **0.5 %** across four
+arms measured hours apart, which a materially drifting board would be unlikely
+to produce. That is **not** an independent control — per-leaf constancy is the
+proposition under test, so a drifting board and a non-linear cost could in
+principle compensate. It is weak evidence pointing the same way, not a
+substitute for the bracket.
+
+### Whose seconds these are
+
+**221 µs/leaf is the staker-class x86 host's figure, and nothing else's.**
+The host *role* is named beside every number below — rule 37 keeps the host
+itself in `shekyl-dev` — because this project uses *floor* for the Pi (rule
+76), and `min_leaves_for_depth(6)` is also called a rung **floor**. An
+unqualified "floor" beside a duration invites a reader to merge a staker
+measurement with a floor-device one. They are different numbers on different
+hardware.
+
+Projecting each per-leaf rate at 760 320 leaves/day:
+
+| assembly population | `n` | staker-class x86 (observed, 221 µs/leaf) | floor device, projected (509 µs/leaf) |
+| --- | --- | --- | --- |
+| replay window, ~1 day of chain | 765 600 | **169 s** (measured) | ~6.5 min |
+| `min_leaves_for_depth(6)`, ~23 days | 17 778 529 | ~65 min | ~2.5 h |
+| one year of chain | 277 516 800 | ~17 h | ~39 h |
+
+The staker column is the **observed before-figure**. The floor-device column is
+a **projection and only that**: 509 µs/leaf is `537.59 ms` ÷ `1 056`
+leaves/block, the per-block replay rate §9 already carries, and no Pi has run
+this instrument. It is here to size the gap, not to grade anything.
+
+**Increment 6 does not owe a Pi measurement of today's cost.** Rule 76 pins a
+*graded* figure to the floor device, and what increment 6 grades is capture —
+the form that replaces this one. Measuring O(chain) on the Pi would spend half
+a day of a contended host to price code that is being deleted.
+
+These numbers are **worse** than the ~102 µs/leaf this section previously
+carried. That came from a busy dev box with no control at all; this host is
+slower, and is a **virtualised** x86 guest (`QEMU Virtual
+CPU`), so the constant stays machine-specific. What travels between hosts is
+the **shape** — flat per-leaf cost, therefore linear in chain length — and the
+mission argument rests on the shape, not the constant. A 2.3× spread between
+two x86 hosts changes no conclusion that "linear fails at some chain age"
+already supports.
+
+**Provenance caveat on this record.** Its `environment.git_revision` reads
+`1ab4664cb`, one commit behind the binary that produced it. The binary was
+cross-built from the tree that became `11a0c8451` while that change was still
+uncommitted, and Cargo reused the cached build-script output — a `.rs` edit is
+not one of the files `build.rs` watches — so the stamp is both stale *and*
+missing its `-dirty` suffix. `build.rs` anticipates "a clean revision behind a
+dirty prover" for *dependency* edits and names runtime capture as the
+mitigation, but `AssembleEdgeRecord` carries only the build-time stamp. The
+delta `1ab4664cb..11a0c8451` is confined to `bin/assemble_edge.rs`'s
+plan-resolution wiring and does not touch the measured path, and the deployed
+binary was confirmed to carry that change behaviourally (both modes refused an
+unrepresentable `--rung`). The measurement stands; the stamp is wrong, and
+`FOLLOWUPS.md` carries the remedy.
 
 **This is a mission-hierarchy failure, not a budget miss.** Commitment 3 — the
 system must outlast the team — is the binding one: a cost linear in chain
@@ -860,10 +968,19 @@ widen the bound or derive from `chunk_width`. Named blocker.
   larger working set and shrink the same-rung spread toward `Flat`. The first
   shape run **diverged 69.1 % against a 5 % bound and was discarded**, with
   the arms showing why it had to be (one *more* leaf came out 38 % faster;
-  `k = 8` came out cheaper than `k = 2`). The dev box is shared (rule 38) and
-  rule 76 pins the figure to the floor device, so a figure-producing run is a
-  claimed-host activity. The ~102 µs/leaf above is a projection from a
-  clean-but-unattested probe and is labelled as one.
+  `k = 8` came out cheaper than `k = 2`). The dev box is shared (rule 38), so a
+  figure-producing run is a claimed-host activity; §11.2's figure came from a
+  claimed, idle staker-class x86 host. **It is an *observational*
+  before-figure** — `rig.attested` reads `not requested`, and the control
+  brackets only the last arm, so between-arm comparability is uncontrolled
+  (§11.2 states the scope and the cheap bracket that would close it). It is
+  not a graded figure either: grading means a budget on the rule-76 rig, and
+  there is no budget for this form because capture replaces it — what
+  increment 6 grades is capture, on the floor device. Two further runs were discarded before the kept one, both for the
+  same cause: the **harness** differed between two samples that are only
+  comparable if it does not, first by holding every arm's rig at once and then
+  by timing `rung_top` alone against `rung_floor` beside it. Neither is
+  detectable by the board control, because the control is part of what moved.
 - **The integrity gate's verdict.** The rig takes its reference root from the
   client, so `assemble_paths`'s root gate is green by construction; the rig
   measures what it costs, never whether it is right. Root agreement is graded
