@@ -21,7 +21,6 @@ use crate::test_support::h;
 use crate::test_support::{block, key_image, spend, wire, Family};
 use crate::trace::{
     Facts, Trace, TraceFault, TraceWriter, CHECKPOINT_LEN, FACTS_LEN, TRACE_MAGIC, TRACE_VERSION,
-    TRACE_VERSION_WITHOUT_SNAPSHOT,
 };
 #[cfg(feature = "fetch")]
 use shekyl_types::BlockHash;
@@ -97,7 +96,6 @@ fn the_trace_round_trips_through_both_doors() {
     );
 
     let trace = Trace::read(Cursor::new(&bytes)).expect("read");
-    assert_eq!(trace.version(), TRACE_VERSION);
     assert_eq!(trace.covered(), Some((h(0), h(2))));
     assert_eq!(
         trace.checkpoint().map(|(hh, _)| hh),
@@ -225,8 +223,8 @@ fn the_archival_snapshot_is_the_checkpoints_other_encoding_on_both_sides() {
     // refuses a snapshot with nothing to pair with, a second one, and a
     // `finish` with the checkpoint and not its snapshot; the reader refuses
     // the same shapes in the bytes, plus a snapshot whose height is not the
-    // checkpoint's, and a `0x04` record under the version that never
-    // carried one. A trace with no checkpoint carries neither and reads.
+    // checkpoint's. A trace with no checkpoint carries neither and reads;
+    // the `0x00` layout, which carried neither record, is not read at all.
     let empty = ArchivalSnapshot::empty();
     let state = digest_v0(&[], &[], CurveTreeRoot::EMPTY.as_bytes());
 
@@ -280,20 +278,15 @@ fn the_archival_snapshot_is_the_checkpoints_other_encoding_on_both_sides() {
         Trace::read(Cursor::new(&stripped)).expect_err("missing"),
         TraceFault::MissingSnapshot { height: 0 }
     ));
-    // Reader: a `0x04` record under the version that never carried one.
-    let mut old = good.clone();
-    old[8] = TRACE_VERSION_WITHOUT_SNAPSHOT;
-    assert!(matches!(
-        Trace::read(Cursor::new(&old)).expect_err("v0 with a snapshot"),
-        TraceFault::UnexpectedSnapshot
-    ));
-    // …and a `0x00` trace without one reads, and says it was not compared.
-    let mut old_stripped = stripped.clone();
-    old_stripped[8] = TRACE_VERSION_WITHOUT_SNAPSHOT;
-    let trace = Trace::read(Cursor::new(&old_stripped)).expect("a v0 trace");
-    assert_eq!(trace.version(), TRACE_VERSION_WITHOUT_SNAPSHOT);
-    assert!(trace.checkpoint().is_some());
-    assert!(trace.archival_snapshot().is_none());
+    // Reader: the `0x00` layout is no longer read (DRS-E4 commit 7), with
+    // or without the record — the version byte alone refuses the file.
+    for mut old in [good.clone(), stripped.clone()] {
+        old[8] = 0x00;
+        assert!(matches!(
+            Trace::read(Cursor::new(&old)).expect_err("a v0 trace"),
+            TraceFault::UnsupportedVersion { found: 0x00 }
+        ));
+    }
     // Reader: the snapshot's height is not the checkpoint's.
     let mut not_tip = good.clone();
     not_tip[snapshot_at + 1..snapshot_at + 9].copy_from_slice(&7u64.to_le_bytes());
@@ -400,12 +393,12 @@ mod fetch {
     use shekyl_rpc_types::{
         BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, RpcStatus,
     };
-    use shekyl_types::BlockHeight;
+    use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
     use super::three_blocks;
     use crate::corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter};
     use crate::fetch::{fetch_corpus, FetchFault, ROUTE};
-    use crate::source::Source;
+    use crate::source::{IngestEvent, Injection, Sequenced, ServeCredit, Source};
 
     /// One recorded request: the route and the heights asked.
     type Asked = (String, Vec<u64>);
@@ -474,7 +467,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let written = fetch_corpus(&rpc, 0..3, batch(2), &mut w)
+        let written = fetch_corpus(&rpc, 0..3, batch(2), &[], &mut w)
             .await
             .expect("fetched");
         assert_eq!(written, 3);
@@ -506,7 +499,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
             .await
             .expect_err("pruned");
         match err {
@@ -533,7 +526,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
             .await
             .expect_err("refused");
         assert!(
@@ -555,7 +548,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
             .await
             .expect_err("short");
         assert!(
@@ -578,10 +571,86 @@ mod fetch {
         )
         .expect("header");
         assert!(matches!(
-            fetch_corpus(&rpc, 0..1, batch(1), &mut w)
+            fetch_corpus(&rpc, 0..1, batch(1), &[], &mut w)
                 .await
                 .expect_err("transport"),
             FetchFault::Rpc(RpcError::ConnectionError(_))
         ));
+    }
+
+    fn receipt(at: u64, tag: u8) -> Injection {
+        Injection {
+            at: BlockHeight::from_raw(at),
+            credit: ServeCredit {
+                persona: PCanonicalId::from_bytes([tag; 32]),
+                shard: ShardId::from_raw(u64::from(tag) + 100),
+                epoch: SettlementEpoch::from_raw(u64::from(tag)),
+            },
+        }
+    }
+
+    /// The injector's receipts are placed right after the block at their
+    /// height — across a batch boundary, two at one height in the order
+    /// given — and the corpus reads the `Inject` back where the daemon
+    /// wrote it. A receipt the range does not reach is refused before the
+    /// first request.
+    #[tokio::test]
+    async fn injections_land_beside_their_block_and_a_stray_one_is_refused_first() {
+        let blocks = three_blocks();
+        let rpc = Scripted::new(&[reply(&blocks[..2]), reply(&blocks[2..])]);
+        let mut w = CorpusWriter::create(
+            std::io::Cursor::new(Vec::new()),
+            CorpusNet::Fakechain,
+            BlockHeight::from_raw(0),
+        )
+        .expect("header");
+        // Out of height order on purpose: placement is by `at`, not by
+        // position in the flag list.
+        let receipts = [receipt(2, 0x22), receipt(1, 0x11), receipt(2, 0x33)];
+        let written = fetch_corpus(&rpc, 0..3, batch(2), &receipts, &mut w)
+            .await
+            .expect("fetched");
+        assert_eq!(written, 3, "blocks, not records");
+        let bytes = w.finish().expect("count").into_inner();
+        let mut r = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+        assert_eq!(r.declared(), 6);
+        let mut shape = Vec::new();
+        while let Some(Sequenced { event, .. }) = r.next().expect("record") {
+            shape.push(match event {
+                IngestEvent::Extend(_) => None,
+                IngestEvent::Inject(credit) => Some(credit),
+                other => panic!("{other:?}"),
+            });
+        }
+        assert_eq!(
+            shape,
+            vec![
+                None,
+                None,
+                Some(receipts[1].credit),
+                None,
+                Some(receipts[0].credit),
+                Some(receipts[2].credit),
+            ]
+        );
+
+        let rpc = Scripted::new(&[reply(&blocks)]);
+        let mut w = CorpusWriter::create(
+            std::io::Cursor::new(Vec::new()),
+            CorpusNet::Fakechain,
+            BlockHeight::from_raw(0),
+        )
+        .expect("header");
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &[receipt(3, 0x44)], &mut w)
+            .await
+            .expect_err("stray");
+        assert!(
+            matches!(err, FetchFault::InjectionOutOfRange { injection } if injection == receipt(3, 0x44)),
+            "{err}"
+        );
+        assert!(
+            rpc.asked.lock().expect("lock").is_empty(),
+            "refused before any block was requested"
+        );
     }
 }

@@ -115,8 +115,8 @@ mod vectors_tests;
 
 #[cfg(feature = "pipeline")]
 pub use connector::{
-    Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Rewind, Rewound, RunEnd,
-    RunFault, TemplateFacts,
+    Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Inject, Injected, Rewind,
+    Rewound, RunEnd, RunFault, TemplateFacts,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]
@@ -135,6 +135,8 @@ pub use schedule::{Chain, ChainRules, RegtestLever, RegtestLeverRefused};
 pub use seed::{SeedClaim, SeedLedger};
 #[cfg(feature = "pipeline")]
 pub use sequencer::{SequenceError, Sequencer};
-pub use source::{IngestEvent, SequenceNo, Sequenced, Source};
+pub use source::{
+    IngestEvent, Injection, InjectionParseError, SequenceNo, Sequenced, ServeCredit, Source,
+};
 pub use substrate::{ProductionSubstrate, SubstrateFault};
 pub use trace::{Facts, Trace, TraceFault, TraceWriter};

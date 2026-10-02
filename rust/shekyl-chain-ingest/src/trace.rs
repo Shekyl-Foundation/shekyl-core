@@ -43,17 +43,15 @@
 //! one checkpoint: a trace carrying the `0x02` record carries the `0x04`
 //! record at the same height, the writer refuses a `finish` with one and
 //! not the other ([`TraceFault::MissingSnapshot`]) and the reader refuses
-//! the file. Its presence, not the version byte, is what tells a `0x01`
-//! trace from a `0x00` one (rule 22's falsifier class) — a version-`0x00`
-//! reader meets `0x04` as [`TraceFault::UnexpectedSnapshot`]. An empty
-//! archival state is a `0x04` record of ten zero counts, never an omitted
-//! record.
+//! the file. An empty archival state is a `0x04` record of ten zero
+//! counts, never an omitted record.
 //!
-//! The reader keeps both arms through DRS-E4 commit 6: the six committed
-//! corpus traces are `0x00` and stay readable until commit 7 re-captures
-//! them. A `0x00` trace has no snapshot door to open —
-//! [`Trace::archival_snapshot`] is `None` — and its run reports the
-//! archival comparison as **not compared**, never as identical.
+//! The reader accepts [`TRACE_VERSION`] alone. The `0x00` layout — no
+//! `0x04` record — was readable through DRS-E4 commit 6 while the six
+//! committed corpus traces still carried it; commit 7 re-captured them and
+//! the arm went with the last file that needed it (rule 15). A trace with
+//! a checkpoint and no snapshot is now a defect of the file, not a
+//! version.
 //!
 //! # The two doors (RD-Q2, RULED)
 //!
@@ -112,14 +110,10 @@ use shekyl_units::AtomicUnits;
 
 /// The file's first eight bytes.
 pub const TRACE_MAGIC: [u8; 8] = *b"SHKTRAC\0";
-/// The layout this module writes; bumped on any change. `0x01` added the
-/// archival snapshot record (DRS-E4 commit 6); the reader still accepts
-/// [`TRACE_VERSION_WITHOUT_SNAPSHOT`] until commit 7 re-captures the
-/// committed corpus traces.
+/// The layout this module writes and the only one it reads; bumped on any
+/// change. `0x01` added the archival snapshot record (DRS-E4 commit 6);
+/// `0x00`, the layout without it, is no longer read (commit 7).
 pub const TRACE_VERSION: u8 = 0x01;
-/// The layout before the archival snapshot: no `0x04` record, and a
-/// reader meeting one under this version refuses the file.
-pub const TRACE_VERSION_WITHOUT_SNAPSHOT: u8 = 0x00;
 
 mod tag {
     pub const FACTS: u8 = 0x01;
@@ -174,12 +168,8 @@ pub enum TraceFault {
     /// The file does not start with [`TRACE_MAGIC`].
     #[error("not a trace: bad magic")]
     BadMagic,
-    /// A version this reader does not know: neither [`TRACE_VERSION`]
-    /// nor [`TRACE_VERSION_WITHOUT_SNAPSHOT`].
-    #[error(
-        "trace version {found}: this reader accepts {TRACE_VERSION_WITHOUT_SNAPSHOT} \
-         (no archival snapshot) and {TRACE_VERSION}"
-    )]
+    /// A version other than [`TRACE_VERSION`].
+    #[error("trace version {found}: this reader accepts {TRACE_VERSION}")]
     UnsupportedVersion {
         /// The version byte found.
         found: u8,
@@ -254,23 +244,17 @@ pub enum TraceFault {
         /// The height of the snapshot already recorded.
         height: u64,
     },
-    /// A version-`0x01` trace whose checkpoint has no archival snapshot
-    /// beside it — §3.8.1: an empty archival state is a record of ten zero
-    /// counts, never an omitted record.
+    /// A checkpoint with no archival snapshot beside it — §3.8.1: an empty
+    /// archival state is a record of ten zero counts, never an omitted
+    /// record.
     #[error(
         "the checkpoint at height {height} has no archival snapshot; \
-         trace version {TRACE_VERSION} carries both or neither"
+         a trace carries both or neither"
     )]
     MissingSnapshot {
         /// The checkpoint's height.
         height: u64,
     },
-    /// A `0x04` record in a version-`0x00` trace, which has no such record.
-    #[error(
-        "archival snapshot record in a version {TRACE_VERSION_WITHOUT_SNAPSHOT} trace, \
-         which carries none"
-    )]
-    UnexpectedSnapshot,
     /// The snapshot's rows could not be read back as §3.8.1 rows.
     #[error("archival snapshot: {0}")]
     Snapshot(#[from] SnapshotFault),
@@ -532,13 +516,10 @@ impl<W: Write> TraceWriter<W> {
 /// exposing the two doors.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Trace {
-    /// The header's version byte: [`TRACE_VERSION`] or
-    /// [`TRACE_VERSION_WITHOUT_SNAPSHOT`].
-    version: u8,
     facts: BTreeMap<u64, Facts>,
     /// At most one, at the covered tip.
     checkpoint: Option<(u64, Digest)>,
-    /// With the checkpoint, at its height; never under version `0x00`.
+    /// With the checkpoint, at its height: `Some` iff `checkpoint` is.
     snapshot: Option<(u64, ArchivalSnapshot)>,
 }
 
@@ -568,7 +549,7 @@ impl Trace {
             return Err(TraceFault::BadMagic);
         }
         let version = head[header::VERSION];
-        if version != TRACE_VERSION && version != TRACE_VERSION_WITHOUT_SNAPSHOT {
+        if version != TRACE_VERSION {
             return Err(TraceFault::UnsupportedVersion { found: version });
         }
         if head[header::RESERVED].iter().any(|&b| b != 0) {
@@ -614,9 +595,6 @@ impl Trace {
                     checkpoint = Some((h, state));
                 }
                 tag::ARCHIVAL_SNAPSHOT => {
-                    if version == TRACE_VERSION_WITHOUT_SNAPSHOT {
-                        return Err(TraceFault::UnexpectedSnapshot);
-                    }
                     let h = read_u64(&mut input)?;
                     let Some((tip, _)) = checkpoint else {
                         return Err(TraceFault::UnanchoredSnapshot);
@@ -645,7 +623,7 @@ impl Trace {
                         if h != tip {
                             return Err(TraceFault::CheckpointNotTip { height: h, tip });
                         }
-                        if version == TRACE_VERSION && snapshot.is_none() {
+                        if snapshot.is_none() {
                             return Err(TraceFault::MissingSnapshot { height: h });
                         }
                     }
@@ -656,7 +634,6 @@ impl Trace {
                         return Err(TraceFault::TrailingBytes);
                     }
                     return Ok(Self {
-                        version,
                         facts,
                         checkpoint,
                         snapshot,
@@ -693,20 +670,13 @@ impl Trace {
     }
 
     /// The checkpoint's other encoding: the archival state after the
-    /// covered tip as §3.8.1's rows, for the grader. `None` when the trace
-    /// carries no checkpoint, and always `None` for a version-`0x00` trace
-    /// — a run over one reports the archival comparison as not compared.
+    /// covered tip as §3.8.1's rows, for the grader. `None` exactly when
+    /// the trace carries no checkpoint.
     #[must_use]
     pub fn archival_snapshot(&self) -> Option<(BlockHeight, Expected<&ArchivalSnapshot>)> {
         self.snapshot
             .as_ref()
             .map(|(h, s)| (BlockHeight::from_raw(*h), Expected(s)))
-    }
-
-    /// The header's version byte, as read.
-    #[must_use]
-    pub const fn version(&self) -> u8 {
-        self.version
     }
 
     /// The heights this trace has facts for, as an inclusive range; `None`

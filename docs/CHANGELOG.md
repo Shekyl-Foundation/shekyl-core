@@ -198,6 +198,38 @@
   proof's content, length, and framing are unchanged
   (`GENESIS_TX_WIRE_FORMAT.md` Q6).
 
+### Replay driver — the regtest injection is an event; the corpus re-captured under the v1 trace (DRS-E4 commit 7)
+
+- Source model: `IngestEvent::Inject(ServeCredit)` — the regtest injector's
+  one un-replayable LMDB write as a first-class event, a pipeline barrier as
+  `Rewind` is, applied in its own store transaction at the committed tip
+  through `ChainStore::regtest_inject_serve_credit`, refused before the
+  store under any rule set but regtest (`RunFault::InjectOffRegtest`), not
+  journaled; a later `Rewind` below its height is
+  `PipelineFault::RewindBelowInjection`. Scope stated in the type: one row
+  kind, the injector its sole producer.
+- Corpus format v2 → **v3**: the `inject` record (tag `0x03`; `at` ‖
+  `persona` ‖ `shard` ‖ `epoch`), Fakechain-only, `at` the tip it was
+  injected at. `shekyl-chain-replay fetch --inject <receipt>` writes one;
+  `RunReport.injected` reports each applied injection as its receipt.
+- `Injection { at: BlockHeight, credit }` has one spelling —
+  `<persona-hex>:<shard>:<epoch>@<height>` — shared by the `--inject` flag,
+  the report and the manifest, so they cannot drift.
+- Trace format: the `0x00` reader arm is **deleted**; the reader accepts
+  `0x01` alone. All six captured chains re-captured under the corrected
+  regtest table and the v1 checkpoint (each trace now carries its `0x04`
+  archival snapshot; the archival oracle grades every chain). Manifests
+  `format_version` `3 → 4`: `out_of_band_writes` rows carry the injection's
+  `receipt`, written by the generator from the daemon's
+  `regtest_inject_archival_serve_credit` response, which now returns the
+  attributed height (C++ + RPC `height`).
+- **API.** `CORE_RPC_VERSION` 3.38 → 3.39. `inject_archival_serve_credit`
+  (regtest only) gains `height` in its response — the tip's block index the
+  row was keyed at, read under the lock with the write. `get_version` gains
+  nothing.
+  (`DRS_E4_ARCHIVAL_WRITER.md` §3.8 item 3, §6 row 7;
+  `DRS_E2_REPLAY_DRIVER.md` §3.9, RD-Q13.)
+
 ### Replay driver — the checkpoint carries the archival state as rows, and the grader diffs them (DRS-E4 commit 6)
 
 - Trace format: `TRACE_VERSION` `0x00 → 0x01`. Every checkpoint (`0x02`)
@@ -209,9 +241,9 @@
   against `ReadSnapshot::archival_snapshot()` over redb. The writer refuses
   a `0x01` trace holding one of the pair without the other; the reader
   refuses a `0x04` under `0x00` and its absence under `0x01`. The six
-  committed `0x00` traces stay readable until commit 7 re-captures them,
-  and grade the snapshot as *not compared*. (`0x03` stays RESERVED for
-  Verdict.)
+  committed `0x00` traces stayed readable until commit 7 re-captured them
+  (above), grading the snapshot as *not compared* in the interim. (`0x03`
+  stays RESERVED for Verdict.)
 - Grader: `shekyl_e2_grade_v2 → v3` — `Observations` gains the archival
   snapshot oracle beside the root oracle; a divergence names the family and
   the row key (`ArchivalDiverged`), and fails the run as a root divergence

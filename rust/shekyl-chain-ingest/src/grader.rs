@@ -241,8 +241,8 @@ pub struct RootOracle {
 /// at one checkpoint per chain a diff says *which* row, which a digest
 /// cannot; the digest clause stays what it was.
 ///
-/// `compared == false` is a version-`0x00` trace or a run that never
-/// connected the checkpoint height: **not compared**, never identical. A
+/// `compared == false` is a run that never connected the checkpoint
+/// height: **not compared**, never identical. A
 /// non-empty [`Self::diverged`] fails the run on its own
 /// ([`GradedRun::passes`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]

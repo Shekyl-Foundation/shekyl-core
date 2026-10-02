@@ -57,14 +57,14 @@ use crate::metrics::Metrics;
 use crate::mutation::{ArchivalKind, Before, Environment, Mutation, Unmutable};
 use crate::pipeline::{run, PipelineConfig, RunReport};
 use crate::schedule::ChainRules;
-use crate::source::{IngestEvent, Source};
+use crate::source::{IngestEvent, Injection, Source};
 use crate::substrate::ProductionSubstrate;
 use crate::test_support::h;
 use crate::test_support::{cleanup, open_store_under, tmp};
 use crate::trace::Trace;
 use shekyl_chain_rules::Candidate;
 use shekyl_pow_randomx::CacheStore;
-/// `manifest.json`, as the capture writes it (format 3).
+/// `manifest.json`, as the capture writes it (format 4).
 #[derive(Deserialize, Debug)]
 struct Manifest {
     format_version: u32,
@@ -92,9 +92,23 @@ struct Manifest {
     /// "wholly block-derived" positively (`[]`) rather than by silence: a
     /// block-driven replay cannot reach such a row, and an archival digest
     /// over the chain diverges by construction at exactly the height a
-    /// writer bug would (`DRS_E4_ARCHIVAL_WRITER.md` ARW-1).
-    out_of_band_writes: Vec<String>,
+    /// writer bug would (`DRS_E4_ARCHIVAL_WRITER.md` ARW-1). Format 4: each
+    /// row is the injector's receipt in the corpus's one spelling, so the
+    /// corpus's `Inject` records can be held to it.
+    out_of_band_writes: Vec<OutOfBandWrite>,
 }
+
+/// One `out_of_band_writes` row: what kind of row, and the receipt the
+/// fetch was given for it (`Injection`'s spelling — the credit and the
+/// height the daemon attributed it to).
+#[derive(Deserialize, Debug)]
+struct OutOfBandWrite {
+    kind: String,
+    receipt: Injection,
+}
+
+/// The one row kind the corpus admits out of band (DRS-E4 §3.8 item 3).
+const OUT_OF_BAND_KIND: &str = "archival_serve_credit";
 
 /// The one captured chain whose state is not wholly block-derived: the
 /// serve credit `emission-claim`'s claim is priced on was injected
@@ -106,9 +120,12 @@ const CHAINS_WITH_OUT_OF_BAND_WRITES: [&str; 1] = ["emission-claim"];
 /// The corpus says which of its rows no block produced, and it is exactly
 /// the one chain the pre-flight found (ARW-1). Both directions: a chain
 /// that injects and does not say so mislabels the corpus; a chain listed as
-/// injecting that does not is a stale claim about the data.
+/// injecting that does not is a stale claim about the data. And the two
+/// halves of the capture agree: the manifest's receipts are exactly the
+/// `Inject` records the corpus carries, at exactly those heights — the
+/// trace half of §3.8 item 3's "present iff the manifest names one".
 #[test]
-fn only_the_named_chains_carry_out_of_band_writes() {
+fn only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly_those() {
     for (dir, manifest) in captured_chains() {
         let expected = CHAINS_WITH_OUT_OF_BAND_WRITES.contains(&manifest.shape.as_str());
         assert_eq!(
@@ -118,14 +135,52 @@ fn only_the_named_chains_carry_out_of_band_writes() {
             dir.display(),
             manifest.out_of_band_writes
         );
-        for note in &manifest.out_of_band_writes {
-            assert!(
-                note.contains("archival_serve_credit"),
-                "{}: the only out-of-band row kind the corpus admits is the injected serve credit; got {note:?}",
+        for row in &manifest.out_of_band_writes {
+            assert_eq!(
+                row.kind,
+                OUT_OF_BAND_KIND,
+                "{}: the only out-of-band row kind the corpus admits is the injected serve credit",
                 dir.display()
             );
         }
+        let in_manifest: Vec<Injection> = manifest
+            .out_of_band_writes
+            .iter()
+            .map(|r| r.receipt)
+            .collect();
+        assert_eq!(
+            corpus_injections(&dir),
+            in_manifest,
+            "{}: the corpus's Inject records and the manifest's out_of_band_writes disagree",
+            dir.display()
+        );
     }
+}
+
+/// Every `Inject` record in a captured corpus, with the height it sits
+/// at — the one the corpus law held to the tip when it was written.
+fn corpus_injections(dir: &Path) -> Vec<Injection> {
+    let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
+    let mut reader =
+        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+    let mut tip: Option<BlockHeight> = None;
+    let mut found = Vec::new();
+    while let Some(event) = reader.next().expect("corpus reads") {
+        match event.event {
+            IngestEvent::Extend(_) => {
+                tip = Some(tip.map_or(reader.first_height(), |t| {
+                    t.checked_add(BlockCount::ONE)
+                        .expect("a captured chain is short")
+                }));
+            }
+            IngestEvent::Rewind { to } => tip = Some(to),
+            IngestEvent::Inject(credit) => found.push(Injection {
+                at: tip.expect("the corpus law refuses an inject before any block"),
+                credit,
+            }),
+        }
+    }
+    found
 }
 
 /// Every captured chain, in name order. **Fails on an empty set** (rule
@@ -144,7 +199,7 @@ fn captured_chains() -> Vec<(PathBuf, Manifest)> {
                 .unwrap_or_else(|e| panic!("{}: manifest does not parse: {e}", p.display()));
             assert_eq!(
                 manifest.format_version,
-                3,
+                4,
                 "{}: capture format {} is not the one this test reads",
                 p.display(),
                 manifest.format_version
@@ -361,6 +416,32 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
         checkpoint.ours,
         checkpoint.theirs
     );
+    // DRS-E4 §3.8 item 3: the replay applied exactly the injections the
+    // manifest names, each at the height the daemon attributed it to — the
+    // report's half of the out-of-band contract (the corpus's half is
+    // `only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly_those`).
+    let named: Vec<Injection> = manifest
+        .out_of_band_writes
+        .iter()
+        .map(|r| r.receipt)
+        .collect();
+    assert_eq!(
+        report.injected, named,
+        "{}: the replay's committed injections are not the manifest's receipts",
+        manifest.shape
+    );
+    // The archival snapshot (§3.8.1) was COMPARED at the tip — the run
+    // reached the covered height with a `0x04` record there. Whether it is
+    // identical is commit 8's assertion (the oracle, §6 row 8; `ARW-26` is
+    // the disagreement already on its table); here the fact asserted is
+    // that the comparison ran, so a silent `None` cannot read as agreement.
+    let archival = report.archival.as_ref().unwrap_or_else(|| {
+        panic!(
+            "{}: the trace carries the daemon's archival snapshot at the tip",
+            manifest.shape
+        )
+    });
+    assert_eq!(archival.at, checkpoint.at);
     if let Some(txid) = &manifest.spend_txid {
         assert_eq!(
             txid.len(),
@@ -446,9 +527,11 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
         genesis_is_the_current_builds(&manifest);
         let report = replay(&dir, &manifest, Arc::clone(&substrate)).await;
         hold(&dir, &manifest, &report);
+        let archival = report.archival.as_ref().expect("held above");
         eprintln!(
             "{}: {} blocks connected, digest MATCH at {}, roots MATCH at all {} heights, weights \
-             MATCH at all {} heights, accumulator and burn MATCH at all {} heights, rows \
+             MATCH at all {} heights, accumulator and burn MATCH at all {} heights, {} \
+             injection(s) applied, archival snapshot {} at {} ({} rows equal{}), rows \
              exercised: {}",
             manifest.shape,
             report.connected.len(),
@@ -456,6 +539,25 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
             report.roots.compared(),
             report.weights.compared(),
             report.emission.compared(),
+            report.injected.len(),
+            if archival.identical() {
+                "MATCH"
+            } else {
+                "DIVERGED (commit 8's oracle adjudicates)"
+            },
+            archival.at,
+            archival.diff.rows_equal(),
+            archival
+                .diff
+                .diverged()
+                .map(|d| format!(
+                    "; {:?}: {} unequal, {} ours-only, {} theirs-only",
+                    d.family,
+                    d.unequal.len(),
+                    d.only_ours.len(),
+                    d.only_theirs.len()
+                ))
+                .collect::<String>(),
             report.exercised.len()
         );
     }
@@ -531,6 +633,9 @@ fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
                 };
                 height = to.to_raw() + 1;
             }
+            // An inject occupies no height and lists no body: nothing a
+            // block mutation could take as an operand.
+            IngestEvent::Inject(_) => {}
         }
     }
     chain

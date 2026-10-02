@@ -4707,7 +4707,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
 // consensus-state write, and the core boundary must not trust the RPC
 // layer to have checked the nettype.
 bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_canonical_id,
-  uint64_t shard_id, uint64_t settlement_epoch)
+  uint64_t shard_id, uint64_t settlement_epoch, uint64_t& attributed_height)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   if (m_nettype != FAKECHAIN)
@@ -4733,6 +4733,7 @@ bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_cano
   const uint64_t block_height = chain_height - 1;
   db_wtxn_guard wtxn_guard(m_db);
   m_db->set_archival_serve_credit_bit(p_canonical_id, shard_id, settlement_epoch, block_height);
+  attributed_height = block_height;
   MWARNING("Injected archival serve-credit bit (regtest Gate-6 stand-in): P="
     << p_canonical_id << " shard=" << shard_id << " E=" << settlement_epoch
     << " height=" << block_height

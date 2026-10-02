@@ -95,8 +95,7 @@ fn code(fault: &TraceFault) -> i32 {
         | TraceFault::UnanchoredSnapshot
         | TraceFault::SnapshotNotTip { .. }
         | TraceFault::DuplicateSnapshot { .. }
-        | TraceFault::MissingSnapshot { .. }
-        | TraceFault::UnexpectedSnapshot => SHEKYL_E2_TRACE_ERR_SEQUENCE,
+        | TraceFault::MissingSnapshot { .. } => SHEKYL_E2_TRACE_ERR_SEQUENCE,
         TraceFault::Snapshot(_) => SHEKYL_E2_TRACE_ERR_ROW,
         // `Io` is the writer's only other fault; the reader-side arms cannot
         // come out of a writer and are reported as I/O if they ever do.

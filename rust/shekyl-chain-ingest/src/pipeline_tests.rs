@@ -228,6 +228,47 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
 
 // ------------------------------------------------------------ the run
 
+/// An `Inject` under a public network's rules is refused at the connector
+/// before the store is asked (DRS-E4 §3.8 item 3: the out-of-band write
+/// has one producer, the regtest injector, and no public chain carries
+/// one) — and the refusal is not a halt: the writer answers afterwards.
+/// The regtest path, with a bonded persona, is
+/// `scenario_archival_tests::an_injected_serve_credit_lands_at_the_tip_and_is_one_snapshot_row`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_inject_off_regtest_is_refused_before_the_store_is_asked() {
+    let path = tmp("connector-inject-off-regtest");
+    let rules = ChainRules::Scheduled(shekyl_address::Network::Testnet);
+    let joined = JoinedConnector::spawn(ConnectorArgs {
+        store: open_store(&path),
+        rules,
+    });
+    let credit = crate::source::ServeCredit {
+        persona: shekyl_types::PCanonicalId::from_bytes([0x51; 32]),
+        shard: shekyl_types::ShardId::from_raw(7),
+        epoch: shekyl_types::SettlementEpoch::from_raw(1),
+    };
+    let refused = joined
+        .actor
+        .ask(crate::connector::Inject(credit))
+        .await
+        .expect_err("regtest-only");
+    assert!(
+        matches!(
+            refused,
+            SendError::HandlerError(RunFault::InjectOffRegtest {
+                credit: named,
+                rules: under,
+            }) if named == credit && under == rules
+        ),
+        "{refused:?}"
+    );
+    // The store was never asked (an empty chain would have been
+    // `ChainEmpty`, a different refusal), and the connector is not over.
+    joined.actor.ask(Digest).await.expect("the writer is up");
+    joined.stop_and_join().await;
+    cleanup(&path);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_checkpoint() {
     let path = tmp("pipeline-replay");

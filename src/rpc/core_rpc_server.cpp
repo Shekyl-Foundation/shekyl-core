@@ -961,14 +961,19 @@ namespace cryptonote
     // injector, under the blockchain lock — a snapshot taken here would be
     // pre-lock and can go stale against a concurrent mine/pop. On refusal
     // (wrong nettype, empty chain) the daemon log names the reason.
+    // The receipt: the tip index the row was keyed at, from inside the
+    // lock. The caller's only way to learn it (DRS-E4 §3.8 item 3 — the
+    // capture replays the injection as a corpus event at this height).
+    uint64_t attributed_height = 0;
     if (!m_core.get_blockchain_storage().regtest_inject_archival_serve_credit(
-      p_canonical_id, req.shard_id, req.settlement_epoch))
+      p_canonical_id, req.shard_id, req.settlement_epoch, attributed_height))
     {
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = "Serve-credit injection failed";
       return false;
     }
 
+    res.height = attributed_height;
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
