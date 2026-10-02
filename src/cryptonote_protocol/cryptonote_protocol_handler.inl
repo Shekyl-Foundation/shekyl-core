@@ -84,17 +84,6 @@
 
 namespace cryptonote
 {
-  //! NetZone byte for an address. Tor addresses are 3, clearnet addresses
-  //! are 1, and an address with no connector is 0. These are not connector
-  //! ids: a Tor connector is 1, and that byte means clearnet here.
-  inline std::uint8_t netzone_of_address(const epee::net_utils::network_address& address) noexcept
-  {
-    const auto connector = address.connector();
-    if (!connector)
-      return netzone_invalid;
-    return *connector == epee::net_utils::connector_id::tor ? netzone_tor : netzone_public;
-  }
-
   /*!
    * \brief Render a peer-supplied blob for a log line: digest and length, never content.
    *
@@ -918,14 +907,14 @@ namespace cryptonote
       //TODO: add announce usage here
       arg.dandelionpp_fluff = false;
       arg.txs = std::move(stem_txs);
-      relay_transactions(arg, context.m_connection_id, netzone_of_address(context.m_remote_address), relay_method::stem);
+      relay_transactions(arg, context.m_connection_id, relay_method::stem);
     }
     if (!fluff_txs.empty())
     {
       //TODO: add announce usage here
       arg.dandelionpp_fluff = true;
       arg.txs = std::move(fluff_txs);
-      relay_transactions(arg, context.m_connection_id, netzone_of_address(context.m_remote_address), relay_method::fluff);
+      relay_transactions(arg, context.m_connection_id, relay_method::fluff);
     }
     return 1;
   }
@@ -2535,23 +2524,11 @@ skip:
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
-  bool t_cryptonote_protocol_handler<t_core>::relay_transactions(NOTIFY_NEW_TRANSACTIONS::request& arg, const boost::uuids::uuid& source, std::uint8_t zone, relay_method tx_relay)
+  bool t_cryptonote_protocol_handler<t_core>::relay_transactions(NOTIFY_NEW_TRANSACTIONS::request& arg, const boost::uuids::uuid& source, relay_method tx_relay)
   {
-    /* Push all outgoing transactions to this function. The behavior needs to
-       identify how the transaction is going to be relayed, and then update the
-       local mempool before doing the relay. The code was already updating the
-       DB twice on received transactions - it is difficult to workaround this
-       due to the internal design.
-
-       The `once_at_origin_route` token is constructed here, the only
-       production caller of `send_txs`. Bypassing the helper is a compile
-       error: `zone_route` has no public constructor. */
-    return m_p2p->send_txs(
-      std::move(arg.txs),
-      zone,
-      source,
-      tx_relay,
-      once_at_origin_route(tx_relay, zone));
+    /* Push all outgoing transactions to this function. The relay decides
+       the phase. Hop 0 is the construction bit inside the relay. */
+    return m_p2p->send_txs(std::move(arg.txs), source, tx_relay);
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>

@@ -1091,15 +1091,12 @@ namespace cryptonote
          re-relaying public and private _should_ be acceptable here. */
       const boost::uuids::uuid source = boost::uuids::nil_uuid();
       if (!public_req.txs.empty())
-        get_protocol()->relay_transactions(public_req, source, netzone_public, relay_method::fluff);
+        get_protocol()->relay_transactions(public_req, source, relay_method::fluff);
       if (!private_req.txs.empty())
-        /* `invalid`+`local` is the fail-closed backstop for originated
-           traffic that chose anonymity and kept its `local` record. It is
-           ALSO the first send of a missed submit nudge, whose origination
-           roll never ran — a second chooser, D5a in miniature. Those two
-           are indistinguishable here without persisting the roll, and
-           rolling here is the `source.is_nil()` reversal. FOLLOWUPS. */
-        get_protocol()->relay_transactions(private_req, source, netzone_invalid, relay_method::local);
+        /* `local` is the origin's record, including a missed submit nudge.
+           Hop 0 inside the relay fail-closes when the construction bit is
+           set and no eligible edge exists. */
+        get_protocol()->relay_transactions(private_req, source, relay_method::local);
     }
     return true;
   }
@@ -1140,7 +1137,7 @@ namespace cryptonote
     m_mempool.on_stem_propagated(txids);
   }
   //-----------------------------------------------------------------------------------------------
-  void core::on_transactions_relayed(const epee::span<const cryptonote::blobdata> tx_blobs, const relay_method tx_relay, const std::uint8_t zone)
+  void core::on_transactions_relayed(const epee::span<const cryptonote::blobdata> tx_blobs, const relay_method tx_relay, const std::optional<std::uint8_t> stem_connector)
   {
     // lock ensures duplicate txs aren't notified twice
     CRITICAL_REGION_LOCAL(m_incoming_tx_lock);
@@ -1163,7 +1160,7 @@ namespace cryptonote
     std::vector<bool> just_broadcasted{};
     just_broadcasted.reserve(tx_hashes.size());
 
-    m_mempool.set_relayed(epee::to_span(tx_hashes), tx_relay, zone, just_broadcasted);
+    m_mempool.set_relayed(epee::to_span(tx_hashes), tx_relay, stem_connector, just_broadcasted);
 
     if (matches_category(tx_relay, relay_category::broadcasted))
       notify_txpool_event(tx_blobs, epee::to_span(tx_hashes), epee::to_span(txs), just_broadcasted);

@@ -48,14 +48,12 @@
 //! Baking any of them in would freeze a decision the round has explicitly left
 //! open, and would do it in the layer hardest to change later.
 //!
-//! # Scope: every zone that stems is observed
+//! # Scope: every connector that stems is observed
 //!
-//! Nothing on this side chooses which zones are observed; the caller does.
-//! Since §89.5 (GATE 3 of 3 deleted) Dandelion++ runs on **every** zone, not
-//! only clearnet -- `dandelionpp_notify` is no longer gated on
-//! `nzone == public_`. A Tor zone that stems produces stem observations
-//! like any other. Q12-U3's `/get_stem_tallies` row carries a `zone` label
-//! at the C++ merge so those observations are distinguishable.
+//! Nothing on this side chooses which connectors are observed; the caller
+//! does. A stem records the connector it was forwarded on, and the tally
+//! keeps the first one, because a connection id is one session.
+//! `/get_stem_tallies` carries that connector on the row.
 //!
 //! ```text
 //! levin_notify.cpp  dandelionpp_notify        <- every zone, noise-off
@@ -70,13 +68,12 @@
 //! shekyl-relay      Relay::record_stem  ->  StemWatch::stemmed
 //! ```
 //!
-//! **An empty tally for a zone that is not configured still means "no
+//! **An empty tally for a connector that is not configured still means "no
 //! stems", not "no drops".** The two read identically off [`StemTally`] and
-//! mean opposite things. The zone label is how an operator tells a zone
-//! that is not running from one that is running clean. The endpoint stays
-//! AdminOnly: a per-successor tally set is the node's anonymity-graph
-//! edge set, and a zone label is strictly more disclosive than the
-//! flattened list.
+//! mean opposite things. The connector on the row is how an operator tells
+//! them apart. The endpoint stays AdminOnly: a per-successor tally set is
+//! the node's anonymity-graph edge set, and a connector label is strictly
+//! more disclosive than the flattened list.
 
 use std::collections::HashMap;
 
@@ -144,6 +141,10 @@ pub struct StemTally {
     /// A locally-originated transaction has no source, and its key is
     /// recorded as `None`, matching `in_mapping_[nil]`.
     sources: std::collections::BTreeSet<Option<ConnectionId>>,
+    /// Connector the first resolved observation on this successor was
+    /// forwarded on. A connection id is one session, so a later observation
+    /// keeps this value.
+    connector: Option<crate::ConnectorId>,
 }
 
 impl StemTally {
@@ -158,6 +159,12 @@ impl StemTally {
     pub fn distinct_sources(&self) -> usize {
         self.sources.len()
     }
+
+    /// Connector the first resolved observation on this successor used.
+    #[must_use]
+    pub fn connector(&self) -> Option<crate::ConnectorId> {
+        self.connector
+    }
 }
 
 /// Light export of a [`StemTally`] for telemetry and off-strand publish.
@@ -170,6 +177,9 @@ pub struct StemTallySnapshot {
     pub silent: u64,
     /// Distinct `in_mapping_` keys that contributed (§35.4).
     pub distinct_sources: u64,
+    /// Connector the successor was forwarded on. Absent until an observation
+    /// resolves.
+    pub connector: Option<crate::ConnectorId>,
 }
 
 impl From<&StemTally> for StemTallySnapshot {
@@ -180,6 +190,7 @@ impl From<&StemTally> for StemTallySnapshot {
             // `BTreeSet::len` is `usize`; cast once at the export edge so the
             // wire/readout contract stays a fixed-width counter.
             distinct_sources: t.distinct_sources() as u64,
+            connector: t.connector,
         }
     }
 }
@@ -320,6 +331,10 @@ impl StemWatch {
 
     fn resolve(&mut self, p: Pending, outcome: StemOutcome) {
         let tally = self.tallies.entry(p.successor).or_default();
+        // First observation wins. The successor is one session.
+        if tally.connector.is_none() {
+            tally.connector = Some(p.connector);
+        }
         match outcome {
             StemOutcome::Propagated => tally.propagated += 1,
             StemOutcome::Silent => tally.silent += 1,
@@ -555,6 +570,21 @@ mod tests {
         );
         assert_eq!(snap[0].1.silent, 1);
         assert_eq!(snap[1].1.propagated, 1);
+        assert_eq!(snap[0].1.connector, Some(crate::ConnectorId::Clearnet));
+    }
+
+    #[test]
+    fn the_first_resolved_observation_keeps_its_connector() {
+        let mut w = StemWatch::default();
+        w.stemmed(tx(1), peer(9), None, crate::ConnectorId::Tor, 1_000);
+        w.seen(&tx(1), Some(peer(3)));
+        w.stemmed(tx(2), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
+        w.seen(&tx(2), Some(peer(4)));
+        assert_eq!(
+            w.tally(&peer(9)).expect("resolved").connector(),
+            Some(crate::ConnectorId::Tor),
+            "a connection id is one session, so the later connector does not replace the first"
+        );
     }
 
     #[test]

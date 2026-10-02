@@ -4,11 +4,10 @@
 // BSD-3-Clause
 
 use super::*;
-use crate::{ConnectorId, Driver, Effect, LinkSecrecy, Relay};
+use crate::{ConnectorId, Driver, Effect, Relay};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::schedule::PeerDirection;
-use shekyl_relay_privacy::RelayZone;
 
 const W: usize = 64; // the window, via the dummy's length
 /// Windows one channel may hold. Generous for the tests that do not care, and
@@ -289,7 +288,6 @@ fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64,
     let zone = Relay::new(
         DandelionParams::inherited(),
         2,
-        LinkSecrecy::of(RelayZone::Tor),
         true,
         // noise ON, or there are no deadlines and this is vacuous
         &[ConnectorId::Tor],
@@ -310,7 +308,7 @@ fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64,
         driver.zone_mut().on_session_established(
             *peer,
             PeerDirection::Outbound,
-            ConnectorId::Clearnet,
+            ConnectorId::Tor,
             &mut rng,
         );
     }

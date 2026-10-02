@@ -129,7 +129,7 @@ this lane.
    session-established with direction. Landed in #922:
    `get_out_connections(` is gone. `get_out_connections_count` stays:
    it answers whether a connector has an outbound peer and trims the
-   public cap (`net_node.inl:3304`). A falsifier of
+   public cap (`net_node.inl:3133`). A falsifier of
    `rg get_out_connections` would delete the count with the draw.
 
 4. **One Dandelion++ instance. The network is a property of an edge.**
@@ -155,19 +155,25 @@ this lane.
      `ADOPTED_TRANSIT_ASSUMPTION_MS` (50), index 1 is
      `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (1 625). An index with no
      measurement is not a stem edge. Per transaction, not per relay.
-   - **Cover.** Noise stays an edge property. The schedule is keyed by
-     the session's link secrecy. A noise frame means something only on
-     an encrypted channel.
+   - **Cover.** Noise stays an edge property. A session is eligible when
+     its connector declares native encryption classical (`link_encrypted`
+     in `shekyl-relay`). Hiding the address is a different cell and does
+     not make the session eligible. A noise frame means something only
+     on an encrypted channel.
 
-   Role, epoch, fluff, and ingress do not read the connector. Stem
-   selection reads it twice: hop 0 reads the declaration, and a
-   connector with no measured transit is not a stem edge.
-   `FluffReach` is deleted. The route decision drops arrival-coherence
-   and keeps origination plus broadcast-all. D7, outbound-fluff-only
-   on a non-public zone (`levin_notify.cpp:268`), is deleted. The
-   carrier development flag stays, default off, without a non-public
-   belt: link secrecy already refuses noise on cleartext
-   (`levin_notify.cpp:308` loses that arm).
+   UPDATE 2026-10-02. Role, epoch, fluff, and ingress do not read the
+   connector. Stem selection reads it twice: hop 0 reads the
+   declaration, and a connector with no measured transit is not a stem
+   edge. `FluffReach`, the zone-route token, and the origin roll are
+   deleted. Fluff is this relay's fanout. Hop 0 is the construction bit
+   above. The pool embargo is the connector the stem was forwarded on;
+   an unnamed connector draws the longest measured transit. The stem
+   floor is one note per connector, and the tally row carries that
+   connector. D7, outbound-fluff-only on a non-public zone, is deleted.
+   The carrier development flag stays, default off. `make_relay`
+   (`levin_notify.cpp:259`) sets the noise flag only when a configured
+   connector is link-encrypted, and `Relay::new` refuses the flag when
+   none is.
 
    `m_network_zones` is keyed by connector identity (clearnet 0, tor 1).
    The two handshake registrations pass the connector the seam observed

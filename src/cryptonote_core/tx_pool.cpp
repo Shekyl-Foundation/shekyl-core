@@ -128,7 +128,7 @@ namespace cryptonote
         `MIN_RELAY_TIME` is the answer to the question actually being asked,
         which is "did the nudge miss?".
 
-        SENT AND STILL HERE (`relayed == true`): `originated_stays_in_zone`
+        SENT AND STILL HERE (`relayed == true`): `origin_keeps_local_record`
         pins a hidden-address origin at `local` permanently, so this entry
         lives on this branch for its whole life, and its retry IS the origin
         asking whether its stem completed. That is the derived quantity.
@@ -385,14 +385,13 @@ namespace cryptonote
            Without this the return DEFEATS the carve-out rather than closing
            it. `upgrade_relay_method` moves the entry to `fluff`, and the two
            selection arms differ in both axes: `local` re-broadcasts at the
-           derived 1148 s into `private_req` (`zone::invalid`, fail-closed
-           anonymity), while `fluff` re-broadcasts at MIN_RELAY_TIME's 300 s
-           into `public_req` (`zone::public_`). So the upgrade made the origin
-           re-emit its OWN transaction sooner and on the clear internet —
-           precisely what `originated_stays_in_zone` exists to prevent, and its
-           own note says so: "one record of Stem or Fluff moves the entry out
-           of Local permanently, and the next pool re-relay puts the user's own
-           transaction on the clear internet."
+           derived interval into the local request, and hop 0 fail-closes
+           when the construction bit is set, while `fluff` re-broadcasts at
+           MIN_RELAY_TIME's 300 s to every session. So the upgrade made the
+           origin re-emit its OWN transaction sooner and on a clear edge —
+           precisely what `origin_keeps_local_record` exists to prevent.
+           One record of stem or fluff moves the entry out of local
+           permanently.
 
            NARROW, and deliberately not a general suspension of monotonicity.
            It refuses exactly one transition — out of `local` — and `local` is
@@ -1248,7 +1247,7 @@ namespace cryptonote
     lock.commit();
   }
   //---------------------------------------------------------------------------------
-  void tx_memory_pool::set_relayed(const epee::span<const crypto::hash> hashes, const relay_method method, const std::uint8_t zone, std::vector<bool> &just_broadcasted)
+  void tx_memory_pool::set_relayed(const epee::span<const crypto::hash> hashes, const relay_method method, const std::optional<std::uint8_t> stem_connector, std::vector<bool> &just_broadcasted)
   {
     just_broadcasted.clear();
 
@@ -1273,8 +1272,9 @@ namespace cryptonote
 
           if (meta.dandelionpp_stem)
           {
-            meta.last_relayed_time =
-              detail::relay_deadline(now, shekyl_dandelionpp_embargo_draw_seconds(static_cast<std::uint8_t>(zone)));
+            const std::uint8_t connector = stem_connector.value_or(SHEKYL_CONNECTOR_BYTE_UNSPECIFIED);
+            meta.last_relayed_time = detail::relay_deadline(
+              now, shekyl_dandelionpp_embargo_draw_seconds_for_connector(connector));
             next_relay = std::min(next_relay, meta.last_relayed_time);
           }
           else

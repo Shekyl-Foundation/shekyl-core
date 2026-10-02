@@ -1358,19 +1358,15 @@ namespace cryptonote
       cryptonote::blobdata txblob;
       if ((broadcasted = m_core.get_pool_transaction(txid, txblob, relay_category::broadcasted)) || m_core.get_pool_transaction(txid, txblob, relay_category::all))
       {
-        // Q12-D5a residual absorption. Always passes `invalid`. Anything not
-        // yet fluff/block (`local` AND `stem` — stem is outside
-        // `relay_category::broadcasted`) is remapped to `local`, so
-        // `once_at_origin_route` fail-closes onto the anonymity zone. A
-        // transaction that rolled clearnet and is still stemming is
-        // therefore re-decided onto anon: the zone chosen again after
-        // origination, which once-at-origin forbids. Closing it needs the
-        // pool meta at this RPC (TODO above). Until then this is a named
-        // residual, not a silent p_own=1. FOLLOWUPS.
+        // A pool entry that is not yet broadcast is relayed as local.
+        // Hop 0 inside the relay is the construction bit. This call does
+        // not choose a connector. Closing the residual that a still-stemming
+        // entry is re-sent as local needs the pool meta at this RPC (TODO
+        // above). FOLLOWUPS.
         NOTIFY_NEW_TRANSACTIONS::request r;
         r.txs.push_back(std::move(txblob));
         const auto tx_relay = broadcasted ? relay_method::fluff : relay_method::local;
-        m_core.get_protocol()->relay_transactions(r, boost::uuids::nil_uuid(), netzone_invalid, tx_relay);
+        m_core.get_protocol()->relay_transactions(r, boost::uuids::nil_uuid(), tx_relay);
         //TODO: make sure that tx has reached other nodes here, probably wait to receive reflections from other nodes
       }
       else

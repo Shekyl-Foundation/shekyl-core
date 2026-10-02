@@ -56,6 +56,13 @@ namespace net_utils
 		tor = 1
 	};
 
+	//! Closed set, in `ConnectorId::ALL` order. A new connector is a member
+	//! here in the same change that adds the enumerator.
+	inline constexpr connector_id all_connectors[] = {
+		connector_id::clearnet,
+		connector_id::tor,
+	};
+
 	constexpr bool operator<(connector_id a, connector_id b) noexcept
 	{
 		return static_cast<std::uint8_t>(a) < static_cast<std::uint8_t>(b);

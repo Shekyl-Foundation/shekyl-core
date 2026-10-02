@@ -13,8 +13,6 @@ use super::*;
 
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
-use shekyl_relay_privacy::{LinkSecrecy, RelayZone};
-
 fn id(byte: u8) -> ConnectionId {
     let mut bytes = [0u8; 16];
     bytes[0] = byte;
@@ -25,7 +23,6 @@ fn zone(rng: &mut SplitMix64) -> Relay {
     Relay::new(
         DandelionParams::inherited(),
         2,
-        LinkSecrecy::of(RelayZone::Public),
         false,
         &[ConnectorId::Clearnet],
         0,
@@ -155,7 +152,6 @@ fn stem_draws_are_not_biased_toward_one_outbound_peer() {
     let mut z = Relay::new(
         DandelionParams::inherited(),
         1,
-        LinkSecrecy::of(RelayZone::Public),
         false,
         &[ConnectorId::Clearnet],
         0,
@@ -190,7 +186,6 @@ fn a_two_slot_draw_over_three_peers_uses_each_peer() {
     let mut z = Relay::new(
         DandelionParams::inherited(),
         2,
-        LinkSecrecy::of(RelayZone::Public),
         false,
         &[ConnectorId::Clearnet],
         0,

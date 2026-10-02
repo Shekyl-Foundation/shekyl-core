@@ -276,7 +276,7 @@ TEST(txpool_relay_timers, stem_under_embargo_is_held_however_old_the_tx_is)
 // ─────────────────────────────────────────────────────────────────────────────
 // §92.5c item 3: an ORIGIN's re-broadcast is derived, not `MIN_RELAY_TIME`.
 //
-// `originated_stays_in_zone` pins an anonymity-zone origin at `local`
+// `origin_keeps_local_record` pins a restricted-hop origin at `local`
 // permanently, so that entry lives on the re-broadcast branch for its whole
 // life. §15.4 cleared `MIN_RELAY_TIME` from the embargo's neighbourhood
 // because it "governs an already-fluffed transaction" — true when written, and

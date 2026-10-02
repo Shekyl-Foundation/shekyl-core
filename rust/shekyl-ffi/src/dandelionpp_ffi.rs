@@ -123,11 +123,13 @@ fn embargo_timer(zone: RelayZone) -> &'static EmbargoTimer {
 /// rounds up to avoid — a shorter embargo is the privacy-losing direction, and
 /// that does not stop being true because the draw was small.
 ///
-/// # The `zone` argument (§89.2)
+/// # The `zone` argument
 ///
-/// `zone` is a `NetZone` byte — the network the transaction is
-/// being embargoed *on*. Since §89 ruled that the anonymity zone stems, that is
-/// no longer always clearnet. Callers pass `static_cast<uint8_t>(zone_->nzone)`.
+/// `zone` is a `NetZone` byte. It is not a connector index: clearnet's
+/// connector is 0 and this public byte is 1. The pool draws the stem
+/// embargo from the forwarded connector
+/// ([`shekyl_dandelionpp_embargo_draw_seconds_for_connector`]). This
+/// function remains the zone-parameterized table.
 ///
 /// **Anything outside `0..=3` resolves to `zone::invalid`, which is provisioned
 /// as the worst case** — see [`RelayZone::from_ffi_u8`]. A miscast or corrupt
@@ -138,6 +140,53 @@ fn embargo_timer(zone: RelayZone) -> &'static EmbargoTimer {
 pub extern "C" fn shekyl_dandelionpp_embargo_draw_seconds(zone: u8) -> u64 {
     let mut rng = SecureRelayRng;
     embargo_timer(RelayZone::from_ffi_u8(zone))
+        .deadline(0, &mut rng)
+        .div_ceil(1_000)
+}
+
+struct ConnectorEmbargo {
+    by_index: Vec<Option<EmbargoTimer>>,
+    longest: EmbargoTimer,
+}
+
+static CONNECTOR_EMBARGO: OnceLock<ConnectorEmbargo> = OnceLock::new();
+
+fn connector_embargo() -> &'static ConnectorEmbargo {
+    CONNECTOR_EMBARGO.get_or_init(|| {
+        let by_index = (0..shekyl_relay::ConnectorId::COUNT)
+            .map(|index| {
+                shekyl_relay_privacy::transit_ms_for_connector_index(index)
+                    .map(|ms| EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(ms)))
+            })
+            .collect();
+        let longest = EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(
+            shekyl_relay::longest_measured_transit(),
+        ));
+        ConnectorEmbargo { by_index, longest }
+    })
+}
+
+/// The embargo for the connector a stem was forwarded on.
+///
+/// A known connector with measured transit uses that window. An unknown
+/// byte, including `0xff`, or a connector with no measurement, uses the
+/// longest measured transit. That is the fail-safe: a short window would
+/// fluff a stem before an honest successor is allowed to re-relay.
+fn embargo_for_connector(connector: u8) -> &'static EmbargoTimer {
+    let table = connector_embargo();
+    table
+        .by_index
+        .get(usize::from(connector))
+        .and_then(Option::as_ref)
+        .unwrap_or(&table.longest)
+}
+
+/// One embargo duration in seconds, drawn from the forwarded connector's
+/// measured transit. See [`embargo_for_connector`].
+#[no_mangle]
+pub extern "C" fn shekyl_dandelionpp_embargo_draw_seconds_for_connector(connector: u8) -> u64 {
+    let mut rng = SecureRelayRng;
+    embargo_for_connector(connector)
         .deadline(0, &mut rng)
         .div_ceil(1_000)
 }
@@ -429,6 +478,25 @@ mod tests {
                 "{zone:?} embargo ({anon}s) must exceed clearnet's ({clearnet}s)"
             );
         }
+    }
+
+    #[test]
+    fn the_connector_embargo_follows_measured_transit() {
+        use shekyl_relay::ConnectorId;
+        let clear = u8::try_from(ConnectorId::Clearnet.index()).expect("index fits");
+        let tor = u8::try_from(ConnectorId::Tor.index()).expect("index fits");
+        let clear_mean = embargo_for_connector(clear).mean_secs();
+        let tor_mean = embargo_for_connector(tor).mean_secs();
+        assert!(
+            tor_mean > clear_mean,
+            "tor {tor_mean}s must outlast clearnet {clear_mean}s"
+        );
+        let longest = clear_mean.max(tor_mean);
+        assert_eq!(embargo_for_connector(0xff).mean_secs(), longest);
+        assert_eq!(
+            embargo_for_connector(u8::try_from(ConnectorId::COUNT).unwrap_or(0xff)).mean_secs(),
+            longest
+        );
     }
 
     #[test]

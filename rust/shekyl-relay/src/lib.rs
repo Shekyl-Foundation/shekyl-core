@@ -72,18 +72,14 @@ pub mod floor_diag;
 mod noise_queue;
 pub mod stem_watch;
 pub mod zone;
-pub mod zone_route;
 
 pub use driver::{Driver, Effect};
 pub use floor_diag::{AchievedOutConnections, FloorSnapshot, FloorTransition, FloorWatch};
 pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend};
-pub use shekyl_relay_privacy::{LinkSecrecy, SlotIndex};
+pub use shekyl_relay_privacy::SlotIndex;
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
 pub use zone::{
-    address_hidden_from_peer, any_hides_address_from_peer, longest_measured_transit, ConnectorId,
-    NodeSync, PeerFluff, Relay, RelayCarrier, RelayDispatch, RelayNewError, RelayPlan, TxBlob,
-};
-pub use zone_route::{
-    is_pre_fluff_relay, once_at_origin_route, originated_stays_in_zone,
-    originated_zone_from_anonymity_roll, NetZone, RelayMethod, ZoneRouteDecision,
+    address_hidden_from_peer, any_hides_address_from_peer, any_link_encrypted, link_encrypted,
+    longest_measured_transit, origin_keeps_local_record, ConnectorId, NodeSync, PeerFluff, Relay,
+    RelayCarrier, RelayDispatch, RelayNewError, RelayPlan, TxBlob,
 };

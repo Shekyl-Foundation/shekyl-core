@@ -3,19 +3,19 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The zone: one Dandelion++ relay domain's state and its scheduled steps.
+//! One Dandelion++ relay: every established session, and the steps that
+//! schedule them.
 //!
-//! A zone is the unit the inherited C++ calls `detail::zone` — public,
-//! or Tor. This type owns the state §18.5's inventory assigned to Rust:
-//! peer fluff queues, the stem map, the epoch role, and the noise **schedule**
-//! (enable bit, cadence, per-channel deadlines). Noise **buffers** live in
-//! [`crate::NoiseQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2).
-//! C++ is transport, and since the 2026-08-27 development opt-in it CAN
-//! enable the carrier — `make_relay_zone` sets the noise bit when
-//! `set_carrier_development(true)`. It remains transport only: Rust decides
-//! whether and when channels fire. A transaction body is still an opaque blob
-//! here. See
-//! `DAEMON_RELAY_PRIVACY.md` §20.2 / §20.4 for the post-RP-3b inventory.
+//! The network is a property of a session's connector, read at hop 0, at the
+//! stem embargo, and at cover. It is not a property of this type. The type
+//! owns the state §18.5 assigned to Rust: peer fluff queues, the stem map,
+//! the epoch role, and the noise **schedule** (enable bit, cadence,
+//! per-channel deadlines). Noise **buffers** live in [`crate::NoiseQueues`]
+//! (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2). C++ is transport. The
+//! development opt-in can ask for cover; Rust refuses that ask unless a
+//! configured connector's encryption cell says the link is encrypted, and
+//! it sends cover only to a session on such a connector. A transaction body
+//! is still an opaque blob here. See `DAEMON_RELAY_PRIVACY.md` criterion 4.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -27,9 +27,9 @@ use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
 use shekyl_relay_privacy::stem_map::{ConnectionId, SlotIndex, StemMap};
-use shekyl_relay_privacy::LinkSecrecy;
 pub use shekyl_transport_layer::ConnectorId;
-use shekyl_transport_layer::{declaration, Assessment, YesNo};
+use shekyl_transport_layer::{declaration, Assessment, NativeEncryption, YesNo};
+use shekyl_types::relay::RelayMethod;
 
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 
@@ -79,6 +79,54 @@ pub fn any_hides_address_from_peer(configured: &[ConnectorId]) -> bool {
     configured.iter().copied().any(address_hidden_from_peer)
 }
 
+/// This connector's native encryption cell says a network observer cannot
+/// read the byte stream.
+///
+/// [`NativeEncryption::Classical`] is encrypted.
+/// [`NativeEncryption::NoneNative`] is not: an added layer is a transport
+/// plan, not this cell. [`Assessment::NotAssessed`] is not presumed encrypted.
+///
+/// Anonymity is [`address_hidden_from_peer`]. The two cells agree on the
+/// connectors that exist today, and a later connector may set only one.
+#[must_use]
+pub fn link_encrypted(connector: ConnectorId) -> bool {
+    matches!(
+        declaration(connector.column()).encryption(),
+        Assessment::Assessed(NativeEncryption::Classical)
+    )
+}
+
+/// True when any configured connector's link is encrypted. Computed once,
+/// at construction, as the cover-traffic refusal.
+#[must_use]
+pub fn any_link_encrypted(configured: &[ConnectorId]) -> bool {
+    configured.iter().copied().any(link_encrypted)
+}
+
+/// A local origin keeps the pool record at [`RelayMethod::Local`] when hop 0
+/// cannot draw a clearnet edge.
+///
+/// Recording `Stem` or `Fluff` would let the pool's monotone upgrade leave
+/// `Local` permanently, and the next re-relay would publish the user's
+/// transaction on every edge. Relayed traffic is not this predicate. A
+/// clearnet-only relay (`hop0_restricted == false`) records the method the
+/// wire used.
+#[must_use]
+pub const fn origin_keeps_local_record(method: RelayMethod, hop0_restricted: bool) -> bool {
+    matches!(method, RelayMethod::Local) && hop0_restricted
+}
+
+// The seam's byte contract. C++ `static_assert`s the same literals; neither
+// compiler sees the other, so both pins are what make a renumbering fail
+// on the side that renumbered. `NetZone` pins live with that type.
+const _: () = {
+    assert!(RelayMethod::None as u8 == 0);
+    assert!(RelayMethod::Local as u8 == 1);
+    assert!(RelayMethod::Stem as u8 == 2);
+    assert!(RelayMethod::Fluff as u8 == 3);
+    assert!(RelayMethod::Block as u8 == 4);
+};
+
 /// What the zone knows about one connected peer's pending fluff batch.
 ///
 /// The inherited `context_t` carries the same three facts. `queued` holds
@@ -89,7 +137,7 @@ pub fn any_hides_address_from_peer(configured: &[ConnectorId]) -> bool {
 pub struct PeerFluff {
     /// Blobs waiting for this peer's flush deadline.
     ///
-    /// Shared handles ([`TxBlob`]) so a public zone with N peers does not make
+    /// Shared handles ([`TxBlob`]) so a fluff to N peers does not make
     /// N full payload copies of every accepted batch. The deadline itself is
     /// **not** here — `FluffScheduler` owns pending deadlines, and a copy in
     /// this struct would be a second owner of the same fact (§18.5).
@@ -357,7 +405,7 @@ pub struct Relay {
 }
 
 impl Relay {
-    /// Open a zone at `now` with no connections yet, or [`Err`] when the
+    /// Open a relay at `now` with no sessions yet, or [`Err`] when the
     /// requested configuration is one the design forbids.
     ///
     /// The first epoch is drawn immediately, matching the inherited
@@ -365,74 +413,45 @@ impl Relay {
     ///
     /// # Refusals
     ///
-    /// **A noise carrier requires an encrypted zone** (ruling of 2026-08-19).
-    /// Noise conceals *packet sizing*, and sizing is the only thing left for a
-    /// network observer to read once the link is encrypted. On a cleartext
-    /// link that observer reads the contents, so padding the sizes conceals
-    /// nothing and the bandwidth buys nothing. This is a refusal rather than a
-    /// silent downgrade to carrier-off, because a node configured
-    /// for a protection it is not getting is the failure mode worth being loud
-    /// about.
+    /// **Cover traffic requires a configured connector whose native
+    /// encryption cell is [`NativeEncryption::Classical`].** Noise conceals
+    /// packet sizing. On a cleartext link the observer reads the contents,
+    /// so padding the sizes conceals nothing. This is a refusal rather than
+    /// a silent downgrade: a node that asked for a protection it is not
+    /// getting is the failure worth being loud about.
     ///
-    /// The predicate is [`LinkSecrecy`] and nothing else. It is **not** reach,
-    /// and it is **not** anonymity: reach says who receives a fluff, anonymity
-    /// says who can be identified, and neither is the question. Encrypting
-    /// ordinary internet traffic would make a clearnet zone eligible for noise
-    /// without making it anonymous, and `RelayZone::is_encrypted` is the one
-    /// place that would change. [`LinkSecrecy`] can only be constructed from a
-    /// [`shekyl_relay_privacy::RelayZone`], so a caller cannot mint "encrypted"
-    /// beside a cleartext identity. This constructor still takes secrecy as a
-    /// **parameter**, not a [`shekyl_relay_privacy::RelayZone`]: Design A is
-    /// that transport is a parameter, not a topology, and handing the
-    /// scheduler the overlay identity would recouple the axes this type exists
-    /// to keep apart. The FFI derives params, reach, and secrecy from one
-    /// discriminant at the adapter; the carrier caller does the same — it
-    /// exists as of 2026-08-29, and hits `Self::new`'s refusal notes because
-    /// it forms the pair in Rust.
+    /// The predicate is [`any_link_encrypted`]. It is not hop 0.
+    /// [`address_hidden_from_peer`] says whether the peer learns this node's
+    /// address. This cell says whether a network observer can read the byte
+    /// stream. The two agree on the connectors that exist today, and a later
+    /// connector may set only one. Cover follows encryption. An added
+    /// transport layer is not this cell, and [`Assessment::NotAssessed`] is
+    /// not presumed encrypted.
     ///
     /// **A noise carrier's channel count must equal
-    /// [`inherited::NOISE_CHANNELS`]** — `stems` doubles as the channel count
-    /// and the schedule is that wide. This was a `debug_assert!`, which
-    /// compiles out in release and therefore let the mismatched zone be
-    /// built in exactly the configuration that ships.
+    /// [`inherited::NOISE_CHANNELS`].** `stems` is that width. This was a
+    /// `debug_assert!`, which compiles out in release.
     ///
-    /// **A noise epoch must carry a full-size message** — otherwise it cannot
-    /// finish inside one epoch, and any roll that rebinds its slot restarts it
-    /// from the first fragment (CV-1), so it may never arrive. The budget is
+    /// **A noise epoch must carry a full-size message.** Otherwise it cannot
+    /// finish inside one epoch, and a roll that rebinds its slot restarts it
+    /// from the first fragment (CV-1). The budget is
     /// [`carrier::noise_windows_in_epoch`] against
-    /// [`carrier::MAX_FRAGMENTS`]; the epoch is a runtime argument, so
-    /// this is a refusal rather than a `const` assertion.
+    /// [`carrier::MAX_FRAGMENTS`].
     ///
     /// The three refusals are distinct [`RelayNewError`] variants. The FFI
-    /// maps every one to null because that is the only channel a C ABI has;
-    /// an in-process caller after the daemon cutover matches.
-    ///
-    /// # Who can reach the refusals
-    ///
-    /// C++ sets the noise flag only behind the development opt-in, which
-    /// defaults off, so no SHIPPED construction hits these. Tests and
-    /// development builds do.
-    ///
-    /// The carrier is complete as of 2026-08-29 — executor, join, boundary,
-    /// enqueue crossing and its producer — so a development-flag zone carries
-    /// real transactions rather than dummies alone. The producer hits these
-    /// refusals, because it forms the pair in Rust and does not route it
-    /// through `make_relay_zone` — which is why the checks are here and not at
-    /// FFI edge. Building it is not the daemon cutover's to provide
-    /// (`COVER_TRAFFIC_RESTORATION.md` §3's status table, the row headed
-    /// "§2.9 step 2 — covert executor", corrected 2026-08-25); C++ keeps
-    /// performing transport.
+    /// maps every one to null. C++ sets the noise flag only behind the
+    /// development opt-in, and only when some configured connector is
+    /// link-encrypted, so a shipped construction does not hit these.
     pub fn new<R: RelayRng + ?Sized>(
         params: DandelionParams,
         stems: usize,
-        secrecy: LinkSecrecy,
-        noise_enabled: bool,
+        noise_requested: bool,
         configured: &[ConnectorId],
         now: Millis,
         rng: &mut R,
     ) -> Result<Self, RelayNewError> {
-        if noise_enabled {
-            if !secrecy.is_encrypted() {
+        if noise_requested {
+            if !any_link_encrypted(configured) {
                 return Err(RelayNewError::NoiseOnCleartext);
             }
             if stems != inherited::NOISE_CHANNELS {
@@ -447,7 +466,7 @@ impl Relay {
             }
         }
         let epoch = EpochScheduler::new(params).start(now, rng);
-        let noise = if noise_enabled {
+        let noise = if noise_requested {
             NoiseSchedule::on(stems, now, rng)
         } else {
             NoiseSchedule::Off
@@ -505,12 +524,13 @@ impl Relay {
 
     /// Whether noise may be sent to `peer`.
     ///
-    /// The carrier follows the destination's connector, not the relay-wide
-    /// flag. A slot held by a clearnet peer is an ordinary stem.
+    /// The carrier follows the destination connector's encryption cell.
+    /// A session whose connector is not link-encrypted stems on the ordinary
+    /// connection.
     pub(crate) fn noise_destination(&self, peer: ConnectionId) -> bool {
         self.contexts
             .get(&peer)
-            .is_some_and(|session| address_hidden_from_peer(session.connector))
+            .is_some_and(|session| link_encrypted(session.connector))
     }
 
     /// Whether this zone runs noise channels.
@@ -1149,9 +1169,9 @@ impl Relay {
         match plan {
             RelayPlan::Stem(destination) if self.noise_enabled() => {
                 match self.map.slot_of(destination) {
-                    // A clearnet slot is a real stem. Noise is for the
-                    // connector that hides this node's address; the clearnet
-                    // stem goes on the ordinary connection.
+                    // Noise is for a session whose connector declares native
+                    // encryption. A cleartext slot stems on the ordinary
+                    // connection.
                     Some(slot) if self.noise_destination(destination) => {
                         RelayCarrier::Noise { channel: slot }
                     }
@@ -1209,6 +1229,8 @@ impl Relay {
     }
 }
 
+#[cfg(test)]
+mod edge;
 #[cfg(test)]
 mod stem_draw;
 #[cfg(test)]

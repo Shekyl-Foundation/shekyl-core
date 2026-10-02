@@ -32,6 +32,7 @@
 #include "include_base_utils.h"
 
 #include <atomic>
+#include <optional>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
@@ -476,10 +477,11 @@ namespace cryptonote
      *
      * @param hashes list of tx hashes that are about to be relayed
      * @param tx_relay update how the tx left this node
+     * @param stem_connector connector a stem was forwarded on; empty for fluff
      * @param just_broadcasted true if a tx was just broadcasted
      *
      */
-    void set_relayed(epee::span<const crypto::hash> hashes, relay_method tx_relay, std::uint8_t zone, std::vector<bool> &just_broadcasted);
+    void set_relayed(epee::span<const crypto::hash> hashes, relay_method tx_relay, std::optional<std::uint8_t> stem_connector, std::vector<bool> &just_broadcasted);
 
     /*! Record that the stem watch resolved these transactions as PROPAGATED —
         seen arriving from somewhere other than the peer they were stemmed to

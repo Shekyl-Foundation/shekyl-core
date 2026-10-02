@@ -79,9 +79,9 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 /// for `local`, `fluff` and `block`. §15.4 cleared it from the embargo's
 /// neighbourhood on the ground that it *"governs an already-fluffed
 /// transaction, a different state from the embargo"* — true when written, and
-/// **vacated** by `originated_stays_in_zone`, which pins an anonymity-zone
-/// origin at `Local` permanently and so created a class that is never fluffed
-/// and lives on that branch for its whole life.
+/// **vacated** by `origin_keeps_local_record`, which keeps a local origin
+/// at `Local` when hop 0 cannot draw a clearnet edge, so that class is never
+/// fluffed and lives on that branch for its whole life.
 ///
 /// At 300 s that origin re-emits **below the anonymity embargo's median**
 /// (346 s): more than half the embargoes along its own stem are still running,

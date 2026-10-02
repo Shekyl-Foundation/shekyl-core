@@ -3248,6 +3248,18 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 /// than embargo length. (Masking would send 5 to `public_`, the shortest.)
 uint64_t shekyl_dandelionpp_embargo_draw_seconds(uint8_t zone);
 
+/// Not a connector index. The connector embargo draws the longest measured
+/// transit for this byte. A stem-tally row uses the same byte when the
+/// observation recorded no connector.
+constexpr std::uint8_t SHEKYL_CONNECTOR_BYTE_UNSPECIFIED = 0xff;
+
+/// One embargo duration in seconds for the connector a stem was forwarded
+/// on. `connector` is a connector index (0 clearnet, 1 tor), not a
+/// `NetZone` byte. A known connector with measured transit uses that
+/// window. `SHEKYL_CONNECTOR_BYTE_UNSPECIFIED` and any other unknown
+/// byte use the longest measured transit.
+uint64_t shekyl_dandelionpp_embargo_draw_seconds_for_connector(uint8_t connector);
+
 /// How long to wait before judging a still-unseen transaction failed, in
 /// seconds — a quantile of the embargo distribution (at most 1 in 100 embargoes
 /// still running), not a multiple of its mean. On the adopted table that is
@@ -3457,41 +3469,27 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 //! Carrier: a noise channel, bound to the stem slot (channel i follows slot i).
 #define SHEKYL_RELAY_CARRIER_NOISE    1
 
-//! Zone-shape flags for `shekyl_relay_zone_new`.
+//! Flags for `shekyl_relay_zone_new`.
 //!
-//! Named bits rather than two `bool` parameters, deliberately. Adjacent bools
-//! in a C signature transpose silently — and transposing THESE two swaps the
-//! Tor outbound-only fluff rule with the noise enable, which is the exact
-//! regression RP-3a's first pass shipped (caught only because eight `private_*`
-//! gtests happened to cover it). Function *signatures* on this surface are
-//! gated by `scripts/ci/check_relay_ffi_signatures.sh` (conflicting-declaration
-//! TU over a cbindgen-generated header). Flag *values* are not: the ABI pin
-//! `zone_flag_bits_do_not_transpose` owns those, and a bitmask removes the
-//! ordering question the signature gate cannot see.
-//!
-//! Bit 0 is not a flag. Fluff reach is per session: an inbound anonymity
-//! session receives a fluff. Keep the noise value in sync with
-//! `SHEKYL_RELAY_ZONE_NOISE_ENABLED` in `relay_zone_ffi`.
+//! A bitmask rather than a bare `bool`, so a second flag cannot be transposed
+//! onto this one by argument order. Function signatures on this surface are
+//! gated by `scripts/ci/check_relay_ffi_signatures.sh`. Flag values are not:
+//! `zone_flag_bits_do_not_transpose` pins the number. Bit 0 is not a flag.
+//! Keep the noise value in sync with `SHEKYL_RELAY_ZONE_NOISE_ENABLED` in
+//! `relay_zone_ffi`.
 #define SHEKYL_RELAY_ZONE_NOISE_ENABLED 2u
 
-//! Open a zone with the caller's epoch length (public 600/30, noise 300/30).
-//! `zone` is the `NetZone` discriminant. An empty `configured`
-//! mask keeps it as the fixture parameter set; a non-empty mask derives the
-//! epoch from the declarations. The stem embargo is drawn from the forwarded
-//! connector, not from this byte. Fluff reach is per session, not this
-//! mask. `flags` is `SHEKYL_RELAY_ZONE_NOISE_ENABLED` or zero. Bit 0 is
-//! ignored.
-//! Null when a zone cannot be built: SIZE_MAX stems, a zero epoch (would
-//! expire at every wake and spin the relay timer), noise enabled on a
-//! cleartext `zone` byte (padding sizes conceals nothing an observer cannot
-//! already read), or a noise channel count other than
-//! `CRYPTONOTE_NOISE_CHANNELS`. Secrecy is the zone discriminant.
-//! Treat null as fatal.
-//! `configured` is a bit per connector index. A bit past the
-//! connector count refuses the handle. An empty mask keeps `zone` as the
-//! parameter class for fixtures; a non-empty mask derives it from the
-//! declarations of the connectors named.
-RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::uint8_t zone,
+//! Open a relay with the caller's epoch length. `configured` is a bit per
+//! connector index and is the relay's identity. A bit past the connector
+//! count refuses the handle. The stem embargo is drawn from the forwarded
+//! connector, not from this mask. `flags` is `SHEKYL_RELAY_ZONE_NOISE_ENABLED`
+//! or zero. Bit 0 is ignored.
+//! Null when a relay cannot be built: SIZE_MAX stems, a zero epoch (would
+//! expire at every wake and spin the relay timer), noise requested with no
+//! link-encrypted connector (padding sizes conceals nothing an observer
+//! cannot already read), or a noise channel count other than
+//! `CRYPTONOTE_NOISE_CHANNELS`. Treat null as fatal.
+RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms,
                                        std::size_t stems,
                                        std::uint32_t min_epoch_secs,
                                        std::uint32_t epoch_jitter_secs,
@@ -3500,6 +3498,10 @@ RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::uint8_t zone,
 //! The declaration cell for this connector: the peer does not learn this
 //! node's address. Unknown connector bytes are false.
 bool shekyl_connector_address_hidden_from_peer(std::uint8_t connector);
+//! The declaration cell for this connector: native encryption is classical,
+//! so a network observer cannot read the byte stream. Unknown bytes are false.
+//! Not the anonymity cell above.
+bool shekyl_connector_link_encrypted(std::uint8_t connector);
 //! The relay's construction bit. Null is false.
 bool shekyl_relay_zone_hop0_restricted(const RelayZoneHandle* handle);
 //! Whether this zone runs noise channels.
@@ -3508,26 +3510,17 @@ bool shekyl_relay_zone_hop0_restricted(const RelayZoneHandle* handle);
 //! Frozen at construction, so this is a plain read. False for a null handle.
 bool shekyl_relay_zone_noise_enabled(const RelayZoneHandle* handle);
 
-//! R-1 origination roll AND its zone mapping, one crossing (rule 40): draws
-//! whether this ORIGINATED transaction takes the anonymity zone and returns
-//! the zone byte send_txs reads -- invalid (0, fail-closed anonymity) or
-//! public_ (1, clearnet BY DESIGN, not fallback). Replaces the
-//! divert_originated_tx + originated_zone_from_anonymity_roll pair, whose
-//! only caller fed one's bool straight into the other. The rate and the
-//! mapping stay in Rust; relayed traffic inherits its arrival zone instead.
-std::uint8_t shekyl_relay_zone_roll_originated_zone();
-
-//! §18.4 live diagnostic: record the zone's achieved outbound
-//! anonymity-CONNECTION count (connections, not peers -- §16.6); returns the
+//! §18.4 live diagnostic: record this connector's achieved outbound
+//! connection count (connections, not peers -- §16.6); returns the
 //! floor transition (0 steady, 1 went below, 2 recovered) for the warn log.
-//! The floor comparison lives in Rust's FloorWatch, the logging path -- no
-//! wire path reads this state (§18.3).
-std::uint8_t shekyl_relay_zone_note_achieved_out(std::uint8_t zone, std::uint32_t achieved);
+//! `connector` is a connector index. The floor comparison lives in Rust's
+//! FloorWatch, the logging path -- no wire path reads this state (§18.3).
+std::uint8_t shekyl_relay_zone_note_achieved_out(std::uint8_t connector, std::uint32_t achieved);
 
 //! Admin-surface read of the §18.4 diagnostic (AdminOnly listener only -- a
 //! public below-floor bit is a targeting oracle, §16.3). False until the
-//! first note: no data is never a fabricated zero.
-bool shekyl_relay_zone_floor_snapshot(std::uint8_t zone, std::uint32_t* out_achieved, std::uint32_t* out_floor, bool* out_below);
+//! first note for `connector`: no data is never a fabricated zero.
+bool shekyl_relay_zone_floor_snapshot(std::uint8_t connector, std::uint32_t* out_achieved, std::uint32_t* out_floor, bool* out_below);
 
 //! The outbound floor the embargo provisioning assumes (F-8b): counts below
 //! this put real fluff first-passage above the provisioned value.
@@ -3578,28 +3571,11 @@ void shekyl_inbound_ceiling_resolve(std::uint64_t reserved,
                                     std::uint64_t inbound_held,
                                     shekyl_inbound_ceiling* out);
 
-//! Once-at-origin zone routing (Q12-D5a; Q12_D6A_PEER_DISCOVERY_RUN.md §§12,
-//! 18), moved from `cryptonote_protocol/enums.h` under rule 20. Bytes cross
-//! raw; the C++ wrappers in enums.h static_assert `relay_method`,
-//! the `netzone_*` bytes and `zone_route::decision` against this contract.
-//! Unknown bytes map to the SAFE arm (fail-closed / false), never toward
-//! clearnet -- refuse-to-leak is the family's invariant (§30.5).
-//!
-//! Decision bytes: 1 = fail closed, 3 = broadcast all. Byte 2, the
-//! clearnet route, is retired.
-std::uint8_t shekyl_relay_zone_once_at_origin_route(std::uint8_t tx_relay, std::uint8_t origin_zone);
-
-//! §30.5/§89.8: an origin on a non-public zone keeps its `local` txpool
-//! record whatever the transport did. Unknown-byte policy is INVERTED here
-//! relative to the siblings, because so is the leak direction: an unknown
-//! ZONE byte on a decodable local origin returns true (not provably public;
-//! keeping `local` fail-closes later, where false would let the record
-//! upgrade and the next pool re-relay put an anonymity origin on clearnet).
-//! Unknown METHOD byte: false.
-bool shekyl_relay_zone_originated_stays_in_zone(std::uint8_t tx_relay, std::uint8_t nzone);
-
-//! Pre-fluff relay methods (stem / local). Unknown bytes: false.
-bool shekyl_relay_zone_is_pre_fluff_relay(std::uint8_t tx_relay);
+//! A local origin keeps its pool record at `local` when hop 0 cannot draw
+//! a clearnet edge. Unknown method bytes return false: no `local` claim is
+//! invented for a class this build cannot name. `hop0_restricted` is the
+//! relay's construction bit.
+bool shekyl_relay_zone_origin_keeps_local_record(std::uint8_t tx_relay, bool hop0_restricted);
 
 
 //! Record `n` packed 32-byte CANONICAL tx hashes stemmed to `successor`
@@ -3636,16 +3612,19 @@ std::size_t shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
     const std::uint8_t* hashes, std::size_t n, const std::uint8_t* from,
     std::uint8_t* out_propagated);
 
-//! Fixed-layout stem-tally row for the §55 transit path (native endian, 40
-//! bytes). Must match `ShekylStemTallyRow` in the Rust FFI.
+//! Fixed-layout stem-tally row for the §55 transit path (native endian, 48
+//! bytes). `connector` is a connector index. `SHEKYL_CONNECTOR_BYTE_UNSPECIFIED`
+//! means the tally recorded none. Must match `ShekylStemTallyRow` in the Rust FFI.
 struct ShekylStemTallyRow
 {
   std::uint8_t peer[16];
   std::uint64_t propagated;
   std::uint64_t silent;
   std::uint64_t distinct_sources;
+  std::uint8_t connector;
+  std::uint8_t pad[7];
 };
-static_assert(sizeof(ShekylStemTallyRow) == 40, "stem tally row layout");
+static_assert(sizeof(ShekylStemTallyRow) == 48, "stem tally row layout");
 
 //! Copy this zone's published stem-outcome rows into `buf`. Returns the row
 //! count NEEDED, which may exceed `cap_rows` -- in that case nothing is

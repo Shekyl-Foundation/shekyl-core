@@ -232,9 +232,9 @@ impl Driver {
                 Some(peer) if self.zone.noise_destination(peer) => {
                     effects.push(Effect::NoiseSend { channel, peer });
                 }
-                // A clearnet peer in this slot is not a noise destination.
-                // The channel stays armed for a later anonymity occupant.
-                // An empty slot still unbinds: nothing is there to send to.
+                // A peer whose connector is not link-encrypted is not a noise
+                // destination. The channel stays armed for a later encrypted
+                // occupant. An empty slot still unbinds.
                 Some(_) => {}
                 None => effects.push(Effect::NoiseUnbind { channel }),
             }

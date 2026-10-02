@@ -35,6 +35,7 @@
 #include <limits>
 #include <set>
 #include <map>
+#include <optional>
 
 #include "byte_slice.h"
 #include "crypto/crypto.h"
@@ -135,7 +136,7 @@ namespace
     class test_core_events final : public cryptonote::i_core_events
     {
         std::map<cryptonote::relay_method, std::vector<cryptonote::blobdata>> relayed_;
-        std::map<cryptonote::relay_method, std::uint8_t> zones_;
+        std::map<cryptonote::relay_method, std::optional<std::uint8_t>> connectors_;
         //! Propagation verdicts, in arrival order. Read by
         //! `stem_watch_records_and_arrival_resolves`, which is what makes the
         //! forwarding leg asserted rather than inferred from the watch.
@@ -193,7 +194,7 @@ namespace
                      == gone_from_pool_.end();
         }
 
-        virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> txes, cryptonote::relay_method relay, std::uint8_t zone) override final
+        virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> txes, cryptonote::relay_method relay, std::optional<std::uint8_t> stem_connector) override final
         {
             if (throw_on_relay_)
             {
@@ -208,11 +209,9 @@ namespace
             std::vector<cryptonote::blobdata>& cached = relayed_[relay];
             for (const auto& tx : txes)
                 cached.push_back(tx);
-            /* §89.2: the embargo is drawn per zone, and the zone arrives here
-               rather than on the txpool entry. Recorded so a test can assert
-               WHICH zone a relay was attributed to — asserting only the relay
-               method would pass whatever zone the dispatch happened to pick. */
-            zones_[relay] = zone;
+            /* The embargo is drawn from the connector a stem was forwarded
+               on. Fluff records no connector. */
+            connectors_[relay] = stem_connector;
         }
 
     public:
@@ -249,11 +248,12 @@ namespace
             return relayed_.count(cryptonote::relay_method::stem);
         }
 
-        //! \return The zone the last `relay`-method relay was attributed to.
-        std::uint8_t relayed_zone(cryptonote::relay_method relay) const
+        //! \return The connector recorded with the last `relay`-method relay.
+        //! Empty when the record was fluff. Throws when that method was not recorded.
+        std::optional<std::uint8_t> relayed_connector(cryptonote::relay_method relay) const
         {
-            const auto found = zones_.find(relay);
-            if (found == zones_.end())
+            const auto found = connectors_.find(relay);
+            if (found == connectors_.end())
                 throw std::logic_error{"no relay recorded for that method"};
             return found->second;
         }
@@ -272,9 +272,9 @@ namespace
 
             std::vector<cryptonote::blobdata> out{std::move(elems->second)};
             relayed_.erase(elems);
-            /* Zone rides with the relay event; drop it with the blobs so
-               `relayed_zone` cannot return a stale attribution after consume. */
-            zones_.erase(relay);
+            /* The connector rides with the relay event; drop it with the blobs
+               so a later read cannot return a stale attribution. */
+            connectors_.erase(relay);
             return out;
         }
     };
@@ -517,7 +517,10 @@ namespace
 
         std::shared_ptr<cryptonote::levin::notify> make_hidden_and_clear_notifier()
         {
-            std::vector<std::shared_ptr<cryptonote::levin::connections>> registries{connections_};
+            std::vector<cryptonote::levin::connector_registry> registries{
+              cryptonote::levin::connector_registry{
+                cryptonote::levin::notify::connector_byte(epee::net_utils::connector_id::clearnet),
+                connections_}};
             const std::uint32_t configured = (std::uint32_t{1} << 0) | (std::uint32_t{1} << 1);
             /* Later `add_connection` registers as clearnet. The test that
                wants a TCP session passes connector 0 itself. */
@@ -685,11 +688,20 @@ namespace
                present would pass with that upgrade sitting beside it. */
             EXPECT_EQ(1u, events_.relayed_method_size());
 
-            /* §89.2 draws the embargo per zone, and the zone reaches the draw
-               with the relay rather than off the txpool entry. Asserting the
-               METHOD alone would pass whichever zone the dispatch attributed
-               it to, which is the axis this round changed. */
-            EXPECT_EQ(cryptonote::netzone_tor, events_.relayed_zone(method));
+            /* A stem or local record carries the successor's connector. This
+               fixture is Tor-only, so that byte is the Tor connector. A fluff
+               record carries none. */
+            const auto connector = events_.relayed_connector(method);
+            if (is_stem)
+            {
+                // `run_private_round` returns bool, so a fatal assert cannot
+                // return void from here.
+                EXPECT_TRUE(connector.has_value());
+                if (connector.has_value())
+                    EXPECT_EQ(static_cast<std::uint8_t>(epee::net_utils::connector_id::tor), *connector);
+            }
+            else
+                EXPECT_FALSE(connector.has_value());
             EXPECT_EQ(txs, events_.take_relayed(method));
 
             if (!is_stem)
@@ -819,66 +831,11 @@ namespace
     };
 }
 
-/* Once-at-origin routing. Production `send_txs` requires a token only this
-   helper can construct. A forwarded stem does not read the token: the
-   notifier that holds the session stems it. What edit fails to compile:
-   constructing a `zone_route` outside this helper, or calling `send_txs`
-   without one. */
-TEST(once_at_origin_route, table)
-{
-    using cryptonote::relay_method;
-    using cryptonote::zone_route;
-    using cryptonote::netzone_invalid;
-    using cryptonote::netzone_public;
-    using cryptonote::netzone_tor;
-
-    // A stem on a real zone is not this function's decision. The residual
-    // is clearnet; production does not consult it for a forwarded stem.
-    EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
-              cryptonote::once_at_origin_route(relay_method::stem, netzone_tor).get());
-    EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
-              cryptonote::once_at_origin_route(relay_method::local, netzone_tor).get());
-
-    // Relayed clearnet inherit — no roll. This is the deleted divert.
-    EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
-              cryptonote::once_at_origin_route(relay_method::stem, netzone_public).get());
-
-    // Originated, roll said anon (`invalid`) — fail closed, never clearnet.
-    EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
-              cryptonote::once_at_origin_route(relay_method::local, netzone_invalid).get());
-    EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
-              cryptonote::once_at_origin_route(relay_method::stem, netzone_invalid).get());
-
-    // Originated, roll said clearnet (`public_`) — by design, not a fallback.
-    EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
-              cryptonote::once_at_origin_route(relay_method::local, netzone_public).get());
-
-    /* DESIGN A (sec 91): a fluff floods EVERY configured zone, from every
-       origin. It was `public_clearnet` — clearnet alone — which made an
-       anonymity zone a depth-one injection point and left a Tor-only node
-       unable to maintain a mempool (sec 91.1). Coherence still refuses a
-       fluff; what changed is where a refused fluff goes. */
-    EXPECT_EQ(zone_route::decision::broadcast_all_zones,
-              cryptonote::once_at_origin_route(relay_method::fluff, netzone_tor).get());
-    EXPECT_EQ(zone_route::decision::broadcast_all_zones,
-              cryptonote::once_at_origin_route(relay_method::fluff, netzone_tor).get());
-    EXPECT_EQ(zone_route::decision::broadcast_all_zones,
-              cryptonote::once_at_origin_route(relay_method::fluff, netzone_public).get());
-    EXPECT_EQ(zone_route::decision::broadcast_all_zones,
-              cryptonote::once_at_origin_route(relay_method::fluff, netzone_invalid).get());
-}
-
-/* The roll's zone mapping moved fully behind the FFI
-   (`shekyl_relay_zone_roll_originated_zone`, one crossing). Its two former
-   witnesses here have owners: outcome distinctness is `roll_mapping_preserves
-   _the_design_fallback_distinction` in `shekyl-relay::zone_route`, and the
-   byte-to-`epee` cast contract is the `static_assert` block in `enums.h`. */
-
-/* Zone-labelled stem tally. Production `stem_tallies_json` calls this.
-   What edit reds it: omit the `"zone"` key from `format_stem_tally_row_json`.
+/* Connector-labelled stem tally. Production `stem_tallies_json` calls this.
+   What edit reds it: omit the `"connector"` key from `format_stem_tally_row_json`.
    A test that only grepped the merge loop could pass if the helper never
    ran; sharing the function is the witness. */
-TEST(stem_tally_json, row_carries_zone_from_the_merge)
+TEST(stem_tally_json, row_carries_connector_from_the_row)
 {
     cryptonote::levin::notify::stem_tally_row row{};
     row.peer[0] = 0xab;
@@ -886,23 +843,23 @@ TEST(stem_tally_json, row_carries_zone_from_the_merge)
     row.propagated = 3;
     row.silent = 1;
     row.distinct_sources = 2;
+    row.connector = static_cast<std::uint8_t>(epee::net_utils::connector_id::tor);
 
-    const std::string tor =
-      cryptonote::levin::format_stem_tally_row_json(row, cryptonote::netzone_tor);
-    EXPECT_NE(std::string::npos, tor.find("\"zone\":\"tor\""));
+    const std::string tor = cryptonote::levin::format_stem_tally_row_json(row);
+    EXPECT_NE(std::string::npos, tor.find("\"connector\":\"tor\""));
     EXPECT_NE(std::string::npos, tor.find("\"peer\":\"abcd"));
     EXPECT_NE(std::string::npos, tor.find("\"propagated\":3"));
     EXPECT_NE(std::string::npos, tor.find("\"silent\":1"));
     EXPECT_NE(std::string::npos, tor.find("\"distinct_sources\":2"));
 
+    row.connector = static_cast<std::uint8_t>(epee::net_utils::connector_id::clearnet);
     EXPECT_NE(
       std::string::npos,
-      cryptonote::levin::format_stem_tally_row_json(row, cryptonote::netzone_public)
-        .find("\"zone\":\"public\""));
+      cryptonote::levin::format_stem_tally_row_json(row).find("\"connector\":\"clearnet\""));
+    row.connector = SHEKYL_CONNECTOR_BYTE_UNSPECIFIED;
     EXPECT_NE(
       std::string::npos,
-      cryptonote::levin::format_stem_tally_row_json(row, cryptonote::netzone_invalid)
-        .find("\"zone\":\"invalid\""));
+      cryptonote::levin::format_stem_tally_row_json(row).find("\"connector\":\"unnamed\""));
 }
 
 /* §89 private stemming posture: the anonymity zone STEMS. Outbound-only fluff
@@ -3296,16 +3253,15 @@ TEST_F(levin_notify, a_real_transaction_rides_the_carrier_and_records_on_arrival
 /*! **A successfully carried ORIGIN is recorded `local`, not `stem`.**
 
     The class an origination keeps is not the class the wire used, and the two
-    diverge exactly here: `originated_stays_in_zone` decides what the pool is
-    told, while the carrier stems on the wire regardless. §30.5 forbids the
-    in-zone backstop reaching clearnet, and the `local` record is what keeps it
-    in zone.
+    diverge exactly here: `origin_keeps_local_record` decides what the pool is
+    told, while the carrier stems on the wire regardless. A restricted hop 0
+    keeps the origin's record at `local`.
 
     Written because the SUCCESS arm of that branch had no coverage. Every other
     carrier case sends `stem`, and the one `local` case forces a discard — so a
     regression recording a carried origin as `stem` stayed green in all of
     them. This arc has already produced that exact defect once, when
-    `originated_stays_in_zone` was handed the wire's method instead of the
+    `origin_keeps_local_record` was handed the wire's method instead of the
     caller's, which would have stripped the pin off every carrier-borne
     origination.
 
@@ -3328,7 +3284,7 @@ TEST_F(levin_notify, a_real_transaction_rides_the_carrier_and_records_on_arrival
     all, and is recorded `local`.
 
     What edit reds this: pass `relay_method::stem` rather than
-    `pending.requested` to `originated_stays_in_zone` in
+    `pending.requested` to `origin_keeps_local_record` in
     `apply_one_carrier_verdict`, or drop the conditional and record `stem`. */
 TEST_F(levin_notify, a_carried_origin_is_recorded_local_and_observed)
 {

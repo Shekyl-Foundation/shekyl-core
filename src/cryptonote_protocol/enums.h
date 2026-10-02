@@ -60,21 +60,16 @@ namespace cryptonote
      `upgrade_relay_method`'s monotonicity, whose `static_assert`s moved with
      the deletion. */
 
-  /* The once-at-origin decision family below FORWARDS to Rust
-     (`shekyl-relay::zone_route`, rule 20): the semantics live beside every
-     sibling relay decision and their governing parameter, and the tables that
-     pin them run in that crate's own test suite. C++ keeps two things — the
-     `zone_route` compile-time token (the seam guard `send_txs` requires), and
-     these byte-contract asserts. Each side pins its OWN enums to the shared
-     documented literals at compile time (Rust's pins are `const` asserts in
-     `zone_route.rs`) -- neither compiler can observe the other, so the pair
-     of pins is what makes a renumbering a compile error on the side that
-     renumbered. The runtime witness that both pins describe the same wire is
-     the `levin.cpp` gtest table, which crosses the real FFI. */
+  /* Relay-method bytes are the FFI contract with `shekyl-relay::zone`
+     (`origin_keeps_local_record` and the `RelayMethod` pins beside it).
+     NetZone bytes below are the contract with `shekyl_types::relay::NetZone`.
+     Neither compiler observes the other, so each side pins its own literals.
+     The runtime witness is the relay-zone FFI test that crosses
+     `shekyl_relay_zone_origin_keeps_local_record`. */
   static_assert(unsigned(relay_method::none) == 0 && unsigned(relay_method::local) == 1
              && unsigned(relay_method::stem) == 2 && unsigned(relay_method::fluff) == 3
              && unsigned(relay_method::block) == 4,
-    "relay_method bytes are the FFI contract with shekyl-relay::zone_route");
+    "relay_method bytes are the FFI contract with shekyl-relay::zone");
   /* Bytes of `shekyl_types::relay::NetZone`. Not connector ids: clearnet's
      connector is 0, and this public byte is 1. Tor stays 3. Discriminant 2
      is not a value. */
@@ -94,100 +89,22 @@ namespace cryptonote
     }
   }
 
-  /*! \brief Pre-fluff relay methods for R-1 (stem / local).
+  /*! A local origin keeps its pool record when hop 0 is restricted.
 
-      Fluff is the deliberate exit from the anonymity zone: once a transaction
-      fluffs it must leave, or coherence would strand it in the anonymity
-      subgraph (§59.1). Extracted so the production branch and its unit
-      witness share one predicate — the suite cannot drive a full
-      `handle_notify_new_transactions` arrival on a non-public context yet
-      (FOLLOWUPS / §89.7), but it can pin this gate. */
-  inline bool is_pre_fluff_relay(const relay_method method) noexcept
-  {
-    return shekyl_relay_zone_is_pre_fluff_relay(static_cast<std::uint8_t>(method));
-  }
+      Hop 0 is the relay's construction bit: some configured connector hides
+      this node's address, so the first hop draws only from those edges.
+      `upgrade_relay_method` is monotone. One record of `stem` or `fluff`
+      moves the entry out of `local` permanently, and the next pool re-relay
+      puts the origin's own transaction on a clear edge.
 
-  /*! \brief Originated traffic on an anonymity zone keeps its `local` txpool
-      record, whatever the transport did with it.
-
-      §30.5 forbids the backstop falling out to the public zone: re-broadcasting
-      our own transaction from the origin's own IP is the first-spy case this
-      arc exists to prevent. `local` is the class that prevents it —
-      `relay_txpool_transactions` routes `local` to `private_req` at
-      `zone::invalid`, which `once_at_origin_route` maps to
-      `anonymity_fail_closed` — take the zone, send nothing if unusable.
-      Every other class routes to `public_req`.
-
-      This matters because `upgrade_relay_method` is monotone: one record of
-      `stem` or `fluff` moves the entry out of `local` permanently, and the next
-      pool re-relay puts the user's own transaction on the clear internet.
-
-      Relayed traffic is excluded deliberately, not by oversight. It records
-      `stem` so the per-zone embargo is drawn (§89.2), and clearnet was always
-      that traffic's home — the roll is eligibility, not a drop commitment
-      (§59.7). Clearnet origins are excluded too: `local` on the public zone has
-      always recorded `stem`, and its home *is* clearnet. */
-  inline bool originated_stays_in_zone(
+      Every other method records the method the relay used. An unknown method
+      byte is false: this does not invent a `local` claim. */
+  inline bool origin_keeps_local_record(
     const relay_method tx_relay,
-    const std::uint8_t nzone) noexcept
+    const bool hop0_restricted) noexcept
   {
-    return shekyl_relay_zone_originated_stays_in_zone(
-      static_cast<std::uint8_t>(tx_relay), static_cast<std::uint8_t>(nzone));
-  }
-
-  /*! \brief Where `node_server::send_txs` should place a transaction under
-      once-at-origin.
-
-      A token only `once_at_origin_route` can construct. `send_txs` requires
-      one to select a zone, so a caller that bypasses the helper is a
-      compile error — same device as `f` refusing a timing parameter
-      (`DAEMON_RELAY_PRIVACY.md` §77.4) and the depth table refusing an
-      unpopulated tier (§83.3). Sharing the helper with the unit table is
-      necessary and not sufficient; this is the liveness half the table
-      cannot supply.
-
-      What edit fails to compile: constructing a `zone_route` anywhere
-      except `once_at_origin_route`, or calling `send_txs` without one.
-      A forwarded stem does not read this token: the notifier that holds
-      the session stems it. */
-  class zone_route
-  {
-  public:
-    enum class decision : std::uint8_t
-    {
-      anonymity_fail_closed = 1, //!< originated chose anon, or local re-relay backstop
-      // Byte 2 was the clearnet route. Retired with the one relay: hop 0
-      // draws from the edges the declaration allows. Not reused.
-      broadcast_all_zones = 3    //!< DESIGN A (sec 91): a fluff floods EVERY configured zone
-    };
-
-    constexpr decision get() const noexcept { return k_; }
-
-    constexpr bool operator==(zone_route const& o) const noexcept { return k_ == o.k_; }
-    constexpr bool operator!=(zone_route const& o) const noexcept { return k_ != o.k_; }
-
-  private:
-    decision k_;
-    explicit constexpr zone_route(decision k) noexcept : k_(k) {}
-    friend zone_route once_at_origin_route(
-      const relay_method, const std::uint8_t) noexcept;
-  };
-
-  inline zone_route once_at_origin_route(
-    const relay_method tx_relay,
-    const std::uint8_t origin) noexcept
-  {
-    static_assert(unsigned(zone_route::decision::anonymity_fail_closed) == 1
-               && unsigned(zone_route::decision::broadcast_all_zones) == 3,
-      "decision bytes are the FFI contract with shekyl-relay::zone_route");
-    switch (shekyl_relay_zone_once_at_origin_route(
-      static_cast<std::uint8_t>(tx_relay), static_cast<std::uint8_t>(origin)))
-    {
-      case 3: return zone_route(zone_route::decision::broadcast_all_zones);
-      /* 1, and defensively anything else: fail closed — send nothing is the
-         one default that cannot leak (§30.5). */
-      default: return zone_route(zone_route::decision::anonymity_fail_closed);
-    }
+    return shekyl_relay_zone_origin_keeps_local_record(
+      static_cast<std::uint8_t>(tx_relay), hop0_restricted);
   }
 
 }

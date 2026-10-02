@@ -1123,15 +1123,14 @@ namespace nodetool
     /* One relay, after every connector zone exists. The mask is which
        connectors are configured; the relay reads their declarations. */
     {
-      std::vector<std::shared_ptr<cryptonote::levin::connections>> registries;
+      std::vector<cryptonote::levin::connector_registry> registries;
       std::uint32_t configured = 0;
       for (auto& zone : m_network_zones)
       {
         const std::uint8_t connector = cryptonote::levin::notify::connector_byte(zone.first);
-        if (connector == 0xff)
-          continue;
         configured |= std::uint32_t{1} << connector;
-        registries.push_back(zone.second.m_net_server.get_config_shared());
+        registries.push_back(cryptonote::levin::connector_registry{
+          connector, zone.second.m_net_server.get_config_shared()});
       }
       const bool pad_txs = command_line::get_arg(vm, arg_pad_transactions);
       network_zone& public_zone_for_relay = m_network_zones.at(epee::net_utils::connector_id::clearnet);
@@ -2540,62 +2539,55 @@ namespace nodetool
   template<class t_payload_net_handler>
   std::string node_server<t_payload_net_handler>::stem_tallies_json() const
   {
-    /* §55 TRANSIT, NOT STRUCTURE. Collects published rows from every zone
-       (a peer belongs to exactly one; zones do not share connection ids),
-       sorts globally by peer id so operator diffs are content-stable, and
-       emits one JSON object: `floor` (per-zone §18.4 diagnostics) and
-       `tallies` (the flattened rows). Each row carries the zone it was collected
-       from -- verification of coherence / the isolation arm, not a `p`
-       instrument. Serialisation lives in `format_stem_tally_row_json` so
-       the unit table and this merge cannot disagree on the label.
+    /* §55 TRANSIT, NOT STRUCTURE. One relay publishes the rows. Each row
+       carries the connector the stem was forwarded on. Serialisation lives
+       in `format_stem_tally_row_json` so the unit table and this merge
+       cannot disagree on the label.
 
-       The endpoint remains AdminOnly (`Visibility::AdminOnly` on
-       `/get_stem_tallies`); a zone label is strictly more disclosive
-       than the flattened peer list, so the gate does not move.
+       The endpoint remains AdminOnly. A connector label is strictly more
+       disclosive than the flattened peer list.
 
        Disappears with the p2p migration. */
     using row_t = cryptonote::levin::notify::stem_tally_row;
-    std::vector<std::pair<row_t, std::uint8_t>> rows;
-    {
-      auto part = m_notifier.stem_snapshot();
-      for (auto& r : part)
-        rows.emplace_back(std::move(r), cryptonote::netzone_public);
-    }
+    std::vector<row_t> rows = m_notifier.stem_snapshot();
     std::sort(rows.begin(), rows.end(),
       [](const auto& a, const auto& b) {
         return std::lexicographical_compare(
-          std::begin(a.first.peer), std::end(a.first.peer),
-          std::begin(b.first.peer), std::end(b.first.peer));
+          std::begin(a.peer), std::end(a.peer),
+          std::begin(b.peer), std::end(b.peer));
       });
 
     /* §18.4: the below-floor diagnostic joins this snapshot as a sibling
-       key rather than a row — rows are per-peer, this is per-zone. Endpoint
-       stays AdminOnly for the same reason with more force: a below-floor bit
-       on the public listener is a free targeting oracle (§16.3). "No data"
-       zones are omitted, never zero-filled. */
+       key rather than a row — rows are per-peer, this is per-connector.
+       "No data" connectors are omitted, never zero-filled. */
     std::string out = "{\"floor\":[";
+    bool wrote_floor = false;
+    for (const epee::net_utils::connector_id connector : epee::net_utils::all_connectors)
     {
+      const std::uint8_t connector_byte = static_cast<std::uint8_t>(connector);
       std::uint32_t achieved = 0, floor = 0;
       bool below = false;
-      if (m_notifier.floor_snapshot(achieved, floor, below))
-      {
-        out += "{\"zone\":\"";
-        out += epee::net_utils::connector_id_to_string(epee::net_utils::connector_id::clearnet);
-        out += "\",\"achieved_out_connections\":";
-        out += std::to_string(achieved);
-        out += ",\"floor\":";
-        out += std::to_string(floor);
-        out += ",\"below\":";
-        out += below ? "true" : "false";
-        out += '}';
-      }
+      if (!m_notifier.floor_snapshot(connector_byte, achieved, floor, below))
+        continue;
+      if (wrote_floor)
+        out += ',';
+      wrote_floor = true;
+      out += "{\"connector\":\"";
+      out += epee::net_utils::connector_id_to_string(connector);
+      out += "\",\"achieved_out_connections\":";
+      out += std::to_string(achieved);
+      out += ",\"floor\":";
+      out += std::to_string(floor);
+      out += ",\"below\":";
+      out += below ? "true" : "false";
+      out += '}';
     }
     out += "],\"tallies\":[";
     for (std::size_t i = 0; i < rows.size(); ++i)
     {
       if (i)
         out += ',';
-      out += cryptonote::levin::format_stem_tally_row_json(rows[i].first, rows[i].second);
+      out += cryptonote::levin::format_stem_tally_row_json(rows[i]);
     }
     out += "]}";
     return out;
@@ -2617,14 +2609,9 @@ namespace nodetool
   }
 
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::send_txs(std::vector<cryptonote::blobdata> txs, const std::uint8_t origin, const boost::uuids::uuid& source, const cryptonote::relay_method tx_relay, const cryptonote::zone_route route)
+  bool node_server<t_payload_net_handler>::send_txs(std::vector<cryptonote::blobdata> txs, const boost::uuids::uuid& source, const cryptonote::relay_method tx_relay)
   {
-    /* One relay. The route token no longer selects a connector: hop 0 is
-       inside the relay, and a fluff reaches every session of that relay.
-       Byte 2 (the clearnet route) is retired with this. The origin byte is
-       the pool's NetZone, consumed by the route token at the caller. */
-    (void)origin;
-    (void)route;
+    /* One relay. Hop 0 is inside it, and a fluff reaches every session. */
     return m_notifier.send_txs(std::move(txs), source, tx_relay);
   }
   //-----------------------------------------------------------------------------------
