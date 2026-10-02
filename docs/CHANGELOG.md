@@ -23,10 +23,19 @@
   the heaviest shard takes 56.1 s at the governing percentile, and one
   attempt and one retry complete by 149.7 s at p99. This replaces the
   "~20 s for 3.33 MB" its span was sized on (`SHT-7`).
+- `SF-D6`'s retry budget is 2 retries (`ARCHIVAL_SHARD_T_DERIVATION.md`
+  §10.7): a read of three attempts completes by 190.4 s at p99 on the worse
+  day, inside `L`'s 240 s span, and cannot run past `L`'s six-minute line.
+  The measurement alone does not bound the count; the deadline arithmetic
+  does. It is not a constant yet: `shekyl-p-fetch` does not retry.
+- `shekyl-economics-sim`: `MissSources::retries` is `attempts`, which is
+  what it always held, and stays 1 deliberately. Bad-day misses are
+  correlated circuit failures, so a retry is margin, not calibration.
 - `shekyl-sp-t3-spike` gains `pd-f2-ceiling`, which reads one observations
   file as §10.1's analysis: miss rate with its Wilson interval, circuit apart
   from transfer misses, the fit and the ceiling or the reason there is none,
-  the span at the heaviest shard, and the read of one attempt and one retry.
+  the span at the heaviest shard, the read of one attempt and up to three
+  retries, and the retry budget that follows.
   The three observation files are in `docs/benchmarks/`.
 
 ### Daemon RPC — `target_height` is the core's target (`CORE_RPC_VERSION` 3.40)

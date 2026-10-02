@@ -33,6 +33,9 @@ is provisional only on `U1b`.** **Three rulings on that reading the same day (§
 `p_attempt = 0.30` is retained, re-grounded as a bound the measurements support; the
 PoW finding is "no measurable cost, sign unresolved"; and `L`'s fetch span is
 re-derived per byte on the worse day — `L = 4` holds, which closes `SHT-7`.**
+**Close-out the same day (§10.7): the sim credits one attempt per read, and `SF-D6`'s
+retry budget is 2 retries. §11 is the closing state: the only row `W` waits on is
+`U1b`.**
 Identifier families **`SHT-`** (findings) and
 **`SHT-Q`** (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
@@ -1904,10 +1907,10 @@ was read off single-attempt p99s and is withdrawn: on this day the retried read'
 is two and a half minutes, and even in the PoW-on window it is 128.7 s.
 
 Two blocks are also exactly the most a read of one attempt and one retry can take when
-each ends at the 120 s deadline. That is the sense in which `L = 4` and a one-retry
-budget fit each other, and it marks what this reading does **not** settle: `SF-D6`'s
-retry budget is still not a number. A second retry could run to 360 s, past the span;
-by `L`'s own ruling that would be the budget's defect, not a reason to raise `L`.
+each ends at the 120 s deadline. A second retry can run to 360 s: past the two blocks,
+and exactly `L`'s six-minute line. This reading does not say whether that is inside
+`SF-D6`'s retry budget; §10.7 does. Whatever the budget, `L`'s own ruling stands: a
+budget that outruns the span is the budget's defect, not a reason to raise `L`.
 
 This closes `SHT-7`'s circularity: `L`'s span no longer rests on a byte count from the
 retired segment, and `W` was not selected inside a span that was sized on it. More
@@ -1918,3 +1921,152 @@ Reproduce, from `rust/`:
 ```text
 cargo run --release -p shekyl-sp-t3-spike --bin pd-f2-ceiling -- ../docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv
 ```
+
+### 10.7 Close-out rulings — 2026-10-02
+
+From the design-owner lane on the close-out of the PR that carries §10.5 and §10.6
+(#932), relayed by Rick the same day. Two confirm what the record already does; three
+add to it.
+
+**Confirmed, no change.** The recalibration row's removal from `FOLLOWUPS.md` is
+accepted: the question is answered, and its reopening condition lives in §10.6 item 1
+and at the constant. (The other confirmation concerns the prunable digest in §10.3 and
+is recorded with that change.)
+
+**1. The sim credits one attempt per read, deliberately.**
+
+> Keep the value 1, deliberately. Rename the field to `attempts` (the code computes
+> p^attempts) and fix the doc. Bad-day misses were mostly size-independent circuit
+> failures, correlated within a window, so a retry is not an independent draw and
+> crediting it (p²) overstates protection. The protocol's retry is margin, not
+> calibration.
+
+Grounded: `MissSources::retries` was the exponent in `read_failure`
+(`rust/shekyl-economics-sim/src/mn_feasibility.rs`), so the field held attempts, and
+its default of 1 was described as "single-retry". It is `attempts` now, with the
+reason at the field and in the report it prints, and
+`the_calibration_credits_one_attempt_per_read` pins it. On the worse day 73 of the 98
+misses at the 1× object were circuit failures, and the circuit share was about 15 % at
+every size (§10.5). No value changed, so no sim verdict moved.
+
+**2. `SF-D6`'s retry budget is 2 retries (three attempts).**
+
+The criterion as given:
+
+> The largest retry count whose p99 completion fits within `L = 4`'s fetch span on the
+> worse PoW-off day at `W = 3,000,000 B` + 149.4 KB. One retry completes by 149.7 s;
+> compute whether a second fits.
+
+A second fits. So does a third, and that is the finding: **the criterion does not
+select a count.** On the worse day (the 2026-09-30 soak, 489 attempts at the 1×
+object, which is larger than the heaviest shard and so bounds it from above), a miss
+costing what it took and at most the 120 s deadline:
+
+| Retries | Completed reads, p50 | p90 | p99 | Longest possible read |
+|---:|---:|---:|---:|---:|
+| 0 | 19.0 s | 62.9 s | 101.9 s | 120 s |
+| 1 | 24.9 s | 85.4 s | 149.7 s | 240 s |
+| **2** | 25.4 s | 95.6 s | **190.4 s** | **360 s** |
+| 3 | 25.4 s | 99.8 s | 202.9 s | 480 s |
+
+Every row's p99 is inside the 240 s span. The p99 stops moving because few reads get
+that far: in this reading a fourth attempt is reached by under 1 % of them, so it
+cannot set a 99th percentile. In the two windows of 2026-10-01 a second retry's p99 is 129.5 s (PoW on)
+and 133.0 s (PoW off).
+
+What bounds the count is the last column, which is arithmetic on the deadline and not
+a measurement. `L`'s ruling names six minutes as the line past which the budget is too
+generous (`ARCHIVAL_SHARD_FETCH.md`, `SF-D8`). Three attempts can take exactly six
+minutes and no more. Four can take eight.
+
+**Ruled (Rick, 2026-10-02), on that table: 2 retries.** The rule, so that a later day
+is read the same way:
+
+> The retry budget is the largest count whose retried read completes inside `L`'s
+> fetch span (240 s) at p99 on the worst day measured, **and** whose longest possible
+> read is not past `L`'s six-minute line.
+
+- The second leg holds on every day, including one on which the assigned `P` stalls
+  each attempt to the deadline. So the budget cannot trip `L`'s upper falsifier, and
+  `L` is never asked to absorb it.
+- The first leg is the one a measurement can move, and only downward: a day whose
+  two-retry p99 is past 240 s makes the budget 1. That is the **reopening
+  condition**.
+- `SF-D6`'s own requirement on the number is met with room: a `P` that truncates
+  every attempt costs the witness 360 s, three blocks of the 500 in
+  `CHALLENGE_RESPONSE_BLOCKS`.
+- A read that takes all 360 s has used three of `L`'s four blocks, where the ruling
+  allotted two to fetch-plus-retry and one each to skew and margin. At p99 on the
+  worse day it has used 190.4 s. The tail between is what the budget spends of `L`'s
+  margin, and it is bounded.
+
+Two things this does **not** claim:
+
+- **No failure rate.** The table has no "every attempt misses" column on purpose. The
+  tool prints one (0.80 % at two retries), computed as if attempts were independent
+  draws. Item 1 above is the ruling that they are not, so that figure is a floor and
+  nothing is calibrated on it.
+- **No constant.** `shekyl-p-fetch` does not retry; it classifies an outcome and its
+  caller decides (`FetchError::retries_same_p`). The callers that will retry are not
+  built, so the budget is recorded here and in `SF-D6` as their input, and enters the
+  code with them.
+
+The rule is `shekyl_sp_t3_spike::ceiling::retry_budget`, and `pd-f2-ceiling` prints the
+table and the budget for any observations file (the command under §10.6).
+
+---
+
+## 11. Closing state — 2026-10-02
+
+**`W = 3,000,000 B`** (`archival_shard_length_bytes`), provisional on one thing: the
+server-egress measurement `U1b`. It is pinned, together with `L = 4`, at the Round-2
+testnet gate (§5, §9.5).
+
+**Ruled.**
+
+| What | Ruling | Where |
+|---|---|---|
+| The partition domain (`SHT-Q1`) | transactions that carry archival good | §2 |
+| `L2` as a bound on `T` | withdrawn | §3 |
+| The partition unit (`SHT-Q2`) | archival bytes, bound through the txid | §8.6 |
+| The target witness-miss rate | the failure window's `p_attempt`, judged with PoW on | §10.1 |
+| The overshoot tolerance | 5 % | §10.2 |
+| A pruned form's length | measured at serve time from full segments | §10.3 |
+| `p_attempt` | 0.30 retained, measured-supported | §10.6 |
+| The PoW finding | no measurable cost, sign unresolved | §10.6 |
+| `L` | 4 holds on the worse day's per-byte rate | §10.6 |
+| Attempts the sim credits | one, deliberately | §10.7 |
+| `SF-D6`'s retry budget | 2 retries | §10.7 |
+
+**Built.**
+
+- The domain's equivalence test (§2.1).
+- The byte partition: the store half, the txid's length term and the C++ call into the
+  one mixer, the regenerated pins (`ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F).
+- The canonical-form fixes for `SHT-10` and `SHT-11`.
+- `SHT-8`'s two re-keys and the re-derived `escalation_knee_n` (§10.4).
+- The W₂ size ladder, its three observation files, and the tool that reads them
+  (`pd-f2-ceiling`).
+
+**Closed.** `SHT-1` (the inherited 3.33 MB: `W` is derived in bytes), `SHT-2` (by
+`SHT-Q1`), `SHT-4` (`U1a` is read and does not bind), `SHT-6`, `SHT-7`, `SHT-8`,
+`SHT-10`, `SHT-11`, `SHT-12` (by `SHT-Q2`).
+
+**Handed off.** Each is a `FOLLOWUPS.md` row whose owner is another document:
+
+- `SHT-3`, the stale materialise premise on `SF-D7`: `ARCHIVAL_SHARD_FETCH.md`.
+- `SHT-9`, the fixture consensus refuses: `CHAIN_RULES_SLICE_5.md`.
+- The `PDM-Q-F34` coverage row and its sim arms, and the single home of the production
+  `W`: `ARCHIVAL_PRUNED_DAEMON_MODE.md`.
+- What the Rust store must carry when it backs the daemon RPC:
+  `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F.
+- The retry budget's consumer: the schedulers that retry, unbuilt (`SF-D6`).
+
+**Remaining, in this file's name.**
+
+- **`U1b`** (`SHT-5`): an honest server's sustained egress over Tor on the Pi 4 floor
+  device. It can only lower `W`'s ceiling, and it is the one row the constant waits
+  on. This lane runs it.
+- One row of test coverage, not of the derivation: leg (f) of `SHT-Q1`'s equivalence
+  covers a connected serve-credit transaction only at the row level (§2.1). It waits
+  on `SHT-9`'s fixture.
