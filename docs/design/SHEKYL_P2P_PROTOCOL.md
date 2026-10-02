@@ -4949,6 +4949,9 @@ question for all four conditions**, because all four are `kept_by_block`-gated
 — `:267` and `:276` inline, `:291` by its enclosing `if`, and `:257` by
 short-circuit (`fee_good = kept_by_block || m_blockchain.check_fee(...)`).
 
+The call sites in the answer were re-read after the origin parameter was
+removed, verified at `dev` `736fd998d0`.
+
 > **Answer: there is no peer to punish. That is the whole of it, and it is
 > verified at every call site rather than inferred from one.**
 >
@@ -4962,6 +4965,8 @@ short-circuit (`fee_good = kept_by_block || m_blockchain.check_fee(...)`).
 > `relay_method::block` and nothing about a network. **No connection exists
 > to attribute an offense to, so an offense classification has nothing to
 > classify.**
+
+Citations below remain verified at `dev` `059aca264`.
 
 **A leg this row previously rested on was wrong, and it is retracted rather
 than quietly dropped.** It read: *"documented as 'from a previously-verified

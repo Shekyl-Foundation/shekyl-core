@@ -107,13 +107,17 @@ def main() -> int:
             continue
         pinned += 1
         rel = os.path.relpath(d, ROOT)
-        cache: dict[str, list[str] | None] = {}
+        # Keyed by pin and path. A later section re-pins the same file after
+        # dev moved; a path-only cache would answer that pin with the first
+        # pin's bytes, and a shifted line would read as blank.
+        cache: dict[tuple[str, str], list[str] | None] = {}
 
         def resolver(sha, _cache=cache):
             def get(path):
-                if path not in _cache:
-                    _cache[path] = blob(sha, path)
-                return _cache[path]
+                key = (sha, path)
+                if key not in _cache:
+                    _cache[key] = blob(sha, path)
+                return _cache[key]
             return get
         try:
             fails += check_text(text, rel, resolver)
