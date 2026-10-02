@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Archival shards — the W₂ size ladder is read: `W = 3,000,000 B` stands on `U1a`
+
+- With onion PoW on, 13 of 319 single-attempt fetches of the largest served
+  object missed the 120 s deadline: 4.1 %, 95 % interval 2.4 – 6.9 %, against
+  the 0.30 the failure window is calibrated on
+  (`ARCHIVAL_SHARD_T_DERIVATION.md` §10.5). The provisional shard length
+  stands on the transport ceiling; it is now provisional only on the
+  server-egress measurement (`U1b`). No constant changes.
+- The PoW comparison found no cost on any judged statistic, and one material
+  difference in PoW's favour that the design cannot attribute
+  (`SP_T3_SKELETON_MEASUREMENT.md` §19b). Two PoW-off windows a day apart
+  differ by more than the postures do.
+- `shekyl-sp-t3-spike` gains `pd-f2-ceiling`, which reads one observations
+  file as §10.1's analysis: miss rate with its Wilson interval, circuit apart
+  from transfer misses, the fit and the ceiling or the reason there is none.
+  The three observation files are in `docs/benchmarks/`.
+
 ### Daemon RPC — `target_height` is the core's target (`CORE_RPC_VERSION` 3.40)
 
 - `get_version` and `sync_info` no longer write `0` when the node is

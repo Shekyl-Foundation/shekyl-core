@@ -26,7 +26,10 @@ the txid" is §8.5's right-hand column. **Four rulings of 2026-10-01 (§10)** fi
 inputs the build and the fit were held on: the target witness-miss rate is the failure
 window's `p_attempt`, judged in the soak with PoW on; the 5 % overshoot tolerance is
 confirmed; a pruned form's length is measured at serve time from full segments (option
-(iv)), which lifts the cutover's blocker; and `SHT-8`'s two residues have owners. Identifier families **`SHT-`** (findings) and
+(iv)), which lifts the cutover's blocker; and `SHT-8`'s two residues have owners. **The
+W₂ run is read (2026-10-02, §10.5): with PoW on, 4.1 % of 1× fetches missed (95 %
+interval 2.4 – 6.9 %) against the 0.30 target, so `W = 3,000,000 B` stands on `U1a` and
+is provisional only on `U1b`.** Identifier families **`SHT-`** (findings) and
 **`SHT-Q`** (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
 (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a) — 105 prefixes
@@ -1472,6 +1475,9 @@ The rows §3 keeps restate directly:
 > **`W ∈ [ max(149.4 KB, 149.4 KB / τ),  U1a ceiling ]`**, with the ceiling between
 > ≈ 4.49 MB (pessimistic) and ≈ 16 MB (optimistic) until the multi-size W₂ run pins it.
 
+**Read 2026-10-02 (§10.5):** the run is in. `U1a` does not bind at 3 MB in any window
+read, and the interval above is superseded by that section.
+
 | `τ` | floor | against the pessimistic ceiling (4.49 MB) |
 |---|---|---|
 | 10 % | 1.49 MB | feasible |
@@ -1500,7 +1506,8 @@ It is re-pinned at the Round-2 gate, like `T` was, by:
 - **the overshoot tolerance `τ`**, Rick's input. It sets the floor — **5 %, confirmed
   2026-10-01 (§10.2)**, so the floor is 2.99 MB and no longer an open input;
 - **the multi-size W₂ run** (§4.1, pre-registered). It separates `t_fixed` from `v`
-  and turns the ceiling into one number;
+  and turns the ceiling into one number — **read 2026-10-02 (§10.5): `U1a` does not
+  bind**;
 - **the `U1b` server-egress measurement** (`SHT-5`). It may lower the ceiling.
 
 **Constant rename, owed in the build, not here.** `archival_shard_tx_count` (the JSON
@@ -1697,3 +1704,113 @@ the build:
 - **`escalation_knee_n`** is re-derived by the sim lane, per `SCC-Q2`. **LANDED
   2026-10-01**: `2,250,000` closed shards, the middle of the re-swept band
   (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13).
+
+### 10.5 The W₂ reading — 2026-10-02
+
+**`W = 3,000,000 B` stands on `U1a`.** With PoW on, 13 of 319 fetches of the 1× object
+missed: 4.08 %, 95 % Wilson interval 2.40 % to 6.85 %. The whole interval is under 0.30,
+which is §10.1 item 1's first branch: the provisional `W` stands and `U1a` does not
+bind. `W` is now provisional only on `U1b` (`SHT-5`).
+
+This subsection is the reading. §4.1a and §10.1 above are the analysis as it was fixed
+beforehand, and are not edited.
+
+**The run.** The interleaved run started 2026-10-01 11:33:10 UTC and ended 2026-10-02
+11:34:01 UTC with exit 0: 1,910 fetches, 955 per posture, 318, 318 and 319 per object
+per posture (§4.1a expected about 230). The observations are in
+[`docs/benchmarks/`](../benchmarks/):
+
+| File | Run |
+|---|---|
+| [`w2_ladder_interleaved_pow_on_20261001.tsv`](../benchmarks/w2_ladder_interleaved_pow_on_20261001.tsv) | the interleaved run, PoW on — **the governing arm** |
+| [`w2_ladder_interleaved_pow_off_20261001.tsv`](../benchmarks/w2_ladder_interleaved_pow_off_20261001.tsv) | the interleaved run, PoW off |
+| [`w2_ladder_soak_pow_off_20260930.tsv`](../benchmarks/w2_ladder_soak_pow_off_20260930.tsv) | the restart's soak, PoW off, one persona (2026-09-30 11:26 to 2026-10-01 11:33 UTC) |
+
+Every number below comes from two commands in `rust/`, each a pure function of the
+files it is given:
+
+```text
+cargo run --release -p shekyl-sp-t3-spike --bin pd-f2-ceiling -- <file>
+cargo run --release -p shekyl-sp-t3-spike --bin pd-f2-diff -- <baseline> <treatment>
+```
+
+`pd-f2-ceiling` is §10.1's analysis (`shekyl_sp_t3_spike::ceiling`), written after the
+run and before this section, on the crate's own row parser and percentile rule.
+
+**Items 1 and 3 — the governing arm, per object.** A miss is any outcome but `ok`, or an
+`ok` slower than 120 s.
+
+| Object | n | Missed | 95 % interval | Circuit | Transfer | `t₇₀` |
+|---|---|---|---|---|---|---|
+| 831,744 B | 318 | 4 (1.26 %) | 0.49 – 3.19 % | 2 | 2 | 7.70 s |
+| 1,663,488 B | 318 | 9 (2.83 %) | 1.50 – 5.29 % | 4 | 5 | 10.47 s |
+| 3,326,976 B | 319 | 13 (4.08 %) | 2.40 – 6.85 % | 2 | 11 | 14.07 s |
+
+Transfer misses grow with the object (2, 5, 11); circuit misses do not (2, 4, 2). So a
+smaller `W` would shave the transfer leg only, and at these rates there is little of it
+to shave. No exchange was refused, in any file.
+
+**Item 2 — the ceiling as a number.** The model is kept:
+`t₇₀ = 5.90 s + bytes / 400,358 B/s`, the ½× point 6.1 % of its own value off the line
+through the ends (limit 15 %). `W_max = 45,532,062 B`. That is an **extrapolation**,
+about fourteen times the largest object the production frame serves. It says the
+ceiling is nowhere near 3 MB. It does not say where the ceiling is.
+
+**Item 4 — the stand-in.** The failure window was calibrated on `p_attempt = 0.30`.
+The measured single-attempt miss at the 1× object, PoW on, is **0.041** in this window.
+Whether the window is recalibrated on a measured value is the design owner's, and is
+posed here, not decided. One thing a recalibration has to weigh is the next paragraph.
+
+**The PoW-off readings beside it**, fitted the same way, as §10.1 requires:
+
+| Run | 1× missed | 95 % interval | Fit `t₇₀` | Off the line | `W_max` (extrapolated) |
+|---|---|---|---|---|---|
+| interleaved, PoW on | 13 / 319 (4.08 %) | 2.40 – 6.85 % | 5.90 s + bytes / 400,358 B/s | 6.1 % | 45.5 MB |
+| interleaved, PoW off | 18 / 319 (5.64 %) | 3.60 – 8.74 % | 5.08 s + bytes / 247,532 B/s | 7.7 % | 28.3 MB |
+| restart's soak, PoW off | 98 / 489 (20.04 %) | 16.73 – 23.82 % | 12.09 s + bytes / 71,606 B/s | 3.7 % | 7.6 MB |
+
+**The verdict does not depend on which window is read.** The soak a day earlier missed
+five times as often, and its interval is still wholly under 0.30. Its misses were
+mostly circuit failures — 73, 71 and 73 at the three sizes, about 15 % at each — which
+no shard length changes. What does not exist is a PoW-**on** reading on a day like the
+soak's. If PoW on behaved that day as PoW off did, the miss would be about 0.20.
+
+**The PoW comparison (§4.1a), as judged.** PoW-off baseline, PoW-on treatment, inside
+one window. Margins: 3 points on completion, 10 % of the PoW-off value on a
+percentile.
+
+| Object | Completion | p50 | p90 |
+|---|---|---|---|
+| 831,744 B | 0.972 → 0.987, inconclusive | 6.53 → 6.42 s, immaterial | 19.98 → 19.65 s, inconclusive |
+| 1,663,488 B | 0.975 → 0.975, immaterial | 8.59 → 8.02 s, inconclusive | 28.38 → 19.83 s, inconclusive |
+| 3,326,976 B | 0.950 → 0.962, inconclusive | 11.29 → 11.10 s, inconclusive | 49.16 → 27.48 s, **MATERIAL** |
+
+- **No PoW cost appears on any judged statistic.** Nothing is slower or less complete
+  with PoW on by more than its margin.
+- **One statistic is material, and in PoW's favour:** the 1× p90 is 21.7 s lower with
+  PoW on (95 % interval −29.6 to −5.7 s against a margin of ±4.9 s). §4.1a sends a
+  material PoW *cost* to Rick as a `SPIKE-F-15` finding; this is a material difference
+  the other way, and goes the same route (`SP_T3_SKELETON_MEASUREMENT.md` §19b).
+- **It is not attributed.** Each posture is two onions in one window, and an
+  observation carries no persona (by design: nothing to correlate), so posture cannot
+  be separated from where two onions' circuits happened to land. `SPIKE-F-18` found
+  that a service at zero effort publishes no PoW parameters, so a client's fetch has
+  nothing PoW-specific in it; that makes a PoW *benefit* an unlikely cause and names
+  no other.
+
+**Secondary — two PoW-off windows a day apart** (the restart's soak against the
+interleaved run's PoW-off file). Eight of the nine judged statistics are material:
+completion is about 13 to 14 points higher at every size on the second day, p50 is 28
+to 42 % lower, p90 is lower at every size (inconclusive at ½×). That is larger than
+anything between the postures, which is why §4.1a compared them inside one window.
+**Reported and not attributed**, as registered. Two things differed besides the day:
+the soak ran one persona and the interleaved run four, and the idle wallet-RPC process
+§4.1a records on the soak's host was stopped by its owner about six and a half hours
+into the interleaved run. Host state at each window is in the internal usage ledger.
+
+**What this replaces.** §9.3 held `U1a`'s ceiling as an interval, 4.49 to 16 MB, from
+one object size. It is replaced by a decision that needs no model (item 1) and by
+fitted maxima of 7.6 MB in the worst window read and 45.5 MB in the governing one,
+both extrapolations past 3.33 MB. `L`'s fetch span is not re-derived here: with PoW
+off the fitted rate is three and a half times higher on the second day than on the
+first, and a constant provisioned from either would be provisioned from a day.
