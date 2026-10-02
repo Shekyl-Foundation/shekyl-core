@@ -110,6 +110,15 @@ has the result. The C++ macro `FEE_PER_BYTE` itself still exists with no
 caller; deleting it is a C++ change and is carried by a `FOLLOWUPS.md`
 row.
 
+**Landed.** ESR-3, 2026-10-02, at `08925a981`. Six folds read the
+validator's `EMISSION_SPLIT_EPOCH`; the fee-ladder instrument's pinned
+copy is discharged. It moved 20 numeric cells of the control report and 33
+of the production report, the largest by a relative 1.9 × 10⁻⁵, and no
+cell of A1-T or A1-L. The falsifier above ("a mid-year sample does not
+move") was wrong in the small — every sample shifts by one block of the
+within-year interpolation — and right in what it guarded: nothing a reader
+would quote changes.
+
 **Added 2026-10-02: ESR-10**, the fee sensitivity the first two items
 left out. ESR-1 runs the Standard rung at `×1` only. The multiplier is in
 the type and nothing sweeps it, and the rung mix is not modelled at all.
