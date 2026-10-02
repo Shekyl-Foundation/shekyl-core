@@ -260,8 +260,11 @@ managed Tor stays client-only; do not add relay flags to it.
 
 **A second Tor process for the daemon's SOCKS/onion, as cover.** Rejected as a
 cover configuration. Originated cells then travel that client's own OR
-connections. The default managed ephemeral Tor is that second process;
-`--tx-proxy` / `--anonymous-inbound` against the operator relay yields it.
+connections. The default managed ephemeral Tor is that second process.
+`--anonymous-inbound` against the operator relay yields it.
+`--tx-proxy` names that relay's SOCKS and does not: the per-boot
+onion still publishes on the managed Tor. `--no-ephemeral-tor` is
+what turns the publish off.
 This is not a new ruling — it is the §3 mixing claim stated so "separate
 process" cannot be read as a sidecar client Tor.
 

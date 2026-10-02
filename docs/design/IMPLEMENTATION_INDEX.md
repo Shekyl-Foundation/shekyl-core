@@ -877,8 +877,8 @@ migration schedulable rather than something to negotiate mid-flight.
 
 | # | dependency | where |
 | --- | --- | --- |
-| 1 | **Zone handle lifetime** — `RelayZoneHandle` is created and owned per network zone by C++ | [`levin_notify.cpp`](../../src/cryptonote_protocol/levin_notify.cpp) `make_relay_zone`, held in `detail::zone::relay` |
-| 2 | **Connection table** — the `ConnectionId` → peer/address join, and zone membership | [`net_node.inl`](../../src/p2p/net_node.inl) `m_network_zones`, `for_each_connection` |
+| 1 | **Relay handle lifetime** — one `RelayZoneHandle` covers every configured connector; C++ creates and owns it | [`levin_notify.cpp`](../../src/cryptonote_protocol/levin_notify.cpp) `make_relay`, held in `detail::zone::relay` |
+| 2 | **Connection table** — the `ConnectionId` → peer/address join, keyed by connector | [`net_node.inl`](../../src/p2p/net_node.inl) `m_network_zones`, `for_each_connection` |
 
 **Decay warning: this is a claim about code state and it ages at the code's
 rate, not the estimate's.** The visible symptom is `/get_stem_tallies`'
