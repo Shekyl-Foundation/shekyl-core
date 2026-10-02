@@ -14,6 +14,10 @@ shekyl-economics = { path = "../shekyl-economics" }
 # instead of re-asserting their values locally.
 # (ARCHIVAL_REWARD_GATE_M1.md §4) — delete this feature at the §14.4 seal.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# The emission-split epoch the validator judges a block at
+# (`EMISSION_SPLIT_EPOCH`), read rather than restated
+# (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-3).
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # A4 W9 stuffer: price real transaction weights through the SAME single-sourced
 # predictor the wallet fee path uses (DQ-2G dep-don't-mirror, D-1 hoist).
 shekyl-tx-weight = { path = "../shekyl-tx-weight" }

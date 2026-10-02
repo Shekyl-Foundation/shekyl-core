@@ -209,7 +209,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
 
         let emission_share = calc_effective_emission_share(
             block + config.genesis_height_offset,
-            0,
+            crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT,
             sim.staker_emission_share,
             sim.staker_emission_decay,
             blocks_per_year,

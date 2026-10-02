@@ -337,7 +337,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
 
         let emission_share = calc_effective_emission_share(
             abs_height,
-            0,
+            crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT,
             params.staker_emission_share,
             params.staker_emission_decay,
             params.blocks_per_year,

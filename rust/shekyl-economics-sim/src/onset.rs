@@ -216,7 +216,7 @@ pub fn emission_leg_at_decay(a: &A1YearAgg, params: &SimParams, annual_decay: u6
     let mid_height = (a.year - 1) * params.blocks_per_year + params.blocks_per_year / 2;
     let share = calc_effective_emission_share(
         mid_height,
-        0,
+        crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT,
         params.staker_emission_share,
         annual_decay,
         params.blocks_per_year,

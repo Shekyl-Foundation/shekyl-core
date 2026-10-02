@@ -174,6 +174,13 @@ impl SimParams {
 
 const COIN: f64 = 1_000_000_000.0;
 
+/// The height the staker emission share decays from. The validator's own
+/// (`shekyl_chain_rules::EMISSION_SPLIT_EPOCH`), read here so that every
+/// fold in this crate splits a block at the epoch the validator judges it
+/// at.
+pub(crate) const EMISSION_SPLIT_EPOCH_HEIGHT: u64 =
+    shekyl_chain_rules::EMISSION_SPLIT_EPOCH.to_raw();
+
 pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResult {
     let economic = EconomicParams {
         release_min: params.release_min,
@@ -248,7 +255,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
         let emission_share = calc_effective_emission_share(
             block + config.genesis_height_offset,
-            0,
+            EMISSION_SPLIT_EPOCH_HEIGHT,
             params.staker_emission_share,
             params.staker_emission_decay,
             params.blocks_per_year,
