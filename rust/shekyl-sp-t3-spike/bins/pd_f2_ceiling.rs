@@ -50,22 +50,21 @@ fn per_cent(share: f64) -> f64 {
 }
 
 fn size_line(reading: &SizeReading) {
-    let (low, high) = reading.miss_interval().unwrap_or((0.0, 0.0));
-    let governing = reading.t_governing.map_or_else(
+    let (low, high) = reading.miss_interval();
+    let governing = reading.t_governing().map_or_else(
         || "never".to_owned(),
         |t| format!("{:.2} s", t.as_secs_f64()),
     );
     println!(
-        "  {:>9} B  n {:>4}  miss {:>3} ({:5.2} %)  95% [{:5.2}, {:5.2}] %  circuit {:>3}  transfer {:>3}  refused {:>2}  t{GOVERNING_PERCENTILE} {governing}",
-        reading.bytes,
-        reading.n,
+        "  {:>9} B  n {:>4}  miss {:>3} ({:5.2} %)  95% [{:5.2}, {:5.2}] %  circuit {:>3}  transfer {:>3}  t{GOVERNING_PERCENTILE} {governing}",
+        reading.bytes(),
+        reading.attempts(),
         reading.misses(),
         per_cent(reading.miss_rate()),
         per_cent(low),
         per_cent(high),
-        reading.circuit,
-        reading.transfer,
-        reading.refused,
+        reading.circuit_misses(),
+        reading.transfer_misses(),
     );
 }
 
@@ -79,10 +78,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if sizes.is_empty() {
         return Err(format!("{path}: no `{SOAK_ARM_PREFIX}<bytes>` arm to read").into());
     }
+    // A void arm — no attempts, or a refused exchange — is the apparatus, and
+    // it voids the file: the other sizes were measured on the same rig.
     let readings: Vec<SizeReading> = sizes
         .iter()
-        .map(|(bytes, observations)| SizeReading::of(*bytes, observations))
-        .collect();
+        .map(|(bytes, observations)| {
+            SizeReading::of(*bytes, observations).map_err(|void| {
+                format!("{path}: {SOAK_ARM_PREFIX}{bytes} is not a reading — {void}")
+            })
+        })
+        .collect::<Result<_, _>>()?;
 
     println!("observations: {path}");
     println!(
@@ -98,9 +103,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Decision::Stands => "interval wholly at or under the target: the length STANDS",
         Decision::Binds => "interval wholly over the target: the ceiling BINDS",
         Decision::Inconclusive => "interval straddles the target: INCONCLUSIVE",
-        Decision::NoReading => "NO READING: no attempts, or a refused exchange among them",
     };
-    println!("decision at {} B: {verdict}", largest.bytes);
+    println!("decision at {} B: {verdict}", largest.bytes());
 
     match fit(&readings) {
         Fit::TooFewSizes => println!("fit: fewer than three sizes, nothing fitted"),

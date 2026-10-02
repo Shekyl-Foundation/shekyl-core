@@ -25,6 +25,10 @@
 //!    failures apart from transfer failures. Only the second kind shrinks
 //!    with the object.
 //!
+//! An arm with no attempts, or with an exchange the client **refused**, is
+//! the apparatus and not the path. It is a [`Void`], not a reading: there is
+//! no [`SizeReading`] of it for the decision or the fit to be handed.
+//!
 //! Everything reads the same [`Observation`]s through the same percentile
 //! rule as the rest of the crate ([`crate::measure`]), so a number here and a
 //! number from `pd-f2-diff` cannot come from two definitions.
@@ -65,33 +69,65 @@ fn as_f64(count: usize) -> f64 {
     f64::from(u32::try_from(count).unwrap_or(u32::MAX))
 }
 
+/// Why a size's observations are not a reading.
+///
+/// Both are the apparatus, not the path, so neither is a miss rate to judge
+/// or a point to fit: a [`SizeReading`] of either cannot be built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Void {
+    /// No attempts were made at this size.
+    NoAttempts,
+    /// A completed exchange the client refused — the identical 404, a
+    /// malformed envelope, a countersignature that does not verify. None of
+    /// that is Tor's doing, so its presence says the rig was wrong while it
+    /// measured, and every other row of the arm with it.
+    Refused {
+        /// Refused exchanges.
+        refused: usize,
+        /// Of this many attempts.
+        attempts: usize,
+    },
+}
+
+impl std::fmt::Display for Void {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoAttempts => f.write_str("no attempts"),
+            Self::Refused { refused, attempts } => write!(
+                f,
+                "{refused} of {attempts} exchanges were refused by the client: the apparatus, not the path"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Void {}
+
 /// One object size's attempts, classed.
+///
+/// Built only by [`Self::of`], which refuses a [`Void`] arm: a value of this
+/// type has at least one attempt and no refused exchange, so nothing that
+/// takes one has to ask.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SizeReading {
-    /// The object's length.
-    pub bytes: u32,
-    /// Attempts.
-    pub n: usize,
-    /// No exchange happened: the circuit or rendezvous was never there. A
-    /// smaller object does not help these.
-    pub circuit: usize,
-    /// The exchange started and did not deliver in time: a timeout, a body
-    /// cut short, or a success slower than [`DEADLINE`]. These shrink with
-    /// the object.
-    pub transfer: usize,
-    /// A completed exchange the client refused. That is the apparatus, not
-    /// the path; any count here voids the reading rather than informing it.
-    pub refused: usize,
-    /// The time by which [`GOVERNING_PERCENTILE`] per cent of all attempts had
-    /// completed, or `None` when more than the target missed — the
-    /// percentile is then a miss, which never completes.
-    pub t_governing: Option<Duration>,
+    bytes: u32,
+    n: usize,
+    circuit: usize,
+    transfer: usize,
+    t_governing: Option<Duration>,
 }
 
 impl SizeReading {
     /// Class one size's observations.
-    #[must_use]
-    pub fn of(bytes: u32, observations: &[Observation]) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// [`Void`] when there are no observations, or when any of them is a
+    /// refused exchange.
+    pub fn of(bytes: u32, observations: &[Observation]) -> Result<Self, Void> {
+        if observations.is_empty() {
+            return Err(Void::NoAttempts);
+        }
         let mut circuit = 0;
         let mut transfer = 0;
         let mut refused = 0;
@@ -124,54 +160,93 @@ impl SizeReading {
                 observation.elapsed
             });
         }
+        if refused > 0 {
+            return Err(Void::Refused {
+                refused,
+                attempts: observations.len(),
+            });
+        }
         completion.sort_unstable();
         let t_governing =
             nearest_rank(&completion, GOVERNING_PERCENTILE).filter(|t| *t != Duration::MAX);
-        Self {
+        Ok(Self {
             bytes,
             n: observations.len(),
             circuit,
             transfer,
-            refused,
             t_governing,
-        }
+        })
     }
 
-    /// Attempts that missed, of any kind.
+    /// The object's length.
+    #[must_use]
+    pub fn bytes(&self) -> u32 {
+        self.bytes
+    }
+
+    /// Attempts; never zero.
+    #[must_use]
+    pub fn attempts(&self) -> usize {
+        self.n
+    }
+
+    /// No exchange happened: the circuit or rendezvous was never there. A
+    /// smaller object does not help these.
+    #[must_use]
+    pub fn circuit_misses(&self) -> usize {
+        self.circuit
+    }
+
+    /// The exchange started and did not deliver in time: a timeout, a body
+    /// cut short, or a success slower than [`DEADLINE`]. These shrink with
+    /// the object.
+    #[must_use]
+    pub fn transfer_misses(&self) -> usize {
+        self.transfer
+    }
+
+    /// The time by which [`GOVERNING_PERCENTILE`] per cent of all attempts had
+    /// completed, or `None` when more than the target missed — the
+    /// percentile is then a miss, which never completes.
+    #[must_use]
+    pub fn t_governing(&self) -> Option<Duration> {
+        self.t_governing
+    }
+
+    /// Attempts that missed, of either kind.
     #[must_use]
     pub fn misses(&self) -> usize {
-        self.circuit + self.transfer + self.refused
+        self.circuit + self.transfer
     }
 
-    /// The miss rate, `0.0` for an empty reading.
+    /// The miss rate.
     #[must_use]
     pub fn miss_rate(&self) -> f64 {
-        if self.n == 0 {
-            return 0.0;
-        }
         as_f64(self.misses()) / as_f64(self.n)
     }
 
-    /// The miss rate's 95 % Wilson interval; `None` for an empty reading.
+    /// The miss rate's 95 % Wilson interval.
     #[must_use]
-    pub fn miss_interval(&self) -> Option<(f64, f64)> {
-        wilson_95(self.misses(), self.n)
+    pub fn miss_interval(&self) -> (f64, f64) {
+        wilson(self.misses(), self.n)
     }
 }
 
 /// The 95 % Wilson score interval of `k` in `n`; `None` when `n` is zero.
 #[must_use]
 pub fn wilson_95(k: usize, n: usize) -> Option<(f64, f64)> {
-    if n == 0 {
-        return None;
-    }
+    (n > 0).then(|| wilson(k, n))
+}
+
+/// [`wilson_95`] for a non-zero `n`.
+fn wilson(k: usize, n: usize) -> (f64, f64) {
     let n_f = as_f64(n);
     let p = as_f64(k) / n_f;
     let z2 = Z_95 * Z_95;
     let denom = 1.0 + z2 / n_f;
     let centre = (p + z2 / (2.0 * n_f)) / denom;
     let half = Z_95 * (p * (1.0 - p) / n_f + z2 / (4.0 * n_f * n_f)).sqrt() / denom;
-    Some((centre - half, centre + half))
+    (centre - half, centre + half)
 }
 
 /// §10.1 item 1: what one size's miss interval says about the target.
@@ -183,20 +258,12 @@ pub enum Decision {
     Binds,
     /// The interval straddles the target: nothing is re-pinned.
     Inconclusive,
-    /// No attempts, or a refused exchange among them: the apparatus did not
-    /// produce a reading to decide on.
-    NoReading,
 }
 
 /// Read one size's miss interval against [`TARGET_MISS_PER_CENT`].
 #[must_use]
 pub fn decide(reading: &SizeReading) -> Decision {
-    let Some((low, high)) = reading.miss_interval() else {
-        return Decision::NoReading;
-    };
-    if reading.refused > 0 {
-        return Decision::NoReading;
-    }
+    let (low, high) = reading.miss_interval();
     let target = f64::from(TARGET_MISS_PER_CENT) / 100.0;
     if high <= target {
         Decision::Stands
@@ -342,7 +409,7 @@ mod tests {
     fn reading(bytes: u32, n: usize, misses: usize, secs: u64) -> SizeReading {
         let mut observations: Vec<Observation> = (0..n - misses).map(|_| ok(secs)).collect();
         observations.extend((0..misses).map(|_| missed(FailureKind::Circuit)));
-        SizeReading::of(bytes, &observations)
+        SizeReading::of(bytes, &observations).expect("attempts, none refused")
     }
 
     /// The interval is the textbook Wilson score interval, to four places,
@@ -369,18 +436,37 @@ mod tests {
             missed(FailureKind::Circuit),
             missed(FailureKind::Timeout),
             missed(FailureKind::Truncated),
-            missed(FailureKind::Refused),
         ];
-        let reading = SizeReading::of(1, &observations);
-        assert_eq!(reading.n, 7);
+        let reading = SizeReading::of(1, &observations).expect("a reading");
+        assert_eq!(reading.n, 6);
         assert_eq!(reading.circuit, 1);
         assert_eq!(
             reading.transfer, 3,
             "timeout, truncated, and the 121 s success"
         );
-        assert_eq!(reading.refused, 1);
-        assert_eq!(reading.misses(), 5);
-        assert_eq!(decide(&reading), Decision::NoReading, "a refusal voids it");
+        assert_eq!(reading.misses(), 4);
+    }
+
+    /// A void arm is not a reading: no attempts, or one refused exchange
+    /// among any number of good ones. Nothing downstream can then judge it or
+    /// fit it, because there is no value to hand over.
+    #[test]
+    fn a_void_arm_cannot_become_a_reading() {
+        assert_eq!(SizeReading::of(1, &[]), Err(Void::NoAttempts));
+
+        let mut observations: Vec<Observation> = (0..99).map(|_| ok(10)).collect();
+        observations.push(missed(FailureKind::Refused));
+        assert_eq!(
+            SizeReading::of(1, &observations),
+            Err(Void::Refused {
+                refused: 1,
+                attempts: 100
+            })
+        );
+        // The same arm without the refusal is an ordinary reading, so it is
+        // the refusal and nothing else that voided it.
+        observations.pop();
+        assert!(SizeReading::of(1, &observations).is_ok());
     }
 
     /// The governing percentile counts misses as never completing: at exactly
@@ -393,13 +479,20 @@ mod tests {
         let mut observations: Vec<Observation> = (1..=7).map(ok).collect();
         observations.extend((0..3).map(|_| missed(FailureKind::Circuit)));
         assert_eq!(
-            SizeReading::of(1, &observations).t_governing,
+            SizeReading::of(1, &observations)
+                .expect("a reading")
+                .t_governing,
             Some(Duration::from_secs(7))
         );
         // 4 misses: rank 7 is a miss.
         let mut observations: Vec<Observation> = (1..=6).map(ok).collect();
         observations.extend((0..4).map(|_| missed(FailureKind::Timeout)));
-        assert_eq!(SizeReading::of(1, &observations).t_governing, None);
+        assert_eq!(
+            SizeReading::of(1, &observations)
+                .expect("a reading")
+                .t_governing,
+            None
+        );
     }
 
     /// The three verdicts, each from an interval on its own side of 0.30.
@@ -409,7 +502,6 @@ mod tests {
         assert_eq!(decide(&reading(1, 300, 150, 10)), Decision::Binds);
         // 90 of 300 is exactly 0.30: the interval straddles it.
         assert_eq!(decide(&reading(1, 300, 90, 10)), Decision::Inconclusive);
-        assert_eq!(decide(&SizeReading::of(1, &[])), Decision::NoReading);
     }
 
     /// Points on an exact line give that line back, and the ceiling is
@@ -463,7 +555,9 @@ mod tests {
         }
         let readings: Vec<SizeReading> = sizes
             .iter()
-            .map(|(bytes, observations)| SizeReading::of(*bytes, observations))
+            .map(|(bytes, observations)| {
+                SizeReading::of(*bytes, observations).expect("no void arm in the record")
+            })
             .collect();
 
         // (bytes, n, circuit, transfer), smallest object first.
@@ -479,10 +573,9 @@ mod tests {
                 (3_326_976, 319, 2, 11),
             ]
         );
-        assert!(readings.iter().all(|r| r.refused == 0));
 
         let largest = readings.last().expect("three sizes");
-        let (low, high) = largest.miss_interval().expect("non-empty");
+        let (low, high) = largest.miss_interval();
         assert!((low - 0.0240).abs() < 5e-5 && (high - 0.0685).abs() < 5e-5);
         assert_eq!(decide(largest), Decision::Stands);
 
