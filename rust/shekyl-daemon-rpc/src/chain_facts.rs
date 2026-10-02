@@ -14,10 +14,11 @@
 //! one is deleted; the handlers and their tests do not move.
 //!
 //! The shim holds **no policy**: it converts PODs to typed facts and maps
-//! return codes onto [`FactsFault`]. "Synchronized ⇒ target height is 0" on
-//! the **wire** is the handler's rule, applied in `methods`, not here. Inland,
-//! a core-reported `0` is C5's sentinel and decodes as `None` — never
-//! [`ChainCount::from_raw`]`(0)`.
+//! return codes onto [`FactsFault`]. A core-reported `0` target is C5's
+//! sentinel and decodes as `None` — never [`ChainCount::from_raw`]`(0)`.
+//! `get_version` and `sync_info` forward that count, so `0` on their wire is
+//! only `None`. `get_info` still writes `0` when the node is synchronized,
+//! and that rule lives in the C++ handler, not here.
 //!
 //! ```compile_fail
 //! // HEIGHT_SEMANTICS.md C9: `ChainTip.chain_height` is COUNT, not ordinal.

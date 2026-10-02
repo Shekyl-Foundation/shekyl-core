@@ -206,24 +206,9 @@ jobs:
           grep_absent "C++ residue: no HASH_KEY_TXPROOF" \
             grep -rn 'HASH_KEY_TXPROOF' --include='*.cpp' --include='*.h' src/ tests/
 
-          echo "::group::C++ residue: no ecdhEncode/ecdhDecode outside Ledger"
-          matches=$(grep -rn 'ecdhEncode\|ecdhDecode' --include='*.cpp' --include='*.h' src/) && rc=0 || rc=$?
-          if [ "$rc" -gt 1 ]; then
-            echo "FAIL: ecdh grep errored (rc=$rc)"
-            failed=1
-          else
-            outside=$(printf '%s' "$matches" | grep -v device_ledger) && frc=0 || frc=$?
-            if [ "$frc" -gt 1 ]; then
-              echo "FAIL: ecdh filter errored (rc=$frc)"
-              failed=1
-            elif [ -n "$outside" ]; then
-              echo "$outside"
-              echo "FAIL: ecdhEncode/ecdhDecode used outside Ledger gate"
-              failed=1
-            else
-              echo "PASS: no ecdhEncode/ecdhDecode outside Ledger"
-            fi
-          fi
-          echo "::endgroup::"
+          # The Ledger exemption is gone with the backend. A filter that
+          # dropped device_ledger hits would stay green if that tree came back.
+          grep_absent "C++ residue: no ecdhEncode/ecdhDecode" \
+            grep -rn 'ecdhEncode\|ecdhDecode' --include='*.cpp' --include='*.h' src/
 
           exit "${failed}"

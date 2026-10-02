@@ -693,7 +693,6 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF `
             -DBUILD_TESTS=OFF `
             -DSTACK_TRACE=OFF `
-            -DUSE_DEVICE_TREZOR=OFF `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
       # Daemon only. The C++ wallet stack was deleted at Phase 5, and the
