@@ -241,8 +241,10 @@ namespace cryptonote
   //---------------------------------------------------------------
   blobdata block_to_blob(const block& b);
   bool block_to_blob(const block& b, blobdata& b_blob);
-  blobdata tx_to_blob(const transaction& b);
-  bool tx_to_blob(const transaction& b, blobdata& b_blob);
+  // The bytes of `tx`, and whether the serializer accepted them. A refusal
+  // leaves a fragment in `b_blob`; the bool is the only way to tell. Callers
+  // read it (`[[nodiscard]]`), and record the length only on acceptance.
+  [[nodiscard]] bool tx_to_blob(const transaction& b, blobdata& b_blob);
   void get_tx_tree_hash(const std::vector<crypto::hash>& tx_hashes, crypto::hash& h);
   crypto::hash get_tx_tree_hash(const std::vector<crypto::hash>& tx_hashes);
   crypto::hash get_tx_tree_hash(const block& b);

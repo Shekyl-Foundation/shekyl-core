@@ -371,32 +371,24 @@ namespace cryptonote
   //---------------------------------------------------------------
   uint64_t get_transaction_weight(const transaction &tx)
   {
-    size_t blob_size;
-    if (tx.is_blob_size_valid())
-    {
-      blob_size = tx.blob_size;
-    }
-    else
-    {
-      std::ostringstream s;
-      binary_archive<true> a(s);
-      ::serialization::serialize(a, const_cast<transaction&>(tx));
-      blob_size = s.str().size();
-    }
-    return get_transaction_weight(tx, blob_size);
+    return get_transaction_weight(tx, get_transaction_blob_size(tx));
   }
   //---------------------------------------------------------------
+  // Wire length of `tx`. The consensus verifier asks before its structural
+  // checks and must receive a length, never an exception, including for an
+  // in-memory body the serializer refuses. That refusal is not a length to
+  // record: the return is the bytes written before it, and `blob_size_valid`
+  // stays clear so a later weight or copy does not treat the fragment as the
+  // transaction. A body the serializer accepts is recorded, and measured once.
   uint64_t get_transaction_blob_size(const transaction& tx)
   {
-    if (!tx.is_blob_size_valid())
-    {
-      const cryptonote::blobdata tx_blob = tx_to_blob(tx);
+    if (tx.is_blob_size_valid())
+      return tx.blob_size;
+
+    cryptonote::blobdata tx_blob;
+    if (tx_to_blob(tx, tx_blob))
       tx.set_blob_size(tx_blob.size());
-    }
-
-    CHECK_AND_ASSERT_THROW_MES(tx.is_blob_size_valid(), "BUG: blob size valid not set");
-
-    return tx.blob_size;
+    return tx_blob.size();
   }
   //---------------------------------------------------------------
   bool get_tx_fee(const transaction& tx, uint64_t & fee)
@@ -1154,12 +1146,7 @@ namespace cryptonote
     return t_serializable_object_to_blob(b, b_blob);
   }
   //---------------------------------------------------------------
-  blobdata tx_to_blob(const transaction& tx)
-  {
-    return t_serializable_object_to_blob(tx);
-  }
-  //---------------------------------------------------------------
-  bool tx_to_blob(const transaction& tx, blobdata& b_blob)
+  [[nodiscard]] bool tx_to_blob(const transaction& tx, blobdata& b_blob)
   {
     return t_serializable_object_to_blob(tx, b_blob);
   }
