@@ -444,7 +444,7 @@ pub(crate) fn daemon_get_info(chain_count: u64, syncing: bool) -> serde_json::Va
     let target_height = if syncing {
         chain_count.saturating_add(SYNCING_TARGET_LEAD)
     } else {
-        // `0` is the wire's synchronized sentinel, not an absent field.
+        // get_info writes 0 when synchronized.
         0
     };
     super::daemon::synced_chain_facts::GetInfoDocument {

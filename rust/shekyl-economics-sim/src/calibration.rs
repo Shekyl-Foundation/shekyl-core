@@ -68,26 +68,38 @@ pub fn rucknium_shards_equivalent() -> u64 {
     (RUCKNIUM_SPAM_BYTES_GB * 1.0e9 / SHARD_BYTES) as u64
 }
 
+/// Leaves a tree of depth `j` holds — the production [`outputs_per_node`] —
+/// or `None` once that product no longer fits the machine word.
+/// `outputs_per_node` is a `const fn` product that overflows `usize` around
+/// layer 12 (its own doc) — a panic, not a wrap — so the layer below is
+/// checked against the widest per-layer multiplier (the leaf chunk,
+/// `outputs_per_node(0)`) before the product is asked for. A capacity that
+/// does not fit the word is one no chain can fill.
+fn layer_capacity(j: u8) -> Option<u64> {
+    let mut cap = outputs_per_node(0);
+    for layer in 1..=j {
+        if cap > usize::MAX / outputs_per_node(0) {
+            return None;
+        }
+        cap = outputs_per_node(layer);
+    }
+    Some(cap as u64)
+}
+
 /// Curve-tree depth needed to hold `n` leaves — the smallest layer whose
-/// production capacity ([`outputs_per_node`]) covers `n`, clamped to the proof
-/// system's max. Deps the real width logic (DQ-2G dep-don't-mirror), so every
-/// transaction's FCMP proof cost rides real chain depth: shallow early, deeper
-/// late.
+/// [`layer_capacity`] covers `n`, clamped to the proof system's max. Deps the
+/// real width logic (DQ-2G dep-don't-mirror), so every transaction's FCMP
+/// proof cost rides real chain depth: shallow early, deeper late.
 #[must_use]
 pub fn tree_depth_for_leaves(n: u64) -> u8 {
     let n = n.max(1);
     for j in 0..=MAX_TREE_DEPTH {
-        let cap = outputs_per_node(j);
-        if cap as u64 >= n {
-            return j.max(1);
-        }
-        // `outputs_per_node` is a `const fn` product that overflows `usize`
-        // around layer 12 (its own doc) — a panic, not a wrap. A leaf count
-        // the next layer could not represent is deeper than any chain can be;
-        // report that layer rather than ask for a capacity that does not fit.
-        // The widest per-layer multiplier is the leaf chunk, `outputs_per_node(0)`.
-        if cap > usize::MAX / outputs_per_node(0) {
-            return (j + 1).min(MAX_TREE_DEPTH);
+        match layer_capacity(j) {
+            Some(cap) if cap >= n => return j.max(1),
+            Some(_) => {}
+            // Deeper than any chain can be; report the layer rather than
+            // ask for a capacity that does not fit.
+            None => return j.min(MAX_TREE_DEPTH),
         }
     }
     MAX_TREE_DEPTH
@@ -101,19 +113,26 @@ pub struct Shape {
 }
 
 impl Shape {
-    /// Weight-fee (atomic) of one transaction of this shape at `tree_depth`,
-    /// via the **converge fixpoint** the build path runs (fee feeds
+    /// Block weight of one transaction of this shape at `tree_depth`, at its
+    /// min-fee, via the **converge fixpoint** the build path runs (fee feeds
     /// `varint(fee)` into the weight, so it is circular by a few bytes; two
-    /// iterations from zero settle it). Integer throughout (DQ-2G):
-    /// `fee = predict_weight × FEE_PER_BYTE`.
+    /// iterations from zero settle it). Integer throughout (DQ-2G).
     #[must_use]
-    pub fn tx_fee_atomic(self, tree_depth: u8) -> u64 {
+    pub fn tx_weight(self, tree_depth: u8) -> u64 {
         let mut fee = 0u64;
+        let mut weight = 0u64;
         for _ in 0..2 {
-            let weight = predict_weight(self.n_in, self.n_out, tree_depth, fee) as u64;
+            weight = predict_weight(self.n_in, self.n_out, tree_depth, fee) as u64;
             fee = weight * FEE_PER_BYTE_ATOMIC;
         }
-        fee
+        weight
+    }
+
+    /// Weight-fee (atomic) of one transaction of this shape at `tree_depth`:
+    /// `tx_weight × FEE_PER_BYTE`.
+    #[must_use]
+    pub fn tx_fee_atomic(self, tree_depth: u8) -> u64 {
+        self.tx_weight(tree_depth) * FEE_PER_BYTE_ATOMIC
     }
 
     /// Archival bytes one transaction of this shape adds to the fold at
@@ -181,30 +200,120 @@ pub fn stuffer_shape(tree_depth: u8) -> Shape {
         .0
 }
 
-/// Transactions of [`stuffer_shape`] that close one shard at `tree_depth`:
-/// `⌈W / archival_bytes⌉`.
+/// The **max-archival-per-block** figure at `tree_depth`: the most archival
+/// bytes any single shape the builder accepts can land in one block of
+/// `block_weight`, `max over shapes of ⌊block_weight / weight⌋ · archival_len`.
+/// This is **not** [`stuffer_shape`]'s packing: the fee-per-byte argmin is the
+/// cheapest shape, but only whole transactions fit a finite block, so a
+/// shape with a slightly worse ratio and a smaller remainder can land more
+/// bytes (at the surge ceiling, 6-in/1-out beats 8-in/1-out by ≈ 3 %). The
+/// physical ceiling on the fold's slew is this search, not the cost search.
+#[must_use]
+pub fn max_archival_bytes_per_block(block_weight: u64, tree_depth: u8) -> u64 {
+    all_shapes()
+        .map(|s| {
+            let weight = s.tx_weight(tree_depth);
+            if weight == 0 {
+                0
+            } else {
+                (block_weight / weight).saturating_mul(s.archival_bytes(tree_depth))
+            }
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+impl Shape {
+    /// Transactions of this shape at `tree_depth` that land `bytes` of
+    /// archival good: `⌈bytes / archival_bytes⌉`.
+    fn txs_for_archival_bytes(self, tree_depth: u8, bytes: u128) -> u128 {
+        bytes.div_ceil(u128::from(self.archival_bytes(tree_depth).max(1)))
+    }
+}
+
+/// Transactions of [`stuffer_shape`] that close one shard — `W` archival
+/// bytes — at `tree_depth`. The per-depth rate the reports print; a campaign
+/// is priced by [`stuffer_campaign`], not by multiplying this.
 #[must_use]
 pub fn stuffer_txs_per_shard(tree_depth: u8) -> u64 {
-    let bytes = stuffer_shape(tree_depth).archival_bytes(tree_depth).max(1);
-    SHARD_LENGTH.to_raw().div_ceil(bytes)
+    let txs = stuffer_shape(tree_depth)
+        .txs_for_archival_bytes(tree_depth, u128::from(SHARD_LENGTH.to_raw()));
+    u64::try_from(txs).unwrap_or(u64::MAX)
 }
 
-/// Leaves (outputs) one stuffed shard adds to the curve tree at `tree_depth`
-/// — the tree-depth bookkeeping for a campaign, now small: the shape minimises
-/// outputs.
-#[must_use]
-pub fn stuffer_leaves_per_shard(tree_depth: u8) -> u64 {
-    stuffer_txs_per_shard(tree_depth) * stuffer_shape(tree_depth).n_out.get() as u64
+/// Transactions of a shape minting `n_out` outputs each that a tree of
+/// `leaves` outputs absorbs **before it deepens past `depth`**. A transaction
+/// is built — and its FCMP proof priced — against the tree as it stands, so
+/// the `k`-th (from 0) sees `leaves + k · n_out` outputs and is at `depth`
+/// while that is within the layer's capacity. Unbounded at the deepest layer
+/// and past the representable capacities (no chain gets there).
+fn stuffer_txs_before_deepening(depth: u8, leaves: u64, n_out: u64) -> u128 {
+    if depth >= MAX_TREE_DEPTH {
+        return u128::MAX;
+    }
+    match layer_capacity(depth) {
+        None => u128::MAX,
+        Some(cap) => u128::from(cap.saturating_sub(leaves) / n_out.max(1)) + 1,
+    }
 }
 
-/// Attacker cost (atomic) to close one more shard — `W` archival bytes — when
-/// the curve tree holds `chain_leaves` outputs, **one-shot**: every transaction
-/// is the max-archival-per-fee shape, outputs assumed on hand. The binding
+/// One **one-shot** stuffer campaign: every transaction is the
+/// max-archival-per-fee shape, outputs assumed on hand. The binding
 /// (attacker-favouring) figure. Integer (DQ-2G).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StufferCampaign {
+    /// Transactions sent.
+    pub txs: u64,
+    /// Weight-fees paid, atomic.
+    pub cost_atomic: u128,
+}
+
+/// The campaign that closes `delta` more shards — `delta · W` archival bytes —
+/// against a curve tree of `honest_leaves` outputs, **integrated across the
+/// tree-layer boundaries its own outputs cross**: each transaction is priced
+/// at the depth the tree has when it is built, so a campaign that deepens
+/// the tree pays the shallower fee up to the crossing and the deeper one
+/// after it, with the deeper shape's bytes counted from there. Pricing the
+/// whole campaign at the final depth would charge every transaction before
+/// the crossing the wrong proof size.
+///
+/// The transaction count is **rounded once**, at the end: within a layer
+/// whole transactions land exact bytes, and only the last segment carries
+/// the ceiling. Rounding per shard and multiplying would reset the fold
+/// remainder at every boundary and overstate the count by up to `delta − 1`
+/// transactions. The fold's position inside the current shard when the
+/// campaign starts is not modelled (the operand is a shard count): it can
+/// only lower the count, by under one shard's worth of transactions.
 #[must_use]
-pub fn stuffer_cost_per_shard_atomic(chain_leaves: u64) -> u128 {
-    let depth = tree_depth_for_leaves(chain_leaves);
-    u128::from(stuffer_txs_per_shard(depth)) * u128::from(stuffer_shape(depth).tx_fee_atomic(depth))
+pub fn stuffer_campaign(honest_leaves: u64, delta: u64) -> StufferCampaign {
+    let mut remaining = u128::from(SHARD_LENGTH.to_raw()) * u128::from(delta);
+    let mut leaves = honest_leaves;
+    let mut txs = 0u64;
+    let mut cost_atomic = 0u128;
+    while remaining > 0 {
+        let depth = tree_depth_for_leaves(leaves);
+        let shape = stuffer_shape(depth);
+        let n_out = shape.n_out.get() as u64;
+        let to_finish = shape.txs_for_archival_bytes(depth, remaining);
+        let take = to_finish.min(stuffer_txs_before_deepening(depth, leaves, n_out));
+        // `take ≥ 1` (both operands are), so every pass retires bytes and the
+        // loop terminates; `take < to_finish` leaves `remaining > 0`.
+        remaining = remaining.saturating_sub(take * u128::from(shape.archival_bytes(depth).max(1)));
+        cost_atomic += take * u128::from(shape.tx_fee_atomic(depth));
+        let take = u64::try_from(take).unwrap_or(u64::MAX);
+        txs = txs.saturating_add(take);
+        leaves = leaves.saturating_add(take.saturating_mul(n_out));
+    }
+    StufferCampaign { txs, cost_atomic }
+}
+
+/// Attacker cost (atomic) to close one more shard — `W` archival bytes —
+/// against a tree of `honest_leaves`: [`stuffer_campaign`] at `delta = 1`.
+/// The per-shard rate the reports print; a campaign of `delta` shards is
+/// priced by the campaign function, not by multiplying this.
+#[must_use]
+pub fn stuffer_cost_per_shard_atomic(honest_leaves: u64) -> u128 {
+    stuffer_campaign(honest_leaves, 1).cost_atomic
 }
 
 /// Attacker cost (atomic) to close one more shard under **output
@@ -307,6 +416,118 @@ mod tests {
                 fee_per_archival(leafy, depth)
             ));
         }
+    }
+
+    #[test]
+    fn layer_capacity_is_the_depth_boundary() {
+        // `tree_depth_for_leaves` and the campaign integrator read the same
+        // boundary: a tree filled exactly to a layer's capacity is at that
+        // depth; one more leaf deepens it.
+        for j in 2..=6u8 {
+            let cap = layer_capacity(j).expect("single-digit layers fit the word");
+            assert_eq!(tree_depth_for_leaves(cap), j);
+            assert_eq!(tree_depth_for_leaves(cap + 1), j + 1);
+        }
+        assert!(layer_capacity(MAX_TREE_DEPTH).is_none());
+    }
+
+    #[test]
+    fn campaign_rounds_once_and_is_never_dearer_than_per_shard_times_delta() {
+        // Inside one layer the only difference between the campaign and
+        // `delta` per-shard campaigns is the rounding, so start the tree at
+        // the bottom of a layer wide enough that no sweep delta here deepens it.
+        let leaves = layer_capacity(4).unwrap() + 1_000;
+        let depth = tree_depth_for_leaves(leaves);
+        let shape = stuffer_shape(depth);
+        let fee = u128::from(shape.tx_fee_atomic(depth));
+        let per_shard = stuffer_cost_per_shard_atomic(leaves);
+        for delta in [1u64, 2, 7, 250, 4_096] {
+            let campaign = stuffer_campaign(leaves, delta);
+            assert_eq!(
+                tree_depth_for_leaves(leaves + campaign.txs * shape.n_out.get() as u64),
+                depth,
+                "delta {delta} deepened the tree; this test's premise is one layer"
+            );
+            let naive = per_shard * u128::from(delta);
+            // Rounding once can only drop whole transactions the per-shard
+            // ceiling counted twice: at most `delta − 1` of them.
+            assert!(
+                campaign.cost_atomic <= naive,
+                "delta {delta}: {} > {naive}",
+                campaign.cost_atomic
+            );
+            assert!(
+                campaign.cost_atomic + fee * u128::from(delta - 1) >= naive,
+                "delta {delta}: campaign dropped more than delta − 1 transactions"
+            );
+            assert_eq!(campaign.cost_atomic, u128::from(campaign.txs) * fee);
+        }
+        assert_eq!(stuffer_campaign(leaves, 1).cost_atomic, per_shard);
+    }
+
+    #[test]
+    fn campaign_crossing_a_layer_boundary_is_priced_per_segment() {
+        // Start just under the layer-4 capacity so a 100-shard campaign
+        // deepens the tree part-way: the transactions before the crossing
+        // are priced at depth 4, the rest at depth 5 with depth-5 bytes.
+        let cap = layer_capacity(4).unwrap();
+        let leaves = cap - 1_000;
+        let delta = 100u64;
+        let shallow = tree_depth_for_leaves(leaves);
+        assert_eq!(shallow, 4);
+        let s4 = stuffer_shape(shallow);
+        let n_out = s4.n_out.get() as u64;
+        // The k-th transaction (from 0) sees `leaves + k·n_out`; it is at
+        // depth 4 while that is ≤ cap.
+        let first = (cap - leaves) / n_out + 1;
+        let bytes_total = u128::from(SHARD_LENGTH.to_raw()) * u128::from(delta);
+        let bytes_after = bytes_total - u128::from(first) * u128::from(s4.archival_bytes(shallow));
+        let deep = tree_depth_for_leaves(leaves + first * n_out);
+        assert_eq!(deep, 5, "the campaign must actually cross");
+        let s5 = stuffer_shape(deep);
+        let rest = bytes_after.div_ceil(u128::from(s5.archival_bytes(deep)));
+        assert!(rest > 0, "the campaign must continue past the crossing");
+
+        let campaign = stuffer_campaign(leaves, delta);
+        assert_eq!(u128::from(campaign.txs), u128::from(first) + rest);
+        assert_eq!(
+            campaign.cost_atomic,
+            u128::from(first) * u128::from(s4.tx_fee_atomic(shallow))
+                + rest * u128::from(s5.tx_fee_atomic(deep))
+        );
+        // And it is neither flat pricing: the crossing is visible in the figure.
+        let flat = |d: u8| {
+            stuffer_shape(d).txs_for_archival_bytes(d, bytes_total)
+                * u128::from(stuffer_shape(d).tx_fee_atomic(d))
+        };
+        assert_ne!(campaign.cost_atomic, flat(shallow));
+        assert_ne!(campaign.cost_atomic, flat(deep));
+    }
+
+    #[test]
+    fn max_archival_per_block_is_a_search_not_the_cost_shape() {
+        // The physical ceiling is argmax ⌊B/w⌋·archival over every shape; the
+        // fee-per-byte argmin is a candidate, never above the max. At the
+        // surge ceiling the two differ: whole transactions, finite block.
+        let block_weight =
+            shekyl_economics::FULL_REWARD_ZONE * shekyl_economics::BLOCK_WEIGHT_SURGE_FACTOR;
+        let mut differs_somewhere = false;
+        for depth in 2..=MAX_TREE_DEPTH {
+            let best = max_archival_bytes_per_block(block_weight, depth);
+            let s = stuffer_shape(depth);
+            let cost_shape = (block_weight / s.tx_weight(depth)) * s.archival_bytes(depth);
+            assert!(best >= cost_shape, "depth {depth}: {best} < {cost_shape}");
+            assert!(
+                best <= block_weight,
+                "archival bytes cannot exceed the block"
+            );
+            differs_somewhere |= best > cost_shape;
+        }
+        assert!(
+            differs_somewhere,
+            "the search never beat the cost shape — if the wire format moved so the \
+             two coincide at every depth, this expectation is stale, not the model"
+        );
     }
 
     #[test]

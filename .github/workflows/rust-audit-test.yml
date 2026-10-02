@@ -241,6 +241,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           # Workspace at rust/ with target dir at rust/target/.
+          # The fcmp fuzz workspace is excluded from that workspace, so
+          # it is listed on its own line and caches rust/shekyl-fcmp/fuzz/target.
+          # No CARGO_TARGET_DIR: that target must not be rust/target.
           # Swatinem auto-caches ~/.cargo/{registry,git,bin} plus the
           # workspace target/. The default cache key already mixes
           # rustc version + Cargo.lock hash + a per-job component, so
@@ -255,7 +258,9 @@ jobs:
           #     would have silently restored a 1.94-built target/).
           #   - No ~/.cargo/bin caching (cargo-audit reinstalled from
           #     source every run, ~2m30s).
-          workspaces: rust -> target
+          workspaces: |
+            rust -> target
+            rust/shekyl-fcmp/fuzz -> target
       - name: install cargo-audit
         # `cargo install --locked` is idempotent: on Swatinem cache
         # hits the binary is already present in ~/.cargo/bin and this
@@ -414,6 +419,17 @@ jobs:
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp
+      - name: compile the shekyl-fcmp fuzz harnesses
+        # The inventory step only checks the files exist. This is a separate
+        # workspace, so `cargo check --workspace` does not see it
+        # (rust/Cargo.toml exclude: a stable workspace check must not resolve
+        # libfuzzer-sys). This job is the exception: the four harnesses are
+        # the API-drift gate for shekyl-fcmp, and libfuzzer-sys 0.4 typechecks
+        # on the pinned stable toolchain. The lockfile is the fuzz workspace's
+        # own. Placed after the cache so the registry restore is already warm.
+        # No CARGO_TARGET_DIR: this workspace must not share rust/target.
+        # Its own target/ is the second cache workspace above.
+        run: cargo check --locked --manifest-path rust/shekyl-fcmp/fuzz/Cargo.toml
       - name: cargo test (all workspace crates)
         working-directory: rust
         # `shekyl-randomx-differential` excluded from the workspace-wide

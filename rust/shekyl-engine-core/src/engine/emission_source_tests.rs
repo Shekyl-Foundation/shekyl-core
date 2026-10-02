@@ -301,8 +301,7 @@ fn fixture() -> Value {
                 }],
                 shards: vec![EpochCloseShard {
                     shard_id: 4,
-                    freeze_height: 15,
-                    has_segment: true,
+                    close: ShardClose::ClosedAt(15),
                 }],
                 credit_pairs: vec![CreditPair {
                     bond_idx: 0,

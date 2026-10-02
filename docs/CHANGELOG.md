@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Daemon RPC — `target_height` is the core's target (`CORE_RPC_VERSION` 3.40)
+
+- `get_version` and `sync_info` no longer write `0` when the node is
+  synchronized. `0` is only a core-reported absence. A synchronized node
+  whose core named a target reports that target. The wallet's `get_info`
+  reading is still the C++ reply, which keeps the old convention until that
+  method moves.
+
+### Build — hardware-wallet packages are not dependencies
+
+- The daemon does not link hidapi, libusb, protobuf, or udev. Install
+  lists, the depends build, and CI package lines no longer fetch them.
+  The software device remains the key helper; both hardware backends stay
+  deleted (`docs/HARDWARE_WALLETS.md`).
+
+### Daemon — `tx_to_blob` no longer has a form that discards the serializer's verdict
+
+- The value-returning `tx_to_blob(const transaction&)` is deleted. It
+  returned whatever bytes were written before the serializer refused, so a
+  caller could not tell a transaction from a fragment. The boolean form is
+  `[[nodiscard]]`. A refusal now fails the caller: `add_block` throws a
+  `DB_ERROR` for a miner transaction that does not serialize, the
+  block-facts export answers `INCONSISTENT` for a block or a transaction,
+  and `shekyl-blockchain-import` fails the chunk for either.
+  `get_transaction_blob_size` reads the verdict and records the length only
+  when the serializer accepts the body. On a refusal it returns the
+  fragment's length and leaves the size unrecorded, so the consensus
+  verifier still receives a length rather than an exception, and a later
+  weight does not treat the fragment as the transaction.
+  `get_transaction_weight(const transaction&)` measures through that
+  function. No behaviour changes for a transaction that serializes.
+
 ### Consensus — the txid binds the archival length (`SHT-Q2`, rule 07 cutover)
 
 - **Every non-coinbase txid changes.** The transaction id mixes one more

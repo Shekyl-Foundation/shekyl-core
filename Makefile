@@ -48,7 +48,7 @@ all: release-all
 
 depends:
 	cd contrib/depends && $(MAKE) HOST=$(target) && cd ../.. && mkdir -p build/$(target)/release
-	cd build/$(target)/release && USE_DEVICE_TREZOR_MANDATORY=1 cmake -DCMAKE_TOOLCHAIN_FILE=$(CURDIR)/contrib/depends/$(target)/share/toolchain.cmake ../../.. && $(MAKE)
+	cd build/$(target)/release && cmake -DCMAKE_TOOLCHAIN_FILE=$(CURDIR)/contrib/depends/$(target)/share/toolchain.cmake ../../.. && $(MAKE)
 
 cmake-debug:
 	mkdir -p $(builddir)/debug
@@ -64,10 +64,6 @@ debug-test:
 debug-test-asan:
 	mkdir -p $(builddir)/debug
 	cd $(builddir)/debug && cmake -D BUILD_TESTS=ON -D SANITIZE=ON -D CMAKE_BUILD_TYPE=Debug $(topdir) &&  $(MAKE) && $(MAKE) test
-
-debug-test-trezor:
-	mkdir -p $(builddir)/debug
-	cd $(builddir)/debug && cmake -D BUILD_TESTS=ON -D TREZOR_DEBUG=ON -D CMAKE_BUILD_TYPE=Debug $(topdir) &&  $(MAKE) && $(MAKE) test
 
 debug-all:
 	mkdir -p $(builddir)/debug
@@ -98,7 +94,7 @@ release-all:
 
 release-seed:
 	mkdir -p $(builddir)/release
-	cd $(builddir)/release && cmake -D CMAKE_BUILD_TYPE=Release -D ARCH="x86-64" -D USE_HW_DEVICE=OFF -D BUILD_TESTS=OFF $(topdir) && $(MAKE)
+	cd $(builddir)/release && cmake -D CMAKE_BUILD_TYPE=Release -D ARCH="x86-64" -D BUILD_TESTS=OFF $(topdir) && $(MAKE)
 
 release-static:
 	mkdir -p $(builddir)/release

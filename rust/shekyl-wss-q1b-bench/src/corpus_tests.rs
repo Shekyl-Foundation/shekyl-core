@@ -4,6 +4,9 @@
 // BSD-3-Clause
 
 use super::*;
+// The lib no longer calls this -- `min_leaves_for_depth` recomputes the
+// product checked -- so the parity test below imports it directly.
+use shekyl_fcmp::tree::outputs_per_node;
 
 #[test]
 fn the_three_block_counts_are_three_different_numbers() {
@@ -29,6 +32,33 @@ fn depth_ladder_matches_the_production_capacity_function() {
         assert_eq!(min, outputs_per_node(depth - 2) as u64 + 1);
         let shallower = min_leaves_for_depth(depth - 1).expect("depth >= 2 has a floor");
         assert!(min > shallower, "the ladder must be strictly increasing");
+    }
+
+    // The ladder has an upper end, and `None` is how it is reported.
+    //
+    // `outputs_per_node` overflows `usize` past its own stated domain ("`j`
+    // names a layer of the tree, whose depth is single digits") -- a debug
+    // panic, and in a RELEASE build a silent wrap. `min_leaves_for_depth`
+    // therefore recomputes the product with `checked_mul`, so a depth with no
+    // representable floor answers `None` rather than handing back a wrapped
+    // leaf count that a harness would go on to measure. `outputs_per_node` is
+    // deliberately not called above that end: in debug it would panic here.
+    let last = (3u8..=60)
+        .take_while(|d| min_leaves_for_depth(*d).is_some())
+        .last()
+        .expect("the ladder reaches at least depth 3");
+    assert!(
+        min_leaves_for_depth(last + 1).is_none(),
+        "depth {} answered a floor past the ladder's end",
+        last + 1
+    );
+    for depth in (last + 1)..=60 {
+        assert!(
+            min_leaves_for_depth(depth).is_none(),
+            "depth {depth} has a floor although depth {end} does not; the domain is not \
+             an interval, so one rejection does not bound it",
+            end = last + 1
+        );
     }
 }
 
