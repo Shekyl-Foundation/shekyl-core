@@ -103,6 +103,20 @@ the run with the control as its only variant (every mode byte-identical);
 `9d8a52985` adds the production arm and makes it the default. §5.1 has
 the result.
 
+**Landed.** ESR-2, 2026-10-02, at `354bc5d52`. The registered test went
+red first: at the production genesis floor a shard cost 211.67 SKL against
+its 0.5–2 SKL band. The control arm is byte-identical to its fixture. §5.3
+has the result. The C++ macro `FEE_PER_BYTE` itself still exists with no
+caller; deleting it is a C++ change and is carried by a `FOLLOWUPS.md`
+row.
+
+**Added 2026-10-02: ESR-10**, the fee sensitivity the first two items
+left out. ESR-1 runs the Standard rung at `×1` only. The multiplier is in
+the type and nothing sweeps it, and the rung mix is not modelled at all.
+ESR-10 prints A1-T at a swept multiplier and at the defaulted 15/80/5
+mix, including a zero-Priority arm. Its falsifier: the `×1` column equals
+the default report's.
+
 ## 3. The median is a production change inside a sim PR
 
 `shekyl_chain_rules::rules::block_weight::effective_median_at` needs a
@@ -131,8 +145,12 @@ defect.
 | Divergence | Why it exists | Reported as |
 | --- | --- | --- |
 | Control arm: flat `0.1 SKL` per transaction | Reproduces §12.14, so the old and new tables differ by the fee and nothing else | Named arm, printed beside the production arm |
-| Fee multiplier on the Standard rung | What users pay above the default is not knowable before launch | Swept; `×1` is the production default |
-| Rung mix (economy / standard / priority shares) | Same. At the defaulted 15/80/5 mix ([`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §5.5) the 5 % on Priority pay roughly three quarters of all fees at the zone median | Swept, including a zero-Priority arm |
+| Fee multiplier on the Standard rung | What users pay above the default is not knowable before launch | `×1`, the production default, is what runs. The sweep is ESR-10 and is not printed yet |
+| Rung mix (economy / standard / priority shares) | Same. At the defaulted 15/80/5 mix ([`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §5.5) the 5 % on Priority pay roughly three quarters of all fees at the zone median | Not modelled yet: every ordinary transaction pays Standard. ESR-10 |
+| Control arm: admission at a flat 300 atomic/byte | The rate §12.13's stuffer and claim were priced at. Read from a C++ macro with no caller; the chain's admission rate is the relay floor | Part of the control arm; printed in its stuffer table |
+| The admission rate at a shard count (`AdmissionAtShards`) | Arms that sample the chain by shard count alone have no height, and the rate depends on emission, not on traffic. The pairing is fixed as the baseline scenario's: the rate at the year the baseline reaches that count, and its last year's rate beyond | Stated in the stuffer table's footer |
+| Admission rate sampled at the year's last block | A stuffer picks its moment, and on the production arm the floor falls through the year | Attacker-favouring; stated at the field |
+| A claim is one ordinary transaction at the admission rate | The claim's own envelope and the wallet's claim hold floor (`EMISSION_CLAIM_FEE_FLOOR`) are not modelled. Carried from the pre-ESR report unchanged | Appendix A, class A, row A9 |
 | Median held at the penalty-free zone | Only until ESR-6 lands the median | Stated in the report header |
 | Fee paid unrounded | The wallet rounds each fee up to the daemon's quantization mask (1 000 atomic). The mask has no Rust owner — it is a C++ static — and the fee-floor instrument in this crate already pays unrounded (FL-R22). At most 1 000 atomic per transaction, below print precision | Stated here; closes when the mask gains a Rust owner |
 | `REF_TX_WEIGHT = 3_000` | The ladder's reference weight is a C++ macro with no single Rust owner. The crate's one existing declared copy (`fee_ladder.rs`) is reused, not duplicated | Declared at its definition |
@@ -237,6 +255,43 @@ settles at the block weight, the floor falls by `(B / 300 KB)²`, which is
 baseline. The year-10 fee of 1.75 SKL becomes about 0.35–0.40. A result
 far from that range says the median feed is wrong before it says anything
 about the system.
+
+### 5.3 ESR-2 — what the run said (2026-10-02, at `354bc5d52`)
+
+Median still at the zone, so these are stuffing costs at their highest.
+
+**Prediction 4 held at the early end and was not tested at the late
+end.** Cost to stuff one shard along the baseline chain, against a flat
+0.93–0.94 SKL on the control:
+
+| Closed shards | 1 | 100,000 | 500,000 | 2.25 M | 10 M |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Relay floor, atomic/byte | 55,348 | 52,471 | 28,497 | 684 | 72 |
+| Cost per shard, SKL | 171.46 | 163.13 | 88.60 | 2.15 | 0.23 |
+
+"On the order of 200 SKL at genesis" is borne out. "A few hundredths at
+the tail" is not reached: the last column is the baseline's year 60,
+where the floor is still 72 atomic per byte, not the tail's 20.
+
+The control arm did not move at all: its report is byte-identical to its
+fixture.
+
+What else moved on the production arm:
+
+- **A4, stuffing for profit.** Realistic-end ROI is 0.17–0.40 across the
+  scenarios and the gate passes; on the control it was 0.81–1.90. In the
+  baseline's worst configuration the stuffer pays 15.3 M SKL in fees for
+  2.6 M of revenue.
+- **A4 is blind where stuffing is cheap.** It samples each scenario inside
+  its own horizon (10–20 years for most), where the floor is still high.
+  That is the blind spot A1 had before A1-T. It says nothing yet about
+  years 40–60, where a shard costs under an SKL.
+- **A6.** Stuffing fees at the legal block limit are about 1.25 M SKL per
+  epoch at the worst sampled point; the control read 7,174.
+- **A3.** A claim costs 0.697 SKL early and 0.0011 late.
+
+The stuffer here pays the relay floor. A miner filling its own block does
+not (C2-R2 Q9, reopened); that adversary is ESR-7.
 
 ## 6. The staking sim — a separate PR
 
