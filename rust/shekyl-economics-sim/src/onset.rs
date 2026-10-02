@@ -100,7 +100,9 @@ const BINDING: usize = OPP_COST_RATE_BAND.len() - 1;
 
 /// Non-decaying staker floor percentages priced in A1-L, fixed-point `SCALE`.
 /// The last is the **whole** perpetual tail — the absolute ceiling of any
-/// stock-shaped lever on emission.
+/// lever on emission. The tail is a constant flow; against a bond stock that
+/// grows with the corpus it is the fee share's shape with a longer fuse
+/// (§12.14 *Ruling*), priced here so that is a number, not an argument.
 pub const TAIL_FLOOR_BAND: [u64; 3] = [150_000, 500_000, 1_000_000];
 
 /// Alternative staker-emission decay constants priced in A1-L, fixed-point
@@ -581,9 +583,10 @@ pub fn onset_report(
     writeln!(
         out,
         "     Older corpus than H is unfunded by fees REGARDLESS of how busy the chain is; a\n\
-         busy chain crosses the same line later only because its corpus is younger. The\n\
-         shapes that match a bond STOCK scale with time or corpus, not traffic: the tail,\n\
-         the emission-decay constant, and the bond itself."
+         busy chain crosses the same line later only because its corpus is younger. No\n\
+         FLOW — fee share, burn share, or the constant tail — funds a fixed-per-shard bond\n\
+         held forever on a corpus that grows forever; the operand to question is the bond\n\
+         (§12.14 Ruling: bond sizing vs per-shard reward)."
     )?;
     Ok(results)
 }
@@ -680,9 +683,10 @@ pub fn lever_report(
         .collect();
     writeln!(
         out,
-        "  -> The WHOLE perpetual tail ({tail:.0} SKL/yr) funds the bond opp cost of {} shards\n\
-         — the only income shaped like the burden, and its ceiling. Beyond it the lever is\n\
-         the bond itself (0.75 SKL locked per {W} B forever, R = {R}), not any share.",
+        "  -> The WHOLE perpetual tail ({tail:.0} SKL/yr) funds the bond opp cost of {} shards,\n\
+         and it is a CONSTANT flow against a corpus that keeps growing — the fee share's\n\
+         shape with a longer fuse, not a structural answer. The lever is the bond itself\n\
+         (0.75 SKL locked per {W} B forever, R = {R}): what it is FOR decides its size.",
         funded.join(", "),
         W = shekyl_types::SHARD_LENGTH.to_raw(),
         R = REPLICAS_PER_SHARD,

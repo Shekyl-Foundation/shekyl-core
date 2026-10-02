@@ -244,7 +244,7 @@ pub const SCENARIO_9_TAIL_TX_PER_BLOCK: u64 = 15;
 pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConfig {
     ScenarioConfig {
         name: "high_history_low_activity".into(),
-        description: "post-boom settled chain: a large shard corpus accreted in an early boom, then a low-activity fee-era tail over 60 years (emission exhausted) — the §11.2 quadrant where escalation is decisive".into(),
+        description: "post-boom settled chain: a large shard corpus accreted in an early boom, then a low-activity fee-era tail over 60 years (emission near the tail: ~1 SKL/block at year 60, the 0.6 SKL/block floor binds from ~year 64) — the §11.2 quadrant where escalation is decisive".into(),
         sim_years: 60,
         volume: VolumeSchedule {
             get_volume: Box::new(|block, blocks_per_year| {
