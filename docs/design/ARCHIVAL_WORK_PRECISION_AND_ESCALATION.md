@@ -345,6 +345,9 @@ argument for it over a participation-derived signal:
 
 > **⚠️ Amended by §12.10 (A6, Stage 2) — "cannot be moved in a burst" is measured,
 > and it is not quite true. Three layers, separated by what excludes each:**
+> *(The slew figures below are the leaf-era measurement. Byte-keyed (§12.13,
+> 2026-10-01) the same ceiling moves the share **0.05 / 0.10 pts/epoch**; the
+> structure of the argument is unchanged.)*
 >
 > 1. **Reversal and oscillation: structurally excluded — unchanged, and this is
 >    the property that actually matters here.** This section's scope is *swings*:
@@ -1071,12 +1074,12 @@ models (each cell links its section).
 
 | Arm | Verdict | Result |
 | --- | --- | --- |
-| **A1** clearance | ✅ **clears** | Escalation earns its keep in the far tail: scenario 9 flat-25 **0.66×** (fails) vs best candidate **2.36×** at the binding 10 % opportunity-cost rate, 0 %/yr Kryder. A non-event while emission dominates. |
+| **A1** clearance | ~~✅ **clears**~~ → 🔴 **scenario 9 uncleared, byte-keyed (§12.13, 2026-10-01)** | *Leaf-era (J-segment) measurement, records-was:* escalation earns its keep in the far tail: scenario 9 flat-25 **0.66×** (fails) vs best candidate **2.36×** at the binding 10 % opportunity-cost rate, 0 %/yr Kryder. **Re-measured in the operand the validator consumes (closed byte shards): flat 0.06×, best 0.21× at 2 %, 0.04× at 10 % — no candidate in the band clears; the bond term is ~40× per unit of traffic. §12.13.** |
 | **A2** distribution (W6) | ✅ **clears** (§12.10) | Scarce-holder share `1.0000 → 0.9998` — **0.02 %** dilution, **zero** scarce holders stranded below marginal cost. |
 | **A3** stranding | ✅ **reported** (§12.7) | Pre-D1 strands **100 %** past the co-holder cliff — the §1 coupling claim confirmed and *understated*. Post-D1 ≈ 0 outside the quantization corner. |
-| **A4** stuffing (W9) | ~~🔴 FAILS~~ → ✅ **CLEARS (§12.11)** | **Verdict retracted 2026-07-27**: the arm measured *profit*, not *theft*; netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales**. Figures below are historical. Served-work ROI **2.8×–17.8×** at the rational equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. Under R2, ROI **0.6671**, `fee×→1` **0.7** (§12.9 OQ-4). |
-| **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching a ~3 KB opening beats holding 13.6 GB by **4–40×**; crossover `q* ≈ 0.098–0.278`. |
-| **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity, down-swing ≤ **0.1014** pts. Adversarial slew ceiling **1.41 pts/epoch penalty-free** (~~closed **economically** by reopen (c)~~ — **(c) closed with no mechanism (§12.11); this tier CLOSED structurally at §12.11.1**) or **2.82 pts/epoch at the legal 2× limit** (~~already priced out by the block-reward penalty, ~10.24 M SKL/epoch, **114×** the fees~~ — **that is also a price argument and blind to a griefer; this tier closes on the same structural grounds, §12.11.1**). **Both tiers are now descriptive bounds on how fast the chain can be pushed toward a sanctioned state, not residual risk.** See the §6.0 amendment. |
+| **A4** stuffing (W9) | ~~🔴 FAILS~~ → ✅ **CLEARS (§12.11)** | **Verdict retracted 2026-07-27**: the arm measured *profit*, not *theft*; netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales**. Figures below are historical. Served-work ROI **2.8×–17.8×** at the rational equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. Under R2, ROI **0.6671**, `fee×→1` **0.7** (§12.9 OQ-4). *Leaf-era figures; byte-keyed re-measurement (8-in / 1-out shape, `fee×→1` 0.8→2.0) in §12.13.* |
+| **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching a ~3 KB opening beats holding 13.6 GB (12.3 GB byte-keyed, §12.13) by **4–40×**; crossover `q* ≈ 0.098–0.278`. |
+| **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity, down-swing ≤ **0.1014** pts (leaf-era; byte-keyed **0.0036** / slew **0.05–0.10 pts/epoch**, §12.13). Adversarial slew ceiling **1.41 pts/epoch penalty-free** (~~closed **economically** by reopen (c)~~ — **(c) closed with no mechanism (§12.11); this tier CLOSED structurally at §12.11.1**) or **2.82 pts/epoch at the legal 2× limit** (~~already priced out by the block-reward penalty, ~10.24 M SKL/epoch, **114×** the fees~~ — **that is also a price argument and blind to a griefer; this tier closes on the same structural grounds, §12.11.1**). **Both tiers are now descriptive bounds on how fast the chain can be pushed toward a sanctioned state, not residual risk.** See the §6.0 amendment. |
 
 **The through-line: one theorem, three independent confirmations.** A4's
 `prem ≈ 1.0`, OQ-1's `|Δ| = 0` at the partition optimum, and A2's `0.02 %`
@@ -2148,3 +2151,73 @@ bit-identical to the flat constant at every `n`, pinned by
 provisional-until-testnet under the §11.4 ceremony (adversary-advantage
 argument committed *before* the number; PoRep branch ⇒ A1 re-runs with sealing
 costs first). Nothing in 3a/3b weakens or advances that gate.
+
+### 12.13 Byte-keyed re-baseline of the Stage-2 sweep — MEASURED 2026-10-01
+
+**Why.** `SHT-Q2` ([`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md))
+re-keyed the D2 operand: `n` is the count of archival shards **closed** by
+cumulative archival length — `|pqc_auths| + |prunable|` per transaction,
+`W = 3,000,000 B` (PROVISIONAL) per shard, `shekyl_types::shard_of` — read by
+the Rust validator as `shekyl_chain_rules::closed_shards_before` (CEN-F17). The
+sweep that produced every §12.4.1 verdict ran in the **retired** unit: J-segments
+of 25,992 leaves, `SHARD_BYTES = 3.33e6` restated in the sim. Per `SCC-Q2`
+([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md) §G) the knee
+is **re-derived in the new unit by the sweep, not converted**, and per rule 05 the
+sim now calls the production partition and predictors — `shard_of`,
+`SHARD_LENGTH`, `shekyl_tx_weight::predict_weight` / `predict_archival_len` — and
+never divides by `W` itself. The leaf-era rows above are **records-was**; this
+section is what the same arms measure in the operand the validator consumes.
+
+**The unit change is a ~40× burden change.** A J-segment counted one 128-B leaf
+per output (two per normal transaction); a byte shard counts ~10–12.6 KB of
+archival per transaction. The same traffic closes ~43× as many byte shards as it
+froze segments, and the §6.2 coupled bond (`0.75 SKL` per shard) scales with it.
+Nothing in the escalation changed; what the bond term *costs* per unit of traffic
+did.
+
+**Trajectories (closed shards at horizon).** baseline 10 y **523,841**
+(1,572 GB); boom/bust 877,228; sustained-growth 20 y **10,279,293** (30.8 TB);
+late-chain tail 1,236,719; high-history / low-activity 60 y 4,886,932.
+
+**`KNEE_BAND` re-derived: `[500_000, 2_250_000, 10_000_000]` closed shards** —
+baseline `n` at ~10 y, sustained-growth's final `n`, their geometric mean
+(≈ 2.32 M). The sim pins the band to those anchors
+(`stage2::knee_band_brackets_the_sweep_trajectories`). The config now carries
+the middle, `shekyl_escalation_knee_n = 2250000`, provisional and
+behaviour-neutral while flat; the consensus-constants digest re-pinned
+(`885f700d… → 05a1ba28…`). The ceremony still picks the knee with the asymptote.
+
+**Arm results in the byte unit** (each row is the current measurement; the
+§12.4.1 row it supersedes is marked there):
+
+| Arm | Byte-keyed result (2026-10-01) | Change from the leaf-era row |
+| --- | --- | --- |
+| **A1** clearance | 🔴 **high-history / low-activity is cleared by NO candidate in the band**: flat-25 **0.06×**, best (90 % / 2.25 M) **0.21×** at 2 %/yr, **0.04×** at the binding 10 %. Every other scenario clears at every rate (sustained-growth best 7.45×, late tail 8.50× at 10 %). There is no scenario where best clears and flat does not. | Was ✅ "scenario 9 flat 0.66× / best 2.36×". Fails on the bond term alone — ~40× the leaf-era bond per unit of traffic. **For the design owner:** the §6.0 band (asymptote ≤ 90 %) cannot clear the quadrant §11.2 added for exactly this purpose; the lever that would is the bond floor or `W`, not the share curve. |
+| **A4** stuffing (W9) | Shape **searched, not asserted**: the max-archival-per-fee shape is **8-in / 1-out** at every depth (inputs carry the PQC auth + FCMP share the operand counts; outputs carry unprunable prefix it does not) — the reverse of the leaf era's 1-in / 16-out, which inflated an output count the operand no longer measures. Cost per shard **0.93 SKL** one-shot, **1.00–1.03 SKL** output-conserving sustained; Monero-anchor ≈ 1,026 shards' worth. Realistic-end ROI 0.80–1.88× (`fee×→1` spread **0.8→2.0×**, was 2.8→17.8×); `prem ≈ 1.0` unchanged. | §12.11's no-exclusivity closure is an accounting argument independent of the unit and **stands**; the profit figures here are the historical gate re-measured, not a reopening. |
+| **A5** proxy (W10) | Unchanged in substance — the opening artifact and the test≡job payload are payload questions, not operand ones. Holding = `4096 · W` ≈ **12.3 GB** (was 13.6). | Numeric only. |
+| **A6** swing | Flood ceiling ≈ 3,700–3,900 shards/epoch at the surge limit; worst adversarial slew **0.05 pts/epoch** penalty-free, **0.10** at the legal 2× limit, reorg down-swing **0.0036 pts**. | Was 1.41 / 2.82 / 0.1014. The drop is the knee moving from 10⁵ segments to 2.25 × 10⁶ shards while an epoch's flood still closes only a few thousand units: a steepest-candidate ramp 22× longer in its own unit. §12.11.1's structural closure stands. |
+
+**Depth direction, corrected.** The leaf-era text said stuffing is "cheapest
+early" and the flood "harder to move over time". Byte-keyed, the FCMP proof that
+grows with depth is archival good the stuffer is *buying*, so depth moves only the
+archival/weight ratio: one-shot cost per shard **+1.3 %** and sustained **−2.6 %**
+from depth 1 to 6; the flood ceiling **−4 %**. Noise, not a lever; the sim's tests
+pin a bound, not a direction.
+
+**Unit discrepancy, disclosed for the escalation owner (`SCC-Q1`).** `SCC-Q1`'s
+answer names the burden count as *"transactions below the discard frontier"*, and
+`SCC-Q2` says the band is swept in that unit. What the validator **consumes** is
+closed shards at parent state (`closed_shards_before`; `economics_params.json`'s
+own comment since 2026-09-30), and that is the unit this sweep ran in — the sim
+measures the operand the chain reads. The two differ by the retention window (a
+closed shard is below the frontier only after its bodies leave ordinary daemons)
+and by unit (shards of bytes vs transactions). Either `SCC-Q1`'s answer is
+superseded by the landed operand, or `closed_shards_before` owes a frontier lag;
+that is a ruling, not a sim finding, and the knee's re-derivation holds under
+either reading because the band was swept, not selected.
+
+**Assumption carried.** The sustained stuffer model prices the cheapest
+output-conserving producer/consumer cycle (a campaign that must mint its own
+inputs). Whether an adversary with a large pre-existing output set is the right
+worst case for the ceremony is the owner's call; the one-shot (binding) figure
+does not depend on it.
