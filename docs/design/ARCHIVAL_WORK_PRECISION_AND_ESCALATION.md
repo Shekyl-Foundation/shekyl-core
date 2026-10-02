@@ -2222,16 +2222,19 @@ the traffic alone. The staker emission share decays by `0.9` per whole year
 (`shekyl_staker_emission_decay = 900000`, applied in
 `rust/shekyl-economics/src/emission_share.rs:62-87` — verified at source, not
 read from the parameter's name): `0.15 · 0.9^40 ≈ 0.0022` of emission at year
-40, and scenario 9 runs to 60 with its emission exhausted. **Stakers are decayed
-out of the perpetual tail by design**, so a settled chain's archival budget is
-the fee leg alone, and 15 tx/block of fees cannot carry a bond on 4.9 M shards
-at any share ≤ 90 %. The only lever that matches the failure is a **staker
-floor on the tail** — a share of the terminal subsidy that does not decay to
-zero. `shekyl_staker_emission_share` / `_decay` are on the genesis-frozen list,
-so this is a **question for the design owner, not a proposal**: whether a
-settled, low-activity Shekyl is meant to retain archivers at all, and if so
-from which leg. Until it is answered, A1's 🔴 is the model telling the truth
-about the parameters as frozen.
+40, and scenario 9 runs to 60 with its emission near the tail (the curve still
+mints ≈ 1.04 SKL/block at year 60 against the 2³² SKL asymptote at ESF 21; the
+0.6 SKL/block floor binds from ≈ year 64 — "exhausted" was wrong at source,
+corrected 2026-10-01). **Stakers are decayed out of the perpetual tail by
+design**, so a settled chain's archival budget is the fee leg alone, and
+15 tx/block of fees cannot carry a bond on 4.9 M shards at any share ≤ 90 %.
+~~The only lever that matches the failure is a staker floor on the tail~~ —
+**REFUTED 2026-10-01 (design owner, §12.14 *Ruling*): the tail is a constant
+flow and the bond burden is a stock that grows with the corpus, so a tail floor
+has the fee share's shape with a longer fuse; no flow funds a fixed-per-shard
+bond held forever on a corpus that grows forever. The operand to question is
+the bond, not the funding leg.** A1's 🔴 remains the model telling the truth
+about the parameters as frozen; what it is the truth *about* is in §12.14.
 
 **The binding rate, justified for this scenario.** The 10 %/yr opportunity
 cost on bonded SKL is exogenous to the model (`burden::OPP_COST_RATE_BAND`,
@@ -2278,8 +2281,9 @@ capital locks at close + freeze — the moment the shard's bond is posted —
 which is *before* discard, not after. A frontier lag would count the burden
 from the moment bodies leave ordinary daemons; `closed_shards_before` counts
 it from the moment it is borne, which is the right moment. The operand stays
-a pure fold with no frontier term. The ruling is the escalation owner's; the
-`SCC` §G row carries it.
+a pure fold with no frontier term. **RULED 2026-10-01 (design owner): superseded
+on the locked-capital reason; the operand stays a pure fold.** The `SCC` §G row
+carries the ruling of record.
 
 **Assumption carried.** The sustained stuffer model prices the cheapest
 output-conserving producer/consumer cycle (a campaign that must mint its own
@@ -2390,12 +2394,18 @@ is the only share-shaped row that holds the baseline to year 54 at 10 %.
 That row is the miner's income, i.e. the fee-era PoW security budget, and is
 listed so the owner sees the ceiling, not as a candidate: reaching into it is a
 security trade (`00-mission` priority 1) that needs its own wargame. (iii) **A
-non-decaying staker floor on the tail is the first lever shaped like the
-burden**, and it tops out too: the **whole** perpetual tail — 157,680 SKL/yr,
+non-decaying staker floor on the tail is not a structural answer either** (the
+owner's correction, below): the **whole** perpetual tail — 157,680 SKL/yr,
 every SKL of terminal subsidy to archival — funds the bond opportunity cost of
 **1.75 M shards at 2 %, 0.70 M at 5 %, 0.35 M at 10 %**, against scenario 9's
-4.9 M and the baseline's 3.3 M at 60 y. It pushes scenario 9's onset from y18
-to y42 and leaves it at 0.93 replicas; no floor the tail can pay clears it.
+4.9 M and the baseline's 3.3 M at 60 y (it pushes scenario 9's onset from y18
+to y42 and leaves it at 0.93 replicas at 10 %), and the corpus keeps growing
+(≈ 16.6 k shards/yr at 15 tx/block, +7.5 k SKL/yr of burden at 10 %) while the
+tail does not. The table's whole-tail row reads 0.76 at 2 % because at year 60
+the curve still mints ≈ 274 k SKL/yr above the tail; from ≈ year 64 the tail
+alone is the leg, and against scenario 9's year-60 burden (2.2 M SKL/yr at
+10 %, 440 k at 2 %) it clears only at 2 % and only at `R ≤ 2`. A constant flow
+against an unbounded stock: the fee share's shape with a longer fuse.
 (iv) **Re-pinning the decay** is worth little: `0.95` moves nothing visible, and
 no decay at all equals the 15 % floor (by construction — the shipped share *is*
 15 %) at 0.20 replicas. The decay constant is not where the failure is. (v) So,
@@ -2405,14 +2415,35 @@ an exogenous 10 %. Scenario 9's burden is 0.45 SKL per shard-year at 10 %; the
 figure the ceremony frozen-lists as the §6.2 bond floor is the operand every
 row above divides by.
 
-**For the design owner (unchanged in kind from §12.13, now with the price of
-each answer).** Whether a settled, low-activity Shekyl retains archivers at all
-is the question; if it does, the table says which leg can pay for how much of
-its corpus and for how long, and that the share curve alone cannot. The 10 %
-binding rate is kept and all three columns are printed; it is least grounded
-precisely in the settled-chain row (§12.13 *The binding rate*), and at 2 % the
-baseline clears to 60 y under the best band candidate. The sim's A1 verdict
-now names its horizon; this section is the record of what the longer horizon
-measured. The ruling — floor, decay, bond, `R`, or an accepted sunset of
-archival in the settled case — is a genesis-frozen-parameter decision for the
-GF-7 ceremony and is carried as such in `docs/FOLLOWUPS.md`.
+**Ruling (2026-10-01, design owner): the burden model is the thing to
+question, not the funding.** What the arithmetic says is that **no flow of any
+kind — fee share, burn share, tail floor — can fund a bond that is a fixed
+amount per shard, held forever, on a corpus that grows forever.** So the
+question is not "which flow" but **what the bond is for**:
+
+- If the bond is the **slash deterrent** — the cartel arm's inequality,
+  `free_epochs × reward` against `bond_at_risk + friction`
+  (`rust/shekyl-economics-sim/src/cartel.rs`; `ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`
+  §10.4, TJ-4) — it need only exceed what cheating on *that shard* would earn,
+  which is proportional to the shard's **current reward**. A bond proportional
+  to expected reward has an opportunity cost proportional to `reward × rate`,
+  and A1's ratio becomes `≈ 1/rate`: it clears at every age, every traffic
+  level, forever, with no escalation.
+- A fixed `0.75 SKL` per 3 MB makes sense only if the bond is doing a
+  **second job** — admission cost, anti-sybil floor — in which case that job is
+  **named and priced on its own**, not carried implicitly by the deterrent.
+
+Reframed, the retention question answers itself: a settled, low-activity
+chain is meant to retain archivers **if the bond asked of them tracks what
+serving is worth**. Under the current fixed-per-shard bond the honest answer to
+"do we expect archivers on a dead chain" is **no**, and the Foundation
+`CompleteTree` is the posture **by design** — a legitimate choice that must be
+*stated* as one. Under that statement scenario 9 is not a FAIL; it is the
+**backstop case**. This is a bond-floor design question (TJ-4 territory, sized
+against the cartel arm), not an escalation question and not a #929 item. The
+sim pass it owes is **bond sizing vs per-shard reward** — whether a working
+escalation band exists under the current bond, and under a reward-proportional
+one — scheduled in `docs/FOLLOWUPS.md` so the next pass is not spent on the
+flow question this section has closed. The 10 % binding rate is kept and all
+three columns are printed; it is least grounded precisely in the settled-chain
+row (§12.13 *The binding rate*).

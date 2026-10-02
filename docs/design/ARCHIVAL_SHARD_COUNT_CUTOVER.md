@@ -352,8 +352,11 @@ Numbered, and none resolved here.
 
 1. **`SCC-Q1` — `n`'s replacement burden count. ANSWERED (design owner,
    2026-09-27): transactions below the discard frontier, not transactions
-   archived.** The escalation exists to redirect burned value toward stakers *as
-   the burden on archivers grows*, and that burden starts when bodies **leave
+   archived — SUPERSEDED 2026-10-01 (design owner): the burden is locked
+   capital, borne at close + freeze, so the operand is closed shards at parent
+   state, a pure fold; see the `SCC-Q2` note below.** The escalation exists to
+   redirect burned value toward stakers *as the burden on archivers grows*, and
+   that burden starts when bodies **leave
    ordinary daemons** — not when shards close. Inside the retention window every
    daemon still holds them, so nothing is yet borne by archivers. Computable at the
    parent state from `cumulative_tx_count` and `D(E)` on both sides, and it moves
@@ -399,8 +402,10 @@ Numbered, and none resolved here.
    `closed_shards_before` therefore counts the burden from the moment it is
    borne, which is what `SCC-Q1` asked for; a frontier lag would count it
    late. The operand stays a pure fold, with no frontier term and no `D(E)`
-   read. **Awaiting the design owner's ruling**; until then `SCC-Q1` reads as
-   ANSWERED above and this note is the recommendation.
+   read. **RULED 2026-10-01 (design owner): `SCC-Q1`'s answer is SUPERSEDED
+   on the locked-capital reason; the operand stays a pure fold.** The
+   `SCC-Q1` entry above is the records-was answer; this paragraph is the
+   ruling of record.
 
    **Provenance correction.** `100,000` **is** sim-derived — it is the middle of
    the Stage-2 `KNEE_BAND = [25_000, 100_000, 250_000]`, swept against
