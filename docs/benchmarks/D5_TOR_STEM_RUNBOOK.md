@@ -51,14 +51,20 @@ reuse their data directory.
 
 ## Binaries
 
-The gate is the floor binary, not this file. The floor's existing
-aarch64 daemon is an earlier build: per-network relays, R-1 coherence,
-the hand-pinned id. The run waits on an aarch64 `shekyld` of
-`5a1a405ae`, built on the floor the way that earlier binary was. The
-x86 worktree binary is not a substitute and is not part of this rig.
+Two binaries, both `5a1a405ae`. A later commit on this branch
+handshakes with either, because the id is a function of the genesis
+hash. The record's binaries are this commit. Each measurement
+`shekyld --version` names it before anything dials.
 
-The seed's measurement daemon is an x86 build of the same commit. Each
-measurement `shekyld --version` names `5a1a405ae` before anything dials.
+The floor binary is the aarch64 `shekyld` built on the floor. The seed
+binary is a portable x86-64 build of the same commit (`ARCH=x86-64`,
+the seed deploy). The September portable deploy carries the hand-pinned
+id and does not handshake with the floor build, so the run uses the
+redeploy. The x86 worktree binary is neither of these.
+
+The miner and the fluff receiver are two processes of that seed
+binary, separate data directories, on the seed host. The floor runs
+the one aarch64 process.
 
 ## The three processes
 
@@ -86,14 +92,15 @@ process. Read the onion from its log once it is published. Its
 exclusive dial is the third daemon's onion, and it keeps that dial up
 while the seed dials the floor.
 
-**Fluff receiver.** Same commit, `--out-peers 0`, its own per-boot
-onion. It dials nothing, so it has no session until the floor dials
-it. From its side that session is the only one, and it is inbound Tor.
+**Fluff receiver.** The seed binary again, its own data directory,
+`--out-peers 0`, its own per-boot onion. It dials nothing, so it has
+no session until the floor dials it. From its side that session is the
+only one, and it is inbound Tor.
 
 ## Sequence
 
-1. Confirm both measurement binaries are `5a1a405ae`, the floor one
-   aarch64 and built on the floor.
+1. Confirm the floor binary and the seed binary both name `5a1a405ae`.
+   The fluff receiver is a second process of the seed binary.
 2. Start the miner. From a wallet opened against its RPC, `shekyl-cli
    mine start`. The daemon is `--regtest`; the wallet is that network.
    The retired spelling `start_mining` redirects to `mine start`.
