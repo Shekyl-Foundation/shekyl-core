@@ -77,10 +77,17 @@ Dandelion++ stem`, `Queueing … for Dandelion++ fluffing`).
 per-boot onion, through the warm client Tor that is already up. Do not
 restart that Tor: a restart drops the cached descriptor, which is the
 failure the inbound distribution fixed by keeping the Tor warm and
-restarting the daemon instead. `--add-exclusive-node` is that onion.
-`--tx-proxy` names that Tor's SOCKS address. A count on `--tx-proxy`,
-if one is written, is at least 12; a smaller count refuses startup.
-The count is a cap, not the number of peers this run dials.
+restarting the daemon instead. `--add-exclusive-node` is the floor's
+onion and no other. `--tx-proxy` names that Tor's SOCKS address. A
+count on `--tx-proxy`, if one is written, is at least 12; a smaller
+count refuses startup. The count is a cap, not the number of peers
+this run dials.
+
+Both seed processes publish a per-boot onion through that one Tor.
+The miner's dial list does not include the fluff receiver's onion. A
+session from the miner to the receiver would be a second session on
+the receiver, and its pool line would no longer be an inbound-Tor-only
+observation.
 
 The floor syncs that mined chain from the seed over clearnet, as the
 previous hop did, so the Tor session below is not how the floor gets
@@ -89,13 +96,15 @@ the chain.
 **Stem receiver (floor).** Default ephemeral per-boot onion: no
 `--anonymous-inbound`, no `--no-ephemeral-tor`. Miner off on this
 process. Read the onion from its log once it is published. Its
-exclusive dial is the third daemon's onion, and it keeps that dial up
-while the seed dials the floor.
+exclusive dial is the fluff receiver's onion — the `--out-peers 0`
+process, read from that process's log — and it keeps that dial up
+while the miner dials the floor.
 
 **Fluff receiver.** The seed binary again, its own data directory,
-`--out-peers 0`, its own per-boot onion. It dials nothing, so it has
-no session until the floor dials it. From its side that session is the
-only one, and it is inbound Tor.
+`--out-peers 0`, its own per-boot onion on the same warm Tor. It dials
+nothing. The floor is the process that dials this onion. The miner
+does not. From the receiver's side that session is the only one, and
+it is inbound Tor.
 
 ## Sequence
 
@@ -108,11 +117,15 @@ only one, and it is inbound Tor.
 3. Start the floor. Copy its per-boot onion. Sync the miner's chain
    over clearnet. The floor's height matches the miner's before the
    third daemon is asked to sync.
-4. Start the fluff receiver. It is at height 1. Copy its per-boot
-   onion. Confirm it has no outbound session.
-5. The floor takes that onion as an exclusive node and dials it, with
-   the seed's dial of the floor also up. Confirm the fluff receiver's
-   only session is inbound Tor.
+4. Start the fluff receiver. It is at height 1. Copy the per-boot
+   onion from this process's log, the `--out-peers 0` one. The miner's
+   onion is a different address on the same Tor. Confirm the receiver
+   has no outbound session.
+5. The floor takes the fluff receiver's onion as an exclusive node and
+   dials it. The miner's exclusive node stays the floor's onion. With
+   the miner's dial of the floor also up, confirm the receiver's only
+   session is the inbound Tor session from the floor, and that the
+   miner has no session to the receiver.
 6. **Required.** The fluff receiver's height reaches the floor's, over
    that Tor session. Record the time from the handshake to the matching
    height. If it does not, stop. The fluff observation cannot be made,
