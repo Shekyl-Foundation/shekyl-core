@@ -29,7 +29,7 @@ use std::fmt;
 use shekyl_types::SHARD_LENGTH;
 
 use crate::burden::honest_leaves_at_closed_shards;
-use crate::calibration::{self, stuffer_campaign_cost_atomic, tree_depth_for_leaves};
+use crate::calibration::{self, stuffer_campaign, tree_depth_for_leaves};
 use crate::escalation::{family, EscalationCurve, SHARE_SCALE};
 
 /// Long-term block-weight median floor — the penalty-free zone.
@@ -212,10 +212,8 @@ pub fn a6_report(
         RDP = worst_reorg_pts,
         W = worst_epoch_pts,
         WP = worst_pen_pts,
-        C = stuffer_campaign_cost_atomic(
-            honest_leaves_at_closed_shards(worst_dn_at_n),
-            worst_dn
-        ) as f64
+        C = stuffer_campaign(honest_leaves_at_closed_shards(worst_dn_at_n), worst_dn).cost_atomic
+            as f64
             / 1.0e9,
         P = penalty_compensation_skl_per_epoch(base_block_reward_atomic),
     )?;
