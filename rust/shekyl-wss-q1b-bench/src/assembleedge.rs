@@ -170,7 +170,61 @@ pub struct Arm {
 /// — five times the bound. [`plan_at_replay_window`]'s separation is whatever
 /// the ladder produces, and it is checked against this floor rather than set
 /// by it. [`plan_at_depth`] builds its top at this multiple, rounded up.
+///
+/// This is the *display* form. Leaf counts are derived and compared through
+/// [`separated_leaves`], the exact integer form, so no plan arithmetic goes
+/// through a float; the const-assert below pins the two to one value.
 pub const SAME_RUNG_SEPARATION: f64 = 1.5;
+
+/// [`SAME_RUNG_SEPARATION`] as an exact ratio `(numerator, denominator)`.
+const SAME_RUNG_SEPARATION_RATIO: (u32, u32) = (3, 2);
+
+const _: () = assert!(
+    SAME_RUNG_SEPARATION * (SAME_RUNG_SEPARATION_RATIO.1 as f64)
+        == SAME_RUNG_SEPARATION_RATIO.0 as f64,
+    "SAME_RUNG_SEPARATION and SAME_RUNG_SEPARATION_RATIO name one value"
+);
+
+/// The fewest leaves that sit [`SAME_RUNG_SEPARATION`] above `floor_leaves`:
+/// `ceil(floor × 3 / 2)`, in integers.
+///
+/// Rounded **up**, not truncated: the separation is a floor, and truncating
+/// `floor × 1.5` lands just under it (25 993 → 38 989, a ratio of 1.49998),
+/// so a plan built on it would construct a pair that fails its own bound.
+/// Integer arithmetic keeps this exact at any leaf count; a float round-trip
+/// is exact only below `2^53`.
+///
+/// # Panics
+///
+/// If `floor_leaves × 3` overflows `u64` — no rung is that wide.
+#[must_use]
+pub fn separated_leaves(floor_leaves: u64) -> u64 {
+    let (numerator, denominator) = SAME_RUNG_SEPARATION_RATIO;
+    floor_leaves
+        .checked_mul(u64::from(numerator))
+        .expect("a rung floor times the separation ratio fits in u64")
+        .div_ceil(u64::from(denominator))
+}
+
+/// Whether `depth`'s rung floor is a real leaf count rather than a wrapped one.
+///
+/// [`shekyl_fcmp::tree::outputs_per_node`] documents its own overflow as "a
+/// const-eval or **debug** panic, not a silent wrap", on the stated grounds
+/// that "`j` names a layer of the tree, whose depth is single digits". In a
+/// **release** build — which is how this harness runs — the `usize` product
+/// wraps with no panic, so a deep `--rung` yields a plausible-looking but
+/// wrong population and the run measures nothing meaningful. That is worse
+/// than a crash, because the record would look valid.
+///
+/// [`min_leaves_for_depth`] carries that domain: it recomputes the product
+/// with `checked_mul` and answers `None` where it would not fit — the same
+/// answer it already gives for a depth below the ladder. So this is a reading
+/// of that one `Option`, not a second ceiling; no bound is restated here,
+/// which is how a harness and a consensus-frozen domain drift apart.
+#[must_use]
+pub fn rung_floor_is_representable(depth: u8) -> bool {
+    min_leaves_for_depth(depth).is_some()
+}
 
 /// The arms at one replay window's worth of leaves — **not** the graded
 /// assembly population.
@@ -206,7 +260,7 @@ pub fn plan_at_replay_window() -> Vec<Arm> {
     let floor_leaves =
         min_leaves_for_depth(top.depth).expect("the replay-window top sits on a rung with a floor");
     assert!(
-        top.leaf_count as f64 >= floor_leaves as f64 * SAME_RUNG_SEPARATION,
+        top.leaf_count >= separated_leaves(floor_leaves),
         "the replay window ({} leaves) is less than {SAME_RUNG_SEPARATION}x its rung floor \
          ({floor_leaves}); the same-rung pair could not tell a slope from noise",
         top.leaf_count
@@ -230,12 +284,7 @@ pub fn plan_at_replay_window() -> Vec<Arm> {
 pub fn plan_at_depth(depth: u8) -> Vec<Arm> {
     let floor_leaves =
         min_leaves_for_depth(depth).unwrap_or_else(|| panic!("depth {depth} has no rung floor"));
-    // Rounded UP, not truncated: the separation is a floor, and truncating
-    // `floor x 1.5` lands just under it (25 993 -> 38 989, a ratio of
-    // 1.49998), so the plan would construct a pair that fails its own bound.
-    #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
-    let top_leaves = (floor_leaves as f64 * SAME_RUNG_SEPARATION).ceil() as u64;
-    let top = Population::at(top_leaves);
+    let top = Population::at(separated_leaves(floor_leaves));
     assert_eq!(
         top.depth, depth,
         "depth {depth}'s rung is narrower than {SAME_RUNG_SEPARATION}x, so a same-rung pair \
@@ -398,8 +447,17 @@ impl Default for FlatnessCriterion {
 /// Increment 6 must widen the bound explicitly or derive the expectation
 /// from [`shekyl_fcmp::tree::chunk_width`] of the layer actually added before
 /// it grades a passing capture. This paragraph is that blocker (rule 22).
+///
+/// # Panics
+///
+/// If `shallow_depth` is `0`: depth 0 is not a tree, and a zero divisor
+/// would hand [`read_flatness`] an infinite expectation that grades nothing.
 #[must_use]
 pub fn expected_cross_rung_ratio(shallow_depth: u8, deep_depth: u8) -> f64 {
+    assert!(
+        shallow_depth > 0,
+        "depth 0 is not a tree; the cross-rung ratio has no shallow arm"
+    );
     f64::from(deep_depth) / f64::from(shallow_depth)
 }
 

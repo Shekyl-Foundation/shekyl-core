@@ -479,3 +479,35 @@ fn the_replay_window_plan_is_not_labelled_graded() {
         );
     }
 }
+
+/// The ladder has a domain, and it is monotone.
+///
+/// `outputs_per_node`'s product wraps silently in a release build, so
+/// [`rung_floor_is_representable`] reads [`min_leaves_for_depth`]'s `Option`,
+/// which recomputes it checked. This pins that the domain is an interval:
+/// once a depth has no floor, no deeper one does either. That is what makes
+/// the first rejection a usable bound rather than a hole in the middle.
+#[test]
+fn the_rung_domain_is_a_monotone_interval() {
+    let first_bad = (2..=60u8)
+        .find(|d| !rung_floor_is_representable(*d))
+        .expect("some depth in 2..=60 must exceed u64; the ladder changed shape");
+    assert!(
+        first_bad > LEAF_RATE_MODEL_DEPTH,
+        "the rate model's depth {LEAF_RATE_MODEL_DEPTH} must have a floor; \
+         the domain ends at {first_bad}"
+    );
+    for depth in first_bad..=60u8 {
+        assert!(
+            !rung_floor_is_representable(depth),
+            "depth {depth} has a floor although {first_bad} does not; the domain is \
+             not an interval, so the first rejection does not bound it"
+        );
+    }
+    for depth in 2..first_bad {
+        assert!(
+            rung_floor_is_representable(depth),
+            "depth {depth} lost its floor"
+        );
+    }
+}

@@ -23,8 +23,9 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use shekyl_wss_q1b_bench::assembleedge::{
-    plan_at_depth, plan_at_replay_window, read_flatness, signed_change_pct, spread_pct, Arm,
-    ArmRole, AssembleRig, FlatnessCriterion, PlanKind, LEAF_RATE_MODEL_DEPTH,
+    plan_at_depth, plan_at_replay_window, read_flatness, rung_floor_is_representable,
+    signed_change_pct, spread_pct, Arm, ArmRole, AssembleRig, FlatnessCriterion, PlanKind,
+    LEAF_RATE_MODEL_DEPTH,
 };
 use shekyl_wss_q1b_bench::corpus::worst_case_leaves_per_block;
 use shekyl_wss_q1b_bench::report::{
@@ -58,13 +59,18 @@ struct Args {
     /// a cross-rung step no dearer than one layer — in minutes. Neither plan
     /// is the graded assembly population. That population is a ruled chain
     /// age, and the record says which plan ran.
-    #[arg(long)]
+    ///
+    /// Depth 2 is the shallowest tree (`min_leaves_for_depth`): the leaf
+    /// layer is never itself the root.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(2..))]
     rung: Option<u8>,
 
     /// Leaves per ingested block. Defaults to the worst-case rate at
     /// `LEAF_RATE_MODEL_DEPTH`, the depth a path's proof weight is priced at.
-    /// That depth is not the tree depth of either plan.
-    #[arg(long)]
+    /// That depth is not the tree depth of either plan. Must be at least 1
+    /// and no larger than the smallest arm's population, so every arm holds
+    /// at least one block.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     leaves_per_block: Option<u64>,
 
     /// Directory the scratch client store is created in. On the pinned rig
@@ -133,6 +139,20 @@ fn arm_record(arm: Arm, series: Series) -> AssembleArmRecord {
 }
 
 fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
+    // Refused here rather than left to a `clap` range, because the bound is a
+    // property of the ladder and not a constant to restate: above some depth
+    // `outputs_per_node`'s product wraps in a release build, and the run would
+    // report a valid-looking record for a population that does not exist.
+    if let Some(depth) = args.rung {
+        if !rung_floor_is_representable(depth) {
+            return Err(format!(
+                "--rung {depth}: the rung floor is not representable — \
+                 `outputs_per_node` overflows at this depth and wraps silently in a \
+                 release build, so the plan would measure a population that does not \
+                 exist. Pick a shallower rung."
+            ));
+        }
+    }
     let arms = args.rung.map_or_else(plan_at_replay_window, plan_at_depth);
     let leaves_per_block = args
         .leaves_per_block
