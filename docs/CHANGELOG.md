@@ -198,6 +198,23 @@
   proof's content, length, and framing are unchanged
   (`GENESIS_TX_WIRE_FORMAT.md` Q6).
 
+### Archival FFI — one dead export removed; the rest of the deletion surface registered for the cutover (DRS-E4 commit 9)
+
+- **Removed:** `shekyl_archival_settlement_epoch_overridden` (declared in
+  `shekyl_ffi.h`, never called — the daemon's startup gate reads
+  `shekyl_archival_settlement_epoch_override_present` and arms) and its
+  only backing, `shekyl_archival_retention::settlement_epoch_blocks_overridden`.
+  Found by surveying all 60 `shekyl_archival_*` exports against their C++
+  callers.
+- **Not removed, by finding:** `release_pop` / `reinstate_pop`,
+  `segment_freeze.rs`, the freeze half of `challenge.rs` / `path.rs` and
+  their exports — scheduled by `DRS_E4_ARCHIVAL_WRITER.md` §3.9 to delete
+  "in this increment" on a premise that holds only after the cutover. They
+  are the live C++ pop path's and freeze pipeline's; the C++ daemon is
+  consensus until the cutover. Registered whole as `DEL-008`
+  (`DAEMON_REDB_STORE.md` §12) with the C++ half, trigger the cutover,
+  falsifier named. (`DRS_E4_ARCHIVAL_WRITER.md` §3.9, §6 row 9.)
+
 ### Replay driver — the archival oracle holds, with its sufficiency stamp; the LMDB slash fixture replicated on the Rust stack (DRS-E4 commit 8)
 
 - Oracle: the replay harness's `hold()` now **asserts** the archival rows

@@ -141,10 +141,10 @@ pub use conservation::{verify_conservation_snapshot, ConservationError, Conserva
 pub use constants::{
     arm_settlement_epoch_override_for_regtest, effective_archival_reorg_depth_blocks,
     effective_settlement_epoch_blocks, parse_reorg_cap_override, parse_settlement_epoch_override,
-    settlement_epoch_blocks_overridden, settlement_epoch_override_floor,
-    settlement_epoch_override_ignored, settlement_epoch_override_present,
-    SettlementEpochOverrideError, CHALLENGES_PER_PAIR_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS,
-    CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
+    settlement_epoch_override_floor, settlement_epoch_override_ignored,
+    settlement_epoch_override_present, SettlementEpochOverrideError, CHALLENGES_PER_PAIR_PER_EPOCH,
+    CHALLENGE_BEACON_SEAL_BLOCKS, CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
+    SLASH_GRACE_EPOCHS,
 };
 pub use debit_auth::{
     cold_authority_pin, debit_auth_pin, requires_cold_authority, ColdAuthorityError, DebitAuthError,

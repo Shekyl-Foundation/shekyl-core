@@ -9,10 +9,9 @@ use super::codes::*;
 use shekyl_archival_retention::{
     claim_window_floor, effective_settlement_epoch_blocks, epoch_close_compute,
     epoch_close_due_at_height, failure_window_slashable, good_through, prune_below_epoch_at_height,
-    serve_credit_epoch_ok, settlement_epoch_at_height, settlement_epoch_blocks_overridden,
-    slash_open_interval_to_append, BadInterval, BaselineObservation, CreditPair, EpochCloseBond,
-    EpochCloseInputs, EpochCloseShard, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
-    FAILURE_WINDOW_SERVE_BUDGET, MAX_CLAIM_AGE_W,
+    serve_credit_epoch_ok, settlement_epoch_at_height, slash_open_interval_to_append, BadInterval,
+    BaselineObservation, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
+    FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET, MAX_CLAIM_AGE_W,
 };
 /// Returns `1` when `settlement_epoch >= join_settlement_epoch + 1` (gate-4 §2.2 `E_first` lower bound).
 #[no_mangle]
@@ -248,16 +247,6 @@ pub extern "C" fn shekyl_archival_settlement_epoch_blocks() -> u64 {
 #[no_mangle]
 pub extern "C" fn shekyl_archival_reorg_depth_blocks() -> u64 {
     shekyl_archival_retention::effective_archival_reorg_depth_blocks()
-}
-
-/// True iff a `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override is active (the
-/// effective schedule differs from the genesis default — which requires
-/// this process to have **armed** via
-/// [`shekyl_archival_settlement_epoch_arm_regtest`]). Drives the daemon's
-/// loud fakechain warning.
-#[no_mangle]
-pub extern "C" fn shekyl_archival_settlement_epoch_overridden() -> bool {
-    settlement_epoch_blocks_overridden()
 }
 
 /// True iff `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` is present in the process

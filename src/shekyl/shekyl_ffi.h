@@ -2615,12 +2615,6 @@ uint64_t shekyl_archival_settlement_epoch_blocks(void);
 /// regtest lever beside the epoch's). Read only to report the schedule.
 uint64_t shekyl_archival_reorg_depth_blocks(void);
 
-/// True iff a SHEKYL_SETTLEMENT_EPOCH_BLOCKS override is active (effective
-/// schedule differs from the genesis default — which requires this process
-/// to have armed via shekyl_archival_settlement_epoch_arm_regtest). Drives
-/// the daemon's loud fakechain warning.
-bool shekyl_archival_settlement_epoch_overridden(void);
-
 /// True iff SHEKYL_SETTLEMENT_EPOCH_BLOCKS or SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS
 /// is present in the environment at all (no validation, no schedule latch).
 /// Drives Blockchain::init's
