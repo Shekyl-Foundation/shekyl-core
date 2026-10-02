@@ -7,7 +7,8 @@
 - `calculate_transaction_prunable_hash` no longer hashes. It finds the
   transaction's prunable range, the bytes after `unprunable_size`, and
   hands it to `shekyl_wire::prunable_hash_of` over a new FFI entry,
-  `shekyl_tx_prunable_hash` (one range, no length). The digest is a txid
+  `shekyl_tx_prunable_hash` (one byte range; no archival length, which
+  stays the mixer's to measure). The digest is a txid
   operand that also travels alone — the `txs_prunable_hash` row, and
   `prunable_hash` beside a pruned body in `get_transactions`, which the
   wallet mixes into the id it checks — so it has the mixer's definition and
