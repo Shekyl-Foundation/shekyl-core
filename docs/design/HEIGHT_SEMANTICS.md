@@ -9,7 +9,10 @@ height-semantics Phase 2d RULED 2026-09-21 (countersign clocks +
 difference constants); height-semantics Phase 2e RULED 2026-09-21
 (C4 `bond_post_offset_blocks` + wallet-ledger tip/reorg wrap);
 height-semantics Phase 2f RULED 2026-09-21 (ScanResult and the remaining
-inland ordinals are `BlockHeight`; reference spans are `BlockCount`).
+inland ordinals are `BlockHeight`; reference spans are `BlockCount`);
+height-semantics Phase 2g POSED 2026-10-01, not ruled (the daemon-store
+and archival surface the census did not walk; §3.5,
+`DRS_E4_ARCHIVAL_WRITER.md` `ARW-Q16`).
 Stamp-clock COUNT→ORDINAL conversion is optional-not-owed. The
 `get_version` `target_height` wire `0` stays `RK-`. Numerics are frozen
 as pinned (Rick, 2026-09-19).
@@ -35,7 +38,9 @@ C++ overloads "height" for the count (`m_db->height()`, `get_height`,
 `get_info.height` after `++res.height` at
 `src/rpc/core_rpc_server.cpp:206-207`). The Rust vocabulary already
 splits the types; the remaining tax is callers that wrap a count in
-`BlockHeight`.
+`BlockHeight` — and, found 2026-10-01, a whole surface the census did
+not walk that carries both quantities as bare `u64` (the daemon store
+and the archival schedule; §3.5 Phase 2g).
 
 Named conversions, on `ChainCount`
 (`rust/shekyl-types/src/block_axis.rs:150-182`):
@@ -382,6 +387,38 @@ quantity.
   JSON block number is `usize` inside the fetch helpers. FFI pods, the
   snapshot-id preimage, the `get_version` wire `0`, and the gf7
   measurement hook stay raw. No numeric change.
+- **Height-semantics Phase 2g — the daemon-store and archival surface —
+  POSED 2026-10-01, not ruled** (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-Q16`;
+  default (b) there names this slice). The census above (§2–§3.3) walked
+  the wallet side and the daemon-admission reads; the Rust daemon store
+  and the archival settlement schedule are in it nowhere, and Phase 2e's
+  *C2-complete* is true of the census and false of the tree. Read at the
+  tree 2026-10-01: `shekyl_archival_retention::SettlementSchedule` is
+  thirty-one bare-`u64` height parameters (`last_block`,
+  `slash_deadline_height`, `close_due_at_height(block_height: u64)`, …);
+  `shekyl_types::archival::storage_ids_through(listed: u64, height: u64)`;
+  `shekyl_chain_rules::archival::Transition::count() -> u64` (a
+  **count**, `connecting + 1`, named but untyped);
+  `shekyl_chain_store::store::archival_write::{record_archival_epoch,
+  write_slashes}(height: u64)` (C7 by name). Three one-apart defects were
+  found there by tests, not readers, in one lane in three days — the
+  close height (DRS-E4 commit 2), the coinbase term (commit 3), the
+  slash-log key (commit 6, `ARW-26`) — and commit 4 had defended the
+  class with a name (`count()`), which held in its crate and not across
+  the call into the store. *Scope if ruled:* those surfaces become
+  `BlockHeight` / `ChainCount` / `BlockCount` inland; the
+  `shekyl_archival_epoch_*` FFI free functions and the
+  `consensus_state::*` process-latched wrappers decode at the edge (C1,
+  C8); one new named bridge on `ChainCount` for *the count of a chain
+  whose tip is `h`* (`tip()`'s inverse — today only reachable as
+  `from_next_height(h) + ONE`), with its C9 `compile_fail`; **no numeric
+  change**. *First deliverable, not last:* a `scripts/ci` gate for an
+  inland bare-`u64` height (exact-hit, shrink-only allowlist, the
+  `check_test_only_features.py` shape), so C2 stops being review-borne
+  and a slice cannot again be complete over a census. *What E4 does
+  regardless* (`ARW-Q16` (a)): its commit 8 lands the `ARW-26` ruling
+  typed at the site it changes, and commits 7 and 9 write no new bare
+  height. *Falsifier:* a fourth one-apart instance before this slice lands.
 
 **Out of scope of the whole audit:** any stamp value change (none from
 Phase 1); the daemon-RPC `target_height` *wire* sentinel deletion
