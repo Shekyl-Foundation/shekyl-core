@@ -122,6 +122,8 @@ defect.
 | Fee multiplier on the Standard rung | What users pay above the default is not knowable before launch | Swept; `×1` is the production default |
 | Rung mix (economy / standard / priority shares) | Same. At the defaulted 15/80/5 mix ([`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §5.5) the 5 % on Priority pay roughly three quarters of all fees at the zone median | Swept, including a zero-Priority arm |
 | Median held at the penalty-free zone | Only until ESR-6 lands the median | Stated in the report header |
+| Fee paid unrounded | The wallet rounds each fee up to the daemon's quantization mask (1 000 atomic). The mask has no Rust owner — it is a C++ static — and the fee-floor instrument in this crate already pays unrounded (FL-R22). At most 1 000 atomic per transaction, below print precision | Stated here; closes when the mask gains a Rust owner |
+| `REF_TX_WEIGHT = 3_000` | The ladder's reference weight is a C++ macro with no single Rust owner. The crate's one existing declared copy (`fee_ladder.rs`) is reused, not duplicated | Declared at its definition |
 | Fee floor enforced in consensus | Not the current system: the floor is relay policy (C2-R2 Q9, reopened 2026-10-02) | Second arm of ESR-7 |
 | Traffic schedules, opportunity-cost band, SKL price band, storage and Kryder terms, replica target `R = 6` | No production owner exists | Exogenous; each already declared at its definition (Appendix A, class A) |
 
@@ -130,6 +132,16 @@ defect.
 Hand arithmetic from the floor formula, for a transaction of about
 17.5 KB. Rough by construction; registered so that the tables are a test
 and not a narrative.
+
+**Amended 2026-10-02, still before any run: the shape.** 17.5 KB is the
+2-in/2-out spend of
+[`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md). The
+sim's ordinary transaction is **1-in/2-out** (`burden::normal_tx_shape`),
+one authorisation lighter — roughly 12–13 KB. Every per-transaction fee
+below, and the 875 KB block figure, are therefore about 30 % too high.
+Read the crossover years as about three years earlier (≈ year 30 and
+≈ year 10) and the block figure as ≈ 600 KB. The directions and their
+order are unchanged, and they are what is registered.
 
 1. **ESR-1, control arm.** Exact reproduction of §12.14. This is the
    wiring's falsifier, not a prediction about the system.
