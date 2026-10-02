@@ -10,8 +10,8 @@
   (`ARCHIVAL_SHARD_T_DERIVATION.md` §10.5). The provisional shard length
   stands on the transport ceiling; it is now provisional only on the
   server-egress measurement (`U1b`). No constant changes.
-- The PoW comparison found no cost on any judged statistic, and one material
-  difference in PoW's favour that the design cannot attribute
+- The PoW comparison detected no material cost on any judged statistic, and
+  one material difference in PoW's favour that the design cannot attribute
   (`SP_T3_SKELETON_MEASUREMENT.md` §19b). Two PoW-off windows a day apart
   differ by more than the postures do.
 - `shekyl-sp-t3-spike` gains `pd-f2-ceiling`, which reads one observations

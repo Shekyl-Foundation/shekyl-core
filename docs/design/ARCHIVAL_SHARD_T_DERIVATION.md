@@ -1788,8 +1788,11 @@ percentile.
 | 1,663,488 B | 0.975 → 0.975, immaterial | 8.59 → 8.02 s, inconclusive | 28.38 → 19.83 s, inconclusive |
 | 3,326,976 B | 0.950 → 0.962, inconclusive | 11.29 → 11.10 s, inconclusive | 49.16 → 27.48 s, **MATERIAL** |
 
-- **No PoW cost appears on any judged statistic.** Nothing is slower or less complete
-  with PoW on by more than its margin.
+- **No material PoW cost was detected.** No judged statistic is materially worse
+  with PoW on. That is weaker than "PoW costs nothing", and the intervals say how
+  much weaker: on eight of the nine the interval excludes a cost larger than the
+  margin; on the ninth, p90 at the ¼× object, it does not (6.8 s faster to 4.8 s
+  slower, against ±2.0 s), so there a cost is neither shown nor ruled out.
 - **One statistic is material, and in PoW's favour:** the 1× p90 is 21.7 s lower with
   PoW on (95 % interval −29.6 to −5.7 s against a margin of ±4.9 s). §4.1a sends a
   material PoW *cost* to Rick as a `SPIKE-F-15` finding; this is a material difference
