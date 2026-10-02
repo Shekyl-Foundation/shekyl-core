@@ -11,8 +11,8 @@ use shekyl_archival_retention::{
     epoch_close_due_at_height, failure_window_slashable, good_through, prune_below_epoch_at_height,
     serve_credit_epoch_ok, settlement_epoch_at_height, settlement_epoch_blocks_overridden,
     slash_open_interval_to_append, BadInterval, BaselineObservation, CreditPair, EpochCloseBond,
-    EpochCloseInputs, EpochCloseShard, ShardClose, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
-    FAILURE_WINDOW_SERVE_BUDGET, MAX_CLAIM_AGE_W,
+    EpochCloseInputs, EpochCloseShard, ShardClose, ShardCloseWire, FAILURE_WINDOW_M,
+    FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET, MAX_CLAIM_AGE_W,
 };
 /// Returns `1` when `settlement_epoch >= join_settlement_epoch + 1` (gate-4 §2.2 `E_first` lower bound).
 #[no_mangle]
@@ -491,7 +491,10 @@ pub(super) unsafe fn decode_epoch_rows(
         .iter()
         .map(|s| EpochCloseShard {
             shard_id: s.shard_id,
-            close: ShardClose::from_wire(s.has_segment != 0, s.freeze_height),
+            close: ShardClose::from_wire(ShardCloseWire {
+                has_segment: s.has_segment != 0,
+                freeze_height: s.freeze_height,
+            }),
         })
         .collect();
     let pairs: Vec<CreditPair> = raw_pairs

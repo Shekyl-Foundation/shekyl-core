@@ -279,29 +279,33 @@ fn a_complete_tree_slash_demotes_the_record_to_an_empty_compact_one() {
 
 // ---- shard close heights: exemption 1 (the search) and 3 (the cut) ------
 
+/// One chain, both close tests. h1 reaches `W` (shard 0 closes), h3 reaches
+/// `2W + 4` (shard 1 closes), h4 adds nothing. The height search and
+/// `shard_close` read this same chain, so the two cannot drift apart.
+fn chain_closing_two_shards() -> crate::harness::MockChain {
+    let w = SHARD_LENGTH.to_raw();
+    let folds = [0, w, w + 3, 2 * w + 4, 2 * w + 4];
+    folds
+        .into_iter()
+        .enumerate()
+        .fold(crate::harness::MockChain::default(), |chain, (h, fold)| {
+            chain.push(
+                RecordedBlock {
+                    cumulative_archival_len: ArchivalLength::from_raw(fold),
+                    ..recorded(1_000 + h as u64)
+                },
+                root(0x11),
+            )
+        })
+}
+
 /// Exemption 1. `SCC-Q3` on `SHT-Q2`'s partition: the height whose
 /// archival fold first reached a shard's end, found by binary search over
 /// `cumulative_archival_len` — a function of the fold sequence, which is
 /// the only thing the `MockChain` here carries.
 #[test]
 fn shard_close_height_is_the_block_whose_fold_reached_the_shards_end() {
-    let w = SHARD_LENGTH.to_raw();
-    // Fold through h: h1 reaches W (shard 0 closes), h3 reaches 2W + 4
-    // (shard 1 closes), h4 adds nothing.
-    let folds = [0, w, w + 3, 2 * w + 4, 2 * w + 4];
-    let chain =
-        folds
-            .iter()
-            .enumerate()
-            .fold(crate::harness::MockChain::default(), |chain, (h, &fold)| {
-                chain.push(
-                    RecordedBlock {
-                        cumulative_archival_len: ArchivalLength::from_raw(fold),
-                        ..recorded(1_000 + h as u64)
-                    },
-                    root(0x11),
-                )
-            });
+    let chain = chain_closing_two_shards();
     let parent = BlockHeight::from_raw(4);
     chain.with_view(|view| {
         assert_eq!(
@@ -330,52 +334,52 @@ fn shard_close_height_is_the_block_whose_fold_reached_the_shards_end() {
 }
 
 /// Exemption 1. `SHT-Q1`'s falsifier (i), run on `g(age)`'s operand
-/// (`SHT-8` item 2; `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F's `g(age)` row):
-/// the operand is keyed on the fold alone. Shards 0 and 1 are `ClosedAt`
-/// the heights whose fold reached their ends; shard 2 — at the universe,
-/// with a fold short of its end — is `Open`, and the parent height, which
-/// would be the operand under a height-driven closure, never enters. The
-/// same fixture as the search above, so the two cannot drift apart.
+/// (`SHT-8` item 2; `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F's `g(age)` row).
+/// The operand is the height search, read through one [`ClosedUniverse`]:
+/// every shard below the count is `ClosedAt` exactly
+/// [`shard_close_height`] of that universe's parent, and the next shard —
+/// at the count, fold short of its end — is `Open`. Age of that operand
+/// is the retention falsifier
+/// `shard_close_age_is_zero_while_open_and_the_fold_height_once_closed`.
 #[test]
 fn shard_close_is_the_fold_height_below_the_universe_and_open_at_it() {
     use shekyl_archival_retention::ShardClose;
-    let w = SHARD_LENGTH.to_raw();
-    let folds = [0, w, w + 3, 2 * w + 4, 2 * w + 4];
-    let chain =
-        folds
-            .iter()
-            .enumerate()
-            .fold(crate::harness::MockChain::default(), |chain, (h, &fold)| {
-                chain.push(
-                    RecordedBlock {
-                        cumulative_archival_len: ArchivalLength::from_raw(fold),
-                        ..recorded(1_000 + h as u64)
-                    },
-                    root(0x11),
-                )
-            });
-    let parent = BlockHeight::from_raw(4);
-    let universe = 2;
+    let chain = chain_closing_two_shards();
+    // The same subtraction `closed_shards_before` and `ClosedUniverse::before`
+    // make: connecting 5 reads parent 4, the parent the height search above
+    // names. Two shards are closed on this chain.
+    let connecting = BlockHeight::from_raw(5);
+    let parent = BlockHeight::from_raw(
+        connecting
+            .to_raw()
+            .checked_sub(1)
+            .expect("connecting is past genesis"),
+    );
     chain.with_view(|view| {
+        let universe = ClosedUniverse::before(&view, connecting).expect("parent is recorded");
         assert_eq!(
-            shard_close(&view, ShardId::from_raw(0), parent, universe),
-            Ok(ShardClose::ClosedAt(1))
+            universe.count().get(),
+            closed_shards_before(&view, connecting)
+                .expect("parent is recorded")
+                .get()
         );
+        assert_eq!(universe.count().get(), 2);
+        for shard in 0..universe.count().get() {
+            let close = shard_close(&view, ShardId::from_raw(shard), &universe)
+                .expect("a shard below the count has a close height");
+            let ShardClose::ClosedAt(height) = close else {
+                panic!("shard {shard} is below the closed universe");
+            };
+            assert_eq!(
+                shard_close_height(&view, ShardId::from_raw(shard), parent)
+                    .expect("the search places the same height"),
+                BlockHeight::from_raw(height)
+            );
+        }
+        let open = universe.count().get();
         assert_eq!(
-            shard_close(&view, ShardId::from_raw(1), parent, universe),
-            Ok(ShardClose::ClosedAt(3))
-        );
-        assert_eq!(
-            shard_close(&view, ShardId::from_raw(2), parent, universe),
-            Ok(ShardClose::Open)
-        );
-        // An open shard ages nothing at any height; a closed one ages from
-        // its fold height, not from the parent.
-        let seb = 10;
-        assert_eq!(ShardClose::Open.age_milli(parent.to_raw(), seb), 0);
-        assert_eq!(
-            ShardClose::ClosedAt(1).age_milli(parent.to_raw(), seb),
-            shekyl_archival_retention::shard_age_milli(parent.to_raw(), 1, seb)
+            shard_close(&view, ShardId::from_raw(open), &universe).expect("open has no search"),
+            ShardClose::Open
         );
     });
 }

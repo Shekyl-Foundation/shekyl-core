@@ -135,7 +135,7 @@ pub use consensus_state::{
     settlement_epoch_slash_deadline_height, shard_age_milli, shard_contribution_micro,
     shard_work_micro, sigma_work_milli, BadInterval, CreditIndexOutOfRange, CreditPair,
     EpochCloseBond, EpochCloseInputs, EpochCloseResult, EpochCloseShard, ServeCreditRow,
-    ServedWork, SettlementEpochBlocks, SettlementSchedule, ShardClose,
+    ServedWork, SettlementEpochBlocks, SettlementSchedule, ShardClose, ShardCloseWire,
     FOUNDATION_EXCLUDED_FROM_MARKET,
 };
 pub use conservation::{verify_conservation_snapshot, ConservationError, ConservationSnapshot};

@@ -13,7 +13,7 @@ use std::os::raw::c_char;
 
 use shekyl_archival_retention::{
     admission_code_cstr, admission_codes, check_admission_of, last_settled_epoch_as_of_parent,
-    parent_state_shards_from_gather, HoldingsKind, ParentStateHoldings, ShardClose,
+    parent_state_shards_from_gather, HoldingsKind, ParentStateHoldings, ShardClose, ShardCloseWire,
 };
 use shekyl_peer_policy::DropVerdict;
 
@@ -91,8 +91,10 @@ fn archival_admission_drop_verdict(code: u8) -> DropVerdict {
 /// The `freeze_height` / `has_segment` pair is the C++ LMDB validator's
 /// segment-keyed reading of a shard's close (CEN-L10's ruled divergence:
 /// the Rust validator keys the close on the archival fold, `SHT-Q2`). This
-/// ABI is that validator's, so the pair stays; it is folded into
-/// `ShardClose` by [`ShardClose::from_wire`] here and nowhere else.
+/// ABI is that validator's, so the pair stays. It is one [`ShardCloseWire`],
+/// folded by [`ShardClose::from_wire`] — the same constructor the
+/// epoch-close decoder, the submit shim, the `archival_claim_source`
+/// decoder and the KAT parser call. The inverse is [`ShardClose::to_wire`].
 ///
 /// **`has_segment_*` is required and must be the real presence bit** — i.e. the
 /// return value of `archival_shard_freeze_height`, not a guess derived from the
@@ -171,7 +173,12 @@ pub unsafe extern "C" fn shekyl_archival_check_bond_admission(
     let closes: Vec<ShardClose> = freeze_heights
         .iter()
         .zip(has_segment)
-        .map(|(&height, &present)| ShardClose::from_wire(present != 0, height))
+        .map(|(&height, &present)| {
+            ShardClose::from_wire(ShardCloseWire {
+                has_segment: present != 0,
+                freeze_height: height,
+            })
+        })
         .collect();
 
     let shards = match parent_state_shards_from_gather(r_market, &closes, parent_height) {

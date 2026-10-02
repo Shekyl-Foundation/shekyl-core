@@ -1822,13 +1822,13 @@ impl EmissionFfiFixture {
                 .collect(),
             ffi_shards: shards
                 .iter()
-                .map(|s| ShekylArchivalEpochCloseShard {
-                    shard_id: s.shard_id,
-                    freeze_height: match s.close {
-                        ShardClose::ClosedAt(height) => height,
-                        ShardClose::Open => 0,
-                    },
-                    has_segment: u8::from(s.close.is_closed()),
+                .map(|s| {
+                    let wire = s.close.to_wire();
+                    ShekylArchivalEpochCloseShard {
+                        shard_id: s.shard_id,
+                        freeze_height: wire.freeze_height,
+                        has_segment: u8::from(wire.has_segment),
+                    }
                 })
                 .collect(),
             ffi_pairs: pairs

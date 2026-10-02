@@ -76,9 +76,11 @@
 //!   over that fold (`DRS_E4_ARCHIVAL_WRITER.md` §3.7). SI-13, enforced
 //!   when the store connects each block, keeps the fold non-decreasing,
 //!   and under it the landing height is the close. [`shard_close`] wraps
-//!   it as `g(age)`'s operand: `ClosedAt(height)` below the universe,
-//!   `Open` at or beyond it — the fold, never a height, closes a shard
-//!   (`SHT-Q1` falsifier (i); `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F).
+//!   it as `g(age)`'s operand against a [`ClosedUniverse`]: `ClosedAt(height)`
+//!   below the count that read returned, `Open` at or beyond it. The count
+//!   and the parent it was read through are one value, so a caller cannot
+//!   name a different universe than the fold (`SHT-Q1` falsifier (i);
+//!   `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F).
 //! - **The stale eligibility copy is deliberate.** The C++ slash scan
 //!   judged every shard of a record against the record *as the epoch's
 //!   scan began* while applying each slash to the live row, so an offline
@@ -103,7 +105,7 @@ mod inputs;
 mod slash;
 
 pub(crate) use close::accrue;
-pub use close::{shard_close, shard_close_height};
+pub use close::{shard_close, shard_close_height, ClosedUniverse};
 pub use delta::{
     Accrual, ArchivalDelta, EpochClose, RecordWrite, RecordWriteKind, ServeCreditKey, Slash,
 };

@@ -58,12 +58,17 @@
 //!    *more* of the same ones (the predicate is over the holding's **sum**), and
 //!    every copy the griefer bonds lowers their own scarcity income.
 //! 4. **Timing is killed by the read-point** — see [`ParentStateHoldings`].
-//! 5. **Validator cost is bounded, and here is the actual number:** the caller
-//!    does **two** store reads per held shard (the `r_market` row and the
-//!    shard's close — a point lookup in LMDB, a binary search over the
-//!    archival fold in the Rust store), so at `MAX_HOLDINGS_SHARDS = 4096` one
-//!    bond post costs at most ~8k reads. Real, but not a cheap DoS: every shard in
-//!    the holding is priced at a full `ARCHIVAL_BOND_FLOOR_ATOMIC` of locked
+//! 5. **Validator cost is bounded, and here is the actual number:** this
+//!    function does no I/O. The caller gathers two facts per held shard.
+//!    The caller that exists is the C++ LMDB validator: one point lookup
+//!    for the `r_market` row and one for the segment freeze, so one bond
+//!    post is at most `2 · MAX_HOLDINGS_SHARDS` point reads. The Rust epoch
+//!    close does not use this gather. A closed shard's height there is a
+//!    binary search over the parent (one recorded-row read per probe, plus
+//!    one after the loop), paid once per closed shard per settlement
+//!    boundary and sized by the closed universe, not by this cap. Real, but
+//!    not a cheap DoS: every shard in the holding is priced at a full
+//!    `ARCHIVAL_BOND_FLOOR_ATOMIC` of locked
 //!    collateral, and the tx carries a PQC signature and pays weight fees. The
 //!    arithmetic itself is a single pass. The whole-corpus case walks **none**,
 //!    because it short-circuits ([`check_admission`]) — without that

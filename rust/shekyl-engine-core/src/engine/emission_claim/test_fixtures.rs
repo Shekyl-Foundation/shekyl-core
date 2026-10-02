@@ -209,16 +209,11 @@ pub(crate) fn epoch_json(e: &EpochSnapshot) -> serde_json::Value {
         .shards
         .iter()
         .map(|s| {
-            // The daemon RPC's segment-keyed pair (CEN-L10), as the C++
-            // emits it.
-            let (has_segment, freeze_height) = match s.close {
-                ShardClose::ClosedAt(height) => (true, height),
-                ShardClose::Open => (false, 0),
-            };
+            let wire = s.close.to_wire();
             serde_json::json!({
                 "shard_id": s.shard_id,
-                "freeze_height": freeze_height,
-                "has_segment": has_segment,
+                "freeze_height": wire.freeze_height,
+                "has_segment": wire.has_segment,
             })
         })
         .collect();

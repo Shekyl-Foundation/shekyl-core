@@ -279,6 +279,45 @@ pub enum ShardClose {
     ClosedAt(u64),
 }
 
+/// The C++ LMDB validator's `(has_segment, freeze_height)` pair, as the
+/// admission ABI, `shekyl_archival_epoch_close_shard`, and the
+/// `archival_claim_source` RPC's `shards[]` rows carry it.
+///
+/// **CEN-L10's divergence site** (`CONSENSUS_STORE_RECONCILIATION.md`
+/// §5.4.1; `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F): LMDB keeps no archival
+/// fold, so the C++ feeds the frozen J-segment's freeze height where the
+/// Rust store reads the archival fold's close height. The field names are
+/// the wire's. Rust reads the pair only through [`ShardClose::from_wire`]
+/// and writes it only through [`ShardClose::to_wire`]. `has_segment` false
+/// is [`ShardClose::Open`] whatever `freeze_height` says — the presence
+/// bit decides. Callers: the admission FFI, the epoch-close decoder, the
+/// submit shim, the engine's RPC decoder, and the KAT parser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShardCloseWire {
+    pub has_segment: bool,
+    pub freeze_height: u64,
+}
+
+impl ShardCloseWire {
+    /// An open shard on the wire. The height column is present because the
+    /// ABI has one; [`ShardClose::from_wire`] ignores it, and
+    /// [`ShardClose::to_wire`] writes this value so an open shard has one
+    /// encoding.
+    pub const OPEN: Self = Self {
+        has_segment: false,
+        freeze_height: 0,
+    };
+
+    /// A shard the wire reports closed at `freeze_height`.
+    #[must_use]
+    pub const fn closed(freeze_height: u64) -> Self {
+        Self {
+            has_segment: true,
+            freeze_height,
+        }
+    }
+}
+
 impl ShardClose {
     /// The age term [`shard_contribution_micro`] and the admission gather
     /// feed `g(age)`: zero for an open shard, [`shard_age_milli`] from the
@@ -291,30 +330,25 @@ impl ShardClose {
         }
     }
 
-    /// The C++ validator's `(has_segment, freeze_height)` pair, as the
-    /// admission FFI, `shekyl_archival_epoch_close_shard` and the
-    /// `archival_claim_source` RPC's `shards[]` rows carry it.
-    ///
-    /// **This is CEN-L10's divergence site** (`CONSENSUS_STORE_RECONCILIATION.md`
-    /// §5.4.1; `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F): LMDB keeps no archival
-    /// fold, so the C++ feeds the frozen J-segment's freeze height where the
-    /// Rust store reads the archival fold's close height. The pair's names are
-    /// the wire's and the C ABI's; nothing on this side of the boundary reads
-    /// them except through this constructor. `has_segment = false` is `Open`
-    /// whatever the height says — the presence bit, not the height, decides.
+    /// Fold a [`ShardCloseWire`] into the operand. The presence bit decides:
+    /// a false `has_segment` is [`Self::Open`] and the height is unread.
     #[must_use]
-    pub fn from_wire(has_segment: bool, freeze_height: u64) -> Self {
-        if has_segment {
-            Self::ClosedAt(freeze_height)
+    pub const fn from_wire(wire: ShardCloseWire) -> Self {
+        if wire.has_segment {
+            Self::ClosedAt(wire.freeze_height)
         } else {
             Self::Open
         }
     }
 
-    /// `true` for [`Self::ClosedAt`].
+    /// The wire pair for this operand. [`Self::Open`] encodes as
+    /// [`ShardCloseWire::OPEN`]: the height column is filled, not a close.
     #[must_use]
-    pub const fn is_closed(self) -> bool {
-        matches!(self, Self::ClosedAt(_))
+    pub const fn to_wire(self) -> ShardCloseWire {
+        match self {
+            Self::ClosedAt(height) => ShardCloseWire::closed(height),
+            Self::Open => ShardCloseWire::OPEN,
+        }
     }
 }
 
@@ -759,14 +793,38 @@ mod tests {
             ShardClose::ClosedAt(0).age_milli(60_000, seb),
             WORK_MILLI_SCALE
         );
-        assert_eq!(ShardClose::from_wire(false, 0), ShardClose::Open);
-        assert_eq!(ShardClose::from_wire(false, 20_000), ShardClose::Open);
+        // The presence bit decides. A height beside `has_segment = false`
+        // is unread, and encoding an open shard fills that column with
+        // [`ShardCloseWire::OPEN`] rather than preserving the stale height.
+        // `ClosedAt(0)` stays distinguishable: genesis-band oldest, not open.
         assert_eq!(
-            ShardClose::from_wire(true, 20_000),
-            ShardClose::ClosedAt(20_000)
+            ShardClose::from_wire(ShardCloseWire {
+                has_segment: false,
+                freeze_height: 0,
+            }),
+            ShardClose::Open
         );
-        assert!(!ShardClose::Open.is_closed());
-        assert!(ShardClose::ClosedAt(0).is_closed());
+        assert_eq!(
+            ShardClose::from_wire(ShardCloseWire {
+                has_segment: false,
+                freeze_height: 20_000,
+            }),
+            ShardClose::Open
+        );
+        assert_eq!(ShardClose::Open.to_wire(), ShardCloseWire::OPEN);
+        assert_eq!(
+            ShardClose::from_wire(ShardCloseWire {
+                has_segment: false,
+                freeze_height: 20_000,
+            })
+            .to_wire(),
+            ShardCloseWire::OPEN
+        );
+        let closed = ShardCloseWire::closed(20_000);
+        assert_eq!(ShardClose::from_wire(closed), ShardClose::ClosedAt(20_000));
+        assert_eq!(ShardClose::ClosedAt(20_000).to_wire(), closed);
+        assert_eq!(ShardClose::ClosedAt(0).to_wire(), ShardCloseWire::closed(0));
+        assert_ne!(ShardClose::ClosedAt(0).to_wire(), ShardCloseWire::OPEN);
     }
 
     #[test]
