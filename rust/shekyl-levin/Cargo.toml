@@ -50,6 +50,9 @@ proptest = "1"
 # Not a production dependency (see `payload/block.rs`).
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
+# The regtest handshake advertises the id derived from fakechain's genesis
+# pin. Dev-only: production Levin does not know which network it is on.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 
 [lints]
 workspace = true

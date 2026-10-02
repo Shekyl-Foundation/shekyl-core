@@ -1145,7 +1145,7 @@ already has both, in the shipped binary.**
 
 | property R10 requires | stagenet, at source |
 | --- | --- |
-| distinct `NETWORK_ID` | `STAGENET_ID` and `TESTNET_ID` in [`prefix.rs`](../../rust/shekyl-p2p-transport/src/prefix.rs) share no bytes |
+| distinct `NETWORK_ID` | `network_id_from_genesis` of stagenet's genesis block hash and of testnet's differ; the KAT in [`network_id_ffi.rs`](../../rust/shekyl-ffi/src/network_id_ffi.rs) records both |
 | no compiled IP seeds | `get_ip_seed_nodes()`'s `STAGENET` branch is empty — `else if` at [`net_node.inl:737`](../../src/p2p/net_node.inl#L737), the block `:738-740` holding only the comment at `:739`; the four production seeds are inside the `TESTNET` branch |
 | no compiled anon seeds | `get_seed_nodes()` returns `{}` for `tor` and `i2p` on **every** network ([`:770-772`](../../src/p2p/net_node.inl#L770)) — Q12-R2 has not landed the testnet list yet |
 

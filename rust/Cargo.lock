@@ -4393,6 +4393,7 @@ dependencies = [
  "shekyl-proofs",
  "shekyl-relay",
  "shekyl-relay-privacy",
+ "shekyl-rpc-types",
  "shekyl-runtime",
  "shekyl-seam",
  "shekyl-thread-ledger",
@@ -4441,6 +4442,7 @@ dependencies = [
  "shekyl-net-address",
  "shekyl-p2p-transport",
  "shekyl-portable-storage",
+ "shekyl-rpc-types",
  "thiserror",
  "zstd",
 ]

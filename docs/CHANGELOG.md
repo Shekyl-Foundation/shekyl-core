@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Handshake network id derives from the genesis block
+
+- The 16-byte handshake `NETWORK_ID` is the first 16 bytes of
+  `cSHAKE256(S = "shekyl/p2p-network-id-v1", X = genesis_block_hash)`.
+  A regenesis rotates it. Fakechain still shares mainnet's genesis, so
+  it shares the id until it has a genesis of its own. The harness
+  goldens keep their synthetic id.
+
 ### Wallet contract — one owner for the error codes
 
 - The wallet contract's error vocabulary moves out of the RPC server into

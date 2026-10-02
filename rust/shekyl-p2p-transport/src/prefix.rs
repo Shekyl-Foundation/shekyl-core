@@ -3,17 +3,38 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Eight-byte clearnet prefix. PWD-T5: the first eight bytes of
+//! Handshake network id, and the eight-byte clearnet prefix derived from it.
+//!
+//! The id is the first 16 bytes of
+//! `cSHAKE256(S = "shekyl/p2p-network-id-v1", X = genesis_block_hash)`.
+//! A different genesis is a different network, so a regenesis rotates the
+//! id. PWD-T5's prefix is the first eight bytes of
 //! `cSHAKE256(S = "shekyl/p2p-wire-prefix-v1", X = network_id)`.
 
 use shekyl_crypto_hash::cshake256_32;
 
-/// Customization string. Registered in `CRYPTO_DOMAIN_REGISTRY.tsv`.
+/// Customization for the handshake network id.
+/// Registered in `CRYPTO_DOMAIN_REGISTRY.tsv` beside [`WIRE_PREFIX_DST`].
+pub const NETWORK_ID_DST: &[u8] = b"shekyl/p2p-network-id-v1";
+
+/// Customization for the clearnet framing prefix.
+/// Registered in `CRYPTO_DOMAIN_REGISTRY.tsv`.
 pub const WIRE_PREFIX_DST: &[u8] = b"shekyl/p2p-wire-prefix-v1";
 
 pub const PREFIX_LEN: usize = 8;
 
 pub type NetworkId = [u8; 16];
+
+/// The handshake id of the chain whose genesis block hash is
+/// `genesis_block_hash`. First 16 bytes of
+/// `cSHAKE256(S = NETWORK_ID_DST, X = genesis_block_hash)`, digest order.
+#[must_use]
+pub fn network_id_from_genesis(genesis_block_hash: &[u8; 32]) -> NetworkId {
+    let digest = cshake256_32(NETWORK_ID_DST, genesis_block_hash);
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&digest[..16]);
+    out
+}
 
 #[must_use]
 pub fn prefix_for(network_id: &NetworkId) -> [u8; PREFIX_LEN] {
@@ -23,46 +44,18 @@ pub fn prefix_for(network_id: &NetworkId) -> [u8; PREFIX_LEN] {
     out
 }
 
-/// Mainnet, testnet, and stagenet prefixes pinned by PWD-T5.
-pub const MAINNET_PREFIX: [u8; PREFIX_LEN] = hex_prefix(0xAFBC_D4D1_FAB9_8B6D);
-pub const TESTNET_PREFIX: [u8; PREFIX_LEN] = hex_prefix(0xF0B3_52E8_928F_8D56);
-pub const STAGENET_PREFIX: [u8; PREFIX_LEN] = hex_prefix(0x5C29_42C0_F9F9_8A21);
-
-const fn hex_prefix(v: u64) -> [u8; PREFIX_LEN] {
-    v.to_be_bytes()
-}
-
-const fn hex_id(hi: u64, lo: u64) -> NetworkId {
-    let mut out = [0u8; 16];
-    let h = hi.to_be_bytes();
-    let l = lo.to_be_bytes();
-    let mut i = 0;
-    while i < 8 {
-        out[i] = h[i];
-        out[i + 8] = l[i];
-        i += 1;
-    }
-    out
-}
-
-/// Production network ids, the v3.1.0-alpha.6 bytes. Rotation is a separate
-/// decision and is not this module's job. FAKECHAIN uses [`MAINNET_ID`].
-pub const MAINNET_ID: NetworkId = hex_id(0x556C_A970_8FF9_1F7A, 0x4069_DAF3_FC55_BBBD);
-pub const TESTNET_ID: NetworkId = hex_id(0x78CE_055B_BBDA_7956, 0xB9C8_A1A2_EC1F_7672);
-pub const STAGENET_ID: NetworkId = hex_id(0x2D21_9754_A1BD_79BA, 0x0540_FDFB_8DC8_A4AE);
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn pinned_network_prefixes() {
-        assert_eq!(prefix_for(&MAINNET_ID), MAINNET_PREFIX);
-        assert_eq!(prefix_for(&TESTNET_ID), TESTNET_PREFIX);
-        assert_eq!(prefix_for(&STAGENET_ID), STAGENET_PREFIX);
-        assert_ne!(MAINNET_PREFIX, TESTNET_PREFIX);
-        assert_ne!(MAINNET_PREFIX, STAGENET_PREFIX);
-        assert_ne!(TESTNET_PREFIX, STAGENET_PREFIX);
-        assert_eq!(prefix_for(&MAINNET_ID), prefix_for(&MAINNET_ID));
+    fn the_id_is_a_function_of_the_genesis_hash() {
+        let a = [1u8; 32];
+        let mut b = a;
+        b[31] = 2;
+        let id_a = network_id_from_genesis(&a);
+        assert_eq!(id_a, network_id_from_genesis(&a));
+        assert_ne!(id_a, network_id_from_genesis(&b));
+        assert_ne!(prefix_for(&id_a), prefix_for(&network_id_from_genesis(&b)));
     }
 }

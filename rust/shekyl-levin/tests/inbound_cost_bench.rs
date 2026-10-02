@@ -249,6 +249,13 @@ fn rpc_ok(rpc_port: u16) -> bool {
 // A simulated inbound peer
 // ---------------------------------------------------------------------------
 
+/// FAKECHAIN (`--regtest`) derives its id from fakechain's genesis pin.
+fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
+    shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
+        shekyl_rpc_types::DaemonNetwork::Fakechain,
+    ))
+}
+
 /// Completes a handshake, then services the socket until told to stop.
 ///
 /// The servicing thread is not incidental: an unanswered `COMMAND_TIMED_SYNC`
@@ -271,7 +278,7 @@ fn spawn_peer(
 
         let req = HandshakeRequest {
             node_data: BasicNodeData {
-                network_id: shekyl_p2p_transport::MAINNET_ID,
+                network_id: regtest_network_id(),
                 address: NetworkAddress::Ipv4 {
                     ip: Ipv4Addr::new(9, 9, 9, 9),
                     port: advertised_port,

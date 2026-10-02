@@ -143,7 +143,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **T5** 8-byte prefix stays | **INTERIM** (as of 2026-09-25) | The encrypting path uses `prefix_for` (`prefix.rs`). The plaintext path still starts with `LEVIN_SIGNATURE`. That start is deleted at the flip; it is not a finished wire | n/a |
 | **T6** packet limits derived | NOT IMPLEMENTED | still the inherited `LEVIN_INITIAL/DEFAULT_MAX_PACKET_SIZE` | No — transport cluster |
 | **T7** compression survives | **NO BUILD REQUIRED** | rules the status quo; `COMPRESSION_MIN_PAYLOAD = 256`, `ZSTD_COMPRESSION_LEVEL = 1` present at `rust/shekyl-levin/src/compress.rs:25,32` | n/a |
-| **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages, `ck` after `ee` and after the KEM mix, both transport keys' rekey (`ck'`, `k'`), and the initial chaining key. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. `prefix.rs` pins `AFBCD4D1FAB98B6D`, `F0B352E8928F8D56`, `5C2942C0F9F98A21` | No — follows T1 |
+| **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages, `ck` after `ee` and after the KEM mix, both transport keys' rekey (`ck'`, `k'`), and the initial chaining key. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. The prefix KAT is `prefix_for` of the id derived from each genesis: `A7BED0CCF3F623E8`, `4C771D503D5D43D9`, `166195003AFF953A` | No — follows T1 |
 | **B1** rate limiting adopted | NOT IMPLEMENTED | the decision names four unguarded invoke handlers; all four still unguarded | No — hardening; does not change the wire |
 | **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
 | **B3** per-command caps | **IMPLEMENTED** | 11-arm `DefinedCommand` table in `rust/shekyl-levin/src/ingress.rs` (2001 and 1003 are unknown dispatch; sole block path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`); handshake 65536 reconstructed; support-flags 4096→256; 2003/2006 hash-list derived; 2007/2008/2009/2010 keep inherited envelopes (4/4/1/4 MiB); 2002/2004 take the packet limit until PWD-B12 / the 2004 byte budget; C++ `connection_context.cpp` is the FFI shim | **YES** — with B3a and B4, as one unit |
@@ -3532,26 +3532,44 @@ eight bytes and neither is wrong.
 > - **Output:** bytes `[0..8]` of the 32-byte digest, in digest order, no
 >   re-ordering and no endian conversion.
 
-**The three prefixes, computed rather than promised.** The ids live in
-`shekyl-p2p-transport::prefix` (`MAINNET_ID`, `TESTNET_ID`, `STAGENET_ID`),
-the v3.1.0-alpha.6 bytes. C++ reads them through `shekyl_network_id` and
-states no byte. `prefix_for` is not `const`, so the prefixes below are the
-KATs that test pins against it:
+**The network id is the genesis.** The handshake refuses a peer whose id is
+not this node's. What makes another network a different network is its
+genesis block, so the id is that hash:
+
+> **`network_id = cSHAKE256(S = "shekyl/p2p-network-id-v1", X = genesis_block_hash)[0..16]`**
+>
+> - **Function:** cSHAKE256 with customization, NIST SP 800-185 semantics.
+>   Mechanism 1 in [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv),
+>   the row beside `shekyl/p2p-wire-prefix-v1`. Customization `S` is the exact
+>   ASCII bytes `shekyl/p2p-network-id-v1`, no NUL, no length prefix.
+> - **Input `X`:** the 32-byte genesis block hash, `genesis_hash_for` in
+>   `shekyl-rpc-types` (the block-0 id, not `GENESIS_TX`). Fakechain's pin is
+>   mainnet's genesis, so fakechain's id is mainnet's until fakechain has a
+>   genesis of its own.
+> - **Output:** bytes `[0..16]` of the 32-byte digest, in digest order.
+> - **`shekyl_network_id(nettype)`** computes this from the pin the daemon
+>   already holds, before any socket opens. C++ states no byte.
+
+**The three prefixes, computed rather than promised.** `prefix_for` of the
+id above is not `const`. The table is the KAT of
+`network_id_from_genesis(genesis_hash_for(net))` and of `prefix_for` of that
+id. A regenesis moves the hash, both columns move, and the KAT fails until
+it is re-recorded with the new genesis:
 
 | Network | `network_id` | Prefix |
 | --- | --- | --- |
-| mainnet | `556CA9708FF91F7A4069DAF3FC55BBBD` | `AFBCD4D1FAB98B6D` |
-| testnet | `78CE055BBBDA7956B9C8A1A2EC1F7672` | `F0B352E8928F8D56` |
-| stagenet | `2D219754A1BD79BA0540FDFB8DC8A4AE` | `5C2942C0F9F98A21` |
+| mainnet | `8E2F854EE0623A16D1218496DC17D398` | `A7BED0CCF3F623E8` |
+| testnet | `C9FF7876B68A92F94EC019872BE78957` | `4C771D503D5D43D9` |
+| stagenet | `C1E3B5498DB1E7A63BB892C19E7F768C` | `166195003AFF953A` |
 
 **Pairwise distinct — observed, not assumed.** Truncating a 32-byte digest to 8
 bytes cannot *guarantee* distinctness by construction, so the claim "different
 networks get different prefixes" is discharged by computing all three and
 comparing them, with the comparison exercised against a known-identical pair so
-it can be seen to fail. **P2P-3 carries this as a compile-time assertion over
-the network table**, which is what keeps the property true if a `NETWORK_ID`
-ever changes; **if one does pre-genesis, these three values re-derive** and
-PWD-T8's vectors re-mint with them.
+it can be seen to fail. **The KAT in `network_id_ffi.rs` is that comparison.**
+A genesis hash that moves takes the id and the prefix with it, and the KAT
+fails until both columns are re-recorded with the new genesis. PWD-T8's
+vectors re-mint with them.
 
 **The registry row landed with the call site (2026-09-24).** P2P-2 could not
 add it: the domain gate requires a registered literal to have a defining file
@@ -3813,8 +3831,8 @@ after them because it governs every vector added later:
    directions of the check: a connection opening with another network's prefix
    is **dropped at the framing layer, before any Noise processing**, and one
    opening with this network's prefix **proceeds to the transport handshake**. Its inputs
-   are the three pinned values in PWD-T5 — mainnet `AFBCD4D1FAB98B6D`, testnet
-   `F0B352E8928F8D56`, stagenet `5C2942C0F9F98A21` — so a cross-pair (dial
+   are the three derived prefixes — mainnet `A7BED0CCF3F623E8`, testnet
+   `4C771D503D5D43D9`, stagenet `166195003AFF953A` — so a cross-pair (dial
    mainnet with the testnet prefix) is a real, runnable case rather than a
    synthetic one.
 

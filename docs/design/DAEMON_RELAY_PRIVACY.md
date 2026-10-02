@@ -185,13 +185,12 @@ this lane.
    server. A session established before the relay exists logs at
    error and is not registered.
 
-   `NETWORK_ID` is a handshake constant, not a relay field. Its home
-   is `shekyl-p2p-transport::prefix`: the production ids, and the wire
-   prefixes are `prefix_for` of those ids. C++ reads them through
-   `shekyl_network_id` and states no byte. The alpha.6 bytes stay in
-   this change. Rotating them is a testnet flag day — every unrotated
-   node fails the handshake — and that rotation is its own commit at
-   the release cut. The harness goldens keep their synthetic id.
+   `NETWORK_ID` is a handshake value, not a relay field. It is the
+   first 16 bytes of `cSHAKE256(S = "shekyl/p2p-network-id-v1",
+   X = genesis_block_hash)`, and the wire prefix is `prefix_for` of
+   that id. `shekyl_network_id` computes it from the genesis hash this
+   build already pins; C++ states no byte. A regenesis rotates the id
+   because the hash moves. The harness goldens keep their synthetic id.
 
 5. **Embargo is a deadline in the timing engine.** `OwnerClass::Relay`
    already exists (`shekyl-timing-engine`). The embargo is one
