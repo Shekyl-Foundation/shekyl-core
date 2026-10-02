@@ -198,6 +198,20 @@
   proof's content, length, and framing are unchanged
   (`GENESIS_TX_WIRE_FORMAT.md` Q6).
 
+### Docs — DRS-E4 closes as record; the LMDB cutover gets its one list (DRS-E4 commit 10)
+
+- Process only. `DRS_E4_ARCHIVAL_WRITER.md` and `DRS_E1_SARCH.md` archive to
+  `docs/completed/`; the S-ARCH row of `DAEMON_REDB_STORE.md` §5 reads
+  LANDED for both halves. The one open archival question (`ARW-Q19`, the
+  slash log's retention horizon and key) is re-homed to its own round,
+  `DRS_E4_SLASH_LOG_ROUND.md` (`SLK-Q1` / `SLK-Q2`, posed, not ruled, no
+  code). `DAEMON_REDB_STORE.md` §12.1 enumerates, in one place, every
+  C++-anchored gate, guard and marshal that goes red or stale on cutover
+  day and the rule for that day — retire the subject, never clear the
+  gate. Rule 91 gains the refuted-premise bullet (a finding that refutes a
+  premise edits the premise's own text in the same commit), applied here
+  to `journal_horizon`'s doc and `DRS_E1_SPRUNE.md` §3.
+
 ### Archival FFI — one dead export removed; the rest of the deletion surface registered for the cutover (DRS-E4 commit 9)
 
 - **Removed:** `shekyl_archival_settlement_epoch_overridden` (declared in

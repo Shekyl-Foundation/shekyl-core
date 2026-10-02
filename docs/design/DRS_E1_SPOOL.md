@@ -52,7 +52,7 @@ a separate store file that may be discarded wholesale; **falsifier: any pool
 table in the consensus store's `TableDefinition` set**), §11.2 (the pool is
 *not chain state*: replay cannot produce it, every digest excludes it) and
 §7.5 (the nine 4.M policy rows arrive through **E5's `AdmissionPolicy`**,
-never as `RuleSet`); from [`DRS_E1_SARCH.md`](DRS_E1_SARCH.md) (the E1 shape
+never as `RuleSet`); from [`DRS_E1_SARCH.md`](../completed/DRS_E1_SARCH.md) (the E1 shape
 this increment repeats: shapes minted for a writer that is another
 increment's, absence carried by the type, vocabulary in `shekyl-types`, a
 record re-specified rather than ported); and from

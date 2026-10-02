@@ -2276,7 +2276,7 @@ gates do **not** all wait on the second:
    that wait here, with the writer call site. S-ARCH remains priority 7
    of 9 and gated on the P0b journal audit — **UPDATE 2026-09-23: that gate
    lifted 2026-09-05 (P0b RECONCILED) and was re-read by S-ARCH's Round-0
-   pre-flight ([`DRS_E1_SARCH.md`](DRS_E1_SARCH.md) §0, PR #840), which
+   pre-flight ([`DRS_E1_SARCH.md`](../completed/DRS_E1_SARCH.md) §0, PR #840), which
    splits the row: the *reads* are E1 increment 8, ruled and cuttable; the
    settlement *write path* this item waits on is E4's, whose first question
    the pre-flight names (SAR-7)** — that is **not** "waiting for

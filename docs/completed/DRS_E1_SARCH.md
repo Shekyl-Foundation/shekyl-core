@@ -1,6 +1,17 @@
 # DRS-E1 S-ARCH — archival reads: increment plan and Round-0 pre-flight
 
-**Status:** LANDED — **implemented 2026-09-23** on the S-ARCH increment PR
+**Status:** CLOSED-as-record — **archived 2026-10-02** (its own condition
+met: the E4 increment landed — DRS-E4 PR-a #914 / #921 and PR-b, closed as
+record the same day, [`DRS_E4_ARCHIVAL_WRITER.md`](DRS_E4_ARCHIVAL_WRITER.md)
+beside this file — and its plan owned the §0 / §2.2 / §2.3 boundary
+statement from its §2 down); owns no open residue — the reads are
+`store/archival_reads.rs`, the writers `store/archival_write.rs`, the record
+`shekyl-chain-store::codec::archival::BondRecord`, SI-14 / SI-15 are
+[`STORE_INVARIANT_REGISTER.md`](../design/STORE_INVARIANT_REGISTER.md)'s,
+`SAR-Q7`'s port landed with E4 (`holds_shard_at`, CEN-L16's as-built note),
+and the one open archival question (`SLK-Q1` / `SLK-Q2`) is
+[`DRS_E4_SLASH_LOG_ROUND.md`](../design/DRS_E4_SLASH_LOG_ROUND.md)'s. History
+follows. **Was: LANDED — implemented 2026-09-23** on the S-ARCH increment PR
 cut from `dev` @ `4dc5194de` (three commits, §7 as executed; layout
 **10 → 11**; nine reads A1, A3–A10 on `ReadSnapshot`; the bond record's
 first Rust type, `shekyl-chain-store::codec::archival::BondRecord`, cross-checked
@@ -20,7 +31,7 @@ statement (§0, §2.2, §2.3) until E4's plan owns it — **E4's plan exists
 from 2026-09-29 ([`DRS_E4_ARCHIVAL_WRITER.md`](DRS_E4_ARCHIVAL_WRITER.md),
 Round 0 executed; it owns the boundary from its §2 down) and this file
 archives to `docs/completed/` when that increment lands (its §9).**
-Implements *from* [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §5 (the
+Implements *from* [`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) §5 (the
 S-ARCH row: extraction order **7**, "largest surface (18) and gated on the
 P0b journal audit"), §3.4 rule 3 ("Archival (DRS-E4): design typed cursors
 for retention; **delete gather shell**"), §7.5 table 2 (CEN-L7 … L10 and
@@ -28,12 +39,12 @@ four CEN-L14 sites are **E4 S-ARCH** — the archival *writers* are E4's, and
 this increment mints the shapes they will write into) and §7.1.1 (the E2
 digest excludes `archival_*` and E2 may not act on any S-ARCH row until
 archival digest coverage exists); from
-[`DRS_E1_SCURVE.md`](../completed/DRS_E1_SCURVE.md) (the E1 shape this increment repeats:
+[`DRS_E1_SCURVE.md`](DRS_E1_SCURVE.md) (the E1 shape this increment repeats:
 reads on `ReadSnapshot`, typed absence, vocabulary in `shekyl-types`, the
 writer named and left to its own increment); from
-[`DRS_E1_STX.md`](../completed/DRS_E1_STX.md) §3.3 (the absence
+[`DRS_E1_STX.md`](DRS_E1_STX.md) §3.3 (the absence
 discriminator, applied in §3.3); and from
-[`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) **`PDM-Q3`**
+[`ARCHIVAL_PRUNED_DAEMON_MODE.md`](../design/ARCHIVAL_PRUNED_DAEMON_MODE.md) **`PDM-Q3`**
 (the C++ serve-credit admission verifier dies at E4 / S-ARCH when the
 preimage is re-keyed), **`PDM-Q12`** (the segment-freeze pipeline retires;
 no successor object) and **`PDM-Q6`** (txid commits `prunable_hash` and
@@ -41,7 +52,7 @@ no successor object) and **`PDM-Q6`** (txid commits `prunable_hash` and
 decide which of this surface's readers are already dead. Process per
 `26-sub-pr-design-discipline.mdc`; identifier families **`SAR-`** (findings)
 and **`SAR-Q`** (round questions) registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 by the PR that adds
+[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 by the PR that adds
 this file (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a): the two
 parse to distinct prefixes and clear the 95 registered).
 
