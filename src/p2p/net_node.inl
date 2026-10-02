@@ -2646,16 +2646,13 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::try_get_support_flags(const p2p_connection_context& context, std::function<void(p2p_connection_context&, const uint32_t&)> f)
   {
-    if(context.m_remote_address.get_zone() != epee::net_utils::zone::public_)
-      return false;
-
     COMMAND_REQUEST_SUPPORT_FLAGS::request support_flags_request;
     bool r = epee::net_utils::async_invoke_remote_command2<typename COMMAND_REQUEST_SUPPORT_FLAGS::response>
     (
       context,
       COMMAND_REQUEST_SUPPORT_FLAGS::ID, 
       support_flags_request, 
-      m_network_zones.at(epee::net_utils::zone::public_).m_net_server.get_config_object(),
+      m_network_zones.at(context.m_remote_address.get_zone()).m_net_server.get_config_object(),
       [=](int code, const typename COMMAND_REQUEST_SUPPORT_FLAGS::response& rsp, p2p_connection_context& context_)
       {  
         if(code < 0)

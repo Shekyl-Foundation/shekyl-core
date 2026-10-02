@@ -179,13 +179,11 @@ this lane.
    per connector. Collapsing those into one session table is LV-3. The
    protocol handler does not branch on the connector: a session syncs,
    relays blocks, answers support flags, and takes transactions the
-   same way whatever carried it. The switches that go are
-   `cryptonote_protocol_handler.inl:433` (no sync off clearnet),
-   `:2527` (blocks only to clearnet), `net_node.inl:2812` (support
-   flags only from clearnet), and the D7 arm above. A session
-   established before the relay exists is an ordering invariant and
-   fails loudly; the silent return at `levin_notify.cpp:1524` does not
-   survive.
+   same way whatever carried it. The clearnet-only gates are gone:
+   chain sync, compact-block relay, and the support-flags request.
+   The support-flags request goes out on the session's own zone
+   server. A session established before the relay exists logs at
+   error and is not registered.
 
    `NETWORK_ID` is a handshake constant, not a relay field. Its home
    is `shekyl-p2p-transport::prefix`: the production ids, and the wire

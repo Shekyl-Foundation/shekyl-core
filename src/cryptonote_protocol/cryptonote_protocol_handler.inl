@@ -429,13 +429,6 @@ namespace cryptonote
       return true;
     }
 
-    // No chain synchronization over hidden networks (tor, Tor, etc.)
-    if(context.m_remote_address.get_zone() != epee::net_utils::zone::public_)
-    {
-      context.set_state_normal();
-      return true;
-    }
-
     if (hshd.current_height > target)
     {
     /* As I don't know if accessing hshd from core could be a good practice,
@@ -2513,12 +2506,12 @@ skip:
   template<class t_core>
   bool t_cryptonote_protocol_handler<t_core>::relay_block(NOTIFY_NEW_COMPACT_BLOCK::request& arg, cryptonote_connection_context& exclude_context)
   {
-    // Public-zone peers only: compact-block announce is the sole block path (PWD-B6).
+    // Compact-block announce is the sole block path (PWD-B6), on every session.
     std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> connections;
     m_p2p->for_each_connection([&exclude_context, &connections](connection_context& context, uint32_t)
     {
       // session_established() filters out connections before the Levin handshake
-      if (context.session_established() && exclude_context.m_connection_id != context.m_connection_id && context.m_remote_address.get_zone() == epee::net_utils::zone::public_)
+      if (context.session_established() && exclude_context.m_connection_id != context.m_connection_id)
       {
         LOG_DEBUG_CC(context, "RELAYING BLOCK TO PEER");
         connections.push_back({context.m_remote_address.get_zone(), context.m_connection_id});

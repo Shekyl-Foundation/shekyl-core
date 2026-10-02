@@ -1579,7 +1579,10 @@ namespace levin
   void notify::on_session_established(const boost::uuids::uuid &id, bool is_income, const std::uint8_t connector)
   {
     if (!zone_)
+    {
+      MERROR("session established with no relay; the session is not registered");
       return;
+    }
 
     boost::asio::dispatch(zone_->strand, [z = zone_, id, is_income, connector] {
       shekyl_relay_zone_on_session_established(
