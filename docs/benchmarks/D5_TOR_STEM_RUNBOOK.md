@@ -9,9 +9,8 @@ fluff the two-node hop could not show.
 The head the binaries are built from is the derivation commit
 `5a1a405ae`: the handshake id is
 `cSHAKE256(shekyl/p2p-network-id-v1, genesis_block_hash)`, not the
-hand-pinned bytes `23ca43d2f` moved. The run records that head. It has
-not been run. Until it has, #924 is complete in the tree and incomplete
-in the record.
+hand-pinned bytes `23ca43d2f` moved. The run on 2026-10-02 stopped at
+step 6. The record is at the end of this file.
 
 ## What this run records
 
@@ -154,3 +153,33 @@ it is inbound Tor.
 
 10. Stop the three measurement processes. Leave the standing daemons
     as they were found.
+
+## Run, 2026-10-02 — step 6 did not complete
+
+Both binaries were `5a1a405ae`. The daemons were `--testnet
+--fixed-difficulty 1`. The miner and the fluff receiver were two
+processes of the seed binary. The miner's only dial was the floor's
+onion, through the warm Tor that was already up. The floor dialed the
+fluff receiver's onion. The fluff receiver was `--out-peers 0`.
+
+The floor's public clearnet port was not reachable, and the account
+on that host cannot change the firewall. The floor's clearnet session
+was a forward of the miner's loopback p2p port. On that session the
+floor's height went from 1 to 87 in under a minute. That sync is not
+a Tor sync.
+
+Dialing an onion requires `--tx-proxy`, and `--tx-proxy` makes the
+ephemeral onion spawn yield. The floor therefore used one Tor, the
+pinned binary, for both the dial and the inbound onion.
+
+Step 6 failed. From 18:20:23Z through 18:28:39Z the fluff receiver's
+height stayed 1, with one inbound Tor session and no outbound. At
+18:28:23.966Z it logged the remote height 87 and started
+synchronization. `COMMAND_REQUEST_SUPPORT_FLAGS` (command 1007) then
+returned an empty body — `portable_storage` reported packet size 0,
+below the 9-byte header — and the invoke failed with
+`LEVIN_ERROR_FORMAT`. The next line was `Failed to request missing
+objects, dropping connection`. The same sequence repeated. The height
+never left 1, so the spend was not sent and the pool observation was
+not made. That is a finding for #924. The three measurement processes
+were stopped. The standing daemons were left as they were found.
