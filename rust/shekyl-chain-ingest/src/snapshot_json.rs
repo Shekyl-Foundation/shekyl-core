@@ -336,9 +336,11 @@ mod tests {
         // (`prev_height + 1`), so epoch E's row sits one above E's deadline.
         // The inputs state that operand (`ARW-26`); this test holds the rows
         // to it. The Rust writer keys the same row by the connecting height.
-        // No spec names the key, so which name the row carries is a new
-        // ruling — posed as `ARW-Q17`, not read off either writer; the
-        // replica test pins both equations until it is taken.
+        // No spec named the key; `ARW-Q17` ruled it from the reader's
+        // strict-above predicate: the connecting height. The C++'s count is
+        // a live off-by-one against its own height-denominated reader
+        // (`ARW-27`); the inputs record what the C++ wrote, and the replica
+        // test pins both equations as the record of the disagreement.
         let log_height =
             u64_at(&inputs["schedule"]["slash_log_height_by_epoch"][slash_epoch.to_string()]);
         assert_eq!(

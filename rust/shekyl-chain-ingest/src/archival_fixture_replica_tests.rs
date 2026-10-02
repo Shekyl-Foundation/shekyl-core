@@ -39,8 +39,11 @@
 //! fold by the block count after the connect — and the replica's at
 //! `slash_deadline_height(11)`, the connecting height. Same decision, same
 //! block, two names for it; [`the_slash_log_key_disagreement_is_exactly_the_one_posed`]
-//! pins both equations so either side moving is a failure here, and the
-//! ruling on which name the row carries is `ARW-Q17`'s, not this test's.
+//! pins both equations so either side moving is a failure here. Which name
+//! the row carries was `ARW-Q17`'s to rule, not this test's — ruled: the
+//! connecting height, because the log's one reader asks *strictly above
+//! `h`*; the fixture's `+ 1` is the C++'s live off-by-one against its own
+//! reader (`ARW-27`), which this pin records rather than inherits.
 //! It does **not** make the slash families corpus-exercised: the
 //! sufficiency stamp's census still finds zero slash rows on every captured
 //! chain, and whether that red stands or a slash-bearing capture is owed is
@@ -477,7 +480,8 @@ fn passes_match_by_persona_shard_epoch(
 /// and keyed differently, by exactly the two operands `ARW-26` names: the
 /// fixture at the fold **count** (`deadline + 1`), the replica at the
 /// **connecting height** (`deadline`). Both equations are pinned; the
-/// ruling between them is `ARW-Q17`.
+/// ruling between them is `ARW-Q17` — the connecting height — and the
+/// fixture's side is the C++ defect `ARW-27` names, kept here as its record.
 fn the_slash_log_key_disagreement_is_exactly_the_one_posed(
     theirs: &ArchivalSnapshot,
     ours: &ArchivalSnapshot,
@@ -534,7 +538,9 @@ fn the_slash_log_key_disagreement_is_exactly_the_one_posed(
     );
     // Through the bridge, both keys name the deadline block — the C++'s as
     // the count of the chain it tips, the Rust writer's as its height. The
-    // disagreement is which of those two the row carries (`ARW-Q17`).
+    // disagreement is which of those two the row carries; `ARW-Q17` ruled
+    // the height, since the reader scans strictly above its operand and the
+    // C++'s own reader takes a height (`ARW-27`).
     assert_eq!(
         key_there.tip(),
         Some(inputs.deadline),

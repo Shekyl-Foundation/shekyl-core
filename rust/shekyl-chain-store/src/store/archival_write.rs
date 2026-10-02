@@ -385,12 +385,14 @@ impl<'id> WriteBatch<'_, 'id> {
     /// comparisons take (`Transition::count()`, one above). The C++ keys
     /// the same row by that count (`db_lmdb.cpp` `apply_archival_slash_one`
     /// is handed `prev_height + 1`), so the two writers' rows for one fold
-    /// sit one apart; no document specifies which is meant, and the choice
-    /// is **posed, not ruled** — `DRS_E4_ARCHIVAL_WRITER.md` `ARW-Q17`,
-    /// with the read-side consequence for `slash_log_after` /
-    /// `holds_shard_at` stated there. Until it is ruled, this is the Rust
-    /// writer's position, typed so that moving it is a signature change,
-    /// not a renumbering.
+    /// sit one apart. No document specified which was meant; the choice was
+    /// **ruled** from the read the log exists for (`DRS_E4_ARCHIVAL_WRITER.md`
+    /// `ARW-Q17`, 2026-10-02): `holds_shard_at(h)` is *yes iff a logged
+    /// slash strictly above `h` removed it*, which is correct only with the
+    /// connecting height as the key — the count would read a shard as held
+    /// at the very block that removed it. The C++'s count-keyed row against
+    /// its height-denominated reader is that off-by-one, live (`ARW-27`);
+    /// this signature is what makes it unspellable here.
     ///
     /// [`ChainCount`]: shekyl_types::ChainCount
     fn write_slashes(

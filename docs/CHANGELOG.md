@@ -216,10 +216,24 @@
   under a levered `SEB 100` schedule and compared role-mapped; every
   state field equal; the one disagreement is the slash-log **key** —
   fixture at the fold count (`deadline + 1`), Rust at the connecting
-  height — pinned on both sides and **posed as `ARW-Q17`** (no spec names
-  the key; the read-side consequence for `slash_log_after` /
-  `holds_shard_at` attached). The slash-bearing corpus capture is posed
-  as `ARW-Q18`.
+  height — pinned on both sides; posed as `ARW-Q17` and **ruled the same
+  day: the connecting height, `BlockHeight`**, from the one read the log
+  exists for (`holds_shard_at(h)` is *yes iff a logged slash strictly
+  above `h` removed it* — only the connecting-height key makes a shard
+  not-held at the block that removed it). The slash-bearing corpus
+  capture is posed as `ARW-Q18`.
+- **Known defect in the C++ archival path (`ARW-27`), not inherited.**
+  The C++ keys `archival_slash_log` by the post-connect count
+  (`prev_height + 1`) while its `archival_bond_holds_shard` reader scans
+  strictly above a block **height** (`h_fire`, both call sites) and
+  documents that semantics itself — so for a slash applied during block
+  `H` the C++ answers *held at `H`*. Epoch `e`'s slash connects at
+  exactly `H_close(e + 1)`, inside the next epoch's fire range, so the
+  wrong answer surfaces at `1 / modulus` per challenge on the slashed
+  pair, at both the serve-credit gate and the slash-eligibility scan.
+  Not fixed in C++ (rule 20; the C++ archival writer is a deletion
+  target); the Rust store's `SlashLogKey` is height-keyed and its reads
+  agree with the predicate.
 - **API (`shekyl-types`).** `ChainCount::with_tip(BlockHeight) ->
   Option<ChainCount>` — the count of a chain whose tip is `h`
   (`ARW-26`'s operand), with its `compile_fail`. Inside the archival
@@ -228,7 +242,7 @@
   `connecting: BlockHeight`); the inland-height grandfather list burns
   down `174 → 172`.
   (`DRS_E4_ARCHIVAL_WRITER.md` §3.8 item 2, §6 row 8, `ARW-Q17`,
-  `ARW-Q18`.)
+  `ARW-Q18`, `ARW-27`.)
 
 ### Replay driver — the regtest injection is an event; the corpus re-captured under the v1 trace (DRS-E4 commit 7)
 

@@ -497,6 +497,18 @@ impl SlashAppliedKey {
 /// connecting height the scheduler ran at and the row's ordinal within it
 /// (DRS-E4 `ARW-Q2`; dense per height, SI-22).
 ///
+/// **The height is a [`BlockHeight`], the connecting height, and that is a
+/// ruling, not a convention** (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-Q17`,
+/// 2026-10-02). The log exists for one read — *did `P` hold `s` at `h`*,
+/// answered *yes iff a logged slash **strictly above** `h` removed it*
+/// (`shekyl_types::archival::SlashedHolding`, [`Self::above`]) — and the
+/// key's denomination is coupled to that predicate's strictness: a slash
+/// applied during block `H`, keyed `H`, is not held at `H`, where it
+/// applied; keyed by the post-connect count `H + 1` it would read as held at
+/// the height that removed it. Neither moves without the other. The C++
+/// keyed the same row by `m_db->height()`, a count, against a reader whose
+/// operand is a height — the live off-by-one `ARW-27` records.
+///
 /// The C++ packed it as `BE(height) ‖ BE(seq)` with a reserved
 /// `u32::MAX` seq for its epoch-marker row kind; the tuple `(u64, u32)`
 /// orders the same way, and the marker kind is not carried, so every seq is
