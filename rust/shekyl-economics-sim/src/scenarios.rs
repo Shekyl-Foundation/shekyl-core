@@ -236,11 +236,14 @@ pub const SCENARIO_9_TAIL_TX_PER_BLOCK: u64 = 15;
 /// large `n`, low *current* volume, the post-boom settled chain. An early boom
 /// (years 0–20, ~250 tx/block) accretes the shard corpus (~4.9 M byte shards
 /// at 60 y), then a long low-activity tail (years 20–60,
-/// [`SCENARIO_9_TAIL_TX_PER_BLOCK`] tx/block). Run to **60 years** so the emission leg is
-/// exhausted (`0.9^60 ≈ 0.002` of the initial staker-emission share, and most
-/// supply emitted) — the only regime where the fee leg is the primary budget and
-/// escalation is decisive (A1's binding case; F-G). None of scenarios 1–8 reach
-/// it (`scenario_8` is high-history but *busy* and only 5 years long).
+/// [`SCENARIO_9_TAIL_TX_PER_BLOCK`] tx/block). Run to **60 years** so the
+/// **staker** emission leg has decayed to ≈ 0.002 of its initial share
+/// (`0.9^60`) on a curve within 0.1 % of its asymptote — not exhausted: the
+/// curve still mints ≈ 1 SKL/block at year 60, and the 0.6 SKL/block tail
+/// floor binds from ≈ year 64 — the only regime where the fee leg is the primary
+/// budget and escalation is decisive (A1's binding case; F-G). None of
+/// scenarios 1–8 reach it (`scenario_8` is high-history but *busy* and only 5
+/// years long).
 pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConfig {
     ScenarioConfig {
         name: "high_history_low_activity".into(),

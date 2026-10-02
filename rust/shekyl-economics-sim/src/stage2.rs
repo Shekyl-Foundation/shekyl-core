@@ -24,7 +24,7 @@ use shekyl_economics::{
     base_block_reward,
     burn::{calc_burn_pct, compute_burn_split},
     calc_effective_emission_share, effective_emission,
-    params::{mul_scale, EconomicParams, SCALE},
+    params::{EconomicParams, SCALE},
     split_block_emission, ScaledShare, TxVolume,
 };
 
@@ -195,7 +195,7 @@ pub fn burden_trajectory(params: &SimParams, config: &ScenarioConfig) -> BurdenT
 /// One year's funding + burden inputs for A1, computed once per scenario on the
 /// **flat-ledger** trajectory (shipped 25% split), independent of the escalation
 /// candidate. The candidate is applied downstream only to the fee leg
-/// (`mul_scale(whole_burn_atomic, share_milli(n))`); the second-order ledger feedback from
+/// (`year_share_atomic(whole_burn_atomic, share_milli(n))`); the second-order ledger feedback from
 /// redistributing the burn (`actually_destroyed` shifts `circulating`, nudging
 /// future `burn_pct`/emission) is deliberately not modeled here — it is small
 /// against the first-order clearance question, and a full-feedback refinement
@@ -211,20 +211,38 @@ pub struct A1YearAgg {
     /// Staker emission leg accrued over the year, **atomic units** (integer —
     /// the DQ-2G algorithm zone; SKL/f64 conversion is deferred to the reported
     /// clearance ratio). Sum of the production `split_block_emission` staker leg.
-    pub emission_leg_atomic: u64,
+    ///
+    /// The four annual sums are `u128`, not the chain's `u64`: a *year* of
+    /// fees is not a chain quantity, and under the growth schedule run to 60 y
+    /// (`onset.rs`) it passes `u64::MAX` from ≈ year 52. A `u64` here would
+    /// have to clip, and a clipped aggregate fails silently — it stays
+    /// valid-looking while the ratio it feeds goes wrong.
+    pub emission_leg_atomic: u128,
     /// Whole fee burn over the year (pre-share), **atomic units**. The fee leg
-    /// is `mul_scale(this, share_milli(n))` — the same integer op production runs
-    /// (`compute_burn_split`), never an f64 `× share_fraction`.
-    pub whole_burn_atomic: u64,
+    /// is [`year_share_atomic`]`(this, share_milli(n))` — production's
+    /// `mul_scale` floor on the year aggregate, never an f64 `× share_fraction`.
+    pub whole_burn_atomic: u128,
     /// All fees paid over the year (pre-burn), **atomic units**: the ceiling of
     /// every share-of-fees lever, miner income included. `whole_burn` is the
     /// `burn_pct` fraction of this; the `√V` damper in `calc_burn_pct` is the
     /// gap between the two (`onset.rs`).
-    pub whole_fees_atomic: u64,
+    pub whole_fees_atomic: u128,
     /// All block emission over the year (miner + staker, pre-split), **atomic
     /// units** — the operand a non-decaying staker floor would be a share of
     /// (`onset.rs`). `emission_leg` is the shipped decaying split of this.
-    pub total_emission_atomic: u64,
+    pub total_emission_atomic: u128,
+}
+
+/// A fixed-point `SCALE` share of a **year aggregate**: `floor(pool × share /
+/// SCALE)`, the same floor production's `mul_scale` takes per block
+/// (`compute_burn_split`), on the `u128` the year sums to. This exists only
+/// because `mul_scale` is `u64 → u64` and a year of fees is not (see
+/// [`A1YearAgg`]); for any `pool ≤ u64::MAX` it equals `mul_scale` exactly
+/// (pinned in `year_share_matches_mul_scale_in_u64_range`). Every share of a
+/// year aggregate goes through here — the sim never writes `× share` itself.
+#[must_use]
+pub fn year_share_atomic(pool_atomic: u128, share_milli: u64) -> u128 {
+    pool_atomic * u128::from(share_milli) / u128::from(SCALE)
 }
 
 /// Accumulate the per-year A1 inputs over a scenario's blocks (one flat-ledger
@@ -310,10 +328,10 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 year,
                 n: fold.closed_shards(),
                 cumulative_outputs: fold.cumulative_outputs as u64,
-                emission_leg_atomic: year_emission_atomic.min(u128::from(u64::MAX)) as u64,
-                whole_burn_atomic: year_burn_atomic.min(u128::from(u64::MAX)) as u64,
-                whole_fees_atomic: year_fees_atomic.min(u128::from(u64::MAX)) as u64,
-                total_emission_atomic: year_total_emission_atomic.min(u128::from(u64::MAX)) as u64,
+                emission_leg_atomic: year_emission_atomic,
+                whole_burn_atomic: year_burn_atomic,
+                whole_fees_atomic: year_fees_atomic,
+                total_emission_atomic: year_total_emission_atomic,
             });
             year_emission_atomic = 0;
             year_burn_atomic = 0;
@@ -329,9 +347,9 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
 /// rate. `≥ 1` ⇒ the candidate keeps the staker whole every sustained year.
 ///
 /// **Algorithm zone is integer** (DQ-2G): `budget_atomic = emission_leg +
-/// mul_scale(whole_burn, share_milli(n))` — the escalation share is applied by
-/// the SAME `mul_scale` production runs (`compute_burn_split`), never an f64
-/// `× share_fraction`. Burden (F-G) is the integer locked-bond opportunity cost
+/// year_share_atomic(whole_burn, share_milli(n))` — the escalation share is
+/// the floor production's `mul_scale` takes (`compute_burn_split`), never an
+/// f64 `× share_fraction`. Burden (F-G) is the integer locked-bond opportunity cost
 /// (principal atomic; the exogenous rate is the single float boundary) plus the
 /// minor fiat storage term. f64 appears **only** in the returned ratio (report)
 /// and at the two named exogenous boundaries (rate, `SKL/fiat` price). The
@@ -364,14 +382,13 @@ pub fn a1_sustained_years(aggs: &[A1YearAgg]) -> impl Iterator<Item = &A1YearAgg
 
 /// The shipped budget for one year under a candidate, **atomic**: the decaying
 /// staker emission leg plus the candidate's share of the fee **burn** — the
-/// escalation share applied by the same `mul_scale` production runs
-/// (`compute_burn_split`), never an f64 `× share_fraction`. `onset.rs` builds
-/// the alternative budgets (share of fees, a tail floor) beside this one.
+/// escalation share taken with production's floor ([`year_share_atomic`]),
+/// never an f64 `× share_fraction`. The one home for the shipped budget: A1,
+/// A2, A3 and `onset.rs`'s shipped lever all call it; `onset.rs` builds the
+/// alternative budgets (share of fees, a tail floor) beside it.
 #[must_use]
 pub fn a1_shipped_budget_atomic(a: &A1YearAgg, candidate: &EscalationCurve) -> u128 {
-    let share_milli = candidate.share(a.n);
-    let fee_leg_atomic = mul_scale(a.whole_burn_atomic, share_milli);
-    u128::from(a.emission_leg_atomic) + u128::from(fee_leg_atomic)
+    a.emission_leg_atomic + year_share_atomic(a.whole_burn_atomic, candidate.share(a.n))
 }
 
 /// One year's clearance ratio `budget_skl / burden_skl` for an already-formed
@@ -835,7 +852,7 @@ pub struct A4Decomp {
 /// horizon`, cost is stuffing fees + the coupled bond.
 #[must_use]
 fn a4_decompose(
-    whole_burn_atomic: u64,
+    whole_burn_atomic: u128,
     n: u64,
     sigma_honest_milli: u64,
     candidate: &EscalationCurve,
@@ -843,10 +860,16 @@ fn a4_decompose(
     horizon_years: u64,
 ) -> A4Decomp {
     let n2 = n.saturating_add(delta);
-    // The share-manipulation Δpool on the honest burn — the production op. Only the
-    // fee leg is share-gated, so the emission leg cancels in the delta.
-    let dpool_atomic = mul_scale(whole_burn_atomic, candidate.share(n2))
-        .saturating_sub(mul_scale(whole_burn_atomic, candidate.share(n)));
+    // The share-manipulation Δpool on the honest burn — production's floor on
+    // the year aggregate. Only the fee leg is share-gated, so the emission leg
+    // cancels in the delta. `reward_share_floor` is the production per-epoch
+    // op and takes the chain's `u64`; a year's Δpool fits it in every A4 run
+    // (A4 runs at the scenarios' own horizons), and the conversion is loud
+    // rather than clipping if a schedule ever moves that.
+    let dpool_atomic = year_share_atomic(whole_burn_atomic, candidate.share(n2))
+        .saturating_sub(year_share_atomic(whole_burn_atomic, candidate.share(n)));
+    let dpool_atomic = u64::try_from(dpool_atomic)
+        .expect("a year's share-manipulation Δpool fits the chain's u64 budget operand");
     let dpool_skl_per_year = dpool_atomic as f64 / COIN;
     // Served-work capture of that Δpool: Δn fresh shards at r=1, grouped small.
     let capped_att = attacker_capped_work_milli(delta, A4_ATTACKER_HOLDINGS);
@@ -925,7 +948,7 @@ fn a4_decompose(
 /// The scalar ROI (the gate quantity) — a thin projection of [`a4_decompose`].
 #[must_use]
 fn a4_stuffing_roi(
-    whole_burn_atomic: u64,
+    whole_burn_atomic: u128,
     n: u64,
     sigma_honest_milli: u64,
     candidate: &EscalationCurve,
@@ -1288,9 +1311,7 @@ fn a3_stranding_report(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Re
     let epy = crate::proxy::epochs_per_year();
     for (label, &yi) in ["early", "mid", "late"].iter().zip(picks.iter()) {
         let a = years[yi];
-        let budget_atomic = a
-            .emission_leg_atomic
-            .saturating_add(mul_scale(a.whole_burn_atomic, flat_25().share(a.n)));
+        let budget_atomic = a1_shipped_budget_atomic(a, &flat_25());
         let budget_per_epoch = (budget_atomic as f64 / epy) as u64;
         let claim_cost = claim_cost_atomic(a.cumulative_outputs);
         for &archivers in &A3_ARCHIVER_BAND {
@@ -1443,9 +1464,7 @@ fn shard_reward_operands(params: &SimParams) -> ShardRewardOperands {
             .iter()
             .filter(|a| a.n >= MAX_HOLDINGS_SHARDS as u64)
         {
-            let pool_atomic = a
-                .emission_leg_atomic
-                .saturating_add(mul_scale(a.whole_burn_atomic, flat_25().share(a.n)));
+            let pool_atomic = a1_shipped_budget_atomic(a, &flat_25());
             let pool_per_epoch_skl = (pool_atomic as f64 / COIN) / epy;
             let per_shard = pool_per_epoch_skl / a.n as f64;
             rewards.push(per_shard);
@@ -1563,9 +1582,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
                 .max_by_key(|c| c.asymptote)
                 .copied()
                 .unwrap_or_else(flat_25);
-            let pool = a
-                .emission_leg_atomic
-                .saturating_add(mul_scale(a.whole_burn_atomic, best.share(a.n)));
+            let pool = a1_shipped_budget_atomic(a, &best);
             let per_epoch = (pool as f64 / crate::proxy::epochs_per_year()) as u64;
             crate::redistribution::a2_report(
                 out,
@@ -1654,6 +1671,7 @@ pub struct Stage2Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_economics::params::mul_scale;
 
     #[test]
     fn trajectory_shards_are_monotone_and_final_is_max() {
@@ -1733,6 +1751,34 @@ mod tests {
         }
         // Emission decays ×0.90/yr, so the last year's leg is below the first's.
         assert!(aggs.last().unwrap().emission_leg_atomic < aggs[0].emission_leg_atomic);
+    }
+
+    #[test]
+    fn year_share_matches_mul_scale_in_u64_range() {
+        // The year-aggregate share is production's `mul_scale` floor widened,
+        // not a second rounding rule: wherever both are defined they agree
+        // bit-for-bit, including at the u64 ceiling.
+        for pool in [
+            0u64,
+            1,
+            999_999,
+            1_000_000,
+            1_000_001,
+            3,
+            u64::MAX / 7,
+            u64::MAX,
+        ] {
+            for share in [0u64, 1, 250_000, 333_333, 999_999, SCALE] {
+                assert_eq!(
+                    year_share_atomic(u128::from(pool), share),
+                    u128::from(mul_scale(pool, share)),
+                    "pool {pool} share {share}"
+                );
+            }
+        }
+        // And past it, the floor continues rather than clipping.
+        let pool = u128::from(u64::MAX) * 3;
+        assert_eq!(year_share_atomic(pool, SCALE / 2), pool / 2);
     }
 
     #[test]
