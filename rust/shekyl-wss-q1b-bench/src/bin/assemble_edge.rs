@@ -138,22 +138,36 @@ fn arm_record(arm: Arm, series: Series) -> AssembleArmRecord {
     }
 }
 
-fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
-    // Refused here rather than left to a `clap` range, because the bound is a
-    // property of the ladder and not a constant to restate: above some depth
-    // `outputs_per_node`'s product wraps in a release build, and the run would
-    // report a valid-looking record for a population that does not exist.
-    if let Some(depth) = args.rung {
-        if !rung_floor_is_representable(depth) {
-            return Err(format!(
-                "--rung {depth}: the rung floor is not representable — \
-                 `outputs_per_node` overflows at this depth and wraps silently in a \
-                 release build, so the plan would measure a population that does not \
-                 exist. Pick a shallower rung."
-            ));
+/// The plan this invocation names, and its kind.
+///
+/// **One resolution path for every mode.** `--plan` and the measurement both
+/// come through here, so neither can accept a depth the other refuses — which
+/// is exactly what happened when the check lived in `run` alone: `--plan
+/// --rung 15` walked past it and panicked inside `plan_at_depth`.
+///
+/// The depth bound is read rather than restated. Above some depth
+/// `outputs_per_node`'s product wraps in a release build, so
+/// [`rung_floor_is_representable`] — a reading of `min_leaves_for_depth`'s
+/// `Option` — is the only place that knows where the ladder ends.
+fn resolve_plan(args: &Args) -> Result<(Vec<Arm>, PlanKind), String> {
+    match args.rung {
+        None => Ok((plan_at_replay_window(), PlanKind::ReplayWindow)),
+        Some(depth) => {
+            if !rung_floor_is_representable(depth) {
+                return Err(format!(
+                    "--rung {depth}: the rung floor is not representable. \
+                     `outputs_per_node`'s product overflows at this depth and wraps \
+                     silently in a release build, so the plan would name a population \
+                     that does not exist. Pick a shallower rung."
+                ));
+            }
+            Ok((plan_at_depth(depth), PlanKind::Shape { depth }))
         }
     }
-    let arms = args.rung.map_or_else(plan_at_replay_window, plan_at_depth);
+}
+
+fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
+    let (arms, plan_kind) = resolve_plan(args)?;
     let leaves_per_block = args
         .leaves_per_block
         .unwrap_or_else(|| worst_case_leaves_per_block(LEAF_RATE_MODEL_DEPTH).leaves_per_block);
@@ -236,10 +250,6 @@ fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
     let input_cap_change_pct =
         signed_change_pct(median(ArmRole::RungTop), median(ArmRole::InputCap));
 
-    let plan_kind = args
-        .rung
-        .map_or(PlanKind::ReplayWindow, |depth| PlanKind::Shape { depth });
-
     let arm_records = arms
         .iter()
         .map(|arm| {
@@ -318,11 +328,19 @@ fn main() -> ExitCode {
     let args = Args::parse();
 
     if args.plan {
+        let (arms, plan_kind) = match resolve_plan(&args) {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                eprintln!("assemble_edge: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
         eprintln!(
             "leaf rate modelled at depth {LEAF_RATE_MODEL_DEPTH} (proof weight); each arm's \
              tree depth is read from its own leaf count"
         );
-        for arm in args.rung.map_or_else(plan_at_replay_window, plan_at_depth) {
+        eprintln!("plan: {}", plan_kind.label());
+        for arm in arms {
             eprintln!(
                 "  {:>11}  n={:<10} depth={}  k={}",
                 arm.role.as_str(),
