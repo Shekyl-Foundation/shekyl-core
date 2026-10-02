@@ -11,7 +11,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
-- **Stamp the revision when cross-building a bench binary for a remote rig.** `shekyl-wss-q1b-bench`'s `build.rs` watches `HEAD`, `packed-refs` and the branch ref, but a `.rs` edit is none of those, so Cargo reuses the cached script output and the stamp goes stale — and loses its `-dirty` suffix, reporting a *clean* build of a tree that was dirty. `AssembleEdgeRecord` carries only that build-time stamp; runtime capture (`report::ProverPin::capture`) cannot help on a rig that has no repo, which is the case the cross-build exists for. `assemble_edge_20261002T052942Z.json` reads `1ab4664cb` for a binary built from `11a0c8451` (`CT6_PROVING_STATE.md` §11.2 records it). `build.rs` already honours a `SHEKYL_GIT_REVISION` override, so the remedy is to set it in the cross-build recipe rather than to add a rerun trigger Cargo does not offer. Falsify by a record from a copied binary naming the revision it was built from. Target: **pre-genesis**.
+- **Stamp the revision when cross-building a bench binary for a remote rig.** `shekyl-wss-q1b-bench`'s `build.rs` watches `HEAD`, `packed-refs` and the branch ref, but a `.rs` edit is none of those, so Cargo reuses the cached script output: the stamp goes stale **and** loses its `-dirty` suffix, reporting a clean build of a dirty tree. `AssembleEdgeRecord` carries only that build-time stamp, and runtime capture (`report::ProverPin::capture`) cannot help on a rig with no repo — the case the cross-build exists for. `assemble_edge_20261002T052942Z.json` reads `1ab4664cb` for a binary built from `11a0c8451`. `build.rs` already honours a `SHEKYL_GIT_REVISION` override, so the remedy is to set it in the cross-build recipe rather than to add a rerun trigger Cargo does not offer. Falsify by a record from a copied binary naming the revision it was built from.
+  - Owner: [`WSS_Q1B_BENCH_SPEC.md`](design/WSS_Q1B_BENCH_SPEC.md)
+  - Target: pre-genesis
 
 
 Default. Lands before genesis if it should exist at launch.
