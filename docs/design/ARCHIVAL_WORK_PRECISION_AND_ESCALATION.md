@@ -2298,8 +2298,10 @@ hides *when* a failure arrives. The #929 review modelled §12.13's equations by
 hand and read three eras off them — emission carries everything early; the
 staker emission leg (half-life ≈ 2.9 y under the `0.9`/yr decay) crosses the
 linearly growing bond burden mid-life; and in the fee era, for constant traffic,
-the fee pool `∝ V` and the corpus `∝ V·t`, so **`V` cancels** and a fee *flow*
-can fund only the most recent `H` traffic-years of a bond *stock*. It predicted
+fees `∝ V` and the corpus `∝ V·t`, so a fee *flow* can fund only the most
+recent `H` traffic-years of a bond *stock* — with `V` cancelling outright for a
+share of **all** fees, and only up to the `√V` of `burn_pct` for a share of the
+**burn** (measured below, (iv)). It predicted
 the gap opens around years 18–25 in *every* constant-traffic world, while the
 chain is still minting 5–10 SKL/block. The sim now measures that instead of
 taking it from the hand model: two arms in `rust/shekyl-economics-sim/src/onset.rs`,
@@ -2314,21 +2316,30 @@ opportunity cost at 10 %; `onset` is the first sustained year the shipped budget
 (burn × share, flat-25 or the best band candidate) fails to clear; `*` marks a
 cyclic schedule that clears again later.
 
-| Scenario | `n` at 60 y | xover | flat @10 % | best @10 % | flat @2 % | best @2 % | flat-25 ratio @10 % at y10 / 20 / 30 / 40 / 50 / 60 |
-| --- | ---: | :-: | :-: | :-: | :-: | :-: | --- |
-| baseline steady state | 3.28 M | y23 | **y24** | y28 | y37 | never | 38.7 · 2.17 · 0.34 · 0.17 · 0.13 · 0.11 |
-| boom / bust cycle | 5.44 M | y20 | y20\* | y20\* | y26\* | y28\* | 17.0 · 0.81 · 0.07 · 0.02 · 0.01 · 0.01 |
-| sustained growth (shape only) | 1.56 × 10¹⁰ | y16 | y39 | y39 | y39 | y40 | 16.1 · 2.16 · 2.04 · 0.00 · 0.00 · 0.00 |
-| stuffing attack | 3.30 M | y23 | y24 | y28 | y37 | never | 37.4 · 2.13 · 0.34 · 0.17 · 0.13 · 0.11 |
-| stake concentration | 3.28 M | y23 | y24 | y28 | y37 | never | as baseline |
-| mass unstaking | 3.28 M | y23 | y24 | y28 | y37 | never | as baseline |
-| chain bootstrap | 4.71 M | y21 | y22 | y33 | y43 | never | 41.3 · 1.58 · 0.34 · 0.22 · 0.17 · 0.14 |
-| late-chain tail | 14.6 M | y3 | y12 | y43 | y59 | never | 1.19 · 0.59 · 0.39 · 0.30 · 0.24 · 0.20 |
-| high-history / low-activity | 4.89 M | y16 | **y18** | y21 | y21 | y21 | 9.84 · 0.60 · 0.03 · 0.02 · 0.01 · 0.01 |
+| Scenario | `n` at 60 y | xover | flat @2 % | best @2 % | flat @5 % | best @5 % | flat @10 % | best @10 % | flat-25 ratio @10 % at y10 / 20 / 30 / 40 / 50 / 60 |
+| --- | ---: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | --- |
+| baseline steady state | 3.28 M | y23 | y37 | never | y28 | y48 | **y24** | y28 | 38.7 · 2.17 · 0.34 · 0.17 · 0.13 · 0.11 |
+| boom / bust cycle | 5.44 M | y20 | y26\* | y28\* | y22\* | y24\* | y20\* | y20\* | 17.0 · 0.81 · 0.07 · 0.02 · 0.01 · 0.01 |
+| sustained growth (shape only) | 1.56 × 10¹⁰ | y16 | y39 | y40 | y39 | y39 | y39 | y39 | 16.1 · 2.16 · 2.04 · 0.00 · 0.00 · 0.00 |
+| stuffing attack | 3.30 M | y23 | y37 | never | y28 | y48 | y24 | y28 | 37.4 · 2.13 · 0.34 · 0.17 · 0.13 · 0.11 |
+| stake concentration | 3.28 M | y23 | y37 | never | y28 | y48 | y24 | y28 | as baseline |
+| mass unstaking | 3.28 M | y23 | y37 | never | y28 | y48 | y24 | y28 | as baseline |
+| chain bootstrap | 4.71 M | y21 | y43 | never | y27 | never | y22 | y33 | 41.3 · 1.58 · 0.34 · 0.22 · 0.17 · 0.14 |
+| late-chain tail | 14.6 M | y3 | y59 | never | y24 | never | y12 | y43 | 1.19 · 0.59 · 0.39 · 0.30 · 0.24 · 0.20 |
+| high-history / low-activity | 4.89 M | y16 | y21 | y21 | y21 | y21 | **y18** | y21 | 9.84 · 0.60 · 0.03 · 0.02 · 0.01 · 0.01 |
 
 Sustained growth's `1.2^year` to 60 y is unphysical (block weight caps it; 15.6
-billion shards is 47 PB) and is read for shape only. The late-chain tail starts
-with most of the supply already emitted, hence its early crossover.
+billion shards is 47 PB) and is read for shape only — including its collapse to
+`0.00` from y40: by ≈ y38 the cumulative fee burn has destroyed the circulating
+supply (the burn is a fraction of fees that grow `1.2^year`; the supply is
+bounded by the `2³²` SKL asymptote), so `calc_burn_pct`'s supply ratio → 0,
+`burn_pct → 0`, and the fee leg vanishes while fees keep growing. That is the
+model behaving honestly on an impossible input, not arithmetic failing — the
+sim's year aggregates are `u128` so that a year of those fees (past `u64::MAX`
+from ≈ y52) is carried, never clipped
+(`onset::growth_schedule_year_fees_exceed_u64_so_the_aggregate_is_u128`). The
+late-chain tail starts with most of the supply already emitted, hence its early
+crossover.
 
 **Reading.** The hand model holds. (i) **The three eras are real and dated:**
 the emission leg alone stops covering the bond at **y20–23** in every
@@ -2338,37 +2349,59 @@ minting. The 20-year horizons §12.13 ran to end four years before the
 baseline's onset, which is why §12.13 saw eight clearing scenarios and one
 failing one with nothing between: the gap was not in the trajectories, it was
 past the horizon. (ii) **The escalation is not a dead lever;** it is a
-*delay* at 10 % (baseline y24 → y28, bootstrap y22 → y33, late tail y12 → y43)
-and the difference between failing and clearing-to-60 at 2 % (flat y37, best
-never, for every steady scenario). The discriminating region §12.13 scheduled a
-sweep for is simply the low-rate, post-crossover quadrant of the existing
-scenarios; it did not need a tenth axis. (iii) **At 10 % nothing in the band
-clears any constant-traffic world past y28**, and (iv) **the failure is
-traffic-independent in the fee era**, printed in closed form from the
-production constants (`fee 0.1 SKL`, `burn base 0.5` at baseline `V` with the
-supply emitted — `calc_burn_pct`, not restated — `W = 3 MB`, bond `0.75 SKL ×
-R6`, 12,627 archival B/tx deep):
+*delay* at 10 % (baseline y24 → y28, bootstrap y22 → y33, late tail y12 → y43),
+twenty years at 5 % on the baseline (y28 → y48; bootstrap and the late tail go
+from failing to clearing-to-60), and the difference between failing and
+clearing-to-60 at 2 % (flat y37, best never, for every steady scenario). The
+discriminating region §12.13 scheduled a sweep for is simply the low-rate,
+post-crossover quadrant of the existing scenarios; it did not need a tenth
+axis. (iii) **At 10 % nothing in the band clears any constant-traffic world
+past y28**, and (iv) **in the fee era the failure is a horizon `H` in
+traffic-years**, printed in closed form from the production constants
+(`fee 0.1 SKL`, `W = 3 MB`, bond `0.75 SKL × R6`, 12,627 archival B/tx deep,
+and the burn fraction read from `calc_burn_pct` with the supply emitted — not
+restated):
 
-| Fee leg | `H` @2 % | @5 % | @10 % |
-| --- | ---: | ---: | ---: |
-| burn × flat 25 % | 33 y | 13 y | **7 y** |
-| burn × 100 % | 132 y | 53 y | 26 y |
-| **all** fees × 100 % | 264 y | 106 y | 53 y |
+`H = fee · base · share · W / (bond · R · rate · bytes_per_tx)`
 
-A fee leg clears a corpus no deeper than `H` traffic-years regardless of how
-busy the chain is; a busy chain crosses the same line later only because its
-corpus is younger (`onset::fee_horizon_is_traffic_independent_in_the_fee_era`
-checks the closed form against the fold at y60 on the baseline). This is the
-`√V` damper's second job made visible: the damper is monetary gentleness for
-the burn and, as a side effect, scales the archival pool as `V^1.5` against a
-burden `∝ V·t`.
+`V` cancels between fees and corpus **only through the factors written there**.
+For a share of **all** fees (`base = 1`) `H` is therefore traffic-independent.
+For a share of the **burn**, `base = burn_pct`, which rises as `√V` until
+`burn_cap` binds — at `V = 162 tx/block`, found by asking `calc_burn_pct`
+upward from the baseline, not by inverting it — so a burn lever's `H` rises
+with traffic up to the cap (`burn_cap / burn_base = 0.9 / 0.5 = 1.8×` the
+baseline figure) and is flat above it:
+
+| Fee leg | `V` (tx/block) | `burn_pct` | `H` @2 % | @5 % | @10 % |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| burn × flat 25 % | 15 (scen. 9 tail) | 0.27 | 18 y | 7 y | 4 y |
+| burn × flat 25 % | 50 (baseline) | 0.50 | 33 y | 13 y | **7 y** |
+| burn × flat 25 % | 162 (at `burn_cap`) | 0.90 | 59 y | 24 y | 12 y |
+| burn × 100 % | 15 | 0.27 | 72 y | 29 y | 14 y |
+| burn × 100 % | 50 | 0.50 | 132 y | 53 y | 26 y |
+| burn × 100 % | 162 | 0.90 | 238 y | 95 y | 48 y |
+| **all** fees × 100 % | any | — | 264 y | 106 y | 53 y |
+
+Corpus older than `H` is unfunded by fees, and past the cap no amount of
+traffic moves `H`; a busier chain crosses the same line later only because its
+corpus is younger (`onset::fee_horizon_closed_form_matches_the_fold_on_the_baseline`
+checks the closed form against the fold at y60 on the baseline;
+`onset::burn_horizon_rises_with_sqrt_traffic_until_the_cap` pins the `√V`
+rise, the cap, and the all-fees invariance). This is the `√V` damper's second
+job made visible: the damper is monetary gentleness for the burn and, as a
+side effect, scales the archival pool as `V^1.5` (not `V`) against a burden
+`∝ V·t` below the cap, and as `V` above it — the traffic-independence the
+hand model stated holds exactly for all-fees levers and only at the cap for
+burn levers.
 
 **A1-L: the levers, priced.** Min ratio over sustained years to 60 y at the
 three rates, `R` sustained at 10 %, and the onset year at 10 %, for the two
 scenarios that bracket the question — the settled chain (scenario 9) and the
 busy steady chain (baseline). Every row is a budget formed with production's
-integer ops (`mul_scale`, `calc_effective_emission_share` for the decay rows)
-and folded through the same clearance function; **priced, not proposed** —
+integer ops (`mul_scale`'s floor on the `u128` year aggregate —
+`stage2::year_share_atomic`, pinned equal to `mul_scale` across the `u64`
+range — and `calc_effective_emission_share` for the decay rows) and folded
+through the same clearance function; **priced, not proposed** —
 every one of them is a genesis-frozen or ceremony-gated number.
 
 | Lever | scen. 9 @2 % | @5 % | @10 % | R @10 % | onset | baseline @2 % | @5 % | @10 % | R @10 % | onset |

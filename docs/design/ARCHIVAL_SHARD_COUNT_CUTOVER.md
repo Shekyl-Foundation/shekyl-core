@@ -356,14 +356,17 @@ Numbered, and none resolved here.
    2026-09-27): transactions below the discard frontier, not transactions
    archived — SUPERSEDED 2026-10-01 (design owner): the burden is locked
    capital, borne at close + freeze, so the operand is closed shards at parent
-   state, a pure fold; see the `SCC-Q2` note below.** The escalation exists to
-   redirect burned value toward stakers *as the burden on archivers grows*, and
-   that burden starts when bodies **leave
-   ordinary daemons** — not when shards close. Inside the retention window every
-   daemon still holds them, so nothing is yet borne by archivers. Computable at the
-   parent state from `cumulative_tx_count` and `D(E)` on both sides, and it moves
-   in **epoch steps**, as the segment count did — so the operand keeps the step
-   shape the ramp was built against.
+   state, a pure fold; see the `SCC-Q2` note below.** *Records-was — the
+   2026-09-27 rationale, SUPERSEDED, kept so the reversal is legible:* that
+   answer held the burden to start when bodies **leave ordinary daemons**,
+   not when shards close, on the ground that inside the retention window every
+   daemon still holds them; its operand was `cumulative_tx_count` against
+   `D(E)` at the parent state, moving in epoch steps like the segment count.
+   *Why it was superseded:* the archiver's burden is the **bond** — capital
+   locked at close + freeze, before and regardless of when daemons discard —
+   so the retention window is not a grace period for the burden, and the
+   premise fails. The current operand is closed shards at parent state (the
+   `SCC-Q2` ruling below carries the full reasoning).
 2. **`SCC-Q2` RULED (Rick, 2026-09-27, design-owner lane): `knee_n` is
    re-expressed, not ported.**
    - The Stage-2 escalation sweep (`KNEE_BAND × ASYMPTOTE_BAND`,
