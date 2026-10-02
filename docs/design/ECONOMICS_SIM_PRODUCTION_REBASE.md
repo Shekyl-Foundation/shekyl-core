@@ -117,6 +117,11 @@ weights the sim feeds the fold, against which the validator records. ESR-6
 pins the sim's window construction against the validator's on a shared
 trace.
 
+The block weight the median needs is `transactions × predict_weight`, and
+three folds already carry the honest fold (`stage2::HonestFold`) for its
+leaf count. The weight accumulator goes there, once, so the folds do not
+grow three copies of it.
+
 ## 4. Declared divergences
 
 Under the first ruling, every place this crate does not call production is
@@ -192,10 +197,14 @@ year at 10 % for flat / best):
 
 Three things the control tables said that the production arm does not:
 
-- **Nothing clears to 60 years.** On the control, the best band candidate
-  never failed at 2 % in six scenarios and at 5 % in two. On the
-  production arm every scenario has an onset at every rate (baseline best
-  at 2 %: year 44).
+- **Every scenario has an onset at every rate.** On the control, the best
+  band candidate never failed at 2 % in six scenarios and at 5 % in two.
+  On the production arm no cell reads "never" (baseline best at 2 %:
+  year 44). That is the claim, and no more: the boom/bust schedule's
+  onsets are starred, meaning a later year clears again, as on the
+  control. The commit message of `9d8a52985` says "no candidate now
+  clears to 60 years", which conflates the two; this sentence is the
+  corrected one.
 - **The fee era has no fee leg to speak of.** On the settled chain, the
   A1-L row "all fees × 100 %" — the miner's whole fee income — carried
   0.88 / 0.36 / 0.18 of the burden at 2 / 5 / 10 % on the control. On the
@@ -205,9 +214,29 @@ Three things the control tables said that the production arm does not:
   constant in height; the report prints it for the control arm only.
 
 One thing nobody predicted: the early fee is high. The Standard rung at
-the zone median is about 1.7 SKL per ordinary transaction at year 10.
-Whether anyone would pay that is outside the sim, and ESR-6's median is
-expected to lower it.
+the zone median is about 1.7 SKL per ordinary transaction at year 10
+(3.3 in year 1). Whether anyone would pay that is outside the sim, and
+ESR-6's median is expected to lower it.
+
+**Why a 17× fee moves the year-10 ratio by only 20 %.** The fee leg is
+17.2× the control's at year 10 (1.97 M against 0.114 M SKL per year), but
+the staker emission leg is 9.05 M on both arms, so emission is 82 % of the
+production budget and 99 % of the control's. The budgets stand at 11.02 M
+and 9.16 M, a ratio of 1.202, which is the ratio of the two table cells
+(46.55 / 38.72). The fee reaches the burden as it should; early clearance
+is an emission result on either arm. Emission's share of the production
+budget by year: 99.6 % at year 1, 82 % at 10, 49 % at 20, 23 % at 30.
+
+### 5.2 ESR-6, predicted from ESR-1's output (2026-10-02, before ESR-6)
+
+Sharper than prediction 3, which assumed the wrong shape. Baseline traffic
+is 50 ordinary transactions per block. At 12.5–13.5 KB each that is a
+block of 625–675 KB against a 300 KB zone. If the validator's median
+settles at the block weight, the floor falls by `(B / 300 KB)²`, which is
+**4.3–5.1×**, at every decade alike, because traffic is constant on the
+baseline. The year-10 fee of 1.75 SKL becomes about 0.35–0.40. A result
+far from that range says the median feed is wrong before it says anything
+about the system.
 
 ## 6. The staking sim — a separate PR
 
