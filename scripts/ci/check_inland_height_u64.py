@@ -106,8 +106,10 @@ SCOPE = (
 
 # The list's length ratchet. Lower it as sites are typed; it is not raised.
 # History: 174 at the gate's birth (2026-10-01, DRS-E4, `ARW-Q16` (c) as
-# ruled: landed grandfathered so the forty-first instance is CI's finding).
-GRANDFATHER_CEILING = 174
+# ruled: landed grandfathered so the forty-first instance is CI's finding);
+# 172 at E4 commit 8 (2026-10-02: `record_archival_epoch` / `write_slashes`
+# take the connecting `BlockHeight`, `ARW-Q17`).
+GRANDFATHER_CEILING = 172
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

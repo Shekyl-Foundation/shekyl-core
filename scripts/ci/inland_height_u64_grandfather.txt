@@ -91,8 +91,7 @@ rust/shekyl-chain-store/src/store/alt_tests.rs	1	fn hash_at(store: &ChainStore, 
 rust/shekyl-chain-store/src/store/alt_tests.rs	1	fn side_block(height: u64, previous: BlockHash, key_image: usize) -> (BlockHash, Vec<u8>) {
 rust/shekyl-chain-store/src/store/alt_tests.rs	1	fn tip_height(store: &ChainStore) -> Option<u64> {
 rust/shekyl-chain-store/src/store/amendments_tests.rs	1	fn block_info(store: &ChainStore, height: u64) -> Option<BlockInfo> {
-rust/shekyl-chain-store/src/store/archival_write.rs	1	fn write_slashes(&self, height: u64, delta: &ArchivalDelta) -> Result<(), StoreError> {
-rust/shekyl-chain-store/src/store/archival_write.rs	5	height: u64,
+rust/shekyl-chain-store/src/store/archival_write.rs	4	height: u64,
 rust/shekyl-chain-store/src/store/chain_reads.rs	3	height: u64,
 rust/shekyl-chain-store/src/store/chain_reads.rs	1	pub(super) fn class_of(tip: Option<&(u64, BlockInfo)>, height: u64) -> HeightClass<'_> {
 rust/shekyl-chain-store/src/store/connect.rs	1	height: u64,

@@ -18,9 +18,10 @@
 //! and beside them the inputs the Rust side must reproduce — personas and
 //! their seeded records, the serve passes, the schedule, the chain's shape
 //! and the asserted waypoints — named rather than left as whatever the C++
-//! fixture happened to pass. Commit 8 is the consumer; the test at the foot
-//! of this file is what holds the pair readable and self-consistent until
-//! then.
+//! fixture happened to pass. The consumer is `archival_fixture_replica_tests`,
+//! which rebuilds that state through the production stack and compares it
+//! through a role map; the test at the foot of this file is what holds the
+//! pair readable and self-consistent on its own.
 //!
 //! The shape is deliberately dumb: family name, then rows as hex `key` /
 //! `value` pairs in the family's key order. Nothing here interprets a row.
@@ -171,7 +172,7 @@ pub fn from_json(text: &str) -> Result<ArchivalSnapshot, RowsFileFault> {
 }
 
 /// Bytes from lowercase hex; `None` on an odd length or a non-hex digit.
-fn unhex(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn unhex(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return None;
     }
@@ -306,8 +307,9 @@ mod tests {
     /// facts the inputs name: the serve passes are the credit rows, the
     /// slash lands at the slash epoch's deadline on the named persona, the
     /// watermark is that epoch, and the accruing row is the tip's open
-    /// epoch. Commit 8 replaces the second half with a diff against the
-    /// Rust replayer; until then this is what keeps the pair honest.
+    /// epoch. The comparison against the Rust writer is
+    /// `archival_fixture_replica_tests`'; this is what keeps the pair
+    /// honest without building anything.
     #[test]
     fn the_committed_m_of_n_capture_reads_back_and_matches_its_inputs() {
         let rows = from_json(include_str!(
@@ -333,9 +335,10 @@ mod tests {
         // The C++ keys its slash log by the block *count* after the connect
         // (`prev_height + 1`), so epoch E's row sits one above E's deadline.
         // The inputs state that operand (`ARW-26`); this test holds the rows
-        // to it. The Rust writer keys the same row by the connecting height
-        // — which side the §3.8.1 row means is commit 8's adjudication
-        // against the spec, not this test's, and not the C++'s by default.
+        // to it. The Rust writer keys the same row by the connecting height.
+        // No spec names the key, so which name the row carries is a new
+        // ruling — posed as `ARW-Q17`, not read off either writer; the
+        // replica test pins both equations until it is taken.
         let log_height =
             u64_at(&inputs["schedule"]["slash_log_height_by_epoch"][slash_epoch.to_string()]);
         assert_eq!(

@@ -126,7 +126,9 @@ impl super::Transition {
         view: &V,
         accrual: Accrual,
     ) -> Result<Option<EpochClose>, ViewRead<V::Fault>> {
-        let count = self.count();
+        // The schedule's edge is `u64` (Phase 2g); the count is decoded
+        // once, as the count it is.
+        let count = self.count().to_raw();
         let Some(closing) = self.schedule.close_due_at_height(count) else {
             return Ok(None);
         };

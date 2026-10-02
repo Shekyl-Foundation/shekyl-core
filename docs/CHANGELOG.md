@@ -198,6 +198,38 @@
   proof's content, length, and framing are unchanged
   (`GENESIS_TX_WIRE_FORMAT.md` Q6).
 
+### Replay driver — the archival oracle holds, with its sufficiency stamp; the LMDB slash fixture replicated on the Rust stack (DRS-E4 commit 8)
+
+- Oracle: the replay harness's `hold()` now **asserts** the archival rows
+  identical at every captured chain's checkpoint (`RunReport::archival`
+  was reported, not held); green on all six.
+- Sufficiency stamp (`archival_sufficiency_tests`): a census of which
+  archival family each captured chain witnesses, asserted in both
+  directions against the committed `0x04` records, and a stub half that
+  replays each chain with one witnessed family stubbed and requires the
+  oracle to go red. Measured: no captured chain carries a slash row
+  (`ARW-13`); the `SlashLog` gate is noticed only through the
+  `last_slash_epoch` watermark; a stubbed `ServeCredit` is refused by the
+  store before the comparator sees it.
+- Fixture replica (`archival_fixture_replica_tests`): the LMDB unit
+  fixture's slash state (`ARW-Q15`) rebuilt through the production stack
+  under a levered `SEB 100` schedule and compared role-mapped; every
+  state field equal; the one disagreement is the slash-log **key** —
+  fixture at the fold count (`deadline + 1`), Rust at the connecting
+  height — pinned on both sides and **posed as `ARW-Q17`** (no spec names
+  the key; the read-side consequence for `slash_log_after` /
+  `holds_shard_at` attached). The slash-bearing corpus capture is posed
+  as `ARW-Q18`.
+- **API (`shekyl-types`).** `ChainCount::with_tip(BlockHeight) ->
+  Option<ChainCount>` — the count of a chain whose tip is `h`
+  (`ARW-26`'s operand), with its `compile_fail`. Inside the archival
+  writer the same quantity is now typed end to end
+  (`Transition::count() -> ChainCount`; the write sites take
+  `connecting: BlockHeight`); the inland-height grandfather list burns
+  down `174 → 172`.
+  (`DRS_E4_ARCHIVAL_WRITER.md` §3.8 item 2, §6 row 8, `ARW-Q17`,
+  `ARW-Q18`.)
+
 ### Replay driver — the regtest injection is an event; the corpus re-captured under the v1 trace (DRS-E4 commit 7)
 
 - Source model: `IngestEvent::Inject(ServeCredit)` — the regtest injector's
