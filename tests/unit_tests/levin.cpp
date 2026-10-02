@@ -397,9 +397,13 @@ namespace
 
         virtual void on_connection_new(cryptonote::levin::detail::p2p_context& context) override final
         {
+            /* The context's remote address defaults to `invalid`. Deriving the
+               connector from that zone is `0xff`, which the relay does not
+               know and does not register. The fixture's zone is the one
+               `make_notifier` adopted the earlier connections with. */
             if (notifier)
                 notifier->on_session_established(context.m_connection_id, context.m_is_income,
-                  cryptonote::levin::notify::connector_byte(context.m_remote_address.get_zone()));
+                  cryptonote::levin::notify::connector_byte(session_zone));
         }
 
         virtual void on_connection_close(cryptonote::levin::detail::p2p_context& context) override final
@@ -445,6 +449,10 @@ namespace
         }
 
         std::shared_ptr<cryptonote::levin::notify> notifier{};
+        /* Zone of the live notifier. `invalid` until `make_notifier` names one,
+           so a connection opened against an unnamed fixture is the loud
+           unknown-connector path rather than a silent miss. */
+        epee::net_utils::zone session_zone{epee::net_utils::zone::invalid};
     };
 
     class levin_notify : public ::testing::Test
@@ -493,6 +501,7 @@ namespace
         std::shared_ptr<cryptonote::levin::notify> make_notifier(bool is_public, bool pad_txs)
         {
             epee::net_utils::zone zone = is_public ? epee::net_utils::zone::public_ : epee::net_utils::zone::tor;
+            receiver_.session_zone = zone;
             receiver_.notifier.reset(
               new cryptonote::levin::notify{io_service_, connections_, zone, pad_txs, events_}
             );
@@ -510,6 +519,9 @@ namespace
         {
             std::vector<std::shared_ptr<cryptonote::levin::connections>> registries{connections_};
             const std::uint32_t configured = (std::uint32_t{1} << 0) | (std::uint32_t{1} << 1);
+            /* Later `add_connection` registers as clearnet. The test that
+               wants a TCP session passes connector 0 itself. */
+            receiver_.session_zone = epee::net_utils::zone::public_;
             receiver_.notifier.reset(new cryptonote::levin::notify{
               io_service_, std::move(registries), configured, false, events_});
             return receiver_.notifier;
@@ -692,20 +704,18 @@ namespace
             for (++context; context != contexts_.end(); ++context)
             {
                 const std::size_t sent = context->process_send_queue();
-                /* OUTBOUND ONLY — stemming or fluffing, and this is the
-                   assertion to protect. On a hidden service an inbound peer is
-                   a stranger who dialled us; RP-3a dropped that rule in the
-                   port and these `private_*` cases are what caught it. Opening
-                   the stem gates must not cost the catcher. */
-                if (sent)
+                /* A stem still goes to one outbound peer. A fluff reaches
+                   every other session; inbound is no longer excluded. */
+                if (sent && is_stem)
+                {
                     EXPECT_EQ(1u, (context - contexts_.begin()) % 2);
+                }
                 send_count += sent;
             }
 
-            /* One successor when stemming; the outbound half of ten when
-               fluffing — never nine, which would mean the outbound-only reach
-               was lost. */
-            const std::size_t expected = is_stem ? 1u : 5u;
+            /* One outbound successor when stemming; every other session when
+               fluffing. Nine here is the reach, not a sign it was lost. */
+            const std::size_t expected = is_stem ? 1u : 9u;
             EXPECT_EQ(expected, send_count);
             EXPECT_EQ(expected, receiver_.notified_size());
             for (std::size_t count = 0; count < expected; ++count)
@@ -2153,13 +2163,10 @@ TEST_F(levin_notify, private_fluff_without_padding)
 
         EXPECT_EQ(0u, context->process_send_queue());
         for (++context; context != contexts_.end(); ++context)
-        {
-            const bool is_incoming = ((context - contexts_.begin()) % 2 == 0);
-            EXPECT_EQ(is_incoming ? 0u : 1u, context->process_send_queue());
-        }
+            EXPECT_EQ(1u, context->process_send_queue());
 
-        ASSERT_EQ(5u, receiver_.notified_size());
-        for (unsigned count = 0; count < 5; ++count)
+        ASSERT_EQ(9u, receiver_.notified_size());
+        for (unsigned count = 0; count < 9; ++count)
         {
             auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
             EXPECT_EQ(txs, notification.txs);
@@ -2274,13 +2281,10 @@ TEST_F(levin_notify, private_fluff_with_padding)
 
         EXPECT_EQ(0u, context->process_send_queue());
         for (++context; context != contexts_.end(); ++context)
-        {
-            const bool is_incoming = ((context - contexts_.begin()) % 2 == 0);
-            EXPECT_EQ(is_incoming ? 0u : 1u, context->process_send_queue());
-        }
+            EXPECT_EQ(1u, context->process_send_queue());
 
-        ASSERT_EQ(5u, receiver_.notified_size());
-        for (unsigned count = 0; count < 5; ++count)
+        ASSERT_EQ(9u, receiver_.notified_size());
+        for (unsigned count = 0; count < 9; ++count)
         {
             auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
             EXPECT_EQ(txs, notification.txs);
@@ -3348,10 +3352,13 @@ TEST_F(levin_notify, a_carried_origin_is_recorded_local_and_observed)
 
     /* An ORIGINATION, which RD-4 stems even in a fluff epoch, so it reaches
        the carrier arm the same way a forwarded stem does. */
+    /* Sample before the accept. The carrier's verdict can land inside
+       `carrier_accepts`'s own poll, and sampling after it then reads the
+       observation as already present. */
+    const std::size_t stem_before = notifier.stem_in_flight();
     ASSERT_TRUE(carrier_accepts(notifier, txs, cryptonote::relay_method::local))
         << "the carrier never took the origination";
 
-    const std::size_t stem_before = notifier.stem_in_flight();
     drive_schedule(notifier, [this](std::size_t) {
         return events_.relayed_method_size() != 0;
     });

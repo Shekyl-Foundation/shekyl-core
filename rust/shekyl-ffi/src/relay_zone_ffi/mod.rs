@@ -838,6 +838,9 @@ pub unsafe extern "C" fn shekyl_relay_zone_on_session_established(
         PeerDirection::Outbound
     };
     let Some(connector) = connector_from_byte(network) else {
+        tracing::error!(
+            "session established with connector byte {network:#x}; the relay does not know it, so the session is not registered"
+        );
         return;
     };
     // `publish` is `&self` and must not overlap the `driver`/`rng` borrow.
