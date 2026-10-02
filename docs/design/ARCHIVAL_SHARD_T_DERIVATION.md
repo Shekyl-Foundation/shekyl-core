@@ -1467,6 +1467,86 @@ heaviest shard, `W + 149.4 KB`, the ceiling on `W` is:
 `U1b`, an honest server's sustained egress on the floor device, still has no value
 (`SHT-5`). It may lower this ceiling, and it cannot raise it.
 
+### 9.3a `U1b`'s run, pre-registered — committed before it starts (2026-10-02)
+
+The floor device is available, so `SHT-5`'s measurement can run. This fixes what it
+measures and how it is read, before any observation exists. The design owner can
+correct an input here; nobody corrects it after the reading.
+
+**What `U1b` asks, in bytes.** Two things of an honest `P` on the Pi 4:
+
+1. *One read.* A witness's read of the heaviest shard completes inside the deadline
+   when the floor device is the server.
+2. *An epoch of reads.* `reads per epoch × heaviest shard ≤ sustained egress × epoch`
+   (§3's bound, restated).
+
+**The rig is W₂'s instrument with the host changed.** `pd-f2-measure`, the soak arm
+alone, the size ladder (§4.1a's three objects), onion PoW on, fresh circuits for every
+fetch, 24 hours.
+
+- **On the floor device:** one persona behind its own pinned Tor (one, because one on
+  the wire is the conformant shape), and the reader behind another Tor on the same
+  device. The binary is built on the device from this PR's commit.
+- **Control, same window:** the identical run, same commit and settings, on the
+  internal node the W₂ runs used, started at the same time. §10.6 item 2 is why: two
+  days differ by more than two postures did, so a floor-device figure set against
+  W₂'s would not be attributable to the device. Against a control in its own window
+  it is.
+
+**The bias, stated.** The floor device carries both ends: reader, server and two Tors
+share its four cores, and both hosts share one uplink. Each of these works against
+the device. So both verdicts below are one-sided: a pass holds a fortiori for the
+device as a server alone, and a fail is **not** a verdict.
+
+**Read 1 — one read.** §10.1's analysis, unchanged, on the device's file: the miss
+rate at the 1× object with its 95 % Wilson interval, against 0.30.
+
+- Interval wholly at or under 0.30: `U1b` does not lower `W`'s ceiling on this leg.
+- Anything else: no verdict. The rig cannot tell the device as a reader from the
+  device as a server. It triggers the split rig (below).
+
+**Read 2 — an epoch of reads.** From the device's 1× arm, with one read always in
+flight:
+
+- `c = completions / Σ elapsed` reads per second. A miss costs the time it took and
+  delivers nothing.
+- capacity `R = c × 1,200,000` reads per epoch (`settlement_epoch_blocks` = 10,000
+  blocks of 120 s).
+- load `3 × H`: three challenge reads per drawable pair per epoch
+  (`CHALLENGES_PER_PAIR_PER_EPOCH`), `H` the pairs one `P` holds.
+- **`H` is pre-registered at 4,096**, the list bound (`archival_max_holdings_shards`),
+  so the load is 12,288 reads. That is the most one record can hold, which is the
+  conservative reading. The honest-operator holding §5 owes is the design owner's and
+  is not stated yet, so the reading also reports `R / 3`, the `H` at which this leg
+  binds.
+- `R ≥ 12,288`: `U1b` does not bind at the list bound. One read in flight is a floor
+  on capacity, since the server admits concurrent reads and `SPIKE-F-11` found
+  reader concurrency does not materially degrade a persona.
+- `R < 12,288`: no verdict, for the same reason as read 1. It triggers the split rig.
+- Organic and band-2 reads have no authority in the tree, so they are not in the
+  verdict. The headroom `R / 12,288` is reported as the room left for them.
+
+**Reported, not judged.**
+
+- The device against the control, by `pd-f2-diff` with §4.1a's margins: whether the
+  host moved any of the nine statistics.
+- The device's fit and the ceiling it gives, by `pd-f2-ceiling`, with §4.1a's
+  rejection thresholds.
+- The control against W₂'s PoW-on window: one more between-day figure.
+
+**Void, rerun and not read.** Either run exits non-zero or before its 24 hours; a
+host reboots; an exchange is refused (the tool voids the arm); another claim's load
+lands on either host during the window; the two runs' start times differ by more
+than ten minutes.
+
+**The split rig, if triggered.** The server alone on the floor device (`serve-only`)
+and readers on other hosts. The reader half does not exist since `SF` (a) made the
+reader `shekyl-p-fetch`. It is built and pre-registered then, with a concurrency
+sweep, and `W` stays provisional until it is read.
+
+**Direction.** This can only lower `W`'s ceiling. If both reads pass, `W` rests on
+no open measurement and goes to the Round-2 gate as it stands.
+
 ### 9.4 Soft upward pressure: bookkeeping
 
 Per-shard consensus state (`archival_r_market` rows, serve-credit rows per
@@ -2066,7 +2146,7 @@ testnet gate (§5, §9.5).
 
 - **`U1b`** (`SHT-5`): an honest server's sustained egress over Tor on the Pi 4 floor
   device. It can only lower `W`'s ceiling, and it is the one row the constant waits
-  on. This lane runs it.
+  on. This lane runs it; the run is pre-registered in §9.3a.
 - One row of test coverage, not of the derivation: leg (f) of `SHT-Q1`'s equivalence
   covers a connected serve-credit transaction only at the row level (§2.1). It waits
   on `SHT-9`'s fixture.
