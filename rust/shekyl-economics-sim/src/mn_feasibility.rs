@@ -73,9 +73,17 @@ const CAP_PAIR_BAND: [f64; 5] = [5_000.0, 10_000.0, 20_000.0, 40_000.0, 100_000.
 /// belongs.
 #[derive(Debug, Clone, Copy)]
 pub struct MissSources {
-    /// Per-attempt transport failure. **Stand-in 0.30** (2026-07-30 cold-path
-    /// onion, no PoW / no flood) — does not transfer to SP-T3; rig re-run gates
-    /// the real value.
+    /// Per-attempt transport failure. **0.30, retained and measured-supported**
+    /// (ruled 2026-10-02, `ARCHIVAL_SHARD_T_DERIVATION.md` §10.6). It began as
+    /// a stand-in from a 2026-07-30 cold-path run with no PoW; the W₂ size
+    /// ladder has since measured the single-attempt miss at the largest
+    /// served object at 0.041 with PoW on and 0.20 on the worst day observed
+    /// (95 % upper bound 0.238), so 0.30 bounds every window read. The
+    /// failure window has to hold on a bad day, not a typical one, which is
+    /// why it is not tightened to a measured value. **Reopens** if any
+    /// measured window's upper bound exceeds 0.30. Tightening needs a
+    /// multi-day series that characterizes the bad-day tail; one good window
+    /// never justifies it.
     pub p_attempt: f64,
     /// Attempts per read before a witness gives up (`r`).
     pub retries: u32,
@@ -377,7 +385,8 @@ impl FeasibilityTargets {
     }
 }
 
-/// Default sources minus coverage: stand-in `p`, single-retry witnesses,
+/// Default sources minus coverage: the retained `p` (see
+/// [`MissSources::p_attempt`]), single-retry witnesses,
 /// targeted fabrication intensity `φ ≈ 1`. Coverage is derived by
 /// [`evaluate`] from [`FeasibilityTargets`].
 #[must_use]
@@ -632,10 +641,11 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
          Inputs: lambda_target={LT:.3} reads/pair/epoch; OPERATIVE evaluation at\n\
          DELIVERED lambda={DL:.3} (projection {PP:.0} pairs; k_cap binds past\n\
          {KNEE:.0} pairs, so target and delivered coincide only below that knee);\n\
-         p_attempt={P:.3} (STAND-IN: measured 2026-07-30 with NO PoW and NO\n\
-         flood -- does not transfer to the SP-T3 operating point; the rig re-run\n\
-         gates the real value), r={R}, fabrication_intensity={FI:.2} (1.00 =\n\
-         every gap epoch poisoned).",
+         p_attempt={P:.3} (RETAINED 2026-10-02, measured-supported: the W2 size\n\
+         ladder's worst observed day missed 0.20, 95% upper bound 0.238, and its\n\
+         PoW-on window 0.041; reopens if a measured window's upper bound exceeds\n\
+         it), r={R}, fabrication_intensity={FI:.2} (1.00 = every gap epoch\n\
+         poisoned).",
         LT = t.lambda_target,
         DL = snap.delivered_lambda,
         PP = t.projected_pairs,
@@ -849,8 +859,9 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
          free-ride). A cell is feasible iff m_min <= m <= m_max. The W16 bound is\n\
          an INPUT here: its value comes from the crisis-price degrade economics,\n\
          not from this arm. The operative verdicts are GATED on two labelled\n\
-         inputs: the stand-in p (rig re-run) and the pair projection -- move\n\
-         either and the same tables re-answer without re-deriving the arm.",
+         inputs: the retained p (reopened by a measured window above it) and\n\
+         the pair projection -- move either and the same tables re-answer\n\
+         without re-deriving the arm.",
         MH = mh,
     )?;
     Ok(())
