@@ -204,10 +204,10 @@ command 1007). The session that established once the floor was at
 29 bytes, then the chain requests. At 19:42:43.331Z it logged
 `Synced 84/84`. Wall time from the established session to height 84
 is 21.2 s. The node's own add line for that span is 0.588 s at
-5.10 blocks/s. One inbound Tor socket, no outbound socket. One
-outbound dial closed before its handshake; it did not become a
-session. (`--out-peers 0` did not bind the ephemeral Tor zone: that
-setup installs the default outbound cap.)
+5.10 blocks/s. One inbound Tor socket. The outbound count stayed 0
+by accident: `--out-peers 0` does not bind the ephemeral Tor zone,
+which installs the default outbound cap, and the one outbound dial
+closed before its handshake.
 
 The spend is
 `0d9d8bc2713af9e80e1af31621ce7d2f77101927e5908caf0dee2a6c2f26e16c`,
@@ -223,6 +223,24 @@ is `Received NOTIFY_NEW_TRANSACTIONS`.
 The hop is 536 ms to the receive line and 916 ms to the pool line.
 The receiver's pool showed the same txid at 19:46:09.864Z, on its
 inbound Tor session (`NOTIFY_NEW_TRANSACTIONS` at 19:46:09.729Z).
-The receiver logged no stem send for it. The three measurement
-processes were stopped. The standing daemons were left as they were
-found. One sample does not replace the 1 625 ms transit assumption.
+The receiver logged no stem send for it. That floor log is level 1,
+so it has no stem line and no fluff line. The same millisecond as
+the pool add it sent command 2002 to its clearnet peer; 1.27 s
+later it sent command 2002 to the receiver's onion.
+
+A second spend on the same topology, with the floor at log level 2,
+names the arm. Tx
+`04e0bacb3f191edb9a2a89be5a90f036a5dd4f16bdccfcdea9ae03c3bb2609e8`.
+At 19:58:23.167Z the floor logged `Sent 1 transaction(s) to
+00000000-0000-0000-0700-000000000000 using Dandelion++ stem`, the
+send that the traffic line shows going to the clearnet peer. At
+19:58:23.787Z it logged `Queueing 1 transaction(s) for Dandelion++
+fluffing`, and at 19:58:24.037Z it sent command 2002 to the
+receiver's onion. The receiver admitted that notification inbound
+at 19:58:24.609Z and added it to the pool at 19:58:24.662Z. The
+inbound-only Tor peer received a fluff. The stem successor was the
+clearnet peer.
+
+The three measurement processes were stopped. The standing daemons
+were left as they were found. One sample does not replace the
+1 625 ms transit assumption.

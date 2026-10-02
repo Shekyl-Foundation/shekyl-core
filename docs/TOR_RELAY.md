@@ -45,6 +45,10 @@ relay Tor whose volume never sees those cells.
   relay and no second client, pass `--anonymous-inbound` (a stable
   onion on this process) or `--no-ephemeral-tor` (no overlay inbound).
   `--tx-proxy` to a SocksPort that is not this relay is still uncovered.
+  `--out-peers 0` does not make the ephemeral Tor zone listen-only,
+  because that setup installs the default outbound cap, and the D-5
+  receiver's outbound count stayed 0 because its one dial closed
+  before the handshake rather than because the flag bound the zone.
   Omit the outbound count (the default satisfies the floor of 12; an
   explicit count below 12 is refused at start). Overlay inbound on this
   process is the mixing topology for inbound — inbound on a second Tor
