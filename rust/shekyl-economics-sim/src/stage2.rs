@@ -216,6 +216,15 @@ pub struct A1YearAgg {
     /// is `mul_scale(this, share_milli(n))` — the same integer op production runs
     /// (`compute_burn_split`), never an f64 `× share_fraction`.
     pub whole_burn_atomic: u64,
+    /// All fees paid over the year (pre-burn), **atomic units**: the ceiling of
+    /// every share-of-fees lever, miner income included. `whole_burn` is the
+    /// `burn_pct` fraction of this; the `√V` damper in `calc_burn_pct` is the
+    /// gap between the two (`onset.rs`).
+    pub whole_fees_atomic: u64,
+    /// All block emission over the year (miner + staker, pre-split), **atomic
+    /// units** — the operand a non-decaying staker floor would be a share of
+    /// (`onset.rs`). `emission_leg` is the shipped decaying split of this.
+    pub total_emission_atomic: u64,
 }
 
 /// Accumulate the per-year A1 inputs over a scenario's blocks (one flat-ledger
@@ -245,6 +254,8 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
     // Integer atomic accumulators (DQ-2G: the budget quantities never touch f64).
     let mut year_emission_atomic: u128 = 0;
     let mut year_burn_atomic: u128 = 0;
+    let mut year_fees_atomic: u128 = 0;
+    let mut year_total_emission_atomic: u128 = 0;
     let mut aggs = Vec::with_capacity(config.sim_years as usize);
 
     for block in 0..total_blocks {
@@ -288,6 +299,8 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
 
         year_emission_atomic += u128::from(staker_emission);
         year_burn_atomic += u128::from(whole_burn);
+        year_fees_atomic += u128::from(total_fees);
+        year_total_emission_atomic += u128::from(effective);
         already_generated += u128::from(effective);
         total_burned += u128::from(flat.actually_destroyed);
 
@@ -299,9 +312,13 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 cumulative_outputs: fold.cumulative_outputs as u64,
                 emission_leg_atomic: year_emission_atomic.min(u128::from(u64::MAX)) as u64,
                 whole_burn_atomic: year_burn_atomic.min(u128::from(u64::MAX)) as u64,
+                whole_fees_atomic: year_fees_atomic.min(u128::from(u64::MAX)) as u64,
+                total_emission_atomic: year_total_emission_atomic.min(u128::from(u64::MAX)) as u64,
             });
             year_emission_atomic = 0;
             year_burn_atomic = 0;
+            year_fees_atomic = 0;
+            year_total_emission_atomic = 0;
         }
     }
     aggs
@@ -327,30 +344,64 @@ pub fn a1_min_clearance_ratio(
     fiat_per_skl: f64,
     kryder: KryderRate,
 ) -> f64 {
-    aggs.iter()
-        .filter(|a| a.year > A1_RAMP_YEARS && a.n > 0)
+    a1_sustained_years(aggs)
         .map(|a| {
-            // Integer share application — production's exact op, not f64.
-            let share_milli = candidate.share(a.n);
-            let fee_leg_atomic = mul_scale(a.whole_burn_atomic, share_milli);
-            let budget_atomic = u128::from(a.emission_leg_atomic) + u128::from(fee_leg_atomic);
-            let budget_skl = budget_atomic as f64 / COIN; // report/comparison boundary
-
-            let opp_cost_skl = bond_opp_cost_skl(a.n, opp_cost_rate);
-            let storage_fiat = burden_cost_fiat_per_year(
-                a.n * REPLICAS_PER_SHARD,
-                a.year as f64,
-                BASE_STORAGE_FIAT_PER_BYTE_YEAR,
+            a1_year_clearance_ratio(
+                a,
+                a1_shipped_budget_atomic(a, candidate),
+                opp_cost_rate,
+                fiat_per_skl,
                 kryder,
-            );
-            let burden_skl = opp_cost_skl + storage_fiat / fiat_per_skl;
-            if burden_skl <= 0.0 {
-                f64::INFINITY
-            } else {
-                budget_skl / burden_skl
-            }
+            )
         })
         .fold(f64::INFINITY, f64::min)
+}
+
+/// The years A1 judges: past the ramp, with a non-empty corpus.
+pub fn a1_sustained_years(aggs: &[A1YearAgg]) -> impl Iterator<Item = &A1YearAgg> {
+    aggs.iter().filter(|a| a.year > A1_RAMP_YEARS && a.n > 0)
+}
+
+/// The shipped budget for one year under a candidate, **atomic**: the decaying
+/// staker emission leg plus the candidate's share of the fee **burn** — the
+/// escalation share applied by the same `mul_scale` production runs
+/// (`compute_burn_split`), never an f64 `× share_fraction`. `onset.rs` builds
+/// the alternative budgets (share of fees, a tail floor) beside this one.
+#[must_use]
+pub fn a1_shipped_budget_atomic(a: &A1YearAgg, candidate: &EscalationCurve) -> u128 {
+    let share_milli = candidate.share(a.n);
+    let fee_leg_atomic = mul_scale(a.whole_burn_atomic, share_milli);
+    u128::from(a.emission_leg_atomic) + u128::from(fee_leg_atomic)
+}
+
+/// One year's clearance ratio `budget_skl / burden_skl` for an already-formed
+/// budget. Burden (F-G) is the integer locked-bond opportunity cost (principal
+/// atomic; the exogenous rate is the single float boundary) plus the minor fiat
+/// storage term; f64 appears only in the returned ratio and at the two named
+/// exogenous boundaries (rate, `SKL/fiat` price). The one home for the ratio:
+/// the A1 min and the per-year onset table both fold over it.
+#[must_use]
+pub fn a1_year_clearance_ratio(
+    a: &A1YearAgg,
+    budget_atomic: u128,
+    opp_cost_rate: f64,
+    fiat_per_skl: f64,
+    kryder: KryderRate,
+) -> f64 {
+    let budget_skl = budget_atomic as f64 / COIN; // report/comparison boundary
+    let opp_cost_skl = bond_opp_cost_skl(a.n, opp_cost_rate);
+    let storage_fiat = burden_cost_fiat_per_year(
+        a.n * REPLICAS_PER_SHARD,
+        a.year as f64,
+        BASE_STORAGE_FIAT_PER_BYTE_YEAR,
+        kryder,
+    );
+    let burden_skl = opp_cost_skl + storage_fiat / fiat_per_skl;
+    if burden_skl <= 0.0 {
+        f64::INFINITY
+    } else {
+        budget_skl / burden_skl
+    }
 }
 
 /// A1 clearance for one candidate (or the flat baseline): the min clearance
@@ -552,13 +603,13 @@ fn a1_clearance_report(
     if d2_case.is_empty() {
         writeln!(
             out,
-            "  -> NO DISCRIMINATING SCENARIO: across the whole set, every scenario either\n\
-             clears flat or clears for no candidate — the escalation does no work the\n\
-             flat share does not. The knee band was swept against trajectories that\n\
-             never land in a region where flat fails and best clears. Before the\n\
-             ceremony picks a knee, the next row SOLVES for that region (traffic x\n\
-             corpus) rather than adding a tenth point; if it is empty or razor-thin the\n\
-             lever is dead in this unit (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §12.13)."
+            "  -> NO DISCRIMINATING SCENARIO AT THIS HORIZON: across the whole set, every\n\
+             scenario either clears flat or clears for no candidate — within its own\n\
+             sim_years the escalation does no work the flat share does not. That is a\n\
+             statement about the horizon, not the lever: A1-T below runs the same\n\
+             scenarios to 60 y, where the staker emission leg has decayed under the bond\n\
+             burden and the region (flat fails, best clears) opens at the low rates\n\
+             (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §12.13–§12.14)."
         )?;
     }
     Ok(results)
@@ -1488,6 +1539,10 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     print_escalation_family(out)?;
     print_stuffer_cost_curve(out)?;
     let a1 = a1_clearance_report(out, params)?;
+    // A1-T / A1-L (§12.14): A1's min hides when the failure arrives; the onset
+    // table and the lever table fold the same per-year ratio.
+    let a1_onset = crate::onset::onset_report(out, params)?;
+    let a1_levers = crate::onset::lever_report(out, params)?;
     a3_stranding_report(out, params)?;
     crate::distribution::oq1_probe_report(out)?;
     // OQ-2's corpus samples are the baseline trajectory's early / mid / late
@@ -1569,6 +1624,8 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     let report = Stage2Report {
         burden_trajectories: trajectories,
         a1_clearance: a1,
+        a1_onset,
+        a1_levers,
         a4_stuffing: a4,
     };
     let json = serde_json::to_string_pretty(&report).expect("JSON serialization failed");
@@ -1588,6 +1645,8 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
 pub struct Stage2Report {
     pub burden_trajectories: Vec<BurdenTrajectory>,
     pub a1_clearance: Vec<A1ScenarioResult>,
+    pub a1_onset: Vec<crate::onset::OnsetScenarioResult>,
+    pub a1_levers: Vec<crate::onset::LeverResult>,
     pub a4_stuffing: Vec<A4ScenarioResult>,
 }
 
