@@ -791,7 +791,8 @@ resume from a store whose frozen segments were pruned is refused outright
 one. Every drained leaf since genesis is in memory, and every spend rebuilds
 every layer over all of them.
 
-At 760 320 leaves/day and the ~102 µs/leaf the instrument measures:
+At 760 320 leaves/day and an illustrative ~102 µs/leaf — one off-rig probe,
+unattested (§11.5):
 
 | assembly population | `n` | cost per spend |
 | --- | --- | --- |
@@ -828,11 +829,14 @@ names, and no plan may sit at or above it.
 
 ### 11.4 The criterion, fixed in advance
 
-Flat does not mean constant — one more layer costs one more layer's walk — so
-the criterion has two halves:
+Flat does not mean one constant across every depth — a deeper path may cost
+one more layer's walk — so the criterion has two halves:
 
 - **within a depth rung**, cost constant within noise however much `n` grows;
-- **across a rung boundary**, a step of one layer's work and no more.
+- **across a rung boundary**, the deeper arm costs no more than one layer's
+  work, within the same tolerance. The check is a ceiling. A cheaper step
+  still passes, and that pass is not evidence the step matched
+  `expected_cross_rung_ratio`. The model treats every layer as the same cost.
 
 The populations are chosen so both are observable, and derived from the
 production ladder rather than restated: the cross-rung pair differs by **one
@@ -848,14 +852,18 @@ widen the bound or derive from `chunk_width`. Named blocker.
 
 ### 11.5 What this round does not establish
 
-- **No graded figure.** The instrument's own board control re-times identical
-  work on the same client at the end of a run; the first shape run **diverged
-  69.1 % against a 5 % bound and was discarded**, with the arms showing why it
-  had to be (one *more* leaf came out 38 % faster; `k = 8` came out cheaper
-  than `k = 2`). The dev box is shared (rule 38) and rule 76 pins the figure to
-  the floor device, so a figure-producing run is a claimed-host activity. The
-  ~102 µs/leaf above is a projection from a clean-but-unattested probe and is
-  labelled as one.
+- **No graded figure.** The board control times `rung_top` twice, back to
+  back, on the same client, after every other arm has been measured and its
+  rig dropped. Both timings are then the only resident population, so
+  whatever separates them is the board. The control does not span the earlier
+  arms: holding the top client across them would time `rung_floor` beside the
+  larger working set and shrink the same-rung spread toward `Flat`. The first
+  shape run **diverged 69.1 % against a 5 % bound and was discarded**, with
+  the arms showing why it had to be (one *more* leaf came out 38 % faster;
+  `k = 8` came out cheaper than `k = 2`). The dev box is shared (rule 38) and
+  rule 76 pins the figure to the floor device, so a figure-producing run is a
+  claimed-host activity. The ~102 µs/leaf above is a projection from a
+  clean-but-unattested probe and is labelled as one.
 - **The integrity gate's verdict.** The rig takes its reference root from the
   client, so `assemble_paths`'s root gate is green by construction; the rig
   measures what it costs, never whether it is right. Root agreement is graded
@@ -873,7 +881,11 @@ Building §11.5's red-bite turned up a gap worth its own record. With `entries`
 reduced to the owned leaf alone, `assemble_paths` **does not refuse**. It
 returns a path whose `tree_root` is the real consensus root while every branch
 below it comes from a one-leaf tree — a leaf chunk of 1 under a root that
-commits to 44.
+commits to 44. The test's claim is that one comparison of the two paths.
+The chunk-length assertions under it are witnesses of today's failure mode.
+Equal paths have equal chunk lengths, so those witnesses are deleted when
+capture turns the comparison into equality. The `tree_root` equality stays:
+a correct path still commits to the oracle root.
 
 The cause is that the two mechanisms never meet. The gate compares the
 **store-backed** `root_at` against `reference.curve_tree_root`; the branches are
@@ -912,11 +924,14 @@ a grade makes. The record nevertheless serialized a `FlatnessGrade`
 unconditionally, so a contaminated run could have reported **`Flat`**: the one
 reading capture is trying to earn, handed over by a moving board.
 
-The record now carries `FlatnessOutcome` — `Graded(..)`, or
+The record carries one `FlatnessReading`: the same-rung spread, the cross-rung
+ratio, the expected ceiling, and a `FlatnessOutcome` — `Graded(..)`, or
 `Withheld(BoardNotQuiet | SeriesUnconverged)`, with the reason part of the value
-(rule 82). Withholding the reading is not withholding the data: every series
-stays in the record, which is what lets a later reader re-judge the run rather
-than take a verdict's word.
+(rule 82). `read_flatness` fills all four, so the published ratio is the ratio
+the criterion judged, including the zero-arm guard. Withholding the judgment
+is not withholding the data: the numbers and every series stay in the record,
+which is what lets a later reader re-judge the run rather than take a verdict's
+word.
 
 This is deliberately **not** `Verdict::Ungraded`. `Verdict` answers *did the
 figure meet its budget on the pinned rig*, and its `Ungraded` means "measured

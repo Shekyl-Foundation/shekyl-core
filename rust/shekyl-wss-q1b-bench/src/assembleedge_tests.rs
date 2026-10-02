@@ -12,7 +12,8 @@
 //!
 //! The rig itself is driven at a deliberately small population: it proves the
 //! ingest path, the rule-47 assertions and the assembly call, none of which
-//! depend on scale. The graded populations are the bin's job, not a test's.
+//! depend on scale. The window and shape populations are the bin's job, not
+//! a test's.
 
 use std::time::Duration;
 
@@ -159,8 +160,8 @@ fn a_cross_rung_overstep_fires() {
 
 #[test]
 fn a_cross_rung_step_flatter_than_predicted_passes() {
-    // Cheaper than one layer's work is not a failure: the criterion bounds
-    // the overstep, not the direction.
+    // The cross-rung half is a ceiling. A ratio of 1.0 against an expected
+    // 1.25 passes, and that pass is not evidence the step matched the model.
     let grade = grade(
         FlatnessCriterion::default(),
         (ms(100), ms(100)),
@@ -330,7 +331,7 @@ fn no_plan_here_claims_to_be_the_graded_one() {
 /// A flat-looking run on a moving board must not report `Flat`.
 #[test]
 fn a_contaminated_run_is_withheld_even_when_it_looks_flat() {
-    let o = outcome(
+    let reading = read_flatness(
         FlatnessCriterion::default(),
         false,
         true,
@@ -339,16 +340,20 @@ fn a_contaminated_run_is_withheld_even_when_it_looks_flat() {
         (4, 5),
     );
     assert_eq!(
-        o,
+        reading.outcome,
         FlatnessOutcome::Withheld(GradeWithheld::BoardNotQuiet),
         "a non-quiet board cannot support the claim a grade makes"
     );
+    // The numbers stay. Withholding the judgment is not withholding the data,
+    // and the ratio is the one the grade would have used.
+    assert!((reading.cross_rung_ratio - 1.25).abs() < 1e-9);
+    assert!((reading.cross_rung_expected - 1.25).abs() < 1e-12);
 }
 
 /// An unconverged series is not yet a cost, so it cannot be graded either.
 #[test]
 fn an_unconverged_series_is_withheld() {
-    let o = outcome(
+    let reading = read_flatness(
         FlatnessCriterion::default(),
         true,
         false,
@@ -357,7 +362,7 @@ fn an_unconverged_series_is_withheld() {
         (4, 5),
     );
     assert_eq!(
-        o,
+        reading.outcome,
         FlatnessOutcome::Withheld(GradeWithheld::SeriesUnconverged)
     );
 }
@@ -366,7 +371,7 @@ fn an_unconverged_series_is_withheld() {
 /// disqualification, and a board that moved makes convergence meaningless.
 #[test]
 fn both_faults_report_the_board() {
-    let o = outcome(
+    let reading = read_flatness(
         FlatnessCriterion::default(),
         false,
         false,
@@ -374,14 +379,17 @@ fn both_faults_report_the_board() {
         (ms(100), ms(125)),
         (4, 5),
     );
-    assert_eq!(o, FlatnessOutcome::Withheld(GradeWithheld::BoardNotQuiet));
+    assert_eq!(
+        reading.outcome,
+        FlatnessOutcome::Withheld(GradeWithheld::BoardNotQuiet)
+    );
 }
 
 /// A quiet, converged run is graded — otherwise withholding would be
 /// unconditional and the gate could not pass.
 #[test]
 fn a_quiet_converged_run_is_graded() {
-    let o = outcome(
+    let reading = read_flatness(
         FlatnessCriterion::default(),
         true,
         true,
@@ -389,7 +397,12 @@ fn a_quiet_converged_run_is_graded() {
         (ms(100), ms(125)),
         (4, 5),
     );
-    assert_eq!(o, FlatnessOutcome::Graded(FlatnessGrade::Flat));
+    assert_eq!(
+        reading.outcome,
+        FlatnessOutcome::Graded(FlatnessGrade::Flat)
+    );
+    assert!(reading.same_rung_spread_pct.abs() < 1e-9);
+    assert!((reading.cross_rung_ratio - 1.25).abs() < 1e-9);
 }
 
 /// A cheaper `MAX_INPUTS` arm reads as cheaper, not as a cost.
@@ -407,6 +420,46 @@ fn a_cheaper_input_cap_arm_reports_a_negative_change() {
     // it is the wrong instrument for this field.
     assert!(spread_pct(ms(6081), ms(3575)) > 0.0);
     assert!(signed_change_pct(ms(3575), ms(6081)) > 0.0);
+}
+
+/// The published ratio is the ratio the grade used, zero guard included.
+///
+/// A raw `deep / shallow` on a zero shallow arm is `NaN`. The reading and
+/// the grade both go through the guard, so they agree on infinity and the
+/// record cannot publish a ratio the criterion did not judge.
+#[test]
+fn the_recorded_ratio_is_the_ratio_the_grade_judged() {
+    let same = (ms(100), ms(100));
+    let cross = (Duration::ZERO, ms(100));
+    let depths = (4, 5);
+    let reading = read_flatness(
+        FlatnessCriterion::default(),
+        true,
+        true,
+        same,
+        cross,
+        depths,
+    );
+    let judged = grade(FlatnessCriterion::default(), same, cross, depths);
+    assert!(reading.cross_rung_ratio.is_infinite());
+    match (reading.outcome, judged) {
+        (
+            FlatnessOutcome::Graded(FlatnessGrade::CrossRungOverstep {
+                ratio, expected, ..
+            }),
+            FlatnessGrade::CrossRungOverstep {
+                ratio: judged_ratio,
+                expected: judged_expected,
+                ..
+            },
+        ) => {
+            assert_eq!(reading.cross_rung_ratio, ratio);
+            assert_eq!(ratio, judged_ratio);
+            assert_eq!(reading.cross_rung_expected, expected);
+            assert_eq!(expected, judged_expected);
+        }
+        other => panic!("a zero shallow arm must overstep, and both doors must agree: {other:?}"),
+    }
 }
 
 /// The plan's label comes from the type, so the replay window is never

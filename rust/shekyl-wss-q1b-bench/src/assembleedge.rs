@@ -5,90 +5,39 @@
 
 //! CT-6 increment 5 — the path-assembly cost instrument.
 //!
-//! This module times [`CurveTreeClient::assemble_paths`] against a real,
-//! store-backed client at several leaf populations with the owned-output count
-//! held fixed. It is the instrument capture is graded with, written **before**
-//! capture exists, so the criterion cannot be fitted to the curve it is meant
-//! to judge.
+//! Times [`CurveTreeClient::assemble_paths`] on a store-backed client at
+//! several leaf populations, with the owned-output count held fixed. Capture
+//! is unbuilt. This is the instrument it will be graded with, written before
+//! capture exists. The argument, the chain-versus-window finding, and the
+//! pre-registered criterion are `CT6_PROVING_STATE.md` §11.
 //!
-//! ## What it measures, and why nothing did before
+//! ## The two halves
 //!
-//! The spend-edge rig ([`crate::fixture`]) proves against *synthesized* paths:
-//! it hands [`crate::fixture::prove_only`] a [`crate::fixture::Path`] it built
-//! itself, so `assemble_paths` is never called and its cost has never been
-//! measured. That is the gap this module closes. Path assembly today rebuilds
-//! every layer from every drained leaf:
+//! [`FlatnessCriterion`] pre-registers both. [`read_flatness`] is the only
+//! function that applies them, and the record stores that one value.
 //!
-//! ```text
-//! let stream = assemble_leaf_stream(&self.entries, cutoff);
-//! let layers = build_layers(&stream);
-//! ```
+//! - **Within one depth rung**, cost is constant within
+//!   [`SAME_RUNG_TOLERANCE_PCT`] however much `n` grows.
+//! - **Across a rung boundary**, the deeper arm costs no more than one
+//!   layer's work, within the same tolerance. A cheaper step still passes.
+//!   That pass is an upper bound. It is not evidence the step matched
+//!   [`expected_cross_rung_ratio`]. The model treats every layer as the same
+//!   cost, and increment 6 re-derives it before a passing capture is graded.
 //!
-//! — `n` work for `k <= MAX_INPUTS` paths. Increment 3 hoisted that out of the
-//! per-input loop, taking `k · n` to `n + k`; the `n` remains.
+//! [`plan_at_replay_window`] is one day of chain. [`plan_at_depth`] is a
+//! cheaper rung, for the shape. The same-rung pair on the shape plan sits
+//! [`SAME_RUNG_SEPARATION`] apart; the window plan's separation is whatever
+//! the ladder produces, and it must clear that floor. The cross-rung pair
+//! differs by one leaf. Neither plan is the graded assembly population.
+//! That population is blocked on a ruled chain age.
 //!
-//! ## `n` is the chain, not a window
+//! ## What a run does not establish
 //!
-//! `CurveTreeClient::entries` is append-only — `extend` on ingest, replaced
-//! wholesale only by a rollback's rebuild, and never `retain`ed, `drain`ed or
-//! `truncate`d. `rebuild_from_store` reloads the **whole** drained set, and a
-//! resume from a store whose frozen segments were pruned is refused outright
-//! (`ClientError::ResumeFromPrunedStore`, F5) rather than resumed from a
-//! partial one. So every drained leaf since genesis is in memory, and
-//! `assemble_paths` rebuilds every layer over all of them for every spend.
-//!
-//! This matters because every *neighbouring* figure in this harness is
-//! windowed, and `assemble.rs`'s own docstring reaches for one of them —
-//! "765 600 at the graded worst case" is `worst_case_window_leaves`, the
-//! 725-block replay window, which is about **one day** of chain at a 120 s
-//! target. Assembly is not bounded by that window. At 760 320 leaves/day and
-//! the ~102 µs/leaf this instrument measures:
-//!
-//! | assembly population | `n` | cost per spend |
-//! | --- | --- | --- |
-//! | replay window, ~1 day of chain | 765 600 | ~78 s |
-//! | depth-6 floor, ~23 days | 17 778 529 | ~30 min |
-//! | one year of chain | 277 516 800 | ~7.9 h |
-//!
-//! An O(chain) spend cost fails the mission's third commitment — the system
-//! must outlast the team — whatever today's budget says, which is the whole
-//! argument for capture. It also means "worst case" cannot be derived here:
-//! it is a ruling about how old a chain the wallet must still spend on. See
-//! [`plan_at_replay_window`].
-//!
-//! ## The claim, stated so it can fail
-//!
-//! Capture's claim is that assembly becomes **flat in chain size at a fixed
-//! owned-output count**. Flat does not mean constant: a path of depth `d + 1`
-//! does one more layer's chunk work than a path of depth `d`. So the claim has
-//! two halves, and [`FlatnessCriterion`] pre-registers both:
-//!
-//! - **Within one depth rung**, cost is constant within noise however much `n`
-//!   grows. This is the half that fails today.
-//! - **Across a rung boundary**, cost steps by one layer's work and no more.
-//!
-//! [`plan`] chooses populations so both halves are observable: two arms share a
-//! rung at a `1.6×` separation in `n`, and two more straddle a rung boundary at
-//! a separation of **one leaf**, which isolates the layer step from the
-//! population term entirely.
-//!
-//! ## What this instrument does not establish
-//!
-//! `assemble_paths` gates on `root_at(reference.height) == reference.curve_tree_root`
-//! before doing any work. This rig takes the reference root from the client's own
-//! [`CurveTreeClient::root_and_depth_at`], so **the gate's verdict is green by
-//! construction** — the rig measures what the gate costs, never whether it is
-//! right. That the store tier reproduces an independently built root is graded
-//! in-crate by the CT-6 height-keyed C1 oracle (`shekyl-curve-tree`'s
-//! `client::ct6_oracle`, increments 2 and 4), against a replay oracle this crate
-//! cannot reach: `CurveTreeClient::entries` is `pub(crate)`, `store::ops` is
-//! private, and the oracle itself is `#[cfg(test)]`. Widening any of those to
-//! re-derive the check here would publish a second root mechanism a production
-//! caller could gate against, which `assemble.rs` rules out by design ("no
-//! replay-oracle fallback"). The rig instead asserts what it *can* establish
-//! independently, which is its own subject (rule 47): that the population it
-//! fed is the population the client drained, and that the depth the client
-//! reports is the depth that population's leaf count implies.
+//! The rig takes its reference root from [`CurveTreeClient::root_and_depth_at`],
+//! so the integrity gate is green by construction. Root agreement is graded
+//! in `shekyl-curve-tree`'s `client::ct6_oracle`. This rig asserts its own
+//! subject: the client drained the population it was fed, and reports the
+//! depth that count implies.
 
 use std::time::Duration;
 
@@ -173,12 +122,15 @@ pub enum ArmRole {
     /// The largest population one rung shallower: [`ArmRole::RungFloor`]'s
     /// leaf count minus one. Adjacent in `n`, one layer shallower.
     RungBelow,
-    /// The fewest leaves that reach the graded top's depth.
+    /// The fewest leaves that reach [`Self::RungTop`]'s depth.
     RungFloor,
-    /// The rung's upper population, at [`CANONICAL_OWNED_INPUTS`]. In [`plan`]
-    /// this is the graded worst case; in [`plan_at_depth`] it is
-    /// [`SAME_RUNG_SEPARATION`] above the floor. Either way it is the arm the
-    /// floor is compared against across `n`.
+    /// The rung's upper population, at [`CANONICAL_OWNED_INPUTS`].
+    ///
+    /// In [`plan_at_replay_window`] this is one day of chain. In
+    /// [`plan_at_depth`] it is [`SAME_RUNG_SEPARATION`] above the floor.
+    /// Either way it is the arm the floor is compared against across `n`.
+    /// It is also the board-control subject: the run builds it last and times
+    /// it twice, back to back, with no other rig resident.
     RungTop,
     /// [`ArmRole::RungTop`]'s population at [`MAX_INPUTS`], so the record shows
     /// the `k` term beside `n` rather than asserting it is small (`#842`'s
@@ -215,8 +167,9 @@ pub struct Arm {
 /// Below this the pair is powerless: today's cost is linear in `n`, so a
 /// same-rung comparison can only see a slope that clears
 /// [`SAME_RUNG_TOLERANCE_PCT`], and `1.5×` in `n` puts a linear term at `50 %`
-/// — five times the bound. The graded rung's natural separation is checked
-/// against this rather than set by it.
+/// — five times the bound. [`plan_at_replay_window`]'s separation is whatever
+/// the ladder produces, and it is checked against this floor rather than set
+/// by it. [`plan_at_depth`] builds its top at this multiple, rounded up.
 pub const SAME_RUNG_SEPARATION: f64 = 1.5;
 
 /// The arms at one replay window's worth of leaves — **not** the graded
@@ -236,14 +189,14 @@ pub const SAME_RUNG_SEPARATION: f64 = 1.5;
 /// plan here is the graded plan, and `AssembleEdgeRecord::plan` says so.
 ///
 /// Every population comes from a function that owns it:
-/// [`worst_case_window_leaves`] for the graded top, and
+/// [`worst_case_window_leaves`] for the window's top, and
 /// [`min_leaves_for_depth`] for the rung floor — which is itself derived from
 /// `outputs_per_node`, the capacity function the widths live in. Nothing here
 /// restates a leaf count, so a width change moves the whole plan.
 ///
 /// # Panics
 ///
-/// If the graded top's depth has no rung floor, or if the window does not
+/// If the window top's depth has no rung floor, or if the window does not
 /// clear [`SAME_RUNG_SEPARATION`] above it — either means the ladder changed
 /// shape under the plan, which must stop a run rather than silently leave it
 /// with a comparison that cannot discriminate.
@@ -251,10 +204,11 @@ pub const SAME_RUNG_SEPARATION: f64 = 1.5;
 pub fn plan_at_replay_window() -> Vec<Arm> {
     let top = Population::at(worst_case_window_leaves(LEAF_RATE_MODEL_DEPTH));
     let floor_leaves =
-        min_leaves_for_depth(top.depth).expect("the graded worst case sits on a rung with a floor");
+        min_leaves_for_depth(top.depth).expect("the replay-window top sits on a rung with a floor");
     assert!(
         top.leaf_count as f64 >= floor_leaves as f64 * SAME_RUNG_SEPARATION,
-        "the replay window ({} leaves) is less than {SAME_RUNG_SEPARATION}x its rung floor          ({floor_leaves}); the same-rung pair could not tell a slope from noise",
+        "the replay window ({} leaves) is less than {SAME_RUNG_SEPARATION}x its rung floor \
+         ({floor_leaves}); the same-rung pair could not tell a slope from noise",
         top.leaf_count
     );
     arms_for(top, floor_leaves)
@@ -263,9 +217,9 @@ pub fn plan_at_replay_window() -> Vec<Arm> {
 /// The same four roles on `depth`'s rung, for establishing the shape at a
 /// population that fits in a coffee break.
 ///
-/// The claim is about *shape*, and shape is a property of a rung, not of the
-/// graded rung in particular: a cost constant across one rung and stepping by
-/// one layer at its boundary is the same evidence wherever it is measured.
+/// The claim is about *shape*, and shape is a property of a rung, not of any
+/// one rung in particular: a cost constant across one rung, and no dearer
+/// than one layer at its boundary, is the same evidence wherever it is measured.
 /// What does **not** travel is the absolute figure.
 ///
 /// # Panics
@@ -284,7 +238,8 @@ pub fn plan_at_depth(depth: u8) -> Vec<Arm> {
     let top = Population::at(top_leaves);
     assert_eq!(
         top.depth, depth,
-        "depth {depth}'s rung is narrower than {SAME_RUNG_SEPARATION}x, so a same-rung pair          does not fit inside it"
+        "depth {depth}'s rung is narrower than {SAME_RUNG_SEPARATION}x, so a same-rung pair \
+         does not fit inside it"
     );
     arms_for(top, floor_leaves)
 }
@@ -397,7 +352,10 @@ pub const SAME_RUNG_TOLERANCE_PCT: f64 = 2.0 * DEFAULT_TOLERANCE_PCT;
 pub struct FlatnessCriterion {
     /// Largest same-rung spread that still reads as flat.
     pub same_rung_tolerance_pct: f64,
-    /// Largest cross-rung overstep beyond one layer's work that still passes.
+    /// Largest excess of the measured cross-rung ratio over
+    /// [`expected_cross_rung_ratio`], in percent of that expectation, that
+    /// still passes. A ratio below the expectation is inside the bound:
+    /// the half is a ceiling, not a target.
     pub cross_rung_tolerance_pct: f64,
 }
 
@@ -424,16 +382,22 @@ impl Default for FlatnessCriterion {
 /// one or the other, so the true ratio is
 /// `(walked + added) / walked` in *chunk work*, not in layer count.
 ///
-/// The approximation is kept here because it is the right shape for the
-/// question this commit asks — is the cost flat, or does it track `n`? — where
-/// the two hypotheses differ by orders of magnitude and a 2× model error in
-/// one layer's share changes nothing. It is **not** good enough to grade a
-/// *passing* capture against: a correct capture could overshoot
-/// [`FlatnessCriterion::cross_rung_tolerance_pct`] on model error rather than
-/// on its own cost. Increment 6 must either widen that bound explicitly or
-/// derive the expectation from [`shekyl_fcmp::tree::chunk_width`] of the layer
-/// actually added;
-/// this docstring is the named blocker for that choice (rule 22).
+/// The approximation is the right shape for "flat, or tracking `n`", where
+/// the two hypotheses differ by orders of magnitude and a 2× error in one
+/// layer's share changes nothing.
+///
+/// ## The grade uses this number as a ceiling
+///
+/// [`read_flatness`] fails the cross-rung half only when the measured ratio
+/// exceeds this value by more than
+/// [`FlatnessCriterion::cross_rung_tolerance_pct`]. A smaller ratio passes.
+/// The pass means the deep arm was no dearer than one layer. It does not
+/// mean the step matched. A `Flat` cross-rung half is therefore not evidence
+/// that a capture walked the added layer.
+///
+/// Increment 6 must widen the bound explicitly or derive the expectation
+/// from [`shekyl_fcmp::tree::chunk_width`] of the layer actually added before
+/// it grades a passing capture. This paragraph is that blocker (rule 22).
 #[must_use]
 pub fn expected_cross_rung_ratio(shallow_depth: u8, deep_depth: u8) -> f64 {
     f64::from(deep_depth) / f64::from(shallow_depth)
@@ -501,63 +465,123 @@ pub enum GradeWithheld {
     SeriesUnconverged,
 }
 
-/// Decide whether this run can support a reading, and take it if so.
+/// The numbers [`read_flatness`] judged, and whether they may be read as a grade.
 ///
-/// Board first: a moving board is the stronger disqualification, and naming
-/// convergence for a run that was never quiet would point at the wrong
-/// remedy.
+/// One value. The record stores this struct, so the published ratio is the
+/// ratio the criterion used — including the zero-arm guard — rather than a
+/// second division beside it.
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize)]
+pub struct FlatnessReading {
+    /// Absolute spread of the same-rung pair, in percent of the smaller arm.
+    pub same_rung_spread_pct: f64,
+    /// `deep / shallow` across the rung boundary. Infinite when the shallow
+    /// arm is zero.
+    pub cross_rung_ratio: f64,
+    /// [`expected_cross_rung_ratio`] at the depths those costs were measured at.
+    pub cross_rung_expected: f64,
+    /// The judgment, or why it was withheld. The three numbers above are
+    /// present either way: withholding the judgment is not withholding the data.
+    pub outcome: FlatnessOutcome,
+}
+
+/// The spread and the ratio a judgment is taken over. Private so a caller
+/// cannot grade one pair of numbers and publish another.
+#[derive(Clone, Copy)]
+struct PairNumbers {
+    same_rung_spread_pct: f64,
+    cross_rung_ratio: f64,
+    cross_rung_expected: f64,
+}
+
+fn pair_numbers(
+    same_rung: (Duration, Duration),
+    cross_rung: (Duration, Duration),
+    cross_rung_depths: (u8, u8),
+) -> PairNumbers {
+    PairNumbers {
+        same_rung_spread_pct: spread_pct(same_rung.0, same_rung.1),
+        cross_rung_ratio: ratio(cross_rung.0, cross_rung.1),
+        cross_rung_expected: expected_cross_rung_ratio(cross_rung_depths.0, cross_rung_depths.1),
+    }
+}
+
+/// Apply [`FlatnessCriterion`] to one run.
+///
+/// `same_rung` is `(smaller_n, larger_n)`, the two costs at one depth.
+/// `cross_rung` is `(shallow_arm, deep_arm)`, the two costs one layer apart.
+/// `cross_rung_depths` is `(shallow, deep)` for that pair.
+///
+/// The numbers are always filled. The outcome is withheld, board first, when
+/// the run cannot support a grade: a moving board is the stronger
+/// disqualification, and naming convergence for a run that was never quiet
+/// would point at the wrong remedy. A withheld outcome carries no
+/// [`FlatnessGrade`]. A contaminated run must not be able to say `Flat`.
 #[must_use]
-pub fn outcome(
+pub fn read_flatness(
     criterion: FlatnessCriterion,
     board_quiet: bool,
     every_series_converged: bool,
     same_rung: (Duration, Duration),
     cross_rung: (Duration, Duration),
     cross_rung_depths: (u8, u8),
-) -> FlatnessOutcome {
-    if !board_quiet {
-        return FlatnessOutcome::Withheld(GradeWithheld::BoardNotQuiet);
+) -> FlatnessReading {
+    let numbers = pair_numbers(same_rung, cross_rung, cross_rung_depths);
+    let outcome = if !board_quiet {
+        FlatnessOutcome::Withheld(GradeWithheld::BoardNotQuiet)
+    } else if !every_series_converged {
+        FlatnessOutcome::Withheld(GradeWithheld::SeriesUnconverged)
+    } else {
+        FlatnessOutcome::Graded(judge(criterion, numbers))
+    };
+    FlatnessReading {
+        same_rung_spread_pct: numbers.same_rung_spread_pct,
+        cross_rung_ratio: numbers.cross_rung_ratio,
+        cross_rung_expected: numbers.cross_rung_expected,
+        outcome,
     }
-    if !every_series_converged {
-        return FlatnessOutcome::Withheld(GradeWithheld::SeriesUnconverged);
-    }
-    FlatnessOutcome::Graded(grade(criterion, same_rung, cross_rung, cross_rung_depths))
 }
 
-/// Grade a measured plan: the same-rung pair, then the cross-rung pair.
+/// Same-rung spread first, then the cross-rung ceiling.
 ///
-/// `same_rung` is `(shallower_n_cost, larger_n_cost)` at one depth;
-/// `cross_rung` is `(shallow_depth_cost, deep_depth_cost)` at adjacent `n`,
-/// with the depths those costs were measured at.
-///
-/// Returns the first failure, so a verdict names one pair.
-#[must_use]
-pub fn grade(
-    criterion: FlatnessCriterion,
-    same_rung: (Duration, Duration),
-    cross_rung: (Duration, Duration),
-    cross_rung_depths: (u8, u8),
-) -> FlatnessGrade {
-    let spread_pct = spread_pct(same_rung.0, same_rung.1);
-    if spread_pct > criterion.same_rung_tolerance_pct {
+/// The first failure is the grade, so a verdict names one pair. The
+/// cross-rung half fails only when [`PairNumbers::cross_rung_ratio`] exceeds
+/// [`PairNumbers::cross_rung_expected`] by more than the tolerance.
+fn judge(criterion: FlatnessCriterion, numbers: PairNumbers) -> FlatnessGrade {
+    if numbers.same_rung_spread_pct > criterion.same_rung_tolerance_pct {
         return FlatnessGrade::SameRungSlope {
-            spread_pct,
+            spread_pct: numbers.same_rung_spread_pct,
             tolerance_pct: criterion.same_rung_tolerance_pct,
         };
     }
 
-    let expected = expected_cross_rung_ratio(cross_rung_depths.0, cross_rung_depths.1);
-    let ratio = ratio(cross_rung.0, cross_rung.1);
-    let overstep_pct = (ratio - expected) / expected * 100.0;
+    let overstep_pct = (numbers.cross_rung_ratio - numbers.cross_rung_expected)
+        / numbers.cross_rung_expected
+        * 100.0;
     if overstep_pct > criterion.cross_rung_tolerance_pct {
         return FlatnessGrade::CrossRungOverstep {
-            ratio,
-            expected,
+            ratio: numbers.cross_rung_ratio,
+            expected: numbers.cross_rung_expected,
             tolerance_pct: criterion.cross_rung_tolerance_pct,
         };
     }
 
     FlatnessGrade::Flat
+}
+
+/// [`judge`] on a fresh [`pair_numbers`]. Tests use this to show each half
+/// can fire. Production goes through [`read_flatness`], which judges the
+/// numbers it returns.
+#[cfg(test)]
+fn grade(
+    criterion: FlatnessCriterion,
+    same_rung: (Duration, Duration),
+    cross_rung: (Duration, Duration),
+    cross_rung_depths: (u8, u8),
+) -> FlatnessGrade {
+    judge(
+        criterion,
+        pair_numbers(same_rung, cross_rung, cross_rung_depths),
+    )
 }
 
 /// Absolute spread between two costs, as a percentage of the smaller.

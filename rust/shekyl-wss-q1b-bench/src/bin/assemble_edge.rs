@@ -23,8 +23,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use shekyl_wss_q1b_bench::assembleedge::{
-    expected_cross_rung_ratio, outcome, plan_at_depth, plan_at_replay_window, signed_change_pct,
-    spread_pct, Arm, ArmRole, AssembleRig, FlatnessCriterion, PlanKind, LEAF_RATE_MODEL_DEPTH,
+    plan_at_depth, plan_at_replay_window, read_flatness, signed_change_pct, spread_pct, Arm,
+    ArmRole, AssembleRig, FlatnessCriterion, PlanKind, LEAF_RATE_MODEL_DEPTH,
 };
 use shekyl_wss_q1b_bench::corpus::worst_case_leaves_per_block;
 use shekyl_wss_q1b_bench::report::{
@@ -50,18 +50,20 @@ struct Args {
     #[arg(long)]
     plan: bool,
 
-    /// Measure the shape on this depth's rung instead of the graded one.
+    /// Measure the shape on this depth's rung instead of the replay-window plan.
     ///
-    /// The graded plan's top population is the real worst-case window, which
-    /// costs hours to ingest and whose absolute seconds belong on the floor
-    /// device (rule 76). A shallower rung establishes the same SHAPE -- flat
-    /// across a rung, one layer's step at its boundary -- in minutes. It does
-    /// not establish the figure, and the record says which plan it ran.
+    /// The replay-window plan is one day of chain (`plan_at_replay_window`).
+    /// It costs hours to ingest, and its seconds are a one-day-old chain's.
+    /// A shallower rung establishes the same shape — flat across a rung, and
+    /// a cross-rung step no dearer than one layer — in minutes. Neither plan
+    /// is the graded assembly population. That population is a ruled chain
+    /// age, and the record says which plan ran.
     #[arg(long)]
     rung: Option<u8>,
 
-    /// Leaves per ingested block. Defaults to the worst-case rate the graded
-    /// window is derived from, so the corpus is built the way it accrues.
+    /// Leaves per ingested block. Defaults to the worst-case rate at
+    /// `LEAF_RATE_MODEL_DEPTH`, the depth a path's proof weight is priced at.
+    /// That depth is not the tree depth of either plan.
     #[arg(long)]
     leaves_per_block: Option<u64>,
 
@@ -145,55 +147,90 @@ fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
     let below = find(ArmRole::RungBelow);
     let floor = find(ArmRole::RungFloor);
     let top = find(ArmRole::RungTop);
-    let cap = find(ArmRole::InputCap);
+    // Asserted up front, before any ingest. The loop below measures it.
+    let _cap = find(ArmRole::InputCap);
 
-    // The graded top is measured first and held, so the control at the end of
-    // the run re-times *identical work* on the same client. Two terms with one
-    // sensitivity profile: whatever separates them is the board, not the
-    // workload. A control across two different arms would not cancel, which is
-    // the mistake `CT6_PROVING_STATE.md` §10.4 retired a claim over.
-    let (top_rig, top_first) = measure(top, leaves_per_block, args.store_dir.as_deref());
-    let below_series = measure_and_release(below, leaves_per_block, args.store_dir.as_deref());
-    let floor_series = measure_and_release(floor, leaves_per_block, args.store_dir.as_deref());
-    let cap_series = measure_and_release(cap, leaves_per_block, args.store_dir.as_deref());
-
+    // One rig resident at a time. `rung_top` is the control subject, so it is
+    // built last and timed twice, back to back, on the same client. The two
+    // timings have one sensitivity profile: whatever separates them is the
+    // board. A control across two different arms would not cancel
+    // (`CT6_PROVING_STATE.md` §10.4).
+    //
+    // The other arms finish, and their rigs drop, before that client exists.
+    // Holding it across them would time `rung_floor` beside `rung_top`'s
+    // working set and shrink the same-rung spread toward `Flat` — the reading
+    // capture is trying to earn. The control therefore does not span the
+    // earlier arms. Spanning them is the bias it exists to exclude.
+    let store = args.store_dir.as_deref();
+    let mut timed: Vec<(Arm, Series)> = Vec::with_capacity(arms.len());
+    // Every arm except the control subject. The set is the plan, so a new
+    // role is released before `rung_top` exists rather than timed beside it.
+    for arm in arms
+        .iter()
+        .copied()
+        .filter(|arm| arm.role != ArmRole::RungTop)
+    {
+        timed.push((arm, measure_and_release(arm, leaves_per_block, store)));
+    }
+    let (top_rig, top_first) = measure(top, leaves_per_block, store);
     eprintln!("  re-timing rung_top as the board control ...");
     let top_again = time(&top_rig);
+    drop(top_rig);
+    timed.push((top, top_first));
+
+    let series_of = |role: ArmRole| {
+        timed
+            .iter()
+            .find(|(arm, _)| arm.role == role)
+            .map(|(_, series)| series)
+            .expect("the plan's roles were all timed")
+    };
+    let median = |role: ArmRole| std::time::Duration::from_secs_f64(series_of(role).median_s);
 
     let control_divergence_pct = spread_pct(
-        std::time::Duration::from_secs_f64(top_first.median_s),
+        median(ArmRole::RungTop),
         std::time::Duration::from_secs_f64(top_again.median_s),
     );
     let load_control = LoadControl::over(
         [(
             control_divergence_pct,
-            top_first.converged && top_again.converged,
+            series_of(ArmRole::RungTop).converged && top_again.converged,
         )],
         DEFAULT_TOLERANCE_PCT,
     );
 
-    let d = |s: &Series| std::time::Duration::from_secs_f64(s.median_s);
-    let criterion = FlatnessCriterion::default();
-    let same_rung = (d(&floor_series), d(&top_first));
-    let cross_rung = (d(&below_series), d(&floor_series));
-    let cross_depths = (below.population.depth, floor.population.depth);
-
     // Every series that feeds the reading, including the control's own. A
     // median from a series that never settled is not yet a cost, so a grade
     // taken over one would be a reading of an unfinished measurement.
-    let every_series_converged = [
-        &below_series,
-        &floor_series,
-        &top_first,
-        &cap_series,
-        &top_again,
-    ]
-    .iter()
-    .all(|s| s.converged);
+    let every_series_converged =
+        timed.iter().all(|(_, series)| series.converged) && top_again.converged;
+    let criterion = FlatnessCriterion::default();
+    let reading = read_flatness(
+        criterion,
+        load_control.quiet,
+        every_series_converged,
+        (median(ArmRole::RungFloor), median(ArmRole::RungTop)),
+        (median(ArmRole::RungBelow), median(ArmRole::RungFloor)),
+        (below.population.depth, floor.population.depth),
+    );
+    let input_cap_change_pct =
+        signed_change_pct(median(ArmRole::RungTop), median(ArmRole::InputCap));
 
     let plan_kind = args
         .rung
         .map_or(PlanKind::ReplayWindow, |depth| PlanKind::Shape { depth });
+
+    let arm_records = arms
+        .iter()
+        .map(|arm| {
+            let index = timed
+                .iter()
+                .position(|(timed_arm, _)| timed_arm.role == arm.role)
+                .expect("every plan arm was timed");
+            let (arm, series) = timed.swap_remove(index);
+            arm_record(arm, series)
+        })
+        .collect();
 
     Ok(AssembleEdgeRecord {
         schema_version: SCHEMA_VERSION,
@@ -201,9 +238,11 @@ fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
         grading: "baseline — capture is unbuilt, so a same-rung slope is the EXPECTED reading \
                   and is the evidence for why capture must exist. The criterion carried here \
                   was fixed before capture existed; CT-6 increment 6 re-grades these same arms \
-                  against it. The integrity gate's verdict is green by construction (the \
-                  reference root is taken from the client); root agreement is graded in-crate \
-                  by shekyl-curve-tree's client::ct6_oracle, not here.",
+                  against it. A cross-rung pass is a ceiling (no dearer than one layer), not \
+                  evidence the step matched the uniform-layer model. The integrity gate's \
+                  verdict is green by construction (the reference root is taken from the \
+                  client); root agreement is graded in-crate by shekyl-curve-tree's \
+                  client::ct6_oracle, not here.",
         environment: Environment::capture(),
         rig: rig::decide(&Environment::capture(), false, None, false)
             .map_err(|e| format!("rig: {e}"))?,
@@ -212,25 +251,10 @@ fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
         plan: plan_kind,
         plan_note: plan_kind.note(),
         criterion,
-        same_rung_spread_pct: spread_pct(same_rung.0, same_rung.1),
-        cross_rung_ratio: cross_rung.1.as_secs_f64() / cross_rung.0.as_secs_f64(),
-        cross_rung_expected: expected_cross_rung_ratio(cross_depths.0, cross_depths.1),
-        input_cap_change_pct: signed_change_pct(d(&top_first), d(&cap_series)),
-        grade: outcome(
-            criterion,
-            load_control.quiet,
-            every_series_converged,
-            same_rung,
-            cross_rung,
-            cross_depths,
-        ),
+        input_cap_change_pct,
+        reading,
         control_series: top_again,
-        arms: vec![
-            arm_record(below, below_series),
-            arm_record(floor, floor_series),
-            arm_record(top, top_first),
-            arm_record(cap, cap_series),
-        ],
+        arms: arm_records,
         load_control,
     })
 }
@@ -250,11 +274,11 @@ fn report(r: &AssembleEdgeRecord) {
     }
     eprintln!(
         "  same rung      {:.1} % spread across n (bound {:.1} %) — must reach 0 for flatness",
-        r.same_rung_spread_pct, r.criterion.same_rung_tolerance_pct
+        r.reading.same_rung_spread_pct, r.criterion.same_rung_tolerance_pct
     );
     eprintln!(
-        "  cross rung     {:.3}x measured, {:.3}x predicted by one layer's work",
-        r.cross_rung_ratio, r.cross_rung_expected
+        "  cross rung     {:.3}x measured, {:.3}x the one-layer ceiling (a pass is not a match)",
+        r.reading.cross_rung_ratio, r.reading.cross_rung_expected
     );
     eprintln!(
         "  input cap      {:+.1} % to raise k to MAX_INPUTS at one population (#842's n + k; \
@@ -265,7 +289,7 @@ fn report(r: &AssembleEdgeRecord) {
         "  board          {:.1} % control divergence (bound {:.1} %), quiet: {}",
         r.load_control.max_divergence_pct, r.load_control.tolerance_pct, r.load_control.quiet
     );
-    eprintln!("  READING        {:?}", r.grade);
+    eprintln!("  READING        {:?}", r.reading.outcome);
     eprintln!("  PLAN           {}", r.plan_note);
     eprintln!("  GRADING        {}", r.grading);
 }

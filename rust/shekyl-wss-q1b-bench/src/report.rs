@@ -94,6 +94,13 @@ use crate::timing::Series;
 ///   read off the same axis. A `v2` record's value is not wrong for what it
 ///   was — it is a model estimate — but it is not the graded quantity, and
 ///   `per_block_advance_provenance` now says which one a record carries.
+///
+///   [`AssembleEdgeRecord`]'s flatness numbers later moved under `reading`.
+///   That nesting is a shape change of a record type that has never had a
+///   cited run — the first shape run was discarded (`CT6_PROVING_STATE.md`
+///   §11.5) — so it does not bump this constant. Spend and verify records
+///   at v3 are already emitted, and a bump would re-label them for a reader
+///   of a record that does not exist yet.
 ///   The retired quotient beside the measurement divides by `replayed_blocks`
 ///   — the blocks the corpus covers, `window_leaves / leaves_per_block` — and
 ///   not by `REPLAY_WINDOW_BLOCKS`. At the default window the two denominators
@@ -517,10 +524,6 @@ pub struct VerifyEdgeRecord {
     pub call_site: &'static str,
 }
 
-#[cfg(test)]
-#[path = "report_tests.rs"]
-mod tests;
-
 /// One arm of the path-assembly cost instrument, as measured.
 ///
 /// The role, the population and the depth travel with the series: a cost is
@@ -546,6 +549,10 @@ pub struct AssembleArmRecord {
 /// Carries the **pre-registered** [`crate::assembleedge::FlatnessCriterion`]
 /// and the grade it yields, so increment 6's re-grade reads the same criterion
 /// this run was written under rather than one chosen after seeing the curve.
+///
+/// The flatness numbers are [`Self::reading`], one value from
+/// [`crate::assembleedge::read_flatness`]. Nesting them did not bump
+/// [`SCHEMA_VERSION`]: this record type has never had a cited run.
 #[derive(Clone, Debug, Serialize)]
 pub struct AssembleEdgeRecord {
     /// [`SCHEMA_VERSION`].
@@ -574,13 +581,6 @@ pub struct AssembleEdgeRecord {
     pub criterion: crate::assembleedge::FlatnessCriterion,
     /// Every arm, in plan order.
     pub arms: Vec<AssembleArmRecord>,
-    /// Spread across the same-rung pair, in percent of the cheaper arm. The
-    /// half that must go to zero for capture's claim to hold.
-    pub same_rung_spread_pct: f64,
-    /// Measured ratio across the rung boundary.
-    pub cross_rung_ratio: f64,
-    /// Ratio one layer's work predicts across that boundary.
-    pub cross_rung_expected: f64,
     /// Change from the canonical owned count to `MAX_INPUTS` at one
     /// population, in percent — `#842`'s `n + k` claim, measured.
     ///
@@ -589,18 +589,25 @@ pub struct AssembleEdgeRecord {
     /// a cost at all. An absolute spread reported that case as a 70 % cost and
     /// said raising `k` was dearer, which inverts the finding.
     pub input_cap_change_pct: f64,
-    /// The criterion's reading of this run, or why it was withheld.
-    pub grade: crate::assembleedge::FlatnessOutcome,
-    /// Whether the board stayed quiet across the run.
+    /// Spread, cross-rung ratio, expected ceiling, and outcome, from
+    /// [`crate::assembleedge::read_flatness`]. One value, so the record
+    /// cannot publish a ratio the grade did not judge.
+    pub reading: crate::assembleedge::FlatnessReading,
+    /// Whether the board stayed quiet for the control pair.
     pub load_control: LoadControl,
-    /// The control: [`crate::assembleedge::ArmRole::RungTop`] re-timed at the
-    /// end of the run, on the same client, over identical work.
+    /// [`crate::assembleedge::ArmRole::RungTop`] timed a second time, on the
+    /// same client, immediately after its own sample.
     ///
-    /// Two terms with one sensitivity profile, so whatever separates this from
-    /// the arm's own series is the board and not the workload. That is the
-    /// cancellation `CT6_PROVING_STATE.md` §10.4's retired ratio could not
-    /// claim: a memory-bandwidth-bound replay and an `fsync`-bound advance are
-    /// taxed by load at different rates, while two `assemble_paths` calls over
-    /// the same leaves are taxed identically.
+    /// The other arms have already been measured and their rigs dropped, so
+    /// both timings of this client are the only resident population. Whatever
+    /// separates them is the board. The control does not span the earlier
+    /// arms: holding this client across them would time the smaller arm beside
+    /// the larger working set. Two `assemble_paths` calls over the same leaves
+    /// are taxed by load at the same rate, which is the cancellation
+    /// `CT6_PROVING_STATE.md` §10.4's retired ratio could not claim.
     pub control_series: Series,
 }
+
+#[cfg(test)]
+#[path = "report_tests.rs"]
+mod tests;

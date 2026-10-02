@@ -67,12 +67,8 @@ impl CurveTreeClient {
     /// is the caller's, against its own chain view; it is landed and pure
     /// height arithmetic, not a `ReferenceBlock` constructor (§5).
     ///
-    /// Runs the integrity gate first: returns [`ClientError::RootMismatch`]
-    /// if the reconstructed root does not match `reference.curve_tree_root`,
-    /// [`ClientError::OutputNotDrained`] if `input.gindex` is not a drained
-    /// leaf at the reference height, and [`ClientError::IdentityMismatch`] if
-    /// the leaf at `input.gindex` does not carry the expected `(output_key,
-    /// commitment)`.
+    /// This is [`Self::assemble_paths`] of one input. The gate, what `n`
+    /// counts, and the errors are that function's.
     pub fn assemble_path(
         &self,
         input: &AssembleInput,
@@ -95,63 +91,38 @@ impl CurveTreeClient {
     /// input count and `n` the drained leaf count. Hoisting them makes it
     /// `n + k`.
     ///
-    /// ## `n` is the chain, and that is the unfixed cost
+    /// `n` is every drained leaf since genesis. `entries` only grows (`extend`
+    /// on ingest, replaced wholesale by a rollback's rebuild), and a resume
+    /// from a pruned store is refused ([`ClientError::ResumeFromPrunedStore`],
+    /// F5). The 725-block replay window is a different quantity. The chain-age
+    /// cost, and why no figure is stated here, is `CT6_PROVING_STATE.md` §11.2.
     ///
-    /// `n` is **every drained leaf since genesis**, not a window:
-    /// `CurveTreeClient::entries` only ever grows (`extend` on ingest,
-    /// replaced wholesale only by a rollback's rebuild, which reloads the
-    /// whole drained set), and a resume from a pruned store is refused
-    /// outright ([`ClientError::ResumeFromPrunedStore`], F5) rather than
-    /// resumed from a partial one.
+    /// Hoisting fixed the `k` factor. Capture removes the `n`, by reading an
+    /// owned output's stored path material. The structural pin is
+    /// `ct6_oracle::assembly_today_depends_on_every_foreign_leaf`: one
+    /// comparison, `assert_ne!` while capture is unbuilt. The witness block
+    /// under that comparison describes today's failure mode and is deleted
+    /// when the comparison flips.
     ///
-    /// This docstring previously cited `765 600` here as "the graded worst
-    /// case". That figure is `worst_case_window_leaves` — the 725-block
-    /// **replay window**, about one day of chain — and it is the wrong
-    /// quantity for a population that is not windowed. **Corrected
-    /// 2026-10-01** (`CT6_PROVING_STATE.md` §11.2).
+    /// # Integrity gate
     ///
-    /// The complexity is the claim here; **no cost figure is**. The ~102 µs
-    /// per leaf quoted in §11.2 is an *illustrative, unattested* projection
-    /// from one off-rig probe on one x86 board — hardware-dependent, and §11.5
-    /// records that nothing is graded. It is enough to show the shape (a day
-    /// of chain already costs tens of seconds, a year hours); it is not a
-    /// number to design against.
+    /// The gate runs once, before any input work. A mismatch returns no paths.
+    /// It compares the store-backed [`Self::root_at`] at `reference.height`
+    /// with `reference.curve_tree_root`.
     ///
-    /// Hoisting fixed the `k` factor. The `n` is what `CT-6` increment 5's
-    /// capture removes, by making assembly read an owned output's own stored
-    /// path material rather than rebuilding the tree. That is a *structural*
-    /// property, not a faster loop: once it holds, assembly succeeds with
-    /// every foreign leaf absent, which is what
-    /// `ct6_oracle::assembly_today_depends_on_every_foreign_leaf` pins —
-    /// `assert_ne!` while capture is unbuilt, inverted when it lands.
+    /// The branches are a second mechanism. They are rebuilt from replay-held
+    /// `entries`, and every path in the batch shares that one layer stack.
+    /// That is what makes `curve_tree_actor`'s *"every input shares one tree
+    /// context"* true of the values and not merely of the `reference`. The
+    /// gate does not approve the stack. [`TreeContext::tree_root`] is copied
+    /// from the gated reference, so a wrong `entries` set still yields a path
+    /// whose root is the consensus root over branches from a different tree.
+    /// [`Self::root_and_depth_at`] is not consulted.
     ///
-    /// **The integrity gate runs once, before any input work**, and a mismatch
-    /// returns with **no** paths assembled rather than a partial batch. Every
-    /// path below is then derived from one `layers` stack, which is what makes
-    /// `curve_tree_actor`'s *"every input shares one tree context"* true of
-    /// the values and not merely of the `reference`.
-    ///
-    /// ## The gate does not approve those layers
-    ///
-    /// This paragraph used to say the paths were derived from "the same
-    /// `layers` that gate approved". **They are not, and that wording is
-    /// withdrawn (2026-10-01).** The two mechanisms below are separate by
-    /// design: the gate compares the **store-backed** [`Self::root_at`]
-    /// against `reference.curve_tree_root`, while the branches are rebuilt
-    /// from replay-held `entries`. Nothing cross-checks them, and
-    /// [`Self::root_and_depth_at`] — which answers both from the store tier —
-    /// is not called here.
-    ///
-    /// So a wrong `entries` set passes the gate and yields a path whose
-    /// [`TreeContext::tree_root`] is the real consensus root (it is copied
-    /// from the gated `reference`) over branches from a different tree. The
-    /// red-bite above demonstrates it with one leaf retained. It is **latent
-    /// today** — `entries` is append-only and a pruned-store resume is refused
-    /// — and becomes live when capture introduces a second branch source, so
-    /// the check that closes it belongs to capture, policing the source it is
-    /// for. The sound form recomputes the root from the path's own branches
-    /// (an `O(depth)` walk) and refuses on disagreement: comparing two store
-    /// reads would leave the branches unchecked.
+    /// The gap is latent while `entries` is append-only. The check that closes
+    /// it recomputes the root from the path's own branches and belongs to the
+    /// capture build (`CT6_PROVING_STATE.md` §11.6). Comparing two store reads
+    /// would leave the branches unchecked.
     ///
     /// # Duplicate inputs are not refused here
     ///
@@ -162,12 +133,11 @@ impl CurveTreeClient {
     ///
     /// # Errors
     ///
-    /// [`ClientError::RootMismatch`] if the **store-backed** root at
-    /// `reference.height` ([`Self::root_at`]) does not match
-    /// `reference.curve_tree_root` — *not* a root reconstructed from the
-    /// branches, which is the check this gate does **not** perform (see
-    /// above); [`ClientError::OutputNotDrained`] if a
-    /// `gindex` is not a drained leaf at the reference height;
+    /// [`ClientError::RootMismatch`] if [`Self::root_at`] at
+    /// `reference.height` does not match `reference.curve_tree_root`. This is
+    /// the store-backed root. It is not a root recomputed from the path's
+    /// branches. [`ClientError::OutputNotDrained`] if a `gindex` is not a
+    /// drained leaf at the reference height.
     /// [`ClientError::IdentityMismatch`] if the leaf at a `gindex` does not
     /// carry the expected `(output_key, commitment)`.
     pub fn assemble_paths(

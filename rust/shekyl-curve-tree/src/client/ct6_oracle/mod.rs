@@ -719,32 +719,34 @@ mod ring;
 /// one — and when the others are absent it does not refuse, it emits a path
 /// that claims the real root.
 ///
-/// # This assertion inverts when capture lands
+/// # What changes when capture lands
 ///
-/// Capture's claim is structural, not a speed-up: an owned output's path is
-/// read from its own stored material, so assembly is independent of chain
-/// size **by construction** — at every depth, at year one and at year eight
-/// hundred. The executable form of that claim is this test with
-/// [`assert_ne!`] turned into [`assert_eq!`]: a path assembled with every
-/// foreign leaf absent must equal the one assembled with all of them present.
+/// The claim is one comparison. A path assembled with every foreign leaf
+/// absent equals the path assembled with the whole tree present. Today they
+/// differ, so the comparison is [`assert_ne!`]. Capture turns that one
+/// assertion into [`assert_eq!`] and **deletes the witness block under it**.
 ///
-/// It is deliberately **not** a timing test. A cost curve across populations
-/// only estimates the property; this settles it. A slower implementation
-/// cannot pass the inverted form, and neither can one that keeps a fallback
-/// rebuild, because the fallback has nothing to rebuild from.
+/// The witnesses describe today's failure mode: a one-leaf chunk under the
+/// real root. Equal paths have equal chunk lengths, so the witnesses
+/// contradict the inverted comparison. Leaving them in place makes a correct
+/// capture look red.
 ///
-/// # What it also pins: the gate does not cover the path material
+/// The [`TreeContext::tree_root`] equality is not a witness. A correct path
+/// still commits to the oracle root, and that assertion stays.
 ///
-/// `assemble_paths` runs two mechanisms by design — the integrity gate reads
-/// the **store** tier (`root_at`), while the branches are rebuilt from the
-/// replay-held `entries`. Nothing checks that the two agree, and
-/// [`CurveTreeClient::root_and_depth_at`] — which returns both from the store
-/// tier and exists for exactly this comparison — is never called from
-/// assembly. So with `entries` reduced to one leaf the gate still passes on
-/// the store's root, and the emitted [`TreeContext::tree_root`] is that root
-/// (it is copied from the gated `reference`), while every branch below it
-/// comes from a one-leaf tree. The assertions below hold both halves of that
-/// split so it cannot be mistaken for a refusal.
+/// This is not a timing test. A cost curve across populations only estimates
+/// the property. A slower implementation cannot pass the inverted comparison,
+/// and neither can one that keeps a fallback rebuild, because the fallback
+/// has nothing to rebuild from.
+///
+/// # The gate does not cover the path material
+///
+/// `assemble_paths` runs two mechanisms. The integrity gate reads the store
+/// tier (`root_at`). The branches are rebuilt from replay-held `entries`.
+/// Nothing checks that the two agree, and
+/// [`CurveTreeClient::root_and_depth_at`] is not called from assembly. With
+/// `entries` reduced to one leaf the gate still passes, and the emitted
+/// `tree_root` is copied from the gated reference.
 #[test]
 fn assembly_today_depends_on_every_foreign_leaf() {
     let tip = varying_tip();
@@ -797,22 +799,26 @@ fn assembly_today_depends_on_every_foreign_leaf() {
         .pop()
         .expect("one input yields one path");
 
-    // The inversion point. Capture makes these equal.
+    // The claim. When capture lands, invert this one assertion to `assert_eq!`
+    // and delete the witness block below it. Do not invert the witnesses:
+    // equal paths have equal chunk lengths, so they cannot survive the flip.
     assert_ne!(
         full, sparse,
         "assembly produced the same path with the foreign leaves absent. That is \
-         capture's structural property, so if this fires because capture landed, \
-         invert this assertion to assert_eq! -- it is the red-bite, not a bug"
+         capture's structural property. Invert this assertion to assert_eq! and \
+         delete the witness block below — it is the red-bite, not a bug"
     );
 
-    // Both halves of the two-mechanism split, so the failure above cannot be
-    // read as a refusal or as a wrong root.
+    // Stays across the inversion. A correct path still commits to the oracle root.
     assert_eq!(
         sparse.tree.tree_root, oracle_root,
         "the emitted path claims the real root even with one leaf present: \
          tree_root is copied from the gated reference, which the store tier \
          answered, so the gate cannot see that the branches came from elsewhere"
     );
+
+    // Witnesses of today's failure mode. Delete this block when the claim
+    // above becomes assert_eq!.
     assert_ne!(
         full.leaf_chunk.len(),
         sparse.leaf_chunk.len(),
