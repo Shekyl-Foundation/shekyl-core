@@ -23,8 +23,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use shekyl_wss_q1b_bench::assembleedge::{
-    expected_cross_rung_ratio, grade, plan_at_depth, plan_at_replay_window, spread_pct, Arm,
-    ArmRole, AssembleRig, FlatnessCriterion, LEAF_RATE_MODEL_DEPTH,
+    expected_cross_rung_ratio, outcome, plan_at_depth, plan_at_replay_window, signed_change_pct,
+    spread_pct, Arm, ArmRole, AssembleRig, FlatnessCriterion, PlanKind, LEAF_RATE_MODEL_DEPTH,
 };
 use shekyl_wss_q1b_bench::corpus::worst_case_leaves_per_block;
 use shekyl_wss_q1b_bench::report::{
@@ -75,7 +75,27 @@ struct Args {
     json: Option<String>,
 }
 
-/// Time one arm, building its client first (untimed).
+/// Time one arm and **release its rig** before returning.
+///
+/// The control re-times `rung_top` at the end of the run and must see the same
+/// machine `top_first` saw. A live rig holds its whole drained entry set in
+/// memory and its scratch database on disk, so keeping the other arms' rigs
+/// alive would put the control under harness-created memory and disk pressure
+/// that the first timing never had — and the control exists precisely to
+/// attribute a divergence to the *board*. Holding them would also multiply
+/// peak resources across every population at once.
+///
+/// This was the original shape: the arms were bound to `_below_rig` and
+/// friends, and an `_`-prefixed binding keeps a value alive to the end of
+/// scope rather than dropping it. Releasing explicitly here, rather than
+/// relying on that distinction at four call sites.
+fn measure_and_release(arm: Arm, leaves_per_block: u64, store_dir: Option<&str>) -> Series {
+    let (rig, series) = measure(arm, leaves_per_block, store_dir);
+    drop(rig);
+    series
+}
+
+/// Time one arm, building its client first (untimed), and keep the rig.
 fn measure(arm: Arm, leaves_per_block: u64, store_dir: Option<&str>) -> (AssembleRig, Series) {
     eprintln!(
         "  building {:>11}  n={:<10} depth={} k={} ...",
@@ -133,9 +153,9 @@ fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
     // workload. A control across two different arms would not cancel, which is
     // the mistake `CT6_PROVING_STATE.md` §10.4 retired a claim over.
     let (top_rig, top_first) = measure(top, leaves_per_block, args.store_dir.as_deref());
-    let (_below_rig, below_series) = measure(below, leaves_per_block, args.store_dir.as_deref());
-    let (_floor_rig, floor_series) = measure(floor, leaves_per_block, args.store_dir.as_deref());
-    let (_cap_rig, cap_series) = measure(cap, leaves_per_block, args.store_dir.as_deref());
+    let below_series = measure_and_release(below, leaves_per_block, args.store_dir.as_deref());
+    let floor_series = measure_and_release(floor, leaves_per_block, args.store_dir.as_deref());
+    let cap_series = measure_and_release(cap, leaves_per_block, args.store_dir.as_deref());
 
     eprintln!("  re-timing rung_top as the board control ...");
     let top_again = time(&top_rig);
@@ -158,6 +178,23 @@ fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
     let cross_rung = (d(&below_series), d(&floor_series));
     let cross_depths = (below.population.depth, floor.population.depth);
 
+    // Every series that feeds the reading, including the control's own. A
+    // median from a series that never settled is not yet a cost, so a grade
+    // taken over one would be a reading of an unfinished measurement.
+    let every_series_converged = [
+        &below_series,
+        &floor_series,
+        &top_first,
+        &cap_series,
+        &top_again,
+    ]
+    .iter()
+    .all(|s| s.converged);
+
+    let plan_kind = args
+        .rung
+        .map_or(PlanKind::ReplayWindow, |depth| PlanKind::Shape { depth });
+
     Ok(AssembleEdgeRecord {
         schema_version: SCHEMA_VERSION,
         measurement: "path assembly — CurveTreeClient::assemble_paths across leaf populations",
@@ -172,20 +209,21 @@ fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
             .map_err(|e| format!("rig: {e}"))?,
         call_site: "shekyl-curve-tree/src/assemble.rs — CurveTreeClient::assemble_paths, \
                     reached from the CT-5c send path once per spend",
-        plan: if args.rung.is_some() {
-            "SHAPE — a rung chosen to run in minutes. Flatness across the rung and the one-layer \
-             step at its boundary travel; the absolute seconds do NOT."
-        } else {
-            "REPLAY WINDOW — 725 blocks, about one day of chain. NOT the graded assembly \
-             population: assembly's n is the whole chain, so the graded figure is blocked on a \
-             ruled chain age. These seconds are a one-day-old chain's."
-        },
+        plan: plan_kind,
+        plan_note: plan_kind.note(),
         criterion,
         same_rung_spread_pct: spread_pct(same_rung.0, same_rung.1),
         cross_rung_ratio: cross_rung.1.as_secs_f64() / cross_rung.0.as_secs_f64(),
         cross_rung_expected: expected_cross_rung_ratio(cross_depths.0, cross_depths.1),
-        input_cap_cost_pct: spread_pct(d(&top_first), d(&cap_series)),
-        grade: grade(criterion, same_rung, cross_rung, cross_depths),
+        input_cap_change_pct: signed_change_pct(d(&top_first), d(&cap_series)),
+        grade: outcome(
+            criterion,
+            load_control.quiet,
+            every_series_converged,
+            same_rung,
+            cross_rung,
+            cross_depths,
+        ),
         control_series: top_again,
         arms: vec![
             arm_record(below, below_series),
@@ -198,15 +236,7 @@ fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
 }
 
 fn report(r: &AssembleEdgeRecord) {
-    eprintln!(
-        "\n{} [{}]",
-        r.measurement,
-        if r.plan.starts_with("SHAPE") {
-            "SHAPE"
-        } else {
-            "GRADED"
-        }
-    );
+    eprintln!("\n{} [{}]", r.measurement, r.plan.label());
     for arm in &r.arms {
         eprintln!(
             "  {:>11}  n={:<10} depth={}  k={}  {:.4} s/call (converged: {})",
@@ -227,14 +257,16 @@ fn report(r: &AssembleEdgeRecord) {
         r.cross_rung_ratio, r.cross_rung_expected
     );
     eprintln!(
-        "  input cap      {:.1} % to raise k to MAX_INPUTS at one population (#842's n + k)",
-        r.input_cap_cost_pct
+        "  input cap      {:+.1} % to raise k to MAX_INPUTS at one population (#842's n + k; \
+         negative means cheaper, so k is lost in n)",
+        r.input_cap_change_pct
     );
     eprintln!(
         "  board          {:.1} % control divergence (bound {:.1} %), quiet: {}",
         r.load_control.max_divergence_pct, r.load_control.tolerance_pct, r.load_control.quiet
     );
-    eprintln!("  GRADE          {:?}", r.grade);
+    eprintln!("  READING        {:?}", r.grade);
+    eprintln!("  PLAN           {}", r.plan_note);
     eprintln!("  GRADING        {}", r.grading);
 }
 

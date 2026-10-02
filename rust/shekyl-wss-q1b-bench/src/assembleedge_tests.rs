@@ -324,3 +324,105 @@ fn no_plan_here_claims_to_be_the_graded_one() {
          become a claim about the chain"
     );
 }
+
+// ── Withholding, direction, and the plan's identity ─────────────────────────
+
+/// A flat-looking run on a moving board must not report `Flat`.
+#[test]
+fn a_contaminated_run_is_withheld_even_when_it_looks_flat() {
+    let o = outcome(
+        FlatnessCriterion::default(),
+        false,
+        true,
+        (ms(100), ms(100)),
+        (ms(100), ms(125)),
+        (4, 5),
+    );
+    assert_eq!(
+        o,
+        FlatnessOutcome::Withheld(GradeWithheld::BoardNotQuiet),
+        "a non-quiet board cannot support the claim a grade makes"
+    );
+}
+
+/// An unconverged series is not yet a cost, so it cannot be graded either.
+#[test]
+fn an_unconverged_series_is_withheld() {
+    let o = outcome(
+        FlatnessCriterion::default(),
+        true,
+        false,
+        (ms(100), ms(100)),
+        (ms(100), ms(125)),
+        (4, 5),
+    );
+    assert_eq!(
+        o,
+        FlatnessOutcome::Withheld(GradeWithheld::SeriesUnconverged)
+    );
+}
+
+/// The board is named ahead of convergence: it is the stronger
+/// disqualification, and a board that moved makes convergence meaningless.
+#[test]
+fn both_faults_report_the_board() {
+    let o = outcome(
+        FlatnessCriterion::default(),
+        false,
+        false,
+        (ms(100), ms(100)),
+        (ms(100), ms(125)),
+        (4, 5),
+    );
+    assert_eq!(o, FlatnessOutcome::Withheld(GradeWithheld::BoardNotQuiet));
+}
+
+/// A quiet, converged run is graded — otherwise withholding would be
+/// unconditional and the gate could not pass.
+#[test]
+fn a_quiet_converged_run_is_graded() {
+    let o = outcome(
+        FlatnessCriterion::default(),
+        true,
+        true,
+        (ms(100), ms(100)),
+        (ms(100), ms(125)),
+        (4, 5),
+    );
+    assert_eq!(o, FlatnessOutcome::Graded(FlatnessGrade::Flat));
+}
+
+/// A cheaper `MAX_INPUTS` arm reads as cheaper, not as a cost.
+///
+/// This is the discarded first run's actual shape — `k = 8` came in below
+/// `k = 2` — and the absolute spread reported it as a 70 % cost.
+#[test]
+fn a_cheaper_input_cap_arm_reports_a_negative_change() {
+    let change = signed_change_pct(ms(6081), ms(3575));
+    assert!(
+        change < 0.0,
+        "a cheaper arm must read negative; got {change:.1} %"
+    );
+    // The absolute spread cannot tell the two directions apart, which is why
+    // it is the wrong instrument for this field.
+    assert!(spread_pct(ms(6081), ms(3575)) > 0.0);
+    assert!(signed_change_pct(ms(3575), ms(6081)) > 0.0);
+}
+
+/// The plan's label comes from the type, so the replay window is never
+/// announced as a graded figure.
+#[test]
+fn the_replay_window_plan_is_not_labelled_graded() {
+    assert_eq!(PlanKind::ReplayWindow.label(), "REPLAY WINDOW");
+    assert_eq!(PlanKind::Shape { depth: 4 }.label(), "SHAPE");
+    for kind in [PlanKind::ReplayWindow, PlanKind::Shape { depth: 4 }] {
+        assert!(
+            !kind.label().contains("GRADED"),
+            "no plan here is the graded one, so no label may say so"
+        );
+        assert!(
+            !kind.note().is_empty(),
+            "every plan must say what its figures mean"
+        );
+    }
+}

@@ -560,13 +560,16 @@ pub struct AssembleEdgeRecord {
     pub rig: RigVerdict,
     /// Where the measured call is paid in production.
     pub call_site: &'static str,
-    /// Which plan ran: the graded rung, or a shallower one measured for shape.
+    /// Which plan ran, as a type rather than prose.
     ///
-    /// Load-bearing. A shape run's arms carry the same roles and the same
-    /// criterion as the graded run, so without this field a reader cannot tell
-    /// a figure that belongs to the chain from one that belongs to a rung
-    /// chosen to fit in minutes.
-    pub plan: &'static str,
+    /// Load-bearing. Every plan's arms carry the same roles and the same
+    /// criterion, so without this field a reader cannot tell a one-day-old
+    /// chain's figure from a rung chosen to fit in minutes.
+    pub plan: crate::assembleedge::PlanKind,
+    /// What [`Self::plan`]'s figures do and do not mean, from
+    /// [`crate::assembleedge::PlanKind::note`] — one source for the record and
+    /// the console, so they cannot disagree.
+    pub plan_note: &'static str,
     /// The criterion, fixed before capture existed.
     pub criterion: crate::assembleedge::FlatnessCriterion,
     /// Every arm, in plan order.
@@ -578,11 +581,16 @@ pub struct AssembleEdgeRecord {
     pub cross_rung_ratio: f64,
     /// Ratio one layer's work predicts across that boundary.
     pub cross_rung_expected: f64,
-    /// Cost of raising `k` from the canonical count to `MAX_INPUTS` at one
-    /// population, in percent. `#842`'s `n + k` claim, measured.
-    pub input_cap_cost_pct: f64,
-    /// The criterion's reading of this run.
-    pub grade: crate::assembleedge::FlatnessGrade,
+    /// Change from the canonical owned count to `MAX_INPUTS` at one
+    /// population, in percent — `#842`'s `n + k` claim, measured.
+    ///
+    /// **Signed.** A negative value means the `MAX_INPUTS` arm was *cheaper*,
+    /// which is evidence the `k` term is lost in the noise of `n` rather than
+    /// a cost at all. An absolute spread reported that case as a 70 % cost and
+    /// said raising `k` was dearer, which inverts the finding.
+    pub input_cap_change_pct: f64,
+    /// The criterion's reading of this run, or why it was withheld.
+    pub grade: crate::assembleedge::FlatnessOutcome,
     /// Whether the board stayed quiet across the run.
     pub load_control: LoadControl,
     /// The control: [`crate::assembleedge::ArmRole::RungTop`] re-timed at the

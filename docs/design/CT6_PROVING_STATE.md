@@ -866,3 +866,66 @@ widen the bound or derive from `chunk_width`. Named blocker.
   gate against, which `assemble.rs` rules out by design. What the rig does
   assert is its own subject (rule 47): the client drained exactly the
   population fed, and reports the depth that count implies.
+
+### 11.6 The gate does not cover the path material
+
+Building §11.5's red-bite turned up a gap worth its own record. With `entries`
+reduced to the owned leaf alone, `assemble_paths` **does not refuse**. It
+returns a path whose `tree_root` is the real consensus root while every branch
+below it comes from a one-leaf tree — a leaf chunk of 1 under a root that
+commits to 44.
+
+The cause is that the two mechanisms never meet. The gate compares the
+**store-backed** `root_at` against `reference.curve_tree_root`; the branches are
+rebuilt from replay-held `entries`; `tree_root` is then *copied from the gated
+reference*, so it is always the store's answer whatever the branches say. The
+docstring used to assert the paths came from "the same `layers` that gate
+approved" — withdrawn 2026-10-01, because they do not.
+
+**The check that closes it is not a comparison of two store reads.**
+`root_and_depth_at` answers both root and depth from the store tier, so
+comparing it against `tree_root` compares the store with itself and leaves the
+branches unchecked — which is the thing that can actually drift. The sound form
+**recomputes the root from the path's own branches** (an `O(depth)` hash walk)
+and refuses on disagreement. That verifies the artifact, so it catches every way
+the branches can diverge rather than the one case a test happened to construct.
+
+**It belongs to the capture build, not here.** Today the gap is *latent*:
+`entries` is append-only and a pruned-store resume is refused (`F5`), so
+production never assembles from a truncated set. It becomes *live* when capture
+introduces a second branch source — captured chunks plus a frontier snapshot —
+whose mutual consistency is exactly what can drift. So this is **capture's
+integrity gate**, and it lands as the first production commit of that build,
+policing the source it exists for.
+
+Threat model, kept proportionate: **no funds are at risk.** An inconsistent path
+yields a proof that fails after ~6 s of proving on the floor device, or a
+malformed transaction the daemon rejects. That is a rule-82 failure-clarity cost
+plus a small behavioural tell — proportionate to a cheap check, not to a round
+of its own.
+
+### 11.7 A reading is withheld from a run that cannot support one
+
+`LoadControl` already says a non-quiet run "cannot claim its figure is a
+property of the work rather than of the machine" — which is precisely the claim
+a grade makes. The record nevertheless serialized a `FlatnessGrade`
+unconditionally, so a contaminated run could have reported **`Flat`**: the one
+reading capture is trying to earn, handed over by a moving board.
+
+The record now carries `FlatnessOutcome` — `Graded(..)`, or
+`Withheld(BoardNotQuiet | SeriesUnconverged)`, with the reason part of the value
+(rule 82). Withholding the reading is not withholding the data: every series
+stays in the record, which is what lets a later reader re-judge the run rather
+than take a verdict's word.
+
+This is deliberately **not** `Verdict::Ungraded`. `Verdict` answers *did the
+figure meet its budget on the pinned rig*, and its `Ungraded` means "measured
+somewhere else"; this answers *does the cost track `n`*, and withholds for
+contamination rather than provenance. Two questions with different inputs, so
+two types — collapsing them would give `Ungraded` a second meaning.
+
+One related correction: the `k` arm's field was an **absolute** spread, so a
+`MAX_INPUTS` arm that came in *cheaper* — which the discarded run's did — was
+reported as a 70 % *cost*, inverting `#842`'s `n + k` finding. It is now a
+signed change, and a negative value reads as what it is: the `k` term lost in
+the noise of `n`.

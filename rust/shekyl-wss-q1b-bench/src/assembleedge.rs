@@ -332,6 +332,52 @@ fn arms_for(top: Population, floor_leaves: u64) -> Vec<Arm> {
     ]
 }
 
+/// Which plan a run measured.
+///
+/// Typed rather than a string, because the console header read the record's
+/// prose with `starts_with("SHAPE")` and printed `GRADED` for everything else
+/// — including the replay-window plan, which the record says in the same breath
+/// is **not** the graded assembly population. A label a reader could copy as
+/// the ruled figure must not be derived by sniffing the text that disclaims it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize)]
+pub enum PlanKind {
+    /// [`plan_at_replay_window`]: 725 blocks, about one day of chain.
+    ReplayWindow,
+    /// [`plan_at_depth`]: a shallower rung, measured for shape only.
+    Shape {
+        /// The rung's depth.
+        depth: u8,
+    },
+}
+
+impl PlanKind {
+    /// Short label for a console header.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ReplayWindow => "REPLAY WINDOW",
+            Self::Shape { .. } => "SHAPE",
+        }
+    }
+
+    /// What the plan's figures do and do not mean, for the record.
+    #[must_use]
+    pub fn note(self) -> &'static str {
+        match self {
+            Self::ReplayWindow => {
+                "REPLAY WINDOW — 725 blocks, about one day of chain. NOT the graded assembly \
+                 population: assembly's n is the whole chain, so a graded figure is a ruling \
+                 about chain age rather than a measurement. These seconds are a one-day-old \
+                 chain's."
+            }
+            Self::Shape { .. } => {
+                "SHAPE — a rung chosen to run in minutes. Flatness across the rung and the \
+                 one-layer step at its boundary travel; the absolute seconds do NOT."
+            }
+        }
+    }
+}
+
 /// Bound on a same-rung spread, in percent.
 ///
 /// Two arms are compared through medians that each converged to within
@@ -416,6 +462,68 @@ pub enum FlatnessGrade {
     },
 }
 
+/// The criterion's reading, or why the run cannot support one.
+///
+/// A grade is only meaningful from a run whose numbers are the workload's.
+/// [`LoadControl`](crate::report::LoadControl) already says a non-quiet run
+/// "cannot claim its figure is a property of the work rather than of the
+/// machine" — which is exactly the claim a grade makes — and the spend edge
+/// withholds its verdict in that state. Emitting a `FlatnessGrade`
+/// unconditionally would let a contaminated run report **`Flat`**, the one
+/// reading capture is trying to earn.
+///
+/// # Why this is not [`Verdict`](crate::report::Verdict)
+///
+/// `Verdict` answers *did the measured figure meet its budget on the pinned
+/// rig*; its `Ungraded` means "measured somewhere else". This answers *does
+/// the cost track `n`*, and withholds for contamination rather than for
+/// provenance. Two questions with different inputs, so two types; collapsing
+/// them would overload `Ungraded` with a second meaning.
+///
+/// The raw series stay in the record either way — withholding the reading is
+/// not withholding the data.
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize)]
+pub enum FlatnessOutcome {
+    /// The board stayed quiet and every contributing series converged.
+    Graded(FlatnessGrade),
+    /// No reading. The reason is part of the value (rule 82).
+    Withheld(GradeWithheld),
+}
+
+/// Why a reading was withheld.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize)]
+pub enum GradeWithheld {
+    /// The board moved across the run: the control re-timed identical work
+    /// and disagreed with the first timing by more than the bound, so the
+    /// numbers describe the machine.
+    BoardNotQuiet,
+    /// A contributing series never settled, so its median is not yet a cost.
+    SeriesUnconverged,
+}
+
+/// Decide whether this run can support a reading, and take it if so.
+///
+/// Board first: a moving board is the stronger disqualification, and naming
+/// convergence for a run that was never quiet would point at the wrong
+/// remedy.
+#[must_use]
+pub fn outcome(
+    criterion: FlatnessCriterion,
+    board_quiet: bool,
+    every_series_converged: bool,
+    same_rung: (Duration, Duration),
+    cross_rung: (Duration, Duration),
+    cross_rung_depths: (u8, u8),
+) -> FlatnessOutcome {
+    if !board_quiet {
+        return FlatnessOutcome::Withheld(GradeWithheld::BoardNotQuiet);
+    }
+    if !every_series_converged {
+        return FlatnessOutcome::Withheld(GradeWithheld::SeriesUnconverged);
+    }
+    FlatnessOutcome::Graded(grade(criterion, same_rung, cross_rung, cross_rung_depths))
+}
+
 /// Grade a measured plan: the same-rung pair, then the cross-rung pair.
 ///
 /// `same_rung` is `(shallower_n_cost, larger_n_cost)` at one depth;
@@ -461,6 +569,22 @@ pub fn spread_pct(a: Duration, b: Duration) -> f64 {
         return f64::INFINITY;
     }
     (hi.as_secs_f64() - lo) / lo * 100.0
+}
+
+/// Signed percentage change from `from` to `to`.
+///
+/// Distinct from [`spread_pct`], which is absolute and therefore says
+/// "70 % cost" for an arm that was 70 % *cheaper*. Direction is the whole
+/// point for the `k` arm: a cheaper `MAX_INPUTS` arm is evidence that the `k`
+/// term is lost in the noise of `n`, and reporting it as a cost inverts that
+/// reading. The discarded first run was exactly this case.
+#[must_use]
+pub fn signed_change_pct(from: Duration, to: Duration) -> f64 {
+    let from = from.as_secs_f64();
+    if from <= 0.0 {
+        return f64::INFINITY;
+    }
+    (to.as_secs_f64() - from) / from * 100.0
 }
 
 /// `deep / shallow`, as a ratio.
