@@ -1440,6 +1440,9 @@ floor `W ≥ 149.4 KB / τ`. The design owner recommends `τ ≤ 5 %`, which giv
 
 ### 9.3 The upper bound, `U1a`, in bytes
 
+> **Read 2026-10-02 (§10.5):** the multi-size run this section waits on is in. `U1a`
+> does not bind at 3 MB, and the one-size interval below is superseded by that reading.
+
 A whole-shard read must complete in one attempt within one block (120 s), the criterion
 the W₂ measurement was graded against. The measurement is on a ~3.33 MB object: cold
 p99 48.27 s, soak p99 86.06 s (`ARCHIVAL_SHARD_FETCH.md`:1091-1095). With
