@@ -2428,7 +2428,12 @@ question is not "which flow" but **what the bond is for**:
   which is proportional to the shard's **current reward**. A bond proportional
   to expected reward has an opportunity cost proportional to `reward × rate`,
   and A1's ratio becomes `≈ 1/rate`: it clears at every age, every traffic
-  level, forever, with no escalation.
+  level, forever, with no escalation. **The `1/rate` result is conditional**:
+  it holds only if the bond's second job (below) does not exist or is priced
+  separately. If TJ-4's Round 2 finds the fixed floor is doing admission or
+  anti-sybil work, `1/rate` survives for the deterrent portion only, and the
+  fixed portion carries a burden of its own shape that this table has already
+  priced.
 - A fixed `0.75 SKL` per 3 MB makes sense only if the bond is doing a
   **second job** — admission cost, anti-sybil floor — in which case that job is
   **named and priced on its own**, not carried implicitly by the deterrent.
