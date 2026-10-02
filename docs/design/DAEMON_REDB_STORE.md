@@ -2669,6 +2669,63 @@ mis-stated is one that passes on the wrong set.
 | DEL-007 | **heed as an intermediate engine** — its only advantage over redb is on-disk compatibility with the C++ LMDB, and no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve — the genesis block is regenerated from `GENESIS_TX`/`GENESIS_NONCE` on any empty store, so it is a derived artifact of a repo constant, not state; LMDB→heed→redb is two switchovers to reach where one gets you | Rick, 2026-09-01 | **Closed — do not re-propose** (CSR-7) |
 | DEL-008 | **The archival C++ path and the Rust that exists only to be called from it — one deletion, the FFI its seam** (`DRS_E4_ARCHIVAL_WRITER.md` §3.9, timing corrected at commit 9, 2026-10-02). C++: the appliers, reverters, gather shell, freeze pipeline, serve-credit leaf-preimage verifier, injector LMDB write, `Archival*RevertValue` codecs, `blockchain_db.cpp` pure virtuals (§3.9's line ranges). Rust: `release_pop`, `reinstate_pop` (`bond_connect.rs`) and their tests; `segment_freeze.rs`; the freeze half of `challenge.rs` / `path.rs`; `shard_coverage.rs`'s freeze operand; every `shekyl_archival_*` export under `shekyl-ffi/src/archival_ffi/` whose only caller is that C++ (59 of 60 at the register date; the sixtieth, `shekyl_archival_settlement_epoch_overridden`, had none and was deleted at commit 9). Not in this row: `serve_credit_decisions.rs`'s read of the freeze half (retires with `PDM-Q6` item 4's re-key, `ARW-13`) and `shekyl-economics-sim`'s (`SHT-8`'s row); the gates that pin "C++ is canonical" (FOLLOWUPS' *Re-examine the C++-anchored CI gates* row) invert at the same trigger | Cutover — the Rust daemon is consensus (`DRS_E1_SPRUNE.md` §13's rule; `PDM-Q-S0`; DEL-004's path). **Falsify by** `rg 'shekyl_archival_(release\|reinstate)_pop\|shekyl_archival_frozen_segment_count' src/` returning nothing while a Rust symbol still exists | **Planned** (registered 2026-10-02) |
 
+### 12.1 Cutover day — what goes red or stale by design, in one list
+
+**Why this subsection exists (2026-10-02).** The register above is a
+register of deletion *decisions*; §8.1's genesis gate reads *"deletion
+register empty; production `shekyld` does not link liblmdb"*, so it was
+always meant to drain. What it did not carry is the enumeration of
+everything else that goes red or stale on the same day the C++ store
+leaves — and that enumeration has been growing in the places each piece
+was built: a census macro's doc comment, five gates' subject assertions,
+a conformance register's rule, four design docs. FOLLOWUPS' *Re-examine
+the C++-anchored CI gates at the LMDB cutover* row named eight gates on
+2026-09-13 and said the cheap moment to scope them is *"while it is
+known which eight and why, not after the cutover when they are failing
+and someone is deciding under pressure whether a red is real"*. This is
+that list, anchored on `DEL-008` — the first register row whose trigger
+is cutover day and whose falsifier is a command. The alternative is a
+burst of red whose causes are distributed across eight scripts, a
+register, a census and four documents, and the temptation under that
+pressure is to **clear** a gate rather than **retire** it — widen a
+floor, add an allowlist row — which deletes a still-valid shape together
+with its dead subject.
+
+**The rule for the day.** A red that is on this list is retired by
+deleting the dead *subject* (the LMDB-side parse, the C++-citing row, the
+walker-side floor) **with** the C++ it asserted over — never by lowering
+a `MIN_*`, widening an allowlist, or re-pointing a citation at a Rust
+file that happens to exist. A red that is **not** on this list is a
+finding, not a casualty: it is read before anything is cleared. Each
+entry names where the behaviour is built so the reader goes to the
+source, not to this table.
+
+| Where it is built | What it asserts over the C++ | On cutover day |
+| --- | --- | --- |
+| `DEL-008` (above); `DRS_E4_ARCHIVAL_WRITER.md` §3.9 (archived; its line ranges are the C++ enumeration) | The archival C++ path and the Rust that exists only to be called from it | **The trigger.** Deletes whole, FFI as the seam; `DEL-008`'s falsifier is the day's first check. `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` archives the same day (RETIRED BY RULING `PDM-Q12`, live in code until this) |
+| `scripts/ci/check_redb_schema_bijection.py` — subject assertion *"parsed ZERO tables from `SHEKYL_LMDB_TABLES`"* | redb's `schema.rs` is a bijection with the X-macro in `db_lmdb.cpp` | **Retire the LMDB side.** The X-macro is the denominator by design (*"why the X-macro is the source"*); when it leaves, the assertion fires correctly. What survives is the schema ↔ `TABLE_CLASSES` pair (the gate's third surface) — the Rust schema becomes its own denominator, and the `RUST_ONLY_TABLES` allowlist (`SCW-11`) becomes the whole table set and is deleted, not grown |
+| `scripts/ci/check_redb_schema_key_types.py` — `MIN_CONSTRAINTS = 23` | Every redb key's ordering constraint is derived from the LMDB flags / comparator it mirrors | **Retire the derivation, keep the order.** With no LMDB flags there is nothing to derive *from*; the gate's floor goes red by construction. redb's orders are then specified by `lmdb_order`'s pinned vectors (a transcription of the C++ over 4 000 pairs) — those tests stay as the order's spec; the gate that re-derived them does not |
+| `scripts/ci/check_lmdb_schema_coverage.py` (+ `test_check_lmdb_schema_coverage.py`) | Every X-macro table has a `docs/LMDB_SCHEMA.md` section | **Retire with its subject.** `LMDB_SCHEMA.md` becomes a records-was of the store that shipped before genesis (`15-deletion-and-debt.mdc`: no persisted state, `DEL-007`); the gate has no subject |
+| `scripts/ci/check_segment_freeze_sites.sh` (run from `check_consensus_invariants.sh`) | One-site tripwires on the C++ freeze pipeline's counter lockstep and cursor accounting | **Retire with `DEL-008`.** The sites are the C++ half of the row; the five invariants' Rust subject is `segment_freeze.rs`, which deletes in the same row |
+| `scripts/ci/check_consensus_invariants.sh` — the `db_lmdb.cpp` watermark counts (`WM_CALLS`, `WM_KEY_SITES`, `WM_IN_REVERTS`) and the `tests/core_tests/block_validation.cpp` citation | Watermark-write and revert sites in the LMDB store | **Retire those checks; keep the file.** There is no Rust successor to assert over: S-PRUNE's body horizon is *"a rule of the epoch calendar — there is no constant to name and no watermark to store"* (`prune.rs`, module doc), and the one number it keeps, the undo floor, is `UndoLogFloorCell`'s with its SI rows. The shell counts over `db_lmdb.cpp` lose their subject and are deleted, not re-pointed |
+| `scripts/ci/check_drs_p0d_digest_coverage.py` — `MIN_WALKER_CPP = 800` beside `MIN_DIGEST_RS = 2000` | The C++ walker (`shekyl_e2_trace_export.cpp`, `archival_snapshot.cpp` — rule 20 holds the latter to a marshal) covers what the Rust digest covers | **Retire the walker-side floor, keep the digest-side.** The oracle loses its C++ side; see the register row two below for what the comparison becomes |
+| `scripts/ci/check_chain_rules_coverage.py` over `census.rs`'s `held_by_cxx("tests/core_tests/block_validation.cpp", …)` rows (A1, A4) | The C++ ingest driver holds acceptance topology (`ALREADY_EXISTS`, `ORPHANED`) and the cited core test proves it refuses | **Re-classify the rows.** The census's own doc says it: *"a deferral with a known expiry: the cited file leaves the tree at cutover, the gate goes red, and the row is re-classified then — held rows cannot outlive the C++ silently."* The holder becomes the Rust ingest driver (`DRS_E2_REPLAY_DRIVER.md`'s connector), cited as `enforced_at`, never as a Rust file that merely exists |
+| `scripts/ci/check_test_only_features.py` — `MET_TRIGGER_UNGOVERNED_AT_REGISTRATION` (fifteen entries, shrink-only; three record an edge into `shekyl-ffi`) | Each entry pins an *exact* hit set — feature, consumer, edge — and *"a recorded hit that vanished is red until deleted"* | **Delete the vanished hits, one entry at a time.** The three `shekyl-ffi` edges vanish when the C++ consumer of the FFI does; the other twelve leave on their own rows (`F-7`, the governance row). An entry is deleted when its hit is gone, not when the list is inconvenient |
+| `CONSENSUS_STORE_RECONCILIATION.md` — the verdict states `CHECKED-CONFORMANT` / `DIVERGENT`, and §(adjudication) *"after cutover the fixtures re-baseline from Rust and become permanent regression gates"* | Rust's store behaviour conforms to the C++'s, row by row | **Two states become unreachable; the existing verdicts stay.** A conformance verdict needs two sides; with one, no new row can take either state. Every pinned verdict is a records-was at its sha (`95-documentation-lifecycle.mdc`: the discriminator is artifact vs verdict) and is kept; the register's rule already names what the oracle becomes — the E2 corpus re-baselines from Rust. `CEN-L10` → bucket 3 the same day (E4 §9: *"not here, the C++ is live"*) |
+| The E2 trace corpus and the archival fixture replica (`shekyl-chain-ingest`, `archival_fixture_replica_tests.rs`; `DRS_E2_REPLAY_DRIVER.md`) | Six chains captured from the C++ daemon, replayed against Rust | **Re-baseline from Rust** (the rule above). The capture tooling's C++ half (`shekyl_e2_trace_export`) is `DEL-008`'s; the Rust replay and the corpus stay |
+| `scripts/ci/check_levin_constant_parity.sh` (`LV-1`) and `test_check_doc_code_citations.py`'s C++ fixtures | Levin wire constants are hand-copies of C++ definitions; the citation gate's self-test cites `.cpp` paths | **Not this cutover.** Both are on FOLLOWUPS' list of eight; `LV-1`'s subject is the p2p cutover's (`P2P_3_IMPLEMENTATION_ROUND.md`), and the citation self-test's fixtures are pinned shas, not live files. Listed so the day's reader does not clear them by association |
+
+**What is not here, on purpose.** The gates that pin "the inland store
+is Rust" (`check_inland_height_u64.py`, `check_store_invariant_register.py`,
+the persisted-schema snapshot check of `42-serialization-policy.mdc`) do
+not reference the C++ and do not move. FOLLOWUPS' *Re-examine
+the C++-anchored CI gates* row stays open as the **work** (the
+mirror→lead transition designed once, blocker-keyed on §8.1's observable)
+— this subsection is its **enumeration**, so the row no longer has to be.
+A gate added after this date that asserts over `src/blockchain_db/lmdb/`
+or `SHEKYL_LMDB_TABLES` adds its row here in the same PR, or it is the
+next unlisted red.
+
 ---
 
 ## 13. Documentation obligations
