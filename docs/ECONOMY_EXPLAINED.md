@@ -12,7 +12,7 @@
 > `design/STAKER_ARCHIVAL_SIM.md` (simulation ledger),
 > `design/REWARD_EMISSION_LEG.md` (emission mechanics),
 > `PUBLIC_NARRATIVE_FAQ.md` (positioning and service promise).
-
+>
 > **DRIFT (marked 2026-10-02).** Parts of this explainer describe the
 > economics as simulated in June 2026 and no longer match `dev`. Two
 > facts are corrected in place: the burn formula (the stake-ratio factor
@@ -39,7 +39,12 @@ rises otherwise**. That condition is a real one, not a formality: the
 burn scales with the circulating fraction, so early in the chain's life
 it is near zero while issuance is at its largest, and net supply grows
 even on a busy chain. The burn overtakes issuance only as the curve
-flattens and usage matures. Four interacting control loops decide *who*
+flattens and usage matures. *(UNVERIFIED 2026-10-02, pending the sim
+re-base: the simulations behind this sentence held the fee at a flat 0.1
+coins per transaction, while the relay floor the chain charges is
+proportional to the block reward and falls with it. Whether burned fees
+ever exceed issuance depends on a fee level that has not been measured.)*
+Four interacting control loops decide *who*
 receives newly released coins, *how fast* they release, and *how many fees
 get destroyed*. None of the loops needs governance
 or manual tuning; each reads an on-chain quantity (transaction volume,
@@ -241,7 +246,11 @@ protocol sets the purse (Loops 3+4); the market sets the population.
 
 > **DRIFT.** Every figure in this section (117 coins, ~3,546 coins,
 > 0.000085 %, the ~45-coin portfolio) comes from a simulation arm that
-> closed one shard per 10,000-block epoch. The chain now closes a shard per
+> closed one shard per 10,000-block epoch. That cadence was a parameter of
+> the arm (`blocks_per_shard` in `shekyl-economics-sim`, defaulted to one
+> settlement epoch), not a quantity read from the chain's partition — so
+> the figures are an artefact of the parameter, not a measured property of
+> the design. The chain now closes a shard per
 > 3 MB of archival bytes: baseline traffic closes 523,841 shards in ten
 > years, and at 0.75 coins per shard and the model's six replicas that is
 > about 2.4 million coins of bond at year 10, not ~1,300. The conclusions
