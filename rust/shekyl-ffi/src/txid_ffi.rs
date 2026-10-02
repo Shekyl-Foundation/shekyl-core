@@ -34,9 +34,10 @@ use crate::legacy_util::slice_from_ptr;
 /// `first_input_is_spend` is whether the transaction has a first input that
 /// is not `gen`. An empty range may be passed as a null pointer.
 ///
-/// Returns `false`, writing nothing, only when a pointer is null where bytes
-/// were promised: `out_txid`, or a range with a non-zero length. No content
-/// of the ranges can make it fail.
+/// Returns `false`, writing nothing, only when a pointer cannot be the range
+/// it claims: `out_txid` is null, or a range with a non-zero length is null
+/// or longer than `isize::MAX` bytes (no allocation is). No content of the
+/// ranges can make it fail.
 ///
 /// # Safety
 /// Each range's pointer is readable for its length; `out_txid` is writable
@@ -101,8 +102,9 @@ pub unsafe extern "C" fn shekyl_txid_from_segments(
 /// range — a body with no prunable region — is a valid input and may be
 /// passed as a null pointer.
 ///
-/// Returns `false`, writing nothing, only when a pointer is null where bytes
-/// were promised: `out_hash`, or `prunable` with a non-zero length.
+/// Returns `false`, writing nothing, only when a pointer cannot be the range
+/// it claims: `out_hash` is null, or `prunable` has a non-zero length and is
+/// null or longer than `isize::MAX` bytes (no allocation is).
 ///
 /// # Safety
 /// `prunable` is readable for `prunable_len` bytes; `out_hash` is writable
@@ -221,9 +223,10 @@ mod tests {
         );
     }
 
-    /// The only refusals are the pointer ones, and they write nothing.
+    /// The only refusals are of a pointer that cannot be the range it
+    /// claims, and they write nothing.
     #[test]
-    fn refuses_only_a_null_pointer_where_bytes_were_promised() {
+    fn refuses_only_a_range_that_cannot_be_read() {
         let bytes = [0u8; 4];
         let mut out = [0xEEu8; 32];
         // SAFETY: `bytes` and `out` are live; the null range claims 3 bytes,
@@ -244,6 +247,27 @@ mod tests {
             )
         };
         assert!(!null_range);
+        assert_eq!(out, [0xEE; 32], "a refusal writes nothing");
+
+        // SAFETY: `bytes` and `out` are live; the prunable range claims more
+        // than `isize::MAX` bytes, which no allocation holds, so it is
+        // refused before anything is read.
+        let oversized_range = unsafe {
+            shekyl_txid_from_segments(
+                bytes.as_ptr(),
+                bytes.len(),
+                core::ptr::null(),
+                0,
+                core::ptr::null(),
+                0,
+                0,
+                false,
+                bytes.as_ptr(),
+                isize::MAX as usize + 1,
+                out.as_mut_ptr(),
+            )
+        };
+        assert!(!oversized_range);
         assert_eq!(out, [0xEE; 32], "a refusal writes nothing");
 
         // SAFETY: every range is empty; the null `out_txid` is the refusal
@@ -312,15 +336,22 @@ mod tests {
         );
     }
 
-    /// Its only refusals are the pointer ones, and they write nothing.
+    /// Its only refusals are of a pointer that cannot be the range it
+    /// claims, and they write nothing.
     #[test]
-    fn the_prunable_export_refuses_only_a_null_pointer_where_bytes_were_promised() {
+    fn the_prunable_export_refuses_only_a_range_that_cannot_be_read() {
         let mut out = [0xEEu8; 32];
         // SAFETY: the null range claims 3 bytes, which is the refusal under
         // test and is never read; `out` is 32 writable bytes.
         assert!(!unsafe { shekyl_tx_prunable_hash(core::ptr::null(), 3, out.as_mut_ptr()) });
         assert_eq!(out, [0xEE; 32], "a refusal writes nothing");
         let bytes = [0u8; 4];
+        // SAFETY: the length is past `isize::MAX`, which no allocation is, so
+        // it is refused before anything is read; `out` is 32 writable bytes.
+        assert!(!unsafe {
+            shekyl_tx_prunable_hash(bytes.as_ptr(), isize::MAX as usize + 1, out.as_mut_ptr())
+        });
+        assert_eq!(out, [0xEE; 32], "a refusal writes nothing");
         // SAFETY: `bytes` is live; the null `out_hash` is the refusal under
         // test and is never written.
         assert!(!unsafe {

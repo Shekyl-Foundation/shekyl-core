@@ -1400,9 +1400,10 @@ int32_t shekyl_tx_extra_shape_of(
 // consensus operand.
 //
 // The ranges are opaque here -- nothing is parsed -- so no content can make
-// the call fail. It returns false, writing nothing, only for a null pointer
-// where bytes were promised (out_txid, or a range with a non-zero length); a
-// null pointer is accepted for an empty range. out_txid receives 32 bytes.
+// the call fail. It returns false, writing nothing, only for a pointer that
+// cannot be the range it claims: a null out_txid, or a range with a non-zero
+// length that is null or longer than PTRDIFF_MAX bytes. A null pointer is
+// accepted for an empty range. out_txid receives 32 bytes.
 // ---------------------------------------------------------------------------
 bool shekyl_txid_from_segments(
     const uint8_t* prefix,
@@ -1426,8 +1427,9 @@ bool shekyl_txid_from_segments(
 /// One byte range, nothing parsed, and no archival length: that operand is
 /// the txid mixer's to measure. An empty range (a body with no prunable
 /// region) is valid and may be a null pointer. Returns false, writing
-/// nothing, only for a null pointer where bytes were promised. out_hash
-/// receives 32 bytes.
+/// nothing, only for a pointer that cannot be the range it claims: a null
+/// out_hash, or a prunable with a non-zero length that is null or longer
+/// than PTRDIFF_MAX bytes. out_hash receives 32 bytes.
 bool shekyl_tx_prunable_hash(
     const uint8_t* prunable,
     size_t prunable_len,
