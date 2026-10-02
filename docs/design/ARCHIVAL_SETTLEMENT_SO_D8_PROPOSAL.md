@@ -827,7 +827,9 @@ is in the past and in the DB, which is what `PC-D4` could not do.
   **resolves because `h` is in the past and in the DB**, which is what
   `PC-D4` could not do. Two
   records answering different draws of the same pair may share `h_incl` and
-  both admit. Mirror in `serve_credit_decisions.rs` in lockstep.
+  both admit. (This once read "mirror in `serve_credit_decisions.rs` in
+  lockstep"; the mirror was deleted 2026-10-02, DRS-E4 commit 10d. The Rust
+  side of this rule is CEN-J8–J10's, built from the ruling.)
 - **Membership gate, consensus-visible:** admitted only if
   `(P, s) ∈ assignment(h)`. Without it a miner colluding with `P` includes
   pass records for `P`'s pair citing any `h` it likes — regardless of whether

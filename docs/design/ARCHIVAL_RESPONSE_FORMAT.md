@@ -1255,8 +1255,9 @@ round a check passed while measuring the wrong thing — the `CTTypeNull`-only
 tripwire arm, the equivalence test above, and the `cargo check` that missed a
 clippy-only lint.
 
-**Rule 47, again.** `archival_serve_credit_equivalence.cpp` is a cross-language
-equivalence test *for this exact shape* that asserts consensus **verdicts** over
+**Rule 47, again.** `archival_serve_credit_equivalence.cpp` (deleted with its
+mirror 2026-10-02, DRS-E4 commit 10d) was a cross-language
+equivalence test *for this exact shape* that asserted consensus **verdicts** over
 a JSON fixture and never full-tx bytes — so it could not detect a byte
 divergence in the thing it is named for. The gate did not assert its own
 subject. The byte-parity arm is owed regardless of how the rest of `A` lands.

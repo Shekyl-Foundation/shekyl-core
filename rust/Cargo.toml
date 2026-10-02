@@ -379,7 +379,6 @@ members = [
 # only builds under `cargo +nightly fuzz build`. Hardening-pass
 # commit 8 (`docs/MID_REWIRE_HARDENING.md` §3.8).
 exclude = [
-    "shekyl-archival-retention/fuzz",
     "shekyl-wire/fuzz",
     "shekyl-engine-state/fuzz",
     "shekyl-p2p-transport/fuzz",

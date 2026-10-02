@@ -198,6 +198,39 @@
   proof's content, length, and framing are unchanged
   (`GENESIS_TX_WIRE_FORMAT.md` Q6).
 
+### Archival — the serve-credit C++ mirror and its equivalence KAT are deleted; the tree now says there is no Rust serve-credit verifier (DRS-E4 commit 10d)
+
+- **Behaviour unchanged; what the tree *claims* changed.** Deleted:
+  `shekyl-archival-retention/src/serve_credit_decisions.rs` (the D-SC-A/B/C
+  mirror of the C++ serve-credit acceptance gate), its equivalence KAT
+  (Rust leg, C++ leg `archival_serve_credit_equivalence.cpp`, shared
+  fixture) and the two fuzz targets over it (the crate's `fuzz/` harness,
+  which held nothing else, goes with them; the fuzz-smoke gate's required
+  list loses two paths). Nothing called the mirror. It implemented the leaf
+  preimage `PDM-Q6` item 4 retired (2026-09-18), so it was a trap for
+  whoever builds the successor, and it read as a Rust verifier for a rule
+  the Rust validator does not have: `shekyl-chain-rules` runs no
+  serve-credit acceptance (CEN-J8–J10 pending) — a well-formed serve credit
+  from a bonded persona is accepted on shape (H20), block-level `(P, shard,
+  E)` uniqueness (G7) and persona existence (L7). That gap is now a
+  FOLLOWUPS row, *Serve-credit acceptance (CEN-J8–J10) has no Rust rule*,
+  which names what the successor is built from (`PDM-Q6` item 4, the
+  `SHT-Q2` key, `ARCHIVAL_CREDIT_WIRE.md`) so the next lane reaches for the
+  ruling and not for what used to be in the tree.
+- **The C++ gate still runs**, unchanged, and is the only serve-credit
+  acceptance that does: `blockchain.cpp` `check_archival_serve_credit_input`
+  through `shekyl_archival_challenge_leaf_index` / `_leaf_chunk_bounds` /
+  `_frozen_segment_count` into `segment_freeze.rs` and `challenge.rs`. Those
+  stay, for those callers, and retire together at the LMDB cutover
+  (`DAEMON_REDB_STORE.md` `DEL-008`, which now names the callers and drops
+  the "retires with the re-key" exclusion — a deferral whose blocker was
+  itself a deferral). G7's uniqueness body moves into `rules/body.rs` as
+  the module's own set-membership scan; its tests already lived there.
+  `inland_height_u64` grandfather list: 172 → 170.
+- Rule 22 gains two forms: *a deferral inherits whatever blocker is nearest
+  to hand* (the check: is the blocker itself a deferral?) and *a parity
+  artifact outlives its rule unless the retirement ruling names it*.
+
 ### Docs — DRS-E4 closes as record; the LMDB cutover gets its one list (DRS-E4 commit 10)
 
 - Process only. `DRS_E4_ARCHIVAL_WRITER.md` and `DRS_E1_SARCH.md` archive to

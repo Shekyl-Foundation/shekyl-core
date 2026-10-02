@@ -36,8 +36,6 @@ rust/shekyl-archival-retention/src/emission_verify.rs	1	current_block_height: u6
 rust/shekyl-archival-retention/src/emission_verify.rs	1	pub current_block_height: u64,
 rust/shekyl-archival-retention/src/pass_anchor.rs	1	fn chain_hash(height: u64) -> [u8; 32] {
 rust/shekyl-archival-retention/src/pass_anchor.rs	1	fn window_at(predecessor_height: u64) -> PassAnchorWindow {
-rust/shekyl-archival-retention/src/serve_credit_decisions.rs	1	block_height: u64,
-rust/shekyl-archival-retention/src/serve_credit_decisions.rs	1	pub current_height: u64,
 rust/shekyl-archival-retention/src/shard_coverage.rs	1	fn row(shard_id: u64, bonded_count: u64, freeze_height: u64) -> ShardCoverageIn {
 rust/shekyl-archival-retention/src/shard_coverage.rs	2	pub freeze_height: u64,
 rust/shekyl-archival-retention/src/shard_coverage.rs	1	tip_height: u64,

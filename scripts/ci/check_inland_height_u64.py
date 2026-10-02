@@ -108,8 +108,10 @@ SCOPE = (
 # History: 174 at the gate's birth (2026-10-01, DRS-E4, `ARW-Q16` (c) as
 # ruled: landed grandfathered so the forty-first instance is CI's finding);
 # 172 at E4 commit 8 (2026-10-02: `record_archival_epoch` / `write_slashes`
-# take the connecting `BlockHeight`, `ARW-Q17`).
-GRANDFATHER_CEILING = 172
+# take the connecting `BlockHeight`, `ARW-Q17`); 170 at E4 commit 10d
+# (2026-10-02: the serve-credit C++ mirror `serve_credit_decisions.rs`
+# deleted with its two sites — not typed, gone).
+GRANDFATHER_CEILING = 170
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5
