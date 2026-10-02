@@ -94,7 +94,14 @@ tables has one cause. Each item names what would show it wrong.
 
 The constant-fee closed form for the fee horizon (`onset.rs`, and the two
 tests that pin it) describes a fee the chain does not charge. It is
-retired with ESR-1 as the §12.14 artifact it is, not adapted.
+retired with ESR-1 as the §12.14 artifact it is, not adapted: the report
+prints it on the control arm only, and its tests run on that arm.
+
+**Landed.** ESR-1, 2026-10-02, in three commits: `cef2c6638` pins the
+`--stage2` report before the change; `c78cfd76e` makes the fee an arm of
+the run with the control as its only variant (every mode byte-identical);
+`9d8a52985` adds the production arm and makes it the default. §5.1 has
+the result.
 
 ## 3. The median is a production change inside a sim PR
 
@@ -162,6 +169,45 @@ ESR-3 and ESR-6 both move the early years against prediction 2. If the
 early columns do not improve at ESR-1's production arm, that is a finding
 about ESR-1; if they stop improving after ESR-3 or ESR-6, read that
 step's delta alone before judging the prediction.
+
+### 5.1 ESR-1 — what the run said (2026-10-02, at `9d8a52985`)
+
+The median is still held at the penalty-free zone here, so every
+production figure below is the fee at its **highest**; ESR-6 lowers it.
+
+| Prediction | Outcome |
+| --- | --- |
+| 1. The control arm reproduces §12.14 exactly | **Held.** `--stage2 --control-flat-fee` against the report captured before the change: 13 lines added, none removed, none changed. The 13 are the arm label, a blank line, and the new fee table (`0.1000` in every cell). |
+| 2. Better than §12.14 early, worse late; crossover ≈ year 30 as amended | **Held in direction; the crossover is later than registered.** Mean fee per ordinary transaction on the baseline, SKL, at y10 / 20 / 30 / 40 / 50 / 60: **1.7480 / 0.6421 / 0.1960 / 0.0571 / 0.0164 / 0.0047**, against a flat `0.1`. It crosses `0.1 SKL` between year 30 and year 40, not at year 30. At year 60 it is 21× below the control ("a few tens" was registered). |
+
+What moved in A1-T (flat-25 clearance ratio at 10 %, by decade; onset
+year at 10 % for flat / best):
+
+| Scenario | Arm | y10 | y20 | y30 | y40 | y50 | y60 | Onset |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | :-: |
+| baseline | control | 38.72 | 2.17 | 0.34 | 0.17 | 0.13 | 0.11 | y24 / y28 |
+| baseline | production | 46.55 | 3.81 | 0.54 | 0.10 | 0.02 | 0.01 | y27 / y33 |
+| high-history / low-activity | control | 9.84 | 0.60 | 0.03 | 0.02 | 0.01 | 0.01 | y18 / y21 |
+| high-history / low-activity | production | 46.67 | 1.27 | 0.03 | 0.00 | 0.00 | 0.00 | y21 / y21 |
+
+Three things the control tables said that the production arm does not:
+
+- **Nothing clears to 60 years.** On the control, the best band candidate
+  never failed at 2 % in six scenarios and at 5 % in two. On the
+  production arm every scenario has an onset at every rate (baseline best
+  at 2 %: year 44).
+- **The fee era has no fee leg to speak of.** On the settled chain, the
+  A1-L row "all fees × 100 %" — the miner's whole fee income — carried
+  0.88 / 0.36 / 0.18 of the burden at 2 / 5 / 10 % on the control. On the
+  production arm it carries 0.03 / 0.01 / 0.01. Only the tail-floor rows
+  still read above a tenth.
+- **The constant-fee horizon `H` does not exist.** It needs a fee that is
+  constant in height; the report prints it for the control arm only.
+
+One thing nobody predicted: the early fee is high. The Standard rung at
+the zone median is about 1.7 SKL per ordinary transaction at year 10.
+Whether anyone would pay that is outside the sim, and ESR-6's median is
+expected to lower it.
 
 ## 6. The staking sim — a separate PR
 
