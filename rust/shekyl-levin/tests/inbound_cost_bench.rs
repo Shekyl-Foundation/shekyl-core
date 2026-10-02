@@ -84,11 +84,6 @@ use shekyl_levin::{
     COMMAND_HANDSHAKE, COMMAND_REQUEST_SUPPORT_FLAGS,
 };
 
-/// `config::NETWORK_ID` — FAKECHAIN (`--regtest`) uses the mainnet id.
-const MAINNET_NETWORK_ID: [u8; 16] = [
-    0x55, 0x6C, 0xA9, 0x70, 0x8F, 0xF9, 0x1F, 0x7A, 0x40, 0x69, 0xDA, 0xF3, 0xFC, 0x55, 0xBB, 0xBD,
-];
-
 /// Inbound counts to sample. The first is the baseline; every later row's
 /// marginal cost is taken against its predecessor, so a non-linear term shows
 /// up as a drifting per-connection figure rather than hiding in an average.
@@ -276,7 +271,7 @@ fn spawn_peer(
 
         let req = HandshakeRequest {
             node_data: BasicNodeData {
-                network_id: MAINNET_NETWORK_ID,
+                network_id: shekyl_p2p_transport::MAINNET_ID,
                 address: NetworkAddress::Ipv4 {
                     ip: Ipv4Addr::new(9, 9, 9, 9),
                     port: advertised_port,

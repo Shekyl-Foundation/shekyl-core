@@ -49,6 +49,7 @@ proptest = "1"
 # `ATTESTATION_WITNESS_MAX_BYTES` twin equals the retention crate's authority.
 # Not a production dependency (see `payload/block.rs`).
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 
 [lints]
 workspace = true

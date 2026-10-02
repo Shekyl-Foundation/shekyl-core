@@ -16,7 +16,7 @@
 //!
 //! `--offline` skips the p2p bind (`net_node.inl`); this harness uses
 //! `--p2p-bind-ip 127.0.0.1` plus `--out-peers 0`. `--regtest` (FAKECHAIN)
-//! speaks mainnet `NETWORK_ID` (`cryptonote_config.h` `get_config`).
+//! speaks [`shekyl_p2p_transport::MAINNET_ID`].
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
@@ -31,10 +31,7 @@ use shekyl_levin::{
     COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
 };
 
-/// `config::NETWORK_ID` — FAKECHAIN (`--regtest`) uses mainnet id.
-const MAINNET_NETWORK_ID: [u8; 16] = [
-    0x55, 0x6C, 0xA9, 0x70, 0x8F, 0xF9, 0x1F, 0x7A, 0x40, 0x69, 0xDA, 0xF3, 0xFC, 0x55, 0xBB, 0xBD,
-];
+/// FAKECHAIN (`--regtest`) uses [`shekyl_p2p_transport::MAINNET_ID`].
 
 struct Daemon {
     child: Child,
@@ -368,7 +365,7 @@ fn rust_client_handshakes_with_shekyld() {
     let advertised_port: u16 = 28_099;
     let req = HandshakeRequest {
         node_data: BasicNodeData {
-            network_id: MAINNET_NETWORK_ID,
+            network_id: shekyl_p2p_transport::MAINNET_ID,
             address: NetworkAddress::Ipv4 {
                 ip: Ipv4Addr::new(9, 9, 9, 9),
                 port: advertised_port,
@@ -386,7 +383,7 @@ fn rust_client_handshakes_with_shekyld() {
     };
     let payload = session.invoke_map(COMMAND_HANDSHAKE, &req);
     let hs = HandshakeResponse::load(&payload).expect("decode handshake response");
-    assert_eq!(hs.node_data.network_id, MAINNET_NETWORK_ID);
+    assert_eq!(hs.node_data.network_id, shekyl_p2p_transport::MAINNET_ID);
     assert_eq!(hs.payload_data.current_height, tip.height);
     assert_eq!(hs.payload_data.top_id, tip.top_id);
 

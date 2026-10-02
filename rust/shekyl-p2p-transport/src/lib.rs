@@ -30,8 +30,8 @@ pub use noise::{
     PROTOCOL_NAME,
 };
 pub use prefix::{
-    prefix_for, NetworkId, MAINNET_PREFIX, PREFIX_LEN, STAGENET_PREFIX, TESTNET_PREFIX,
-    WIRE_PREFIX_DST,
+    prefix_for, NetworkId, MAINNET_ID, MAINNET_PREFIX, PREFIX_LEN, STAGENET_ID, STAGENET_PREFIX,
+    TESTNET_ID, TESTNET_PREFIX, WIRE_PREFIX_DST,
 };
 
 /// Wire size of the initiator's first flight, prefix included.

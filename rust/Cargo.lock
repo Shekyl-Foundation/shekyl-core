@@ -4439,6 +4439,7 @@ dependencies = [
  "proptest",
  "shekyl-archival-retention",
  "shekyl-net-address",
+ "shekyl-p2p-transport",
  "shekyl-portable-storage",
  "thiserror",
  "zstd",

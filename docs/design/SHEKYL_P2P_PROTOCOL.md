@@ -3532,9 +3532,11 @@ eight bytes and neither is wrong.
 > - **Output:** bytes `[0..8]` of the 32-byte digest, in digest order, no
 >   re-ordering and no endian conversion.
 
-**The three prefixes, computed rather than promised.** The `NETWORK_ID`
-constants are frozen (`cryptonote_config.h:364`, `:496`, `:507`) and
-`cshake256_32` exists in-tree, so this is a measurement:
+**The three prefixes, computed rather than promised.** The ids live in
+`shekyl-p2p-transport::prefix` (`MAINNET_ID`, `TESTNET_ID`, `STAGENET_ID`),
+the v3.1.0-alpha.6 bytes. C++ reads them through `shekyl_network_id` and
+states no byte. `prefix_for` is not `const`, so the prefixes below are the
+KATs that test pins against it:
 
 | Network | `network_id` | Prefix |
 | --- | --- | --- |

@@ -940,17 +940,9 @@ namespace nodetool
       public_zone.m_can_announce = false;
     }
 
-    if (m_nettype == cryptonote::TESTNET)
     {
-      memcpy(&m_network_id, &::config::testnet::NETWORK_ID, 16);
-    }
-    else if (m_nettype == cryptonote::STAGENET)
-    {
-      memcpy(&m_network_id, &::config::stagenet::NETWORK_ID, 16);
-    }
-    else
-    {
-      memcpy(&m_network_id, &::config::NETWORK_ID, 16);
+      const auto id = cryptonote::get_config(m_nettype).NETWORK_ID;
+      memcpy(&m_network_id, &id, 16);
     }
 
     m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);

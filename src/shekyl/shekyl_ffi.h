@@ -4334,6 +4334,13 @@ void shekyl_link_connection(std::uint64_t id, std::uint64_t* bytes_up, std::uint
 /// window, read from the engine's clock. A null pointer is skipped.
 void shekyl_link_speed(std::uint64_t id, std::uint64_t* bytes_per_sec_up, std::uint64_t* bytes_per_sec_down);
 
+/// The 16-byte production network id for `nettype`
+/// (`cryptonote::network_type`: 0 mainnet, 1 testnet, 2 stagenet, 3 fakechain).
+/// Fakechain is the mainnet id. Returns 0, or -1 when `out` is null or
+/// `nettype` is not one of those four. The bytes live in
+/// `shekyl-p2p-transport::prefix`; this function does not state them.
+int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
+
 } // extern "C"
 
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h

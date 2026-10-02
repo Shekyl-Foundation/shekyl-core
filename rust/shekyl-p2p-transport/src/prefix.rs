@@ -32,26 +32,28 @@ const fn hex_prefix(v: u64) -> [u8; PREFIX_LEN] {
     v.to_be_bytes()
 }
 
+const fn hex_id(hi: u64, lo: u64) -> NetworkId {
+    let mut out = [0u8; 16];
+    let h = hi.to_be_bytes();
+    let l = lo.to_be_bytes();
+    let mut i = 0;
+    while i < 8 {
+        out[i] = h[i];
+        out[i + 8] = l[i];
+        i += 1;
+    }
+    out
+}
+
+/// Production network ids, the v3.1.0-alpha.6 bytes. Rotation is a separate
+/// decision and is not this module's job. FAKECHAIN uses [`MAINNET_ID`].
+pub const MAINNET_ID: NetworkId = hex_id(0x556C_A970_8FF9_1F7A, 0x4069_DAF3_FC55_BBBD);
+pub const TESTNET_ID: NetworkId = hex_id(0x78CE_055B_BBDA_7956, 0xB9C8_A1A2_EC1F_7672);
+pub const STAGENET_ID: NetworkId = hex_id(0x2D21_9754_A1BD_79BA, 0x0540_FDFB_8DC8_A4AE);
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const MAINNET_ID: NetworkId = hex_id(0x556C_A970_8FF9_1F7A, 0x4069_DAF3_FC55_BBBD);
-    const TESTNET_ID: NetworkId = hex_id(0x78CE_055B_BBDA_7956, 0xB9C8_A1A2_EC1F_7672);
-    const STAGENET_ID: NetworkId = hex_id(0x2D21_9754_A1BD_79BA, 0x0540_FDFB_8DC8_A4AE);
-
-    const fn hex_id(hi: u64, lo: u64) -> NetworkId {
-        let mut out = [0u8; 16];
-        let h = hi.to_be_bytes();
-        let l = lo.to_be_bytes();
-        let mut i = 0;
-        while i < 8 {
-            out[i] = h[i];
-            out[i + 8] = l[i];
-            i += 1;
-        }
-        out
-    }
 
     #[test]
     fn pinned_network_prefixes() {
