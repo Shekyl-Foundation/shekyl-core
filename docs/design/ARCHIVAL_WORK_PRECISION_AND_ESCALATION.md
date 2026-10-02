@@ -2192,7 +2192,7 @@ behaviour-neutral while flat; the consensus-constants digest re-pinned
 
 | Arm | Byte-keyed result (2026-10-01) | Change from the leaf-era row |
 | --- | --- | --- |
-| **A1** clearance | 🔴 **high-history / low-activity is cleared by NO candidate in the band**: flat-25 **0.06×**, best (90 % / 2.25 M) **0.21×** at 2 %/yr, **0.04×** at the binding 10 %. Read as replicas rather than a ratio (both burden terms are linear in `R`, so `R_sustained = 6 · ratio` exactly): at 10 % the budget carries **0.07** of a replica flat, **0.26** best — a quarter of one copy where the model wants six; even at 2 % the best candidate sustains 1.3 copies. Every other scenario clears at every rate (sustained-growth best 7.45×, late tail 8.50× at 10 %). **There is no scenario where best clears and flat does not** — see *The finding* below. | Was ✅ "scenario 9 flat 0.66× / best 2.36×". Fails on the bond term alone — ~40× the leaf-era bond per unit of traffic. **For the design owner:** the §6.0 band (asymptote ≤ 90 %) cannot clear the quadrant §11.2 added for exactly this purpose; the lever that would is the bond floor, `W`, or the tail floor named below — not the share curve. |
+| **A1** clearance | 🔴 **high-history / low-activity is cleared by NO candidate in the band**: flat-25 **0.06×**, best (90 % / 2.25 M) **0.21×** at 2 %/yr, **0.04×** at the binding 10 %. Read as replicas rather than a ratio (both burden terms are linear in `R`, so `R_sustained = 6 · ratio` exactly): at 10 % the budget carries **0.07** of a replica flat, **0.26** best — a quarter of one copy where the model wants six; even at 2 % the best candidate sustains 1.3 copies. Every other scenario clears at every rate **within its own horizon** (sustained-growth best 7.45×, late tail 8.50× at 10 %); run to 60 y, every constant-traffic world fails at 10 % by year 28 (§12.14). **Within the shipped horizons there is no scenario where best clears and flat does not** — see *The finding* below. | Was ✅ "scenario 9 flat 0.66× / best 2.36×". Fails on the bond term alone — ~40× the leaf-era bond per unit of traffic. **For the design owner:** the §6.0 band (asymptote ≤ 90 %) cannot clear the quadrant §11.2 added for exactly this purpose; the lever that would is the bond floor, `W`, or the tail floor named below — not the share curve. |
 | **A4** stuffing (W9) | Shape **searched, not asserted**: the max-archival-per-fee shape is **8-in / 1-out** at every depth (inputs carry the PQC auth + FCMP share the operand counts; outputs carry unprunable prefix it does not) — the reverse of the leaf era's 1-in / 16-out, which inflated an output count the operand no longer measures. Cost per shard **0.93 SKL** one-shot, **1.00–1.03 SKL** output-conserving sustained; Monero-anchor ≈ 1,026 shards' worth. Realistic-end ROI 0.80–1.88× (`fee×→1` spread **0.8→2.0×**, was 2.8→17.8×); `prem ≈ 1.0` unchanged. | §12.11's no-exclusivity closure is an accounting argument independent of the unit and **stands**; the profit figures here are the historical gate re-measured, not a reopening. |
 | **A5** proxy (W10) | Unchanged in substance — the opening artifact and the test≡job payload are payload questions, not operand ones. Holding = `4096 · W` ≈ **12.3 GB** (was 13.6). | Numeric only. |
 | **A6** swing | Flood ceiling ≈ 3,700–3,900 shards/epoch at the surge limit; worst adversarial slew **0.05 pts/epoch** penalty-free, **0.10** at the legal 2× limit, reorg down-swing **0.0036 pts**. | Was 1.41 / 2.82 / 0.1014. The drop is the knee moving from 10⁵ segments to 2.25 × 10⁶ shards while an epoch's flood still closes only a few thousand units: a steepest-candidate ramp 22× longer in its own unit. §12.11.1's structural closure stands. |
@@ -2204,14 +2204,18 @@ growth: flat **2.16×** at 10 %) and the failing one (**0.01×**) sit two orders
 of magnitude apart, and no trajectory lands between them — the knee band was
 swept against trajectories that never enter the region where flat fails and
 best clears, so the sweep cannot say whether that region exists, let alone
-where the knee should sit inside it. The A1 report now prints this verdict
-(`NO DISCRIMINATING SCENARIO`) whenever the D2 case is empty. **The next sim
-row therefore does not add a tenth point.** It *solves* for the region: hold
-the Stage-2 arms fixed, sweep tail traffic × accreted corpus, and report the
-set where flat-25 < 1.0 ≤ best at the binding rate. If that set is empty or
-razor-thin the lever is dead in this unit and the ceremony is choosing a knee
-for a curve that never binds; if it is wide, the knee is placed inside it from
-measurement. Scheduled in `docs/FOLLOWUPS.md` (owner: this section).
+where the knee should sit inside it. The A1 report prints this verdict
+(`NO DISCRIMINATING SCENARIO AT THIS HORIZON`) whenever the D2 case is empty.
+**MEASURED 2026-10-01, §12.14: this finding is a statement about the
+scenarios' horizons, not about the lever.** The "next row" that was to solve
+for the region ran the same nine scenarios to 60 years instead of sweeping a
+new axis, and the region opens on its own once the staker emission leg has
+decayed under the bond burden: at 2 %/yr flat-25 fails baseline at year 37 and
+the best candidate never does; at the binding 10 % no candidate clears any
+constant-traffic world past year 28. The lever is not dead; it is a four-to-ten
+year delay at 10 % and the difference between failing and clearing at 2–5 %.
+The region's shape, the onset years, and what each other lever buys are in
+§12.14.
 
 **Why scenario 9 fails, structurally.** It is not the escalation and it is not
 the traffic alone. The staker emission share decays by `0.9` per whole year
@@ -2282,3 +2286,133 @@ output-conserving producer/consumer cycle (a campaign that must mint its own
 inputs). Whether an adversary with a large pre-existing output set is the right
 worst case for the ceremony is the owner's call; the one-shot (binding) figure
 does not depend on it.
+
+### 12.14 Onset of A1 failure and the lever table — MEASURED 2026-10-01
+
+**Why.** A1's verdict is a **minimum** over sustained years, and a minimum
+hides *when* a failure arrives. The #929 review modelled §12.13's equations by
+hand and read three eras off them — emission carries everything early; the
+staker emission leg (half-life ≈ 2.9 y under the `0.9`/yr decay) crosses the
+linearly growing bond burden mid-life; and in the fee era, for constant traffic,
+the fee pool `∝ V` and the corpus `∝ V·t`, so **`V` cancels** and a fee *flow*
+can fund only the most recent `H` traffic-years of a bond *stock*. It predicted
+the gap opens around years 18–25 in *every* constant-traffic world, while the
+chain is still minting 5–10 SKL/block. The sim now measures that instead of
+taking it from the hand model: two arms in `rust/shekyl-economics-sim/src/onset.rs`,
+**A1-T** (onset) and **A1-L** (levers), fold the one per-year clearance function
+A1's minimum folds (`stage2::a1_year_clearance_ratio`; `onset::shipped_lever_reproduces_a1`
+pins that the shipped lever *is* A1's budget, atomic-for-atomic).
+
+**A1-T: every Stage-2 scenario run to 60 years.** The schedule past each
+scenario's own horizon is its own closure (constant, cyclic, or growing).
+`xover` is the first year the staker **emission leg alone** falls below the bond
+opportunity cost at 10 %; `onset` is the first sustained year the shipped budget
+(burn × share, flat-25 or the best band candidate) fails to clear; `*` marks a
+cyclic schedule that clears again later.
+
+| Scenario | `n` at 60 y | xover | flat @10 % | best @10 % | flat @2 % | best @2 % | flat-25 ratio @10 % at y10 / 20 / 30 / 40 / 50 / 60 |
+| --- | ---: | :-: | :-: | :-: | :-: | :-: | --- |
+| baseline steady state | 3.28 M | y23 | **y24** | y28 | y37 | never | 38.7 · 2.17 · 0.34 · 0.17 · 0.13 · 0.11 |
+| boom / bust cycle | 5.44 M | y20 | y20\* | y20\* | y26\* | y28\* | 17.0 · 0.81 · 0.07 · 0.02 · 0.01 · 0.01 |
+| sustained growth (shape only) | 1.56 × 10¹⁰ | y16 | y39 | y39 | y39 | y40 | 16.1 · 2.16 · 2.04 · 0.00 · 0.00 · 0.00 |
+| stuffing attack | 3.30 M | y23 | y24 | y28 | y37 | never | 37.4 · 2.13 · 0.34 · 0.17 · 0.13 · 0.11 |
+| stake concentration | 3.28 M | y23 | y24 | y28 | y37 | never | as baseline |
+| mass unstaking | 3.28 M | y23 | y24 | y28 | y37 | never | as baseline |
+| chain bootstrap | 4.71 M | y21 | y22 | y33 | y43 | never | 41.3 · 1.58 · 0.34 · 0.22 · 0.17 · 0.14 |
+| late-chain tail | 14.6 M | y3 | y12 | y43 | y59 | never | 1.19 · 0.59 · 0.39 · 0.30 · 0.24 · 0.20 |
+| high-history / low-activity | 4.89 M | y16 | **y18** | y21 | y21 | y21 | 9.84 · 0.60 · 0.03 · 0.02 · 0.01 · 0.01 |
+
+Sustained growth's `1.2^year` to 60 y is unphysical (block weight caps it; 15.6
+billion shards is 47 PB) and is read for shape only. The late-chain tail starts
+with most of the supply already emitted, hence its early crossover.
+
+**Reading.** The hand model holds. (i) **The three eras are real and dated:**
+the emission leg alone stops covering the bond at **y20–23** in every
+constant-traffic world, and the shipped budget fails at **y18–24** at the
+binding rate — baseline at y24, scenario 9 at y18 — while the chain is still
+minting. The 20-year horizons §12.13 ran to end four years before the
+baseline's onset, which is why §12.13 saw eight clearing scenarios and one
+failing one with nothing between: the gap was not in the trajectories, it was
+past the horizon. (ii) **The escalation is not a dead lever;** it is a
+*delay* at 10 % (baseline y24 → y28, bootstrap y22 → y33, late tail y12 → y43)
+and the difference between failing and clearing-to-60 at 2 % (flat y37, best
+never, for every steady scenario). The discriminating region §12.13 scheduled a
+sweep for is simply the low-rate, post-crossover quadrant of the existing
+scenarios; it did not need a tenth axis. (iii) **At 10 % nothing in the band
+clears any constant-traffic world past y28**, and (iv) **the failure is
+traffic-independent in the fee era**, printed in closed form from the
+production constants (`fee 0.1 SKL`, `burn base 0.5` at baseline `V` with the
+supply emitted — `calc_burn_pct`, not restated — `W = 3 MB`, bond `0.75 SKL ×
+R6`, 12,627 archival B/tx deep):
+
+| Fee leg | `H` @2 % | @5 % | @10 % |
+| --- | ---: | ---: | ---: |
+| burn × flat 25 % | 33 y | 13 y | **7 y** |
+| burn × 100 % | 132 y | 53 y | 26 y |
+| **all** fees × 100 % | 264 y | 106 y | 53 y |
+
+A fee leg clears a corpus no deeper than `H` traffic-years regardless of how
+busy the chain is; a busy chain crosses the same line later only because its
+corpus is younger (`onset::fee_horizon_is_traffic_independent_in_the_fee_era`
+checks the closed form against the fold at y60 on the baseline). This is the
+`√V` damper's second job made visible: the damper is monetary gentleness for
+the burn and, as a side effect, scales the archival pool as `V^1.5` against a
+burden `∝ V·t`.
+
+**A1-L: the levers, priced.** Min ratio over sustained years to 60 y at the
+three rates, `R` sustained at 10 %, and the onset year at 10 %, for the two
+scenarios that bracket the question — the settled chain (scenario 9) and the
+busy steady chain (baseline). Every row is a budget formed with production's
+integer ops (`mul_scale`, `calc_effective_emission_share` for the decay rows)
+and folded through the same clearance function; **priced, not proposed** —
+every one of them is a genesis-frozen or ceremony-gated number.
+
+| Lever | scen. 9 @2 % | @5 % | @10 % | R @10 % | onset | baseline @2 % | @5 % | @10 % | R @10 % | onset |
+| --- | ---: | ---: | ---: | ---: | :-: | ---: | ---: | ---: | ---: | :-: |
+| shipped: burn × flat 25 % | 0.06 | 0.02 | 0.01 | 0.07 | y18 | 0.54 | 0.22 | 0.11 | 0.66 | y24 |
+| burn × best band cand. (90 % / 2.25 M) | 0.21 | 0.09 | 0.04 | 0.26 | y21 | 1.95 | 0.79 | 0.40 | 2.38 | y28 |
+| burn × 100 % | 0.24 | 0.10 | 0.05 | 0.29 | y21 | 2.17 | 0.88 | 0.44 | 2.64 | y30 |
+| all fees × 25 % | 0.22 | 0.09 | 0.04 | 0.27 | y18 | 1.09 | 0.44 | 0.22 | 1.33 | y26 |
+| all fees × 100 % (the PoW budget) | 0.88 | 0.36 | 0.18 | 1.07 | y21 | 4.36 | 1.76 | 0.89 | 5.32 | y54 |
+| flat + non-decaying tail floor 15 % | 0.16 | 0.07 | 0.03 | 0.20 | y24 | 0.70 | 0.28 | 0.14 | 0.85 | y38 |
+| flat + tail floor 50 % | 0.41 | 0.17 | 0.08 | 0.50 | y35 | 1.06 | 0.43 | 0.21 | 1.29 | y46 |
+| flat + the **whole** tail (100 %) | 0.76 | 0.31 | 0.16 | 0.93 | y42 | 1.57 | 0.64 | 0.32 | 1.92 | y51 |
+| flat + decay 0.95/yr | 0.06 | 0.03 | 0.01 | 0.08 | y21 | 0.55 | 0.22 | 0.11 | 0.67 | y29 |
+| flat + no decay | 0.16 | 0.07 | 0.03 | 0.20 | y24 | 0.70 | 0.28 | 0.14 | 0.85 | y38 |
+
+**What the table says.** (i) **Share-of-burn is capped at the burn.** Band top
+→ 100 % of the burn is +11 % (0.26 → 0.29 replicas on scenario 9): the lever the
+ceremony is sizing has its ceiling eleven percent above where the band already
+reaches. (ii) **Taking the share of all fees** rather than of the burn recovers
+the `√V` factor — ×2 on the baseline (`burn_pct = 0.5` there) and ×3.7 on
+scenario 9, whose 15 tx/block puts `burn_pct` at 0.27 — and 100 % of all fees
+is the only share-shaped row that holds the baseline to year 54 at 10 %.
+That row is the miner's income, i.e. the fee-era PoW security budget, and is
+listed so the owner sees the ceiling, not as a candidate: reaching into it is a
+security trade (`00-mission` priority 1) that needs its own wargame. (iii) **A
+non-decaying staker floor on the tail is the first lever shaped like the
+burden**, and it tops out too: the **whole** perpetual tail — 157,680 SKL/yr,
+every SKL of terminal subsidy to archival — funds the bond opportunity cost of
+**1.75 M shards at 2 %, 0.70 M at 5 %, 0.35 M at 10 %**, against scenario 9's
+4.9 M and the baseline's 3.3 M at 60 y. It pushes scenario 9's onset from y18
+to y42 and leaves it at 0.93 replicas; no floor the tail can pay clears it.
+(iv) **Re-pinning the decay** is worth little: `0.95` moves nothing visible, and
+no decay at all equals the 15 % floor (by construction — the shipped share *is*
+15 %) at 0.20 replicas. The decay constant is not where the failure is. (v) So,
+past every share and every tail, **the lever shaped like the whole burden is the
+bond itself** — `0.75 SKL` locked per 3 MB shard, times `R = 6`, forever, under
+an exogenous 10 %. Scenario 9's burden is 0.45 SKL per shard-year at 10 %; the
+figure the ceremony frozen-lists as the §6.2 bond floor is the operand every
+row above divides by.
+
+**For the design owner (unchanged in kind from §12.13, now with the price of
+each answer).** Whether a settled, low-activity Shekyl retains archivers at all
+is the question; if it does, the table says which leg can pay for how much of
+its corpus and for how long, and that the share curve alone cannot. The 10 %
+binding rate is kept and all three columns are printed; it is least grounded
+precisely in the settled-chain row (§12.13 *The binding rate*), and at 2 % the
+baseline clears to 60 y under the best band candidate. The sim's A1 verdict
+now names its horizon; this section is the record of what the longer horizon
+measured. The ruling — floor, decay, bond, `R`, or an accepted sunset of
+archival in the settled case — is a genesis-frozen-parameter decision for the
+GF-7 ceremony and is carried as such in `docs/FOLLOWUPS.md`.
