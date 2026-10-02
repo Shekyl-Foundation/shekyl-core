@@ -328,7 +328,9 @@ fn first_spy_precision_rises_with_spy_fraction() {
                 nodes: 512,
                 peers: 8,
                 reach: FloodReach::EveryPeer,
-                transit_ms: shekyl_relay_privacy::conformance::transit_for(FloodReach::EveryPeer),
+                transit_ms: shekyl_relay_privacy::conformance::transit_for(
+                    shekyl_relay_privacy::MeasuredConnector::Clearnet,
+                ),
             },
             20,
             DelayFamily::Geometric,

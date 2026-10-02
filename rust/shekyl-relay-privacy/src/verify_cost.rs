@@ -464,20 +464,64 @@ impl SpecVerifyCost {
 /// under-estimating shortens the embargo, the privacy-losing direction.
 pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 
+/// Connectors this crate has a transit row for, in `ConnectorId` order.
+///
+/// The privacy crate stays dependency-free, so it does not import
+/// `ConnectorId`. The order is the contract with that enum and with the
+/// relay: index 0 is clearnet, index 1 is Tor. A new connector is a variant
+/// here in the same change that gives it a measurement. Fluff reach is a
+/// separate axis and does not select a row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(usize)]
+pub enum MeasuredConnector {
+    /// [`ADOPTED_TRANSIT_ASSUMPTION_MS`].
+    Clearnet = 0,
+    /// [`ANON_ZONE_TRANSIT_ASSUMPTION_MS`].
+    Tor = 1,
+}
+
+impl MeasuredConnector {
+    /// Closed set, in index order. A new variant is a member here.
+    pub const ALL: [Self; 2] = [Self::Clearnet, Self::Tor];
+
+    /// Declaration index. The FFI and the relay pass this byte.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+
+    /// `None` for an index this table does not measure.
+    #[must_use]
+    pub const fn from_index(index: usize) -> Option<Self> {
+        match index {
+            0 => Some(Self::Clearnet),
+            1 => Some(Self::Tor),
+            _ => None,
+        }
+    }
+}
+
+/// Measured transit for one [`MeasuredConnector`].
+#[must_use]
+pub const fn transit_ms_for_connector(connector: MeasuredConnector) -> f64 {
+    match connector {
+        MeasuredConnector::Clearnet => ADOPTED_TRANSIT_ASSUMPTION_MS,
+        MeasuredConnector::Tor => ANON_ZONE_TRANSIT_ASSUMPTION_MS,
+    }
+}
+
 /// Measured transit for a connector, keyed by declaration order
 /// (`ConnectorId::index`).
 ///
-/// Index 0 is the clearnet connector ([`ADOPTED_TRANSIT_ASSUMPTION_MS`]).
-/// Index 1 is Tor ([`ANON_ZONE_TRANSIT_ASSUMPTION_MS`]). The relay crate
-/// pins those two indexes. Any other index has no distribution and is not
-/// eligible to be stemmed on — a connector supplies its own measurement
+/// Index 0 is [`MeasuredConnector::Clearnet`]. Index 1 is
+/// [`MeasuredConnector::Tor`]. Any other index has no distribution and is
+/// not eligible to be stemmed on — a connector supplies its own measurement
 /// before it can be.
 #[must_use]
-pub fn transit_ms_for_connector_index(index: usize) -> Option<f64> {
-    match index {
-        0 => Some(ADOPTED_TRANSIT_ASSUMPTION_MS),
-        1 => Some(ANON_ZONE_TRANSIT_ASSUMPTION_MS),
-        _ => None,
+pub const fn transit_ms_for_connector_index(index: usize) -> Option<f64> {
+    match MeasuredConnector::from_index(index) {
+        Some(connector) => Some(transit_ms_for_connector(connector)),
+        None => None,
     }
 }
 
@@ -814,14 +858,24 @@ mod tests {
 
     #[test]
     fn an_unlisted_connector_index_has_no_transit() {
+        assert_eq!(MeasuredConnector::Clearnet.index(), 0);
+        assert_eq!(MeasuredConnector::Tor.index(), 1);
         assert_eq!(
-            transit_ms_for_connector_index(0),
+            transit_ms_for_connector_index(MeasuredConnector::Clearnet.index()),
             Some(ADOPTED_TRANSIT_ASSUMPTION_MS)
         );
         assert_eq!(
-            transit_ms_for_connector_index(1),
+            transit_ms_for_connector_index(MeasuredConnector::Tor.index()),
             Some(ANON_ZONE_TRANSIT_ASSUMPTION_MS)
         );
+        for connector in MeasuredConnector::ALL {
+            assert_eq!(MeasuredConnector::ALL[connector.index()], connector);
+            assert_eq!(
+                MeasuredConnector::from_index(connector.index()),
+                Some(connector)
+            );
+        }
         assert!(transit_ms_for_connector_index(2).is_none());
+        assert!(MeasuredConnector::from_index(2).is_none());
     }
 }

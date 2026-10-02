@@ -42,10 +42,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md) D-5
   - Target: pre-genesis
 
-- **One relay; the network is an edge property.** Criterion 4 restated 2026-10-01 (`DAEMON_RELAY_PRIVACY.md`). One relay is in; hop 0 reads the connector declaration; the embargo reads the forwarded connector. Chain sync, block relay, and support flags no longer stop at clearnet, and a session with no relay logs. The deletion is one relay, the connector read at hop 0 and at the embargo, and cover; the carrier development flag stays without the non-public belt. `Relay` is the type. Arrival-coherence and the pool's `origin_zone` are deleted; the pool keeps the relay method. The zone enum is re-keyed, not renumbered. `m_network_zones` is re-keyed by connector identity; one session table is LV-3. `NETWORK_ID` is `network_id_from_genesis` of the genesis block hash (`shekyl/p2p-network-id-v1`); a regenesis rotates it, and the KAT records the derived bytes. Falsify by the zone enum re-keyed off the address type, no `struct Zone` under `shekyl-relay`, and no uuid byte in `cryptonote_config.h`.
-  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
-  - Target: pre-genesis
-
 - **Run the D5 thread-budget legs once the conditions are pinned.** The ledger prints before the p2p loop. The conditions (D5, 2026-09-30) are the smallest worker count, blocking cap and executor count that meet each leg's duty, summed against four cores on the floor device with the miner off. The floors now on the ledger (transport and daemon-RPC 2/1, Tor-control 1/1) are unmeasured. The pin is the draft of those conditions, and it comes before any leg. Falsify by one record per leg, each naming its count and the ledger line it was read from.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D5
   - Target: pre-genesis

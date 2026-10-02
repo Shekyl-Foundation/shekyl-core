@@ -709,8 +709,8 @@ comparison, the existing daemon-submit boundary is 754 lines of C++ shim plus
 | Black-hole recovery scales as `M/(j+1)` | `black_hole_recovery_scales_with_holder_count` | Round 1 ✅ |
 | Black-hole attribution leak is mean-invariant; passive races are non-leaky | `black_hole_attack_leak_is_mean_invariant` | Round 2 ✅ |
 | First-spy diffusion precision π₀ | `first_spy_precision_rises_with_spy_fraction` | Round 2 ✅ |
-| Clearnet↔Tor delta: supernode observer collapses on Tor | `tor_collapses_the_supernode_diffusion_observer` | Round 2 (transport) ✅ |
-| Clearnet passive channel is real, mean-dependent, zero on Tor | `passive_clearnet_leak_is_mean_dependent_and_zero_on_tor` | Round 3 (ε lever) ✅ |
+| Production fluff: an inbound supernode observes it (EveryPeer, every connector). The retired D7 graph is the arm that sees nothing | `an_inbound_supernode_observes_a_production_fluff` | updated 2026-10-02 |
+| Production passive channel is mean-dependent; the retired D7 graph leaks nothing on that inbound edge | `every_peer_passive_leak_falls_with_the_embargo` | updated 2026-10-02 |
 | ≤0.3% worst-case exposure reachable via reshape, not embargo-lengthening | `origin_exposure_meets_target_via_reshape_not_embargo` | Round 3 (levers) ✅ |
 | Origin always stems (unit stem at q=100%) | `always_fluffing_gives_a_unit_stem_the_origin_still_holds` | Round 2 (RD-4) ✅ |
 | Frozen reference vectors, cross-architecture | `tests/golden_vector.rs` | RP-1 ✅ |
@@ -841,6 +841,12 @@ than one from a clearnet origin.
 > gap could have produced it. The measurements below remain valid and useful —
 > they quantify what Tor buys against the *passive* supernode adversary — but
 > they are no longer what the recommendation waits on.
+>
+> **SUPERSEDED 2026-10-02 (D7).** Outbound-only fluff is deleted. Production
+> fluff is `EveryPeer` on every connector, so an inbound supernode observes
+> the diffusion on Tor as on clearnet. The zero rows in the tables below are
+> the retired graph, not a current Tor property. Connector transit does not
+> select the edge set.
 
 The original framing, retained because the measurement programme it sets up is
 unchanged: Tor was **not** frozen as the principal default, pending the
@@ -856,17 +862,17 @@ on Tor." What it can do is **measure both configurations** and let the
 `simulate_transport_observation` measures exactly the delta the §6.3 source fact
 produces, for the paper's primary adversary — a supernode that opens cheap
 *inbound* edges to a fraction of honest nodes and runs the first-spy estimator
-(512 nodes, 12 peers, `tor_collapses_the_supernode_diffusion_observer`; re-measured
+(512 nodes, 12 peers, `an_inbound_supernode_observes_a_production_fluff`; the retired-graph rows were `tor_collapses_the_supernode_diffusion_observer`, re-measured
 at the §69.2 `peers` pin — §70.2):
 
 | supernode reach | transport | fluff observed | first-spy π₀ |
 | --- | --- | --- | --- |
 | dials 5 % | clearnet | 1.0000 | 0.0978 |
-| dials 5 % | **Tor/I2P** | **0.0000** | **0.000** |
+| dials 5 % | **Tor/I2P — RETIRED D7, not production** | **0.0000** | **0.000** |
 | dials 10 % | clearnet | 1.0000 | 0.1760 |
-| dials 10 % | **Tor/I2P** | **0.0000** | **0.000** |
+| dials 10 % | **Tor/I2P — RETIRED D7, not production** | **0.0000** | **0.000** |
 | dials 30 % | clearnet | 1.0000 | 0.4228 |
-| dials 30 % | **Tor/I2P** | **0.0000** | **0.000** |
+| dials 30 % | **Tor/I2P — RETIRED D7, not production** | **0.0000** | **0.000** |
 
 The delta is stark and structural: a clearnet supernode observes **every** fluff
 and attributes the source with the paper's first-spy precision (rising with its
@@ -885,7 +891,7 @@ the cheap inbound supernode; the black-hole channel is unchanged, and remains
 the reason the mechanism itself (embargo distribution + Q-8a reshape) must be
 correct regardless of transport.**
 
-### 6.6 The clearnet passive channel is real, mean-dependent, and zero on Tor
+### 6.6 The passive channel is real and mean-dependent — Tor's structural zero is RETIRED D7 (2026-10-02)
 
 `simulate_transport_observation` (§6.5) measures the *diffusion-phase* supernode
 — what it learns from watching natural fluff. `simulate_passive_neighbor_leak`
@@ -893,7 +899,7 @@ measures the *embargo-phase* leak the same inbound supernode gets: when a
 stem-prefix node's embargo fires before it is disarmed, a supernode neighbouring
 that node catches the early fluff and attributes the source to a prefix member.
 Measured (supernode reach φ = 0.10,
-`passive_clearnet_leak_is_mean_dependent_and_zero_on_tor`):
+`every_peer_passive_leak_falls_with_the_embargo`; the zero row is the retired graph):
 
 | embargo mean | transport | leak rate | origin share of leaks |
 | --- | --- | --- | --- |
@@ -906,7 +912,7 @@ Measured (supernode reach φ = 0.10,
 | 144 s (adopted **until F-7**; now 190 s, see banner) | clearnet | 0.0114 | 0.20 |
 | 300 s | clearnet | 0.0056 | 0.20 |
 | 500 s | clearnet | 0.0032 | 0.20 |
-| *any* | **Tor/I2P** | **0.0000** | — |
+| *any* | **Tor/I2P — RETIRED D7, not production** | **0.0000** | — |
 
 Two properties, both load-bearing for Round 3:
 
@@ -4164,8 +4170,8 @@ peers notified where five belonged. It reads like a delivery detail and is a
 privacy rule: on a hidden service an inbound peer is a stranger who dialled us,
 so relaying to it hands a transaction to a peer this node never chose — the exact
 sybil exposure i2p/tor is standing in for now that Dandelion++ stemming is off.
-It is now `FluffReach::OutboundOnly`, a zone-lifetime policy in Rust, with a test
-asserting *who* received the batch plus a public-zone negative control.
+**SUPERSEDED 2026-10-02.** That restoration was `FluffReach::OutboundOnly`.
+D7 deleted the rule: a fluff reaches every session, and the type is gone.
 
 **But §18.4b's map could not have predicted it, and that is the lesson.** The map
 is organised by the behaviours the port *knew it was moving*; the outbound-only
@@ -4379,7 +4385,7 @@ where does the fact live now."**
 | G-3 | Stem pool is all synced outbound, anchors included | `get_out_connections:142-159` | **holds** | `:186-192` |
 | G-4 | ~~Anchor admission is any successful outbound handshake~~ | ~~`net_node.inl:1347`~~ | **NO LONGER HOLDS — mechanism deleted 2026-09-06** | The anchor list, its admission and its dial arm were removed whole; there is no anchor admission to verify. See the STALE note in §12.11 |
 | G-4 | ~~On reconnect the 2 anchor slots fill first~~ | ~~`net_node.inl:1820`~~ | **NO LONGER HOLDS — mechanism deleted 2026-09-06** | No anchor slots exist. Refill is white-first to the 70 % target, then gray |
-| §12.6 | Fluff is transport-gated: on Tor it fluffs outbound-only | `fluff_notify` `:448` | **holds — moved languages** | `FluffReach::OutboundOnly` (`zone/mod.rs`). RP-3a dropped this rule and the eight `private_*` gtests caught it; restored with `a_private_zone_fluffs_only_to_outbound_peers` |
+| §12.6 | Fluff is transport-gated: on Tor it fluffs outbound-only | `fluff_notify` `:448` | **NO LONGER HOLDS — D7 deleted 2026-10-02** | Fluff reaches every session. `FluffReach` is gone. The retired directed graph remains an instrument in `shekyl-relay-privacy` (`FloodReach::OutboundOnly`) and is not production |
 | — | `send_noise` pads every channel to a constant rate on its own timer | `:663` | **holds** | `:780`, `:811` |
 
 **Two findings from the census, neither of which is a line-number update.**
@@ -12252,7 +12258,7 @@ REST handler, and none of the sixteen admin REST paths appear in
 
 §69.2 pinned `FloodParams::peers` 8 → 12 and updated §67.2 and §28.4. It did
 not touch **§6.5**, whose table is the recorded output of
-`tor_collapses_the_supernode_diffusion_observer` — a test that consumes
+`tor_collapses_the_supernode_diffusion_observer` (renamed `an_inbound_supernode_observes_a_production_fluff`) — a test that consumed
 `FloodParams::default()`. The pin therefore re-parameterised that measurement
 silently, and every assertion in it got *easier* at higher degree
 (`observed_fraction > 0.9`, a structural-zero Tor arm, a monotonicity arm), so
@@ -12318,7 +12324,7 @@ two doc comments saying so.
 | §55.2's three false claims | **amended on the record** (superseded note, not a rewrite) |
 | `handler_for` totality → compile time | **done (§70.1)** — `Endpoint`-keyed table, exhaustive match, no wildcard; the startup panic is now `error[E0004]`, and the specification tests green untouched across the change |
 | `state.restricted` at the one call site | **open, named at the site** — needs an `AppState`, which links `core_rpc_ffi_*`; the only route-table property still resting on review |
-| `propagation_measurement` wall-clock | **accepted, and measured so it is visible**: `tor_collapses_the_supernode_diffusion_observer` runs **143–236 s** debug on the reference box across two runs (the spread is machine load, not variance in the instrument — the π₀ figures are bit-identical, the draws being seeded), and the whole suite runs in CI's default workspace pass because the crate's own dev-dependency self-enables `conformance` — so a `required-features` gate on the `[[test]]` would gate nothing. The two real remedies both cost more than the wall-clock: cutting trial counts edits a measurement instrument for CI convenience, and moving the suite behind a non-auto feature relocates the cost without removing it. Recorded rather than trimmed |
+| `propagation_measurement` wall-clock | **accepted, and measured so it is visible**: `an_inbound_supernode_observes_a_production_fluff` (formerly `tor_collapses_the_supernode_diffusion_observer`) ran **143–236 s** debug on the reference box across two runs of the old body (the spread is machine load, not variance in the instrument — the π₀ figures are bit-identical, the draws being seeded), and the whole suite runs in CI's default workspace pass because the crate's own dev-dependency self-enables `conformance` — so a `required-features` gate on the `[[test]]` would gate nothing. The two real remedies both cost more than the wall-clock: cutting trial counts edits a measurement instrument for CI convenience, and moving the suite behind a non-auto feature relocates the cost without removing it. Recorded rather than trimmed |
 | `hop` quantile policy | decided (§66); clearnet measurement still outstanding |
 | F′ reverse-parity readouts | unblocked; three readouts in §67.2's order |
 

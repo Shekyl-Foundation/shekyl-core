@@ -701,6 +701,7 @@ namespace levin
              graph. The sybil-substitution reasoning is retired with it — §64
              priced it, and minting onion addresses is free, so it was the
              outbound-only reach rule doing that work, never the network.
+             D7 deleted that reach rule: a fluff reaches every session.
 
              A stem send on this zone now clears the flag (`dandelionpp_notify`).
              Which arm set it is load-bearing downstream: a receiver keeps its

@@ -556,6 +556,12 @@ TEST(txpool_meta, set_relay_method_clears_observed_circulating_and_keeps_fcmp_ve
   EXPECT_EQ(0, meta.observed_circulating);
   EXPECT_EQ(1, meta.fcmp_verified);
   EXPECT_EQ(cryptonote::relay_method::stem, meta.get_relay_method());
+
+  // Bit 3 shares the byte and is live. Setting it after the method is
+  // written must not move the method the decoder returns.
+  meta.observed_circulating = 1;
+  EXPECT_EQ(1, meta.fcmp_verified);
+  EXPECT_EQ(cryptonote::relay_method::stem, meta.get_relay_method());
 }
 
 TEST(relay_deadline, is_monotonic_in_the_draw)

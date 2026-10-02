@@ -358,16 +358,17 @@ impl DandelionParams {
             // fluff flood (`simulate_fluff_return`), by deployed fluff rule at
             // Shekyl's `P2P_DEFAULT_OUT_PEERS = 12`:
             //
-            //   clearnet (EveryPeer, usable degree ~24)      ~1250 ms
-            //   Tor-C  (OutboundOnly, usable degree 12 exact) ~3250 ms  <- binding
+            //   EveryPeer (usable degree ~24)                 ~1250 ms
+            //   retired D7 OutboundOnly (degree 12 exact)     ~3250 ms  <- binding
             //
-            // The old 2250 was an `EveryPeer` measurement at `peers = 8` fed
-            // to the derivation for EVERY transport, so the anonymity zone was
-            // provisioned from a fluff rule it does not use (~44 % low). The
-            // gap is a DEGREE effect, not a direction effect: at matched
-            // usable degree (EveryPeer@8 vs OutboundOnly@16) the two rules
-            // measure 2500 vs 2250 ms — the direction constraint costs
-            // nothing; halving the usable degree is what costs (§40.1).
+            // Production fluff is EveryPeer on every connector (D7 deleted
+            // 2026-10-02). 3250 ms stays the constant: it was measured on the
+            // longer graph and has not been remeasured on the production one.
+            // Over-estimating F lengthens the embargo, which is the
+            // privacy-safe direction. The old 2250 was an EveryPeer
+            // measurement at peers = 8. The gap to 3250 is a degree effect:
+            // at matched usable degree the two rules measure close together;
+            // halving the usable degree is what costs (§40.1).
             //
             // One process-wide F for every zone: a fluff wave returns over
             // whatever network the *node* is on, so there is no per-zone F to
