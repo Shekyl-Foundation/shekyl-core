@@ -239,7 +239,15 @@ fluffing`, and at 19:58:24.037Z it sent command 2002 to the
 receiver's onion. The receiver admitted that notification inbound
 at 19:58:24.609Z and added it to the pool at 19:58:24.662Z. The
 inbound-only Tor peer received a fluff. The stem successor was the
-clearnet peer.
+clearnet peer, which is the miner, the transaction's origin. A stem
+arriving at a node that already holds it in stem state is the loop
+case, and the rule there is fluff now: the miner sent
+`NOTIFY_NEW_TRANSACTIONS` back, and the floor logged the fluff queue
+at 19:58:23.787Z. The 620 ms from the stem line to that queue is one
+clearnet round trip plus the miner's pool handling, not the floor's
+embargo. That is what a three-node ring does when its only clearnet
+edge points at the origin; a wider graph does not, and nothing about
+the embargo should be derived from this interval.
 
 The three measurement processes were stopped. The standing daemons
 were left as they were found. One sample does not replace the
