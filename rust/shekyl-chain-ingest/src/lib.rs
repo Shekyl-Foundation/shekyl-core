@@ -104,6 +104,7 @@ pub mod schedule;
 pub mod seed;
 #[cfg(feature = "pipeline")]
 pub mod sequencer;
+pub mod snapshot_json;
 pub mod source;
 pub mod substrate;
 #[cfg(test)]

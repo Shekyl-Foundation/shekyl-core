@@ -63,6 +63,7 @@ use shekyl_chain_rules::{
     Fault, InvalidBlock, PaidEmission, PerHeightRecord, Retry, Stale, StructurallyValid, Verdict,
     ViewRead, Weights,
 };
+use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
 use shekyl_types::archival::BondRecord;
 use shekyl_types::{
@@ -226,6 +227,13 @@ pub struct Rewind {
 /// The redb-side logical state now (commit 2), for the digest sink.
 #[derive(Clone, Copy, Debug)]
 pub struct Digest;
+
+/// The redb-side archival state now, as `DRS_E4_ARCHIVAL_WRITER.md`
+/// §3.8.1's rows (`ReadSnapshot::archival_snapshot`), for the archival
+/// oracle: the checkpoint's other encoding, diffed against the trace's
+/// `0x04` record rather than hashed (`ARW-25`).
+#[derive(Clone, Copy, Debug)]
+pub struct ArchivalState;
 
 /// The hash of the block recorded at a height, for the driver's seed claim
 /// when its ledger's window has moved past that height (`seed` module
@@ -518,6 +526,18 @@ impl Message<Digest> for Connector {
 
     async fn handle(&mut self, _: Digest, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         Ok(self.writer.read()?.logical_state_digest_v0()?)
+    }
+}
+
+impl Message<ArchivalState> for Connector {
+    type Reply = Result<ArchivalSnapshot, RunFault>;
+
+    async fn handle(
+        &mut self,
+        _: ArchivalState,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self.writer.read()?.archival_snapshot()?)
     }
 }
 

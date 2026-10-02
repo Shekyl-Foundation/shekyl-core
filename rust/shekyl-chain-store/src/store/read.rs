@@ -47,6 +47,7 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
+use crate::archival_snapshot::ArchivalSnapshot;
 use crate::codec::{
     ArchivalLastSlashEpochCell, BlockInfo, BondRecord, CurveTreeState, OutTx, PropertyCell,
     RMarket, SigmaWorkMilli, SlashLogEntry, TotalBurnedCell, TxOutputIndices,
@@ -1009,6 +1010,28 @@ impl ReadSnapshot<'_> {
     ) -> Result<Option<AtomicUnits>, StoreError> {
         archival_reads::budget_accruing(&self.txn, epoch)
             .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// The archival state as of this snapshot, as the E2 trace carries it
+    /// (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, `ARW-25`): the nine table
+    /// families walked whole and the slash watermark cell, re-encoded
+    /// through [`ArchivalSnapshot`]'s constructors. The redb leg of the
+    /// archival comparison; the LMDB leg arrives in the trace's `0x04`
+    /// record, and the grader diffs the two by family and key.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a row that does not decode; SI-23 for a second accruing
+    /// row; the engine's.
+    pub fn archival_snapshot(&self) -> Result<ArchivalSnapshot, StoreError> {
+        let mut snapshot =
+            archival_reads::snapshot_rows(&self.txn).map_err(chain_reads::ReadFault::into_plain)?;
+        if let Some(epoch) = self.last_settled_slash_epoch()? {
+            snapshot
+                .set_last_slash_epoch(epoch)
+                .expect("the first row of an empty singleton family");
+        }
+        Ok(snapshot)
     }
 }
 

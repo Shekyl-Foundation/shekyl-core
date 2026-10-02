@@ -10,15 +10,19 @@
 
 use std::io::Cursor;
 
+use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFault, EMPTY_BODY_LEN};
 use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::{BlockWeight, CurveTreeRoot, LongTermWeight};
+use shekyl_types::{BlockWeight, CurveTreeRoot, LongTermWeight, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 
 use crate::test_support::h;
 #[cfg(feature = "fetch")]
 use crate::test_support::{block, key_image, spend, wire, Family};
-use crate::trace::{Facts, Trace, TraceFault, TraceWriter, CHECKPOINT_LEN, FACTS_LEN, TRACE_MAGIC};
+use crate::trace::{
+    Facts, Trace, TraceFault, TraceWriter, CHECKPOINT_LEN, FACTS_LEN, TRACE_MAGIC, TRACE_VERSION,
+    TRACE_VERSION_WITHOUT_SNAPSHOT,
+};
 #[cfg(feature = "fetch")]
 use shekyl_types::BlockHash;
 
@@ -70,20 +74,40 @@ fn the_trace_round_trips_through_both_doors() {
     let root = CurveTreeRoot::from_bytes([0xc2; 32]);
     let state = digest_v0(&hashes, &spent, root.as_bytes());
     w.push_checkpoint(&state).expect("checkpoint");
+    // The checkpoint's other encoding (§3.8.1): one accrual row, one
+    // budget row — 8 + 8 bytes each behind a `u32` length.
+    let mut snapshot = ArchivalSnapshot::empty();
+    snapshot
+        .set_budget_accruing(SettlementEpoch::from_raw(0), AtomicUnits::from_raw(150))
+        .expect("accruing");
+    snapshot
+        .push_budget(SettlementEpoch::from_raw(3), AtomicUnits::from_raw(9))
+        .expect("budget");
+    w.push_archival_snapshot(&snapshot)
+        .expect("archival snapshot");
     let bytes = w.finish().expect("trailer");
     assert_eq!(&bytes[..8], &TRACE_MAGIC);
+    assert_eq!(bytes[8], TRACE_VERSION);
     assert_eq!(
         bytes.len(),
-        16 + 3 * (1 + 8 + FACTS_LEN) + (1 + 8 + CHECKPOINT_LEN) + 17
+        16 + 3 * (1 + 8 + FACTS_LEN)
+            + (1 + 8 + CHECKPOINT_LEN)
+            + (1 + 8 + EMPTY_BODY_LEN + 2 * (4 + 16))
+            + 17
     );
 
     let trace = Trace::read(Cursor::new(&bytes)).expect("read");
+    assert_eq!(trace.version(), TRACE_VERSION);
     assert_eq!(trace.covered(), Some((h(0), h(2))));
     assert_eq!(
         trace.checkpoint().map(|(hh, _)| hh),
         Some(h(2)),
         "one checkpoint, at the covered tip"
     );
+    let (at, rows) = trace.archival_snapshot().expect("the snapshot");
+    assert_eq!(at, h(2), "at the checkpoint's height");
+    assert!(rows.value().diff(&snapshot).is_identical());
+    assert_eq!(rows.value().row_count(), 2);
     assert_eq!(trace.borrow(h(1)).expect("covered").value(), &facts_at(1));
     assert!(
         trace.borrow(h(3)).is_none(),
@@ -145,6 +169,8 @@ fn trace_refusals_gap_unanchored_duplicate_reserved_and_trailer() {
             .expect_err("facts after checkpoint"),
         TraceFault::FactsAfterCheckpoint { height: 1 }
     ));
+    w.push_archival_snapshot(&ArchivalSnapshot::empty())
+        .expect("the checkpoint's other encoding");
     let good = w.finish().expect("trailer");
     assert!(Trace::read(Cursor::new(&good)).is_ok());
 
@@ -170,10 +196,10 @@ fn trace_refusals_gap_unanchored_duplicate_reserved_and_trailer() {
     ));
 
     let mut bad_version = good.clone();
-    bad_version[8] = 1;
+    bad_version[8] = 2;
     assert!(matches!(
         Trace::read(Cursor::new(&bad_version)).expect_err("version"),
-        TraceFault::UnsupportedVersion { found: 1 }
+        TraceFault::UnsupportedVersion { found: 2 }
     ));
 
     // The trailer ends a trace: two concatenated, or one byte past it, is
@@ -189,6 +215,121 @@ fn trace_refusals_gap_unanchored_duplicate_reserved_and_trailer() {
     assert!(matches!(
         Trace::read(Cursor::new(&padded)).expect_err("a byte past the trailer"),
         TraceFault::TrailingBytes
+    ));
+}
+
+#[test]
+fn the_archival_snapshot_is_the_checkpoints_other_encoding_on_both_sides() {
+    // DRS-E4 §3.8.1 (pairing, 2026-10-01): under `TRACE_VERSION` the `0x02`
+    // and `0x04` records are one checkpoint's two encodings. The writer
+    // refuses a snapshot with nothing to pair with, a second one, and a
+    // `finish` with the checkpoint and not its snapshot; the reader refuses
+    // the same shapes in the bytes, plus a snapshot whose height is not the
+    // checkpoint's, and a `0x04` record under the version that never
+    // carried one. A trace with no checkpoint carries neither and reads.
+    let empty = ArchivalSnapshot::empty();
+    let state = digest_v0(&[], &[], CurveTreeRoot::EMPTY.as_bytes());
+
+    // Writer: unanchored, duplicate, missing.
+    let mut w = TraceWriter::new(Vec::new()).expect("header");
+    w.push_facts(h(0), &facts_at(0)).expect("facts");
+    assert!(matches!(
+        w.push_archival_snapshot(&empty).expect_err("no checkpoint"),
+        TraceFault::UnanchoredSnapshot
+    ));
+    w.push_checkpoint(&state).expect("checkpoint");
+    w.push_archival_snapshot(&empty).expect("paired");
+    assert!(matches!(
+        w.push_archival_snapshot(&empty).expect_err("second"),
+        TraceFault::DuplicateSnapshot { height: 0 }
+    ));
+    let good = w.finish().expect("trailer");
+    let trace = Trace::read(Cursor::new(&good)).expect("read");
+    let (at, rows) = trace.archival_snapshot().expect("snapshot");
+    assert_eq!(at, h(0));
+    assert_eq!(rows.value().row_count(), 0);
+
+    let mut unpaired = TraceWriter::new(Vec::new()).expect("header");
+    unpaired.push_facts(h(0), &facts_at(0)).expect("facts");
+    unpaired.push_checkpoint(&state).expect("checkpoint");
+    assert!(matches!(
+        unpaired.finish().expect_err("checkpoint without snapshot"),
+        TraceFault::MissingSnapshot { height: 0 }
+    ));
+
+    // No checkpoint: neither record, and the trace reads.
+    let mut none = TraceWriter::new(Vec::new()).expect("header");
+    none.push_facts(h(0), &facts_at(0)).expect("facts");
+    let bytes = none.finish().expect("trailer");
+    let trace = Trace::read(Cursor::new(&bytes)).expect("read");
+    assert!(trace.checkpoint().is_none());
+    assert!(trace.archival_snapshot().is_none());
+
+    // The empty record's layout: tag, height, ten zero counts.
+    let snapshot_at = 16 + (1 + 8 + FACTS_LEN) + (1 + 8 + CHECKPOINT_LEN);
+    let record = &good[snapshot_at..snapshot_at + 1 + 8 + EMPTY_BODY_LEN];
+    assert_eq!(record[0], 0x04);
+    assert_eq!(&record[1..9], &0u64.to_le_bytes());
+    assert!(record[9..].iter().all(|&b| b == 0));
+    assert_eq!(good.len(), snapshot_at + 1 + 8 + EMPTY_BODY_LEN + 17);
+
+    // Reader: the snapshot stripped out of a `0x01` trace is a missing one.
+    let mut stripped = good[..snapshot_at].to_vec();
+    stripped.extend_from_slice(&good[snapshot_at + 1 + 8 + EMPTY_BODY_LEN..]);
+    assert!(matches!(
+        Trace::read(Cursor::new(&stripped)).expect_err("missing"),
+        TraceFault::MissingSnapshot { height: 0 }
+    ));
+    // Reader: a `0x04` record under the version that never carried one.
+    let mut old = good.clone();
+    old[8] = TRACE_VERSION_WITHOUT_SNAPSHOT;
+    assert!(matches!(
+        Trace::read(Cursor::new(&old)).expect_err("v0 with a snapshot"),
+        TraceFault::UnexpectedSnapshot
+    ));
+    // …and a `0x00` trace without one reads, and says it was not compared.
+    let mut old_stripped = stripped.clone();
+    old_stripped[8] = TRACE_VERSION_WITHOUT_SNAPSHOT;
+    let trace = Trace::read(Cursor::new(&old_stripped)).expect("a v0 trace");
+    assert_eq!(trace.version(), TRACE_VERSION_WITHOUT_SNAPSHOT);
+    assert!(trace.checkpoint().is_some());
+    assert!(trace.archival_snapshot().is_none());
+    // Reader: the snapshot's height is not the checkpoint's.
+    let mut not_tip = good.clone();
+    not_tip[snapshot_at + 1..snapshot_at + 9].copy_from_slice(&7u64.to_le_bytes());
+    assert!(matches!(
+        Trace::read(Cursor::new(&not_tip)).expect_err("not the tip"),
+        TraceFault::SnapshotNotTip { height: 7, tip: 0 }
+    ));
+    // Reader: the snapshot before its checkpoint.
+    let checkpoint_at = 16 + (1 + 8 + FACTS_LEN);
+    let mut swapped = good[..checkpoint_at].to_vec();
+    swapped.extend_from_slice(&good[snapshot_at..snapshot_at + 1 + 8 + EMPTY_BODY_LEN]);
+    swapped.extend_from_slice(&good[checkpoint_at..snapshot_at]);
+    swapped.extend_from_slice(&good[snapshot_at + 1 + 8 + EMPTY_BODY_LEN..]);
+    assert!(matches!(
+        Trace::read(Cursor::new(&swapped)).expect_err("before the checkpoint"),
+        TraceFault::UnanchoredSnapshot
+    ));
+    // Reader: two snapshots.
+    let mut doubled = good[..snapshot_at + 1 + 8 + EMPTY_BODY_LEN].to_vec();
+    doubled.extend_from_slice(&good[snapshot_at..]);
+    assert!(matches!(
+        Trace::read(Cursor::new(&doubled)).expect_err("two snapshots"),
+        TraceFault::DuplicateSnapshot { height: 0 }
+    ));
+    // Reader: a row the snapshot refuses — a second row of a singleton
+    // family — is the snapshot's fault, carried.
+    let mut two_watermarks = good[..snapshot_at + 1 + 8 + 9 * 8].to_vec();
+    two_watermarks.extend_from_slice(&2u64.to_le_bytes());
+    for epoch in [1u64, 2] {
+        two_watermarks.extend_from_slice(&8u32.to_le_bytes());
+        two_watermarks.extend_from_slice(&epoch.to_le_bytes());
+    }
+    two_watermarks.extend_from_slice(&good[snapshot_at + 1 + 8 + EMPTY_BODY_LEN..]);
+    assert!(matches!(
+        Trace::read(Cursor::new(&two_watermarks)).expect_err("two watermarks"),
+        TraceFault::Snapshot(SnapshotFault::SecondSingletonRow { .. })
     ));
 }
 

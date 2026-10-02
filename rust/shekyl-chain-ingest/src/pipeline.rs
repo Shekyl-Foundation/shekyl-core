@@ -39,7 +39,10 @@
 //! The trace carries at most one checkpoint, at its covered tip (RD-F18).
 //! After that height connects, the loop asks the connector for the
 //! redb-side [`crate::trace::Digest`] and records it beside the trace's
-//! expectation. A refusal is a **recorded verdict**: the writer stays up;
+//! expectation; when the trace carries the checkpoint's other encoding —
+//! the archival rows (DRS-E4 §3.8.1, version `0x01`) — it asks for the
+//! redb side's rows too and records the diff. A refusal is a **recorded
+//! verdict**: the writer stays up;
 //! this driver ends the run (an honest chain that refuses is a
 //! disagreement; E3 and the mutation family keep the same actor and decide
 //! for themselves). A store halt is a fault.
@@ -53,6 +56,7 @@ use kameo::error::SendError;
 use shekyl_chain_rules::{
     form, FormAttempt, InvalidBlock, PaidEmission, StructurallyValid, Substrate, Verdict, Weights,
 };
+use shekyl_chain_store::archival_snapshot::SnapshotDiff;
 use shekyl_chain_store::store::{ChainStore, StoreError};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight,
@@ -61,7 +65,9 @@ use shekyl_units::AtomicUnits;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
-use crate::connector::{Apply, Connector, ConnectorArgs, Digest, HashAt, Rewind, RunFault};
+use crate::connector::{
+    Apply, ArchivalState, Connector, ConnectorArgs, Digest, HashAt, Rewind, RunFault,
+};
 use crate::grader::Observations;
 use crate::metrics::{Concurrency, Metrics, MetricsArtifact};
 use crate::schedule::ChainRules;
@@ -124,6 +130,12 @@ pub struct RunReport {
     /// The redb-side digest at the trace's covered-tip checkpoint, beside
     /// the trace's expectation, when that height connected.
     pub checkpoint: Option<Checkpoint>,
+    /// The checkpoint's other encoding (DRS-E4 §3.8.1, `ARW-25`): the
+    /// redb-side archival rows at the covered tip diffed against the
+    /// trace's `0x04` record, family by family, when that height connected
+    /// and the trace carries the record. `None` on a version-`0x00` trace:
+    /// **not compared**, never identical.
+    pub archival: Option<ArchivalCheckpoint>,
     /// The derived-vs-trace root comparison, per connected height the trace
     /// has facts for (DRS-E3 CTW-5, `DRS_E3_CURVE_WRITER.md` §3.8): how many
     /// heights were compared, and every one that disagreed. **Every**
@@ -397,6 +409,24 @@ impl Checkpoint {
     }
 }
 
+/// The covered-tip archival snapshot, compared row by row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArchivalCheckpoint {
+    /// The height after which both sides' rows were taken.
+    pub at: BlockHeight,
+    /// The redb rows against the trace's, per family: `ours` is the redb
+    /// side, `theirs` the trace's (the LMDB side).
+    pub diff: SnapshotDiff,
+}
+
+impl ArchivalCheckpoint {
+    /// Whether every family agreed.
+    #[must_use]
+    pub fn identical(&self) -> bool {
+        self.diff.is_identical()
+    }
+}
+
 /// A committed rewind and the state it left.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Switch {
@@ -423,6 +453,13 @@ pub enum Disagreement {
     },
     /// The redb digest differed from the trace's checkpoint.
     Diverged {
+        /// The checkpoint height.
+        at: BlockHeight,
+    },
+    /// The redb archival rows differed from the trace's `0x04` record at
+    /// the checkpoint (DRS-E4 §3.8.1); the report's
+    /// [`ArchivalCheckpoint`] names the family and the key.
+    ArchivalDiverged {
         /// The checkpoint height.
         at: BlockHeight,
     },
@@ -460,10 +497,12 @@ impl RunReport {
 
     /// What the grader reads (RD-Q9), derived from the report so the two
     /// cannot disagree: exercised rows, the refusal, the covered-tip digest,
-    /// and the per-height root oracle (CTW-5). The digest and the oracle
-    /// stay separate. The digest carries only the live root, so an interior
-    /// miss is invisible to it; `digest_identical` is `None` when no
-    /// checkpoint was compared.
+    /// the per-height root oracle (CTW-5), and the archival oracle at the
+    /// checkpoint (DRS-E4 §3.8.1). The digest and the oracles stay
+    /// separate. The digest carries only the live root, so an interior
+    /// miss is invisible to it, and it carries no archival state;
+    /// `digest_identical` is `None` and `archival.compared` is `false`
+    /// when no checkpoint was compared.
     #[must_use]
     pub fn observations(&self) -> Observations {
         Observations {
@@ -477,12 +516,17 @@ impl RunReport {
                 compared: self.roots.compared(),
                 diverged_at: self.roots.diverged().map(|d| d.at).collect(),
             },
+            archival: self
+                .archival
+                .as_ref()
+                .map(|a| crate::grader::ArchivalOracle::from_diff(a.at, &a.diff))
+                .unwrap_or_default(),
         }
     }
 
     /// Every way the run disagreed with the chain, in the order they can
-    /// occur: a root that diverged at a height, a checkpoint that diverged,
-    /// a refusal that ended the run.
+    /// occur: a root that diverged at a height, a checkpoint that diverged
+    /// (digest, then archival rows), a refusal that ended the run.
     pub fn disagreements(&self) -> impl Iterator<Item = Disagreement> + '_ {
         let roots = self
             .roots
@@ -501,6 +545,11 @@ impl RunReport {
             .as_ref()
             .filter(|c| !c.identical())
             .map(|c| Disagreement::Diverged { at: c.at });
+        let archival = self
+            .archival
+            .as_ref()
+            .filter(|a| !a.identical())
+            .map(|a| Disagreement::ArchivalDiverged { at: a.at });
         let refused = self
             .refused
             .as_ref()
@@ -512,6 +561,7 @@ impl RunReport {
             .chain(weights)
             .chain(emission)
             .chain(diverged)
+            .chain(archival)
             .chain(refused)
     }
 }
@@ -915,6 +965,17 @@ where
                     .expect("checkpoint_at comes from the trace")
                     .value();
                 self.report.checkpoint = Some(Checkpoint { at, ours, theirs });
+                // The checkpoint's other encoding (DRS-E4 §3.8.1): the
+                // trace's archival rows at the same height, diffed against
+                // the redb side's. A version-`0x00` trace carries none and
+                // the report says so by leaving the field `None`.
+                if let Some((_, theirs)) = self.trace.archival_snapshot() {
+                    let ours = self.connector.ask(ArchivalState).await.map_err(collapse)?;
+                    self.report.archival = Some(ArchivalCheckpoint {
+                        at,
+                        diff: ours.diff(theirs.value()),
+                    });
+                }
             }
         }
         if let Some(refused) = applied.refused {

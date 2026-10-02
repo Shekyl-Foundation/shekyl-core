@@ -198,6 +198,41 @@
   proof's content, length, and framing are unchanged
   (`GENESIS_TX_WIRE_FORMAT.md` Q6).
 
+### Replay driver — the checkpoint carries the archival state as rows, and the grader diffs them (DRS-E4 commit 6)
+
+- Trace format: `TRACE_VERSION` `0x00 → 0x01`. Every checkpoint (`0x02`)
+  is now paired with an **archival snapshot** record (`0x04`): the archival
+  state at the covered tip as canonical rows in ten positional families,
+  the C++ walker's reading over LMDB
+  (`src/blockchain_db/lmdb/archival_snapshot.cpp`, one read transaction, a
+  marshal — its one arithmetic the open epoch's checked accrual sum)
+  against `ReadSnapshot::archival_snapshot()` over redb. The writer refuses
+  a `0x01` trace holding one of the pair without the other; the reader
+  refuses a `0x04` under `0x00` and its absence under `0x01`. The six
+  committed `0x00` traces stay readable until commit 7 re-captures them,
+  and grade the snapshot as *not compared*. (`0x03` stays RESERVED for
+  Verdict.)
+- Grader: `shekyl_e2_grade_v2 → v3` — `Observations` gains the archival
+  snapshot oracle beside the root oracle; a divergence names the family and
+  the row key (`ArchivalDiverged`), and fails the run as a root divergence
+  does. `RunReport` gains `archival`.
+- FFI (`shekyl_e2_*`): a `ShekylE2ArchivalSnapshot` builder with a row
+  pusher per family, `shekyl_e2_trace_push_archival_snapshot`, and a JSON
+  dump; `SHEKYL_E2_TRACE_ERR_ROW` (−6) for a row the snapshot refuses.
+- Fixture (`ARW-Q15`): the LMDB unit fixture's slash-and-close state is
+  committed as data — `rust/shekyl-chain-ingest/fixtures/archival_fixture_slash_m_of_n.{inputs,rows}.json`
+  — the rows and, beside them, the inputs the Rust replayer must reproduce
+  (personas, seeded records, serve passes, schedule, waypoints), written by
+  `tests/unit_tests/archival_substrate_lmdb.cpp` under
+  `SHEKYL_E4_CAPTURE_DIR`. Its consistency test surfaced **`ARW-26`**: the
+  C++ keys `archival_slash_log` by the post-connect block count and the
+  Rust writer by the connecting height — recorded, not adjudicated; commit
+  8's.
+- The `DAEMON_REDB_STORE.md` §7.1.1 archival exclusion is discharged by
+  this instrument; digest v0's read set is unchanged.
+  (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, §6 row 6; `DRS_E2_REPLAY_DRIVER.md`
+  §3.9.)
+
 ### Chain store — the archival writer: `connect` records the verdict's archival transition (DRS-E4 commit 5)
 
 - Every archival phase of the redb `connect` now has a body

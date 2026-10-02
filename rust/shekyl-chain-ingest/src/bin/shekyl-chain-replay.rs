@@ -355,11 +355,23 @@ async fn replay(replay: Replay) -> Result<(), Failure> {
             Disagreement::EmissionDiverged { at } => {
                 eprintln!("coins_generated / burned at height {at}: derived != trace, DIVERGE");
             }
+            Disagreement::ArchivalDiverged { at } => {
+                eprintln!("archival rows after height {at}: redb != trace, DIVERGE");
+            }
         }
     }
     if let Some(checkpoint) = &report.checkpoint {
         if checkpoint.identical() {
             eprintln!("checkpoint after height {}: digest MATCH", checkpoint.at);
+        }
+    }
+    if let Some(archival) = &report.archival {
+        if archival.identical() {
+            eprintln!(
+                "archival rows after height {}: {} row(s) MATCH",
+                archival.at,
+                archival.diff.rows_equal()
+            );
         }
     }
 
@@ -395,11 +407,22 @@ fn grade(
             u.id, u.clause, u.acceptance
         );
     }
+    for family in &graded.archival_oracle.diverged {
+        eprintln!(
+            "ARCHIVAL DIVERGED {}: {} unequal, {} only redb, {} only trace",
+            family.family,
+            family.unequal.len(),
+            family.only_ours.len(),
+            family.only_theirs.len()
+        );
+    }
     if !graded.passes() {
         if graded.unadjudicated.is_empty() {
+            let roots = graded.root_oracle.diverged_at.len();
+            let families = graded.archival_oracle.diverged.len();
             return Err(format!(
-                "root oracle diverged at {} height(s) (§1.3)",
-                graded.root_oracle.diverged_at.len()
+                "root oracle diverged at {roots} height(s); archival oracle diverged in \
+                 {families} family(ies) (§1.3)"
             )
             .into());
         }

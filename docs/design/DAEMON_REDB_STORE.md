@@ -1376,6 +1376,26 @@ rule binds is the apply/revert path (E4's writers, CEN-L7 … L10) and the E2
 verdict over the rows they write, and both are still gated here exactly as
 written. The typed reads change what E2 will *compare*, not whether it may.
 
+**DISCHARGED 2026-10-01 (DRS-E4 commit 6, `DRS_E4_ARCHIVAL_WRITER.md`
+§3.8.1, `ARW-25`) — by the named-exclusion branch, with the instrument
+being a diff, not a digest family.** The archival writers landed (E4
+commits 4–5) and the comparator that watches them is the **archival
+snapshot**: a `0x04` trace record paired with every `0x02` checkpoint under
+`TRACE_VERSION 0x01`, carrying the archival state at the covered tip as
+canonical rows — the C++ walker's reading over LMDB
+(`src/blockchain_db/lmdb/archival_snapshot.cpp`) against
+`ReadSnapshot::archival_snapshot()` over redb — compared row by row by the
+grader's snapshot oracle. Digest v0's read set is unchanged, and its
+`excluded` state for the archival rows in `LMDB_WRITE_ATOMICITY_AUDIT.md`
+§10 stays true; that document's §11 archival-families UPDATE carries the
+per-table disposition (nine families and the last-slash cell in the
+snapshot; six `NOT_PORTED` journals dissolved with no state to compare;
+`archival_settlement` held, SO-D8). "Digests must still *see* production
+LMDB behavior" is met in the form the rule anticipated for an exclusion: the
+rows are the C++'s own reading, committed as data in every captured trace
+(E4 commit 7 re-captures the six). The rule's text above is kept as the
+record of what gated E4; it no longer gates anything.
+
 Pop-reversal atomicity is FCMP++ Phase-4 load-bearing.
 
 ### 7.2 DRS-P0 bug-escalation ladder (E-2)

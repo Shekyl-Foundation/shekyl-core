@@ -980,7 +980,33 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
     assert_eq!(at, h(5));
     assert_eq!(ours, theirs, "the fork's tip matches its own trace");
     assert_eq!(ours, expected_state(&r.after));
-    assert_eq!(report.observations().digest_identical, Some(true));
+    let obs = report.observations();
+    assert_eq!(obs.digest_identical, Some(true));
+    // The checkpoint's other encoding (ARW-25): the redb archival rows
+    // against the trace's `0x04` record, at the same height, row for row.
+    let archival = report
+        .archival
+        .as_ref()
+        .expect("archival rows at the checkpoint");
+    assert_eq!(archival.at, h(5));
+    assert!(
+        archival.identical(),
+        "{:?}",
+        archival.diff.diverged().collect::<Vec<_>>()
+    );
+    assert!(obs.archival.compared);
+    assert_eq!(obs.archival.at, Some(5));
+    assert!(obs.archival.diverged.is_empty());
+    assert_eq!(
+        obs.archival.rows_equal,
+        u64::try_from(
+            GrownTree::over(&r.after)
+                .archival_snapshot_after(5)
+                .row_count()
+        )
+        .expect("fits"),
+        "every row the fixture accrued was compared"
+    );
     cleanup(&path);
 }
 
@@ -1012,6 +1038,8 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
             .expect("facts");
         }
         w.push_checkpoint(&[0xEE; 32]).expect("a wrong checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+            .expect("the true archival rows: this control is the digest's alone");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
@@ -1088,6 +1116,8 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+            .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
@@ -1179,6 +1209,8 @@ async fn a_wrong_recorded_median_at_one_height_goes_red_and_names_the_height() {
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+            .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
@@ -1271,6 +1303,8 @@ async fn a_wrong_recorded_accumulator_at_one_height_goes_red_and_names_the_heigh
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+            .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
@@ -1342,6 +1376,8 @@ async fn a_wrong_recorded_burn_at_one_height_goes_red_and_names_the_height() {
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+            .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
