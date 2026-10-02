@@ -48,7 +48,7 @@
 #include "cryptonote_core/tx_pool.h"
 #include "net/net_utils_base.h"
 #include "shekyl/shekyl_ffi.h"
-#include "pqc_spend_fixture.h"
+#include "tx_blob.h"
 
 using namespace cryptonote;
 

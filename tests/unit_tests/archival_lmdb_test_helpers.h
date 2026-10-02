@@ -23,7 +23,7 @@
 
 #include <stdexcept>
 #include <string>
-#include "pqc_spend_fixture.h"
+#include "tx_blob.h"
 
 namespace archival_test {
 

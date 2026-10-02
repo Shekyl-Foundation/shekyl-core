@@ -52,6 +52,7 @@
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "cryptonote_core/tx_pool.h"
 #include "pqc_spend_fixture.h"
+#include "tx_blob.h"
 #include "rpc/rpc_facts_ffi.h"
 #include "shekyl/shekyl_ffi.h"
 
@@ -170,6 +171,13 @@ namespace
       return m_height ? hash_at(top) : crypto::null_hash;
     }
 
+    // A block whose miner transaction the serializer refuses. The chain's
+    // coinbase is v1 with one input; a signature vector whose length is not
+    // that input count is the refusal. Set this after `init_blockchain`:
+    // `HardFork::init` rereads every height through `get_block_from_height`
+    // while the chain is built.
+    void set_unserializable_block(uint64_t height) { m_unserializable_block = height; }
+
     // `get_block_from_height` is what `blocks_by_height` reads. BaseTestDB
     // answers every height with a default-constructed block, so without this
     // override a past-the-tip height would look like a successful read of an
@@ -184,7 +192,10 @@ namespace
       // reaches its subject.
       if (height >= m_height)
         throw BLOCK_DNE("no block at that height");
-      return block_at(height);
+      cryptonote::block blk = block_at(height);
+      if (height == m_unserializable_block)
+        blk.miner_tx.signatures.resize(2);
+      return blk;
     }
 
     // `Blockchain::get_block_by_hash` reaches the store through
@@ -242,6 +253,7 @@ namespace
     uint64_t m_height;
     uint64_t m_missing = std::numeric_limits<uint64_t>::max();
     uint64_t m_bad_coinbase = std::numeric_limits<uint64_t>::max();
+    uint64_t m_unserializable_block = std::numeric_limits<uint64_t>::max();
     cryptonote::block m_alt{};
     bool m_has_alt = false;
     crypto::hash m_tx_id = crypto::null_hash;
@@ -1028,6 +1040,40 @@ TEST(rpc_facts_shims, blocks_by_height_refuses_a_stored_transaction_that_does_no
     EXPECT_EQ(0, ok);
     EXPECT_EQ(nullptr, owned.owner) << "a refusal hands back nothing to release";
   }
+}
+
+// A stored block the serializer refuses is the same contradiction as a
+// stored transaction: the fragment written before the refusal is not a
+// block to hand a client.
+TEST(rpc_facts_shims, blocks_by_height_refuses_a_stored_block_that_does_not_serialize)
+{
+  cryptonote::block whole = block_at(1);
+  cryptonote::blobdata whole_blob;
+  ASSERT_TRUE(cryptonote::block_to_blob(whole, whole_blob));
+  ASSERT_FALSE(whole_blob.empty());
+
+  cryptonote::block damaged = whole;
+  damaged.miner_tx.signatures.resize(2);
+  cryptonote::blobdata fragment;
+  ASSERT_FALSE(cryptonote::block_to_blob(damaged, fragment));
+
+  const uint64_t heights[] = {1};
+  BlockchainAndPool bap;
+  FactsTestDB* db = new FactsTestDB(CHAIN_HEIGHT);
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+  db->set_unserializable_block(1);
+
+  const shekyl_rpc_block_entry* out = nullptr;
+  size_t len = 7;
+  uint64_t failed = 0;
+  uint8_t ok = 1;
+  BlocksOwner owned;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INCONSISTENT, daemon_rpc_facts::blocks_by_height(
+    bap.bc, heights, 1, &out, &len, &failed, &ok, &owned.owner));
+  EXPECT_EQ(nullptr, out);
+  EXPECT_EQ(0u, len);
+  EXPECT_EQ(0, ok);
+  EXPECT_EQ(nullptr, owned.owner) << "a refusal hands back nothing to release";
 }
 
 TEST(rpc_facts_shims, blocks_by_height_refuses_every_null_out_parameter)

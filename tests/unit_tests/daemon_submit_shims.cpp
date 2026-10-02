@@ -42,7 +42,7 @@
 #include "cryptonote_protocol/cryptonote_protocol_handler_common.h"
 #include "rpc/daemon_submit_ffi.h"
 #include "span.h"
-#include "pqc_spend_fixture.h"
+#include "tx_blob.h"
 
 using namespace cryptonote;
 

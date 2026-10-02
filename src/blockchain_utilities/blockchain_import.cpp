@@ -438,7 +438,8 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
         if (opt_verify)
         {
           cryptonote::blobdata block;
-          cryptonote::block_to_blob(bp.block, block);
+          if (!cryptonote::block_to_blob(bp.block, block))
+            throw std::runtime_error("a block in the chunk did not serialize");
           std::vector<tx_blob_entry> txs;
           for (const auto &tx: bp.txs)
           {
@@ -512,6 +513,10 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
             txs.push_back(std::make_pair(tx, std::move(tx_blob)));
           }
 
+          cryptonote::blobdata block_blob;
+          if (!cryptonote::block_to_blob(b, block_blob))
+            throw std::runtime_error("a block in the chunk did not serialize");
+
           size_t block_weight;
           difficulty_type cumulative_difficulty;
           uint64_t coins_generated;
@@ -529,7 +534,7 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
             // a zero accrual is correct here, not a gap.
             // The witness the chunk carried, on the same terms as the verifying path
             // above — empty for genesis, which is the only block that reaches here.
-            core.get_blockchain_storage().get_db().add_block(std::make_pair(b, block_to_blob(b)), block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, 0, bp.attestation_witness, txs);
+            core.get_blockchain_storage().get_db().add_block(std::make_pair(b, std::move(block_blob)), block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, 0, bp.attestation_witness, txs);
           }
           catch (const std::exception& e)
           {

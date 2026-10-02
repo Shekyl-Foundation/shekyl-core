@@ -44,7 +44,7 @@
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
-#include "pqc_spend_fixture.h"
+#include "tx_blob.h"
 
 using namespace cryptonote;
 using epee::string_tools::pod_to_hex;

@@ -1048,7 +1048,15 @@ int blocks_by_height(cryptonote::Blockchain& bc, const uint64_t* heights, size_t
         failed = true;
         break;
       }
-      owned->blocks.push_back(cryptonote::block_to_blob(blk));
+      // A stored block or transaction that will not serialize is the store
+      // contradicting itself. A fragment is not a body to hand a client.
+      std::string block_blob;
+      if (!cryptonote::block_to_blob(blk, block_blob))
+      {
+        MERROR("rpc facts: block " << heights[i] << " did not serialize");
+        return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+      }
+      owned->blocks.push_back(std::move(block_blob));
       std::vector<cryptonote::transaction> txs;
       std::vector<crypto::hash> missed;
       bc.get_transactions(blk.tx_hashes, txs, missed);
@@ -1056,8 +1064,6 @@ int blocks_by_height(cryptonote::Blockchain& bc, const uint64_t* heights, size_t
       blobs.reserve(txs.size());
       for (const cryptonote::transaction& tx : txs)
       {
-        // A stored transaction that will not serialize is the store
-        // contradicting itself; a fragment is not a body to hand a client.
         std::string blob;
         if (!cryptonote::tx_to_blob(tx, blob))
         {

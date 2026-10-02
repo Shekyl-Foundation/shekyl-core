@@ -371,44 +371,24 @@ namespace cryptonote
   //---------------------------------------------------------------
   uint64_t get_transaction_weight(const transaction &tx)
   {
-    size_t blob_size;
-    if (tx.is_blob_size_valid())
-    {
-      blob_size = tx.blob_size;
-    }
-    else
-    {
-      std::ostringstream s;
-      binary_archive<true> a(s);
-      ::serialization::serialize(a, const_cast<transaction&>(tx));
-      blob_size = s.str().size();
-    }
-    return get_transaction_weight(tx, blob_size);
+    return get_transaction_weight(tx, get_transaction_blob_size(tx));
   }
   //---------------------------------------------------------------
+  // Wire length of `tx`. The consensus verifier asks before its structural
+  // checks and must receive a length, never an exception, including for an
+  // in-memory body the serializer refuses. That refusal is not a length to
+  // record: the return is the bytes written before it, and `blob_size_valid`
+  // stays clear so a later weight or copy does not treat the fragment as the
+  // transaction. A body the serializer accepts is recorded, and measured once.
   uint64_t get_transaction_blob_size(const transaction& tx)
   {
-    if (!tx.is_blob_size_valid())
-    {
-      // The serializer's verdict is deliberately not read here. This
-      // function's one caller is the consensus verifier
-      // (ver_non_input_consensus), which sizes a transaction BEFORE its
-      // structural checks and returns a verdict, never an exception. It can
-      // be handed an in-memory transaction no wire bytes express -- a
-      // pseudo-out count that disagrees with the inputs, say -- which the
-      // serializer refuses and the verifier's own check rejects by name. For
-      // such a body this is the length of what was written before the
-      // refusal, and the rejection comes from that later check. A transaction
-      // taken from the wire is hashed at intake, and the hash refuses a body
-      // that does not serialize (calculate_transaction_hash).
-      cryptonote::blobdata tx_blob;
-      tx_to_blob(tx, tx_blob);
+    if (tx.is_blob_size_valid())
+      return tx.blob_size;
+
+    cryptonote::blobdata tx_blob;
+    if (tx_to_blob(tx, tx_blob))
       tx.set_blob_size(tx_blob.size());
-    }
-
-    CHECK_AND_ASSERT_THROW_MES(tx.is_blob_size_valid(), "BUG: blob size valid not set");
-
-    return tx.blob_size;
+    return tx_blob.size();
   }
   //---------------------------------------------------------------
   bool get_tx_fee(const transaction& tx, uint64_t & fee)
@@ -1166,7 +1146,7 @@ namespace cryptonote
     return t_serializable_object_to_blob(b, b_blob);
   }
   //---------------------------------------------------------------
-  bool tx_to_blob(const transaction& tx, blobdata& b_blob)
+  [[nodiscard]] bool tx_to_blob(const transaction& tx, blobdata& b_blob)
   {
     return t_serializable_object_to_blob(tx, b_blob);
   }

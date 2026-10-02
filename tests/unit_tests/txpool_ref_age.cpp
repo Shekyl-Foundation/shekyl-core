@@ -36,7 +36,7 @@
 // forward-declares it), needed by init_blockchain's fakechain options.
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_pool.h"
-#include "pqc_spend_fixture.h"
+#include "tx_blob.h"
 
 using namespace cryptonote;
 
