@@ -6,11 +6,12 @@ and why its two "not measured" reasons were a misread, is
 under "The hop, same day". This file is that run as steps, plus the
 fluff the two-node hop could not show.
 
-The head the binaries are built from is the derivation commit
-`5a1a405ae`: the handshake id is
-`cSHAKE256(shekyl/p2p-network-id-v1, genesis_block_hash)`, not the
-hand-pinned bytes `23ca43d2f` moved. The run on 2026-10-02 stopped at
-step 6. The record is at the end of this file.
+The handshake id is
+`cSHAKE256(shekyl/p2p-network-id-v1, genesis_block_hash)`, derived in
+`5a1a405ae`. The run that completed used `409762e06`, which deletes
+the non-clearnet command allowlist on top of that derivation. The
+attempt that stopped at step 6, and the run that finished it, are
+the two sections at the end of this file.
 
 ## What this run records
 
@@ -50,10 +51,10 @@ reuse their data directory.
 
 ## Binaries
 
-Two binaries, both `5a1a405ae`. A later commit on this branch
-handshakes with either, because the id is a function of the genesis
-hash. The record's binaries are this commit. Each measurement
-`shekyld --version` names it before anything dials.
+Two binaries of the same commit. The completed run's binaries are
+`409762e06`. A later commit on this branch handshakes with either,
+because the id is a function of the genesis hash. Each measurement
+`shekyld --version` names the commit before anything dials.
 
 The floor binary is the aarch64 `shekyld` built on the floor. The seed
 binary is a portable x86-64 build of the same commit (`ARCH=x86-64`,
@@ -112,7 +113,8 @@ it is inbound Tor.
 
 ## Sequence
 
-1. Confirm the floor binary and the seed binary both name `5a1a405ae`.
+1. Confirm the floor binary and the seed binary both name the commit
+   the run is recording. The completed run named `409762e06`.
    The fluff receiver is a second process of the seed binary.
 2. Start the miner. From a wallet opened against its RPC, `shekyl-cli
    mine start`. The daemon is `--testnet`; the wallet is that network.
@@ -145,7 +147,7 @@ it is inbound Tor.
 | Where | Line | What it means |
 | --- | --- | --- |
 | Miner | `Sent 1 transaction(s) … using Dandelion++ stem` | Stem left. Timestamp is the start of the hop. |
-| Floor | `Including transaction` | Stem arrived. Timestamp minus the line above is the hop. |
+| Floor | `Received NOTIFY_NEW_TRANSACTIONS` | Stem arrived. This tree has no `Including transaction` line. Timestamp minus the line above is the hop. |
 | Floor | `Transaction added to pool` | Node-local interval, from `Including transaction`. |
 | Floor | `Queueing … transaction(s) for Dandelion++ fluffing` | Fluff was queued. |
 | Fluff receiver | its pool shows the txid | The inbound-only peer admitted the fluff, after step 6. It must not have logged `Sent … using Dandelion++ stem` for this txid. |
@@ -179,3 +181,48 @@ with one inbound Tor session and no outbound. The spend was not
 sent. The stem timestamps and the fluff observation are owed after
 the fix, on this same rig. The three measurement processes were
 stopped. The standing daemons were left as they were found.
+
+## Run, 2026-10-02 — the receiver synced over Tor
+
+Both binaries were `409762e06`. Same flags as the attempt above
+(`--testnet --fixed-difficulty 1`), except the floor used the default
+posture: a named onion and no `--tx-proxy`, no `--anonymous-inbound`,
+no `--no-ephemeral-tor`. It published its own per-boot onion and
+dialed the receiver's. The miner dialed that onion through the warm
+Tor (`--tx-proxy`, `--no-ephemeral-tor`) and did not dial the
+receiver. The receiver was `--out-peers 0`. The seed ran one managed
+Tor, the receiver's.
+
+The floor's chain still arrived over a forward of the miner's
+loopback p2p, height 1 to 84. That sync is not a Tor sync.
+
+The first Tor sync is the receiver's. One attempt while the floor
+was still at height 41 died (`LEVIN_ERROR_CONNECTION_DESTROYED` on
+command 1007). The session that established once the floor was at
+84 finished. At 19:42:22.165Z the receiver logged the session
+(`outbound=false`) and remote height 84; command 1007 came back as
+29 bytes, then the chain requests. At 19:42:43.331Z it logged
+`Synced 84/84`. Wall time from the established session to height 84
+is 21.2 s. The node's own add line for that span is 0.588 s at
+5.10 blocks/s. One inbound Tor socket, no outbound socket. One
+outbound dial closed before its handshake; it did not become a
+session. (`--out-peers 0` did not bind the ephemeral Tor zone: that
+setup installs the default outbound cap.)
+
+The spend is
+`0d9d8bc2713af9e80e1af31621ce7d2f77101927e5908caf0dee2a6c2f26e16c`,
+weight 13235. The log has no `Including transaction` line; arrival
+is `Received NOTIFY_NEW_TRANSACTIONS`.
+
+| Where | When (UTC) | Line |
+| --- | --- | --- |
+| Miner | 19:46:06.954Z | `Sent 1 transaction(s) … using Dandelion++ stem` |
+| Floor | 19:46:07.490Z | `Received NOTIFY_NEW_TRANSACTIONS (1 txes)`, inbound Tor |
+| Floor | 19:46:07.870Z | `Transaction added to pool` |
+
+The hop is 536 ms to the receive line and 916 ms to the pool line.
+The receiver's pool showed the same txid at 19:46:09.864Z, on its
+inbound Tor session (`NOTIFY_NEW_TRANSACTIONS` at 19:46:09.729Z).
+The receiver logged no stem send for it. The three measurement
+processes were stopped. The standing daemons were left as they were
+found. One sample does not replace the 1 625 ms transit assumption.

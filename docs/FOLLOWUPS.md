@@ -30,6 +30,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D12
   - Target: pre-genesis
 
+- **`--out-peers 0` does not bind the ephemeral Tor zone.** `add_ephemeral_tor_zone` installs the default outbound cap (`set_max_out_peers(zone, -1)`), so a receiver started at `--out-peers 0` still dials on Tor. D-5, 2026-10-02: one such dial closed before the handshake and the outbound socket count stayed 0; the sync and the pool admission were the inbound session. Falsify by a `--out-peers 0` daemon whose Tor-zone outbound cap is 0 and whose log has no outbound dial.
+  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
+  - Target: pre-genesis
+
 - **Measure the anonymity hop on the floor, and split the node-local term.** One Tor stem (`bd4392985`) took 658 ms in transit, under the 1 625 ms assumption, and 1.36 s from `Including transaction` to pool add, about eleven times the modal Pi 4 verification cell (124.5 ms, `verify_cost.rs`, still the pre-`PL-D3` millis). Under-estimating the hop fluffs stems early (D-5). The distribution is that same shape. Each sample records input count, tree depth and bytes, so it maps to a `SPEC_VERIFY_COST` cell, and splits the node-local interval into verify and pool admission. If verify alone is near 1.3 s for the modal shape, the owed floor re-measurement is the input that re-derives the anonymity embargo. If the time is the pool write, the embargo inputs stay and aarch64 admission latency is the finding. Not #909. The rerun's command sequence is [`D5_TOR_STEM_RUNBOOK.md`](benchmarks/D5_TOR_STEM_RUNBOOK.md). Falsify by the owner doc naming which of the two the distribution showed.
   - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md) D-5
   - Target: pre-genesis
