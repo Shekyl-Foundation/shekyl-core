@@ -130,8 +130,7 @@ static libraries.
 cmake -S . -B build\msvc-release -G "Visual Studio 18 2026" -A x64 ^
   -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake ^
   -DVCPKG_TARGET_TRIPLET=x64-windows-static ^
-  -DCMAKE_BUILD_TYPE=Release ^
-  -DUSE_DEVICE_TREZOR=OFF
+  -DCMAKE_BUILD_TYPE=Release
 cmake --build build\msvc-release --config Release --parallel
 ```
 
@@ -292,11 +291,9 @@ Shekyl's four-component economics formula).
 
 ## Seed node build (lean daemon)
 
-`make release-seed` builds only the daemon (`shekyld`) with hardware wallet
-support disabled (`-DUSE_HW_DEVICE=OFF`) and `ARCH=x86-64` (portable x86_64).
-This eliminates HIDAPI, protobuf, and libusb as runtime dependencies -- libraries
-a seed node never needs -- and ensures the binary runs on any x86_64 host
-regardless of CPU generation (no AVX/SSE4.x required).
+`make release-seed` builds only the daemon (`shekyld`) with `ARCH=x86-64`
+(portable x86_64), so it runs on any x86_64 host regardless of CPU
+generation (no AVX/SSE4.x required).
 
 ```bash
 make release-seed
@@ -310,7 +307,6 @@ Equivalent manual cmake invocation:
 cmake -S . -B build/seed-release \
   -DCMAKE_BUILD_TYPE=Release \
   -DARCH="x86-64" \
-  -DUSE_HW_DEVICE=OFF \
   -DBUILD_TESTS=OFF
 cmake --build build/seed-release --target daemon -- -j"$(nproc)"
 ```
@@ -324,8 +320,6 @@ CMake cache values cannot leak architecture-specific flags.
 - Boost (chrono, date-time, filesystem, program-options, regex, serialization,
   system, thread)
 - OpenSSL, libsodium, readline
-
-No HIDAPI, protobuf, or libusb packages are required on the target machine.
 
 See `shekyl-dev/docs/SEED_NODE_DEPLOYMENT.md` for full deployment instructions.
 

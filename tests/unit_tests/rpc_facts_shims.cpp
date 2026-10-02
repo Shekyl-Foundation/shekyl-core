@@ -512,14 +512,12 @@ TEST(rpc_facts_shims, chain_tip_reports_the_count_and_the_top_block_hash)
   EXPECT_EQ(0, std::memcmp(facts.top_hash, expected.data, sizeof(facts.top_hash)));
 }
 
-// The two scalars are reported **verbatim**, and that is the contract worth
-// pinning: the wire's rule is "`target_height` is 0 when synchronized", and
-// that rule lives in the Rust handler, not here. If this export ever applied
-// it, the raw target would become unobservable and `sync_info` and
-// `get_info` — which both need to distinguish "synchronized" from "target
-// happens to be zero" — would be reading a value that had already been
-// collapsed. A synchronized daemon with a non-zero target must survive the
-// seam intact.
+// The two scalars are reported **verbatim**. The Rust handlers used to
+// rewrite a synchronized node's target to 0; they no longer do, and this
+// export must not either. If it did, the raw target would become
+// unobservable and a synchronized daemon with a non-zero target would be
+// indistinguishable from one whose core reported none. A synchronized
+// daemon with a non-zero target must survive the seam intact.
 TEST(rpc_facts_shims, chain_tip_passes_the_p2p_scalars_through_uncollapsed)
 {
   BlockchainAndPool bap;

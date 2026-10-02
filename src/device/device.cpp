@@ -29,9 +29,6 @@
 
 #include "device.hpp"
 #include "device_default.hpp"
-#ifdef WITH_DEVICE_LEDGER
-#include "device_ledger.hpp"
-#endif
 #include "misc_log_ex.h"
 
 
@@ -57,9 +54,6 @@ namespace hw {
 
     device_registry::device_registry(){
         hw::core::register_all(registry);
-        #ifdef WITH_DEVICE_LEDGER
-        hw::ledger::register_all(registry);
-        #endif
         atexit(clear_device_registry);
     }
 

@@ -3,12 +3,10 @@
 # Owner: by leaving it; a row that is resolved must leave it (the gate goes red
 # when a listed heading is gone). Never add a row here except at a merge that
 # lands a row written before this gate existed.
-Delete `get_version`'s `target_height` zero-sentinel at the wire boundary.
 The claim-source reply should carry the hash of its own gather tip, so a vouched record needs no bracket.
 Fourteen crates meet the feature-governance trigger ungoverned
 `PL-D4` — a proper hash-commitment mechanism for the leaf's 4th scalar, succeeding the `PL-D3` Pedersen commitment.
 CEN-A7's per-block transaction-count bound has two undocumented values: `2^28` (`CRYPTONOTE_MAX_TX_PER_BLOCK`, `cryptonote_basic.h:914`, an element count) and `10^6` (`shekyl_wire::READ_LEN_CAP`, `block.rs:163`).
-The `shekyl-fcmp` fuzz crate is built nowhere in CI.
 `ARCHIVAL_P_DERIVE_V1`'s regenerator is not citation-gated
 DRS-BENCH redb arm: add when a redb-backed `shekyld` build target exists that reports its backend.
 DRS-W16: `remove_block` deletes at an implicit cursor position its caller sets.
@@ -24,9 +22,6 @@ The archiver's serving store needs a retention rule for a dropped shard, and an 
 `SO-D9` — `ERR_EPOCH_MISMATCH` on the serve-credit admission path is a tautology; RULED (i) 2026-09-13, implementation owed.
 Serve-credit inclusion incentive and archival weight pricing — the fee-and-weight round Q9 names but nothing scheduled.
 Connect-path regression for the hash-gated FCMP++ proof-skip (`CEN-M8` fix wiring).
-Delete `fill_construct_tx_rct_stub`
-The C++ transaction builder is test-only and nothing tracked that.
-`src/device/device_ledger.*` may be the next `device_cold.hpp`
 `get_archival_emission_claim_source` walks the entire serve-credit table per unauthenticated RPC
 `shekyl-ffi` has 105 undocumented items, so `missing_docs` cannot gate detached-doc drift.
 `release_readiness` query (frozen §2 surface) deferred — blocker: persona addressing.

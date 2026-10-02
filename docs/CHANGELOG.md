@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Daemon RPC — `target_height` is the core's target (`CORE_RPC_VERSION` 3.40)
+
+- `get_version` and `sync_info` no longer write `0` when the node is
+  synchronized. `0` is only a core-reported absence. A synchronized node
+  whose core named a target reports that target. The wallet's `get_info`
+  reading is still the C++ reply, which keeps the old convention until that
+  method moves.
+
+### Build — hardware-wallet packages are not dependencies
+
+- The daemon does not link hidapi, libusb, protobuf, or udev. Install
+  lists, the depends build, and CI package lines no longer fetch them.
+  The software device remains the key helper; both hardware backends stay
+  deleted (`docs/HARDWARE_WALLETS.md`).
+
 ### Daemon — `tx_to_blob` no longer has a form that discards the serializer's verdict
 
 - The value-returning `tx_to_blob(const transaction&)` is deleted. It
