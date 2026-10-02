@@ -95,10 +95,11 @@ pub unsafe extern "C" fn shekyl_txid_from_segments(
 /// function the mixer uses ([`shekyl_wire::prunable_hash_of`]) and not a
 /// second one beside it.
 ///
-/// One range and nothing else. There is no length parameter for the reason
-/// the txid entry has none, and no transaction is parsed, so no content can
-/// make the call fail. An empty range — a body with no prunable region — is
-/// a valid input and may be passed as a null pointer.
+/// One byte range and nothing else. The digest takes no archival length —
+/// that operand is the mixer's, measured where the txid is mixed — and no
+/// transaction is parsed, so no content can make the call fail. An empty
+/// range — a body with no prunable region — is a valid input and may be
+/// passed as a null pointer.
 ///
 /// Returns `false`, writing nothing, only when a pointer is null where bytes
 /// were promised: `out_hash`, or `prunable` with a non-zero length.

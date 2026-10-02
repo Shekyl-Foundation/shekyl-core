@@ -1423,10 +1423,11 @@ bool shekyl_txid_from_segments(
 /// body, which a wallet mixes into the txid it checks that body against -- so
 /// it is computed where the mixer is, and C++ holds no hash of its own for it.
 ///
-/// One range, no length parameter, nothing parsed. An empty range (a body
-/// with no prunable region) is valid and may be a null pointer. Returns
-/// false, writing nothing, only for a null pointer where bytes were promised.
-/// out_hash receives 32 bytes.
+/// One byte range, nothing parsed, and no archival length: that operand is
+/// the txid mixer's to measure. An empty range (a body with no prunable
+/// region) is valid and may be a null pointer. Returns false, writing
+/// nothing, only for a null pointer where bytes were promised. out_hash
+/// receives 32 bytes.
 bool shekyl_tx_prunable_hash(
     const uint8_t* prunable,
     size_t prunable_len,
