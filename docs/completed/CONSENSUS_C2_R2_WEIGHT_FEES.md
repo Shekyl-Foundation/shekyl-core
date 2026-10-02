@@ -1,7 +1,8 @@
 # C2-R2 — Block-weight / reward-zone / fee constants design round
 
 **Status:** **SIGNED (Rick, 2026-09-06), with amendments recorded per
-ruling:** Q1/Q2/Q4/Q6/Q7/Q8/Q9/Q10/Q11 ratified (Q1 with the GAP-7
+ruling:** Q1/Q2/Q4/Q6/Q7/Q8/Q9/Q10/Q11 ratified — **Q9 REOPENED
+2026-10-02, §5 Q9** — (Q1 with the GAP-7
 condition discharged in the passing direction — floor figure in the census
 notes; Q10 with corrected headroom and the 0x0A rule-15 row); **Q3
 amended — the window/hysteresis half ratified, the ×50 surge factor
@@ -95,7 +96,9 @@ precedent); rules 00 / 06 / 16 / 19 / 20 / 21 / 22 / 42 / 50 / 60 / 71 / 76 /
   ratification-only, so §5 Q9 was DRAFTED as a recommendation. **The
   maintainer then made the ruling himself: NO consensus fee floor, ratified
   with both reopeners (§5 Q9 carries his words).** The fence did its job:
-  the round proposed; the owner ruled.
+  the round proposed; the owner ruled. **REOPENED 2026-10-02 by the same
+  owner, on a ground outside both reopeners (§5 Q9); the code is
+  unchanged.**
 
 ---
 
@@ -709,7 +712,7 @@ shares), not fee ratios, and must not be read as rung spacing. The
 reopener is tied to the premise: any fee-lane adoption of adjacent rungs
 closer than ×1.07 falsifies claim (2).
 
-### Q9 — the census §6 question: is a consensus fee floor wanted?
+### Q9 — the census §6 question: is a consensus fee floor wanted? — RULED 2026-09-06; REOPENED 2026-10-02
 
 **Boundary (restated from the fence):** a "yes" would have minted a new
 consensus rule — beyond this round's ratification-only mandate — so this
@@ -746,6 +749,37 @@ zero-fee families leaving the protocol). Put to the maintainer as a
 recommendation with these reopeners — and so put, it was RULED as above:
 the ruling is the maintainer's act on this analysis, not the round's
 overreach.
+
+**REOPENED (Rick, 2026-10-02, design-owner lane) — his words: "You are
+correct, and I missed the implication there," and the question is open
+again by his act.** Neither reopener above has fired. The ground is a
+different one: cost (iii) of the analysis ratified above does not hold as
+written, on two counts read at `dev` on that date.
+
+1. *"Pays the penalty curve past `m`"* prices nothing at or below the
+   median. The penalty begins past the effective median, so a miner fills
+   its own block up to it with zero-fee transactions at no cost.
+2. *"And the storage bond economics below it"* is a cost borne by the
+   archivers who hold the bytes, not by the miner who includes them. Since
+   `SHT-Q2` (ruled 2026-09-29) shards close by cumulative archival length,
+   so those bytes close shards whatever fee they paid, and
+   [`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](../design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md)
+   §12.14 (2026-10-01) measured the per-shard bond as the binding archival
+   burden. The economics sim does not price this adversary either: its
+   stuffer pays the fee path. Finding F-H of the same document disposed of
+   the coinbase channel with an output-count cap and, on that basis, kept
+   the stuffer model fee-path-only ("no miner-stuffer arm").
+
+Costs (i) and (ii) stand and constrain any answer: the zero-fee archival
+families rely on the exemption, and a reward-indexed floor in consensus
+makes a transaction's validity depend on the fee climate. **Nothing is
+decided beyond the reopening.** No mechanism is chosen and no consensus
+rule is added; the code is unchanged, and the fee floor remains relay
+policy with `kept_by_block` exempt. The question is taken up with the
+fee-floor basis
+([`FEE_LADDER_DERIVATION.md`](../design/FEE_LADDER_DERIVATION.md) FL-R13),
+after the economics sims are re-based on the production fee code; the
+`FOLLOWUPS.md` row *C2-R2 Q9 is reopened* carries it.
 
 ### Q10 — the tx_extra relay cap 24 576 (CEN-M4)
 

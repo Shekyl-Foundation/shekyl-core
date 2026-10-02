@@ -12,6 +12,22 @@
 > `design/STAKER_ARCHIVAL_SIM.md` (simulation ledger),
 > `design/REWARD_EMISSION_LEG.md` (emission mechanics),
 > `PUBLIC_NARRATIVE_FAQ.md` (positioning and service promise).
+>
+> **DRIFT (marked 2026-10-02).** Parts of this explainer describe the
+> economics as simulated in June 2026 and no longer match `dev`. Two
+> facts are corrected in place: the burn formula (the stake-ratio factor
+> is deleted from the code) and the shard unit (a shard is 3 MB of
+> archival bytes, not one per settlement epoch). Three passages are
+> **marked, not rewritten**, because the design they describe is under
+> re-examination and the replacement text is not decided: the "small
+> accountability bond" claim just below, the section *Why staking doesn't
+> distort the money supply*, and the locked-supply line of the year-10
+> example. Their figures come from a simulation arm that closed one shard
+> per 10,000-block epoch; the chain now closes a shard per 3 MB of
+> archival bytes, which at baseline traffic is roughly two thousand times
+> as many shards (523,841 closed in ten years, against 263)
+> ([`design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md)
+> §12.13–§12.14). Do not quote the marked figures.
 
 ## The big picture
 
@@ -23,11 +39,16 @@ rises otherwise**. That condition is a real one, not a formality: the
 burn scales with the circulating fraction, so early in the chain's life
 it is near zero while issuance is at its largest, and net supply grows
 even on a busy chain. The burn overtakes issuance only as the curve
-flattens and usage matures. Four interacting control loops decide *who*
+flattens and usage matures. *(UNVERIFIED 2026-10-02, pending the sim
+re-base: the simulations behind this sentence held the fee at a flat 0.1
+coins per transaction, while the relay floor the chain charges is
+proportional to the block reward and falls with it. Whether burned fees
+ever exceed issuance depends on a fee level that has not been measured.)*
+Four interacting control loops decide *who*
 receives newly released coins, *how fast* they release, and *how many fees
 get destroyed*. None of the loops needs governance
 or manual tuning; each reads an on-chain quantity (transaction volume,
-emitted-supply fraction, staked fraction, archival work claims) and adjusts
+emitted-supply fraction, archival work claims) and adjusts
 automatically. The design goals — low burn, fair split between miners and
 stakers, strong participation incentives on both sides — fall out of how the
 four loops push against each other.
@@ -36,7 +57,10 @@ A deliberate structural choice underlies all of it: **Shekyl's proof-of-stake
 is not "yield on locked capital." It is payment for archival work**, with a
 small accountability bond. That single decision is what makes the
 participation loop self-regulating, and it is what the gate-7 locked-supply
-simulation confirmed numerically.
+simulation confirmed numerically. *(DRIFT 2026-10-02: "small" and the
+gate-7 confirmation rest on the one-shard-per-epoch model; under
+byte-keyed shards the bond is a binding cost, not a negligible one — see
+the banner above.)*
 
 ## Loop 1 — The emission curve (the PoW backbone)
 
@@ -92,8 +116,8 @@ The demand-side half. A fraction of each block's **transaction fees** (never
 the subsidy) is burned:
 
 ```text
-burn_pct = 50% × sqrt(volume/baseline) × (emitted/total_supply)
-                × (1 + stake_ratio), capped at 90%
+burn_pct = 50% × sqrt(volume/baseline) × (circulating/total_supply),
+           capped at 90%
 ```
 
 Three things keep the burn rate low where it should be low:
@@ -121,10 +145,12 @@ Notice the symmetry with Loop 2: high activity simultaneously *releases more
 subsidy* (multiplier up) and *destroys more fees* (sqrt-volume term up). The
 two act as opposing spring forces around the activity baseline.
 
-One honest caveat: the `(1 + stake_ratio)` term is currently **inert** — the
-gate-7 simulation showed bonds-only staking locks so little supply that the
-factor never moves off 1.0. A FOLLOWUPS item (target V3.1) re-evaluates it;
-today the burn is governed by volume and supply maturity alone.
+The formula once carried a further `× (1 + stake_ratio)` factor. It is
+**deleted** from the code: it keyed the burn rate on stake participation,
+which is the wrong axis for a burn, and under bonds-only staking it was
+pinned to 1.0 at every call
+([`design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md)
+F-D). The burn is governed by volume and supply maturity alone.
 
 ## Loop 4 — The staker emission share (the PoS bootstrap subsidy)
 
@@ -153,10 +179,13 @@ the other.
 
 ## What stakers actually do, and why participation self-regulates
 
-A staker bonds **0.75 coins per shard slot** and commits to storing a shard of
-chain history (one shard per 10,000-block settlement epoch, ~13.9 days). Each
-epoch they prove retention and are paid from the staker pool **proportional to
-verified work** — payment for service, not yield on stake.
+A staker bonds **0.75 coins per shard** and commits to storing a shard of
+chain history. A shard is **3 MB of archival bytes** — the transaction
+proofs and post-quantum authorisations a pruned node discards — so shards
+close with traffic, not on a clock (the 3 MB figure is provisional). Each
+10,000-block settlement epoch (~13.9 days) they prove retention and are paid
+from the staker pool **proportional to verified work** — payment for
+service, not yield on stake.
 
 This is where the most important regulating behavior lives, and it is emergent
 rather than tuned. The staking-market simulation (ledger entry L11 in
@@ -213,7 +242,24 @@ organization — rather than on the market.
 So "encourage participation" isn't a fixed APR promise — it's a servo. The
 protocol sets the purse (Loops 3+4); the market sets the population.
 
-## Why staking doesn't distort the money supply
+## Why staking doesn't distort the money supply — DRIFT 2026-10-02: figures predate byte-keyed shards
+
+> **DRIFT.** Every figure in this section (117 coins, ~3,546 coins,
+> 0.000085 %, the ~45-coin portfolio) comes from a simulation arm that
+> closed one shard per 10,000-block epoch. That cadence was a parameter of
+> the arm (`blocks_per_shard` in `shekyl-economics-sim`, defaulted to one
+> settlement epoch), not a quantity read from the chain's partition — so
+> the figures are an artefact of the parameter, not a measured property of
+> the design. The chain now closes a shard per
+> 3 MB of archival bytes: baseline traffic closes 523,841 shards in ten
+> years, and at 0.75 coins per shard and the model's six replicas that is
+> about 2.4 million coins of bond at year 10, not ~1,300. The conclusions
+> drawn here —
+> "work-priced rather than capital-priced", "nearly zero capital-lockup
+> risk" — do not follow from the current numbers, and the bond's shape is
+> under re-examination
+> ([`design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md)
+> §12.14 *Ruling*). The text below is kept as the June 2026 record.
 
 Because PoS here is work-priced rather than capital-priced, the capital
 actually locked is tiny. The gate-7 simulation traced the real locked-supply
@@ -240,7 +286,8 @@ bandwidth*, compensated by the pool, not frozen wealth.
   among ~110 archivers by verified epoch work — which over an epoch is what
   holds the population at its breakeven attractor.
 - Net inflation that year: 4.7% and falling; locked supply: ~1,300 coins out
-  of 3.2 billion circulating.
+  of 3.2 billion circulating *(DRIFT 2026-10-02: the locked-supply figure
+  predates byte-keyed shards — see the marked section above)*.
 
 Every number above moves automatically: more usage → faster release, higher
 burn, fatter fee flow to both miners and stakers; less usage → slower release,
