@@ -215,6 +215,13 @@ pub fn stuffer_cost_per_shard_atomic(chain_leaves: u64) -> u128 {
 /// is `⌈W · fee_cycle / bytes_cycle⌉`. The sustained figure a campaign that
 /// has to mint its own inputs actually pays; reported beside the one-shot
 /// cost, which stays the gate's input.
+///
+/// **Pairs are complete, not a shortcut.** Minimising `Σλ·fee / Σλ·bytes`
+/// over shape weights `λ ≥ 0` under `Σλ·net = 0` is a linear-fractional
+/// program; after the Charnes–Cooper transform it is a linear program with
+/// two equality constraints (the balance and the normalisation), so a basic
+/// optimum has at most two shapes with non-zero weight. Searching triples
+/// would find nothing cheaper.
 #[must_use]
 pub fn sustained_stuffer_cost_per_shard_atomic(chain_leaves: u64) -> u128 {
     let depth = tree_depth_for_leaves(chain_leaves);
@@ -272,10 +279,25 @@ mod tests {
         // operand does not count. So the argmax is MAX_INPUTS-in / 1-out at
         // every depth — and the J-segment era's 1-in/16-out leaf stuffer is
         // now among the DEAREST shapes per archival byte.
+        //
+        // TRIPWIRE, not a regression check: `stuffer_shape` SEARCHES, so a
+        // wire-format change that moved the archival/weight balance would be
+        // followed by the model and fail only here. On failure the model is
+        // right and this expectation is stale — re-read the prose that quotes
+        // the shape (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §12.13) and
+        // update both.
         let max_in = InputCount::clamped(usize::MAX).get();
         for depth in 2..=MAX_TREE_DEPTH {
             let s = stuffer_shape(depth);
-            assert_eq!((s.n_in.get(), s.n_out.get()), (max_in, 1), "depth {depth}");
+            assert_eq!(
+                (s.n_in.get(), s.n_out.get()),
+                (max_in, 1),
+                "depth {depth}: the archival/weight balance moved — the searched \
+                 shape is now {}-in/{}-out; update the model's prose and §12.13, \
+                 this is not a regression",
+                s.n_in.get(),
+                s.n_out.get()
+            );
             let leafy = Shape {
                 n_in: InputCount::clamped(1),
                 n_out: OutputCount::clamped(MAX_OUTPUTS),

@@ -39,7 +39,7 @@ use crate::calibration::{
     tree_depth_for_leaves, RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB, RUCKNIUM_SPAM_FEES_XMR,
 };
 use crate::engine::{ScenarioConfig, SimParams};
-use crate::escalation::{family, flat_25, EscalationCurve, KNEE_BAND};
+use crate::escalation::{family, flat_25, EscalationCurve, KNEE_ARCHIVAL_LEN_BYTES, KNEE_BAND};
 use crate::population::{
     attacker_capped_work_milli, honest_sigma_work_milli, honest_sigma_work_milli_deleted, DQ2H_TAIL,
 };
@@ -366,6 +366,14 @@ pub struct A1CandidateResult {
     /// rate (`≥ 1` clears). Parallel to [`OPP_COST_RATE_BAND`]; the last member
     /// (10%) is the binding case.
     pub min_ratio_by_rate: Vec<f64>,
+    /// The replica count the budget would sustain at each rate — the
+    /// un-binarised form of the ratio. Both burden terms are linear in
+    /// [`REPLICAS_PER_SHARD`] (`locked_bond_atomic` and the storage term), so
+    /// `ratio(R) = ratio(R_0) · R_0 / R` exactly and this is
+    /// `REPLICAS_PER_SHARD · min_ratio`. `R = 6` is a leaf-era replication
+    /// constant carried as an input; the ceremony reads "clears at R = 2"
+    /// here rather than a binary fail at that constant.
+    pub replicas_sustained_by_rate: Vec<f64>,
 }
 
 /// A1 clearance for one scenario.
@@ -385,9 +393,13 @@ fn a1_candidate_result(
     // Mid price ($0.10) for the minor storage term; the binding bond-opp-cost
     // term is price-independent, so this choice barely moves the verdict (F-G).
     let mid_price = SKL_FIAT_PRICE_BAND[1];
-    let min_ratio_by_rate = OPP_COST_RATE_BAND
+    let min_ratio_by_rate: Vec<f64> = OPP_COST_RATE_BAND
         .iter()
         .map(|&rate| a1_min_clearance_ratio(aggs, curve, rate, mid_price, KryderRate::Stall))
+        .collect();
+    let replicas_sustained_by_rate = min_ratio_by_rate
+        .iter()
+        .map(|r| r * REPLICAS_PER_SHARD as f64)
         .collect();
     A1CandidateResult {
         asymptote_pct: if is_flat {
@@ -401,6 +413,7 @@ fn a1_candidate_result(
             Some(curve.knee_shards)
         },
         min_ratio_by_rate,
+        replicas_sustained_by_rate,
     }
 }
 
@@ -417,14 +430,23 @@ fn a1_clearance_report(
         "\nA1 — burden clearance (§12.2, F-G): min budget / (bond-opp-cost + storage) ratio.\n\
          budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor 0.75 x R{R} x n x rate.\n\
          >=1.0 keeps the staker whole every sustained year. Columns = opp-cost rate {RATES:?} (10% binding).\n\
-         Storage is a minor add-on (F-G: ~100x smaller); the binding term is PRICE-INDEPENDENT (SKL vs SKL).",
+         Storage is a minor add-on (F-G: ~100x smaller); the binding term is PRICE-INDEPENDENT (SKL vs SKL).\n\
+         Knee band {BAND:?} closed shards; the shipped middle is {KNEE_TB:.2} TB of archival at W = {W} B/shard.",
         R = REPLICAS_PER_SHARD,
         RATES = OPP_COST_RATE_BAND,
+        BAND = KNEE_BAND,
+        KNEE_TB = KNEE_ARCHIVAL_LEN_BYTES as f64 / 1e12,
+        W = shekyl_types::SHARD_LENGTH.to_raw(),
     )?;
     writeln!(
         out,
-        "{:<20} {:>12}   {:>24}   {:>24}",
-        "scenario", "best-cand", "flat-25 ratio @rate", "best-cand ratio @rate"
+        "{:<20} {:>12}   {:>24}   {:>24}   {:>17}",
+        "scenario", "best-cand", "flat-25 ratio @rate", "best-cand ratio @rate", "R sustained @10%"
+    )?;
+    writeln!(
+        out,
+        "{:<20} {:>12}   {:>24}   {:>24}   {:>8} {:>8}",
+        "", "", "", "", "flat", "best"
     )?;
 
     let mut results = Vec::new();
@@ -451,7 +473,7 @@ fn a1_clearance_report(
             .unwrap_or_else(|| flat25.clone());
         writeln!(
             out,
-            "{:<20} {:>12}   {:>7.2} {:>7.2} {:>7.2}   {:>7.2} {:>7.2} {:>7.2}",
+            "{:<20} {:>12}   {:>7.2} {:>7.2} {:>7.2}   {:>7.2} {:>7.2} {:>7.2}   {:>8.2} {:>8.2}",
             trunc(&config.name, 20),
             best.asymptote_pct
                 .map(|a| format!("{a:.0}%/{}", best.knee_shards.unwrap_or(0)))
@@ -462,6 +484,8 @@ fn a1_clearance_report(
             best.min_ratio_by_rate[0],
             best.min_ratio_by_rate[1],
             best.min_ratio_by_rate[2],
+            flat25.replicas_sustained_by_rate[binding],
+            best.replicas_sustained_by_rate[binding],
         )?;
 
         results.push(A1ScenarioResult {
@@ -475,8 +499,15 @@ fn a1_clearance_report(
         out,
         "  -> rate cols each = {:?} (10% binding, last). The D2 case is where the\n\
          best candidate clears (>=1.0) at 10% while flat-25 does NOT — escalation\n\
-         earning its keep. A4/A5 then drop any winner that fails W9/W10.",
-        OPP_COST_RATE_BAND
+         earning its keep. A4/A5 then drop any winner that fails W9/W10.\n\
+         'R sustained' = R{R} x ratio: the replica count the budget would carry at\n\
+         10% (both burden terms are linear in R), so a fail reads as a number.\n\
+         The 10%/yr binding rate is EXOGENOUS: SKL bonded for decades in a settled\n\
+         chain at ~{tx} tx/block is where that assumption is strongest and least\n\
+         grounded; the band is kept, the choice of binding member is the owner's.",
+        OPP_COST_RATE_BAND,
+        R = REPLICAS_PER_SHARD,
+        tx = crate::scenarios::SCENARIO_9_TAIL_TX_PER_BLOCK,
     )?;
     // Verdict, computed: which scenarios no candidate clears at the binding
     // rate, and which are the D2 case proper (best clears, flat does not).
@@ -518,6 +549,18 @@ fn a1_clearance_report(
             uncleared.join(", ")
         },
     )?;
+    if d2_case.is_empty() {
+        writeln!(
+            out,
+            "  -> NO DISCRIMINATING SCENARIO: across the whole set, every scenario either\n\
+             clears flat or clears for no candidate — the escalation does no work the\n\
+             flat share does not. The knee band was swept against trajectories that\n\
+             never land in a region where flat fails and best clears. Before the\n\
+             ceremony picks a knee, the next row SOLVES for that region (traffic x\n\
+             corpus) rather than adding a tenth point; if it is empty or razor-thin the\n\
+             lever is dead in this unit (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §12.13)."
+        )?;
+    }
     Ok(results)
 }
 
