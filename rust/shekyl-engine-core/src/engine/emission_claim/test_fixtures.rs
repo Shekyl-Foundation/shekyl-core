@@ -8,7 +8,8 @@ use crate::engine::emission_source::{
 };
 use shekyl_archival_retention::{
     as_of_e_served_work, epoch_close_height, settlement_epoch_at_height, sigma_work_milli,
-    CreditPair, EpochCloseShard, HoldingsDescriptor, HoldingsKind, ShardSet, EMISSION_KAT_SHAPE,
+    CreditPair, EpochCloseShard, HoldingsDescriptor, HoldingsKind, ShardClose, ShardSet,
+    EMISSION_KAT_SHAPE,
 };
 use shekyl_types::ChainCount;
 
@@ -43,13 +44,11 @@ pub(crate) fn snapshot(epoch: u64) -> EpochSnapshot {
         shards: vec![
             EpochCloseShard {
                 shard_id: shape.shard_a,
-                has_segment: true,
-                freeze_height: close - shape.shard_a_freeze_offset,
+                close: ShardClose::ClosedAt(close - shape.shard_a_freeze_offset),
             },
             EpochCloseShard {
                 shard_id: shape.shard_b,
-                has_segment: true,
-                freeze_height: close - shape.shard_b_freeze_offset,
+                close: ShardClose::ClosedAt(close - shape.shard_b_freeze_offset),
             },
         ],
         credit_pairs: shape
@@ -210,10 +209,11 @@ pub(crate) fn epoch_json(e: &EpochSnapshot) -> serde_json::Value {
         .shards
         .iter()
         .map(|s| {
+            let wire = s.close.to_wire();
             serde_json::json!({
                 "shard_id": s.shard_id,
-                "freeze_height": s.freeze_height,
-                "has_segment": s.has_segment,
+                "freeze_height": wire.freeze_height,
+                "has_segment": wire.has_segment,
             })
         })
         .collect();

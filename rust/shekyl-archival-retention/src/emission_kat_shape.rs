@@ -20,9 +20,10 @@
 //! this crate (not a test-support module) because pinned KAT vectors are
 //! first-class consensus artifacts (`30-cryptography.mdc`).
 
-/// The pinned shape values. Freeze heights are **offsets below**
-/// `epoch_close_height(E)` (the fixture epoch is each suite's to choose);
-/// credit pairs are `(bond_idx, shard_idx)` index tuples.
+/// The pinned shape values. Close heights are **offsets below**
+/// `epoch_close_height(E)` (the fixture epoch is each suite's to choose).
+/// The wire still names that column `freeze_height`. Credit pairs are
+/// `(bond_idx, shard_idx)` index tuples.
 #[derive(Debug, Clone, Copy)]
 pub struct EmissionKatShape {
     /// Both bond rows' `join_settlement_epoch` (claimant = idx 0, other =
@@ -33,9 +34,9 @@ pub struct EmissionKatShape {
     pub shard_a: u64,
     /// The other-bond-only shard (`R_market = 1`).
     pub shard_b: u64,
-    /// `h_close(E) − freeze_height` for shard A.
+    /// `h_close(E) − shard_close_height` for shard A (the wire's `freeze_height`).
     pub shard_a_freeze_offset: u64,
-    /// `h_close(E) − freeze_height` for shard B.
+    /// `h_close(E) − shard_close_height` for shard B (the wire's `freeze_height`).
     pub shard_b_freeze_offset: u64,
     /// Serve credits: {claimant→A, other→A, other→B}.
     pub credit_pairs: [(usize, usize); 3],
