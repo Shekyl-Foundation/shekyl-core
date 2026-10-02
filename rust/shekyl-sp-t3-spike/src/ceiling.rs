@@ -54,6 +54,13 @@ pub const GOVERNING_PERCENTILE: u8 = 100 - TARGET_MISS_PER_CENT;
 /// fitted maximum.
 pub const OVERSHOOT_BYTES: u32 = 149_400;
 
+/// The heaviest shard at the provisional shard length: `W` plus its
+/// overshoot. The object a witness's read is sized against.
+pub const HEAVIEST_SHARD_BYTES: u32 = 3_149_400;
+const _: () = assert!(
+    HEAVIEST_SHARD_BYTES as u64 == shekyl_types::SHARD_LENGTH.to_raw() + OVERSHOOT_BYTES as u64
+);
+
 /// §4.1a's linearity threshold: the model is rejected when an interior
 /// point's `t₇₀` lies further than this share **of its own value** from the
 /// line through the ladder's two ends. Per cent.
@@ -286,14 +293,32 @@ pub enum Rejection {
     NotLinear { off_per_cent: f64 },
 }
 
-/// §10.1 item 2: `t₇₀ = t_fixed + bytes / v` over the ladder.
+/// `t = t_fixed + bytes / v`, fitted over a size ladder and kept on §4.1a's
+/// thresholds.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Fit {
-    /// Fewer than three sizes, or two of the same size: no line to judge.
+pub struct Line {
+    /// The time that does not depend on the object's size, in seconds.
+    pub t_fixed_s: f64,
+    /// The rate the rest is paid at.
+    pub bytes_per_s: f64,
+    /// The furthest interior point's distance from the line through the
+    /// ladder's ends, per cent of its own value.
+    pub off_per_cent: f64,
+}
+
+impl Line {
+    /// The fitted time for an object of `bytes`, in seconds.
+    #[must_use]
+    pub fn at(&self, bytes: u32) -> f64 {
+        self.t_fixed_s + f64::from(bytes) / self.bytes_per_s
+    }
+}
+
+/// Why a ladder gives no [`Line`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum NoLine {
+    /// Fewer than three distinct sizes: no line to judge.
     TooFewSizes,
-    /// A size missed more than the target, so its `t₇₀` is infinite. Item 1
-    /// has then already answered and no model is fitted.
-    Unbounded { bytes: u32 },
     /// The model fits and is rejected on §4.1a's thresholds: the transport
     /// does not decompose this way.
     Rejected {
@@ -301,42 +326,26 @@ pub enum Fit {
         bytes_per_s: f64,
         why: Rejection,
     },
-    /// The model, and the largest shard length whose heaviest shard still
-    /// completes inside the deadline at the governing percentile.
-    Kept {
-        t_fixed_s: f64,
-        bytes_per_s: f64,
-        /// The interior point's distance from the line through the ends, per
-        /// cent of its own value.
-        off_per_cent: f64,
-        /// `v · (deadline − t_fixed) − overshoot`.
-        w_max_bytes: f64,
-        /// Whether `w_max_bytes` lies past the largest size measured, where
-        /// it is an extrapolation and not a reading.
-        extrapolated: bool,
-    },
 }
 
-/// Fit the ladder. `readings` in any order; sorted by size here.
-#[must_use]
-pub fn fit(readings: &[SizeReading]) -> Fit {
-    let mut by_size: Vec<&SizeReading> = readings.iter().collect();
-    by_size.sort_unstable_by_key(|r| r.bytes);
-    by_size.dedup_by_key(|r| r.bytes);
+/// Least squares of time on size, judged on §4.1a's thresholds. `points` in
+/// any order; sorted by size here, and a repeated size counts once.
+///
+/// # Errors
+///
+/// [`NoLine`] when there are fewer than three sizes or the model is rejected.
+pub fn line_through(points: &[(u32, Duration)]) -> Result<Line, NoLine> {
+    let mut by_size: Vec<(u32, Duration)> = points.to_vec();
+    by_size.sort_unstable_by_key(|(bytes, _)| *bytes);
+    by_size.dedup_by_key(|(bytes, _)| *bytes);
     if by_size.len() < 3 {
-        return Fit::TooFewSizes;
+        return Err(NoLine::TooFewSizes);
     }
-    let mut points: Vec<(f64, f64)> = Vec::with_capacity(by_size.len());
-    for reading in &by_size {
-        let Some(t) = reading.t_governing else {
-            return Fit::Unbounded {
-                bytes: reading.bytes,
-            };
-        };
-        points.push((f64::from(reading.bytes), t.as_secs_f64()));
-    }
+    let points: Vec<(f64, f64)> = by_size
+        .iter()
+        .map(|(bytes, t)| (f64::from(*bytes), t.as_secs_f64()))
+        .collect();
 
-    // Least squares of t on bytes.
     let count = as_f64(points.len());
     let mean_x = points.iter().map(|(x, _)| x).sum::<f64>() / count;
     let mean_y = points.iter().map(|(_, y)| y).sum::<f64>() / count;
@@ -348,19 +357,19 @@ pub fn fit(readings: &[SizeReading]) -> Fit {
     let slope = sxy / sxx;
     let t_fixed_s = mean_y - slope * mean_x;
     if slope <= 0.0 {
-        return Fit::Rejected {
+        return Err(NoLine::Rejected {
             t_fixed_s,
             bytes_per_s: 0.0,
             why: Rejection::NoPositiveRate,
-        };
+        });
     }
     let bytes_per_s = 1.0 / slope;
     if t_fixed_s < 0.0 {
-        return Fit::Rejected {
+        return Err(NoLine::Rejected {
             t_fixed_s,
             bytes_per_s,
             why: Rejection::NegativeFixedTime,
-        };
+        });
     }
 
     // Linearity: every interior point against the line through the two ends.
@@ -374,22 +383,144 @@ pub fn fit(readings: &[SizeReading]) -> Fit {
         })
         .fold(0.0_f64, f64::max);
     if off_per_cent > f64::from(LINEARITY_TOLERANCE_PER_CENT) {
-        return Fit::Rejected {
+        return Err(NoLine::Rejected {
             t_fixed_s,
             bytes_per_s,
             why: Rejection::NotLinear { off_per_cent },
-        };
+        });
     }
-
-    let w_max_bytes =
-        bytes_per_s * (DEADLINE.as_secs_f64() - t_fixed_s) - f64::from(OVERSHOOT_BYTES);
-    Fit::Kept {
+    Ok(Line {
         t_fixed_s,
         bytes_per_s,
         off_per_cent,
-        w_max_bytes,
-        extrapolated: w_max_bytes > x_high,
+    })
+}
+
+/// §10.1 item 2: the governing percentile's line over the ladder, and the
+/// ceiling it puts on the shard length.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Fit {
+    /// A size missed more than the target, so its `t₇₀` is infinite. Item 1
+    /// has then already answered and no model is fitted.
+    Unbounded { bytes: u32 },
+    /// No line: too few sizes, or the model rejected.
+    NoLine(NoLine),
+    /// The model, and the largest shard length whose heaviest shard still
+    /// completes inside the deadline at the governing percentile.
+    Kept {
+        line: Line,
+        /// `v · (deadline − t_fixed) − overshoot`.
+        w_max_bytes: f64,
+        /// Whether `w_max_bytes` lies past the largest size measured, where
+        /// it is an extrapolation and not a reading.
+        extrapolated: bool,
+    },
+}
+
+/// Fit the governing percentile over the ladder.
+#[must_use]
+pub fn fit(readings: &[SizeReading]) -> Fit {
+    let mut points: Vec<(u32, Duration)> = Vec::with_capacity(readings.len());
+    for reading in readings {
+        let Some(t) = reading.t_governing else {
+            return Fit::Unbounded {
+                bytes: reading.bytes,
+            };
+        };
+        points.push((reading.bytes, t));
     }
+    let line = match line_through(&points) {
+        Ok(line) => line,
+        Err(no_line) => return Fit::NoLine(no_line),
+    };
+    let largest = points.iter().map(|(bytes, _)| *bytes).max().unwrap_or(0);
+    let w_max_bytes =
+        line.bytes_per_s * (DEADLINE.as_secs_f64() - line.t_fixed_s) - f64::from(OVERSHOOT_BYTES);
+    Fit::Kept {
+        line,
+        w_max_bytes,
+        extrapolated: w_max_bytes > f64::from(largest),
+    }
+}
+
+/// §4.1a's per-percentile fit: the `p`th percentile of each size's
+/// **completions** (every success, however slow — the crate's percentile
+/// rule, [`crate::measure::summarize`]), as a line over the ladder.
+///
+/// # Errors
+///
+/// [`NoLine`] when fewer than three sizes have a completion, or the model is
+/// rejected.
+pub fn completion_line(sizes: &[(u32, &[Observation])], p: u8) -> Result<Line, NoLine> {
+    let points: Vec<(u32, Duration)> = sizes
+        .iter()
+        .filter_map(|(bytes, observations)| {
+            let mut completions: Vec<Duration> = observations
+                .iter()
+                .filter(|o| o.is_success())
+                .map(|o| o.elapsed)
+                .collect();
+            completions.sort_unstable();
+            nearest_rank(&completions, p).map(|t| (*bytes, t))
+        })
+        .collect();
+    line_through(&points)
+}
+
+/// A read of one attempt and, if that misses, one retry.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RetriedRead {
+    /// The share of reads in which both attempts missed.
+    pub failure_rate: f64,
+    /// The `p`th percentile of the reads that completed, from the first
+    /// attempt's start; `None` when none did.
+    pub completed_by: Option<Duration>,
+}
+
+/// What a witness's read looks like when a missed attempt is retried once,
+/// on the attempts actually observed.
+///
+/// Exact, not sampled: every ordered pair of observed attempts is one read,
+/// the second drawn independently of the first. A first attempt that
+/// completes inside [`DEADLINE`] is the read. One that misses costs what it
+/// took, capped at the deadline — a witness gives up there — and the retry's
+/// time is added to it; if the retry misses too, the read fails.
+///
+/// `None` for no observations.
+#[must_use]
+pub fn read_with_one_retry(observations: &[Observation], p: u8) -> Option<RetriedRead> {
+    if observations.is_empty() {
+        return None;
+    }
+    let completed = |o: &Observation| o.is_success() && o.elapsed <= DEADLINE;
+    let completions: Vec<Duration> = observations
+        .iter()
+        .filter(|o| completed(o))
+        .map(|o| o.elapsed)
+        .collect();
+    let spent_on_misses: Vec<Duration> = observations
+        .iter()
+        .filter(|o| !completed(o))
+        .map(|o| o.elapsed.min(DEADLINE))
+        .collect();
+
+    let n = observations.len();
+    let mut reads: Vec<Duration> =
+        Vec::with_capacity(completions.len() * (n + spent_on_misses.len()));
+    for first in &completions {
+        // The retry is never taken; one read per second draw keeps every
+        // ordered pair the same weight.
+        reads.extend(std::iter::repeat_n(*first, n));
+    }
+    for spent in &spent_on_misses {
+        reads.extend(completions.iter().map(|retry| *spent + *retry));
+    }
+    reads.sort_unstable();
+    let misses = as_f64(spent_on_misses.len());
+    Some(RetriedRead {
+        failure_rate: (misses * misses) / (as_f64(n) * as_f64(n)),
+        completed_by: nearest_rank(&reads, p),
+    })
 }
 
 #[cfg(test)]
@@ -515,18 +646,20 @@ mod tests {
             reading(4_000_000, 100, 0, 21),
         ];
         let Fit::Kept {
-            t_fixed_s,
-            bytes_per_s,
-            off_per_cent,
+            line,
             w_max_bytes,
             extrapolated,
         } = fit(&readings)
         else {
             panic!("an exact line is kept: {:?}", fit(&readings));
         };
-        assert!((t_fixed_s - 5.0).abs() < 1e-9);
-        assert!((bytes_per_s - 250_000.0).abs() < 1e-3);
-        assert!(off_per_cent < 1e-9);
+        assert!((line.t_fixed_s - 5.0).abs() < 1e-9);
+        assert!((line.bytes_per_s - 250_000.0).abs() < 1e-3);
+        assert!(line.off_per_cent < 1e-9);
+        assert!(
+            (line.at(3_000_000) - 17.0).abs() < 1e-9,
+            "5 s + 3 MB / 250 kB/s"
+        );
         assert!((w_max_bytes - (250_000.0 * 115.0 - 149_400.0)).abs() < 1e-3);
         assert!(extrapolated, "28.6 MB is past the 4 MB largest size");
     }
@@ -580,18 +713,16 @@ mod tests {
         assert_eq!(decide(largest), Decision::Stands);
 
         let Fit::Kept {
-            t_fixed_s,
-            bytes_per_s,
-            off_per_cent,
+            line,
             w_max_bytes,
             extrapolated,
         } = fit(&readings)
         else {
             panic!("the model is kept: {:?}", fit(&readings));
         };
-        assert!((t_fixed_s - 5.899).abs() < 5e-4, "t_fixed {t_fixed_s}");
-        assert!((bytes_per_s - 400_358.0).abs() < 0.5, "v {bytes_per_s}");
-        assert!((off_per_cent - 6.1).abs() < 0.05, "off {off_per_cent}");
+        assert!((line.t_fixed_s - 5.899).abs() < 5e-4, "{line:?}");
+        assert!((line.bytes_per_s - 400_358.0).abs() < 0.5, "{line:?}");
+        assert!((line.off_per_cent - 6.1).abs() < 0.05, "{line:?}");
         assert!(
             (w_max_bytes - 45_532_062.0).abs() < 0.5,
             "W_max {w_max_bytes}"
@@ -610,10 +741,10 @@ mod tests {
         ];
         assert!(matches!(
             fit(&bent),
-            Fit::Rejected {
+            Fit::NoLine(NoLine::Rejected {
                 why: Rejection::NotLinear { off_per_cent },
                 ..
-            } if (off_per_cent - 25.0).abs() < 1e-9
+            }) if (off_per_cent - 25.0).abs() < 1e-9
         ));
         // Time falls with size.
         let falling = [
@@ -623,10 +754,10 @@ mod tests {
         ];
         assert!(matches!(
             fit(&falling),
-            Fit::Rejected {
+            Fit::NoLine(NoLine::Rejected {
                 why: Rejection::NoPositiveRate,
                 ..
-            }
+            })
         ));
         // A line that crosses zero time above zero bytes.
         let steep = [
@@ -636,10 +767,10 @@ mod tests {
         ];
         assert!(matches!(
             fit(&steep),
-            Fit::Rejected {
+            Fit::NoLine(NoLine::Rejected {
                 why: Rejection::NegativeFixedTime,
                 ..
-            }
+            })
         ));
         // More than the target missed at one size.
         let unbounded = [
@@ -648,6 +779,110 @@ mod tests {
             reading(3_000_000, 100, 0, 30),
         ];
         assert_eq!(fit(&unbounded), Fit::Unbounded { bytes: 2_000_000 });
-        assert_eq!(fit(&unbounded[..2]), Fit::TooFewSizes);
+        // Two sizes are not a ladder, whatever they read.
+        assert_eq!(fit(&bent[..2]), Fit::NoLine(NoLine::TooFewSizes));
+    }
+
+    /// §4.1a's per-percentile fit reads completions only, by the crate's
+    /// percentile rule, and gives the line they lie on.
+    #[test]
+    fn a_completion_percentile_is_fitted_over_the_ladder() {
+        // Every completion at a size takes the same time, on
+        // t = 5 s + bytes / 250,000 B/s; misses are not completions.
+        let at = |secs: u64| -> Vec<Observation> {
+            let mut observations: Vec<Observation> = (0..9).map(|_| ok(secs)).collect();
+            observations.push(missed(FailureKind::Circuit));
+            observations
+        };
+        let (small, middle, large) = (at(9), at(13), at(21));
+        let sizes: [(u32, &[Observation]); 3] = [
+            (1_000_000, &small),
+            (2_000_000, &middle),
+            (4_000_000, &large),
+        ];
+        let line = completion_line(&sizes, 99).expect("an exact line");
+        assert!((line.t_fixed_s - 5.0).abs() < 1e-9 && (line.bytes_per_s - 250_000.0).abs() < 1e-3);
+        assert_eq!(completion_line(&sizes[..2], 99), Err(NoLine::TooFewSizes));
+    }
+
+    /// One attempt and one retry, exact over every ordered pair: four
+    /// attempts, two completing in 10 s and 20 s, one failing after 30 s and
+    /// one "succeeding" at 200 s, which is a miss that cost the full deadline.
+    #[test]
+    fn a_retried_read_is_every_ordered_pair_of_attempts() {
+        let observations = [
+            ok(10),
+            ok(20),
+            Observation::failure(Duration::from_secs(30), FailureKind::Circuit),
+            ok(200),
+        ];
+        // 16 pairs. First completes: 8 reads (10 x4, 20 x4). First misses and
+        // the retry completes: 30+10, 30+20, 120+10, 120+20. Both miss: 4.
+        let read = read_with_one_retry(&observations, 100).expect("observations");
+        assert!((read.failure_rate - 0.25).abs() < 1e-12);
+        assert_eq!(read.completed_by, Some(Duration::from_secs(140)));
+        // Median of the twelve completed reads: the sixth, a first-attempt 20.
+        assert_eq!(
+            read_with_one_retry(&observations, 50)
+                .expect("observations")
+                .completed_by,
+            Some(Duration::from_secs(20))
+        );
+        assert_eq!(read_with_one_retry(&[], 50), None);
+    }
+
+    /// The worse of the two PoW-off days reads as
+    /// `ARCHIVAL_SHARD_T_DERIVATION.md` §10.6 records it for `L`: the
+    /// per-byte span at the governing percentile and at the p99 of
+    /// completions, and the read of one attempt and one retry.
+    #[test]
+    fn the_worse_day_reads_as_the_record_says_for_the_span() {
+        let file = include_str!("../../../docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv");
+        let mut sizes: std::collections::BTreeMap<u32, Vec<Observation>> =
+            std::collections::BTreeMap::new();
+        for line in file
+            .lines()
+            .filter(|l| *l != crate::measure::ROW_HEADER && !l.is_empty())
+        {
+            let (arm, observation) = crate::measure::parse_row(line).expect("a row");
+            let bytes = arm.strip_prefix("soak@").expect("a soak arm");
+            sizes
+                .entry(bytes.parse().expect("an object size"))
+                .or_default()
+                .push(observation);
+        }
+        let readings: Vec<SizeReading> = sizes
+            .iter()
+            .map(|(bytes, observations)| {
+                SizeReading::of(*bytes, observations).expect("no void arm in the record")
+            })
+            .collect();
+        let largest = readings.last().expect("three sizes");
+        assert_eq!((largest.attempts(), largest.misses()), (489, 98));
+        assert_eq!(decide(largest), Decision::Stands);
+
+        let Fit::Kept { line, .. } = fit(&readings) else {
+            panic!("the model is kept: {:?}", fit(&readings));
+        };
+        assert!((line.t_fixed_s - 12.092).abs() < 5e-4, "{line:?}");
+        assert!((line.bytes_per_s - 71_606.0).abs() < 0.5, "{line:?}");
+        assert!((line.at(HEAVIEST_SHARD_BYTES) - 56.1).abs() < 0.05);
+
+        let ladder: Vec<(u32, &[Observation])> = sizes
+            .iter()
+            .map(|(bytes, observations)| (*bytes, observations.as_slice()))
+            .collect();
+        let tail = completion_line(&ladder, 99).expect("the p99 line is kept");
+        assert!((tail.t_fixed_s - 54.937).abs() < 5e-4, "{tail:?}");
+        assert!((tail.bytes_per_s - 47_851.0).abs() < 0.5, "{tail:?}");
+        assert!((tail.at(HEAVIEST_SHARD_BYTES) - 120.8).abs() < 0.05);
+
+        let (_, at_largest) = ladder.last().expect("three sizes");
+        let read = read_with_one_retry(at_largest, 99).expect("observations");
+        assert!((read.failure_rate - 0.0402).abs() < 5e-5, "{read:?}");
+        let p99 = read.completed_by.expect("reads completed").as_secs_f64();
+        assert!((p99 - 149.7).abs() < 0.05, "p99 {p99}");
+        // Over two minutes and under six: neither arm of `L`'s falsifier.
+        assert!(p99 > 120.0 && p99 < 360.0);
     }
 }

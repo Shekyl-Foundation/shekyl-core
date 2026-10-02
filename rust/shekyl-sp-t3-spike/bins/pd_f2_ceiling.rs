@@ -20,7 +20,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use shekyl_sp_t3_spike::ceiling::{
-    decide, fit, Decision, Fit, Rejection, SizeReading, DEADLINE, GOVERNING_PERCENTILE,
+    completion_line, decide, fit, read_with_one_retry, Decision, Fit, Line, NoLine, Rejection,
+    SizeReading, DEADLINE, GOVERNING_PERCENTILE, HEAVIEST_SHARD_BYTES,
     LINEARITY_TOLERANCE_PER_CENT, OVERSHOOT_BYTES, TARGET_MISS_PER_CENT,
 };
 use shekyl_sp_t3_spike::measure::{parse_row, Observation, ROW_HEADER};
@@ -68,6 +69,45 @@ fn size_line(reading: &SizeReading) {
     );
 }
 
+/// The completion percentiles §4.1a fits.
+const COMPLETION_PERCENTILES: [u8; 3] = [50, 90, 99];
+
+fn line_words(line: &Line) -> String {
+    format!(
+        "{:.3} s + bytes / {:.0} B/s; interior point {:.1} % off the line (limit {LINEARITY_TOLERANCE_PER_CENT} %)",
+        line.t_fixed_s, line.bytes_per_s, line.off_per_cent
+    )
+}
+
+fn no_line_words(no_line: NoLine) -> String {
+    match no_line {
+        NoLine::TooFewSizes => "fewer than three sizes, nothing fitted".to_owned(),
+        NoLine::Rejected {
+            t_fixed_s,
+            bytes_per_s,
+            why,
+        } => {
+            let reason = match why {
+                Rejection::NegativeFixedTime => "the fixed time is negative".to_owned(),
+                Rejection::NoPositiveRate => "time does not grow with size".to_owned(),
+                Rejection::NotLinear { off_per_cent } => format!(
+                    "an interior point is {off_per_cent:.1} % of its own value off the line (limit {LINEARITY_TOLERANCE_PER_CENT} %)"
+                ),
+            };
+            format!("REJECTED — {reason} (t_fixed {t_fixed_s:.3} s, v {bytes_per_s:.0} B/s)")
+        }
+    }
+}
+
+/// One line's time at the heaviest shard, with the line it came from.
+fn span_line(label: &str, line: &Line) {
+    println!(
+        "  span at the heaviest shard ({HEAVIEST_SHARD_BYTES} B), {label}: {:.1} s  [{}]",
+        line.at(HEAVIEST_SHARD_BYTES),
+        line_words(line)
+    );
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let [path] = args.as_slice() else {
@@ -107,36 +147,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("decision at {} B: {verdict}", largest.bytes());
 
     match fit(&readings) {
-        Fit::TooFewSizes => println!("fit: fewer than three sizes, nothing fitted"),
         Fit::Unbounded { bytes } => println!(
             "fit: not fitted — more than {TARGET_MISS_PER_CENT} % missed at {bytes} B, so its t{GOVERNING_PERCENTILE} is infinite"
         ),
-        Fit::Rejected {
-            t_fixed_s,
-            bytes_per_s,
-            why,
-        } => {
-            let reason = match why {
-                Rejection::NegativeFixedTime => "the fixed time is negative".to_owned(),
-                Rejection::NoPositiveRate => "time does not grow with size".to_owned(),
-                Rejection::NotLinear { off_per_cent } => format!(
-                    "an interior point is {off_per_cent:.1} % of its own value off the line (limit {LINEARITY_TOLERANCE_PER_CENT} %)"
-                ),
-            };
-            println!(
-                "fit: REJECTED — {reason} (t_fixed {t_fixed_s:.3} s, v {bytes_per_s:.0} B/s); no ceiling"
-            );
-        }
+        Fit::NoLine(no_line) => println!("fit: {}; no ceiling", no_line_words(no_line)),
         Fit::Kept {
-            t_fixed_s,
-            bytes_per_s,
-            off_per_cent,
+            line,
             w_max_bytes,
             extrapolated,
         } => {
-            println!(
-                "fit: t{GOVERNING_PERCENTILE} = {t_fixed_s:.3} s + bytes / {bytes_per_s:.0} B/s; interior point {off_per_cent:.1} % off the line (limit {LINEARITY_TOLERANCE_PER_CENT} %)"
-            );
+            println!("fit: t{GOVERNING_PERCENTILE} = {}", line_words(&line));
             println!(
                 "ceiling: W_max = v * ({} s - t_fixed) - {OVERSHOOT_BYTES} B = {w_max_bytes:.0} B{}",
                 DEADLINE.as_secs(),
@@ -146,8 +166,44 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     ""
                 }
             );
+            span_line(&format!("t{GOVERNING_PERCENTILE}, all attempts"), &line);
         }
     }
+
+    // §4.1a's per-percentile fits, over completions, read at the same object.
+    let ladder: Vec<(u32, &[Observation])> = sizes
+        .iter()
+        .map(|(bytes, observations)| (*bytes, observations.as_slice()))
+        .collect();
+    for p in COMPLETION_PERCENTILES {
+        match completion_line(&ladder, p) {
+            Ok(line) => span_line(&format!("p{p} of completions"), &line),
+            Err(no_line) => println!("  p{p} of completions: {}", no_line_words(no_line)),
+        }
+    }
+
+    let (largest_bytes, largest_observations) = ladder.last().expect("non-empty, checked above");
+    println!(
+        "one attempt and one retry at {largest_bytes} B, over every ordered pair of its {} attempts (a miss costs what it took, at most {} s):",
+        largest_observations.len(),
+        DEADLINE.as_secs()
+    );
+    let completed_by = |p: u8| {
+        read_with_one_retry(largest_observations, p)
+            .and_then(|read| read.completed_by)
+            .map_or_else(
+                || "never".to_owned(),
+                |t| format!("{:.1} s", t.as_secs_f64()),
+            )
+    };
+    let failure = read_with_one_retry(largest_observations, 50).map_or(0.0, |r| r.failure_rate);
+    println!(
+        "  both attempts miss {:.2} %; completed reads p50 {}  p90 {}  p99 {}",
+        per_cent(failure),
+        completed_by(50),
+        completed_by(90),
+        completed_by(99)
+    );
     Ok(())
 }
 
