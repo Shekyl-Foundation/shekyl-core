@@ -1071,7 +1071,9 @@ Offset  Size  Field
                dandelionpp_stem:1, observed_circulating:1 (LIVE since
                2026-08-27; was bf_padding, reserved; before that
                is_forwarding),
-               fcmp_verified:1, origin_zone:2
+               fcmp_verified:1, reserved:2 (was origin_zone; unused
+               since 2026-10-02 so the record stays 192 bytes and
+               fcmp_verification_hash does not move)
 116     32    crypto::hash fcmp_verification_hash
 148     44    uint8_t padding[44]
 ```

@@ -3,13 +3,18 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Relay network identity — the pool origin byte (`shekyl_types::relay::NetZone`).
+//! The zone-parameterized embargo class.
 //!
-//! Discriminants are the FFI `u8`: invalid 0, public 1, tor 3. Discriminant 2
-//! is unused. These are not connector ids (clearnet is 0 there, tor is 1).
-//! There is **no persisted zone field** on the
-//! txpool entry (§89.2): the embargo draw is told the zone at
-//! `set_relayed` time, not reminded of it later.
+//! Discriminants are the old netzone bytes: invalid 0, public 1, tor 3.
+//! Discriminant 2 is unused. These are not connector ids (clearnet is 0
+//! there, tor is 1). This crate does not import `shekyl-types`; the same
+//! bytes live there as `NetZone`.
+//!
+//! The pool record does not store a zone. `set_relayed` keys the live
+//! embargo by the connector a stem was forwarded on.
+//! [`crate::params::DandelionParams::adopted_for`] still reads this class:
+//! it is the table the zone-keyed draw speaks. A corrupt byte is
+//! [`RelayZone::Invalid`] and draws the longest embargo.
 
 /// Declares [`RelayZone`] and [`RelayZone::ALL`] from ONE variant list.
 ///

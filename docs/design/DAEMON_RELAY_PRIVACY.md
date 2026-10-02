@@ -116,10 +116,12 @@ this lane.
    pool needs from Dandelion++. The bit is owned by the relay and read
    by the pool. `relay_method` on the pool entry
    (`tx_pool.cpp`, `blockchain_db.h`) is the relay state machine stored
-   beside the coins. The two-bit `origin_zone` field is the zone
-   enum's numeric identity (`enums.h`, discriminant 2 unused so `tor`
-   stays 3). When that enum goes, the field is deleted with it. It is
-   not renumbered into a network id. `address_type` (`ipv4 = 1`,
+   beside the coins. **UPDATE 2026-10-02:** the two `origin_zone` bits
+   are unused (`src/blockchain_db/blockchain_db.h:271`). They stay so
+   the record stays 192 bytes, and they are not a connector id.
+   `NetZone` stays the zone-parameterized embargo class, not a pool
+   field; discriminant 2 is unused so `tor` stays 3. `address_type`
+   (`ipv4 = 1`,
    `ipv6 = 2`, `tor = 4`) stays the peerlist's wire discriminant. The
    session's network is an attribute of the session.
 

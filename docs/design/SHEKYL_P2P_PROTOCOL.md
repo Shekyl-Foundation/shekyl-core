@@ -4953,14 +4953,15 @@ short-circuit (`fee_good = kept_by_block || m_blockchain.check_fee(...)`).
 > verified at every call site rather than inferred from one.**
 >
 > `kept_by_block` **is** `(tx_relay == relay_method::block)`
-> (`src/cryptonote_core/tx_pool.cpp:229`), and **every block-owned caller
-> passes `origin =` the invalid netzone byte** — the pop path
-> (`src/cryptonote_core/blockchain.cpp:870`), the alt-block pool supplement
-> (`:2347`), the return-taken-transaction path (`:5932`), and the block
-> importer (`src/blockchain_utilities/blockchain_import.cpp:156`), whose own
-> comment says it outright: *"Imported from a block file: nothing arrived over
-> a transport."* **No connection exists to attribute an offense to, so an
-> offense classification has nothing to classify.**
+> (`src/cryptonote_core/tx_pool.cpp:227`). **No block-owned caller passes a
+> peer-origin parameter.** The pop path
+> (`src/cryptonote_core/blockchain.cpp:741`), the alt-block pool supplement
+> (`src/cryptonote_core/blockchain.cpp:2292`), the return-taken-transaction
+> path (`src/cryptonote_core/blockchain.cpp:5487`), and the block importer
+> (`src/blockchain_utilities/blockchain_import.cpp:157`) each pass
+> `relay_method::block` and nothing about a network. **No connection exists
+> to attribute an offense to, so an offense classification has nothing to
+> classify.**
 
 **A leg this row previously rested on was wrong, and it is retracted rather
 than quietly dropped.** It read: *"documented as 'from a previously-verified
