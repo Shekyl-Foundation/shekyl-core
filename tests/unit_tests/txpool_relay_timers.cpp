@@ -543,6 +543,21 @@ TEST(relay_deadline, zero_draw_still_never_lands_in_the_past)
   EXPECT_EQ(cryptonote::detail::relay_deadline(at(5000, 0), 0), 5000);
 }
 
+TEST(txpool_meta, set_relay_method_clears_observed_circulating_and_keeps_fcmp_verified)
+{
+  // The circulating bit shares a byte with the relay-method bits and with
+  // fcmp_verified. Setting the method clears circulating — that is the
+  // documented reset — and must not move fcmp_verified or the method that
+  // was just written.
+  cryptonote::txpool_tx_meta_t meta{};
+  meta.observed_circulating = 1;
+  meta.fcmp_verified = 1;
+  meta.set_relay_method(cryptonote::relay_method::stem);
+  EXPECT_EQ(0, meta.observed_circulating);
+  EXPECT_EQ(1, meta.fcmp_verified);
+  EXPECT_EQ(cryptonote::relay_method::stem, meta.get_relay_method());
+}
+
 TEST(relay_deadline, is_monotonic_in_the_draw)
 {
   // A longer draw can never yield an earlier deadline, at any sub-second offset.

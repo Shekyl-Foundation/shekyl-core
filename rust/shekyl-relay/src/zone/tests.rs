@@ -596,6 +596,88 @@ fn a_hidden_connector_origin_does_not_draw_a_clear_edge() {
     assert!(matches!(forwarded, RelayPlan::Stem(_)));
 }
 
+#[test]
+fn a_restricted_hop_0_pins_a_slotted_anonymity_peer() {
+    let mut rng = SplitMix64::new(3);
+    let mut z = Relay::new(
+        DandelionParams::inherited(),
+        1,
+        LinkSecrecy::of(RelayZone::Public),
+        false,
+        &[ConnectorId::Clearnet, ConnectorId::Tor],
+        0,
+        &mut rng,
+    )
+    .unwrap();
+    // The first outbound fills the one slot. Later peers do not displace it,
+    // so the three Tor sessions are not all slotted, and the clearnet peer
+    // is not slotted at all.
+    for byte in 2..=4 {
+        z.on_session_established(
+            id(byte),
+            PeerDirection::Outbound,
+            ConnectorId::Tor,
+            &mut rng,
+        );
+    }
+    z.on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    let first = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng);
+    let RelayPlan::Stem(dest) = first else {
+        panic!("hop 0 had an anonymity slot and returned {first:?}");
+    };
+    assert!(
+        z.stem_slots().contains(&Some(dest)),
+        "hop 0 landed on a peer the stem map did not slot"
+    );
+    assert_eq!(dest, id(2), "hop 0 drew a peer that does not hold the slot");
+    assert_eq!(
+        z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+        RelayPlan::Stem(dest),
+        "the local source is pinned for the epoch"
+    );
+}
+
+#[test]
+fn a_clearnet_slot_stems_on_the_ordinary_carrier() {
+    let mut rng = SplitMix64::new(5);
+    let mut z = None;
+    for _ in 0..10_000 {
+        let built = Relay::new(
+            DandelionParams::inherited(),
+            2,
+            LinkSecrecy::of(RelayZone::Tor),
+            true,
+            &[ConnectorId::Clearnet, ConnectorId::Tor],
+            0,
+            &mut rng,
+        )
+        .unwrap();
+        if !built.is_fluffing() {
+            z = Some(built);
+            break;
+        }
+    }
+    let mut z = z.expect("a stem epoch");
+    z.on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    let dispatch = z.plan_dispatch(Some(id(9)), false, NodeSync::Synchronised, &mut rng);
+    assert_eq!(dispatch.plan, RelayPlan::Stem(id(1)));
+    assert!(
+        matches!(dispatch.carrier, RelayCarrier::Ordinary),
+        "a clearnet slot must not carry noise, got {:?}",
+        dispatch.carrier
+    );
+}
+
 fn embargo_mean(transit_ms: f64) -> u32 {
     shekyl_relay_privacy::schedule::EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(
         transit_ms,

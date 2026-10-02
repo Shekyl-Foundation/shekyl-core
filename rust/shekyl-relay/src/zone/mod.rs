@@ -22,7 +22,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
-use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
+use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
@@ -503,6 +503,16 @@ impl Relay {
         self.noise.deadline_at(channel)
     }
 
+    /// Whether noise may be sent to `peer`.
+    ///
+    /// The carrier follows the destination's connector, not the relay-wide
+    /// flag. A slot held by a clearnet peer is an ordinary stem.
+    pub(crate) fn noise_destination(&self, peer: ConnectionId) -> bool {
+        self.contexts
+            .get(&peer)
+            .is_some_and(|session| address_hidden_from_peer(session.connector))
+    }
+
     /// Whether this zone runs noise channels.
     ///
     /// The single owner of the fact (§20.4). C++ reads it back through
@@ -724,23 +734,30 @@ impl Relay {
     }
 
     /// Hop 0 when a configured connector declares the peer does not learn
-    /// this node's address. Eligible edges are outbound sessions whose own
-    /// connector declares the same. Empty is [`RelayPlan::NoRoute`].
+    /// this node's address.
+    ///
+    /// The destination is a stem-map slot whose peer declares the same, and
+    /// the local source stays pinned to that set for the epoch. An anonymity
+    /// peer the map did not slot is not a candidate: drawing one would be a
+    /// stem with no slot, which the carrier treats as map corruption.
+    /// Empty is [`RelayPlan::NoRoute`].
     fn restricted_first_hop<R: RelayRng + ?Sized>(&mut self, rng: &mut R) -> RelayPlan {
-        let candidates: Vec<ConnectionId> = self
-            .contexts
+        let allowed: Vec<ConnectionId> = self
+            .map
+            .slots()
             .iter()
-            .filter(|(_, peer)| {
-                Self::stem_candidate(peer) && address_hidden_from_peer(peer.connector)
+            .flatten()
+            .copied()
+            .filter(|id| {
+                self.contexts.get(id).is_some_and(|peer| {
+                    Self::stem_candidate(peer) && address_hidden_from_peer(peer.connector)
+                })
             })
-            .map(|(id, _)| *id)
             .collect();
-        if candidates.is_empty() {
-            return RelayPlan::NoRoute;
+        match self.map.stem_for_among(None, &allowed, rng) {
+            Some(destination) => RelayPlan::Stem(destination),
+            None => RelayPlan::NoRoute,
         }
-        let span = u64::try_from(candidates.len() - 1).expect("eligible outbound count fits");
-        let index = usize::try_from(bounded_uniform(rng, span)).expect("draw fits");
-        RelayPlan::Stem(candidates[index])
     }
 
     /// Outbound, and the connector has a measured transit. An unmeasured
@@ -1132,7 +1149,13 @@ impl Relay {
         match plan {
             RelayPlan::Stem(destination) if self.noise_enabled() => {
                 match self.map.slot_of(destination) {
-                    Some(slot) => RelayCarrier::Noise { channel: slot },
+                    // A clearnet slot is a real stem. Noise is for the
+                    // connector that hides this node's address; the clearnet
+                    // stem goes on the ordinary connection.
+                    Some(slot) if self.noise_destination(destination) => {
+                        RelayCarrier::Noise { channel: slot }
+                    }
+                    Some(_) => RelayCarrier::Ordinary,
                     None => {
                         debug_assert!(
                             false,

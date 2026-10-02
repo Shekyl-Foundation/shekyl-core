@@ -262,21 +262,14 @@ pub type CarrierResolvedCb =
 /// adjacent `bool`s at the end of a C signature, where a transposition
 /// compiles cleanly on both sides and is silent at runtime.
 ///
-/// Transposing *these two* is not a generic footgun — it swaps the Tor
-/// outbound-only fluff rule with the covert enable, which is exactly the
-/// regression RP-3a's first pass shipped and the eight `private_*` gtests
-/// caught (§18.4c). The header is hand-written rather than cbindgen-generated,
-/// so nothing mechanically checks the C++ declaration against this definition;
-/// a bitmask removes the ordering question rather than relying on that check.
+/// Bit 0 is not a flag. It used to mean "fluff to outbound peers only".
+/// Fluff reach is per session now: an inbound anonymity session receives
+/// a fluff. Passing bit 0 does nothing, and the value is not reserved as
+/// a constant — a named unused bit is the grep hit that gets finished.
 ///
-/// The Tor rule: fluff to outbound connections only, never to an inbound
-/// peer, who on a hidden service is a stranger that dialled us. It follows the
-/// **network**, not covert mode — a hidden-service zone with covert disabled
-/// still needs it, which is why the two bits are independent.
-pub const SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY: u32 = 1 << 0;
-
-/// This zone runs covert (noise) channels. See
-/// [`SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY`] for why these are bits.
+/// This zone runs covert (noise) channels. The header is hand-written
+/// rather than cbindgen-generated, so the value is pinned by
+/// `zone_flag_bits_do_not_transpose` against `shekyl_ffi.h`.
 pub const SHEKYL_RELAY_ZONE_NOISE_ENABLED: u32 = 1 << 1;
 
 /// Opaque zone handle. C++ holds `*mut RelayZoneHandle` and nothing else.
@@ -569,19 +562,13 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// may pass another. Passing the choice through keeps one owner of it
 /// rather than a second copy of the rule here.
 ///
-/// `outbound_fluff_only` is the Tor rule: fluff to outbound connections
-/// only, never to an inbound peer. It is a property of the *network* rather than
-/// of noise mode — a hidden-service zone with noise disabled still needs it — so
-/// it is passed rather than derived from the epoch parameters. See
-/// [`FluffReach::OutboundOnly`].
+/// Fluff reach is not a flag. An inbound session receives a fluff. The
+/// old outbound-only bit is gone; passing bit 0 does nothing.
 ///
 /// `zone` is the `NetZone` discriminant this handle serves. It
-/// selects the transport-bound half of [`DandelionParams`] (§89.2) and is
-/// therefore NOT redundant with `outbound_fluff_only`: fluff reach is a
-/// property of the network, transit latency is a property of the transport,
-/// and outbound-only fluff on clearnet is still an open item (§25.5). An
-/// out-of-domain byte decodes to `Invalid`, which draws the longer (anonymity)
-/// parameters — the fail-safe direction.
+/// selects the transport-bound half of [`DandelionParams`] (§89.2).
+/// An out-of-domain byte decodes to `Invalid`, which draws the longer
+/// (anonymity) parameters — the fail-safe direction.
 ///
 /// Returns null on input a zone cannot be built from: a `stems` that would
 /// overflow the slot arithmetic, or a zero epoch — which is not merely useless
@@ -592,10 +579,8 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// malformed one. Secrecy is read from the **zone discriminant**, not from a
 /// flag bit: `SHEKYL_RELAY_ZONE_NOISE_ENABLED` on a cleartext `zone` byte
 /// (public, or out-of-domain) is noise on a link where padding sizes conceals
-/// nothing an observer cannot already read. The fluff-reach bit is a different
-/// axis — `NOISE_ENABLED` without `OUTBOUND_FLUFF_ONLY` on an *encrypted*
-/// zone is a valid configuration (encrypted clearnet, when that exists) and
-/// builds. [`Relay::new`] also refuses a channel count other than the
+/// nothing an observer cannot already read. [`Relay::new`] also refuses
+/// a channel count other than the
 /// inherited width, and a noise epoch too short to carry a full-size
 /// message. Every [`shekyl_relay::RelayNewError`] maps to null because
 /// that is the only channel a C ABI has. They are enforced at

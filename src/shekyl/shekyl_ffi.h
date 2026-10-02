@@ -3469,29 +3469,25 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 //! `zone_flag_bits_do_not_transpose` owns those, and a bitmask removes the
 //! ordering question the signature gate cannot see.
 //!
-//! The Tor rule follows the NETWORK, not noise mode: a hidden-service zone
-//! with noise disabled still needs it. That is why the bits are independent.
-//! Keep these values in sync with `SHEKYL_RELAY_ZONE_*` in `relay_zone_ffi`.
-#define SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY 1u
+//! Bit 0 is not a flag. Fluff reach is per session: an inbound anonymity
+//! session receives a fluff. Keep the noise value in sync with
+//! `SHEKYL_RELAY_ZONE_NOISE_ENABLED` in `relay_zone_ffi`.
 #define SHEKYL_RELAY_ZONE_NOISE_ENABLED 2u
 
 //! Open a zone with the caller's epoch length (public 600/30, noise 300/30).
 //! `zone` is the `NetZone` discriminant. An empty `configured`
 //! mask keeps it as the fixture parameter set; a non-empty mask derives the
 //! epoch from the declarations. The stem embargo is drawn from the forwarded
-//! connector, not from this byte. It is NOT a restatement of
-//! `SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY` — fluff reach follows the network,
-//! transit latency follows the transport, and outbound-only fluff on clearnet
-//! is still open (§25.5).
-//! `flags` is a mask of the `SHEKYL_RELAY_ZONE_*` bits above.
+//! connector, not from this byte. Fluff reach is per session, not this
+//! mask. `flags` is `SHEKYL_RELAY_ZONE_NOISE_ENABLED` or zero. Bit 0 is
+//! ignored.
 //! Null when a zone cannot be built: SIZE_MAX stems, a zero epoch (would
 //! expire at every wake and spin the relay timer), noise enabled on a
 //! cleartext `zone` byte (padding sizes conceals nothing an observer cannot
 //! already read), or a noise channel count other than
-//! `CRYPTONOTE_NOISE_CHANNELS`. Secrecy is the zone discriminant, not the
-//! fluff-reach bit — `NOISE_ENABLED` without `OUTBOUND_FLUFF_ONLY` on an
-//! encrypted zone is valid. Treat null as fatal.
-//! `configured` is a bit per [`ConnectorId`] index. A bit past the
+//! `CRYPTONOTE_NOISE_CHANNELS`. Secrecy is the zone discriminant.
+//! Treat null as fatal.
+//! `configured` is a bit per connector index. A bit past the
 //! connector count refuses the handle. An empty mask keeps `zone` as the
 //! parameter class for fixtures; a non-empty mask derives it from the
 //! declarations of the connectors named.
@@ -3672,7 +3668,9 @@ std::size_t shekyl_relay_zone_stem_in_flight(const RelayZoneHandle* handle);
 //! Free a zone. Null is a no-op; free exactly once.
 void shekyl_relay_zone_free(RelayZoneHandle* handle);
 //! A peer's Levin handshake completed (session established).
-//! `connector` is a connector discriminant. An unknown byte is ignored.
+//! `connector` is a connector index: 0 clearnet, 1 tor. Any other
+//! byte is not registered, and the relay logs it. The session then
+//! carries no relay traffic.
 void shekyl_relay_zone_on_session_established(
     RelayZoneHandle* handle, const std::uint8_t* id, bool is_income, std::uint8_t connector);
 //! A peer disconnected.

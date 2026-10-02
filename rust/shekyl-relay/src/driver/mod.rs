@@ -229,7 +229,13 @@ impl Driver {
         // carries the clear instead — see [`Effect::NoiseUnbind`].
         if let Some(channel) = self.zone.due_noise_channel(now, rng) {
             match self.zone.stem_slots().get(channel).copied().flatten() {
-                Some(peer) => effects.push(Effect::NoiseSend { channel, peer }),
+                Some(peer) if self.zone.noise_destination(peer) => {
+                    effects.push(Effect::NoiseSend { channel, peer });
+                }
+                // A clearnet peer in this slot is not a noise destination.
+                // The channel stays armed for a later anonymity occupant.
+                // An empty slot still unbinds: nothing is there to send to.
+                Some(_) => {}
                 None => effects.push(Effect::NoiseUnbind { channel }),
             }
         }

@@ -11,11 +11,10 @@ use std::cell::RefCell;
 /// re-point every fixture at a different transport.
 const PUBLIC: u8 = RelayZone::Public.as_u8();
 /// A noise carrier only exists on an encrypted zone, so covert fixtures build
-/// on tor rather than on the cleartext default. Both flags travel together for
-/// the same reason: the pair is what production forms at `make_relay_zone`.
+/// on tor rather than on the cleartext default. Production enables noise with
+/// this bit alone; fluff reach is per session, not a zone flag.
 const TOR: u8 = RelayZone::Tor.as_u8();
-const NOISE_ON_ENCRYPTED: u32 =
-    SHEKYL_RELAY_ZONE_NOISE_ENABLED | SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
+const NOISE_ON_ENCRYPTED: u32 = SHEKYL_RELAY_ZONE_NOISE_ENABLED;
 
 // The "C++ side", simulated: recording callbacks that capture exactly what
 // crosses the boundary. This is the Effect seam test §18.4a asks for, and it
@@ -856,12 +855,8 @@ fn zone_flag_bits_do_not_transpose() {
     // are the actual ABI contract; the round-trip cases below are then
     // meaningful because these are pinned.
     assert_eq!(
-        SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY, 1,
-        "ABI value; `shekyl_ffi.h` hardcodes 1u"
-    );
-    assert_eq!(
         SHEKYL_RELAY_ZONE_NOISE_ENABLED, 2,
-        "ABI value; `shekyl_ffi.h` hardcodes 2u"
+        "ABI value; `shekyl_ffi.h` hardcodes 2u. Bit 0 is not a flag."
     );
 
     unsafe {
@@ -883,26 +878,13 @@ fn zone_flag_bits_do_not_transpose() {
              harmless fluff-only zone"
         );
 
-        // Fluff bit ALONE. A swap makes this read the noise bit → refused
-        // on this cleartext zone, so the handle would be null and BOTH
-        // assertions below would fail.
-        let h = shekyl_relay_zone_new(
-            0,
-            PUBLIC,
-            2,
-            600,
-            30,
-            SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY,
-            0,
-        );
-        assert!(
-            !h.is_null(),
-            "an outbound-fluff-only zone is ordinary and builds"
-        );
+        // Bit 0 is not a flag. If noise were moved onto it, this cleartext
+        // zone would be refused and the handle would be null.
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 1, 0);
+        assert!(!h.is_null(), "bit 0 is ignored; the zone still builds");
         assert!(
             !shekyl_relay_zone_noise_enabled(h),
-            "outbound-fluff bit set alone must NOT enable noise; \
-             reading true here means the bits are transposed"
+            "bit 0 must not enable noise; reading true means noise moved onto it"
         );
         shekyl_relay_zone_free(h);
 
