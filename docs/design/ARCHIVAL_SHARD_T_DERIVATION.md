@@ -1662,6 +1662,12 @@ the build:
   region digest has no second definition to drift — which bytes it covers is the
   serializer's fact either way, and the parity pins hold it. *Reopens if* a C++
   region digest gains a term that is not the bytes' hash.
+  **Overruled for the prunable digest (design owner, 2026-10-02):** it is a txid
+  operand a wallet mixes, so it is computed where the mixer is.
+  `calculate_transaction_prunable_hash` now hands its range to Rust
+  (`shekyl_tx_prunable_hash`) and its separate serialize path is deleted.
+  `get_transaction_prefix_hash` stays C++ and is recorded as transitional
+  ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md) §F).
 - **The pruned RPC reply.** `get_transactions` entries gain a required
   `archival_len` (`CORE_RPC_VERSION` 3.39). The Rust server measures it from the
   pruned half and the prunable half LMDB hands it, and fails the reply rather than

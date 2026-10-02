@@ -307,6 +307,34 @@ built"). One consequence is the engine swap's: the Rust store, unlike LMDB, disc
 prunable halves, so when it backs the daemon RPC its transaction slot must carry the
 `txs_archival_len` row — the serve path cannot measure bytes it no longer holds.
 
+**The prunable digest is Rust's too (design owner, 2026-10-02).** The build above left
+two C++ region digests as plain `keccak`. One of them is a txid operand that travels
+on its own — the `txs_prunable_hash` row and the `prunable_hash` a pruned
+`get_transactions` reply carries, which the wallet mixes — so it is now computed by
+the function the mixer uses (`shekyl_wire::prunable_hash_of`, over
+`shekyl_tx_prunable_hash`). `calculate_transaction_prunable_hash` finds the range and
+hashes nothing; its second derivation, a separate write of the prunable fields, is
+deleted. Pinned per transaction class by `prunable_digest_parity`.
+
+**What the txid still takes from C++, until the engine swap.** Three things remain on
+the C++ side of the boundary. Each is transitional, and each ends the same way: when
+Rust holds the parsed transaction, it derives them and nothing is supplied.
+
+1. **The stored archival length on the serve path.** As above: a transaction slot fed
+   from `shekyl-chain-store` carries the `txs_archival_len` row. `TxRecord`'s rows are
+   as recorded, not as verified (a lost length row reads zero), so the slot's producer
+   rebuilds the id from the record and compares it to the hash it asked by before
+   serving, as `leaf_reads::outputs_at` does.
+2. **`get_transaction_prefix_hash`.** C++ hashes the prefix itself, in
+   `blockchain.cpp`: for the signature-verification input, for the emission claim's
+   signed hash (the prefix with that input removed), and to spot a duplicate
+   transaction in an incoming batch. It does not feed a txid, but on a whole prefix
+   it is the same bytes as the txid's first word, hashed by a second implementation.
+3. **Two facts the FFI entry is told and does not check.**
+   `shekyl_txid_from_segments` takes `first_input_is_spend` and `pqc_auth_count` from
+   the caller, because it parses nothing. They decide the mix's arity, and C++ is
+   their only source.
+
 **`g(age)`'s segment-keyed no-segment branch is this cutover's (RULED 2026-10-01,
 `SHT-8`) — LANDED the same day, Rust-side.** It is a row of this census, owned by the
 design-owner lane; it is not part of the family-1 txid change, and it is not a rule-07
