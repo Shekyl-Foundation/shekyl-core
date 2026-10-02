@@ -10,9 +10,10 @@ difference constants); height-semantics Phase 2e RULED 2026-09-21
 (C4 `bond_post_offset_blocks` + wallet-ledger tip/reorg wrap);
 height-semantics Phase 2f RULED 2026-09-21 (ScanResult and the remaining
 inland ordinals are `BlockHeight`; reference spans are `BlockCount`);
-height-semantics Phase 2g POSED 2026-10-01, not ruled (the daemon-store
-and archival surface the census did not walk; §3.5,
-`DRS_E4_ARCHIVAL_WRITER.md` `ARW-Q16`).
+height-semantics Phase 2g RULED-as-slice 2026-10-01, retype not started
+(the daemon-store and archival surface the census did not walk; its
+gate `check_inland_height_u64.py` landed first, grandfathered at 174;
+§3.5, `DRS_E4_ARCHIVAL_WRITER.md` `ARW-Q16`).
 Stamp-clock COUNT→ORDINAL conversion is optional-not-owed. The
 `get_version` `target_height` wire `0` stays `RK-`. Numerics are frozen
 as pinned (Rick, 2026-09-19).
@@ -388,8 +389,8 @@ quantity.
   snapshot-id preimage, the `get_version` wire `0`, and the gf7
   measurement hook stay raw. No numeric change.
 - **Height-semantics Phase 2g — the daemon-store and archival surface —
-  POSED 2026-10-01, not ruled** (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-Q16`;
-  default (b) there names this slice). The census above (§2–§3.3) walked
+  RULED 2026-10-01 as a separate slice, gate landed, retype not started**
+  (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-Q16` (b), (c)). The census above (§2–§3.3) walked
   the wallet side and the daemon-admission reads; the Rust daemon store
   and the archival settlement schedule are in it nowhere, and Phase 2e's
   *C2-complete* is true of the census and false of the tree. Read at the
@@ -412,13 +413,26 @@ quantity.
   C8); one new named bridge on `ChainCount` for *the count of a chain
   whose tip is `h`* (`tip()`'s inverse — today only reachable as
   `from_next_height(h) + ONE`), with its C9 `compile_fail`; **no numeric
-  change**. *First deliverable, not last:* a `scripts/ci` gate for an
-  inland bare-`u64` height (exact-hit, shrink-only allowlist, the
-  `check_test_only_features.py` shape), so C2 stops being review-borne
-  and a slice cannot again be complete over a census. *What E4 does
-  regardless* (`ARW-Q16` (a)): its commit 8 lands the `ARW-26` ruling
-  typed at the site it changes, and commits 7 and 9 write no new bare
-  height. *Falsifier:* a fourth one-apart instance before this slice lands.
+  change**. *The gate came first, and not as this slice's deliverable —
+  RULED 2026-10-01 (`ARW-Q16` (c) sharpened: a gate that cannot pass
+  cannot land, and its value is the forty-first instance, not the forty):*
+  `scripts/ci/check_inland_height_u64.py` landed in DRS-E4 the same day,
+  **grandfathered at 174 exact-hit records** over these five crates
+  (`inland_height_u64_grandfather.txt`; tests included), a
+  `GRANDFATHER_CEILING` that only lowers, `--selftest` on every hit shape
+  and failure class (rule 47), in `grep-gates.yml`. **C2 is therefore
+  mechanical on this surface, and only here** — the wallet side's census
+  and its `RK-`/C1 rulings are not the gate's subject; widening is this
+  slice's call, taken by adding a crate and its records. Stated
+  non-coverage: count-named operands (`Transition::count()`), heights
+  under other names (`h_open`, `tip`, `at`). *This slice's work is now
+  the burn-down:* each retyped site deletes its record and lowers the
+  ceiling; the slice is complete when the list is empty and the gate
+  keeps it so. *What E4 does regardless* (`ARW-Q16` (a)): its commit 8
+  lands the `ARW-26` ruling typed at the site it changes, and commits 7–9
+  run under the gate. *Falsifier:* a fourth one-apart instance before this
+  slice lands — now only reachable through a count-named or
+  otherwise-named operand, which is the gate's stated blind side.
 
 **Out of scope of the whole audit:** any stamp value change (none from
 Phase 1); the daemon-RPC `target_height` *wire* sentinel deletion

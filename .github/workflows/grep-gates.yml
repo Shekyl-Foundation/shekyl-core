@@ -181,6 +181,16 @@ jobs:
             python3 scripts/ci/check_archival_len_source.py --selftest
           run_one "SHT-Q2: archival length measured, never supplied" \
             python3 scripts/ci/check_archival_len_source.py
+          # ARW-Q16 (c): a block index and a block count are both `u64` and
+          # differ by one everywhere they meet; HEIGHT_SEMANTICS.md C2/C7
+          # was review-borne on the daemon-store and archival surface, and
+          # three one-apart defects landed there in three days. Exact-hit
+          # grandfather of the sites that exist, ceiling that only lowers,
+          # so the next instance is CI's finding. Selftest first (rule 47).
+          run_one "ARW-Q16: inland height gate selftest" \
+            python3 scripts/ci/check_inland_height_u64.py --selftest
+          run_one "ARW-Q16: no new bare-u64 height on the archival surface" \
+            python3 scripts/ci/check_inland_height_u64.py
           run_one "Rule 71: nettype selects data, not control flow" \
             scripts/ci/check_network_uniformity.sh
           run_one "Ignored tests carry their reason in the attribute" \
