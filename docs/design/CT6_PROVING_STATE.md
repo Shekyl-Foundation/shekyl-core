@@ -213,11 +213,13 @@ The brief asked this round to propose an ownership-neutral delta shape because
 bonded serving obligation — not membership paths for proving. **So the
 two-consumer advance is not established.**
 
-This does **not** dissolve the concern, it relocates it: §6.3.3 states the
+This does **not** dissolve the concern, it relocates it: §6.3.3 stated the
 identity-split discipline (*"the frontier advance is public and identity-free;
-path capture is a per-identity filter over the same public stream"*) as the
-answer to `WSS-13`-in-a-new-location. That discipline stands and this round
-inherits it. What F5 left narrower — whether `P` proves its own outputs at
+path capture is a per-identity filter over the same public stream"* — wording
+§6.3.3 carried until it was **re-derived 2026-09-30**, after `Q5` removed its
+premise) as the answer to `WSS-13`-in-a-new-location. The *public,
+identity-free advance* half stands and this round inherits it; the
+*per-identity* half is what the dissolution below took the subject out of. What F5 left narrower — whether `P` proves its own outputs at
 all, and therefore whether a second capture side exists to build — was carried
 as **CT-6 Q5** and is **CLOSED by dissolution (2026-09-22, §5)**: `P` proves
 nothing as a distinct actor, so there is no second capture side and the
@@ -259,7 +261,7 @@ round's fixed points, each inherited from a verified source.
 | **C3** | A snapshot at `h` reproduces `drained_leaf_count_at(drained_through(h))`; root and depth stay pinned to that one `n` | F4; CT-5c Q1 |
 | **C4** | Every horizon **is** `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` read from the JSON authority. No second literal | F2 |
 | **C5** | Reference-height selection is `select_reference_height` / `two_sided_reference_height`, unchanged | F1 |
-| **C6** | The frontier advance is **public and identity-free**; path capture is a per-identity filter over it. No component sees two identities' ownership. **`identity-free` is a claim about the bytes, never about access**: that the content reveals no ownership does not make the file carrying it shared, and a design that reads public content out of another identity's sealed file is `WSS-13` relocated, not C6 satisfied | §6.3.3 |
+| **C6** | The frontier advance is **public and identity-free**; path capture filters it to the wallet's own outputs. **`identity-free` is a claim about the bytes, never about access**: that the content reveals no ownership does not make the file carrying it shared, and a design that reads public content out of another identity's sealed file is `WSS-13` relocated, not C6 satisfied. **Amended 2026-09-30 — the clause read *"a per-identity filter"* and *"no component sees two identities' ownership"*.** `Q5`'s dissolution (2026-09-22) established there is no second proving consumer, and records in its own row that *"C6's second capture side is not built"* — so that half has **no subject**, not a smaller one. The bytes-vs-access half is untouched and is the part that survives, because it governs **persistence** (`Q3`) rather than the number of capture sides | §6.3.3 |
 | **C7** | A reorg deeper than the horizon **refuses**; it never silently produces a wrong tree, and it says so as a rule-82 failure mode (the remedy is a full resync: remove the `.curvetree` file and then clear scan history; neither alone lifts the refusal). **BUILT 2026-09-30 (increment 5).** The horizon is `W` = `FINALITY_DEPTH_BLOCKS`, not the ring's `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`: between the two a rollback is past the snapshot tier and still repairable by folding, so the bound is `> W`. The seats are the producer's fork walk and the ingest backstop (`engine::reorg_finality`), **not** `LeafStore::rollback_to_fork` — the store must perform a deep truncation correctly (F9; the replica generator depends on it), and the policy is about whether a wallet refresh may ask. The walk confirms a fork only when a stored hash matches inside `W`; a short record on a tall chain is not a confirmed fork. Rule-82 copy reaches the caller as `ResyncRequired` (`-29211`, contract 0.10.0; `-29204` is `REFRESH_CANCELLED`) carrying the depth, `W`, and whether the depth was measured. A rescan reports the same code with `history_cleared`, rather than the server-side log `internal_detail` would have left the remedy in | §6.3.4 row 1 |
 | **C8** | Everything here is derived-from-canon: recovery is **refuse-and-resync**, never a migration. Persistence is a cache | `WSS` R3 |
 | **C9** | The graded quantity is §6.3.4 rows 2 and 3, on rule 76's floor, by the landed `shekyl-wss-q1b-bench` harness | §6.3.4; `WSS_Q1B_BENCH_SPEC.md` |
@@ -754,3 +756,191 @@ reader the examiner consumes has no such check, and the weld is asserted against
 directly — a snapshot over a count on the far side of a layer step must report
 that count's depth. Recorded here rather than left as a green that proves less
 than it looks like it does.
+
+## 11 — Increment 5's capture half: the instrument, before the subject
+
+`C7` is increment 5's other half and is built (§4, row C7). This section is the
+capture half, and what it records is an **instrument**, not capture. Capture has
+no code yet. The instrument came first deliberately: capture's claim is a
+*quantitative* one, and a claim graded by a criterion first seen after the
+change has been fitted to the curve it is meant to judge.
+
+### 11.1 Nothing measured the subject
+
+`assemble_paths` had never been timed. The spend-edge rig proves against
+**synthesized** paths (`shekyl-wss-q1b-bench`'s `fixture::synth_sparse_path`),
+so assembly is bypassed and its cost was unmeasured — which also means
+"today's slope is the evidence for capture" was, until now, an argument with no
+measurement behind it. `shekyl-wss-q1b-bench`'s `assembleedge` module and
+`assemble_edge` bin drive the real, store-backed `CurveTreeClient`.
+
+### 11.2 The cost is O(chain), and every neighbouring figure is windowed
+
+This is the finding, and it corrects a line in production:
+
+> `assemble.rs`: "…`n` the drained leaf count (765 600 at the graded worst
+> case)."
+
+765 600 is `worst_case_window_leaves` — the **725-block replay window**, about
+one day of chain at a 120 s target. Assembly is not bounded by it.
+`CurveTreeClient::entries` is append-only (`extend` on ingest, replaced
+wholesale only by a rollback's rebuild, never `retain`ed, `drain`ed or
+`truncate`d); `rebuild_from_store` reloads the **whole** drained set; and a
+resume from a store whose frozen segments were pruned is refused outright
+(`ClientError::ResumeFromPrunedStore`, `F5`) rather than resumed from a partial
+one. Every drained leaf since genesis is in memory, and every spend rebuilds
+every layer over all of them.
+
+At 760 320 leaves/day and an illustrative ~102 µs/leaf — one off-rig probe,
+unattested (§11.5):
+
+| assembly population | `n` | cost per spend |
+| --- | --- | --- |
+| replay window, ~1 day of chain | 765 600 | ~78 s |
+| `min_leaves_for_depth(6)`, ~23 days | 17 778 529 | ~30 min |
+| one year of chain | 277 516 800 | ~7.9 h |
+
+**This is a mission-hierarchy failure, not a budget miss.** Commitment 3 — the
+system must outlast the team — is the binding one: a cost linear in chain
+length fails it at *some* chain age whatever the present budget says, so the
+remedy cannot be a faster board. That is the argument for capture, and it is
+stronger than the slope framing this increment was opened under.
+
+It also means **"worst case" cannot be derived here.** It is a ruling about how
+old a chain the wallet must still be able to spend on. Until that is ruled, no
+plan in the instrument is the graded plan: `plan_at_replay_window` is named for
+what it measures, `plan_at_depth` establishes shape on a cheap rung, and
+`AssembleEdgeRecord::plan` says which ran. **Blocked on that ruling (rule 22).**
+
+### 11.3 Three depths, which are not one
+
+A conflation worth keeping separate, because it already produced a wrong
+reading once in this session:
+
+| axis | value | what it is |
+| --- | --- | --- |
+| rate model | `GRADED_TREE_DEPTH` = 6 | what a path's proof weight is priced at, which fixes a block's leaf rate |
+| replay window | 5 | the depth of the tree 765 600 leaves makes — and it is 5 at every model depth 3…7, since the leaf rate moves 4.5 % across them while a rung needs 38× |
+| the chain | grows | what the curve tree actually is; it crosses `min_leaves_for_depth(6)` after ~23 days, so `GRADED_TREE_DEPTH`'s stated band is satisfied in weeks and its rule-21 reopener was never unsatisfiable |
+
+Two set relations are pinned by test so the conflation cannot return: the
+window's leaf count stays strictly below the floor of the rung the rate model
+names, and no plan may sit at or above it.
+
+### 11.4 The criterion, fixed in advance
+
+Flat does not mean one constant across every depth — a deeper path may cost
+one more layer's walk — so the criterion has two halves:
+
+- **within a depth rung**, cost constant within noise however much `n` grows;
+- **across a rung boundary**, the deeper arm costs no more than one layer's
+  work, within the same tolerance. The check is a ceiling. A cheaper step
+  still passes, and that pass is not evidence the step matched
+  `expected_cross_rung_ratio`. The model treats every layer as the same cost.
+
+The populations are chosen so both are observable, and derived from the
+production ladder rather than restated: the cross-rung pair differs by **one
+leaf** (a rung floor and its predecessor), which isolates the layer step from
+the population term entirely, and the same-rung pair separates ≥ 1.5×, where a
+linear term shows as ≥ 50 % against a 10 % bound.
+
+`expected_cross_rung_ratio` is a **uniform-layer model** and says so: Selene
+nodes are 38 wide and Helios 18, so the true step is in chunk work. It is right
+for *this* question, where the hypotheses differ by orders of magnitude, and
+explicitly **not** good enough to grade a passing capture — increment 6 must
+widen the bound or derive from `chunk_width`. Named blocker.
+
+### 11.5 What this round does not establish
+
+- **No graded figure.** The board control times `rung_top` twice, back to
+  back, on the same client, after every other arm has been measured and its
+  rig dropped. Both timings are then the only resident population, so
+  whatever separates them is the board. The control does not span the earlier
+  arms: holding the top client across them would time `rung_floor` beside the
+  larger working set and shrink the same-rung spread toward `Flat`. The first
+  shape run **diverged 69.1 % against a 5 % bound and was discarded**, with
+  the arms showing why it had to be (one *more* leaf came out 38 % faster;
+  `k = 8` came out cheaper than `k = 2`). The dev box is shared (rule 38) and
+  rule 76 pins the figure to the floor device, so a figure-producing run is a
+  claimed-host activity. The ~102 µs/leaf above is a projection from a
+  clean-but-unattested probe and is labelled as one.
+- **The integrity gate's verdict.** The rig takes its reference root from the
+  client, so `assemble_paths`'s root gate is green by construction; the rig
+  measures what it costs, never whether it is right. Root agreement is graded
+  in-crate by the height-keyed C1 oracle (`client::ct6_oracle`, increments 2
+  and 4) against a replay oracle this crate cannot reach — `entries` is
+  `pub(crate)`, `store::ops` is private, the oracle is `#[cfg(test)]`. Widening
+  any of them would publish a second root mechanism a production caller could
+  gate against, which `assemble.rs` rules out by design. What the rig does
+  assert is its own subject (rule 47): the client drained exactly the
+  population fed, and reports the depth that count implies.
+
+### 11.6 The gate does not cover the path material
+
+Building §11.5's red-bite turned up a gap worth its own record. With `entries`
+reduced to the owned leaf alone, `assemble_paths` **does not refuse**. It
+returns a path whose `tree_root` is the real consensus root while every branch
+below it comes from a one-leaf tree — a leaf chunk of 1 under a root that
+commits to 44. The test's claim is that one comparison of the two paths.
+The chunk-length assertions under it are witnesses of today's failure mode.
+Equal paths have equal chunk lengths, so those witnesses are deleted when
+capture turns the comparison into equality. The `tree_root` equality stays:
+a correct path still commits to the oracle root.
+
+The cause is that the two mechanisms never meet. The gate compares the
+**store-backed** `root_at` against `reference.curve_tree_root`; the branches are
+rebuilt from replay-held `entries`; `tree_root` is then *copied from the gated
+reference*, so it is always the store's answer whatever the branches say. The
+docstring used to assert the paths came from "the same `layers` that gate
+approved" — withdrawn 2026-10-01, because they do not.
+
+**The check that closes it is not a comparison of two store reads.**
+`root_and_depth_at` answers both root and depth from the store tier, so
+comparing it against `tree_root` compares the store with itself and leaves the
+branches unchecked — which is the thing that can actually drift. The sound form
+**recomputes the root from the path's own branches** (an `O(depth)` hash walk)
+and refuses on disagreement. That verifies the artifact, so it catches every way
+the branches can diverge rather than the one case a test happened to construct.
+
+**It belongs to the capture build, not here.** Today the gap is *latent*:
+`entries` is append-only and a pruned-store resume is refused (`F5`), so
+production never assembles from a truncated set. It becomes *live* when capture
+introduces a second branch source — captured chunks plus a frontier snapshot —
+whose mutual consistency is exactly what can drift. So this is **capture's
+integrity gate**, and it lands as the first production commit of that build,
+policing the source it exists for.
+
+Threat model, kept proportionate: **no funds are at risk.** An inconsistent path
+yields a proof that fails after ~6 s of proving on the floor device, or a
+malformed transaction the daemon rejects. That is a rule-82 failure-clarity cost
+plus a small behavioural tell — proportionate to a cheap check, not to a round
+of its own.
+
+### 11.7 A reading is withheld from a run that cannot support one
+
+`LoadControl` already says a non-quiet run "cannot claim its figure is a
+property of the work rather than of the machine" — which is precisely the claim
+a grade makes. The record nevertheless serialized a `FlatnessGrade`
+unconditionally, so a contaminated run could have reported **`Flat`**: the one
+reading capture is trying to earn, handed over by a moving board.
+
+The record carries one `FlatnessReading`: the same-rung spread, the cross-rung
+ratio, the expected ceiling, and a `FlatnessOutcome` — `Graded(..)`, or
+`Withheld(BoardNotQuiet | SeriesUnconverged)`, with the reason part of the value
+(rule 82). `read_flatness` fills all four, so the published ratio is the ratio
+the criterion judged, including the zero-arm guard. Withholding the judgment
+is not withholding the data: the numbers and every series stay in the record,
+which is what lets a later reader re-judge the run rather than take a verdict's
+word.
+
+This is deliberately **not** `Verdict::Ungraded`. `Verdict` answers *did the
+figure meet its budget on the pinned rig*, and its `Ungraded` means "measured
+somewhere else"; this answers *does the cost track `n`*, and withholds for
+contamination rather than provenance. Two questions with different inputs, so
+two types — collapsing them would give `Ungraded` a second meaning.
+
+One related correction: the `k` arm's field was an **absolute** spread, so a
+`MAX_INPUTS` arm that came in *cheaper* — which the discarded run's did — was
+reported as a 70 % *cost*, inverting `#842`'s `n + k` finding. It is now a
+signed change, and a negative value reads as what it is: the `k` term lost in
+the noise of `n`.

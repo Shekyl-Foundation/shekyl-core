@@ -710,3 +710,124 @@ fn a_root_mismatch_refuses_the_whole_batch() {
 // live in `ring` so this file stays the examiner and the injected-tier proof
 // that its three verdicts fire.
 mod ring;
+
+// ---------------------------------------------------------------------------
+// CT-6 increment 5 — capture's red-bite: assembly must not read foreign leaves
+// ---------------------------------------------------------------------------
+
+/// Assembly today depends on **every** leaf in the tree, not just the owned
+/// one — and when the others are absent it does not refuse, it emits a path
+/// that claims the real root.
+///
+/// # What changes when capture lands
+///
+/// The claim is one comparison. A path assembled with every foreign leaf
+/// absent equals the path assembled with the whole tree present. Today they
+/// differ, so the comparison is [`assert_ne!`]. Capture turns that one
+/// assertion into [`assert_eq!`] and **deletes the witness block under it**.
+///
+/// The witnesses describe today's failure mode: a one-leaf chunk under the
+/// real root. Equal paths have equal chunk lengths, so the witnesses
+/// contradict the inverted comparison. Leaving them in place makes a correct
+/// capture look red.
+///
+/// The [`TreeContext::tree_root`] equality is not a witness. A correct path
+/// still commits to the oracle root, and that assertion stays.
+///
+/// This is not a timing test. A cost curve across populations only estimates
+/// the property. A slower implementation cannot pass the inverted comparison,
+/// and neither can one that keeps a fallback rebuild, because the fallback
+/// has nothing to rebuild from.
+///
+/// # The gate does not cover the path material
+///
+/// `assemble_paths` runs two mechanisms. The integrity gate reads the store
+/// tier (`root_at`). The branches are rebuilt from replay-held `entries`.
+/// Nothing checks that the two agree, and
+/// [`CurveTreeClient::root_and_depth_at`] is not called from assembly. With
+/// `entries` reduced to one leaf the gate still passes, and the emitted
+/// `tree_root` is copied from the gated reference.
+#[test]
+fn assembly_today_depends_on_every_foreign_leaf() {
+    let tip = varying_tip();
+    let mut client = CurveTreeClient::new();
+    ingest_through(&mut client, tip, scheduled_outputs);
+    let height = tip;
+    let cutoff = height - BlockCount::ONE;
+
+    let (inputs, _, _) = two_inputs_in_different_chunks(&client, cutoff);
+    let owned = inputs[0];
+
+    // The anchor is an INDEPENDENT root: a replay oracle over the full entry
+    // set, not the client's own `root_at`. Taken before anything is removed,
+    // and asserted to agree with the store tier, so the reference this test
+    // assembles against is the real consensus anchor rather than one the
+    // subject chose for itself.
+    let (oracle_root, oracle_leaves) = oracle_at(&client.entries, cutoff);
+    assert_eq!(
+        client.root_at(height).expect("store root reads"),
+        oracle_root,
+        "the store tier must agree with the replay oracle before this test \
+         removes anything, or the anchor is not the real one"
+    );
+    let reference = reference_at(&client, height);
+    assert_eq!(reference.curve_tree_root, oracle_root);
+
+    let full = client
+        .assemble_paths(&[owned], &reference)
+        .expect("assembly with the whole tree present")
+        .pop()
+        .expect("one input yields one path");
+
+    // Remove every leaf that is not the owned output's. The store is left
+    // untouched, which is what keeps the integrity gate green below.
+    let before = client.entries.len();
+    client.entries.retain(|entry| entry.gindex == owned.gindex);
+    assert_eq!(client.entries.len(), 1, "exactly the owned leaf remains");
+    assert!(
+        before > 1,
+        "the fixture must hold foreign leaves for their absence to mean anything"
+    );
+
+    let sparse = client
+        .assemble_paths(&[owned], &reference)
+        .expect(
+            "TODAY assembly SUCCEEDS with foreign leaves absent -- it does not \
+             refuse. If this now errors, capture (or a new guard) changed the \
+             failure mode and this test must be re-read, not relaxed",
+        )
+        .pop()
+        .expect("one input yields one path");
+
+    // The claim. When capture lands, invert this one assertion to `assert_eq!`
+    // and delete the witness block below it. Do not invert the witnesses:
+    // equal paths have equal chunk lengths, so they cannot survive the flip.
+    assert_ne!(
+        full, sparse,
+        "assembly produced the same path with the foreign leaves absent. That is \
+         capture's structural property. Invert this assertion to assert_eq! and \
+         delete the witness block below — it is the red-bite, not a bug"
+    );
+
+    // Stays across the inversion. A correct path still commits to the oracle root.
+    assert_eq!(
+        sparse.tree.tree_root, oracle_root,
+        "the emitted path claims the real root even with one leaf present: \
+         tree_root is copied from the gated reference, which the store tier \
+         answered, so the gate cannot see that the branches came from elsewhere"
+    );
+
+    // Witnesses of today's failure mode. Delete this block when the claim
+    // above becomes assert_eq!.
+    assert_ne!(
+        full.leaf_chunk.len(),
+        sparse.leaf_chunk.len(),
+        "the leaf chunk is what a wrong population changes first"
+    );
+    assert_eq!(
+        sparse.leaf_chunk.len(),
+        1,
+        "the one-leaf replay yields a one-leaf chunk under a root that commits \
+         to {oracle_leaves} leaves"
+    );
+}
