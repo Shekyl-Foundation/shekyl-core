@@ -14,23 +14,23 @@
 //! measures them.
 //!
 //! **The binding input is a flood, not organic growth.** A W9 stuffer is the
-//! fastest `n` can physically move — it buys leaves at the block-weight ceiling —
-//! so the honest worst case for a no-controller constraint is the **adversarial**
-//! slew, not the scenario trajectories. If per-epoch `Δshare` is invisible even
-//! under a sustained flood at the surge ceiling, §6.1's negative constraint is
-//! vindicated end-to-end.
+//! fastest `n` can physically move — it buys archival bytes at the block-weight
+//! ceiling — so the honest worst case for a no-controller constraint is the
+//! **adversarial** slew, not the scenario trajectories. If per-epoch `Δshare` is
+//! invisible even under a sustained flood at the surge ceiling, §6.1's negative
+//! constraint is vindicated end-to-end.
 //!
 //! **Reorg reversibility.** Monotonicity holds *in the canonical chain*; a reorg
-//! can un-freeze shards. `ARCHIVAL_REORG_DEPTH_BLOCKS` bounds how far back that
+//! can re-open shards. `ARCHIVAL_REORG_DEPTH_BLOCKS` bounds how far back that
 //! reaches, so it bounds the only down-swing that exists.
 
 use std::fmt;
 
-use shekyl_archival_retention::SEGMENT_LEAF_COUNT;
+use shekyl_types::SHARD_LENGTH;
 
+use crate::burden::honest_leaves_at_closed_shards;
 use crate::calibration::{
-    leaf_stuffer_cost_per_shard_atomic, stuffer_tx_fee_atomic, tree_depth_for_leaves,
-    FEE_PER_BYTE_ATOMIC,
+    stuffer_cost_per_shard_atomic, stuffer_shape, tree_depth_for_leaves, FEE_PER_BYTE_ATOMIC,
 };
 use crate::escalation::{family, EscalationCurve, SHARE_SCALE};
 
@@ -55,25 +55,29 @@ pub const EPOCH_BLOCKS: u64 = 10_000;
 /// only down-swing the operand admits.
 pub const REORG_DEPTH_BLOCKS: u64 = 720;
 
-/// Outputs the stuffer can land in one block at `block_weight` — the physical
-/// leaf-minting ceiling. Uses the **production** predictor's weight for the
-/// 1-in/16-out shape (recovered from its min-fee, which is `weight × FEE_PER_BYTE`).
+/// Archival bytes the stuffer can land in one block at `block_weight` when the
+/// chain has closed `n_shards` — the physical ceiling on the fold. Uses the
+/// **production** predictor's weight and archival length for the
+/// max-archival-per-fee shape (weight recovered from its min-fee, which is
+/// `weight × FEE_PER_BYTE`); depth from the honest chain at `n_shards`.
 #[must_use]
-pub fn max_outputs_per_block(block_weight: u64, n_shards: u64) -> u64 {
-    let depth = tree_depth_for_leaves(n_shards.max(1).saturating_mul(SEGMENT_LEAF_COUNT));
-    let tx_weight = stuffer_tx_fee_atomic(depth) / FEE_PER_BYTE_ATOMIC;
+pub fn max_archival_bytes_per_block(block_weight: u64, n_shards: u64) -> u64 {
+    let depth = tree_depth_for_leaves(honest_leaves_at_closed_shards(n_shards.max(1)));
+    let shape = stuffer_shape(depth);
+    let tx_weight = shape.tx_fee_atomic(depth) / FEE_PER_BYTE_ATOMIC;
     if tx_weight == 0 {
         return 0;
     }
-    (block_weight / tx_weight).saturating_mul(crate::calibration::STUFFER_OUTPUTS_PER_TX)
+    (block_weight / tx_weight).saturating_mul(shape.archival_bytes(depth))
 }
 
-/// Shards a flood can freeze over `blocks` at `block_weight` — the max slew of the
-/// D2 operand. Integer throughout.
+/// Shards a flood can close over `blocks` at `block_weight` — the max slew of
+/// the D2 operand: the bytes the flood lands, through the partition's unit `W`.
+/// Integer throughout.
 #[must_use]
 pub fn max_shards_per_window(blocks: u64, block_weight: u64, n_shards: u64) -> u64 {
-    let outputs = max_outputs_per_block(block_weight, n_shards).saturating_mul(blocks);
-    outputs / SEGMENT_LEAF_COUNT
+    let bytes = max_archival_bytes_per_block(block_weight, n_shards).saturating_mul(blocks);
+    bytes / SHARD_LENGTH.to_raw()
 }
 
 /// `Δshare` (fixed-point `SHARE_SCALE`) a jump from `n` to `n + delta` produces
@@ -122,7 +126,7 @@ pub fn a6_report(
         "\nA6 — swing / band width (§12.2): the empirical check on §6.0's STRUCTURAL claim\n\
          that the operand cannot swing (monotone + slow + no controller ⇒ W8 armed by\n\
          operand). Binding input is a W9 FLOOD, not organic growth — a stuffer buying\n\
-         leaves at the block-weight ceiling is the fastest n can physically move.\n\
+         archival bytes at the block-weight ceiling is the fastest n can physically move.\n\
          Ceiling: {FLOOR} B/block floor x{SURGE} surge = {SU} B, reached after\n\
          ~{SAT} blocks of sustained flood ({SATPCT:.1}% of an epoch); epoch = {EB} blocks;\n\
          reorg reach = {RD} blocks. Curve = steepest candidate (asymptote {A:.0}%,\n\
@@ -146,6 +150,7 @@ pub fn a6_report(
     let mut worst_epoch_pts = 0.0_f64;
     let mut worst_reorg_pts = 0.0_f64;
     let mut worst_dn = 0u64;
+    let mut worst_dn_at_n = 0u64;
     let mut worst_pen_pts = 0.0_f64;
     for &n in n_samples {
         let dn_epoch = max_shards_per_window(EPOCH_BLOCKS, surge, n);
@@ -156,7 +161,10 @@ pub fn a6_report(
         let pts = ds_epoch as f64 / SHARE_SCALE as f64 * 100.0;
         worst_epoch_pts = worst_epoch_pts.max(pts);
         worst_reorg_pts = worst_reorg_pts.max(ds_reorg as f64 / SHARE_SCALE as f64 * 100.0);
-        worst_dn = worst_dn.max(dn_pen);
+        if dn_pen > worst_dn {
+            worst_dn = dn_pen;
+            worst_dn_at_n = n;
+        }
         worst_pen_pts =
             worst_pen_pts.max(delta_share(&curve, n, dn_pen) as f64 / SHARE_SCALE as f64 * 100.0);
         writeln!(
@@ -176,7 +184,7 @@ pub fn a6_report(
          settlement epoch when an adversary floods at the surge ceiling for the whole\n\
          epoch — the worst case for §6.0's no-swing claim. Worst observed: {W:.4} points.\n\
          The reorg column bounds the only DOWN-swing that exists (monotonicity holds in\n\
-         the canonical chain; a reorg can un-freeze at most {RD} blocks' worth).\n\
+         the canonical chain; a reorg can re-open at most {RD} blocks' worth).\n\
          VERDICT: {V}",
         W = worst_epoch_pts,
         RD = REORG_DEPTH_BLOCKS,
@@ -195,7 +203,7 @@ pub fn a6_report(
          (b) ADVERSARIAL SLEW RATE (economic) — {W:.4} pts/epoch penalty-free, {WP:.4}\n\
              pts/epoch if the flooder also compensates the miner penalty (the legal 2x\n\
              limit). MEASURED against blockchain.cpp's ArticMine algorithm, not derived —\n\
-             the ceiling a flood can force at maximum effort, early-chain. A rate, not a cliff,\n\
+             the ceiling a flood can force at maximum effort. A rate, not a cliff,\n\
              and it is bounded, monotone and one-directional — but it is NOT invisible,\n\
              which is the honest correction to a purely structural reading of §6.0.\n\
              It is also PRICED, and the legal-limit price is dominated by a term that is\n\
@@ -211,7 +219,9 @@ pub fn a6_report(
         W = worst_epoch_pts,
         WP = worst_pen_pts,
         C = worst_dn as f64
-            * (leaf_stuffer_cost_per_shard_atomic(SEGMENT_LEAF_COUNT) as f64 / 1.0e9),
+            * (stuffer_cost_per_shard_atomic(honest_leaves_at_closed_shards(worst_dn_at_n))
+                as f64
+                / 1.0e9),
         P = penalty_compensation_skl_per_epoch(base_block_reward_atomic),
     )?;
 
@@ -223,14 +233,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn flood_ceiling_is_finite_and_depth_sensitive() {
+    fn flood_ceiling_is_finite_and_nearly_depth_flat() {
         let surge = BLOCK_WEIGHT_PENALTY_FREE;
         let early = max_shards_per_window(EPOCH_BLOCKS, surge, 1_000);
         let late = max_shards_per_window(EPOCH_BLOCKS, surge, 5_000_000);
         assert!(early > 0, "a flood must be able to move n at all");
-        // Deeper trees ⇒ heavier proofs ⇒ fewer leaves per block, so the ceiling
-        // falls as the chain grows: the operand gets HARDER to move over time.
-        assert!(late <= early, "slew ceiling must not rise with chain depth");
+        // Byte-keyed, the ceiling is `B × (archival/weight) / W` per block: the
+        // weight the flooder pays for and the archival bytes the operand counts
+        // both grow with the FCMP proof, so depth moves the ratio, not the
+        // ceiling, and only by a few percent (measured 2026-10-01: −4 % from
+        // depth 1 to 6, with integer tx-per-block rounding making the sign
+        // depth-local). The leaf era's "harder to move over time" was a
+        // lever; here it is noise. Pinned as a bound, not a direction.
+        let (lo, hi) = (early.min(late), early.max(late));
+        assert!(
+            hi * 90 <= lo * 100,
+            "depth moves the ceiling by >10%: {early} vs {late}"
+        );
     }
 
     #[test]

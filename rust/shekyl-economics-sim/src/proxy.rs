@@ -54,7 +54,8 @@ pub fn epochs_per_year() -> f64 {
 }
 
 /// Bytes an archiver would hold at the per-bond cap (`MAX_HOLDINGS_SHARDS` ·
-/// `SHARD_BYTES` ≈ 13.6 GB) — the honest side the proxy avoids (§7.4/W10).
+/// `SHARD_BYTES` = 4096 · W ≈ 12.3 GB) — the honest side the proxy avoids
+/// (§7.4/W10).
 #[must_use]
 pub fn max_holdings_bytes() -> f64 {
     MAX_HOLDINGS_SHARDS as f64 * SHARD_BYTES
@@ -91,12 +92,13 @@ pub const RESPONSE_BYTES: f64 = 128.0 + (4.0 * 38.0) * 32.0 + (18.0 + 38.0) * 32
 
 /// Storage cost basis, fiat `$/byte/year` (mirrors `burden::BASE_STORAGE_FIAT_PER_BYTE_YEAR`
 /// — amortized commodity HDD ≈ `1e-11 $/B/yr`). The honest holder pays this on
-/// the full ~13.6 GB every epoch.
+/// the full capped holding ([`max_holdings_bytes`], ~12.3 GB) every epoch.
 pub const STORAGE_FIAT_PER_BYTE_YEAR: f64 = 1.0e-11;
 
 /// Bandwidth (egress) cost band, fiat `$/byte` **transferred**. `1e-11` ≈
 /// `$0.01/GB` (bulk transit) … `1e-10` ≈ `$0.10/GB` (retail egress). The proxy
-/// pays this only on the re-fetched openings, not on 13.6 GB of standing storage.
+/// pays this only on the re-fetched openings, not on the capped holding's
+/// standing storage.
 pub const FETCH_FIAT_PER_BYTE_BAND: [f64; 2] = [1.0e-11, 1.0e-10];
 
 /// Cloud-class storage basis (`~$0.02/GB-month` ≈ `2.4e-10 $/B/yr`) — the
@@ -544,14 +546,15 @@ pub fn a5_proxy_report(
     writeln!(
         out,
         "  -> W10 gate: FAILS at the current grace window (margin@q=0 < 0 — re-fetch is ~KB\n\
-         vs 13.6 GB held, so honest holding is the DEARER strategy: the proxy free-rides).\n\
+         vs {HELD:.1} GB held, so honest holding is the DEARER strategy: the proxy free-rides).\n\
          'q*' = the per-epoch re-fetch-FAILURE rate the gate-4 grace window must force for\n\
          the m-of-n slash exposure to flip the margin positive — i.e. how tight grace must\n\
          get. A large post-D2 reward lowers q* (bigger forfeit deters more) — the one way\n\
          D2 helps here — but the current hours-long grace gives q≈0, so it does not bind.\n\
          §11.1 disposition (NOT a D2 redesign): tighten gate-4 grace to force q ≥ q*, OR\n\
          accelerate the PoRep reopen (q→1: re-fetch cannot substitute for sealed possession\n\
-         — the whole-shard/actual-possession test, a NAMED non-genesis path)."
+         — the whole-shard/actual-possession test, a NAMED non-genesis path).",
+        HELD = max_holdings_bytes() / 1.0e9,
     )?;
 
     Ok(())

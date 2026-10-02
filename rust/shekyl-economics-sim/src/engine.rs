@@ -66,9 +66,10 @@ pub struct ArchivalLockModel {
     pub bond_floor_atomic: u64,
     /// Seated replicas per deep shard (`R_target`; L15 lean ≈ 6).
     pub replicas_per_shard: u64,
-    /// Blocks of chain history per new deep shard. Shard segment geometry
-    /// is **not yet consensus-pinned** (gate-2/3 `ShardId` wire open), so
-    /// this is an explicit model parameter; default arm uses
+    /// Blocks of chain history per new deep shard. The partition is pinned
+    /// by archival **bytes** (`SHT-Q2`: `W` per shard), not blocks, so the
+    /// blocks-per-shard cadence the staking arm sweeps is a traffic-dependent
+    /// model parameter rather than a constant; default arm uses
     /// `SETTLEMENT_EPOCH_BLOCKS` (the staking sim's frontier-growth
     /// cadence), with a denser sensitivity arm. Must be **> 0** — zero has
     /// no model meaning and `locked_atomic` panics on it rather than
@@ -257,7 +258,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         // Canonical escalated split. This engine has no leaf/corpus trajectory, so
         // n = 0; under the shipped genesis-neutral asymptote that is bit-identical
         // to the flat floor at every n, and after the ceremony this is the honest
-        // "no burden yet" baseline (stage2 threads real n via burden::frozen_shards).
+        // "no burden yet" baseline (stage2 threads real n via burden::closed_shards).
         let fee_split =
             compute_burn_split_at(total_fees, burn_pct, ClosedShardCount::ZERO, &economic);
 

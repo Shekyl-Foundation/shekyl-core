@@ -56,11 +56,20 @@ pub fn floor_share() -> u64 {
 /// saturation.
 pub const ASYMPTOTE_BAND: [u64; 3] = [500_000, 750_000, 900_000];
 
-/// Knee candidates — the `frozen_segment_count` at which the share saturates to
-/// the asymptote. Wide spread on purpose (§6.0 wide-but-slow): a larger knee is
-/// a slower ratchet. `25_000` ≈ the baseline-traffic corpus at ~10y; `250_000`
-/// only saturates deep in a sustained-growth chain.
-pub const KNEE_BAND: [u64; 3] = [25_000, 100_000, 250_000];
+/// Knee candidates — the **closed-shard count** (`shard_of` of cumulative
+/// archival length, `W` = 3 MB per shard; `SHT-Q2`) at which the share
+/// saturates to the asymptote. Wide spread on purpose (§6.0 wide-but-slow): a
+/// larger knee is a slower ratchet. **Re-derived in the byte-keyed unit by the
+/// Stage-2 sweep, not converted from the J-segment band**
+/// (`ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F step 3): the low member is the
+/// baseline-traffic trajectory's `n` at ~10 y, the high member is the
+/// sustained-growth trajectory's final `n`, the middle is their geometric
+/// mean. `stage2::knee_band_brackets_the_sweep_trajectories` pins the band to
+/// those anchors so a trajectory change that silently moved them fails here.
+/// Sweep of 2026-10-01: baseline `n` at 10 y = 523,841; sustained-growth final
+/// `n` = 10,279,293; geometric mean ≈ 2.32 M — rounded to one significant
+/// figure and a half.
+pub const KNEE_BAND: [u64; 3] = [500_000, 2_250_000, 10_000_000];
 
 /// One §6.1-conformant escalation candidate: a saturating banded-PL lift of the
 /// staker share from [`floor_share`] to `asymptote` as `n` rises to `knee`.
@@ -69,12 +78,12 @@ pub struct EscalationCurve {
     /// Saturation share, fixed-point `SHARE_SCALE`. Must be `> floor_share()` and
     /// `< SHARE_SCALE`.
     pub asymptote: u64,
-    /// `frozen_segment_count` at which `share` reaches `asymptote`.
+    /// Closed-shard count at which `share` reaches `asymptote`.
     pub knee_shards: u64,
 }
 
 impl EscalationCurve {
-    /// The staker-pool share at `n` frozen shards, fixed-point `SHARE_SCALE`.
+    /// The staker-pool share at `n` closed shards, fixed-point `SHARE_SCALE`.
     ///
     /// **Delegates to the consensus function** — this module owns *which
     /// candidates to sweep*, never *how a share is computed*. A local ramp here
@@ -208,14 +217,14 @@ mod tests {
     fn larger_knee_is_a_slower_ratchet() {
         // At a fixed asymptote and a mid shard count, a larger knee gives a
         // lower share (the lift is spread over more shards — §6.0 slower).
-        let n = 20_000;
+        let n = KNEE_BAND[0] * 4 / 5;
         let fast = EscalationCurve {
             asymptote: 750_000,
-            knee_shards: 25_000,
+            knee_shards: KNEE_BAND[0],
         };
         let slow = EscalationCurve {
             asymptote: 750_000,
-            knee_shards: 250_000,
+            knee_shards: KNEE_BAND[2],
         };
         assert!(fast.share(n) > slow.share(n));
     }

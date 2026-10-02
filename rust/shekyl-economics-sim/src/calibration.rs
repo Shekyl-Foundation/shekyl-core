@@ -3,40 +3,54 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! W9 **leaf-stuffer** cost model (A4, §12.2 / DQ-2C).
+//! W9 **stuffer** cost model (A4, §12.2 / DQ-2C).
 //!
-//! **Shape, stated so no future reader imports the wrong threat model:** the
-//! stuffer's transaction is **1-in / 16-out** — a *max-leaves-per-fee geometry*,
-//! **not** a black-marble/decoy construct. FCMP++ has **no rings**; the 16
-//! outputs are curve-tree **leaves** that inflate `frozen_segment_count` (and so
-//! the D2 escalation share), they do **not** poison a decoy pool (the ring-side
-//! half of the Rucknium report that FCMP++ deletes and A4 does not model). 16 =
-//! `MAX_OUTPUTS` = `2^4` (zero Bp+ padding waste) maximises leaves/tx; 1 input
-//! minimises the per-input FCMP membership proof (the FCMP++-adapted shape —
-//! Monero's stuffer used 2-in because a ring is cheap per input; a membership
-//! proof is not).
+//! **Shape, stated so no future reader imports the wrong threat model.** The D2
+//! operand `n` counts the shards **closed** by cumulative archival length —
+//! `|pqc_auths| + |prunable|` per transaction, `W` bytes per shard (`SHT-Q2`,
+//! `shekyl_types::shard_of`). A stuffer therefore buys **archival bytes per
+//! fee**, and the fee is `weight × FEE_PER_BYTE`, so the lever is the ratio
+//! `archival_len / weight` over the shapes the builder accepts
+//! (`1..=MAX_INPUTS` × `1..=MAX_OUTPUTS`). That ratio is **maximised by
+//! inputs, not outputs**: each input carries a hybrid PQC authorisation
+//! (prunable) and a share of the FCMP proof (prunable), while each output's
+//! bytes are mostly the unprunable prefix the fee pays for and the shard does
+//! not count. So the shape is **`MAX_INPUTS`-in / 1-out** — the reverse of the
+//! J-segment era's 1-in / 16-out *leaf* stuffer, which inflated a count of
+//! outputs that the operand no longer measures. It is **not** a
+//! black-marble/decoy construct: FCMP++ has no rings; nothing here poisons a
+//! decoy pool (the ring-side half of the Rucknium report that FCMP++ deletes).
+//!
+//! The shape is **searched, not asserted** ([`stuffer_shape`]): the argmax is
+//! computed over every shape at the chain's depth, so if a wire change moved
+//! the balance the model would follow it. The one-shot (binding, attacker-
+//! favouring) cost uses that shape alone; a *sustained* campaign cannot — it
+//! consumes `MAX_INPUTS − 1` outputs per transaction, and outputs are
+//! conserved — so [`sustained_stuffer_cost_per_shard_atomic`] prices the
+//! cheapest producer/consumer **cycle** whose net output balance is zero, and
+//! the reports carry both.
 //!
 //! **DQ-2G / DQ-2C — cost is single-sourced through the production predictor.**
-//! The per-tx weight comes from `shekyl_tx_weight::predict_weight` (the
-//! byte-mirror of `Transaction::write`, hoisted D-1), not a hand byte-model;
-//! `tree_depth` rides the scenario's `n` via the production
-//! [`shekyl_curve_tree::segment::outputs_per_node`], so early-chain shallow-tree
-//! proofs are correctly cheaper (the binding direction, §11.3). The Monero
+//! Weight comes from `shekyl_tx_weight::predict_weight` (the byte-mirror of
+//! `Transaction::write`, hoisted D-1) and archival length from its sibling
+//! `predict_archival_len`, pinned to `Transaction::archival_len()` over the
+//! whole shape space; `tree_depth` rides the chain's leaf count via the
+//! production [`shekyl_curve_tree::segment::outputs_per_node`]. The Monero
 //! March-2024 figures are an order-of-magnitude anchor + proof-of-willingness
-//! (§12.3 DQ-2C), re-derived on Shekyl's own schedule below — never hard-coded.
+//! (§12.3 DQ-2C), re-expressed in Shekyl's unit below — never hard-coded.
 
-use shekyl_archival_retention::SEGMENT_LEAF_COUNT;
 use shekyl_curve_tree::segment::outputs_per_node;
-use shekyl_tx_weight::{predict_weight, InputCount, OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH};
+use shekyl_tx_weight::{
+    predict_archival_len, predict_weight, InputCount, OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
+};
+use shekyl_types::SHARD_LENGTH;
+
+use crate::burden::SHARD_BYTES;
 
 /// Minimum weight-fee, atomic units per byte (`cryptonote_config.h:66`
 /// `FEE_PER_BYTE = 300`). Genesis-provisional; the stuffer pays this floor
 /// (DQ-2C directive 1). A boundary constant (scenario layer, DQ-2G).
 pub const FEE_PER_BYTE_ATOMIC: u64 = 300;
-
-/// Outputs per stuffer tx — the max-leaves-per-fee shape. Single-sourced from
-/// the consensus `MAX_OUTPUTS` (16) so the shape can't drift from the wire cap.
-pub const STUFFER_OUTPUTS_PER_TX: u64 = MAX_OUTPUTS as u64;
 
 // ── Rucknium March-2024 anchor (DQ-2C; report/calibration only) ──────────────
 /// Sustained duration of the incident, days (report §6). Weeks, not a burst.
@@ -45,56 +59,195 @@ pub const RUCKNIUM_DURATION_DAYS: u64 = 23;
 pub const RUCKNIUM_SPAM_FEES_XMR: f64 = 61.5;
 /// Total spam bytes, GB (report §6). `20 nanonero/byte × 3.08 GB ≈ 61.6 XMR`.
 pub const RUCKNIUM_SPAM_BYTES_GB: f64 = 3.08;
-/// Spam outputs (~3.2 M) as Shekyl shards' worth of leaves — the replication row.
+/// The spam's byte volume as Shekyl shards' worth of archival good (`W` per
+/// shard) — the replication row. Monero's transaction bytes are
+/// prunable-heavy, so this is the volume's order of magnitude in the unit the
+/// operand counts, not a claim that every byte would have been archival.
 #[must_use]
 pub fn rucknium_shards_equivalent() -> u64 {
-    // ~1.6 M 1in/2out txs ⇒ ~3.2 M outputs.
-    3_200_000 / SEGMENT_LEAF_COUNT
+    (RUCKNIUM_SPAM_BYTES_GB * 1.0e9 / SHARD_BYTES) as u64
 }
 
 /// Curve-tree depth needed to hold `n` leaves — the smallest layer whose
 /// production capacity ([`outputs_per_node`]) covers `n`, clamped to the proof
-/// system's max. Deps the real width logic (DQ-2G dep-don't-mirror), so the
-/// stuffer's FCMP proof cost rides real chain depth: shallow (cheap) early,
-/// deeper (dearer) late.
+/// system's max. Deps the real width logic (DQ-2G dep-don't-mirror), so every
+/// transaction's FCMP proof cost rides real chain depth: shallow early, deeper
+/// late.
 #[must_use]
 pub fn tree_depth_for_leaves(n: u64) -> u8 {
     let n = n.max(1);
     for j in 0..=MAX_TREE_DEPTH {
-        if outputs_per_node(j) as u64 >= n {
+        let cap = outputs_per_node(j);
+        if cap as u64 >= n {
             return j.max(1);
+        }
+        // `outputs_per_node` is a `const fn` product that overflows `usize`
+        // around layer 12 (its own doc) — a panic, not a wrap. A leaf count
+        // the next layer could not represent is deeper than any chain can be;
+        // report that layer rather than ask for a capacity that does not fit.
+        // The widest per-layer multiplier is the leaf chunk, `outputs_per_node(0)`.
+        if cap > usize::MAX / outputs_per_node(0) {
+            return (j + 1).min(MAX_TREE_DEPTH);
         }
     }
     MAX_TREE_DEPTH
 }
 
-/// Weight-fee (atomic) of one 1-in/16-out stuffer tx at `tree_depth`, via the
-/// **converge fixpoint** the build path runs (fee feeds `varint(fee)` into the
-/// weight, so it is circular by a few bytes; two iterations from the fee floor
-/// settle it — cheaper than approximating, now that the real predictor is a
-/// dep). Integer throughout (DQ-2G): `fee = predict_weight × FEE_PER_BYTE`.
-#[must_use]
-pub fn stuffer_tx_fee_atomic(tree_depth: u8) -> u64 {
-    let n_in = InputCount::clamped(1);
-    let n_out = OutputCount::clamped(STUFFER_OUTPUTS_PER_TX as usize);
-    let mut fee = 0u64;
-    for _ in 0..2 {
-        let weight = predict_weight(n_in, n_out, tree_depth, fee) as u64;
-        fee = weight * FEE_PER_BYTE_ATOMIC;
-    }
-    fee
+/// A transaction shape the builder accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shape {
+    pub n_in: InputCount,
+    pub n_out: OutputCount,
 }
 
-/// Attacker cost (atomic) to inflate the corpus by one shard's worth of leaves
-/// (`SEGMENT_LEAF_COUNT` outputs) when the chain is at `n_at_attack` leaves.
-/// Each 1-in/16-out tx adds 16 leaves; `ceil(SEGMENT_LEAF_COUNT / 16)` txs, each
-/// at the converged min-fee for the chain's depth. Integer (DQ-2G).
+impl Shape {
+    /// Weight-fee (atomic) of one transaction of this shape at `tree_depth`,
+    /// via the **converge fixpoint** the build path runs (fee feeds
+    /// `varint(fee)` into the weight, so it is circular by a few bytes; two
+    /// iterations from zero settle it). Integer throughout (DQ-2G):
+    /// `fee = predict_weight × FEE_PER_BYTE`.
+    #[must_use]
+    pub fn tx_fee_atomic(self, tree_depth: u8) -> u64 {
+        let mut fee = 0u64;
+        for _ in 0..2 {
+            let weight = predict_weight(self.n_in, self.n_out, tree_depth, fee) as u64;
+            fee = weight * FEE_PER_BYTE_ATOMIC;
+        }
+        fee
+    }
+
+    /// Archival bytes one transaction of this shape adds to the fold at
+    /// `tree_depth` — what the operand counts.
+    #[must_use]
+    pub fn archival_bytes(self, tree_depth: u8) -> u64 {
+        predict_archival_len(self.n_in, self.n_out, tree_depth) as u64
+    }
+
+    /// Outputs created minus outputs consumed: positive for a producer,
+    /// negative for a consumer. A sustained campaign's shapes must net to zero.
+    #[must_use]
+    pub fn net_outputs(self) -> i64 {
+        self.n_out.get() as i64 - self.n_in.get() as i64
+    }
+
+    /// `"8-in/1-out"`, for the reports.
+    #[must_use]
+    pub fn label(self) -> String {
+        format!("{}-in/{}-out", self.n_in.get(), self.n_out.get())
+    }
+}
+
+/// Every shape the builder accepts, `1..=MAX_INPUTS` × `1..=MAX_OUTPUTS`. The
+/// input cap is read off the bounded type (it is crate-internal to the
+/// predictor by design); clamping `usize::MAX` lands on it.
+fn all_shapes() -> impl Iterator<Item = Shape> {
+    let max_in = InputCount::clamped(usize::MAX).get();
+    (1..=max_in).flat_map(move |i| {
+        (1..=MAX_OUTPUTS).map(move |o| Shape {
+            n_in: InputCount::clamped(i),
+            n_out: OutputCount::clamped(o),
+        })
+    })
+}
+
+/// Fee per archival byte of `shape` at `tree_depth`, as a rational
+/// `(fee, bytes)`; compared cross-multiplied so the argmax is exact.
+fn fee_per_archival(shape: Shape, tree_depth: u8) -> (u128, u128) {
+    (
+        u128::from(shape.tx_fee_atomic(tree_depth)),
+        u128::from(shape.archival_bytes(tree_depth).max(1)),
+    )
+}
+
+fn cheaper(a: (u128, u128), b: (u128, u128)) -> bool {
+    // a.fee / a.bytes < b.fee / b.bytes
+    a.0 * b.1 < b.0 * a.1
+}
+
+/// The **max-archival-per-fee** shape at `tree_depth` — the one-shot
+/// stuffer's transaction, searched over every shape the builder accepts.
 #[must_use]
-pub fn leaf_stuffer_cost_per_shard_atomic(n_at_attack: u64) -> u128 {
-    let depth = tree_depth_for_leaves(n_at_attack);
-    let tx_fee = u128::from(stuffer_tx_fee_atomic(depth));
-    let txs_per_shard = u128::from(SEGMENT_LEAF_COUNT).div_ceil(u128::from(STUFFER_OUTPUTS_PER_TX));
-    txs_per_shard * tx_fee
+pub fn stuffer_shape(tree_depth: u8) -> Shape {
+    all_shapes()
+        .map(|s| (s, fee_per_archival(s, tree_depth)))
+        .fold(
+            None,
+            |best: Option<(Shape, (u128, u128))>, cand| match best {
+                Some(b) if !cheaper(cand.1, b.1) => Some(b),
+                _ => Some(cand),
+            },
+        )
+        .expect("the shape space is non-empty")
+        .0
+}
+
+/// Transactions of [`stuffer_shape`] that close one shard at `tree_depth`:
+/// `⌈W / archival_bytes⌉`.
+#[must_use]
+pub fn stuffer_txs_per_shard(tree_depth: u8) -> u64 {
+    let bytes = stuffer_shape(tree_depth).archival_bytes(tree_depth).max(1);
+    SHARD_LENGTH.to_raw().div_ceil(bytes)
+}
+
+/// Leaves (outputs) one stuffed shard adds to the curve tree at `tree_depth`
+/// — the tree-depth bookkeeping for a campaign, now small: the shape minimises
+/// outputs.
+#[must_use]
+pub fn stuffer_leaves_per_shard(tree_depth: u8) -> u64 {
+    stuffer_txs_per_shard(tree_depth) * stuffer_shape(tree_depth).n_out.get() as u64
+}
+
+/// Attacker cost (atomic) to close one more shard — `W` archival bytes — when
+/// the curve tree holds `chain_leaves` outputs, **one-shot**: every transaction
+/// is the max-archival-per-fee shape, outputs assumed on hand. The binding
+/// (attacker-favouring) figure. Integer (DQ-2G).
+#[must_use]
+pub fn stuffer_cost_per_shard_atomic(chain_leaves: u64) -> u128 {
+    let depth = tree_depth_for_leaves(chain_leaves);
+    u128::from(stuffer_txs_per_shard(depth)) * u128::from(stuffer_shape(depth).tx_fee_atomic(depth))
+}
+
+/// Attacker cost (atomic) to close one more shard under **output
+/// conservation**: the cheapest producer/consumer cycle whose net output
+/// balance is zero. For a consumer `C` (`net < 0`) and producer `P`
+/// (`net > 0`), a cycle of `net_P` copies of `C` and `−net_C` copies of `P`
+/// nets to zero; a shape with `net ≥ 0` is a cycle on its own. Cost per shard
+/// is `⌈W · fee_cycle / bytes_cycle⌉`. The sustained figure a campaign that
+/// has to mint its own inputs actually pays; reported beside the one-shot
+/// cost, which stays the gate's input.
+#[must_use]
+pub fn sustained_stuffer_cost_per_shard_atomic(chain_leaves: u64) -> u128 {
+    let depth = tree_depth_for_leaves(chain_leaves);
+    let shapes: Vec<(Shape, (u128, u128))> = all_shapes()
+        .map(|s| (s, fee_per_archival(s, depth)))
+        .collect();
+    let mut best: Option<(u128, u128)> = None;
+    let mut consider = |cycle: (u128, u128)| {
+        if best.is_none_or(|b| cheaper(cycle, b)) {
+            best = Some(cycle);
+        }
+    };
+    for &(c, (fee_c, bytes_c)) in &shapes {
+        let net_c = c.net_outputs();
+        if net_c >= 0 {
+            consider((fee_c, bytes_c));
+            continue;
+        }
+        let need = u128::from(net_c.unsigned_abs());
+        for &(p, (fee_p, bytes_p)) in &shapes {
+            let net_p = p.net_outputs();
+            if net_p <= 0 {
+                continue;
+            }
+            let copies_c = u128::from(net_p.unsigned_abs());
+            consider((
+                copies_c * fee_c + need * fee_p,
+                copies_c * bytes_c + need * bytes_p,
+            ));
+        }
+    }
+    let (fee, bytes) = best.expect("the shape space is non-empty");
+    (u128::from(SHARD_LENGTH.to_raw()) * fee).div_ceil(bytes)
 }
 
 #[cfg(test)]
@@ -108,31 +261,75 @@ mod tests {
         let d_big = tree_depth_for_leaves(5_000_000_000);
         assert!((1..=MAX_TREE_DEPTH).contains(&d_small));
         assert!(d_big >= d_small);
-        // SEGMENT_LEAF_COUNT (25,992) is exactly outputs_per_node(2), so a chain
-        // at one shard sits at depth 2.
-        assert_eq!(tree_depth_for_leaves(SEGMENT_LEAF_COUNT), 2);
+        // A chain holding exactly one layer-2 node's capacity sits at depth 2.
+        assert_eq!(tree_depth_for_leaves(outputs_per_node(2) as u64), 2);
     }
 
     #[test]
-    fn stuffer_cost_positive_and_cheaper_when_shallow() {
-        // A shallow (early-chain) tree yields a smaller FCMP proof ⇒ a cheaper
-        // stuffer tx than a deep (late-chain) tree — the binding direction (§11.3).
-        let early = stuffer_tx_fee_atomic(tree_depth_for_leaves(30_000)); // ~depth 3
-        let late = stuffer_tx_fee_atomic(tree_depth_for_leaves(5_000_000_000)); // ~depth 6
-        assert!(early > 0 && late > 0);
-        assert!(
-            early < late,
-            "shallow tree must be cheaper per tx: early={early} late={late}"
-        );
+    fn stuffer_shape_is_max_inputs_min_outputs() {
+        // Inputs carry the archival bytes (PQC auth + FCMP share, both
+        // prunable); outputs carry unprunable prefix the fee pays for and the
+        // operand does not count. So the argmax is MAX_INPUTS-in / 1-out at
+        // every depth — and the J-segment era's 1-in/16-out leaf stuffer is
+        // now among the DEAREST shapes per archival byte.
+        let max_in = InputCount::clamped(usize::MAX).get();
+        for depth in 2..=MAX_TREE_DEPTH {
+            let s = stuffer_shape(depth);
+            assert_eq!((s.n_in.get(), s.n_out.get()), (max_in, 1), "depth {depth}");
+            let leafy = Shape {
+                n_in: InputCount::clamped(1),
+                n_out: OutputCount::clamped(MAX_OUTPUTS),
+            };
+            assert!(cheaper(
+                fee_per_archival(s, depth),
+                fee_per_archival(leafy, depth)
+            ));
+        }
     }
 
     #[test]
-    fn cost_per_shard_is_txs_times_fee() {
-        let n = 100_000;
-        let depth = tree_depth_for_leaves(n);
-        let expected = (u128::from(SEGMENT_LEAF_COUNT).div_ceil(16))
-            * u128::from(stuffer_tx_fee_atomic(depth));
-        assert_eq!(leaf_stuffer_cost_per_shard_atomic(n), expected);
+    fn cost_per_shard_is_txs_times_fee_and_sustained_is_dearer() {
+        let leaves = 100_000;
+        let depth = tree_depth_for_leaves(leaves);
+        let expected = u128::from(stuffer_txs_per_shard(depth))
+            * u128::from(stuffer_shape(depth).tx_fee_atomic(depth));
+        assert_eq!(stuffer_cost_per_shard_atomic(leaves), expected);
         assert!(expected > 0);
+        // Conserving outputs can only add producer transactions to the mix.
+        let sustained = sustained_stuffer_cost_per_shard_atomic(leaves);
+        assert!(sustained >= expected, "{sustained} < {expected}");
+        // …and never by more than the dearest single producer would cost.
+        let leafy = Shape {
+            n_in: InputCount::clamped(1),
+            n_out: OutputCount::clamped(MAX_OUTPUTS),
+        };
+        let all_leafy = (u128::from(SHARD_LENGTH.to_raw())
+            * u128::from(leafy.tx_fee_atomic(depth)))
+        .div_ceil(u128::from(leafy.archival_bytes(depth)));
+        assert!(sustained <= all_leafy);
+    }
+
+    #[test]
+    fn a_shard_costs_about_one_skl_and_depth_barely_moves_it() {
+        // W = 3 MB of archival good at 300 atomic/byte of WEIGHT: weight ≳
+        // archival, so a shard is on the order of W × 300 ≈ 0.9 SKL. Deeper
+        // trees grow the FCMP proof — which is archival good the stuffer is
+        // buying — so depth moves the archival/weight RATIO, not the price,
+        // and only by a few percent (measured 2026-10-01: +1.3 % one-shot,
+        // −2.6 % sustained, depth 1 → 6). The leaf era's "cheapest early" was
+        // a lever; byte-keyed it is noise. Pinned as a bound, not a direction,
+        // because integer tx-per-shard rounding makes the sign depth-local.
+        let early = stuffer_cost_per_shard_atomic(30_000);
+        let late = stuffer_cost_per_shard_atomic(5_000_000_000);
+        let one_skl = u128::from(crate::burden::COIN);
+        assert!(
+            (one_skl / 2..=2 * one_skl).contains(&early),
+            "early {early}"
+        );
+        let (lo, hi) = (early.min(late), early.max(late));
+        assert!(
+            hi * 100 <= lo * 105,
+            "depth moves the cost by >5%: {early} vs {late}"
+        );
     }
 }

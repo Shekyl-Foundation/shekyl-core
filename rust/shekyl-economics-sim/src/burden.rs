@@ -24,32 +24,74 @@
 //! Everything here is `f64` per DQ-2G (measurement precision; the *escalation*
 //! candidates are the only integer-`curve_milli` surface). The shard-count
 //! mapping is **not** re-derived — it calls the consensus
-//! [`frozen_segment_count`] so the sim cannot drift from the freeze rule.
+//! [`shard_of`] on a fold of production-predicted archival bytes
+//! ([`normal_tx_archival_bytes`]), so the sim cannot drift from the partition
+//! (`SHT-Q2`; `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F step 3).
 
-use shekyl_archival_retention::{frozen_segment_count, ARCHIVAL_BOND_FLOOR_ATOMIC};
+use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
+use shekyl_tx_weight::{predict_archival_len, InputCount, OutputCount};
+use shekyl_types::{shard_of, ArchivalLength, SHARD_LENGTH};
+
+use crate::calibration::tree_depth_for_leaves;
 
 /// Atomic units per SKL — the SKL/atomic conversion factor.
 pub const COIN: u64 = 1_000_000_000;
 
-/// Bytes an archiver stores per frozen shard — a **modelling mean**, and a
-/// stale one by unit: it is `SEGMENT_LEAF_COUNT` (25,992) leaves ≈ **3.33 MB**
-/// (~128 B/leaf; the whole ~4,096-shard corpus ≈ 13.6 GB), i.e. the size of the
-/// **retired leaf segment**, not a transaction-composition mean. `PDM-Q6` item 5
-/// (2026-09-23) made a shard a fixed *count* of transactions (`T = 200`) and
-/// retired `SHARD_BYTES` as consensus; this constant shares that name and is
-/// **not** it. Using a mean here is correct for what this module asks — total
-/// burden against total budget genuinely is a mean-of-means question — but the
-/// figure describes a unit that no longer exists, and the distributional
-/// question it cannot see is `PDM-Q-F34` / `STAKER_ARCHIVAL_SIM.md` §L19.
-/// A sim model parameter, **never** a consensus constant; swept in the
-/// byte-size sensitivity arm if it moves.
-pub const SHARD_BYTES: f64 = 3.33e6;
+/// Bytes an archiver stores per closed shard: **`W`**, the archival length of a
+/// shard (`shekyl_types::SHARD_LENGTH`, sourced from
+/// `config/consensus_constants.json` `archival_shard_length_bytes`; `SHT-Q2`).
+/// A shard is *defined* as `W` bytes of archival good — `|pqc_auths| +
+/// |prunable|` over its transactions — so this is the unit, not a modelling
+/// mean: every shard carries `W` plus at most one transaction's overshoot
+/// (≤ 5 % by the §9 selection rule). The unprunable skeleton every node keeps
+/// is not the archiver's burden and is not counted. As `f64` because the fiat
+/// arithmetic below is `f64` (DQ-2G); the integer authority is the typed
+/// constant.
+pub const SHARD_BYTES: f64 = SHARD_LENGTH.to_raw() as f64;
 
 /// Outputs per ordinary transaction (1-in / 2-out typical traffic). Drives the
-/// honest burden: `outputs = tx_volume · this`. The **stuffer** uses the
-/// output-maximizing shape instead (`calibration.rs`, DQ-2C directive 2), not
-/// this value.
+/// honest **curve-tree depth** (`leaves = tx_volume · this`), which sets the
+/// FCMP proof size in every transaction's archival length. The **stuffer**
+/// uses the archival-per-fee shape instead (`calibration.rs`, DQ-2C directive
+/// 2), not this value.
 pub const OUTPUTS_PER_TX_NORMAL: f64 = 2.0;
+
+/// The ordinary transaction's shape: 1-in / 2-out, the pair
+/// [`OUTPUTS_PER_TX_NORMAL`] states as a mean.
+#[must_use]
+pub fn normal_tx_shape() -> (InputCount, OutputCount) {
+    (InputCount::clamped(1), OutputCount::clamped(2))
+}
+
+/// Archival bytes one ordinary (1-in / 2-out) transaction adds to the fold
+/// when the curve tree holds `chain_leaves` outputs — the production
+/// predictor's archival length at the production depth, never a byte model of
+/// the sim's own (DQ-2G dep-don't-mirror). Fee-independent: the fee varint is
+/// in the unprunable prefix.
+#[must_use]
+pub fn normal_tx_archival_bytes(chain_leaves: u64) -> u64 {
+    let (n_in, n_out) = normal_tx_shape();
+    predict_archival_len(n_in, n_out, tree_depth_for_leaves(chain_leaves)) as u64
+}
+
+/// Leaves (outputs) an honest 1-in / 2-out chain holds once it has closed
+/// `closed_shards` shards — the inverse of the honest fold, for arms that
+/// sample the operand `n` directly and need the curve-tree depth at that
+/// chain size. `n · W` archival bytes at `normal_tx_archival_bytes` per tx,
+/// `OUTPUTS_PER_TX_NORMAL` leaves per tx; the per-tx length depends on the
+/// depth it is solving for, so two iterations settle it (the same converge
+/// the fee path runs). A **modelling** map (honest composition), not a
+/// consensus derivation: the chain does not record leaves-per-shard.
+#[must_use]
+pub fn honest_leaves_at_closed_shards(closed_shards: u64) -> u64 {
+    let bytes = closed_shards.saturating_mul(SHARD_LENGTH.to_raw());
+    let mut leaves: u64 = 0;
+    for _ in 0..2 {
+        let per_tx = normal_tx_archival_bytes(leaves).max(1);
+        leaves = ((bytes / per_tx) as f64 * OUTPUTS_PER_TX_NORMAL) as u64;
+    }
+    leaves
+}
 
 /// Base annual storage cost at year 0, fiat `$/byte`. Amortized commodity HDD:
 /// ~`$0.02/GB` capital over a ~5-year service life plus power/redundancy
@@ -141,11 +183,15 @@ impl KryderRate {
     }
 }
 
-/// Frozen shards (the D2 operand `n`) at a cumulative output/leaf count — the
-/// consensus first-crossing rule, **not** re-derived (single source).
+/// Closed shards (the D2 operand `n`) at a cumulative archival length — the
+/// consensus partition [`shard_of`], **not** re-derived (single source). This
+/// is what the validator reads at parent state
+/// (`shekyl_chain_rules::closed_shards_before` is `shard_of` of the recorded
+/// fold), so the sim's `n` and the chain's `n` are one function of one
+/// quantity.
 #[must_use]
-pub fn frozen_shards(cumulative_outputs: u64) -> u64 {
-    frozen_segment_count(cumulative_outputs)
+pub fn closed_shards(cumulative_archival_bytes: u64) -> u64 {
+    shard_of(ArchivalLength::from_raw(cumulative_archival_bytes)).to_raw()
 }
 
 /// Fiat `$/byte` for storage in year `year`, under a Kryder decline off
@@ -160,16 +206,16 @@ pub fn storage_fiat_per_byte_year(
     base_fiat_per_byte_year * (1.0 - kryder.annual_decline()).powf(y)
 }
 
-/// Annual fiat cost to hold `shards` frozen shards in year `year`. This is the
-/// **whole-corpus** burden — pass the D2 operand `n` (total
-/// `frozen_segment_count`), which grows unbounded.
+/// Annual fiat cost to hold `shards` closed shards in year `year`. This is the
+/// **whole-corpus** burden — pass the D2 operand `n` (total closed shards),
+/// which grows unbounded.
 ///
 /// **The per-archiver cost is capped**, and the A1/A2 arms apply that cap over
 /// the DQ-2H population: a single bond holds at most `MAX_HOLDINGS_SHARDS`
-/// (4,096) shards, so one archiver's storage burden tops out at `4096 ·
-/// SHARD_BYTES` ≈ **13.6 GB** — the same figure §7.4 uses for W10's honest cost.
-/// The whole-corpus `n` drives the *escalation*; the capped per-archiver
-/// holdings drive the *cost* side of clearance.
+/// (4,096) shards, so one archiver's storage burden tops out at `4096 · W`
+/// ≈ **12.3 GB** — the figure §7.4 uses for W10's honest cost. The
+/// whole-corpus `n` drives the *escalation*; the capped per-archiver holdings
+/// drive the *cost* side of clearance.
 #[must_use]
 pub fn burden_cost_fiat_per_year(
     shards: u64,
@@ -185,14 +231,41 @@ pub fn burden_cost_fiat_per_year(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_archival_retention::SEGMENT_LEAF_COUNT;
 
     #[test]
-    fn frozen_shards_first_crossing() {
-        // One shard freezes at exactly SEGMENT_LEAF_COUNT leaves, not before.
-        assert_eq!(frozen_shards(SEGMENT_LEAF_COUNT - 1), 0);
-        assert_eq!(frozen_shards(SEGMENT_LEAF_COUNT), 1);
-        assert_eq!(frozen_shards(2 * SEGMENT_LEAF_COUNT + 5), 2);
+    fn closed_shards_is_the_partition() {
+        // One shard closes at exactly W archival bytes, not before — the
+        // consensus `shard_of`, read through the sim's one call site.
+        let w = SHARD_LENGTH.to_raw();
+        assert_eq!(closed_shards(w - 1), 0);
+        assert_eq!(closed_shards(w), 1);
+        assert_eq!(closed_shards(2 * w + 5), 2);
+        assert!((SHARD_BYTES - w as f64).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn honest_leaves_inverts_the_fold_to_within_a_shard() {
+        // Fold the honest composition forward from the leaves the inverse
+        // reports and land back on the same closed-shard count: the two
+        // directions share one per-tx length, so they must agree.
+        for n in [1u64, 100, 10_000, 1_000_000] {
+            let leaves = honest_leaves_at_closed_shards(n);
+            let txs = leaves as f64 / OUTPUTS_PER_TX_NORMAL;
+            let bytes = txs * normal_tx_archival_bytes(leaves) as f64;
+            let back = closed_shards(bytes as u64);
+            assert!(
+                back.abs_diff(n) <= 1,
+                "n={n}: inverse gave {leaves} leaves, folding back gives n={back}"
+            );
+        }
+        // A 1-in/2-out tx is a few KB of archival good, so W buys hundreds of
+        // them: the per-shard leaf count is in the hundreds, not the tens of
+        // thousands the retired J-segment held.
+        let per_tx = normal_tx_archival_bytes(1_000_000);
+        assert!(
+            (1_000..20_000).contains(&per_tx),
+            "per-tx archival {per_tx}"
+        );
     }
 
     #[test]
