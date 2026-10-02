@@ -764,6 +764,10 @@ The transport half of a hop is the Tor gap distributions (outbound
 
 ### The hop, same day
 
+The rerun's command sequence, including the inbound-only fluff peer
+this two-node hop could not show, is
+[`D5_TOR_STEM_RUNBOOK.md`](D5_TOR_STEM_RUNBOOK.md).
+
 One transaction, measurement daemons only. The seed's measurement
 daemon mined a fixed-difficulty chain; the floor's measurement daemon
 synced that chain over clearnet (the inherited early return above means
