@@ -107,9 +107,6 @@ namespace nodetool
   std::optional<std::vector<proxy>> get_proxies(const boost::program_options::variables_map& vm);
   std::optional<std::vector<anonymous_inbound>> get_anonymous_inbounds(const boost::program_options::variables_map& vm);
 
-  //! \return True if `commnd` is filtered (ignored/dropped) for `address`
-  bool is_filtered_command(epee::net_utils::network_address const& address, int command);
-
   /*! Combine the host this node OBSERVED on the socket with the port a peer
     ADVERTISED, or nothing if no endpoint can be derived.
 
@@ -549,9 +546,13 @@ namespace nodetool
     CHAIN_LEVIN_NOTIFY_MAP2(p2p_connection_context); //move levin_commands_handler interface notify(...) callbacks into nothing
 
     BEGIN_INVOKE_MAP2(node_server)
-      if (is_filtered_command(context.m_remote_address, command))
-        return LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED;
-
+      // Which commands a session may carry is `DefinedCommand` in
+      // rust/shekyl-levin/src/ingress.rs — one table, every connector.
+      // The C++ allowlist that sat here kept only HANDSHAKE, TIMED_SYNC
+      // and NOTIFY_NEW_TRANSACTIONS on a non-clearnet address. D-5
+      // (2026-10-02): the receiver handshaked, learned height 87, and
+      // stayed at 1 because support-flags came back empty and the chain
+      // request never left.
       HANDLE_INVOKE_T2(COMMAND_HANDSHAKE, &node_server::handle_handshake)
       HANDLE_INVOKE_T2(COMMAND_TIMED_SYNC, &node_server::handle_timed_sync)
       HANDLE_INVOKE_T2(COMMAND_REQUEST_SUPPORT_FLAGS, &node_server::handle_get_support_flags)

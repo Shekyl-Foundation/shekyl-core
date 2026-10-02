@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### A Tor session carries the chain
+
+- Commands are no longer dropped because the peer is a Tor address.
+  Handshake, timed sync and new transactions were the only ones let
+  through; support-flags (command 1007) came back as an empty body and
+  the chain request never left, so a peer that had handshaked stayed at
+  height 1.
+- `--add-exclusive-node <onion>` no longer requires `--tx-proxy`. The
+  managed Tor supplies the SOCKS address after the command line.
+  `--tx-proxy` still names the SOCKS address dials use, and it no longer
+  turns off the per-boot onion. `--anonymous-inbound` and
+  `--no-ephemeral-tor` are what turn that publish off.
+
 ### Handshake network id derives from the genesis block
 
 - The 16-byte handshake `NETWORK_ID` is the first 16 bytes of

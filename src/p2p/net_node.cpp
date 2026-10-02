@@ -133,7 +133,7 @@ namespace nodetool
     // durable address. The default posture (no flag) is an ephemeral per-boot
     // onion the daemon publishes itself; see arg_no_ephemeral_tor below.
     const command_line::arg_descriptor<std::vector<std::string> > arg_anonymous_inbound = {"anonymous-inbound", "<hidden-service-address>,<[bind-ip:]port>[,max_connections] i.e. \"x.onion,127.0.0.1:18083,100\". This opts into a STABLE, DURABLE onion address (for seeds and deliberately-persistent infrastructure); without it the daemon publishes an ephemeral per-boot address that identifies nothing across restarts"};
-    const command_line::arg_descriptor<bool> arg_no_ephemeral_tor = {"no-ephemeral-tor", "Disable the default ephemeral-per-boot Tor inbound posture (PWD-E7). Without this flag the daemon spawns a managed pinned tor when one is installed, mints a v3 onion key in memory, and serves overlay inbound on a fresh address each boot; configuring --anonymous-inbound or --tx-proxy for tor also makes the ephemeral posture yield", false};
+    const command_line::arg_descriptor<bool> arg_no_ephemeral_tor = {"no-ephemeral-tor", "Disable the default ephemeral-per-boot Tor inbound posture (PWD-E7). Without this flag the daemon spawns a managed pinned tor when one is installed, mints a v3 onion key in memory, and serves overlay inbound on a fresh address each boot. --tx-proxy names the SOCKS address used to dial and does not turn that inbound off. --anonymous-inbound does: it is the operator's own onion, and the per-boot publish yields to it", false};
     const command_line::arg_descriptor<std::string> arg_ban_list = {"ban-list", "Specify ban list file, one IP address per line"};
     const command_line::arg_descriptor<bool> arg_no_sync = {"no-sync", "Don't synchronize the blockchain with other peers", false};
 
@@ -381,23 +381,4 @@ namespace nodetool
 #endif
     return hosts;
   }
-
-  bool is_filtered_command(const epee::net_utils::network_address& address, int command)
-    {
-        switch (command)
-        {
-        case nodetool::COMMAND_HANDSHAKE_T<cryptonote::CORE_SYNC_DATA>::ID:
-        case nodetool::COMMAND_TIMED_SYNC_T<cryptonote::CORE_SYNC_DATA>::ID:
-        case cryptonote::NOTIFY_NEW_TRANSACTIONS::ID:
-            return false;
-        default:
-            break;
-        }
-
-        if (address.connector() == epee::net_utils::connector_id::clearnet)
-            return false;
-
-        MWARNING("Filtered command (#" << command << ") to/from " << address.str());
-        return true;
-    }
 }

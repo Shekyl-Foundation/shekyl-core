@@ -39,13 +39,15 @@ relay Tor whose volume never sees those cells.
   signal. You must be able to restart the node without restarting the relay,
   and the reverse. Do not add relay flags to the daemon-spawned managed Tor.
 - **Same Tor process as the node's client.** Point the daemon's tor-zone
-  SOCKS and overlay inbound at **this** instance. `--tx-proxy` and
-  `--anonymous-inbound` create the tor zone, so the default ephemeral spawn
-  **yields**; do not also leave a second client
-  running. `--tx-proxy` to a SocksPort that is not this relay is still
-  uncovered. Omit the outbound count (the default satisfies the floor of
-  12; an explicit count below 12 is refused at start). Overlay inbound on
-  this process is the mixing topology for inbound — inbound on a second Tor
+  SOCKS at **this** instance with `--tx-proxy`. That names the dial
+  SOCKS and does not turn off the per-boot onion, which is published by
+  the daemon's managed Tor — a second process. To keep inbound on this
+  relay and no second client, pass `--anonymous-inbound` (a stable
+  onion on this process) or `--no-ephemeral-tor` (no overlay inbound).
+  `--tx-proxy` to a SocksPort that is not this relay is still uncovered.
+  Omit the outbound count (the default satisfies the floor of 12; an
+  explicit count below 12 is refused at start). Overlay inbound on this
+  process is the mixing topology for inbound — inbound on a second Tor
   is uncovered inbound.
 
 ```bash
@@ -56,8 +58,7 @@ relay Tor whose volume never sees those cells.
 SocksPort `9050` here is the **relay process's** SOCKS, not a second Tor.
 Replace with that instance's actual SocksPort. `--anonymous-inbound` is the
 HiddenService this same process publishes; taking it opts into a stable onion
-address. Outbound-only mix (`--tx-proxy` without inbound) yields ephemeral
-inbound and leaves this node without overlay inbound.
+address and the per-boot publish yields to it. `--tx-proxy` alone does not.
 
 - **Not a Shekyl setting, flag, or consensus input.** Do not look for a
   daemon option that "enables cover." Path selection stays entirely Tor's.

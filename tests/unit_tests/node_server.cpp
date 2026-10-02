@@ -40,6 +40,7 @@
 #include <condition_variable>
 #include <set>
 #include "shekyl/shekyl_ffi.h"
+#include <cstdlib>
 
 #define MAKE_IPV4_ADDRESS(a,b,c,d) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),0}
 #define MAKE_IPV4_ADDRESS_PORT(a,b,c,d,e) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),e}
@@ -552,6 +553,60 @@ TEST(node_server, operator_onion_is_advertised)
   const auto announced = server.get_announced_address(epee::net_utils::connector_id::tor);
   ASSERT_EQ(announced.host_str(), onion);
   ASSERT_EQ(announced.as<net::tor_address>().port(), 18080);
+}
+
+TEST(node_server, exclusive_onion_does_not_require_tx_proxy)
+{
+  // The managed Tor supplies SOCKS after the command line. Refusing here was
+  // the default posture being unable to dial a named onion. A missing pin
+  // degrades inbound; it must not be what rejects the option.
+  const char *saved = std::getenv("SHEKYL_TOR_BINARY");
+  const std::string saved_copy = saved ? saved : std::string{};
+  ASSERT_EQ(::setenv("SHEKYL_TOR_BINARY", "/no/such/shekyl-tor", 1), 0);
+  auto restore = epee::misc_utils::create_scope_leave_handler([&]() {
+    if (saved)
+      ::setenv("SHEKYL_TOR_BINARY", saved_copy.c_str(), 1);
+    else
+      ::unsetenv("SHEKYL_TOR_BINARY");
+  });
+
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  Server server(cprotocol);
+
+  const auto node_dir = create_node_dir();
+  ASSERT_TRUE(!node_dir.empty());
+  auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir]() {
+    boost::filesystem::remove_all(node_dir);
+  });
+
+  const std::string onion =
+    "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion:12021";
+  std::vector<std::string> args{
+    "--data-dir", node_dir.string(),
+    "--p2p-bind-ip", "127.0.0.1",
+    "--p2p-bind-port", "48119",
+    "--no-igd",
+    "--add-exclusive-node", onion,
+  };
+  boost::program_options::options_description options_description{};
+  cryptonote::core::init_options(options_description);
+  Server::init_options(options_description);
+  boost::program_options::variables_map vm;
+  boost::program_options::store(
+    boost::program_options::command_line_parser(args).options(options_description).run(), vm);
+  boost::program_options::notify(vm);
+  ASSERT_TRUE(server.init(vm));
+
+  test_core offline_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> offline_protocol(offline_core, NULL);
+  Server offline(offline_protocol);
+  const auto offline_dir = create_node_dir();
+  ASSERT_TRUE(!offline_dir.empty());
+  auto auto_remove_offline = epee::misc_utils::create_scope_leave_handler([&offline_dir]() {
+    boost::filesystem::remove_all(offline_dir);
+  });
+  ASSERT_FALSE(offline.init(offline_node_vm(offline_dir, {"--add-exclusive-node", onion})));
 }
 
 TEST(ban, ignores_port)

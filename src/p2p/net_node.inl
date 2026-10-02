@@ -656,13 +656,21 @@ namespace nodetool
       // development flag rather than an operator setting.
     }
 
+    // A named onion creates the tor zone here, before the managed Tor exists.
+    // That zone's SOCKS comes from add_ephemeral_tor_zone, not from --tx-proxy.
+    // Refusing now is what made the default posture unable to dial one onion.
+    const bool managed_tor_supplies_socks =
+      !m_offline
+      && m_nettype != cryptonote::FAKECHAIN
+      && !command_line::get_arg(vm, arg_no_ephemeral_tor);
     for (const auto& zone : m_network_zones)
     {
-      if (zone.second.m_connect == nullptr)
-      {
-        MERROR("Set outgoing peer for " << epee::net_utils::connector_id_to_string(zone.first) << " but did not set --" << arg_tx_proxy.name);
-        return false;
-      }
+      if (zone.second.m_connect != nullptr)
+        continue;
+      if (zone.first == epee::net_utils::connector_id::tor && managed_tor_supplies_socks)
+        continue;
+      MERROR("Set outgoing peer for " << epee::net_utils::connector_id_to_string(zone.first) << " but did not set --" << arg_tx_proxy.name);
+      return false;
     }
 
     auto inbounds = get_anonymous_inbounds(vm);
@@ -830,12 +838,19 @@ namespace nodetool
       MINFO("Ephemeral Tor inbound disabled by --" << arg_no_ephemeral_tor.name);
       return;
     }
-    if (m_network_zones.count(epee::net_utils::connector_id::tor) != 0)
+    // --anonymous-inbound already owns the onion. --tx-proxy does not: it
+    // names the SOCKS address dials use, and the per-boot onion still publishes.
+    // A tor zone that exists only because a named onion was parsed is the same
+    // case — the managed Tor has not started yet, so it is not operator SOCKS.
+    const auto preexisting = m_network_zones.find(epee::net_utils::connector_id::tor);
+    const bool zone_was_present = preexisting != m_network_zones.end();
+    if (zone_was_present && !preexisting->second.m_bind_ip.empty())
     {
-      MINFO("Operator-provisioned tor configuration present (--" << arg_tx_proxy.name
-          << " / --" << arg_anonymous_inbound.name << "); the default ephemeral posture yields to it");
+      MINFO("Operator inbound onion (--" << arg_anonymous_inbound.name
+          << ") owns the tor zone; ephemeral publish yields to it");
       return;
     }
+    const bool socks_from_tx_proxy = zone_was_present && preexisting->second.m_connect != nullptr;
 
     constexpr uint16_t EPHEMERAL_TOR_MAX_STREAMS = 8;
     constexpr uint32_t EPHEMERAL_TOR_BOOTSTRAP_TIMEOUT_SECS = 300;
@@ -876,25 +891,32 @@ namespace nodetool
     // Bind the loopback forward target HERE on port 0 (OS-assigned). A guessed
     // port can already be taken, and the shared bind loop in init() aborts the
     // whole boot on collision. m_bind_ip stays empty so that loop skips this
-    // already-bound server. Zone insertion is the commit: bind failure MUST
-    // erase the zone, or send_txs fail-closes originated txs onto a dead tor
-    // zone whose public bind may still succeed.
+    // already-bound server. A zone this function created is erased if the bind
+    // fails; a zone a named onion already created is left, so the peer is not
+    // dropped with the listener.
     network_zone& zone = add_zone(epee::net_utils::connector_id::tor);
-    zone.m_proxy_address = *proxy_endpoint;
+    // listen_tor installs the managed SOCKS as the dial proxy. When --tx-proxy
+    // already named one, init()'s dial_through_tor writes that address back,
+    // so dials use the operator SOCKS and the onion stays on this managed Tor.
     if (!zone.m_net_server.listen_tor(proxy_endpoint->address, "", "", false,
         reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling(), transport_spans()))
     {
       MERROR("Cannot bind the ephemeral tor forward listener on 127.0.0.1 (OS-assigned port); tearing tor down");
       shekyl_daemon_tor_shutdown();
-      m_network_zones.erase(epee::net_utils::connector_id::tor);
+      if (!zone_was_present)
+        m_network_zones.erase(epee::net_utils::connector_id::tor);
       return;
     }
     const uint16_t local_port = static_cast<uint16_t>(zone.m_net_server.get_binded_port());
 
-    zone.m_connect = &public_connect;
-    set_max_out_peers(zone, -1);
-    m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::tor, zone.m_config.m_net_config.max_out_connection_count);
-    set_max_in_peers(zone, -1);
+    if (!socks_from_tx_proxy)
+    {
+      zone.m_proxy_address = *proxy_endpoint;
+      zone.m_connect = &public_connect;
+      set_max_out_peers(zone, -1);
+      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::tor, zone.m_config.m_net_config.max_out_connection_count);
+      set_max_in_peers(zone, -1);
+    }
     m_ephemeral_tor_alive = true;
 
     const uint16_t virtual_port =
@@ -2615,9 +2637,6 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::invoke_notify_to_peer(const int command, epee::levin::message_writer message, const epee::net_utils::connection_context_base& context)
   {
-    if(is_filtered_command(context.m_remote_address, command))
-      return false;
-
     network_zone& zone = m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector));
     epee::byte_slice msg = message.finalize_notify(command);
     msg = epee::levin::try_compress_message(std::move(msg));

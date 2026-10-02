@@ -168,18 +168,14 @@ was a forward of the miner's loopback p2p port. On that session the
 floor's height went from 1 to 87 in under a minute. That sync is not
 a Tor sync.
 
-Dialing an onion requires `--tx-proxy`, and `--tx-proxy` makes the
-ephemeral onion spawn yield. The floor therefore used one Tor, the
-pinned binary, for both the dial and the inbound onion.
-
-Step 6 failed. From 18:20:23Z through 18:28:39Z the fluff receiver's
-height stayed 1, with one inbound Tor session and no outbound. At
-18:28:23.966Z it logged the remote height 87 and started
-synchronization. `COMMAND_REQUEST_SUPPORT_FLAGS` (command 1007) then
-returned an empty body — `portable_storage` reported packet size 0,
-below the 9-byte header — and the invoke failed with
-`LEVIN_ERROR_FORMAT`. The next line was `Failed to request missing
-objects, dropping connection`. The same sequence repeated. The height
-never left 1, so the spend was not sent and the pool observation was
-not made. That is a finding for #924. The three measurement processes
-were stopped. The standing daemons were left as they were found.
+The only Tor sync attempted was the receiver's, and it failed. The
+floor log has no `session has no connector` and no `map::at`. At
+18:28:24Z the floor logged `Filtered command (#1007)` and sent 0
+bytes; the receiver's `portable_storage` then rejected that empty
+body (`LEVIN_ERROR_FORMAT`), and its own chain request failed to
+send (`Failed to request missing objects, dropping connection`).
+From 18:20:23Z through 18:28:39Z the receiver's height stayed 1,
+with one inbound Tor session and no outbound. The spend was not
+sent. The stem timestamps and the fluff observation are owed after
+the fix, on this same rig. The three measurement processes were
+stopped. The standing daemons were left as they were found.
