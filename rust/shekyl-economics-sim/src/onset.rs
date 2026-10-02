@@ -577,8 +577,9 @@ pub fn onset_report(
         });
     }
 
-    // The fee-era horizon, closed form from production constants.
-    let fee = all_scenarios(params)[0].fee_per_tx;
+    // The fee-era horizon in closed form. It holds only for a fee that is
+    // constant in height, which is the control arm's and not the chain's.
+    let fee = params.fee.per_tx_atomic();
     let bytes_per_tx =
         normal_tx_archival_bytes(crate::burden::honest_leaves_at_closed_shards(KNEE_BAND[2]));
     let w = shekyl_types::SHARD_LENGTH.to_raw();
@@ -878,7 +879,7 @@ mod tests {
         let params = SimParams::default();
         let config = at_horizon(all_scenarios(&params).remove(0));
         let aggs = a1_year_aggs(&params, &config);
-        let fee = config.fee_per_tx;
+        let fee = config.fee.per_tx_atomic();
         let bytes =
             normal_tx_archival_bytes(crate::burden::honest_leaves_at_closed_shards(KNEE_BAND[2]));
         let w = shekyl_types::SHARD_LENGTH.to_raw();
@@ -914,7 +915,7 @@ mod tests {
         let bytes =
             normal_tx_archival_bytes(crate::burden::honest_leaves_at_closed_shards(KNEE_BAND[2]));
         let w = shekyl_types::SHARD_LENGTH.to_raw();
-        let fee = all_scenarios(&params)[0].fee_per_tx;
+        let fee = params.fee.per_tx_atomic();
         let h_at = |v: u64| {
             fee_horizon_years(fee, fee_era_burn_fraction(&params, v), 0.25, 0.10, bytes, w)
         };

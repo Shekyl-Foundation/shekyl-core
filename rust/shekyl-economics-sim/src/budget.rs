@@ -58,6 +58,7 @@ use shekyl_economics::{
 };
 
 use crate::engine::SimParams;
+use crate::fee_model::FeeModel;
 
 const COIN: f64 = 1_000_000_000.0;
 
@@ -68,7 +69,8 @@ pub struct BudgetScenario {
     pub description: String,
     pub sim_years: u64,
     pub get_volume: Box<dyn Fn(u64, u64) -> u64>,
-    pub fee_per_tx: u64,
+    /// The run's fee arm ([`SimParams::fee`]).
+    pub fee: FeeModel,
     pub initial_emitted_fraction: f64,
     pub genesis_height_offset: u64,
 }
@@ -242,7 +244,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
             params.burn_cap,
         );
         let total_fees =
-            (tx_volume as u128 * scenario.fee_per_tx as u128).min(u64::MAX as u128) as u64;
+            (tx_volume as u128 * scenario.fee.per_tx_atomic() as u128).min(u64::MAX as u128) as u64;
         // Canonical escalated entry; n = 0 (no corpus trajectory in this arm —
         // see engine.rs). Genesis-neutral asymptote ⇒ bit-identical to flat.
         let fee_split =

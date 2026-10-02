@@ -6,6 +6,8 @@ use shekyl_economics::{
     split_block_emission, ClosedShardCount, TxVolume,
 };
 
+use crate::fee_model::FeeModel;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct YearSnapshot {
     pub year: u64,
@@ -105,7 +107,9 @@ pub struct ScenarioConfig {
     pub sim_years: u64,
     pub volume: VolumeSchedule,
     pub stake: StakeSchedule,
-    pub fee_per_tx: u64,
+    /// What an ordinary transaction pays. Every scenario takes the run's
+    /// arm ([`SimParams::fee`]); none chooses its own.
+    pub fee: FeeModel,
     pub initial_emitted_fraction: f64,
     pub genesis_height_offset: u64,
     /// Gate-7 derived-lock model. `None` (all legacy scenarios) leaves the
@@ -126,6 +130,9 @@ pub struct SimParams {
     pub staker_pool_share: u64,
     pub staker_emission_share: u64,
     pub staker_emission_decay: u64,
+    /// The run's fee arm: what every scenario charges an ordinary
+    /// transaction (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-1).
+    pub fee: FeeModel,
 }
 
 impl Default for SimParams {
@@ -146,6 +153,7 @@ impl Default for SimParams {
             staker_pool_share: EconomicParams::default().staker_pool_share,
             staker_emission_share: 150_000,
             staker_emission_decay: 900_000,
+            fee: FeeModel::SECTION_12_14_CONTROL,
         }
     }
 }
@@ -232,7 +240,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         let (miner_emission, staker_emission) =
             split_block_emission(effective_reward, emission_share);
 
-        let total_fees_this_block = tx_volume as u128 * config.fee_per_tx as u128;
+        let total_fees_this_block = tx_volume as u128 * config.fee.per_tx_atomic() as u128;
         let total_fees = total_fees_this_block.min(u64::MAX as u128) as u64;
 
         let burn_pct = match (&config.archival_lock, staked_atomic) {
@@ -383,7 +391,7 @@ mod tests {
             stake: StakeSchedule {
                 get_stake_ratio: Box::new(|_b, _bpy, _c| 250_000),
             },
-            fee_per_tx: 100_000_000,
+            fee: crate::fee_model::FeeModel::SECTION_12_14_CONTROL,
             initial_emitted_fraction: 0.0,
             genesis_height_offset: 0,
             archival_lock,

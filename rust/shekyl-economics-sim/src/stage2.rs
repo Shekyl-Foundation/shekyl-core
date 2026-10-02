@@ -303,7 +303,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
             params.burn_base_rate,
             params.burn_cap,
         );
-        let total_fees = (u128::from(tx_volume) * u128::from(config.fee_per_tx))
+        let total_fees = (u128::from(tx_volume) * u128::from(config.fee.per_tx_atomic()))
             .min(u128::from(u64::MAX)) as u64;
         // share = SCALE → the whole burn (pre-split); the candidate re-splits it.
         let whole_burn = compute_burn_split(total_fees, burn_pct, ScaledShare::from_raw(SCALE))
