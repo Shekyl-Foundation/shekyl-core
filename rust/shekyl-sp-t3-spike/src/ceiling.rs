@@ -33,6 +33,7 @@
 //! rule as the rest of the crate ([`crate::measure`]), so a number here and a
 //! number from `pd-f2-diff` cannot come from two definitions.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::measure::{nearest_rank, FailureKind, Observation};
@@ -467,60 +468,165 @@ pub fn completion_line(sizes: &[(u32, &[Observation])], p: u8) -> Result<Line, N
     line_through(&points)
 }
 
-/// A read of one attempt and, if that misses, one retry.
+/// The part of `L`'s four blocks allotted to fetch-plus-retry: two blocks
+/// (`ARCHIVAL_SHARD_FETCH.md`, `SF-D8`, "`L = 4` — why, and how it moves").
+pub const FETCH_SPAN: Duration = Duration::from_secs(240);
+
+/// `L`'s upper falsifier: fetch-plus-retry past six minutes means the retry
+/// budget is too generous, and `L` must not grow to absorb it (same ruling).
+pub const RETRY_CEILING: Duration = Duration::from_secs(360);
+
+/// A read of one attempt and, while attempts miss, up to some number of
+/// retries.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RetriedRead {
-    /// The share of reads in which both attempts missed.
+    /// The share of reads in which every attempt missed, **if attempts were
+    /// independent draws**. On a bad day they are not — circuit failures
+    /// cluster inside a window — so this is a floor on the failure share,
+    /// and nothing is calibrated on it.
     pub failure_rate: f64,
     /// The `p`th percentile of the reads that completed, from the first
     /// attempt's start; `None` when none did.
     pub completed_by: Option<Duration>,
 }
 
-/// What a witness's read looks like when a missed attempt is retried once,
-/// on the attempts actually observed.
+fn as_u128(count: usize) -> u128 {
+    u128::try_from(count).unwrap_or(u128::MAX)
+}
+
+/// What a witness's read looks like when a missed attempt is retried up to
+/// `retries` times, on the attempts actually observed.
 ///
-/// Exact, not sampled: every ordered pair of observed attempts is one read,
-/// the second drawn independently of the first. A first attempt that
-/// completes inside [`DEADLINE`] is the read. One that misses costs what it
-/// took, capped at the deadline — a witness gives up there — and the retry's
-/// time is added to it; if the retry misses too, the read fails.
+/// Exact, not sampled: every ordered `(retries + 1)`-tuple of observed
+/// attempts is one read, each attempt drawn independently of the others. The
+/// read is its first attempt that completes inside [`DEADLINE`], and takes
+/// that attempt's time plus what the misses before it cost. A miss costs what
+/// it took, capped at the deadline — a witness gives up there. If every
+/// attempt misses, the read fails.
 ///
-/// `None` for no observations.
+/// The tuples are counted, not listed: the misses before a completion
+/// contribute only their total, so the totals are tallied once per count of
+/// misses and each is paired with the completions.
+///
+/// `None` for no observations, or for more tuples than a `u128` counts.
 #[must_use]
-pub fn read_with_one_retry(observations: &[Observation], p: u8) -> Option<RetriedRead> {
+pub fn read_with_retries(observations: &[Observation], retries: u32, p: u8) -> Option<RetriedRead> {
     if observations.is_empty() {
         return None;
     }
     let completed = |o: &Observation| o.is_success() && o.elapsed <= DEADLINE;
-    let completions: Vec<Duration> = observations
+    let mut completions: Vec<Duration> = observations
         .iter()
         .filter(|o| completed(o))
         .map(|o| o.elapsed)
         .collect();
+    completions.sort_unstable();
     let spent_on_misses: Vec<Duration> = observations
         .iter()
         .filter(|o| !completed(o))
         .map(|o| o.elapsed.min(DEADLINE))
         .collect();
+    let n = as_u128(observations.len());
+    let attempts = retries.checked_add(1)?;
+    n.checked_pow(attempts)?;
 
-    let n = observations.len();
-    let mut reads: Vec<Duration> =
-        Vec::with_capacity(completions.len() * (n + spent_on_misses.len()));
-    for first in &completions {
-        // The retry is never taken; one read per second draw keeps every
-        // ordered pair the same weight.
-        reads.extend(std::iter::repeat_n(*first, n));
+    // For each count of misses before the completion: every total those
+    // misses can have cost with the number of ordered tuples that cost it,
+    // and the weight of the attempts the read never took. One read per
+    // untaken draw keeps every tuple the same weight.
+    let mut layers: Vec<(Vec<(Duration, u128)>, u128)> = Vec::new();
+    let mut spent: BTreeMap<Duration, u128> = BTreeMap::from([(Duration::ZERO, 1)]);
+    for misses_first in 0..=retries {
+        let untaken = n.pow(retries - misses_first);
+        layers.push((spent.iter().map(|(t, w)| (*t, *w)).collect(), untaken));
+        if misses_first < retries {
+            let mut next: BTreeMap<Duration, u128> = BTreeMap::new();
+            for (total, tuples) in &spent {
+                for miss in &spent_on_misses {
+                    *next.entry(*total + *miss).or_insert(0) += tuples;
+                }
+            }
+            spent = next;
+        }
     }
-    for spent in &spent_on_misses {
-        reads.extend(completions.iter().map(|retry| *spent + *retry));
-    }
-    reads.sort_unstable();
-    let misses = as_f64(spent_on_misses.len());
+    let completed_by = |t: Duration| -> u128 {
+        layers
+            .iter()
+            .map(|(spent, untaken)| {
+                // Totals rise, so the first one past `t` ends the walk.
+                spent
+                    .iter()
+                    .map_while(|(total, tuples)| {
+                        let left = t.checked_sub(*total)?;
+                        let done = completions.partition_point(|c| *c <= left);
+                        Some(tuples * untaken * as_u128(done))
+                    })
+                    .sum::<u128>()
+            })
+            .sum()
+    };
+
+    // The crate's nearest rank, over counted reads: the smallest time by
+    // which `ceil(p * reads / 100)` of the completed reads had completed. It
+    // is an observed total, because the count only rises at one.
+    let longest = longest_read(retries);
+    let all_completed = completed_by(longest);
+    let rank = (u128::from(p) * all_completed)
+        .div_ceil(100)
+        .clamp(1, all_completed.max(1));
+    let nearest = (all_completed > 0).then(|| {
+        let (mut low, mut high) = (0_u64, u64::try_from(longest.as_nanos()).unwrap_or(u64::MAX));
+        while low < high {
+            let middle = low + (high - low) / 2;
+            if completed_by(Duration::from_nanos(middle)) >= rank {
+                high = middle;
+            } else {
+                low = middle + 1;
+            }
+        }
+        Duration::from_nanos(low)
+    });
+    let miss_share = as_f64(spent_on_misses.len()) / as_f64(observations.len());
     Some(RetriedRead {
-        failure_rate: (misses * misses) / (as_f64(n) * as_f64(n)),
-        completed_by: nearest_rank(&reads, p),
+        failure_rate: miss_share.powi(i32::try_from(attempts).unwrap_or(i32::MAX)),
+        completed_by: nearest,
     })
+}
+
+/// The longest a read of one attempt and `retries` retries can take: every
+/// attempt running to [`DEADLINE`]. No day's weather moves it, and neither
+/// does a `P` that stalls each attempt on purpose.
+#[must_use]
+pub fn longest_read(retries: u32) -> Duration {
+    DEADLINE.saturating_mul(retries.saturating_add(1))
+}
+
+/// `SF-D6`'s retry budget, read on one day's attempts at one size: the
+/// largest retry count that satisfies both of
+///
+/// - the retried read completes inside [`FETCH_SPAN`] at p99 on those
+///   attempts, and
+/// - no read can run past [`RETRY_CEILING`] ([`longest_read`]).
+///
+/// The first is the measurement's. It does not bound the count by itself:
+/// once fewer than 1 % of reads reach another attempt, more retries stop
+/// moving the p99. The second is what bounds it, and it is arithmetic on the
+/// deadline — so the budget cannot trip `L`'s upper falsifier on any day.
+///
+/// `None` when the observations give no retried read, or none completes.
+#[must_use]
+pub fn retry_budget(observations: &[Observation]) -> Option<u32> {
+    let mut budget = None;
+    for retries in 0.. {
+        if longest_read(retries) > RETRY_CEILING {
+            break;
+        }
+        match read_with_retries(observations, retries, 99)?.completed_by {
+            Some(p99) if p99 <= FETCH_SPAN => budget = Some(retries),
+            _ => break,
+        }
+    }
+    budget
 }
 
 #[cfg(test)]
@@ -818,17 +924,95 @@ mod tests {
         ];
         // 16 pairs. First completes: 8 reads (10 x4, 20 x4). First misses and
         // the retry completes: 30+10, 30+20, 120+10, 120+20. Both miss: 4.
-        let read = read_with_one_retry(&observations, 100).expect("observations");
+        let read = read_with_retries(&observations, 1, 100).expect("observations");
         assert!((read.failure_rate - 0.25).abs() < 1e-12);
         assert_eq!(read.completed_by, Some(Duration::from_secs(140)));
         // Median of the twelve completed reads: the sixth, a first-attempt 20.
         assert_eq!(
-            read_with_one_retry(&observations, 50)
+            read_with_retries(&observations, 1, 50)
                 .expect("observations")
                 .completed_by,
             Some(Duration::from_secs(20))
         );
-        assert_eq!(read_with_one_retry(&[], 50), None);
+        assert_eq!(read_with_retries(&[], 1, 50), None);
+    }
+
+    /// The counted read is the listed one. Every ordered tuple of attempts
+    /// is walked here, one read each, and the percentile taken by the crate's
+    /// rule over the list — for no retry, one, two and three, at every
+    /// percentile, on attempts whose miss costs and completions all differ.
+    #[test]
+    fn a_counted_read_equals_the_read_listed_tuple_by_tuple() {
+        let observations = [
+            ok(7),
+            ok(31),
+            ok(64),
+            ok(119),
+            ok(121), // a success past the deadline: a miss costing 120
+            Observation::failure(Duration::from_secs(13), FailureKind::Circuit),
+            Observation::failure(Duration::from_secs(58), FailureKind::Truncated),
+        ];
+        let n = observations.len();
+        for retries in 0..=3_u32 {
+            let attempts = retries as usize + 1;
+            let mut listed: Vec<Duration> = Vec::new();
+            let mut failed = 0_usize;
+            for tuple in 0..n.pow(retries + 1) {
+                let mut spent = Duration::ZERO;
+                let mut done = None;
+                let mut rest = tuple;
+                for _ in 0..attempts {
+                    let o = &observations[rest % n];
+                    rest /= n;
+                    if o.is_success() && o.elapsed <= DEADLINE {
+                        done = Some(spent + o.elapsed);
+                        break;
+                    }
+                    spent += o.elapsed.min(DEADLINE);
+                }
+                match done {
+                    Some(t) => listed.push(t),
+                    None => failed += 1,
+                }
+            }
+            listed.sort_unstable();
+            for p in 0..=100_u8 {
+                let read = read_with_retries(&observations, retries, p).expect("observations");
+                assert_eq!(
+                    read.completed_by,
+                    nearest_rank(&listed, p),
+                    "{retries} retries, p{p}"
+                );
+                let share = as_f64(failed) / as_f64(n.pow(retries + 1));
+                assert!((read.failure_rate - share).abs() < 1e-12);
+            }
+        }
+    }
+
+    /// The budget is the larger of the counts the span admits, and never
+    /// more than the ceiling admits whatever the day was like.
+    #[test]
+    fn the_retry_budget_is_bounded_by_the_ceiling_and_by_the_day() {
+        // A clean day: every count fits the span, so the ceiling decides.
+        // Three attempts of 120 s are six minutes; four are eight.
+        assert_eq!(longest_read(2), RETRY_CEILING);
+        assert!(longest_read(3) > RETRY_CEILING);
+        let clean: Vec<Observation> = (0..20).map(|_| ok(10)).collect();
+        assert_eq!(retry_budget(&clean), Some(2));
+
+        // A day on which nine attempts in ten run to the deadline: a second
+        // retry's p99 is past the span (120 + 120 + 100), a first's is not
+        // (120 + 100), so the day decides.
+        let mut bad: Vec<Observation> = vec![ok(100)];
+        bad.extend((0..9).map(|_| ok(500)));
+        let two = read_with_retries(&bad, 2, 99).expect("observations");
+        assert_eq!(two.completed_by, Some(Duration::from_secs(340)));
+        assert_eq!(retry_budget(&bad), Some(1));
+
+        // Nothing completes: there is no read to budget for.
+        let dead: Vec<Observation> = (0..5).map(|_| missed(FailureKind::Circuit)).collect();
+        assert_eq!(retry_budget(&dead), None);
+        assert_eq!(retry_budget(&[]), None);
     }
 
     /// The worse of the two PoW-off days reads as
@@ -878,11 +1062,26 @@ mod tests {
         assert!((tail.at(HEAVIEST_SHARD_BYTES) - 120.8).abs() < 0.05);
 
         let (_, at_largest) = ladder.last().expect("three sizes");
-        let read = read_with_one_retry(at_largest, 99).expect("observations");
+        let read = read_with_retries(at_largest, 1, 99).expect("observations");
         assert!((read.failure_rate - 0.0402).abs() < 5e-5, "{read:?}");
         let p99 = read.completed_by.expect("reads completed").as_secs_f64();
         assert!((p99 - 149.7).abs() < 0.05, "p99 {p99}");
         // Over two minutes and under six: neither arm of `L`'s falsifier.
         assert!(p99 > 120.0 && p99 < 360.0);
+
+        // §10.7, `SF-D6`'s budget: a second retry completes inside the two
+        // blocks at p99, and so would a third — the day does not bound the
+        // count. The ceiling does, at two.
+        let p99_at = |retries: u32| {
+            read_with_retries(at_largest, retries, 99)
+                .expect("observations")
+                .completed_by
+                .expect("reads completed")
+                .as_secs_f64()
+        };
+        assert!((p99_at(2) - 190.4).abs() < 0.05, "{}", p99_at(2));
+        assert!((p99_at(3) - 202.9).abs() < 0.05, "{}", p99_at(3));
+        assert!(p99_at(3) < FETCH_SPAN.as_secs_f64());
+        assert_eq!(retry_budget(at_largest), Some(2));
     }
 }

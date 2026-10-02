@@ -12,17 +12,19 @@
 //!
 //! For every `soak@<bytes>` arm it prints the miss rate with its 95 % Wilson
 //! interval, the circuit and transfer shares, and the governing percentile.
-//! Then the decision at the largest object, and the fit over the ladder with
-//! the ceiling it gives or the reason it gives none. All of it is
+//! Then the decision at the largest object, the fit over the ladder with the
+//! ceiling it gives or the reason it gives none, and the read of one attempt
+//! and its retries with the retry budget that follows. All of it is
 //! [`shekyl_sp_t3_spike::ceiling`]; this file only reads and prints.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use shekyl_sp_t3_spike::ceiling::{
-    completion_line, decide, fit, read_with_one_retry, Decision, Fit, Line, NoLine, Rejection,
-    SizeReading, DEADLINE, GOVERNING_PERCENTILE, HEAVIEST_SHARD_BYTES,
-    LINEARITY_TOLERANCE_PER_CENT, OVERSHOOT_BYTES, TARGET_MISS_PER_CENT,
+    completion_line, decide, fit, longest_read, read_with_retries, retry_budget, Decision, Fit,
+    Line, NoLine, Rejection, SizeReading, DEADLINE, FETCH_SPAN, GOVERNING_PERCENTILE,
+    HEAVIEST_SHARD_BYTES, LINEARITY_TOLERANCE_PER_CENT, OVERSHOOT_BYTES, RETRY_CEILING,
+    TARGET_MISS_PER_CENT,
 };
 use shekyl_sp_t3_spike::measure::{parse_row, Observation, ROW_HEADER};
 
@@ -71,6 +73,10 @@ fn size_line(reading: &SizeReading) {
 
 /// The completion percentiles §4.1a fits.
 const COMPLETION_PERCENTILES: [u8; 3] = [50, 90, 99];
+
+/// The retry counts the read is printed for: none, then one past the count
+/// the ceiling admits, so the line that does not fit is on the page.
+const RETRY_LADDER: [u32; 4] = [0, 1, 2, 3];
 
 fn line_words(line: &Line) -> String {
     format!(
@@ -184,26 +190,39 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let (largest_bytes, largest_observations) = ladder.last().expect("non-empty, checked above");
     println!(
-        "one attempt and one retry at {largest_bytes} B, over every ordered pair of its {} attempts (a miss costs what it took, at most {} s):",
+        "a read of one attempt and its retries at {largest_bytes} B, over every ordered tuple of its {} attempts (a miss costs what it took, at most {} s; the failure share assumes independent attempts and is a floor):",
         largest_observations.len(),
         DEADLINE.as_secs()
     );
-    let completed_by = |p: u8| {
-        read_with_one_retry(largest_observations, p)
-            .and_then(|read| read.completed_by)
-            .map_or_else(
-                || "never".to_owned(),
-                |t| format!("{:.1} s", t.as_secs_f64()),
-            )
-    };
-    let failure = read_with_one_retry(largest_observations, 50).map_or(0.0, |r| r.failure_rate);
-    println!(
-        "  both attempts miss {:.2} %; completed reads p50 {}  p90 {}  p99 {}",
-        per_cent(failure),
-        completed_by(50),
-        completed_by(90),
-        completed_by(99)
-    );
+    for retries in RETRY_LADDER {
+        let completed_by = |p: u8| {
+            read_with_retries(largest_observations, retries, p)
+                .and_then(|read| read.completed_by)
+                .map_or_else(
+                    || "never".to_owned(),
+                    |t| format!("{:.1} s", t.as_secs_f64()),
+                )
+        };
+        let failure =
+            read_with_retries(largest_observations, retries, 50).map_or(0.0, |r| r.failure_rate);
+        println!(
+            "  {retries} {}: every attempt misses {:5.2} %; completed reads p50 {}  p90 {}  p99 {}; longest possible {} s",
+            if retries == 1 { "retry  " } else { "retries" },
+            per_cent(failure),
+            completed_by(50),
+            completed_by(90),
+            completed_by(99),
+            longest_read(retries).as_secs()
+        );
+    }
+    match retry_budget(largest_observations) {
+        Some(budget) => println!(
+            "retry budget: {budget} — the largest count whose p99 is inside the {} s span and whose longest read is not past {} s",
+            FETCH_SPAN.as_secs(),
+            RETRY_CEILING.as_secs()
+        ),
+        None => println!("retry budget: none — no read completes"),
+    }
     Ok(())
 }
 
