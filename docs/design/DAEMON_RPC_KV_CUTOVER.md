@@ -381,7 +381,7 @@ value, which is its own audit (FOLLOWUPS) because some absences are legitimate
 typedef struct shekyl_rpc_chain_tip_facts {
     uint64_t chain_height;      // top block height + 1
     uint8_t  top_hash[32];
-    uint64_t target_height;     // raw core target; "0 when synchronized" is the handler's rule
+    uint64_t target_height;     // raw core target; 0 is a core-reported absence, not "synchronized"
     uint8_t  synchronized;
     uint8_t  release_build;     // SHEKYL_VERSION_IS_RELEASE (build-generated, C++-owned)
     uint8_t  reserved[6];

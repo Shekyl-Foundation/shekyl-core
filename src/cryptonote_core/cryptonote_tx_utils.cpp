@@ -28,12 +28,10 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
-// Shekyl: this file is consensus-oracle / miner-tx construction
-// (construct_miner_tx, construct_tx_* used by tests/core_tests and the
-// daemon). The product spend path is the Rust builder
-// (shekyl-tx-builder + shekyl-engine-core). Do not grow a second wallet
-// spend path here. See docs/FOLLOWUPS.md "C++ transaction builder is
-// test-only".
+// Shekyl: this file is the daemon's miner-transaction and block-hash
+// oracle (construct_miner_tx, generate_genesis_block, get_block_longhash).
+// The wallet spend builder is shekyl-tx-builder. There is no second spend
+// path here; do not add one.
 
 #include <unordered_set>
 #include <random>
