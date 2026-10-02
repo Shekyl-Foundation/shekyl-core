@@ -14,7 +14,9 @@ sequence §9.1 fixes (2026-09-13): (a0) the v2 pass-countersignature
 verifier alone → (a) serve side → (b) `shekyl-p-fetch` → (c) W₂ then
 `N`. This file stays in `docs/design/` because it still owns named
 residue — `L` (`SF-D8`; `archival_attestation_anchor_lag_blocks = 4`
-PROVISIONAL; drop-to-3 is a candidate, not a pin), Sub-PR 2
+PROVISIONAL; it holds on the 2026-10-02 per-byte re-derivation, which
+withdrew the drop-to-3 candidate, and `SF-D6`'s retry budget is still
+owed as a number), Sub-PR 2
 (`PDM-Q6`), and SH-2. The integer `N` (`SF-D7`;
 `shekyl_p_fetch::MAX_INFLIGHT = 8`) and the W₂ measurement are
 discharged. Archives to `docs/completed/` when this file owns no named
@@ -1093,6 +1095,19 @@ soak p99 = 86.06 s; both under 120 s. Verdict: DROP-TO-3 CANDIDATE —
 necessary, not sufficient. Seven attempts of the cold p99 fit under
 six minutes. `L` stays 4 until fetch-plus-retry exists (`SF-D6` /
 TJ-D). Soak p99 does not walk the candidate back and does not pin.
+
+**W₂ 2026-10-02 (size ladder; `ARCHIVAL_SHARD_T_DERIVATION.md` §10.6):**
+the span is restated **per byte**, on the worse of the days measured, as
+the design owner ruled. At the governing percentile a fetch takes
+12.09 s + bytes / 71,606 B/s: **56.1 s** for the heaviest shard at
+`W = 3,000,000 B` (3,149,400 B). That replaces "~20 s for 3.33 MB"
+above, which was a burst floor. One attempt and one retry of the largest
+served object, each ending at 120 s, complete by **149.7 s at p99** and
+fail outright in 4.0 % of reads. Verdict: **`L = 4` holds** — over two
+minutes, so the drop-to-3 candidate is withdrawn; under six, so the
+retry budget is not shown too generous. Two blocks of span are exactly
+what one attempt and one retry can take, so `L = 4` fits a one-retry
+budget and no larger one. `SF-D6`'s budget is still owed as a number.
 
 **Residuals, recorded rather than inherited:**
 

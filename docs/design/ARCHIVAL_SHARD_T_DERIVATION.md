@@ -29,7 +29,11 @@ confirmed; a pruned form's length is measured at serve time from full segments (
 (iv)), which lifts the cutover's blocker; and `SHT-8`'s two residues have owners. **The
 W₂ run is read (2026-10-02, §10.5): with PoW on, 4.1 % of 1× fetches missed (95 %
 interval 2.4 – 6.9 %) against the 0.30 target, so `W = 3,000,000 B` stands on `U1a` and
-is provisional only on `U1b`.** Identifier families **`SHT-`** (findings) and
+is provisional only on `U1b`.** **Three rulings on that reading the same day (§10.6):
+`p_attempt = 0.30` is retained, re-grounded as a bound the measurements support; the
+PoW finding is "no measurable cost, sign unresolved"; and `L`'s fetch span is
+re-derived per byte on the worse day — `L = 4` holds, which closes `SHT-7`.**
+Identifier families **`SHT-`** (findings) and
 **`SHT-Q`** (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
 (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a) — 105 prefixes
@@ -892,7 +896,7 @@ that gate's bookkeeping:
 | **`SHT-2`** | The JSON comment's *"typical shard at ~16.7 KB/tx lands near 3.33 MB"* holds only under the **non-coinbase ordinal**. Under the landed storage-id domain, 3.33 MB is the *saturation* case; at 1 listed tx/block a shard holds ~1.7 MB. The sizing rationale presumes the answer to `SHT-Q1`. | CONFIRMED |
 | **`SHT-3`** | `SF-D7` still states *"`N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`)"* ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):183). Item 5 retired the whole-shard materialise and refuted F32's reason 2 on that ground. Stale premise on a RULED row, and it is the text a future reader would use to derive a memory bound on `T`. | STALE TEXT on a RULED row — owner `SF-` |
 | **`SHT-4`** | `U1` is not bounded by `CHALLENGE_RESPONSE_BLOCKS` (500 blocks ⇒ a 10.8 GB budget against a 3.34 MB shard) and the memory leg is retired by item 5. **AMENDED on review:** the first pass then derived the real bound against the 180 KB/s *burst floor* and reported the row as slack, having missed W₂'s **measured** single-attempt figures on the same page (`:1091-1095`). On the measurement the heavy-end ceiling is ~[140, 490] and **`T = 200` is inside it** — `U1a` is unresolved at 200, not slack. The steering prediction that `U1` is the bound most likely to set `T` is **reinstated**; what was wrong in it was only the denominator. | CONFIRMED, then AMENDED — the amendment is the round's headline |
-| **`SHT-7`** | **`L`'s fetch-span component is justified by a byte count from the retired segment, and its own page already contradicts it.** `L = 4`'s span was sized on "~20 s for 3.33 MB" (`ARCHIVAL_SHARD_FETCH.md`:1074-1090, the 180 KB/s floor); W₂ at `:1091-1095` then measured **48.27 / 86.06 s** for the same object — 2.4–4.3× worse — and `L` stayed 4 on a *different* argument ("seven attempts of the cold p99 fit under six minutes"). So the span text is stale relative to the measurement one paragraph below it, and **deriving `T` from that span would be circular**: it would feed the retired 3.33 MB back into `T`'s own bound, which is exactly what this round was opened to remove. The independent half is `SF-D6`'s retry budget; that is the part to keep. Restate `L`'s span **per byte**, or re-pin `T` and `L` together — but do not call selecting inside the current span "the cheaper option", which the first pass did. | CONFIRMED — owner `SF-`, and it is why §4's rule selects from the lower edge |
+| **`SHT-7`** | **`L`'s fetch-span component is justified by a byte count from the retired segment, and its own page already contradicts it.** `L = 4`'s span was sized on "~20 s for 3.33 MB" (`ARCHIVAL_SHARD_FETCH.md`:1074-1090, the 180 KB/s floor); W₂ at `:1091-1095` then measured **48.27 / 86.06 s** for the same object — 2.4–4.3× worse — and `L` stayed 4 on a *different* argument ("seven attempts of the cold p99 fit under six minutes"). So the span text is stale relative to the measurement one paragraph below it, and **deriving `T` from that span would be circular**: it would feed the retired 3.33 MB back into `T`'s own bound, which is exactly what this round was opened to remove. The independent half is `SF-D6`'s retry budget; that is the part to keep. Restate `L`'s span **per byte**, or re-pin `T` and `L` together — but do not call selecting inside the current span "the cheaper option", which the first pass did. | CONFIRMED — owner `SF-`, and it is why §4's rule selects from the lower edge. **CLOSED 2026-10-02 (§10.6 item 3):** the span is restated per byte on the worse measured day and `L = 4` holds |
 | **`SHT-5`** | `U1b` — an honest server's sustained egress on the rule-76 floor device — **has no authority anywhere in the tree**. The only transport figure (180 KB/s) is requester-side and a burst floor from a null result. This is the one bound that cannot be closed by reasoning. | OPEN — FOLLOWUPS row, measurement owed |
 | **`SHT-6`** | `rust/shekyl-economics-sim/src/burden.rs:33-39`'s `SHARD_BYTES` comment derives 3.33 MB from `SEGMENT_LEAF_COUNT × ~128 B` — the retired **leaf-segment** estimate — while presenting it as the "§2 corpus figure". Corrected in this PR (the only code this round touches). | FIXED here |
 | **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner once the ramp is on, with no economics changed** (it ships flat, so the effect is latent — `SCC-Q2`), and every `T` re-pin thereafter moving when the staker share saturates. **It is a consensus operand, not an economics knob.** `n` reaches consensus through `Blockchain::parent_frozen_segment_count` → `validate_miner_transaction` (`src/cryptonote_core/blockchain.cpp:1494-1508`), derived from `get_curve_tree_leaf_count()` — the **retired leaf geometry** — and read at a pinned parent state with a throwing assert (*"escalation operand read-point violated"*). So the coinbase's fee split depends on it. **CORRECTED 2026-09-27 (`SCC-Q2`'s ruling):** the stronger claim this row first made — *"a wrong re-key changes which coinbases are valid"* — holds only **once the escalation is switched on**. It ships **flat**: `shekyl_escalation_asymptote_share` equals the floor `shekyl_staker_pool_share` (`config/economics_params.json:16-18`, *"the DELIBERATE pre-ceremony NEUTRAL value"*), so the split is 25 % whatever `n` is and a wrong re-key changes no coinbase's validity **today**. The requirement that the re-key be one atomic C++/Rust change is unchanged, and its reason is sharper: the operand is computed on both sides, and a mismatch that is harmless while flat becomes a chain split the moment the GF-7 ceremony raises the asymptote. Likewise the ~65× figure bites only after the ceremony. **Blast radius, otherwise bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so what it clocks is **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table. **Owners RULED 2026-10-01 (§10.4):** `n`'s re-key landed in the Rust validator on 2026-09-30; `g(age)`'s segment-keyed no-segment branch is re-keyed in the **shard-count cutover** ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md)), Rust-side — **LANDED 2026-10-01** (`ShardClose`, `shard_close`; falsifier run, §2's falsifier table); `escalation_knee_n`'s re-derivation is the **sim lane's**, per `SCC-Q2` — **LANDED 2026-10-01** (`2,250,000` closed shards, `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13) |
@@ -926,7 +930,8 @@ Each is a FOLLOWUPS row, not work for this round:
   equation in two unknowns, which is why `U1a` is an interval rather than a
   number and why the 180 KB/s floor is still load-bearing in `L`'s text. The
   harness exists (PR #746). This is the measurement that would make a derivation
-  possible, and it also re-grounds `L`'s span per byte.
+  possible, and it also re-grounds `L`'s span per byte. **Run and read 2026-10-02
+  (§10.5, §10.6).**
 
 ---
 
@@ -1763,6 +1768,8 @@ ceiling is nowhere near 3 MB. It does not say where the ceiling is.
 The measured single-attempt miss at the 1× object, PoW on, is **0.041** in this window.
 Whether the window is recalibrated on a measured value is the design owner's, and is
 posed here, not decided. One thing a recalibration has to weigh is the next paragraph.
+**Answered 2026-10-02 (§10.6): 0.30 is retained, re-grounded as a bound the
+measurements support.**
 
 **The PoW-off readings beside it**, fitted the same way, as §10.1 requires:
 
@@ -1788,11 +1795,12 @@ percentile.
 | 1,663,488 B | 0.975 → 0.975, immaterial | 8.59 → 8.02 s, inconclusive | 28.38 → 19.83 s, inconclusive |
 | 3,326,976 B | 0.950 → 0.962, inconclusive | 11.29 → 11.10 s, inconclusive | 49.16 → 27.48 s, **MATERIAL** |
 
-- **No material PoW cost was detected.** No judged statistic is materially worse
-  with PoW on. That is weaker than "PoW costs nothing", and the intervals say how
-  much weaker: on eight of the nine the interval excludes a cost larger than the
-  margin; on the ninth, p90 at the ¼× object, it does not (6.8 s faster to 4.8 s
-  slower, against ±2.0 s), so there a cost is neither shown nor ruled out.
+- **No measurable PoW cost; the sign is unresolved** (the finding as ruled, §10.6).
+  No judged statistic is materially worse with PoW on. That is weaker than "PoW
+  costs nothing", and the intervals say how much weaker: on eight of the nine the
+  interval excludes a cost larger than the margin; on the ninth, p90 at the ¼×
+  object, it does not (6.8 s faster to 4.8 s slower, against ±2.0 s), so there a
+  cost is neither shown nor ruled out.
 - **One statistic is material, and in PoW's favour:** the 1× p90 is 21.7 s lower with
   PoW on (95 % interval −29.6 to −5.7 s against a margin of ±4.9 s). §4.1a sends a
   material PoW *cost* to Rick as a `SPIKE-F-15` finding; this is a material difference
@@ -1817,6 +1825,96 @@ into the interleaved run. Host state at each window is in the internal usage led
 **What this replaces.** §9.3 held `U1a`'s ceiling as an interval, 4.49 to 16 MB, from
 one object size. It is replaced by a decision that needs no model (item 1) and by
 fitted maxima of 7.6 MB in the worst window read and 45.5 MB in the governing one,
-both extrapolations past 3.33 MB. `L`'s fetch span is not re-derived here: with PoW
-off the fitted rate is three and a half times higher on the second day than on the
-first, and a constant provisioned from either would be provisioned from a day.
+both extrapolations past 3.33 MB. `L`'s fetch span is not re-derived in this
+subsection: with PoW off the fitted rate is three and a half times higher on the
+second day than on the first, so which day to provision from is a ruling, not a
+reading. §10.6 item 3 gives it: the worse day.
+
+### 10.6 Rulings on the reading — 2026-10-02
+
+Three rulings from the design-owner lane on §10.5, made on the PR that carries it
+(#932, reviewed at `5bd974090`) and relayed by Rick the same day. Each is recorded as
+given, then grounded.
+
+**1. `p_attempt = 0.30` is retained, re-grounded from stand-in to measured-supported.**
+
+> `p_attempt = 0.30` is retained as the window's calibration, now measured-supported:
+> worst observed day 0.20 (upper 0.238); typical PoW-on 0.041. Reopens if any measured
+> window's upper bound exceeds 0.30. Tightening requires a multi-day series that
+> characterizes the bad-day tail, not a single good window.
+
+The reason is the direction of the error. The failure window has to hold on a bad Tor
+day. Calibrated on 0.04, a day like the soak's — 20 % of fetches missed, three
+quarters of those circuit failures that no shard length changes — would push honest
+holders through the window and slash them falsely. So the value does not move, and what changes is what it
+is: a bound three windows sit under, with the condition that reopens it.
+
+- The constant's label says so where it is defined
+  (`rust/shekyl-economics-sim/src/mn_feasibility.rs`, `MissSources::p_attempt` and the
+  report it prints). No value changes, so no sim verdict moves.
+- *Reopens:* a measured window whose 1× miss interval has its upper bound above 0.30.
+- *Does not reopen it:* a good window. Tightening is a multi-day question.
+
+**2. The PoW finding: no measurable PoW cost; sign unresolved.**
+
+> Record it as showing no cost, with the sign unresolved. Variation between days is
+> larger than variation between postures, so this design can't attribute the
+> PoW-favourable p90 difference. "No measurable PoW penalty" is the finding. "PoW
+> helps" isn't one.
+
+Grounded on the two comparisons §10.5 reports: the difference between the two PoW-off
+days is larger than the difference between the postures on eight of the nine judged
+statistics — every one but the 1× p90, which is the one the posture comparison found
+material. So the favourable p90 is recorded as unattributed, and nothing in this record
+says PoW helps. §10.5's wording and `SP_T3_SKELETON_MEASUREMENT.md` §19b carry it that
+way.
+
+**3. `L`'s fetch span is re-derived per byte against the worse day (`SHT-7`).**
+
+> Re-derive it against the worse day; don't wait. `L`'s own ruling says the asymmetry
+> decides the direction, and it errs large. The pessimistic per-byte rate is the right
+> input, and more days can only refine it.
+
+`L = 4`'s span was sized on "~20 s for 3.33 MB", a burst floor from a null result
+(`ARCHIVAL_SHARD_FETCH.md`, `SF-D8`). Per byte, on the restart's PoW-off soak
+(2026-09-30), at the heaviest shard `W + 149,400 B = 3,149,400 B`:
+
+| Reading, worse day | Line | At 3,149,400 B |
+|---|---|---|
+| governing percentile (`t₇₀`, all attempts) | 12.09 s + bytes / 71,606 B/s | **56.1 s** |
+| p90 of completions | 20.73 s + bytes / 74,639 B/s | 62.9 s |
+| p99 of completions | 54.94 s + bytes / 47,851 B/s | 120.8 s |
+
+So the span's fetch component is **56.1 s at the governing percentile**, nearly three
+times the retired figure for fewer bytes, and a single attempt's p99 fills one block.
+
+`L`'s ruling allots **two blocks, 240 s, to fetch-plus-retry**, and states its own
+falsifier on the p99 of that: under two minutes, drop to 3; over six, the retry budget
+is too generous and `L` must not track it upward. Read on the worse day, one attempt
+and one retry of the 1× object — which is larger than the heaviest shard, so it bounds
+it from above — over every ordered pair of that day's 489 attempts, a miss costing what
+it took and at most the 120 s deadline:
+
+- both attempts miss in **4.02 %** of reads;
+- reads that complete do so by 24.9 s (p50), 85.4 s (p90) and **149.7 s (p99)**.
+
+**`L = 4` holds.** 149.7 s is over two minutes and under six, so neither arm of the
+falsifier fires, and it is inside the two blocks. The 2026-09-16 "drop-to-3 candidate"
+was read off single-attempt p99s and is withdrawn: on this day the retried read's p99
+is two and a half minutes, and even in the PoW-on window it is 128.7 s.
+
+Two blocks are also exactly the most a read of one attempt and one retry can take when
+each ends at the 120 s deadline. That is the sense in which `L = 4` and a one-retry
+budget fit each other, and it marks what this reading does **not** settle: `SF-D6`'s
+retry budget is still not a number. A second retry could run to 360 s, past the span;
+by `L`'s own ruling that would be the budget's defect, not a reason to raise `L`.
+
+This closes `SHT-7`'s circularity: `L`'s span no longer rests on a byte count from the
+retired segment, and `W` was not selected inside a span that was sized on it. More
+days refine the rate; under the ruling they move `L` only through the falsifier.
+
+Reproduce, from `rust/`:
+
+```text
+cargo run --release -p shekyl-sp-t3-spike --bin pd-f2-ceiling -- ../docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv
+```

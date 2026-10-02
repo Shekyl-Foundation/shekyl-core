@@ -10,13 +10,23 @@
   (`ARCHIVAL_SHARD_T_DERIVATION.md` §10.5). The provisional shard length
   stands on the transport ceiling; it is now provisional only on the
   server-egress measurement (`U1b`). No constant changes.
-- The PoW comparison detected no material cost on any judged statistic, and
-  one material difference in PoW's favour that the design cannot attribute
-  (`SP_T3_SKELETON_MEASUREMENT.md` §19b). Two PoW-off windows a day apart
-  differ by more than the postures do.
+- The PoW comparison shows no measurable cost on any judged statistic, with
+  the sign unresolved: one difference is material in PoW's favour, and the
+  design cannot attribute it (`SP_T3_SKELETON_MEASUREMENT.md` §19b). Two
+  PoW-off windows a day apart differ by more than the postures do.
+- `p_attempt = 0.30`, the failure window's calibration, is retained and is no
+  longer a stand-in: every window read sits under it (worst day 0.20, 95 %
+  upper bound 0.238). It reopens if a measured window's upper bound exceeds
+  it; a single good window never tightens it. The label in
+  `shekyl-economics-sim` says so; no value changes.
+- `L = 4` holds, re-derived per byte on the worse measured day: a fetch of
+  the heaviest shard takes 56.1 s at the governing percentile, and one
+  attempt and one retry complete by 149.7 s at p99. This replaces the
+  "~20 s for 3.33 MB" its span was sized on (`SHT-7`).
 - `shekyl-sp-t3-spike` gains `pd-f2-ceiling`, which reads one observations
   file as §10.1's analysis: miss rate with its Wilson interval, circuit apart
-  from transfer misses, the fit and the ceiling or the reason there is none.
+  from transfer misses, the fit and the ceiling or the reason there is none,
+  the span at the heaviest shard, and the read of one attempt and one retry.
   The three observation files are in `docs/benchmarks/`.
 
 ### Daemon RPC — `target_height` is the core's target (`CORE_RPC_VERSION` 3.40)
