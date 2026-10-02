@@ -90,6 +90,15 @@
   (`885f700d… → 05a1ba28…`). The economics sim now calls `shekyl_types::shard_of`
   and the `shekyl-tx-weight` predictors; its re-measured verdicts, including
   one that flipped, are in `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13.
+  `--stage2` also prints the **onset year** of A1 failure for every scenario
+  run to 60 years and a priced **lever table** (§12.14): under the frozen
+  parameters the staker budget stops clearing the archival bond at year 18–24
+  in every constant-traffic world, and no share of the burn or floor on the
+  tail clears the settled-chain case. Ruled (design owner, 2026-10-01): no flow
+  funds a fixed-per-shard bond held forever on a growing corpus; the bond's
+  size — against the per-shard reward it deters cheating on — is the open
+  question, carried in `FOLLOWUPS.md`; under the fixed bond, the Foundation
+  `CompleteTree` is the settled-chain posture by design.
 
 ### Wallet contract — one owner for the error codes
 
