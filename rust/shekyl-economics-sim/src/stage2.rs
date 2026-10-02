@@ -1857,4 +1857,67 @@ mod tests {
             "capped honest holdings must not lower attacker ROI: {roi_capped} < {roi_spread}"
         );
     }
+
+    /// The `--stage2` narration, byte for byte.
+    const NARRATION_FIXTURE_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/stage2_narration.txt"
+    );
+
+    fn stage2_narration() -> String {
+        let mut narration = String::new();
+        run_stage2(&mut narration, &SimParams::default()).expect("String sink is infallible");
+        narration
+    }
+
+    /// The whole `--stage2` report against the committed copy
+    /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §2). The re-base changes one
+    /// operand of the fold per commit; this is what says which lines of the
+    /// report that commit moved, and that it moved no others. A commit that
+    /// means to move a line regenerates the fixture and the diff is its
+    /// evidence — so the fixture is reviewed as output, never trusted as an
+    /// oracle for the line it was regenerated to match.
+    ///
+    /// Ignored by default: the report folds every scenario to 60 years
+    /// (about 100 s in release, far longer in a debug test). Run with
+    /// `cargo test --release -p shekyl-economics-sim -- --ignored
+    /// stage2_narration_matches_the_committed_fixture`.
+    #[test]
+    #[ignore = "full --stage2 report; ~100 s in release — run with --release --ignored"]
+    fn stage2_narration_matches_the_committed_fixture() {
+        let committed =
+            std::fs::read_to_string(NARRATION_FIXTURE_PATH).expect("read committed narration");
+        let current = stage2_narration();
+        if committed != current {
+            let first = committed
+                .lines()
+                .zip(current.lines())
+                .position(|(a, b)| a != b)
+                .map_or_else(
+                    || committed.lines().count().min(current.lines().count()) + 1,
+                    |i| i + 1,
+                );
+            panic!(
+                "--stage2 narration drifted from the committed fixture; first differing \
+                 line {first} ({} committed lines, {} current). Regenerate with \
+                 SHEKYL_REGEN_FIXTURES=1 and read the diff.",
+                committed.lines().count(),
+                current.lines().count(),
+            );
+        }
+    }
+
+    /// Regenerate the committed narration. Ignored by default; run with
+    /// `SHEKYL_REGEN_FIXTURES=1 cargo test --release -p shekyl-economics-sim
+    /// -- --ignored regen_stage2_narration_fixture`.
+    #[test]
+    #[ignore = "regeneration helper; writes the committed fixture"]
+    fn regen_stage2_narration_fixture() {
+        assert_eq!(
+            std::env::var("SHEKYL_REGEN_FIXTURES").as_deref(),
+            Ok("1"),
+            "set SHEKYL_REGEN_FIXTURES=1 to regenerate"
+        );
+        std::fs::write(NARRATION_FIXTURE_PATH, stage2_narration()).expect("write narration");
+    }
 }
