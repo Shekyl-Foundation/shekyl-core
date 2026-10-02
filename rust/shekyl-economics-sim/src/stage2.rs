@@ -34,9 +34,10 @@ use crate::burden::{
     REPLICAS_PER_SHARD, SHARD_BYTES, SKL_FIAT_PRICE_BAND,
 };
 use crate::calibration::{
-    rucknium_shards_equivalent, stuffer_cost_per_shard_atomic, stuffer_leaves_per_shard,
-    stuffer_shape, stuffer_txs_per_shard, sustained_stuffer_cost_per_shard_atomic,
-    tree_depth_for_leaves, RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB, RUCKNIUM_SPAM_FEES_XMR,
+    rucknium_shards_equivalent, stuffer_campaign_cost_atomic, stuffer_campaign_leaves,
+    stuffer_cost_per_shard_atomic, stuffer_shape, stuffer_txs_per_shard,
+    sustained_stuffer_cost_per_shard_atomic, tree_depth_for_leaves, RUCKNIUM_DURATION_DAYS,
+    RUCKNIUM_SPAM_BYTES_GB, RUCKNIUM_SPAM_FEES_XMR,
 };
 use crate::engine::{ScenarioConfig, SimParams};
 use crate::escalation::{family, flat_25, EscalationCurve, KNEE_ARCHIVAL_LEN_BYTES, KNEE_BAND};
@@ -821,11 +822,12 @@ fn a4_decompose(
     // Cost: one-time stuffing weight-fees + the coupled bond opportunity cost.
     // The stuffer is priced at the tree the honest chain has at `n` plus the
     // few leaves its own campaign mints (the shape minimises outputs, so the
-    // campaign barely deepens the tree). One-shot cost — the binding figure.
+    // campaign barely deepens the tree). One-shot cost — the binding figure —
+    // with the transaction count rounded once for the whole campaign.
     let depth0 = tree_depth_for_leaves(crate::burden::honest_leaves_at_closed_shards(n));
     let chain_leaves = crate::burden::honest_leaves_at_closed_shards(n)
-        .saturating_add(stuffer_leaves_per_shard(depth0).saturating_mul(delta));
-    let fee_skl = (stuffer_cost_per_shard_atomic(chain_leaves) * u128::from(delta)) as f64 / COIN;
+        .saturating_add(stuffer_campaign_leaves(depth0, delta));
+    let fee_skl = stuffer_campaign_cost_atomic(chain_leaves, delta) as f64 / COIN;
     let bond_skl = (u128::from(ARCHIVAL_BOND_FLOOR_ATOMIC) * u128::from(delta)) as f64 / COIN
         * A4_OPP_RATE
         * horizon_years as f64;

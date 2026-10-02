@@ -42,8 +42,18 @@ pub const COIN: u64 = 1_000_000_000;
 /// `config/consensus_constants.json` `archival_shard_length_bytes`; `SHT-Q2`).
 /// A shard is *defined* as `W` bytes of archival good — `|pqc_auths| +
 /// |prunable|` over its transactions — so this is the unit, not a modelling
-/// mean: every shard carries `W` plus at most one transaction's overshoot
-/// (≤ 5 % by the §9 selection rule). The unprunable skeleton every node keeps
+/// mean. The partition assigns a transaction to the shard its **starting**
+/// offset falls in (`rules/tx.rs`, SHT-Q2), so shard `k` actually holds
+/// `W + (overshoot_k − overshoot_{k−1})`: it begins where the previous
+/// shard's last transaction ended and ends where its own does. Summed over
+/// any run of consecutive shards that **telescopes** — `n` shards hold
+/// `n · W` plus under one transaction in total, and a capped holding of
+/// `MAX_HOLDINGS_SHARDS` consecutive shards is off from `n · W` by at most
+/// two transactions (one at each end). `n · SHARD_BYTES` is therefore exact
+/// to within a transaction for the whole-corpus and the capped-holding
+/// burdens alike; the per-shard `± one transaction` (≤ 5 % by the §9
+/// selection rule) is not an occupancy this omits, it is where one shard's
+/// bytes end and the next's begin. The unprunable skeleton every node keeps
 /// is not the archiver's burden and is not counted. As `f64` because the fiat
 /// arithmetic below is `f64` (DQ-2G); the integer authority is the typed
 /// constant.

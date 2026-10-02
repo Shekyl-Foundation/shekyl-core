@@ -29,9 +29,7 @@ use std::fmt;
 use shekyl_types::SHARD_LENGTH;
 
 use crate::burden::honest_leaves_at_closed_shards;
-use crate::calibration::{
-    stuffer_cost_per_shard_atomic, stuffer_shape, tree_depth_for_leaves, FEE_PER_BYTE_ATOMIC,
-};
+use crate::calibration::{self, stuffer_campaign_cost_atomic, tree_depth_for_leaves};
 use crate::escalation::{family, EscalationCurve, SHARE_SCALE};
 
 /// Long-term block-weight median floor — the penalty-free zone.
@@ -55,20 +53,16 @@ pub const EPOCH_BLOCKS: u64 = 10_000;
 /// only down-swing the operand admits.
 pub const REORG_DEPTH_BLOCKS: u64 = 720;
 
-/// Archival bytes the stuffer can land in one block at `block_weight` when the
-/// chain has closed `n_shards` — the physical ceiling on the fold. Uses the
-/// **production** predictor's weight and archival length for the
-/// max-archival-per-fee shape (weight recovered from its min-fee, which is
-/// `weight × FEE_PER_BYTE`); depth from the honest chain at `n_shards`.
+/// Archival bytes a flood can land in one block at `block_weight` when the
+/// chain has closed `n_shards` — the physical ceiling on the fold, searched
+/// over every shape the builder accepts
+/// ([`calibration::max_archival_bytes_per_block`]: whole transactions in a
+/// finite block, so the cheapest-per-byte shape is not always the one that
+/// lands the most); depth from the honest chain at `n_shards`.
 #[must_use]
 pub fn max_archival_bytes_per_block(block_weight: u64, n_shards: u64) -> u64 {
     let depth = tree_depth_for_leaves(honest_leaves_at_closed_shards(n_shards.max(1)));
-    let shape = stuffer_shape(depth);
-    let tx_weight = shape.tx_fee_atomic(depth) / FEE_PER_BYTE_ATOMIC;
-    if tx_weight == 0 {
-        return 0;
-    }
-    (block_weight / tx_weight).saturating_mul(shape.archival_bytes(depth))
+    calibration::max_archival_bytes_per_block(block_weight, depth)
 }
 
 /// Shards a flood can close over `blocks` at `block_weight` — the max slew of
@@ -218,10 +212,11 @@ pub fn a6_report(
         RDP = worst_reorg_pts,
         W = worst_epoch_pts,
         WP = worst_pen_pts,
-        C = worst_dn as f64
-            * (stuffer_cost_per_shard_atomic(honest_leaves_at_closed_shards(worst_dn_at_n))
-                as f64
-                / 1.0e9),
+        C = stuffer_campaign_cost_atomic(
+            honest_leaves_at_closed_shards(worst_dn_at_n),
+            worst_dn
+        ) as f64
+            / 1.0e9,
         P = penalty_compensation_skl_per_epoch(base_block_reward_atomic),
     )?;
 
