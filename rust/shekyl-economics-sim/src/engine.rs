@@ -6,7 +6,8 @@ use shekyl_economics::{
     split_block_emission, ClosedShardCount, TxVolume,
 };
 
-use crate::fee_model::FeeModel;
+use crate::fee_model::{FeeModel, FeePoint};
+use crate::stage2::HonestFold;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct YearSnapshot {
@@ -153,7 +154,20 @@ impl Default for SimParams {
             staker_pool_share: EconomicParams::default().staker_pool_share,
             staker_emission_share: 150_000,
             staker_emission_decay: 900_000,
+            fee: FeeModel::PRODUCTION_DEFAULT,
+        }
+    }
+}
+
+impl SimParams {
+    /// The parameters of the control arm: the shipped economics with the
+    /// flat fee the §12.13–§12.14 tables were measured on. A declared
+    /// divergence from production, kept so those tables stay reproducible.
+    #[must_use]
+    pub fn section_12_14_control() -> Self {
+        Self {
             fee: FeeModel::SECTION_12_14_CONTROL,
+            ..Self::default()
         }
     }
 }
@@ -188,6 +202,9 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
     let mut snapshots = Vec::new();
     let emission_curve_asymptote = params.emission_curve_asymptote as u128;
+    // Read for the curve tree's leaf count alone: it sets the ordinary
+    // transaction's weight, and so its fee.
+    let mut honest = HonestFold::default();
 
     for block in 0..total_blocks {
         let year = block / params.blocks_per_year;
@@ -240,9 +257,6 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         let (miner_emission, staker_emission) =
             split_block_emission(effective_reward, emission_share);
 
-        let total_fees_this_block = tx_volume as u128 * config.fee.per_tx_atomic() as u128;
-        let total_fees = total_fees_this_block.min(u64::MAX as u128) as u64;
-
         let burn_pct = match (&config.archival_lock, staked_atomic) {
             // Gate-7 path: the engine-equivalent composition over the
             // consensus circulating quantity (follows the recorder).
@@ -262,6 +276,18 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
                 params.burn_cap,
             ),
         };
+
+        honest.add_block(tx_volume);
+        let fee_per_tx = config.fee.per_tx_atomic(&FeePoint {
+            already_generated: ag,
+            volume: TxVolume::per_block(tx_volume),
+            sigma_scaled: emission_share,
+            burn_pct_scaled: burn_pct,
+            chain_leaves: honest.leaves(),
+            params: &economic,
+        });
+        let total_fees_this_block = tx_volume as u128 * fee_per_tx as u128;
+        let total_fees = total_fees_this_block.min(u64::MAX as u128) as u64;
 
         // Canonical escalated split. This engine has no leaf/corpus trajectory, so
         // n = 0; under the shipped genesis-neutral asymptote that is bit-identical

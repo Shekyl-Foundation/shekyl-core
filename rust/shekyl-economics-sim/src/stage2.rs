@@ -40,6 +40,7 @@ use crate::calibration::{
 };
 use crate::engine::{ScenarioConfig, SimParams};
 use crate::escalation::{family, flat_25, EscalationCurve, KNEE_ARCHIVAL_LEN_BYTES, KNEE_BAND};
+use crate::fee_model::FeePoint;
 use crate::population::{
     attacker_capped_work_milli, honest_sigma_work_milli, honest_sigma_work_milli_deleted, DQ2H_TAIL,
 };
@@ -111,7 +112,7 @@ pub struct BurdenTrajectory {
 /// where the depth is the curve tree's at the block's start. The two
 /// accumulators are what `shard_of` and `tree_depth_for_leaves` consume.
 #[derive(Debug, Clone, Copy, Default)]
-struct HonestFold {
+pub(crate) struct HonestFold {
     /// f64 so a fractional outputs-per-tx never rounds per block; floored to
     /// u64 only where a consumer needs an integer.
     cumulative_outputs: f64,
@@ -119,12 +120,18 @@ struct HonestFold {
 }
 
 impl HonestFold {
-    fn add_block(&mut self, txs: u64) {
+    pub(crate) fn add_block(&mut self, txs: u64) {
         let per_tx = normal_tx_archival_bytes(self.cumulative_outputs as u64);
         self.cumulative_archival_bytes = self
             .cumulative_archival_bytes
             .saturating_add(txs.saturating_mul(per_tx));
         self.cumulative_outputs += txs as f64 * OUTPUTS_PER_TX_NORMAL;
+    }
+
+    /// Outputs in the curve tree at this point of the fold — what sets the
+    /// proof size, and so an ordinary transaction's weight and fee.
+    pub(crate) fn leaves(&self) -> u64 {
+        self.cumulative_outputs as u64
     }
 
     /// The D2 operand at this point of the fold — the partition, not a
@@ -303,8 +310,16 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
             params.burn_base_rate,
             params.burn_cap,
         );
-        let total_fees = (u128::from(tx_volume) * u128::from(config.fee.per_tx_atomic()))
-            .min(u128::from(u64::MAX)) as u64;
+        let fee_per_tx = config.fee.per_tx_atomic(&FeePoint {
+            already_generated: ag,
+            volume: TxVolume::per_block(tx_volume),
+            sigma_scaled: emission_share,
+            burn_pct_scaled: burn_pct,
+            chain_leaves: fold.leaves(),
+            params: &economic,
+        });
+        let total_fees =
+            (u128::from(tx_volume) * u128::from(fee_per_tx)).min(u128::from(u64::MAX)) as u64;
         // share = SCALE → the whole burn (pre-split); the candidate re-splits it.
         let whole_burn = compute_burn_split(total_fees, burn_pct, ScaledShare::from_raw(SCALE))
             .staker_pool_amount;
@@ -1502,6 +1517,19 @@ fn oq2_corpus_samples(traj: &BurdenTrajectory) -> [u64; 3] {
 /// `--stage2` entry: the burden trajectory across the scenario set. JSON to
 /// stdout, a human-readable summary to stderr.
 pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result {
+    // The arm first: every fee-dependent figure below is a figure under it.
+    writeln!(out, "{}", params.fee.label())?;
+    if params.fee.flat_per_tx_atomic().is_none() {
+        // The arms' prose was written when every run charged the flat fee,
+        // and some of it states results. A table is computed; a paragraph
+        // is not.
+        writeln!(
+            out,
+            "The paragraphs below were written against the flat control fee. Where one states a\n\
+             result, the table beside it governs."
+        )?;
+    }
+    writeln!(out)?;
     writeln!(
         out,
         "Stage-2 archival burden trajectory (§12.1 checkpoint 1)\n\
@@ -1858,15 +1886,34 @@ mod tests {
         );
     }
 
-    /// The `--stage2` narration, byte for byte.
-    const NARRATION_FIXTURE_PATH: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/stage2_narration.txt"
-    );
+    /// A fee arm of the `--stage2` report and the file that pins it.
+    struct PinnedArm {
+        params: fn() -> SimParams,
+        fixture: &'static str,
+    }
 
-    fn stage2_narration() -> String {
+    /// `--stage2`: the production fee arm, which is the default run.
+    const PRODUCTION_ARM: PinnedArm = PinnedArm {
+        params: SimParams::default,
+        fixture: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/stage2_narration.txt"
+        ),
+    };
+
+    /// `--stage2 --control-flat-fee`: the flat fee the §12.13–§12.14 tables
+    /// were measured on.
+    const FLAT_CONTROL_ARM: PinnedArm = PinnedArm {
+        params: SimParams::section_12_14_control,
+        fixture: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/stage2_narration_flat_control.txt"
+        ),
+    };
+
+    fn stage2_narration(arm: &PinnedArm) -> String {
         let mut narration = String::new();
-        run_stage2(&mut narration, &SimParams::default()).expect("String sink is infallible");
+        run_stage2(&mut narration, &(arm.params)()).expect("String sink is infallible");
         narration
     }
 
@@ -1879,15 +1926,29 @@ mod tests {
     /// oracle for the line it was regenerated to match.
     ///
     /// Ignored by default: the report folds every scenario to 60 years
-    /// (about 100 s in release, far longer in a debug test). Run with
+    /// (100–150 s per arm in release, far longer in a debug test). Run with
     /// `cargo test --release -p shekyl-economics-sim -- --ignored
-    /// stage2_narration_matches_the_committed_fixture`.
+    /// matches_the_committed_fixture` (both arms).
+    #[test]
+    #[ignore = "full --stage2 report; ~150 s in release — run with --release --ignored"]
+    fn stage2_narration_matches_the_committed_fixture() {
+        assert_narration_matches(&PRODUCTION_ARM);
+    }
+
+    /// The control arm against its committed copy. This is the fixture that
+    /// ties the re-based sim to the published tables: it is the report as it
+    /// stood before the fee was rewired, plus the lines that name the arm
+    /// and print its fee, and it moves only when a fold operand shared by
+    /// both arms does.
     #[test]
     #[ignore = "full --stage2 report; ~100 s in release — run with --release --ignored"]
-    fn stage2_narration_matches_the_committed_fixture() {
-        let committed =
-            std::fs::read_to_string(NARRATION_FIXTURE_PATH).expect("read committed narration");
-        let current = stage2_narration();
+    fn stage2_narration_flat_control_matches_the_committed_fixture() {
+        assert_narration_matches(&FLAT_CONTROL_ARM);
+    }
+
+    fn assert_narration_matches(arm: &PinnedArm) {
+        let committed = std::fs::read_to_string(arm.fixture).expect("read committed narration");
+        let current = stage2_narration(arm);
         if committed != current {
             let first = committed
                 .lines()
@@ -1898,26 +1959,29 @@ mod tests {
                     |i| i + 1,
                 );
             panic!(
-                "--stage2 narration drifted from the committed fixture; first differing \
-                 line {first} ({} committed lines, {} current). Regenerate with \
-                 SHEKYL_REGEN_FIXTURES=1 and read the diff.",
+                "--stage2 narration drifted from {}; first differing line {first} ({} \
+                 committed lines, {} current). Regenerate with SHEKYL_REGEN_FIXTURES=1 and \
+                 read the diff.",
+                arm.fixture,
                 committed.lines().count(),
                 current.lines().count(),
             );
         }
     }
 
-    /// Regenerate the committed narration. Ignored by default; run with
+    /// Regenerate both committed narrations. Ignored by default; run with
     /// `SHEKYL_REGEN_FIXTURES=1 cargo test --release -p shekyl-economics-sim
-    /// -- --ignored regen_stage2_narration_fixture`.
+    /// -- --ignored regen_stage2_narration_fixtures`.
     #[test]
-    #[ignore = "regeneration helper; writes the committed fixture"]
-    fn regen_stage2_narration_fixture() {
+    #[ignore = "regeneration helper; writes the committed fixtures"]
+    fn regen_stage2_narration_fixtures() {
         assert_eq!(
             std::env::var("SHEKYL_REGEN_FIXTURES").as_deref(),
             Ok("1"),
             "set SHEKYL_REGEN_FIXTURES=1 to regenerate"
         );
-        std::fs::write(NARRATION_FIXTURE_PATH, stage2_narration()).expect("write narration");
+        for arm in [&PRODUCTION_ARM, &FLAT_CONTROL_ARM] {
+            std::fs::write(arm.fixture, stage2_narration(arm)).expect("write narration");
+        }
     }
 }

@@ -144,8 +144,16 @@ fn sample_heights(blocks_per_year: u64, sim_years: u64) -> Vec<u64> {
 /// at [`sample_heights`].
 #[must_use]
 pub fn record_baseline_fixture() -> RecordedChainFixture {
-    let sim = SimParams::default();
+    // The fee here is a test-vector input, not a model of what users pay:
+    // the fixture exists so the engine reproduces the burn and split from a
+    // recorded fee total, and any total serves. It stays on the flat arm so
+    // the committed vectors do not move with the run's fee arm.
+    let sim = SimParams::section_12_14_control();
     let config = scenario_1_baseline(&sim);
+    let vector_fee_per_tx = config
+        .fee
+        .flat_per_tx_atomic()
+        .expect("the recorder runs on the flat arm");
 
     let params = EconomicParams {
         release_min: sim.release_min,
@@ -226,7 +234,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             circulating,
             &params,
         );
-        let total_fees = (u128::from(tx_volume) * u128::from(config.fee.per_tx_atomic()))
+        let total_fees = (u128::from(tx_volume) * u128::from(vector_fee_per_tx))
             .min(u128::from(u64::MAX)) as u64;
         let fee_split =
             compute_burn_split_at(total_fees, burn_pct, ClosedShardCount::ZERO, &params);

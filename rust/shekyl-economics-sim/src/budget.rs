@@ -58,7 +58,8 @@ use shekyl_economics::{
 };
 
 use crate::engine::SimParams;
-use crate::fee_model::FeeModel;
+use crate::fee_model::{FeeModel, FeePoint};
+use crate::stage2::HonestFold;
 
 const COIN: f64 = 1_000_000_000.0;
 
@@ -173,6 +174,9 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
     let mut current_epoch: u64 = 0;
 
     let mut epochs: Vec<EpochRecord> = Vec::new();
+    // Read for the curve tree's leaf count alone: it sets the ordinary
+    // transaction's weight, and so its fee.
+    let mut honest = HonestFold::default();
 
     for block in 0..total_blocks {
         let abs_height = block + scenario.genesis_height_offset;
@@ -243,8 +247,16 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
             params.burn_base_rate,
             params.burn_cap,
         );
-        let total_fees =
-            (tx_volume as u128 * scenario.fee.per_tx_atomic() as u128).min(u64::MAX as u128) as u64;
+        honest.add_block(tx_volume);
+        let fee_per_tx = scenario.fee.per_tx_atomic(&FeePoint {
+            already_generated: ag,
+            volume: TxVolume::per_block(tx_volume),
+            sigma_scaled: emission_share,
+            burn_pct_scaled: burn_pct,
+            chain_leaves: honest.leaves(),
+            params: &economic,
+        });
+        let total_fees = (tx_volume as u128 * fee_per_tx as u128).min(u64::MAX as u128) as u64;
         // Canonical escalated entry; n = 0 (no corpus trajectory in this arm —
         // see engine.rs). Genesis-neutral asymptote ⇒ bit-identical to flat.
         let fee_split =

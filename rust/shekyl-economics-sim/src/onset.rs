@@ -309,6 +309,15 @@ fn at_horizon(mut config: ScenarioConfig) -> ScenarioConfig {
     config
 }
 
+/// Transactions in `year` (1-based) of a scenario's own schedule — the
+/// divisor that turns a year's fees into a mean fee per transaction.
+fn year_tx_count(config: &ScenarioConfig, blocks_per_year: u64, year: u64) -> u128 {
+    let start = (year - 1) * blocks_per_year;
+    (start..start + blocks_per_year)
+        .map(|block| u128::from((config.volume.get_volume)(block, blocks_per_year)))
+        .sum()
+}
+
 /// A1's selection rule, applied to one aggregate series: the band candidate
 /// with the greatest min clearance at the binding rate.
 fn best_candidate(aggs: &[A1YearAgg]) -> EscalationCurve {
@@ -489,10 +498,19 @@ pub fn onset_report(
          era emission carries). 'onset' = first sustained year budget/burden < 1 (shipped burn\n\
          x share; '*' = a later year clears again; 'never' = clears to {H} y). Schedules are\n\
          the scenarios' own closures past their horizons: constant, cyclic, or growing —\n\
-         sustained_growth's 20%/yr to 60 y is unphysical (block weight caps it, and by ~y38\n\
-         its fee burn has destroyed the circulating supply, so burn_pct -> 0 and the fee\n\
-         leg with it) and is read for shape only.",
+         {GROWTH}",
         H = ONSET_HORIZON_YEARS,
+        // Why the growth schedule's late columns collapse is a statement
+        // about the flat fee: there the burn outruns a bounded supply. It
+        // was measured on that arm and is asserted on no other.
+        GROWTH = if params.fee.flat_per_tx_atomic().is_some() {
+            "sustained_growth's 20%/yr to 60 y is unphysical (block weight caps it, and by ~y38\n\
+             its fee burn has destroyed the circulating supply, so burn_pct -> 0 and the fee\n\
+             leg with it) and is read for shape only."
+        } else {
+            "sustained_growth's 20%/yr to 60 y is unphysical (block weight caps it) and is read\n\
+             for shape only."
+        },
     )?;
     let rate_cols: Vec<String> = OPP_COST_RATE_BAND
         .iter()
@@ -512,8 +530,24 @@ pub fn onset_report(
     let mid_price = SKL_FIAT_PRICE_BAND[1];
     let binding = OPP_COST_RATE_BAND[BINDING];
     let mut results = Vec::new();
+    let mut fee_rows: Vec<(String, String)> = Vec::new();
     for config in all_scenarios(params).into_iter().map(at_horizon) {
         let aggs = a1_year_aggs(params, &config);
+        fee_rows.push((
+            config.name.clone(),
+            aggs.iter()
+                .filter(|a| DECADES.contains(&a.year))
+                .map(|a| {
+                    let txs = year_tx_count(&config, params.blocks_per_year, a.year);
+                    if txs == 0 {
+                        "-".to_string()
+                    } else {
+                        format!("{:.4}", a.whole_fees_atomic as f64 / txs as f64 / COIN)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        ));
         let flat = flat_25();
         let best = best_candidate(&aggs);
         let shipped = |c: EscalationCurve| move |a: &A1YearAgg| a1_shipped_budget_atomic(a, &c);
@@ -577,9 +611,30 @@ pub fn onset_report(
         });
     }
 
-    // The fee-era horizon in closed form. It holds only for a fee that is
-    // constant in height, which is the control arm's and not the chain's.
-    let fee = params.fee.per_tx_atomic();
+    writeln!(
+        out,
+        "  -> ORDINARY FEE per transaction, mean over the year (SKL), at y10/20/30/40/50/60.\n\
+         The run's fee arm made visible: a year's fees are its traffic times this."
+    )?;
+    for (name, series) in &fee_rows {
+        writeln!(out, "       {:<20} {series}", trunc(name, 20))?;
+    }
+    match params.fee.flat_per_tx_atomic() {
+        Some(fee) => fee_horizon_report(out, params, fee)?,
+        None => writeln!(
+            out,
+            "  -> FEE HORIZON: no closed form on this fee arm. H = fee x base x share x W /\n\
+             (bond x R x rate x bytes/tx) needs a fee that is constant in height; the\n\
+             production fee follows the block reward. The control arm prints it."
+        )?,
+    }
+    Ok(results)
+}
+
+/// The fee-era clearance horizon in closed form, printed for a **flat** fee
+/// only: `H` is a constant because the fee is, which is the control arm's
+/// property and not the chain's.
+fn fee_horizon_report(out: &mut impl fmt::Write, params: &SimParams, fee: u64) -> fmt::Result {
     let bytes_per_tx =
         normal_tx_archival_bytes(crate::burden::honest_leaves_at_closed_shards(KNEE_BAND[2]));
     let w = shekyl_types::SHARD_LENGTH.to_raw();
@@ -643,8 +698,7 @@ pub fn onset_report(
          younger. No FLOW — fee share, burn share, or the constant tail — funds a\n\
          fixed-per-shard bond held forever on a corpus that grows forever; the operand to\n\
          question is the bond (§12.14 Ruling: bond sizing vs per-shard reward)."
-    )?;
-    Ok(results)
+    )
 }
 
 /// A1-L — the lever table on the two bracketing scenarios. Prints to `out`,
@@ -829,8 +883,9 @@ mod tests {
         // The reason `A1YearAgg`'s annual sums are u128: run to 60 y, the
         // growth schedule's yearly fees pass the chain's u64 — a u64 field
         // would have had to clip, silently. Pins that the case is real and
-        // that the aggregate carries it.
-        let params = SimParams::default();
+        // that the aggregate carries it. The case arises on the flat arm,
+        // where the fee does not fall as the traffic grows.
+        let params = SimParams::section_12_14_control();
         let config = at_horizon(all_scenarios(&params).remove(2));
         assert_eq!(config.name, "sustained_growth");
         let aggs = a1_year_aggs(&params, &config);
@@ -875,11 +930,14 @@ mod tests {
         // the closed form (its burn base read at the baseline's own volume)
         // against the fold on the baseline scenario late in its 60-y run
         // (emission at the tail), to within the tail's contribution and the
-        // storage add-on.
-        let params = SimParams::default();
+        // storage add-on. A closed form exists only on the flat arm.
+        let params = SimParams::section_12_14_control();
         let config = at_horizon(all_scenarios(&params).remove(0));
         let aggs = a1_year_aggs(&params, &config);
-        let fee = config.fee.per_tx_atomic();
+        let fee = config
+            .fee
+            .flat_per_tx_atomic()
+            .expect("the control arm is flat");
         let bytes =
             normal_tx_archival_bytes(crate::burden::honest_leaves_at_closed_shards(KNEE_BAND[2]));
         let w = shekyl_types::SHARD_LENGTH.to_raw();
@@ -904,8 +962,9 @@ mod tests {
     fn burn_horizon_rises_with_sqrt_traffic_until_the_cap() {
         // A burn lever's H is NOT traffic-independent: its base is the
         // production burn fraction, which rises as sqrt(V) until burn_cap. An
-        // all-fees lever's H is. Both read off the same closed form.
-        let params = SimParams::default();
+        // all-fees lever's H is. Both read off the same closed form, which
+        // exists only on the flat arm.
+        let params = SimParams::section_12_14_control();
         let baseline = params.tx_volume_baseline;
         let cap_v = burn_cap_volume(&params);
         assert!(cap_v > baseline);
@@ -915,7 +974,10 @@ mod tests {
         let bytes =
             normal_tx_archival_bytes(crate::burden::honest_leaves_at_closed_shards(KNEE_BAND[2]));
         let w = shekyl_types::SHARD_LENGTH.to_raw();
-        let fee = params.fee.per_tx_atomic();
+        let fee = params
+            .fee
+            .flat_per_tx_atomic()
+            .expect("the control arm is flat");
         let h_at = |v: u64| {
             fee_horizon_years(fee, fee_era_burn_fraction(&params, v), 0.25, 0.10, bytes, w)
         };
