@@ -391,6 +391,17 @@ Numbered, and none resolved here.
    above also held: ~13k transactions per J-segment ≈ 43 byte shards, so the old
    middle `100,000` segments ≈ 4.3 M shards — inside the new band.
 
+   **Recommended disposition (#929 review, 2026-10-01): supersede `SCC-Q1`'s
+   answer, for a reason `SCC-Q1` did not have in hand.** `SCC-Q1` dated the
+   burden from *discard* — bodies leaving ordinary daemons. Under **F-G** the
+   burden the escalation compensates is **locked capital**, and capital locks
+   at **close + freeze**, when the shard's bond is posted — *before* discard.
+   `closed_shards_before` therefore counts the burden from the moment it is
+   borne, which is what `SCC-Q1` asked for; a frontier lag would count it
+   late. The operand stays a pure fold, with no frontier term and no `D(E)`
+   read. **Awaiting the design owner's ruling**; until then `SCC-Q1` reads as
+   ANSWERED above and this note is the recommendation.
+
    **Provenance correction.** `100,000` **is** sim-derived — it is the middle of
    the Stage-2 `KNEE_BAND = [25_000, 100_000, 250_000]`, swept against
    `ASYMPTOTE_BAND` but **never selected**, because Stage 2 recommends and Stage 3

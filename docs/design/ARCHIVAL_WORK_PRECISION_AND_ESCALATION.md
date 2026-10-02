@@ -2192,10 +2192,63 @@ behaviour-neutral while flat; the consensus-constants digest re-pinned
 
 | Arm | Byte-keyed result (2026-10-01) | Change from the leaf-era row |
 | --- | --- | --- |
-| **A1** clearance | 🔴 **high-history / low-activity is cleared by NO candidate in the band**: flat-25 **0.06×**, best (90 % / 2.25 M) **0.21×** at 2 %/yr, **0.04×** at the binding 10 %. Every other scenario clears at every rate (sustained-growth best 7.45×, late tail 8.50× at 10 %). There is no scenario where best clears and flat does not. | Was ✅ "scenario 9 flat 0.66× / best 2.36×". Fails on the bond term alone — ~40× the leaf-era bond per unit of traffic. **For the design owner:** the §6.0 band (asymptote ≤ 90 %) cannot clear the quadrant §11.2 added for exactly this purpose; the lever that would is the bond floor or `W`, not the share curve. |
+| **A1** clearance | 🔴 **high-history / low-activity is cleared by NO candidate in the band**: flat-25 **0.06×**, best (90 % / 2.25 M) **0.21×** at 2 %/yr, **0.04×** at the binding 10 %. Read as replicas rather than a ratio (both burden terms are linear in `R`, so `R_sustained = 6 · ratio` exactly): at 10 % the budget carries **0.07** of a replica flat, **0.26** best — a quarter of one copy where the model wants six; even at 2 % the best candidate sustains 1.3 copies. Every other scenario clears at every rate (sustained-growth best 7.45×, late tail 8.50× at 10 %). **There is no scenario where best clears and flat does not** — see *The finding* below. | Was ✅ "scenario 9 flat 0.66× / best 2.36×". Fails on the bond term alone — ~40× the leaf-era bond per unit of traffic. **For the design owner:** the §6.0 band (asymptote ≤ 90 %) cannot clear the quadrant §11.2 added for exactly this purpose; the lever that would is the bond floor, `W`, or the tail floor named below — not the share curve. |
 | **A4** stuffing (W9) | Shape **searched, not asserted**: the max-archival-per-fee shape is **8-in / 1-out** at every depth (inputs carry the PQC auth + FCMP share the operand counts; outputs carry unprunable prefix it does not) — the reverse of the leaf era's 1-in / 16-out, which inflated an output count the operand no longer measures. Cost per shard **0.93 SKL** one-shot, **1.00–1.03 SKL** output-conserving sustained; Monero-anchor ≈ 1,026 shards' worth. Realistic-end ROI 0.80–1.88× (`fee×→1` spread **0.8→2.0×**, was 2.8→17.8×); `prem ≈ 1.0` unchanged. | §12.11's no-exclusivity closure is an accounting argument independent of the unit and **stands**; the profit figures here are the historical gate re-measured, not a reopening. |
 | **A5** proxy (W10) | Unchanged in substance — the opening artifact and the test≡job payload are payload questions, not operand ones. Holding = `4096 · W` ≈ **12.3 GB** (was 13.6). | Numeric only. |
 | **A6** swing | Flood ceiling ≈ 3,700–3,900 shards/epoch at the surge limit; worst adversarial slew **0.05 pts/epoch** penalty-free, **0.10** at the legal 2× limit, reorg down-swing **0.0036 pts**. | Was 1.41 / 2.82 / 0.1014. The drop is the knee moving from 10⁵ segments to 2.25 × 10⁶ shards while an epoch's flood still closes only a few thousand units: a steepest-candidate ramp 22× longer in its own unit. §12.11.1's structural closure stands. |
+
+**The finding (2026-10-01): in the byte unit the escalation does no
+discriminating work across the Stage-2 set.** Every scenario either clears
+flat or clears for no candidate. The nearest clearing scenario (sustained
+growth: flat **2.16×** at 10 %) and the failing one (**0.01×**) sit two orders
+of magnitude apart, and no trajectory lands between them — the knee band was
+swept against trajectories that never enter the region where flat fails and
+best clears, so the sweep cannot say whether that region exists, let alone
+where the knee should sit inside it. The A1 report now prints this verdict
+(`NO DISCRIMINATING SCENARIO`) whenever the D2 case is empty. **The next sim
+row therefore does not add a tenth point.** It *solves* for the region: hold
+the Stage-2 arms fixed, sweep tail traffic × accreted corpus, and report the
+set where flat-25 < 1.0 ≤ best at the binding rate. If that set is empty or
+razor-thin the lever is dead in this unit and the ceremony is choosing a knee
+for a curve that never binds; if it is wide, the knee is placed inside it from
+measurement. Scheduled in `docs/FOLLOWUPS.md` (owner: this section).
+
+**Why scenario 9 fails, structurally.** It is not the escalation and it is not
+the traffic alone. The staker emission share decays by `0.9` per whole year
+(`shekyl_staker_emission_decay = 900000`, applied in
+`rust/shekyl-economics/src/emission_share.rs:62-87` — verified at source, not
+read from the parameter's name): `0.15 · 0.9^40 ≈ 0.0022` of emission at year
+40, and scenario 9 runs to 60 with its emission exhausted. **Stakers are decayed
+out of the perpetual tail by design**, so a settled chain's archival budget is
+the fee leg alone, and 15 tx/block of fees cannot carry a bond on 4.9 M shards
+at any share ≤ 90 %. The only lever that matches the failure is a **staker
+floor on the tail** — a share of the terminal subsidy that does not decay to
+zero. `shekyl_staker_emission_share` / `_decay` are on the genesis-frozen list,
+so this is a **question for the design owner, not a proposal**: whether a
+settled, low-activity Shekyl is meant to retain archivers at all, and if so
+from which leg. Until it is answered, A1's 🔴 is the model telling the truth
+about the parameters as frozen.
+
+**The binding rate, justified for this scenario.** The 10 %/yr opportunity
+cost on bonded SKL is exogenous to the model (`burden::OPP_COST_RATE_BAND`,
+F-G). It is the right binding member for busy scenarios, where a staker has
+alternatives for the capital. It is the *least grounded* in exactly scenario 9
+— decades of bonded SKL in a settled chain whose own activity is 15 tx/block —
+where the assumption that 10 % is available elsewhere is doing a great deal of
+work. The band is kept and all three columns are printed; the choice of binding
+member for the ceremony is the owner's, and the A1 footer says so. Note that
+the finding above does not depend on it: scenario 9 fails for every candidate
+at **2 %** as well.
+
+**The knee is an archival length in disguise.** `KNEE_BAND[1] · W` is the
+quantity the ceremony is actually choosing — **6.75 TB** of archival
+(`escalation::KNEE_ARCHIVAL_LEN_BYTES`, printed in the A1 header) — and the
+shard count is that divided by the provisional `W`. A `W` re-pin that leaves
+`shekyl_escalation_knee_n` at 2,250,000 silently moves the knee's physical
+meaning; `escalation::knee_is_an_archival_length_pinned_against_a_w_repin`
+fails when `knee · W` moves, and `shipped_knee_is_the_band_middle` fails when
+the config and the band part company. Whichever is re-pinned, the other is
+re-derived in the same change.
 
 **Depth direction, corrected.** The leaf-era text said stuffing is "cheapest
 early" and the flood "harder to move over time". Byte-keyed, the FCMP proof that
@@ -2214,7 +2267,15 @@ closed shard is below the frontier only after its bodies leave ordinary daemons)
 and by unit (shards of bytes vs transactions). Either `SCC-Q1`'s answer is
 superseded by the landed operand, or `closed_shards_before` owes a frontier lag;
 that is a ruling, not a sim finding, and the knee's re-derivation holds under
-either reading because the band was swept, not selected.
+either reading because the band was swept, not selected. **Recommended
+reading (2026-10-01, from the #929 review): supersede `SCC-Q1`'s answer.** The
+burden the escalation compensates is, under F-G, **locked capital**, and
+capital locks at close + freeze — the moment the shard's bond is posted —
+which is *before* discard, not after. A frontier lag would count the burden
+from the moment bodies leave ordinary daemons; `closed_shards_before` counts
+it from the moment it is borne, which is the right moment. The operand stays
+a pure fold with no frontier term. The ruling is the escalation owner's; the
+`SCC` §G row carries it.
 
 **Assumption carried.** The sustained stuffer model prices the cheapest
 output-conserving producer/consumer cycle (a campaign that must mint its own
