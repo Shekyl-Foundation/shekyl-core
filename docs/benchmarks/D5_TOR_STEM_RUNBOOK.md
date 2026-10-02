@@ -68,10 +68,15 @@ the one aarch64 process.
 
 ## The three processes
 
-Fresh data directories, not the standing ones. `--regtest
---fixed-difficulty 1`. RPC bound to loopback. Log level includes the
-`MDEBUG` lines the previous hop was read from (`Sent … using
-Dandelion++ stem`, `Queueing … for Dandelion++ fluffing`).
+Fresh data directories, not the standing ones. `--testnet
+--fixed-difficulty 1`. Fakechain skips the ephemeral onion
+(`add_ephemeral_tor_zone` returns before the tor starts), so a regtest
+daemon cannot publish the address this run dials. Testnet is the
+network the previous hop mined on, and this build's testnet id still
+fails the handshake against a daemon on the hand-pinned id. RPC bound
+to loopback. Log level includes the `MDEBUG` lines the previous hop
+was read from (`Sent … using Dandelion++ stem`, `Queueing … for
+Dandelion++ fluffing`).
 
 **Miner (seed).** Mines the chain. Its only dial is the floor's
 per-boot onion, through the warm client Tor that is already up. Do not
@@ -111,7 +116,7 @@ it is inbound Tor.
 1. Confirm the floor binary and the seed binary both name `5a1a405ae`.
    The fluff receiver is a second process of the seed binary.
 2. Start the miner. From a wallet opened against its RPC, `shekyl-cli
-   mine start`. The daemon is `--regtest`; the wallet is that network.
+   mine start`. The daemon is `--testnet`; the wallet is that network.
    The retired spelling `start_mining` redirects to `mine start`.
    Confirm the height is moving.
 3. Start the floor. Copy its per-boot onion. Sync the miner's chain
