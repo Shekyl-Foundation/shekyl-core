@@ -304,7 +304,7 @@ fn lever_set(best: EscalationCurve) -> Vec<Lever> {
 
 /// A scenario's config re-horizoned to [`ONSET_HORIZON_YEARS`]. The schedule
 /// is the scenario's own closure evaluated past its horizon.
-fn at_horizon(mut config: ScenarioConfig) -> ScenarioConfig {
+pub(crate) fn at_horizon(mut config: ScenarioConfig) -> ScenarioConfig {
     config.sim_years = ONSET_HORIZON_YEARS;
     config
 }

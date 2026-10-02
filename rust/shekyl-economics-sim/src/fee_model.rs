@@ -26,8 +26,9 @@
 //! - the volume, split and burn operands are the fold's own, so they carry
 //!   whatever that fold carries (the design document's ESR-3 and ESR-4).
 
+use serde::Serialize;
 use shekyl_economics::{
-    base_block_reward, corrected_fee_ladder, fee_correction, EconomicParams, TxVolume,
+    base_block_reward, corrected_fee_ladder, fee_correction, EconomicParams, FeeLadder, TxVolume,
 };
 use shekyl_tx_weight::predict_weight;
 
@@ -61,6 +62,9 @@ pub enum FeeModel {
     FlatControl {
         /// Atomic units per transaction.
         per_tx_atomic: u64,
+        /// What admission costs per byte on this arm — the rate a stuffer
+        /// pays. Flat as well, and for the same reason.
+        admission_rate: PerByteRate,
     },
     /// The Standard rung of the production ladder — four times the relay
     /// floor, the wallet's default (`FEE_LADDER_DERIVATION.md` §5.5) — at
@@ -76,6 +80,31 @@ pub enum FeeModel {
 
 /// The flat fee the §12.13–§12.14 tables were measured on: `0.1 SKL`.
 pub const SECTION_12_14_FLAT_FEE_ATOMIC: u64 = 100_000_000;
+
+/// The admission rate the §12.13 stuffer was priced at: 300 atomic per
+/// byte. It was read from a C++ macro, `FEE_PER_BYTE`, that no code calls;
+/// the chain's admission rate is the relay floor. Kept as the control arm's
+/// value and nowhere else.
+pub const SECTION_12_13_ADMISSION_RATE: PerByteRate = PerByteRate::from_atomic(300);
+
+/// A fee rate: atomic units per byte of transaction weight. A type of its
+/// own so that a rate cannot be passed where a leaf count, a depth or a
+/// shard count is expected — the functions that take one take several
+/// other integers beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct PerByteRate(u64);
+
+impl PerByteRate {
+    #[must_use]
+    pub const fn from_atomic(atomic_per_byte: u64) -> Self {
+        Self(atomic_per_byte)
+    }
+
+    #[must_use]
+    pub const fn atomic(self) -> u64 {
+        self.0
+    }
+}
 
 /// Thousandths in one: the multiplier that leaves a rung unchanged.
 const MILLI: u64 = 1_000;
@@ -103,6 +132,7 @@ impl FeeModel {
     /// The control arm at the §12.13–§12.14 fee.
     pub const SECTION_12_14_CONTROL: Self = Self::FlatControl {
         per_tx_atomic: SECTION_12_14_FLAT_FEE_ATOMIC,
+        admission_rate: SECTION_12_13_ADMISSION_RATE,
     };
 
     /// What the chain's wallets pay by default: the Standard rung, unscaled.
@@ -116,7 +146,7 @@ impl FeeModel {
     #[must_use]
     pub const fn flat_per_tx_atomic(self) -> Option<u64> {
         match self {
-            Self::FlatControl { per_tx_atomic } => Some(per_tx_atomic),
+            Self::FlatControl { per_tx_atomic, .. } => Some(per_tx_atomic),
             Self::ProductionStandard { .. } => None,
         }
     }
@@ -125,26 +155,28 @@ impl FeeModel {
     #[must_use]
     pub fn per_tx_atomic(self, at: &FeePoint<'_>) -> u64 {
         match self {
-            Self::FlatControl { per_tx_atomic } => per_tx_atomic,
+            Self::FlatControl { per_tx_atomic, .. } => per_tx_atomic,
             Self::ProductionStandard {
                 multiplier_milli,
                 median,
             } => {
-                // The ladder prices against the reward with the release
-                // multiplier taken out (`fee_floor.rs` reads the same
-                // operand); the multiplier re-enters through `C`.
-                let base_reward = base_block_reward(at.already_generated, at.params)
-                    .expect("sim neutral trajectory stays within the arithmetic domain");
-                let correction =
-                    fee_correction(at.volume, at.sigma_scaled, at.burn_pct_scaled, at.params);
-                let median = match median {
-                    MedianModel::PenaltyFreeZone => at.params.full_reward_zone,
-                };
-                let ladder =
-                    corrected_fee_ladder(base_reward, median, REF_TX_WEIGHT, correction, at.params);
-                let fee = ordinary_tx_fee_atomic(ladder.standard, at.chain_leaves);
+                let fee = ordinary_tx_fee_atomic(ladder_at(median, at).standard, at.chain_leaves);
                 u64::try_from(u128::from(fee) * u128::from(multiplier_milli) / u128::from(MILLI))
                     .unwrap_or(u64::MAX)
+            }
+        }
+    }
+
+    /// What admission costs per byte at `at`: the Economy rung, which is the
+    /// relay floor. A stuffer pays this and no more — it needs its
+    /// transactions relayed, not prioritised — so the multiplier that stands
+    /// for what ordinary users pay above the default does not apply to it.
+    #[must_use]
+    pub fn admission_rate(self, at: &FeePoint<'_>) -> PerByteRate {
+        match self {
+            Self::FlatControl { admission_rate, .. } => admission_rate,
+            Self::ProductionStandard { median, .. } => {
+                PerByteRate::from_atomic(ladder_at(median, at).economy)
             }
         }
     }
@@ -153,7 +185,7 @@ impl FeeModel {
     #[must_use]
     pub fn label(self) -> String {
         match self {
-            Self::FlatControl { per_tx_atomic } => format!(
+            Self::FlatControl { per_tx_atomic, .. } => format!(
                 "FEE ARM: CONTROL — flat {:.3} SKL per transaction at every height. A declared \
                  divergence: the chain charges no flat fee (ECONOMICS_SIM_PRODUCTION_REBASE.md §4).",
                 per_tx_atomic as f64 / 1.0e9
@@ -172,6 +204,22 @@ impl FeeModel {
             ),
         }
     }
+}
+
+/// The production ladder at `at`: every rung comes from this one call, so
+/// the ordinary fee and the admission rate are priced at the same state by
+/// construction.
+fn ladder_at(median: MedianModel, at: &FeePoint<'_>) -> FeeLadder {
+    // The ladder prices against the reward with the release multiplier taken
+    // out (`fee_floor.rs` reads the same operand); the multiplier re-enters
+    // through `C`.
+    let base_reward = base_block_reward(at.already_generated, at.params)
+        .expect("sim neutral trajectory stays within the arithmetic domain");
+    let correction = fee_correction(at.volume, at.sigma_scaled, at.burn_pct_scaled, at.params);
+    let median = match median {
+        MedianModel::PenaltyFreeZone => at.params.full_reward_zone,
+    };
+    corrected_fee_ladder(base_reward, median, REF_TX_WEIGHT, correction, at.params)
 }
 
 /// Fee of one ordinary-shape transaction at `rate_per_byte` when the curve
