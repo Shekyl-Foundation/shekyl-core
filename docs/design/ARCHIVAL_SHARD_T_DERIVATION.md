@@ -1492,6 +1492,11 @@ fetch, 24 hours.
   days differ by more than two postures did, so a floor-device figure set against
   W₂'s would not be attributable to the device. Against a control in its own window
   it is.
+- **Each host runs its platform's pinned Tor:** 0.4.9.12 on the floor device (the
+  `linux-aarch64` pin, an alpha Expert Bundle, because the stable line ships none) and
+  0.4.9.11 on the node. That difference is the device as it ships, so it is inside
+  "the host changed" and the run does not separate it from the hardware. Found while
+  setting up, before any observation.
 
 **The bias, stated.** The floor device carries both ends: reader, server and two Tors
 share its four cores, and both hosts share one uplink. Each of these works against
