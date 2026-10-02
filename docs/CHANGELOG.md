@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Daemon — `tx_to_blob` no longer has a form that discards the serializer's verdict
+
+- The value-returning `tx_to_blob(const transaction&)` is deleted. It
+  returned whatever bytes were written before the serializer refused, so a
+  caller could not tell a transaction from a fragment. The boolean form is
+  `[[nodiscard]]`. A refusal now fails the caller: `add_block` throws a
+  `DB_ERROR` for a miner transaction that does not serialize, the
+  block-facts export answers `INCONSISTENT` for a block or a transaction,
+  and `shekyl-blockchain-import` fails the chunk for either.
+  `get_transaction_blob_size` reads the verdict and records the length only
+  when the serializer accepts the body. On a refusal it returns the
+  fragment's length and leaves the size unrecorded, so the consensus
+  verifier still receives a length rather than an exception, and a later
+  weight does not treat the fragment as the transaction.
+  `get_transaction_weight(const transaction&)` measures through that
+  function. No behaviour changes for a transaction that serializes.
+
 ### Consensus — the txid binds the archival length (`SHT-Q2`, rule 07 cutover)
 
 - **Every non-coinbase txid changes.** The transaction id mixes one more

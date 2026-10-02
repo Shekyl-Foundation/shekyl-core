@@ -351,8 +351,19 @@ TEST(archival_emission_ct_balance, dispatch_verdict_invariant_under_blob_variati
   // tx_verification_utils.cpp; the leaf's own size check backstops it).
   transaction tx_included = make_emission_tx(rv, backing_O);
   tx_included.ct_signatures.p.pseudoOuts.push_back(backing_O);
+  // The extra pseudo-out is a body the serializer refuses. Sizing must
+  // return a length and must not record that fragment as the blob size;
+  // the dispatch, below, is what rejects it.
+  blobdata fragment;
+  ASSERT_FALSE(tx_to_blob(tx_included, fragment));
+  ASSERT_FALSE(tx_included.is_blob_size_valid());
+  EXPECT_EQ(get_transaction_blob_size(tx_included), fragment.size());
+  EXPECT_FALSE(tx_included.is_blob_size_valid());
+  EXPECT_EQ(get_transaction_weight(tx_included), get_transaction_weight(tx_included, fragment.size()));
+  EXPECT_FALSE(tx_included.is_blob_size_valid());
   tx_verification_context tvc_included{};
   EXPECT_FALSE(ver_non_input_consensus(tx_included, tvc_included, HF_VERSION_SHEKYL_NG));
   EXPECT_TRUE(tvc_included.m_verifivation_failed);
   EXPECT_TRUE(tvc_included.m_invalid_input);
+  EXPECT_FALSE(tx_included.is_blob_size_valid());
 }
