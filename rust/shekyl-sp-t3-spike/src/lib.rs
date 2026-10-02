@@ -79,6 +79,7 @@
 //! apparatus sends is a pass record consensus would reject, and nothing here
 //! ever assembles one. See [`harness`]'s module doc.
 
+pub mod ceiling;
 pub mod compare;
 pub mod fixture;
 pub mod harness;

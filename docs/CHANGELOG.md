@@ -23,6 +23,42 @@
   C++. No digest changes: every pinned value equals the one the previous
   C++ code produced.
 
+### Archival shards — the W₂ size ladder is read: `W = 3,000,000 B` stands on `U1a`
+
+- With onion PoW on, 13 of 319 single-attempt fetches of the largest served
+  object missed the 120 s deadline: 4.1 %, 95 % interval 2.4 – 6.9 %, against
+  the 0.30 the failure window is calibrated on
+  (`ARCHIVAL_SHARD_T_DERIVATION.md` §10.5). The provisional shard length
+  stands on the transport ceiling; it is now provisional only on the
+  server-egress measurement (`U1b`). No constant changes.
+- The PoW comparison shows no measurable cost on any judged statistic, with
+  the sign unresolved: one difference is material in PoW's favour, and the
+  design cannot attribute it (`SP_T3_SKELETON_MEASUREMENT.md` §19b). Two
+  PoW-off windows a day apart differ by more than the postures do.
+- `p_attempt = 0.30`, the failure window's calibration, is retained and is no
+  longer a stand-in: every window read sits under it (worst day 0.20, 95 %
+  upper bound 0.238). It reopens if a measured window's upper bound exceeds
+  it; a single good window never tightens it. The label in
+  `shekyl-economics-sim` says so; no value changes.
+- `L = 4` holds, re-derived per byte on the worse measured day: a fetch of
+  the heaviest shard takes 56.1 s at the governing percentile, and one
+  attempt and one retry complete by 149.7 s at p99. This replaces the
+  "~20 s for 3.33 MB" its span was sized on (`SHT-7`).
+- `SF-D6`'s retry budget is 2 retries (`ARCHIVAL_SHARD_T_DERIVATION.md`
+  §10.7): a read of three attempts completes by 190.4 s at p99 on the worse
+  day, inside `L`'s 240 s span, and cannot run past `L`'s six-minute line.
+  The measurement alone does not bound the count; the deadline arithmetic
+  does. It is not a constant yet: `shekyl-p-fetch` does not retry.
+- `shekyl-economics-sim`: `MissSources::retries` is `attempts`, which is
+  what it always held, and stays 1 deliberately. Bad-day misses are
+  correlated circuit failures, so a retry is margin, not calibration.
+- `shekyl-sp-t3-spike` gains `pd-f2-ceiling`, which reads one observations
+  file as §10.1's analysis: miss rate with its Wilson interval, circuit apart
+  from transfer misses, the fit and the ceiling or the reason there is none,
+  the span at the heaviest shard, the read of one attempt and up to three
+  retries, and the retry budget that follows.
+  The three observation files are in `docs/benchmarks/`.
+
 ### Daemon RPC — `target_height` is the core's target (`CORE_RPC_VERSION` 3.40)
 
 - `get_version` and `sync_info` no longer write `0` when the node is
