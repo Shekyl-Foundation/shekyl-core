@@ -38,31 +38,6 @@ TEST(device, name)
   ASSERT_EQ(dev.get_name(), "test");
 }
 
-/*
-TEST(device, locking)
-{
-  hw::core::device_default dev;
-  ASSERT_TRUE(dev.try_lock());
-  ASSERT_FALSE(dev.try_lock());
-  dev.unlock();
-  ASSERT_TRUE(dev.try_lock());
-  dev.unlock();
-  dev.lock();
-  ASSERT_FALSE(dev.try_lock());
-  dev.unlock();
-  ASSERT_TRUE(dev.try_lock());
-  dev.unlock();
-}
-*/
-
-TEST(device, open_close)
-{
-  hw::core::device_default dev;
-  crypto::secret_key key;
-  ASSERT_TRUE(dev.open_tx(key));
-  ASSERT_TRUE(dev.close_tx());
-}
-
 TEST(device, ops)
 {
   hw::core::device_default dev;

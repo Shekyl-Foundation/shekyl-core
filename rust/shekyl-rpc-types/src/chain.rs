@@ -43,7 +43,14 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.38: `get_info` gains the four per-connector
+/// `CORE_RPC_VERSION_MINOR`. 3.40: `get_version` and `sync_info` report the
+/// core's target height. `0` is a core-reported absence, not "synchronized"
+/// — that overload made the two states indistinguishable. 3.39: every `get_transactions` entry gains
+/// `archival_len`, the operand a client supplies beside `prunable_hash` to
+/// rebuild a pruned body's txid, which now binds it (`SHT-Q2`). The txid of
+/// every non-coinbase transaction changes with the same cutover, so a 3.38
+/// peer disagrees about identities, not only about this member. 3.38:
+/// `get_info` gains the four per-connector
 /// socket counts, and `get_bans` / `banned` gain `permanent`. `get_version`
 /// gains nothing. 3.37: `get_block_template` bounds `reserve_size`
 /// to 8 and `extra_nonce` to 8 bytes — the coinbase `0x02` nonce is a fixed
@@ -90,8 +97,10 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `get_curve_tree_path` removal, chained after it on merge; 3.35 the
 /// `pruning_seed` deletion; 3.36 the `tx_prune_height` deletion; 3.37 the
 /// coinbase-nonce bound; 3.38 the per-connector socket counts and the
-/// permanent-ban flag.
-pub const CORE_RPC_VERSION_MINOR: u32 = 38;
+/// permanent-ban flag; 3.39 `get_transactions`' `archival_len`; 3.40
+/// `get_version` and `sync_info` stop encoding synchronization as
+/// `target_height = 0`.
+pub const CORE_RPC_VERSION_MINOR: u32 = 40;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -370,8 +379,8 @@ pub struct GetVersionResponse {
     /// (`KV_SERIALIZE_OPT(current_height, 0)`).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub current_height: u64,
-    /// Height the daemon is syncing towards; `0` — and omitted — once
-    /// synchronized (`KV_SERIALIZE_OPT(target_height, 0)`).
+    /// The core's target height. `0` — and omitted — only when the core
+    /// reported none. A synchronized node with a target reports that target.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub target_height: u64,
     /// The hard-fork schedule. Omitted on the wire when empty
@@ -496,10 +505,10 @@ mod tests {
         // reasons and git merged the line clean**, because a one-line change
         // from 25 to 26 is textually identical whoever makes it. The minor
         // number is not a lock.
-        assert_eq!(CORE_RPC_VERSION, 196_646);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 38);
+        assert_eq!(CORE_RPC_VERSION, 196_648);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 40);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 38);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 40);
     }
 
     #[test]

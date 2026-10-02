@@ -399,7 +399,9 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   time1 = epee::misc_utils::get_tick_count();
 
   uint64_t num_rct_outs = 0;
-  blobdata miner_bd = tx_to_blob(blk.miner_tx);
+  blobdata miner_bd;
+  if (!tx_to_blob(blk.miner_tx, miner_bd))
+    throw DB_ERROR("miner transaction did not serialize at DB add");
   // `prev_height` is the height this block occupies (the count before the add).
   add_transaction(blk_hash, std::make_pair(blk.miner_tx, blobdata_ref(miner_bd)), prev_height);
   if (blk.miner_tx.version >= 2)

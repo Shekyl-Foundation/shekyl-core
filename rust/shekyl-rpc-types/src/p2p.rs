@@ -275,7 +275,9 @@ pub struct SyncInfoResponse {
     pub status: RpcStatus,
     /// Chain height: top block height plus one.
     pub height: u64,
-    /// `0` when the node considers itself synchronized.
+    /// The core's target count. `0` when the core reported none. A
+    /// synchronized node reports the target the core named. `get_info`
+    /// still writes `0` when synchronized; this method does not.
     pub target_height: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub peers: Vec<SyncInfoPeer>,

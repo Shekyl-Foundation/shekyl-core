@@ -24,7 +24,7 @@ use shekyl_archival_retention::CreditPair as Pair;
 use shekyl_archival_retention::{
     as_of_e_served_work, credited_work_milli, epoch_close_height, reward_share_floor,
     sigma_work_milli, ArchivalRewardEmissionVin, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
-    HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardSet, ShardWorkEntry,
+    HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardClose, ShardSet, ShardWorkEntry,
     WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_archival_retention::{EmissionAuthRole, RewardCommit, EMISSION_KAT_SHAPE};
@@ -73,13 +73,11 @@ impl Fixture {
             shards: vec![
                 EpochCloseShard {
                     shard_id: shape.shard_a,
-                    has_segment: true,
-                    freeze_height: close - shape.shard_a_freeze_offset,
+                    close: ShardClose::ClosedAt(close - shape.shard_a_freeze_offset),
                 },
                 EpochCloseShard {
                     shard_id: shape.shard_b,
-                    has_segment: true,
-                    freeze_height: close - shape.shard_b_freeze_offset,
+                    close: ShardClose::ClosedAt(close - shape.shard_b_freeze_offset),
                 },
             ],
             pairs: shape

@@ -64,7 +64,7 @@
 use core::marker::PhantomData;
 
 use redb::{ReadableTable, ReadableTableMetadata, TableDefinition, TableHandle};
-use shekyl_types::{BlockHeight, PqcAuthHash, PrunableHash, TxHash};
+use shekyl_types::{ArchivalLength, BlockHeight, PqcAuthHash, PrunableHash, TxHash};
 
 use crate::codec::{
     BlobKind, Canonical, Coded, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
@@ -73,8 +73,8 @@ use crate::codec::{
 use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
-    TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES,
-    TX_OUTPUTS,
+    TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE, TXS_PRUNABLE_HASH,
+    TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
 };
 
 use super::at_index::AtIndex;
@@ -224,8 +224,21 @@ pub struct TxRecord {
     /// The prunable region's hash — the archival good's unit of
     /// verification (`PDM-Q6` item 1); permanent.
     pub prunable_hash: PrunableHash,
-    /// The `pqc_auths` hash; present iff the txid is 4-part; permanent.
+    /// The `pqc_auths` hash; present iff the txid carries the component;
+    /// permanent.
     pub pqc_auth_hash: Option<PqcAuthHash>,
+    /// The archival length — `txs_archival_len[id]`, the third operand the
+    /// txid binds (`SHT-Q2`); permanent. The row is sparse, present iff the
+    /// transaction carries archival good, so a coinbase's reads zero here.
+    ///
+    /// **As recorded, not as verified** — like the two hash rows beside it.
+    /// A row lost from a transaction that carries good also reads zero, and
+    /// this read cannot tell the two apart. A consumer that names a txid
+    /// from this record rebuilds it from these operands and compares it to
+    /// the hash it asked by (`leaf_reads::outputs_at`, the one such consumer
+    /// today); the prune reads the rows directly and holds them to the
+    /// block's cell (SI-24).
+    pub archival_len: ArchivalLength,
 }
 
 impl TxRecord {
@@ -323,20 +336,20 @@ fn admit<T: ReadTables>(txn: &T, id: TxStorageId) -> Result<Admitted, ReadFault>
     Ok(Admitted::Recorded)
 }
 
-/// One `Coded<V>` hash row under a dense id, read the only way a hash row
-/// is read here: absent is `None`, present **decodes** — a row that is not
-/// exactly one `V` is SI-7 `Undecodable` naming the table, the same fault
-/// whether T3 or T4 met it (PR #800 review round 3). `Coded` does not
-/// decode on access, so a presence check alone (`get(..).is_some()`) would
-/// take a row on faith; every hash-row read goes through here so none
-/// does. Today the arm is unreachable by construction — both codecs are
+/// One `Coded<V>` row under a dense id — a digest row, or the archival
+/// length row — read the only way such a row is read here: absent is `None`,
+/// present **decodes** — a row that is not exactly one `V` is SI-7
+/// `Undecodable` naming the table, the same fault whether T3 or T4 met it
+/// (PR #800 review round 3). `Coded` does not decode on access, so a presence
+/// check alone (`get(..).is_some()`) would take a row on faith; every such
+/// read goes through here so none does. Today the arm is unreachable by construction — both codecs are
 /// fixed-width 32, the engine refuses any other width at write time, and
 /// every 32-byte row decodes — which the tests pin rather than plant
 /// around; the reader still decodes so the seam holds if a codec gains
 /// structure. `cell` is the table's name as the fault carries it (`'static`,
 /// which redb's `TableHandle::name` borrow is not); the two are bound by
 /// the debug assertion, so a test that reaches the row catches a drift.
-fn hash_row<V: Canonical, T: ReadTables>(
+fn coded_row<V: Canonical, T: ReadTables>(
     txn: &T,
     table: TableDefinition<'static, u64, Coded<V>>,
     cell: &'static str,
@@ -478,10 +491,10 @@ pub(super) fn record_at<T: ReadTables>(
     };
     let pruned = SegmentBytes::new(pruned.value().bytes());
 
-    let Some(prunable_hash) = hash_row(txn, TXS_PRUNABLE_HASH, "txs_prunable_hash", id)? else {
+    let Some(prunable_hash) = coded_row(txn, TXS_PRUNABLE_HASH, "txs_prunable_hash", id)? else {
         return Err(absent("txs_prunable_hash"));
     };
-    let pqc_auth_hash = hash_row(txn, TXS_PQC_AUTH_HASH, "txs_pqc_auth_hash", id)?;
+    let pqc_auth_hash = coded_row(txn, TXS_PQC_AUTH_HASH, "txs_pqc_auth_hash", id)?;
     let pqc_auths = txn
         .table(TXS_PQC_AUTHS)?
         .get(id)?
@@ -497,12 +510,20 @@ pub(super) fn record_at<T: ReadTables>(
         (None, None) => None,
     };
 
+    // Sparse by definition (`connect` writes it iff the length is non-zero),
+    // so absence is zero, not a hole. A row lost from a transaction that
+    // carries good is caught where the length is used: the txid it then
+    // rebuilds is not the one the block names.
+    let archival_len =
+        coded_row(txn, TXS_ARCHIVAL_LEN, "txs_archival_len", id)?.unwrap_or(ArchivalLength::ZERO);
+
     Ok(Some(TxRecord {
         location,
         pruned,
         pqc_auths,
         prunable_hash,
         pqc_auth_hash,
+        archival_len,
     }))
 }
 
@@ -512,7 +533,7 @@ pub(super) fn record_at<T: ReadTables>(
 /// At or beyond the count: [`AtIndex::BeyondCount`], no row read — a forged
 /// or stale id is invalid input, not corruption. Below it the primary row
 /// must exist (a hole is **SI-9**, [`admit`]); then the hash row must exist
-/// and decode (leg (i); missing or malformed is **SI-7**, [`hash_row`] — the
+/// and decode (leg (i); missing or malformed is **SI-7**, [`coded_row`] — the
 /// answer is about the region whose digest that row is, so a row that is
 /// not a digest is not a basis for it), and then the segment's presence is
 /// the answer — [`Prunable::Retained`] or [`Prunable::Discarded`], leg
@@ -525,7 +546,7 @@ pub(super) fn prunable_at<T: ReadTables>(
         return Ok(AtIndex::BeyondCount);
     }
     let raw = id.to_raw();
-    if hash_row(txn, TXS_PRUNABLE_HASH, "txs_prunable_hash", raw)?.is_none() {
+    if coded_row(txn, TXS_PRUNABLE_HASH, "txs_prunable_hash", raw)?.is_none() {
         return Err(absent("txs_prunable_hash"));
     }
     let answer = match txn.table(TXS_PRUNABLE)?.get(raw)? {
@@ -566,11 +587,11 @@ pub(super) fn carries_archival_good_at<T: ReadTables>(
     // Leg (i): the prunable hash row is permanent and mandatory — its absence
     // below the count is SI-7, the same fault `prunable_at` reports, because the
     // answer is *about* the region whose digest that row is.
-    let Some(prunable_hash) = hash_row(txn, TXS_PRUNABLE_HASH, "txs_prunable_hash", raw)? else {
+    let Some(prunable_hash) = coded_row(txn, TXS_PRUNABLE_HASH, "txs_prunable_hash", raw)? else {
         return Err(absent("txs_prunable_hash"));
     };
     // Absent ⇔ the txid is 3-part. Not a fault: that is what no row means here.
-    let pqc_auth_hash = hash_row(txn, TXS_PQC_AUTH_HASH, "txs_pqc_auth_hash", raw)?;
+    let pqc_auth_hash = coded_row(txn, TXS_PQC_AUTH_HASH, "txs_pqc_auth_hash", raw)?;
     Ok(AtIndex::Recorded(shekyl_wire::carries_archival_good(
         pqc_auth_hash,
         prunable_hash,

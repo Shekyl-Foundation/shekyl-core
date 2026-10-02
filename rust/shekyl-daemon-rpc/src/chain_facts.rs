@@ -14,10 +14,11 @@
 //! one is deleted; the handlers and their tests do not move.
 //!
 //! The shim holds **no policy**: it converts PODs to typed facts and maps
-//! return codes onto [`FactsFault`]. "Synchronized ⇒ target height is 0" on
-//! the **wire** is the handler's rule, applied in `methods`, not here. Inland,
-//! a core-reported `0` is C5's sentinel and decodes as `None` — never
-//! [`ChainCount::from_raw`]`(0)`.
+//! return codes onto [`FactsFault`]. A core-reported `0` target is C5's
+//! sentinel and decodes as `None` — never [`ChainCount::from_raw`]`(0)`.
+//! `get_version` and `sync_info` forward that count, so `0` on their wire is
+//! only `None`. `get_info` still writes `0` when the node is synchronized,
+//! and that rule lives in the C++ handler, not here.
 //!
 //! ```compile_fail
 //! // HEIGHT_SEMANTICS.md C9: `ChainTip.chain_height` is COUNT, not ordinal.
@@ -108,10 +109,11 @@ pub struct ChainTip {
     pub chain_height: ChainCount,
     /// Hash of the top block.
     pub top_hash: BlockHash,
-    /// Height the node is syncing towards, as the core reports it.
-    /// `None` iff the POD was `0` (C5: synchronized sentinel, not a
-    /// genesis-only chain). The wire still writes `0` when
-    /// [`Self::synchronized`] — that rule stays in `methods`.
+    /// The core's target count. `None` when the core reported `0`: that
+    /// raw value is an absence, not a [`ChainCount`] (C5). Synchronization
+    /// is [`Self::synchronized`]. `get_version` and `sync_info` forward this
+    /// count (`0` only for `None`). `get_info` still writes `0` when the
+    /// node is synchronized.
     pub target_height: Option<ChainCount>,
     /// Whether the protocol layer considers this node synchronized.
     pub synchronized: bool,
@@ -230,8 +232,9 @@ impl FactsFault {
     }
 }
 
-/// C5: a core-reported `0` is the synchronized sentinel, not a genesis-only
-/// chain. Inland never wraps 0 as [`ChainCount`].
+/// C5: a reported target of `0` is not a chain count. Inland never wraps
+/// `0` as [`ChainCount`]. The absence is the core reporting no target;
+/// synchronization is [`ChainTip::synchronized`].
 pub(crate) fn decode_target_count(raw: u64) -> Option<ChainCount> {
     (raw != 0).then(|| ChainCount::from_raw(raw))
 }

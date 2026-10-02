@@ -124,10 +124,10 @@ using namespace crypto;
 //   Within V10 (no bump): the additive `archival_settlement` table (SO-D2)
 //   rides this boundary for the same reason the witness tables rode V9 — a new
 //   empty table on an existing env asserts no incompatibility.
-// V11: retention semantics, not layout — `prune_tx_data` must KEEP
-// `txs_prunable_hash` and `txs_pqc_auths` when it drops the prunable body:
-// both are operands of the pruned v3 txid (`get_pruned_transaction_hash`),
-// and neither has a hash table of its own. V10 code's depth pass deleted
+// V11: retention semantics, not layout — a drop of the prunable body must
+// KEEP `txs_prunable_hash` and `txs_pqc_auths`: both are operands of the v3
+// txid (the Rust mixer, shekyl-wire `txid.rs`), and neither has a hash table
+// of its own (no such drop exists here since V15). V10's depth pass deleted
 // them, so a V10 datadir that ever pruned holds txs the V11 reader cannot
 // name — the facts export answers INCONSISTENT for each of them, forever,
 // with no repair path (the bytes are gone). The rows are required now, so
@@ -159,7 +159,12 @@ using namespace crypto;
 // list. The discard that replaces both is S-PRUNE, Rust, on the redb store
 // (DRS_E1_SPRUNE.md) — nothing here is carried into it. Pre-genesis: delete
 // and resync.
-#define VERSION 15
+// V16: content, not layout — the transaction id (SHT-Q2). A non-coinbase txid
+// mixes the transaction's archival length, so a V15 datadir indexes its
+// transactions, and lists them in every block, under ids no current node
+// computes. Same byte layout; only the version pin makes the stale index
+// loud. Pre-genesis: delete and resync.
+#define VERSION 16
 
 namespace
 {

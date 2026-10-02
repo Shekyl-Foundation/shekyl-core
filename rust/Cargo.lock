@@ -4149,6 +4149,7 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-economics",
  "shekyl-tx-weight",
+ "shekyl-types",
 ]
 
 [[package]]

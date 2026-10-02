@@ -92,20 +92,6 @@ namespace cryptonote
 
 namespace cryptonote
 {
-  //---------------------------------------------------------------
-  void get_transaction_prefix_hash(const transaction_prefix& tx, crypto::hash& h, hw::device &hwdev)
-  {
-    hwdev.get_transaction_prefix_hash(tx,h);    
-  }
-
-  //---------------------------------------------------------------  
-  crypto::hash get_transaction_prefix_hash(const transaction_prefix& tx, hw::device &hwdev)
-  {
-    crypto::hash h = null_hash;
-    get_transaction_prefix_hash(tx, h, hwdev);
-    return h;
-  }
-  
   bool expand_transaction_1(transaction &tx, bool base_only)
   {
     if (tx.version >= 2 && !is_coinbase(tx))
@@ -371,32 +357,24 @@ namespace cryptonote
   //---------------------------------------------------------------
   uint64_t get_transaction_weight(const transaction &tx)
   {
-    size_t blob_size;
-    if (tx.is_blob_size_valid())
-    {
-      blob_size = tx.blob_size;
-    }
-    else
-    {
-      std::ostringstream s;
-      binary_archive<true> a(s);
-      ::serialization::serialize(a, const_cast<transaction&>(tx));
-      blob_size = s.str().size();
-    }
-    return get_transaction_weight(tx, blob_size);
+    return get_transaction_weight(tx, get_transaction_blob_size(tx));
   }
   //---------------------------------------------------------------
+  // Wire length of `tx`. The consensus verifier asks before its structural
+  // checks and must receive a length, never an exception, including for an
+  // in-memory body the serializer refuses. That refusal is not a length to
+  // record: the return is the bytes written before it, and `blob_size_valid`
+  // stays clear so a later weight or copy does not treat the fragment as the
+  // transaction. A body the serializer accepts is recorded, and measured once.
   uint64_t get_transaction_blob_size(const transaction& tx)
   {
-    if (!tx.is_blob_size_valid())
-    {
-      const cryptonote::blobdata tx_blob = tx_to_blob(tx);
+    if (tx.is_blob_size_valid())
+      return tx.blob_size;
+
+    cryptonote::blobdata tx_blob;
+    if (tx_to_blob(tx, tx_blob))
       tx.set_blob_size(tx_blob.size());
-    }
-
-    CHECK_AND_ASSERT_THROW_MES(tx.is_blob_size_valid(), "BUG: blob size valid not set");
-
-    return tx.blob_size;
+    return tx_blob.size();
   }
   //---------------------------------------------------------------
   bool get_tx_fee(const transaction& tx, uint64_t & fee)
@@ -959,63 +937,19 @@ namespace cryptonote
     return res;
   }
   //---------------------------------------------------------------
-  crypto::hash get_pruned_transaction_hash(const transaction& t, const crypto::hash &pruned_data_hash)
-  {
-    // v1 transactions hash the entire blob
-    CHECK_AND_ASSERT_THROW_MES(t.version > 1, "Hash for pruned v1 tx cannot be calculated");
-
-    transaction &tt = const_cast<transaction&>(t);
-    const bool has_pqc = t.version >= 3 && !t.vin.empty() && !std::holds_alternative<txin_gen>(t.vin[0]);
-
-    // prefix
-    crypto::hash prefix_hash;
-    get_transaction_prefix_hash(t, prefix_hash);
-
-    // base rct
-    crypto::hash base_ct_hash;
-    {
-      std::stringstream ss;
-      binary_archive<true> ba(ss);
-      const size_t inputs = t.vin.size();
-      const size_t outputs = t.vout.size();
-      bool r = tt.ct_signatures.serialize_ctsig_base(ba, inputs, outputs);
-      CHECK_AND_ASSERT_THROW_MES(r, "Failed to serialize ct signatures base");
-      cryptonote::get_blob_hash(ss.str(), base_ct_hash);
-    }
-
-    // prunable rct
-    crypto::hash prunable_hash;
-    if (t.ct_signatures.type == ct::CTTypeNull)
-      prunable_hash = crypto::null_hash;
-    else
-      prunable_hash = pruned_data_hash;
-
-    crypto::hash res;
-    if (has_pqc && !t.pqc_auths.empty())
-    {
-      // v3: hash(prefix, base_rct, pqc_auths, prunable)
-      crypto::hash pqc_auth_hash;
-      std::stringstream ss;
-      binary_archive<true> ba(ss);
-      std::vector<pqc_authentication> pqc_tmp = t.pqc_auths;
-      bool r = ::do_serialize(ba, pqc_tmp);
-      CHECK_AND_ASSERT_THROW_MES(r, "Failed to serialize pqc_auths");
-      cryptonote::get_blob_hash(ss.str(), pqc_auth_hash);
-
-      crypto::hash hashes[4] = { prefix_hash, base_ct_hash, pqc_auth_hash, prunable_hash };
-      res = cn_fast_hash(hashes, sizeof(hashes));
-    }
-    else
-    {
-      // v2: hash(prefix, base_rct, prunable)
-      crypto::hash hashes[3] = { prefix_hash, base_ct_hash, prunable_hash };
-      res = cn_fast_hash(hashes, sizeof(hashes));
-    }
-
-    t.set_hash(res);
-    return res;
-  }
-  //---------------------------------------------------------------
+  // The txid of a v2+ transaction is computed in Rust, by the one mixer
+  // (shekyl-wire `TxidSegments::txid`, SHT-Q2). This function serializes the
+  // transaction and hands over the four byte ranges the serializer itself
+  // marked -- prefix, ct base, tx-level pqc_auths, prunable -- with the two
+  // facts about them that are not bytes: how many authorizations the third
+  // range holds, and whether the first input is a spend.
+  //
+  // No hashing and no length happens here. The txid binds the transaction's
+  // archival length (|pqc_auths| + |prunable|), and Rust measures it from the
+  // ranges it is given; a length computed on this side would be a second
+  // measurement of a consensus operand, free to disagree with the first.
+  // For the same reason there is no pruned form of this function: a body
+  // without its prunable range has no length here to measure.
   bool calculate_transaction_hash(const transaction& t, crypto::hash& res, size_t* blob_size)
   {
     CHECK_AND_ASSERT_MES(!t.pruned, false, "Cannot calculate the hash of a pruned transaction");
@@ -1027,60 +961,31 @@ namespace cryptonote
       return get_object_hash(t, res, blob_size_ref);
     }
 
-    // v2+ transactions hash different parts together, than hash the set of those hashes
-    crypto::hash prefix_hash;
-    get_transaction_prefix_hash(t, prefix_hash);
+    // Serializing is what sets the three offsets read below. Its verdict is
+    // read, not discarded: the offsets are recorded before the prunable
+    // region is written, so a refusal inside that region leaves them in order
+    // over a fragment, and the range check below would pass it.
+    blobdata blob;
+    CHECK_AND_ASSERT_MES(tx_to_blob(t, blob), false, "Failed to serialize transaction for its hash");
+    const size_t prefix_size = t.prefix_size;
+    const size_t pqc_auths_offset = t.pqc_auths_offset;
+    const size_t unprunable_size = t.unprunable_size;
 
-    const blobdata blob = tx_to_blob(t);
-    const unsigned int unprunable_size = t.unprunable_size;
-    const unsigned int prefix_size = t.prefix_size;
-    const bool has_pqc = t.version >= 3 && !t.vin.empty() && !std::holds_alternative<txin_gen>(t.vin[0]);
+    CHECK_AND_ASSERT_MES(prefix_size <= pqc_auths_offset && pqc_auths_offset <= unprunable_size && unprunable_size <= blob.size(), false,
+      "Inconsistent transaction prefix, pqc_auths, unprunable and blob sizes");
 
-    CHECK_AND_ASSERT_MES(prefix_size <= unprunable_size && unprunable_size <= blob.size(), false, "Inconsistent transaction prefix, unprunable and blob sizes");
+    const bool first_input_is_spend = t.version >= 3 && !t.vin.empty() && !std::holds_alternative<txin_gen>(t.vin[0]);
+    const uint8_t* const bytes = reinterpret_cast<const uint8_t*>(blob.data());
 
-    // base rct (blob from prefix_size to end of rct base; for v3, we must serialize separately since pqc_auths follows)
-    crypto::hash base_ct_hash;
-    {
-      transaction &tt = const_cast<transaction&>(t);
-      std::stringstream ss;
-      binary_archive<true> ba(ss);
-      const size_t inputs = t.vin.size();
-      const size_t outputs = t.vout.size();
-      bool r = tt.ct_signatures.serialize_ctsig_base(ba, inputs, outputs);
-      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize ct signatures base");
-      cryptonote::get_blob_hash(ss.str(), base_ct_hash);
-    }
-
-    // prunable rct
-    crypto::hash prunable_hash;
-    if (t.ct_signatures.type == ct::CTTypeNull)
-      prunable_hash = crypto::null_hash;
-    else
-    {
-      cryptonote::blobdata_ref blobref(blob);
-      CHECK_AND_ASSERT_MES(calculate_transaction_prunable_hash(t, &blobref, prunable_hash), false, "Failed to get tx prunable hash");
-    }
-
-    if (has_pqc && !t.pqc_auths.empty())
-    {
-      // v3: hash(prefix, base_rct, pqc_auths, prunable)
-      crypto::hash pqc_auth_hash;
-      std::stringstream ss;
-      binary_archive<true> ba(ss);
-      std::vector<pqc_authentication> pqc_tmp = t.pqc_auths;
-      bool r = ::do_serialize(ba, pqc_tmp);
-      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize pqc_auths");
-      cryptonote::get_blob_hash(ss.str(), pqc_auth_hash);
-
-      crypto::hash hashes[4] = { prefix_hash, base_ct_hash, pqc_auth_hash, prunable_hash };
-      res = cn_fast_hash(hashes, sizeof(hashes));
-    }
-    else
-    {
-      // v2: hash(prefix, base_rct, prunable)
-      crypto::hash hashes[3] = { prefix_hash, base_ct_hash, prunable_hash };
-      res = cn_fast_hash(hashes, sizeof(hashes));
-    }
+    const bool mixed = shekyl_txid_from_segments(
+      bytes, prefix_size,
+      bytes + prefix_size, pqc_auths_offset - prefix_size,
+      bytes + pqc_auths_offset, unprunable_size - pqc_auths_offset,
+      t.pqc_auths.size(),
+      first_input_is_spend,
+      bytes + unprunable_size, blob.size() - unprunable_size,
+      reinterpret_cast<uint8_t*>(res.data));
+    CHECK_AND_ASSERT_MES(mixed, false, "Failed to mix the transaction id");
 
     // we still need the size
     if (blob_size)
@@ -1227,12 +1132,7 @@ namespace cryptonote
     return t_serializable_object_to_blob(b, b_blob);
   }
   //---------------------------------------------------------------
-  blobdata tx_to_blob(const transaction& tx)
-  {
-    return t_serializable_object_to_blob(tx);
-  }
-  //---------------------------------------------------------------
-  bool tx_to_blob(const transaction& tx, blobdata& b_blob)
+  [[nodiscard]] bool tx_to_blob(const transaction& tx, blobdata& b_blob)
   {
     return t_serializable_object_to_blob(tx, b_blob);
   }

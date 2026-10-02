@@ -227,18 +227,27 @@ pub fn scenario_8_late_tail(params: &SimParams) -> ScenarioConfig {
     }
 }
 
+/// Scenario 9's tail traffic, in transactions per block — the "low activity"
+/// half of its name. Named so the A1 report can state the regime the binding
+/// opportunity-cost rate is being asserted over.
+pub const SCENARIO_9_TAIL_TX_PER_BLOCK: u64 = 15;
+
 /// Scenario 9 — high history / low activity (§11.2, the missing sim quadrant):
 /// large `n`, low *current* volume, the post-boom settled chain. An early boom
-/// (years 0–20, ~250 tx/block) accretes ~120k shards, then a long low-activity
-/// tail (years 20–60, 15 tx/block). Run to **60 years** so the emission leg is
-/// exhausted (`0.9^60 ≈ 0.002` of the initial staker-emission share, and most
-/// supply emitted) — the only regime where the fee leg is the primary budget and
-/// escalation is decisive (A1's binding case; F-G). None of scenarios 1–8 reach
-/// it (`scenario_8` is high-history but *busy* and only 5 years long).
+/// (years 0–20, ~250 tx/block) accretes the shard corpus (~4.9 M byte shards
+/// at 60 y), then a long low-activity tail (years 20–60,
+/// [`SCENARIO_9_TAIL_TX_PER_BLOCK`] tx/block). Run to **60 years** so the
+/// **staker** emission leg has decayed to ≈ 0.002 of its initial share
+/// (`0.9^60`) on a curve within 0.1 % of its asymptote — not exhausted: the
+/// curve still mints ≈ 1 SKL/block at year 60, and the 0.6 SKL/block tail
+/// floor binds from ≈ year 64 — the only regime where the fee leg is the primary
+/// budget and escalation is decisive (A1's binding case; F-G). None of
+/// scenarios 1–8 reach it (`scenario_8` is high-history but *busy* and only 5
+/// years long).
 pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConfig {
     ScenarioConfig {
         name: "high_history_low_activity".into(),
-        description: "post-boom settled chain: ~120k shards accreted in an early boom, then a low-activity fee-era tail over 60 years (emission exhausted) — the §11.2 quadrant where escalation is decisive".into(),
+        description: "post-boom settled chain: a large shard corpus accreted in an early boom, then a low-activity fee-era tail over 60 years (emission near the tail: ~1 SKL/block at year 60, the 0.6 SKL/block floor binds from ~year 64) — the §11.2 quadrant where escalation is decisive".into(),
         sim_years: 60,
         volume: VolumeSchedule {
             get_volume: Box::new(|block, blocks_per_year| {
@@ -249,7 +258,7 @@ pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConf
                     5..=14 => 250,
                     15..=19 => 120,
                     // Long low-activity tail: few txs, thin fee leg.
-                    _ => 15,
+                    _ => SCENARIO_9_TAIL_TX_PER_BLOCK,
                 }
             }),
         },

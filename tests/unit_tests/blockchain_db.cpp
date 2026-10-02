@@ -44,6 +44,7 @@
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
+#include "tx_blob.h"
 
 using namespace cryptonote;
 using epee::string_tools::pod_to_hex;
@@ -88,8 +89,8 @@ void print_block(const block& blk, const std::string& prefix = "")
 // from std::string, this might break.
 bool compare_txs(const transaction& a, const transaction& b)
 {
-  auto ab = tx_to_blob(a);
-  auto bb = tx_to_blob(b);
+  auto ab = shekyl_test_fixtures::tx_blob(a);
+  auto bb = shekyl_test_fixtures::tx_blob(b);
 
   return ab == bb;
 }
@@ -207,6 +208,43 @@ TYPED_TEST(BlockchainDBTest, OpenAndClose)
   ASSERT_NO_THROW(this->m_db->close());
 }
 
+TYPED_TEST(BlockchainDBTest, AddBlockRefusesAMinerTxThatDoesNotSerialize)
+{
+  boost::filesystem::path tempPath = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path();
+  std::string dirPath = tempPath.string();
+
+  this->set_prefix(dirPath);
+  ASSERT_NO_THROW(this->m_db->open(dirPath));
+  this->get_filenames();
+  this->init_hard_fork();
+
+  db_wtxn_guard guard(this->m_db);
+
+  ASSERT_NO_THROW(this->m_db->add_block(this->m_blocks[0], this->m_block_weights[0], this->m_block_weights[0], t_diffs[0], t_coins[0], 0, {}, this->m_txs[0]));
+  ASSERT_EQ(1u, this->m_db->height());
+
+  // Named while whole, then damaged: the base serializer refuses a
+  // transaction whose encrypted-amount count is not its output count.
+  std::pair<block, blobdata> damaged = this->m_blocks[1];
+  const crypto::hash named = get_block_hash(damaged.first);
+  ASSERT_FALSE(damaged.first.miner_tx.vout.empty());
+  damaged.first.miner_tx.ct_signatures.enc_amounts.clear();
+
+  // The fixture is what it claims: refused by the serializer, still named.
+  blobdata fragment;
+  ASSERT_FALSE(tx_to_blob(damaged.first.miner_tx, fragment));
+  ASSERT_TRUE(damaged.first.is_hash_valid());
+  ASSERT_HASH_EQ(named, get_block_hash(damaged.first));
+
+  EXPECT_THROW(this->m_db->add_block(damaged, this->m_block_weights[1], this->m_block_weights[1], t_diffs[1], t_coins[1], 0, {}, this->m_txs[1]), DB_ERROR);
+
+  // Nothing of it was written, and the store still takes the whole block.
+  EXPECT_EQ(1u, this->m_db->height());
+  EXPECT_FALSE(this->m_db->block_exists(named));
+  ASSERT_NO_THROW(this->m_db->add_block(this->m_blocks[1], this->m_block_weights[1], this->m_block_weights[1], t_diffs[1], t_coins[1], 0, {}, this->m_txs[1]));
+  EXPECT_EQ(2u, this->m_db->height());
+  EXPECT_TRUE(this->m_db->block_exists(named));
+}
 TYPED_TEST(BlockchainDBTest, AddBlock)
 {
 

@@ -14,7 +14,7 @@ use std::net::TcpListener;
 use std::os::raw::c_char;
 
 use shekyl_rpc_types::{HashHex, RpcStatus};
-use shekyl_types::{BlockHash, PrunableHash, TxHash};
+use shekyl_types::{ArchivalLength, BlockHash, PrunableHash, TxHash};
 
 fn run(args: &[&str], address: Option<&str>) -> (i32, String) {
     let cstrs: Vec<CString> = args.iter().map(|a| CString::new(*a).unwrap()).collect();
@@ -415,9 +415,26 @@ fn a_retained_transaction_is_not_reported_pruned() {
 #[test]
 fn a_pruned_transaction_is_reported_pruned() {
     // The prunable half is gone, so the identity mixes the reply's
-    // supplied digest — the same recomputation the binding performs.
-    let txid = console_spend().hash_with_supplied_prunable(PrunableHash::from_bytes([0x5A; 32]));
-    let addr = one_shot_projected(mined_slot(Vec::new()), txid);
+    // supplied digest and archival length — the same recomputation the
+    // binding performs. The reply is built by hand: this daemon's projection
+    // measures the length from the half it holds and refuses a body without
+    // one, so only another store's daemon sends this form.
+    let (pruned, tail) = console_spend_halves();
+    let archival_len = console_spend().archival_len_with_prunable(&tail);
+    let txid = console_spend()
+        .hash_with_supplied_prunable(PrunableHash::from_bytes([0x5A; 32]), archival_len);
+    let entry = shekyl_rpc_types::TxEntry {
+        pruned_as_hex: hex::encode(pruned),
+        prunable_as_hex: String::new(),
+        archival_len: archival_len.to_raw(),
+        pruned: true,
+        ..mined_entry(txid.to_bytes())
+    };
+    let addr = one_shot_raw(shekyl_rpc_types::GetTransactionsResponse {
+        status: RpcStatus::ok(),
+        txs: vec![entry],
+        missed_tx: vec![],
+    });
     let (_, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
     assert!(
         out.contains("(pruned)"),
@@ -440,12 +457,14 @@ fn an_echoed_label_over_a_substituted_body_is_refused() {
     other.prefix.unlock_time = 5;
     let requested = other.hash();
     let (pruned, tail) = console_spend_halves();
+    let archival_len = console_spend().archival_len_with_prunable(&tail);
     let entry = shekyl_rpc_types::TxEntry {
         tx_hash: HashHex::from_bytes(requested.to_bytes()),
         as_hex: String::new(),
         pruned_as_hex: hex::encode(pruned),
         prunable_as_hex: hex::encode(tail),
         prunable_hash: HashHex::from_bytes([0x5A; 32]),
+        archival_len: archival_len.to_raw(),
         as_json: String::new(),
         pruned: false,
         double_spend_seen: false,
@@ -471,29 +490,31 @@ fn an_echoed_label_over_a_substituted_body_is_refused() {
     );
 }
 
-/// **And on the pruned arm, where the daemon also chooses the digest.**
-/// The test above substitutes a body whose prunable half is present, so
-/// the identity is a whole-body hash the daemon cannot steer. The pruned
-/// arm is the interesting one: `prunable_hash` is the daemon's to pick,
-/// and the comment on the binding claims picking it freely buys nothing
-/// because it leaves `H(prefix ‖ base ‖ pqc ‖ X) = txid` to solve for
-/// `X`. That claim is argued at the call site and pinned here — the
-/// daemon serves another transaction's pruned body under this label and
-/// supplies the very digest that makes the *requested* identity come out
+/// **And on the pruned arm, where the daemon also chooses the digest and
+/// the length.** The test above substitutes a body whose prunable half is
+/// present, so the identity is a whole-body hash the daemon cannot steer.
+/// The pruned arm is the interesting one: `prunable_hash` and
+/// `archival_len` are the daemon's to pick, and the comment on the binding
+/// claims picking them freely buys nothing because it leaves
+/// `H(prefix ‖ base ‖ pqc ‖ X ‖ L) = txid` to solve for `X` and `L`. That
+/// claim is argued at the call site and pinned here — the daemon serves
+/// another transaction's pruned body under this label and supplies the
+/// very digest and length that make the *requested* identity come out
 /// right for its own body, which is the best choice available to it.
 #[test]
 fn a_substituted_pruned_body_is_refused_even_with_a_chosen_digest() {
     const CHOSEN: [u8; 32] = [0x11; 32];
-    // The pruned identity of a DIFFERENT transaction, under the digest
-    // the daemon will also supply — so only the body differs.
+    const CHOSEN_LEN: ArchivalLength = ArchivalLength::from_raw(4_242);
+    // The pruned identity of a DIFFERENT transaction, under the digest and
+    // length the daemon will also supply — so only the body differs.
     let mut other = console_spend();
     other.prefix.unlock_time = 5;
-    let requested = other.hash_with_supplied_prunable(PrunableHash::from_bytes(CHOSEN));
+    let requested = other.hash_with_supplied_prunable(PrunableHash::from_bytes(CHOSEN), CHOSEN_LEN);
     // Sanity: the two bodies really do have different pruned identities,
     // or the refusal below would prove nothing.
     assert_ne!(
         requested,
-        console_spend().hash_with_supplied_prunable(PrunableHash::from_bytes(CHOSEN)),
+        console_spend().hash_with_supplied_prunable(PrunableHash::from_bytes(CHOSEN), CHOSEN_LEN),
         "the fixture must substitute a genuinely different body"
     );
     let (pruned, _tail) = console_spend_halves();
@@ -504,6 +525,7 @@ fn a_substituted_pruned_body_is_refused_even_with_a_chosen_digest() {
         // The half is gone, so the binding takes the pruned arm.
         prunable_as_hex: String::new(),
         prunable_hash: HashHex::from_bytes(CHOSEN),
+        archival_len: CHOSEN_LEN.to_raw(),
         as_json: String::new(),
         pruned: true,
         double_spend_seen: false,
@@ -541,6 +563,7 @@ fn extra_transaction_entries_are_a_malformed_reply() {
         pruned_as_hex: "aabb".to_owned(),
         prunable_as_hex: "ccdd".to_owned(),
         prunable_hash: HashHex::from_bytes([0x5A; 32]),
+        archival_len: 2,
         as_json: String::new(),
         pruned: false,
         double_spend_seen: false,
@@ -610,6 +633,7 @@ fn mined_entry(txid: [u8; 32]) -> shekyl_rpc_types::TxEntry {
         pruned_as_hex: hex::encode([0xAAu8, 0xBB]),
         prunable_as_hex: hex::encode([0xCCu8]),
         prunable_hash: HashHex::from_bytes([0x5A; 32]),
+        archival_len: 1,
         as_json: String::new(),
         pruned: false,
         double_spend_seen: false,

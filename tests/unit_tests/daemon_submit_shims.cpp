@@ -42,6 +42,7 @@
 #include "cryptonote_protocol/cryptonote_protocol_handler_common.h"
 #include "rpc/daemon_submit_ffi.h"
 #include "span.h"
+#include "tx_blob.h"
 
 using namespace cryptonote;
 
@@ -421,7 +422,7 @@ struct ShimFixture
     const uint64_t mask = Blockchain::get_fee_quantization_mask();
     for (int round = 0; round < 4; ++round)
     {
-      const size_t weight = cryptonote::tx_to_blob(s.tx).size();
+      const size_t weight = shekyl_test_fixtures::tx_blob(s.tx).size();
       const uint64_t needed = (weight * fee_per_byte + mask - 1) / mask * mask;
       const uint64_t want = needed * fee_scale;
       if (s.tx.ct_signatures.txnFee == want)
@@ -429,7 +430,7 @@ struct ShimFixture
       s.tx.ct_signatures.txnFee = want;
       s.tx.invalidate_hashes();
     }
-    s.blob = cryptonote::tx_to_blob(s.tx);
+    s.blob = shekyl_test_fixtures::tx_blob(s.tx);
     EXPECT_FALSE(s.blob.empty());
     s.txid = cryptonote::get_transaction_hash(s.tx);
     s.weight = s.blob.size();

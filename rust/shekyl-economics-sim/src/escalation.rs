@@ -56,11 +56,34 @@ pub fn floor_share() -> u64 {
 /// saturation.
 pub const ASYMPTOTE_BAND: [u64; 3] = [500_000, 750_000, 900_000];
 
-/// Knee candidates — the `frozen_segment_count` at which the share saturates to
-/// the asymptote. Wide spread on purpose (§6.0 wide-but-slow): a larger knee is
-/// a slower ratchet. `25_000` ≈ the baseline-traffic corpus at ~10y; `250_000`
-/// only saturates deep in a sustained-growth chain.
-pub const KNEE_BAND: [u64; 3] = [25_000, 100_000, 250_000];
+/// Knee candidates — the **closed-shard count** (`shard_of` of cumulative
+/// archival length, `W` = 3 MB per shard; `SHT-Q2`) at which the share
+/// saturates to the asymptote. Wide spread on purpose (§6.0 wide-but-slow): a
+/// larger knee is a slower ratchet. **Re-derived in the byte-keyed unit by the
+/// Stage-2 sweep, not converted from the J-segment band**
+/// (`ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F step 3): the low member is the
+/// baseline-traffic trajectory's `n` at ~10 y, the high member is the
+/// sustained-growth trajectory's final `n`, the middle is their geometric
+/// mean. `stage2::knee_band_brackets_the_sweep_trajectories` pins the band to
+/// those anchors so a trajectory change that silently moved them fails here.
+/// Sweep of 2026-10-01: baseline `n` at 10 y = 523,841; sustained-growth final
+/// `n` = 10,279,293; geometric mean ≈ 2.32 M — rounded to one significant
+/// figure and a half.
+///
+/// **A knee in shards is an archival length in disguise.** `knee · W` is the
+/// quantity the sweep actually chose (how much archive is held when the share
+/// saturates); the shard count is that length divided by a provisional `W`.
+/// A `W` re-pin that left this constant alone would silently move the knee
+/// — [`KNEE_ARCHIVAL_LEN_BYTES`] pins the product so that re-pin fails here
+/// instead, and the config-parity test pins the shipped value to the middle
+/// member.
+pub const KNEE_BAND: [u64; 3] = [500_000, 2_250_000, 10_000_000];
+
+/// The middle knee as the archival length it stands for: `2,250,000 · W` at
+/// `W = 3,000,000 B` — 6.75 TB of closed archive. The quantity the ceremony is
+/// really choosing; `KNEE_BAND[1]` is this divided by
+/// [`shekyl_types::SHARD_LENGTH`].
+pub const KNEE_ARCHIVAL_LEN_BYTES: u64 = 6_750_000_000_000;
 
 /// One §6.1-conformant escalation candidate: a saturating banded-PL lift of the
 /// staker share from [`floor_share`] to `asymptote` as `n` rises to `knee`.
@@ -69,12 +92,12 @@ pub struct EscalationCurve {
     /// Saturation share, fixed-point `SHARE_SCALE`. Must be `> floor_share()` and
     /// `< SHARE_SCALE`.
     pub asymptote: u64,
-    /// `frozen_segment_count` at which `share` reaches `asymptote`.
+    /// Closed-shard count at which `share` reaches `asymptote`.
     pub knee_shards: u64,
 }
 
 impl EscalationCurve {
-    /// The staker-pool share at `n` frozen shards, fixed-point `SHARE_SCALE`.
+    /// The staker-pool share at `n` closed shards, fixed-point `SHARE_SCALE`.
     ///
     /// **Delegates to the consensus function** — this module owns *which
     /// candidates to sweep*, never *how a share is computed*. A local ramp here
@@ -205,17 +228,58 @@ mod tests {
     }
 
     #[test]
+    fn knee_is_an_archival_length_pinned_against_a_w_repin() {
+        // The sweep chose an amount of held archive, not a shard count. If `W`
+        // is re-pinned and KNEE_BAND is not re-derived, the knee silently
+        // moves in bytes; this is where that shows. On failure: re-run the
+        // Stage-2 sweep (ARCHIVAL_SHARD_COUNT_CUTOVER.md §F step 3), do not
+        // divide the constant through.
+        let w = shekyl_types::SHARD_LENGTH.to_raw();
+        assert_eq!(
+            KNEE_BAND[1] * w,
+            KNEE_ARCHIVAL_LEN_BYTES,
+            "knee {} shards x W {w} B != pinned {} B: W moved under the knee",
+            KNEE_BAND[1],
+            KNEE_ARCHIVAL_LEN_BYTES
+        );
+        assert_eq!(
+            KNEE_ARCHIVAL_LEN_BYTES % w,
+            0,
+            "the knee length is whole shards"
+        );
+    }
+
+    #[test]
+    fn shipped_knee_is_the_band_middle() {
+        // config/economics_params.json carries the sweep's middle candidate
+        // (SCC-Q2). Nothing else couples the shipped literal to KNEE_BAND —
+        // a re-derivation that updated one and not the other lands here.
+        let cfg: serde_json::Value =
+            serde_json::from_str(include_str!("../../../config/economics_params.json"))
+                .expect("economics_params.json must be valid JSON");
+        let shipped = cfg
+            .get("shekyl_escalation_knee_n")
+            .and_then(serde_json::Value::as_u64)
+            .expect("shekyl_escalation_knee_n is a u64 in economics_params.json");
+        assert_eq!(
+            shipped, KNEE_BAND[1],
+            "shipped knee {shipped} is not the re-derived band's middle {}",
+            KNEE_BAND[1]
+        );
+    }
+
+    #[test]
     fn larger_knee_is_a_slower_ratchet() {
         // At a fixed asymptote and a mid shard count, a larger knee gives a
         // lower share (the lift is spread over more shards — §6.0 slower).
-        let n = 20_000;
+        let n = KNEE_BAND[0] * 4 / 5;
         let fast = EscalationCurve {
             asymptote: 750_000,
-            knee_shards: 25_000,
+            knee_shards: KNEE_BAND[0],
         };
         let slow = EscalationCurve {
             asymptote: 750_000,
-            knee_shards: 250_000,
+            knee_shards: KNEE_BAND[2],
         };
         assert!(fast.share(n) > slow.share(n));
     }

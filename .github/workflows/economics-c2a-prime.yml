@@ -73,8 +73,7 @@ env:
   APT_INSTALL_LINUX: >-
     apt -y install build-essential cmake libboost-all-dev miniupnpc
     graphviz doxygen libunwind8-dev pkg-config libssl-dev
-    libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev
-    protobuf-compiler ccache git curl ripgrep python3
+    libsodium-dev ccache git curl ripgrep python3
   CCACHE_SETTINGS: |
     ccache --max-size=150M
     ccache --set-config=compression=true
@@ -248,7 +247,7 @@ jobs:
           apt -y install git ripgrep python3 libboost-system1.74.0 libboost-filesystem1.74.0 \
             libboost-thread1.74.0 libboost-chrono1.74.0 libboost-regex1.74.0 \
             libboost-program-options1.74.0 libboost-serialization1.74.0 \
-            libssl3 libsodium23 libprotobuf23 libunwind8
+            libssl3 libsodium23 libunwind8
       - name: install build toolchain for Rust tests
         # curl + ca-certificates: required by the install-Rust step
         # below. They were NEVER installed in this job — the old

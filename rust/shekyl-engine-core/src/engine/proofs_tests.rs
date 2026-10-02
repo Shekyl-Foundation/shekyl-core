@@ -15,7 +15,7 @@ use super::*;
 // Named rather than inherited through `use super::*`: these are wire types
 // the fixtures build with, not workflow items, and the proofs module no
 // longer imports them now that the chain-facing half owns that work.
-use shekyl_types::{BlockHash, PrunableHash};
+use shekyl_types::{ArchivalLength, BlockHash, PrunableHash};
 use shekyl_wire::{Ct, Transaction};
 
 use shekyl_address::Network;
@@ -360,6 +360,7 @@ mod check_workflows {
                                 pruned_as_hex: (*body_hex).clone(),
                                 prunable_as_hex: String::new(),
                                 prunable_hash: shekyl_rpc_types::HashHex::ZERO,
+                                archival_len: 0,
                                 as_json: String::new(),
                                 pruned: false,
                                 double_spend_seen: false,
@@ -567,7 +568,7 @@ mod check_workflows {
         // exactly where it lands. The mock serves `prunable_hash: ZERO`, so
         // that is the digest the identity mixes.
         let txid = tx
-            .hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]))
+            .hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]), ArchivalLength::ZERO)
             .to_bytes();
         let mut txs = BTreeMap::new();
         txs.insert(hex::encode(txid), hex::encode(tx.serialize()));
@@ -889,7 +890,7 @@ mod check_workflows {
         let mut second = base.clone();
         second.prefix.unlock_time = 1;
         let txid2 = second
-            .hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]))
+            .hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]), ArchivalLength::ZERO)
             .to_bytes();
         assert_ne!(txid2, fx.txid, "the second body must be a different tx");
         let mut txs = (*fx.rpc.txs).clone();
@@ -936,7 +937,10 @@ mod check_workflows {
             let mut tx = base.clone();
             tx.prefix.unlock_time = i;
             let id = tx
-                .hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]))
+                .hash_with_supplied_prunable(
+                    PrunableHash::from_bytes([0u8; 32]),
+                    ArchivalLength::ZERO,
+                )
                 .to_bytes();
             ids.push(id);
             txs.insert(hex::encode(id), hex::encode(tx.serialize()));
