@@ -1417,6 +1417,21 @@ bool shekyl_txid_from_segments(
     size_t prunable_len,
     uint8_t* out_txid);
 
+/// The prunable digest of a serialized transaction: keccak256 of its prunable
+/// range, by the function the txid mixer uses (shekyl-wire `prunable_hash_of`).
+/// It is the value stored as `txs_prunable_hash` and served beside a pruned
+/// body, which a wallet mixes into the txid it checks that body against -- so
+/// it is computed where the mixer is, and C++ holds no hash of its own for it.
+///
+/// One range, no length parameter, nothing parsed. An empty range (a body
+/// with no prunable region) is valid and may be a null pointer. Returns
+/// false, writing nothing, only for a null pointer where bytes were promised.
+/// out_hash receives 32 bytes.
+bool shekyl_tx_prunable_hash(
+    const uint8_t* prunable,
+    size_t prunable_len,
+    uint8_t* out_hash);
+
 /// Build the coinbase extra in the grammar's one layout: [PubKey(tx_pubkey
 /// [32]), Nonce(nonce[SHEKYL_COINBASE_NONCE_BYTES]), PqcKemCiphertext(kem),
 /// PqcLeafEntries(leaf)] — [PubKey, Nonce] when n_outputs == 0 — judged by
