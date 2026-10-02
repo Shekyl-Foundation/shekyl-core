@@ -3210,7 +3210,7 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 /// embargo is the privacy-losing direction at every draw value including zero.
 ///
 /// \param zone The relay zone the transaction is embargoed on, as
-/// `epee::net_utils::zone` cast to a byte. The embargo is per-zone since §89.2:
+/// a `NetZone` byte (`netzone_*` in `cryptonote_protocol/enums.h`). The embargo is per-zone since §89.2:
 /// the anonymity zone stems, and a rendezvous hop needs a longer embargo than a
 /// clearnet one. Anything outside 0..=3 resolves to `zone::invalid`, which is
 /// provisioned as the worst case — a corrupt byte costs recovery latency rather
@@ -3445,7 +3445,7 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 #define SHEKYL_RELAY_ZONE_NOISE_ENABLED 2u
 
 //! Open a zone with the caller's epoch length (public 600/30, noise 300/30).
-//! `zone` is the `epee::net_utils::zone` discriminant. An empty `configured`
+//! `zone` is the `NetZone` discriminant. An empty `configured`
 //! mask keeps it as the fixture parameter set; a non-empty mask derives the
 //! epoch from the declarations. The stem embargo is drawn from the forwarded
 //! connector, not from this byte. It is NOT a restatement of
@@ -3554,7 +3554,7 @@ void shekyl_inbound_ceiling_resolve(std::uint64_t reserved,
 //! Once-at-origin zone routing (Q12-D5a; Q12_D6A_PEER_DISCOVERY_RUN.md §§12,
 //! 18), moved from `cryptonote_protocol/enums.h` under rule 20. Bytes cross
 //! raw; the C++ wrappers in enums.h static_assert `relay_method`,
-//! `epee::net_utils::zone` and `zone_route::decision` against this contract.
+//! the `netzone_*` bytes and `zone_route::decision` against this contract.
 //! Unknown bytes map to the SAFE arm (fail-closed / false), never toward
 //! clearnet -- refuse-to-leak is the family's invariant (§30.5).
 //!

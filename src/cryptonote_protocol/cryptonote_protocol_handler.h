@@ -137,14 +137,14 @@ namespace cryptonote
     friend struct ::cryptonote_protocol_handler_test_seam;
     void stop();
     void on_connection_close(cryptonote_connection_context &context);
-    void set_max_out_peers(epee::net_utils::zone zone, unsigned int max) { CRITICAL_REGION_LOCAL(m_max_out_peers_lock); m_max_out_peers[zone] = max; }
-    unsigned int get_max_out_peers(epee::net_utils::zone zone) const
+    void set_max_out_peers(epee::net_utils::connector_id zone, unsigned int max) { CRITICAL_REGION_LOCAL(m_max_out_peers_lock); m_max_out_peers[zone] = max; }
+    unsigned int get_max_out_peers(epee::net_utils::connector_id zone) const
     {
       CRITICAL_REGION_LOCAL(m_max_out_peers_lock);
       const auto it = m_max_out_peers.find(zone);
       if (it == m_max_out_peers.end())
       {
-        MWARNING(epee::net_utils::zone_to_string(zone) << " max out peers not set, using default");
+        MWARNING(epee::net_utils::connector_id_to_string(zone) << " max out peers not set, using default");
         return shekyl_p2p_default_out_peers();
       }
       return it->second;
@@ -152,7 +152,7 @@ namespace cryptonote
     bool no_sync() const { return m_no_sync; }
     void set_no_sync(bool value) { m_no_sync = value; }
     std::string get_peers_overview() const;
-    bool needs_new_sync_connections(epee::net_utils::zone zone) const;
+    bool needs_new_sync_connections(epee::net_utils::connector_id zone) const;
     bool is_busy_syncing();
 
 #ifndef IN_UNIT_TESTS
@@ -170,7 +170,7 @@ namespace cryptonote
 		
     //----------------- i_bc_protocol_layout ---------------------------------------
     virtual bool relay_block(NOTIFY_NEW_COMPACT_BLOCK::request& arg, cryptonote_connection_context& exclude_context);
-    virtual bool relay_transactions(NOTIFY_NEW_TRANSACTIONS::request& arg, const boost::uuids::uuid& source, epee::net_utils::zone zone, relay_method tx_relay);
+    virtual bool relay_transactions(NOTIFY_NEW_TRANSACTIONS::request& arg, const boost::uuids::uuid& source, std::uint8_t zone, relay_method tx_relay);
     //----------------------------------------------------------------------------------
     //bool get_payload_sync_data(HANDSHAKE_DATA::request& hshd, cryptonote_connection_context& context);
     bool request_missing_objects(cryptonote_connection_context& context, bool check_having_blocks, bool force_next_span = false);
@@ -205,7 +205,7 @@ namespace cryptonote
     epee::math_helper::once_a_time_seconds<8> m_idle_peer_kicker;
     epee::math_helper::once_a_time_milliseconds<100> m_standby_checker;
     epee::math_helper::once_a_time_seconds<101> m_sync_search_checker;
-    std::unordered_map<epee::net_utils::zone, unsigned int> m_max_out_peers;
+    std::unordered_map<epee::net_utils::connector_id, unsigned int> m_max_out_peers;
     mutable epee::critical_section m_max_out_peers_lock;
     tools::PerformanceTimer m_sync_timer, m_add_timer;
     uint64_t m_last_add_end_time;

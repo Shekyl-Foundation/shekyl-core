@@ -575,7 +575,7 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// it is passed rather than derived from the epoch parameters. See
 /// [`FluffReach::OutboundOnly`].
 ///
-/// `zone` is the `epee::net_utils::zone` discriminant this handle serves. It
+/// `zone` is the `NetZone` discriminant this handle serves. It
 /// selects the transport-bound half of [`DandelionParams`] (§89.2) and is
 /// therefore NOT redundant with `outbound_fluff_only`: fluff reach is a
 /// property of the network, transit latency is a property of the transport,
@@ -1225,7 +1225,7 @@ pub extern "C" fn shekyl_p2p_default_out_peers() -> u32 {
 // The decision family moved from C++ `cryptonote_protocol/enums.h` under rule
 // 20; C++ keeps the `zone_route` compile-time token as a seam guard whose body
 // forwards here. Bytes cross raw and are `static_assert`ed on the C++ side
-// against `relay_method`, `epee::net_utils::zone` and `zone_route::decision`.
+// against `relay_method`, the `netzone_*` bytes and `zone_route::decision`.
 //
 // Unknown bytes are a caller bug (same process, asserted contract), and they
 // map to the SAFE arm — fail-closed / false — never to a guess that could put

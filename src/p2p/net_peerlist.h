@@ -118,7 +118,9 @@ namespace nodetool
     bool store(const std::string& path, const peerlist_types& other) const;
 
     //! \return Peers in `zone` and from remove from `this`.
-    peerlist_types take_zone(epee::net_utils::zone zone);
+    //! Peers whose address connector is `connector`, removed from `this`.
+    //! `nullopt` is an address with no connector.
+    peerlist_types take_connector(std::optional<epee::net_utils::connector_id> connector);
 
   private:
     peerlist_types m_types;

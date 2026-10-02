@@ -125,7 +125,7 @@ fn embargo_timer(zone: RelayZone) -> &'static EmbargoTimer {
 ///
 /// # The `zone` argument (§89.2)
 ///
-/// `zone` is `epee::net_utils::zone` as a byte — the network the transaction is
+/// `zone` is a `NetZone` byte — the network the transaction is
 /// being embargoed *on*. Since §89 ruled that the anonymity zone stems, that is
 /// no longer always clearnet. Callers pass `static_cast<uint8_t>(zone_->nzone)`.
 ///

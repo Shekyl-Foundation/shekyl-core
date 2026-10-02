@@ -169,10 +169,12 @@ this lane.
    belt: link secrecy already refuses noise on cleartext
    (`levin_notify.cpp:308` loses that arm).
 
-   `m_network_zones` is still keyed by the zone enum. The two handshake
-   registrations pass the connector the seam observed for that session,
-   not the peer address's zone. The enum's deletion is the rest of the
-   re-key; `address_type` stays, and discriminant 2 is not reused.
+   `m_network_zones` is keyed by connector identity (clearnet 0, tor 1).
+   The two handshake registrations pass the connector the seam observed
+   for that session, and the session bookkeeping (port announcement,
+   which peerlist a handshake appends to, the outbound cap trim) looks
+   that connector up. The old zone type is gone. `address_type` stays,
+   and discriminant 2 is not reused.
    Listener, advertised address, seeds, peerlist, and inbound cap stay
    per connector. Collapsing those into one session table is LV-3. The
    protocol handler does not branch on the connector: a session syncs,
@@ -11624,7 +11626,7 @@ embargo cannot currently be per-zone**:
 
 - `shekyl_dandelionpp_embargo_draw_seconds()` (`dandelionpp_ffi.rs:95`) takes
   **no arguments** — there is no zone to pass.
-- `tx_pool.cpp` carries **no** `epee::net_utils::zone` reference at all; the
+- `tx_pool.cpp` carries **no** zone-type reference at all; the
   arm site (`:1058`) is zone-blind.
 
 This is exactly the dependency the inherited comment names at
@@ -11721,11 +11723,11 @@ file. The mismatch is a stale checkout, not a disputed fact.
 
 | anchor | content that locates it |
 | --- | --- |
-| `:936` | `if (covert_enabled \|\| zone == epee::net_utils::zone::public_)` |
+| `:936` | `if (covert_enabled \|\| zone ==` the public-zone enumerator) |
 | `:974-977` | `void notify::new_out_connection()` + its `covert_enabled` early return |
 | `:807`, `:827` | `make_payload_send_txs(*zone_->p2p, …, zone_->pad_txs, false)` |
 | `:561` | `make_payload_send_txs(*z.p2p, …, z.pad_txs, true)` |
-| `:1222` | `if (zone_->nzone == epee::net_utils::zone::public_)` |
+| `:1222` | `if (zone_->nzone ==` the public-zone enumerator) |
 
 > **A line number is a coordinate in one checkout; the content is the claim.**
 > `params.rs`'s numbers moved in this arc's own PR #397, which is exactly how
@@ -14512,7 +14514,7 @@ load-bearing. On the shipped path it is **false**, and not merely untested:
 The `forward` transaction from §89.8.1 waits out its delay in the pool and
 re-emerges through `core::relay_txpool_transactions`, which maps
 `case relay_method::forward: stem_req` (`cryptonote_core.cpp:1069-1071`) and
-dispatches `stem_req` at **`epee::net_utils::zone::public_`** with a nil source
+dispatches `stem_req` at **the public-zone enumerator** with a nil source
 (`:1091`). Origin `public_` cannot cohere and a nil source cannot re-roll, so
 the remaining hops of that stem run on **clearnet**.
 

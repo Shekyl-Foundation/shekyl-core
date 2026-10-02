@@ -171,7 +171,9 @@ namespace shekyl
       {
         MINFO("seam send refused conn " << m_context.m_connection_id
             << " seam_id " << m_id
-            << " zone " << epee::net_utils::zone_to_string(m_context.m_remote_address.get_zone())
+            << " connector " << (epee::net_utils::connector_from_byte(m_context.m_connector)
+                 ? epee::net_utils::connector_id_to_string(*epee::net_utils::connector_from_byte(m_context.m_connector))
+                 : "unnamed")
             << " direction " << (m_context.m_is_income ? "in" : "out")
             << " registry " << (found != 0 ? "yes" : "no")
             << " seam " << accepted

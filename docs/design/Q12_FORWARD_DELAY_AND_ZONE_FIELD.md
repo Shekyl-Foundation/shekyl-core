@@ -87,7 +87,7 @@ open item. **This round decides whether it dies.**
 
 [`cryptonote_core.cpp:1091`](../../src/cryptonote_core/cryptonote_core.cpp#L1091)
 sends the `stem_req` batch — where `forward` entries land — with
-`epee::net_utils::zone::public_` **as a literal**. Not a policy choice: the
+the public-zone enumerator **as a literal**. Not a policy choice: the
 txpool stores no origin zone, and the pool loop runs long after the moment that
 knew it. The coherence branch keys on `send_txs`'s `origin`, whose only
 real-arrival callers are the immediate-relay sites, so it never sees these.

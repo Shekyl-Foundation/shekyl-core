@@ -1091,7 +1091,7 @@ namespace cryptonote
          re-relaying public and private _should_ be acceptable here. */
       const boost::uuids::uuid source = boost::uuids::nil_uuid();
       if (!public_req.txs.empty())
-        get_protocol()->relay_transactions(public_req, source, epee::net_utils::zone::public_, relay_method::fluff);
+        get_protocol()->relay_transactions(public_req, source, netzone_public, relay_method::fluff);
       if (!private_req.txs.empty())
         /* `invalid`+`local` is the fail-closed backstop for originated
            traffic that chose anonymity and kept its `local` record. It is
@@ -1099,7 +1099,7 @@ namespace cryptonote
            roll never ran — a second chooser, D5a in miniature. Those two
            are indistinguishable here without persisting the roll, and
            rolling here is the `source.is_nil()` reversal. FOLLOWUPS. */
-        get_protocol()->relay_transactions(private_req, source, epee::net_utils::zone::invalid, relay_method::local);
+        get_protocol()->relay_transactions(private_req, source, netzone_invalid, relay_method::local);
     }
     return true;
   }
@@ -1140,7 +1140,7 @@ namespace cryptonote
     m_mempool.on_stem_propagated(txids);
   }
   //-----------------------------------------------------------------------------------------------
-  void core::on_transactions_relayed(const epee::span<const cryptonote::blobdata> tx_blobs, const relay_method tx_relay, const epee::net_utils::zone zone)
+  void core::on_transactions_relayed(const epee::span<const cryptonote::blobdata> tx_blobs, const relay_method tx_relay, const std::uint8_t zone)
   {
     // lock ensures duplicate txs aren't notified twice
     CRITICAL_REGION_LOCAL(m_incoming_tx_lock);

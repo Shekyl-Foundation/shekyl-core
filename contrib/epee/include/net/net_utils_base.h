@@ -32,6 +32,7 @@
 #include <boost/uuid/uuid.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/address_v6.hpp>
+#include <stdexcept>
 #include <typeinfo>
 #include <type_traits>
 #include "byte_slice.h"
@@ -89,7 +90,7 @@ namespace net_utils
 		bool is_loopback() const;
 		bool is_local() const;
 		static constexpr address_type get_type_id() noexcept { return address_type::ipv4; }
-		static constexpr zone get_zone() noexcept { return zone::public_; }
+		static constexpr connector_id connector() noexcept { return connector_id::clearnet; }
 		static constexpr bool is_blockable() noexcept { return true; }
 
 		BEGIN_KV_SERIALIZE_MAP()
@@ -145,7 +146,7 @@ namespace net_utils
 		bool is_loopback() const;
 		bool is_local() const;
 		static constexpr address_type get_type_id() noexcept { return address_type::invalid; }
-		static constexpr zone get_zone() noexcept { return zone::public_; }
+		static constexpr connector_id connector() noexcept { return connector_id::clearnet; }
 		static constexpr bool is_blockable() noexcept { return true; }
 
 		BEGIN_KV_SERIALIZE_MAP()
@@ -195,7 +196,7 @@ namespace net_utils
 		bool is_loopback() const;
 		bool is_local() const;
 		static constexpr address_type get_type_id() noexcept { return address_type::ipv6; }
-		static constexpr zone get_zone() noexcept { return zone::public_; }
+		static constexpr connector_id connector() noexcept { return connector_id::clearnet; }
 		static constexpr bool is_blockable() noexcept { return true; }
 
 		static const uint8_t ID = 2;
@@ -235,7 +236,7 @@ namespace net_utils
 			virtual bool is_loopback() const = 0;
 			virtual bool is_local() const = 0;
 			virtual address_type get_type_id() const = 0;
-			virtual zone get_zone() const = 0;
+			virtual connector_id connector() const = 0;
 			virtual bool is_blockable() const = 0;
 			virtual std::uint16_t port() const = 0;
 		};
@@ -266,7 +267,7 @@ namespace net_utils
 			virtual bool is_loopback() const override { return value.is_loopback(); }
 			virtual bool is_local() const override { return value.is_local(); }
 			virtual address_type get_type_id() const override { return value.get_type_id(); }
-			virtual zone get_zone() const override { return value.get_zone(); }
+			virtual connector_id connector() const override { return value.connector(); }
 			virtual bool is_blockable() const override { return value.is_blockable(); }
 			virtual std::uint16_t port() const override { return value.port(); }
 		};
@@ -313,7 +314,11 @@ namespace net_utils
 		bool is_loopback() const { return self ? self->is_loopback() : false; }
 		bool is_local() const { return self ? self->is_local() : false; }
 		address_type get_type_id() const { return self ? self->get_type_id() : address_type::invalid; }
-		zone get_zone() const { return self ? self->get_zone() : zone::invalid; }
+		//! Empty addresses have no connector. An ipv4 or ipv6 address is
+		//! clearnet; a Tor address is Tor. This is the address's type, not
+		//! the connector that carried a session.
+		std::optional<connector_id> connector() const
+		{ return self ? std::optional<connector_id>(self->connector()) : std::nullopt; }
 		bool is_blockable() const { return self ? self->is_blockable() : false; }
 		std::uint16_t port() const { return self ? self->port() : 0; }
 		template<typename Type> const Type &as() const { return as_mutable<const Type>(); }
@@ -357,6 +362,14 @@ namespace net_utils
 	inline bool operator>=(const network_address& lhs, const network_address& rhs)
 	{ return !lhs.less(rhs); }
 
+	//! The connector this address is dialed on. An empty address has none.
+	inline connector_id require_address_connector(const network_address& address)
+	{
+		if (const auto id = address.connector())
+			return *id;
+		throw std::logic_error{"address has no connector"};
+	}
+
 	/************************************************************************/
 	/*                                                                      */
 	/************************************************************************/
@@ -367,6 +380,10 @@ namespace net_utils
     const bool     m_is_income;
     const time_t   m_started;
     const bool      m_ssl;
+    //! The connector that carried this session. `0xff` is unnamed. Not the
+    //! peer address's connector: a proxied dial's address type and the
+    //! connector that carried it need not agree.
+    const std::uint8_t m_connector;
     time_t   m_last_recv;
     time_t   m_last_send;
     uint64_t m_recv_cnt;
@@ -379,12 +396,14 @@ namespace net_utils
     connection_context_base(boost::uuids::uuid connection_id,
                             const network_address &remote_address, bool is_income, bool ssl,
                             time_t last_recv = 0, time_t last_send = 0,
-                            uint64_t recv_cnt = 0, uint64_t send_cnt = 0):
+                            uint64_t recv_cnt = 0, uint64_t send_cnt = 0,
+                            std::uint8_t connector = 0xff):
                                             m_connection_id(connection_id),
                                             m_remote_address(remote_address),
                                             m_is_income(is_income),
                                             m_started(time(NULL)),
                                             m_ssl(ssl),
+                                            m_connector(connector),
                                             m_last_recv(last_recv),
                                             m_last_send(last_send),
                                             m_recv_cnt(recv_cnt),
@@ -400,6 +419,7 @@ namespace net_utils
                                m_is_income(false),
                                m_started(time(NULL)),
                                m_ssl(false),
+                               m_connector(0xff),
                                m_last_recv(0),
                                m_last_send(0),
                                m_recv_cnt(0),
@@ -412,22 +432,22 @@ namespace net_utils
 
     connection_context_base(const connection_context_base& a): connection_context_base()
     {
-      set_details(a.m_connection_id, a.m_remote_address, a.m_is_income, a.m_ssl);
+      set_details(a.m_connection_id, a.m_remote_address, a.m_is_income, a.m_ssl, a.m_connector);
     }
 
     connection_context_base& operator=(const connection_context_base& a)
     {
-      set_details(a.m_connection_id, a.m_remote_address, a.m_is_income, a.m_ssl);
+      set_details(a.m_connection_id, a.m_remote_address, a.m_is_income, a.m_ssl, a.m_connector);
       return *this;
     }
     
   private:
     template<class t_protocol_handler>
     friend class connection;
-    void set_details(boost::uuids::uuid connection_id, const network_address &remote_address, bool is_income, bool ssl)
+    void set_details(boost::uuids::uuid connection_id, const network_address &remote_address, bool is_income, bool ssl, std::uint8_t connector)
     {
       this->~connection_context_base();
-      new(this) connection_context_base(connection_id, remote_address, is_income, ssl);
+      new(this) connection_context_base(connection_id, remote_address, is_income, ssl, 0, 0, 0, 0, connector);
     }
 
 	};

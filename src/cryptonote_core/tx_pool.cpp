@@ -1248,7 +1248,7 @@ namespace cryptonote
     lock.commit();
   }
   //---------------------------------------------------------------------------------
-  void tx_memory_pool::set_relayed(const epee::span<const crypto::hash> hashes, const relay_method method, const epee::net_utils::zone zone, std::vector<bool> &just_broadcasted)
+  void tx_memory_pool::set_relayed(const epee::span<const crypto::hash> hashes, const relay_method method, const std::uint8_t zone, std::vector<bool> &just_broadcasted)
   {
     just_broadcasted.clear();
 

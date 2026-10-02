@@ -102,7 +102,7 @@ namespace levin
     {}
 
     //! One registry, one connector. Tests and the single-zone fixtures.
-    explicit notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::net_utils::zone zone, bool pad_txs, i_core_events& core);
+    explicit notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::net_utils::connector_id connector, bool pad_txs, i_core_events& core);
 
     //! One relay over every connector registry this node has.
     explicit notify(boost::asio::io_context& service, std::vector<std::shared_ptr<connections>> registries, std::uint32_t configured, bool pad_txs, i_core_events& core);
@@ -121,9 +121,7 @@ namespace levin
     //! `connector` is the connector discriminant that carried the session.
     void on_session_established(const boost::uuids::uuid &id, bool is_income, std::uint8_t connector);
 
-    //! Connector discriminant for a zone the seam still names. `0xff` is
-    //! not a connector.
-    static std::uint8_t connector_byte(epee::net_utils::zone zone) noexcept;
+    static std::uint8_t connector_byte(epee::net_utils::connector_id connector) noexcept;
     void on_connection_close(const boost::uuids::uuid &id);
 
     //! Run the logic for the next epoch immediately. Only use in testing.
@@ -213,7 +211,7 @@ namespace levin
   //! omit `"zone"` here. `ShekylStemTallyRow` stays 40 bytes -- the zone is
   //! known at C++ merge time, not on the FFI row.
   std::string format_stem_tally_row_json(
-    const notify::stem_tally_row& row, epee::net_utils::zone z);
+    const notify::stem_tally_row& row, std::uint8_t netzone);
 
   //! §46/§48: canonical tx hashes for the stem-observation watch (F-9).
   //! Parsed once at the fan-out boundary; blob bytes are not a stable identity

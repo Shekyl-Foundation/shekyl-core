@@ -135,7 +135,7 @@ namespace
     class test_core_events final : public cryptonote::i_core_events
     {
         std::map<cryptonote::relay_method, std::vector<cryptonote::blobdata>> relayed_;
-        std::map<cryptonote::relay_method, epee::net_utils::zone> zones_;
+        std::map<cryptonote::relay_method, std::uint8_t> zones_;
         //! Propagation verdicts, in arrival order. Read by
         //! `stem_watch_records_and_arrival_resolves`, which is what makes the
         //! forwarding leg asserted rather than inferred from the watch.
@@ -193,7 +193,7 @@ namespace
                      == gone_from_pool_.end();
         }
 
-        virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> txes, cryptonote::relay_method relay, epee::net_utils::zone zone) override final
+        virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> txes, cryptonote::relay_method relay, std::uint8_t zone) override final
         {
             if (throw_on_relay_)
             {
@@ -250,7 +250,7 @@ namespace
         }
 
         //! \return The zone the last `relay`-method relay was attributed to.
-        epee::net_utils::zone relayed_zone(cryptonote::relay_method relay) const
+        std::uint8_t relayed_zone(cryptonote::relay_method relay) const
         {
             const auto found = zones_.find(relay);
             if (found == zones_.end())
@@ -452,7 +452,7 @@ namespace
         /* Zone of the live notifier. `invalid` until `make_notifier` names one,
            so a connection opened against an unnamed fixture is the loud
            unknown-connector path rather than a silent miss. */
-        epee::net_utils::zone session_zone{epee::net_utils::zone::invalid};
+        epee::net_utils::connector_id session_zone{epee::net_utils::connector_id::clearnet};
     };
 
     class levin_notify : public ::testing::Test
@@ -500,7 +500,7 @@ namespace
             it drive explicitly. */
         std::shared_ptr<cryptonote::levin::notify> make_notifier(bool is_public, bool pad_txs)
         {
-            epee::net_utils::zone zone = is_public ? epee::net_utils::zone::public_ : epee::net_utils::zone::tor;
+            epee::net_utils::connector_id zone = is_public ? epee::net_utils::connector_id::clearnet : epee::net_utils::connector_id::tor;
             receiver_.session_zone = zone;
             receiver_.notifier.reset(
               new cryptonote::levin::notify{io_service_, connections_, zone, pad_txs, events_}
@@ -521,7 +521,7 @@ namespace
             const std::uint32_t configured = (std::uint32_t{1} << 0) | (std::uint32_t{1} << 1);
             /* Later `add_connection` registers as clearnet. The test that
                wants a TCP session passes connector 0 itself. */
-            receiver_.session_zone = epee::net_utils::zone::public_;
+            receiver_.session_zone = epee::net_utils::connector_id::clearnet;
             receiver_.notifier.reset(new cryptonote::levin::notify{
               io_service_, std::move(registries), configured, false, events_});
             return receiver_.notifier;
@@ -689,7 +689,7 @@ namespace
                with the relay rather than off the txpool entry. Asserting the
                METHOD alone would pass whichever zone the dispatch attributed
                it to, which is the axis this round changed. */
-            EXPECT_EQ(epee::net_utils::zone::tor, events_.relayed_zone(method));
+            EXPECT_EQ(cryptonote::netzone_tor, events_.relayed_zone(method));
             EXPECT_EQ(txs, events_.take_relayed(method));
 
             if (!is_stem)
@@ -828,28 +828,30 @@ TEST(once_at_origin_route, table)
 {
     using cryptonote::relay_method;
     using cryptonote::zone_route;
-    using epee::net_utils::zone;
+    using cryptonote::netzone_invalid;
+    using cryptonote::netzone_public;
+    using cryptonote::netzone_tor;
 
     // A stem on a real zone is not this function's decision. The residual
     // is clearnet; production does not consult it for a forwarded stem.
     EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
-              cryptonote::once_at_origin_route(relay_method::stem, zone::tor).get());
+              cryptonote::once_at_origin_route(relay_method::stem, netzone_tor).get());
     EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
-              cryptonote::once_at_origin_route(relay_method::local, zone::tor).get());
+              cryptonote::once_at_origin_route(relay_method::local, netzone_tor).get());
 
     // Relayed clearnet inherit — no roll. This is the deleted divert.
     EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
-              cryptonote::once_at_origin_route(relay_method::stem, zone::public_).get());
+              cryptonote::once_at_origin_route(relay_method::stem, netzone_public).get());
 
     // Originated, roll said anon (`invalid`) — fail closed, never clearnet.
     EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
-              cryptonote::once_at_origin_route(relay_method::local, zone::invalid).get());
+              cryptonote::once_at_origin_route(relay_method::local, netzone_invalid).get());
     EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
-              cryptonote::once_at_origin_route(relay_method::stem, zone::invalid).get());
+              cryptonote::once_at_origin_route(relay_method::stem, netzone_invalid).get());
 
     // Originated, roll said clearnet (`public_`) — by design, not a fallback.
     EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
-              cryptonote::once_at_origin_route(relay_method::local, zone::public_).get());
+              cryptonote::once_at_origin_route(relay_method::local, netzone_public).get());
 
     /* DESIGN A (sec 91): a fluff floods EVERY configured zone, from every
        origin. It was `public_clearnet` — clearnet alone — which made an
@@ -857,13 +859,13 @@ TEST(once_at_origin_route, table)
        unable to maintain a mempool (sec 91.1). Coherence still refuses a
        fluff; what changed is where a refused fluff goes. */
     EXPECT_EQ(zone_route::decision::broadcast_all_zones,
-              cryptonote::once_at_origin_route(relay_method::fluff, zone::tor).get());
+              cryptonote::once_at_origin_route(relay_method::fluff, netzone_tor).get());
     EXPECT_EQ(zone_route::decision::broadcast_all_zones,
-              cryptonote::once_at_origin_route(relay_method::fluff, zone::tor).get());
+              cryptonote::once_at_origin_route(relay_method::fluff, netzone_tor).get());
     EXPECT_EQ(zone_route::decision::broadcast_all_zones,
-              cryptonote::once_at_origin_route(relay_method::fluff, zone::public_).get());
+              cryptonote::once_at_origin_route(relay_method::fluff, netzone_public).get());
     EXPECT_EQ(zone_route::decision::broadcast_all_zones,
-              cryptonote::once_at_origin_route(relay_method::fluff, zone::invalid).get());
+              cryptonote::once_at_origin_route(relay_method::fluff, netzone_invalid).get());
 }
 
 /* The roll's zone mapping moved fully behind the FFI
@@ -886,7 +888,7 @@ TEST(stem_tally_json, row_carries_zone_from_the_merge)
     row.distinct_sources = 2;
 
     const std::string tor =
-      cryptonote::levin::format_stem_tally_row_json(row, epee::net_utils::zone::tor);
+      cryptonote::levin::format_stem_tally_row_json(row, cryptonote::netzone_tor);
     EXPECT_NE(std::string::npos, tor.find("\"zone\":\"tor\""));
     EXPECT_NE(std::string::npos, tor.find("\"peer\":\"abcd"));
     EXPECT_NE(std::string::npos, tor.find("\"propagated\":3"));
@@ -895,11 +897,11 @@ TEST(stem_tally_json, row_carries_zone_from_the_merge)
 
     EXPECT_NE(
       std::string::npos,
-      cryptonote::levin::format_stem_tally_row_json(row, epee::net_utils::zone::public_)
+      cryptonote::levin::format_stem_tally_row_json(row, cryptonote::netzone_public)
         .find("\"zone\":\"public\""));
     EXPECT_NE(
       std::string::npos,
-      cryptonote::levin::format_stem_tally_row_json(row, epee::net_utils::zone::invalid)
+      cryptonote::levin::format_stem_tally_row_json(row, cryptonote::netzone_invalid)
         .find("\"zone\":\"invalid\""));
 }
 

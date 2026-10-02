@@ -430,7 +430,7 @@ namespace levin
           relay(make_relay(configured), &shekyl_relay_zone_free),
           pending_wakes(0),
           hop0_restricted(relay && shekyl_relay_zone_hop0_restricted(relay.get())),
-          record_zone(hop0_restricted ? epee::net_utils::zone::tor : epee::net_utils::zone::public_),
+          record_zone(hop0_restricted ? cryptonote::netzone_tor : cryptonote::netzone_public),
           pad_txs(pad_txs)
       {}
 
@@ -477,7 +477,7 @@ namespace levin
       //! Construction bit, read back from the relay.
       const bool hop0_restricted;
       //! Input the existing relayed-record predicate still takes.
-      const epee::net_utils::zone record_zone;
+      const std::uint8_t record_zone;
       const bool pad_txs;                        //!< Pad txs to the next boundary for privacy
 
       /*! One transaction handed to the carrier, awaiting its verdict.
@@ -1513,9 +1513,9 @@ namespace levin
 
   } // anonymous
 
-  notify::notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::net_utils::zone zone, const bool pad_txs, i_core_events& core)
+  notify::notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::net_utils::connector_id connector, const bool pad_txs, i_core_events& core)
     : notify(service, std::vector<std::shared_ptr<connections>>{std::move(p2p)},
-        connector_byte(zone) == 0xff ? 0u : (std::uint32_t{1} << connector_byte(zone)), pad_txs, core)
+        std::uint32_t{1} << connector_byte(connector), pad_txs, core)
   {}
 
   notify::notify(boost::asio::io_context& service, std::vector<std::shared_ptr<connections>> registries, const std::uint32_t configured, const bool pad_txs, i_core_events& core)
@@ -1546,14 +1546,9 @@ namespace levin
        construction and the single `wake` timer serves them (§20.2a). */
   }
 
-  std::uint8_t notify::connector_byte(const epee::net_utils::zone zone) noexcept
+  std::uint8_t notify::connector_byte(const epee::net_utils::connector_id connector) noexcept
   {
-    switch (zone)
-    {
-      case epee::net_utils::zone::public_: return 0;
-      case epee::net_utils::zone::tor: return 1;
-      default: return 0xff;
-    }
+    return static_cast<std::uint8_t>(connector);
   }
 
   notify::~notify() noexcept
@@ -1806,7 +1801,7 @@ namespace levin
   }
 
   std::string format_stem_tally_row_json(
-    const notify::stem_tally_row& row, epee::net_utils::zone z)
+    const notify::stem_tally_row& row, std::uint8_t netzone)
   {
     static constexpr char HEX[] = "0123456789abcdef";
     std::string out = "{\"peer\":\"";
@@ -1816,7 +1811,7 @@ namespace levin
       out += HEX[b & 0xf];
     }
     out += "\",\"zone\":\"";
-    out += epee::net_utils::zone_to_string(z);
+    out += netzone_name(netzone);
     out += "\",\"propagated\":";
     out += std::to_string(row.propagated);
     out += ",\"silent\":";

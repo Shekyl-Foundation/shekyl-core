@@ -75,10 +75,24 @@ namespace cryptonote
              && unsigned(relay_method::stem) == 2 && unsigned(relay_method::fluff) == 3
              && unsigned(relay_method::block) == 4,
     "relay_method bytes are the FFI contract with shekyl-relay::zone_route");
-  static_assert(unsigned(epee::net_utils::zone::invalid) == 0
-             && unsigned(epee::net_utils::zone::public_) == 1
-             && unsigned(epee::net_utils::zone::tor) == 3,
-    "zone bytes are the FFI contract with shekyl-relay::zone_route");
+  /* Bytes of `shekyl_types::relay::NetZone`. Not connector ids: clearnet's
+     connector is 0, and this public byte is 1. Tor stays 3. Discriminant 2
+     is not a value. */
+  inline constexpr std::uint8_t netzone_invalid = 0;
+  inline constexpr std::uint8_t netzone_public = 1;
+  inline constexpr std::uint8_t netzone_tor = 3;
+  static_assert(netzone_invalid == 0 && netzone_public == 1 && netzone_tor == 3,
+    "netzone bytes are the FFI contract with shekyl_types::relay::NetZone");
+
+  inline const char* netzone_name(std::uint8_t zone) noexcept
+  {
+    switch (zone)
+    {
+    case netzone_public: return "public";
+    case netzone_tor: return "tor";
+    default: return "invalid";
+    }
+  }
 
   /*! \brief Pre-fluff relay methods for R-1 (stem / local).
 
@@ -115,7 +129,7 @@ namespace cryptonote
       always recorded `stem`, and its home *is* clearnet. */
   inline bool originated_stays_in_zone(
     const relay_method tx_relay,
-    const epee::net_utils::zone nzone) noexcept
+    const std::uint8_t nzone) noexcept
   {
     return shekyl_relay_zone_originated_stays_in_zone(
       static_cast<std::uint8_t>(tx_relay), static_cast<std::uint8_t>(nzone));
@@ -156,12 +170,12 @@ namespace cryptonote
     decision k_;
     explicit constexpr zone_route(decision k) noexcept : k_(k) {}
     friend zone_route once_at_origin_route(
-      const relay_method, const epee::net_utils::zone) noexcept;
+      const relay_method, const std::uint8_t) noexcept;
   };
 
   inline zone_route once_at_origin_route(
     const relay_method tx_relay,
-    const epee::net_utils::zone origin) noexcept
+    const std::uint8_t origin) noexcept
   {
     static_assert(unsigned(zone_route::decision::anonymity_fail_closed) == 1
                && unsigned(zone_route::decision::broadcast_all_zones) == 3,

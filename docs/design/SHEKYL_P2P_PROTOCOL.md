@@ -4934,7 +4934,7 @@ short-circuit (`fee_good = kept_by_block || m_blockchain.check_fee(...)`).
 >
 > `kept_by_block` **is** `(tx_relay == relay_method::block)`
 > (`src/cryptonote_core/tx_pool.cpp:229`), and **every block-owned caller
-> passes `origin = epee::net_utils::zone::invalid`** — the pop path
+> passes `origin =` the invalid netzone byte** — the pop path
 > (`src/cryptonote_core/blockchain.cpp:870`), the alt-block pool supplement
 > (`:2347`), the return-taken-transaction path (`:5932`), and the block
 > importer (`src/blockchain_utilities/blockchain_import.cpp:156`), whose own

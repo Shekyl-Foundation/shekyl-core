@@ -172,27 +172,16 @@ namespace epee { namespace net_utils
     return ss.str();
   }
 
-  const char* zone_to_string(zone value) noexcept
+  const char* connector_id_to_string(connector_id value) noexcept
   {
     switch (value)
     {
-    case zone::public_:
-      return "public";
-    case zone::tor:
+    case connector_id::clearnet:
+      return "clearnet";
+    case connector_id::tor:
       return "tor";
-    default:
-      break;
     }
-    return "invalid";
-  }
-
-  zone zone_from_string(const boost::string_ref value) noexcept
-  {
-    if (value == "public")
-      return zone::public_;
-    if (value == "tor")
-      return zone::tor;
-    return zone::invalid;
+    return "unnamed";
   }
 }}
 

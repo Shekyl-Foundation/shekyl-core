@@ -360,7 +360,7 @@ struct RecordingProtocol final : cryptonote::i_cryptonote_protocol
 {
   size_t calls = 0;
   std::vector<cryptonote::blobdata> txs;
-  epee::net_utils::zone zone = epee::net_utils::zone::public_;
+  std::uint8_t zone = cryptonote::netzone_public;
   cryptonote::relay_method method = cryptonote::relay_method::none;
 
   bool is_synchronized() const override { return true; }
@@ -369,7 +369,7 @@ struct RecordingProtocol final : cryptonote::i_cryptonote_protocol
     return true;
   }
   bool relay_transactions(NOTIFY_NEW_TRANSACTIONS::request& arg, const boost::uuids::uuid&,
-    epee::net_utils::zone z, cryptonote::relay_method m) override
+    std::uint8_t z, cryptonote::relay_method m) override
   {
     ++calls;
     txs.assign(arg.txs.begin(), arg.txs.end());
@@ -936,7 +936,7 @@ TEST(daemon_submit_shims, a_broadcast_resubmit_does_not_buy_the_scan)
   ASSERT_EQ(fx.commit(s, fresh, fresh_ki), SHEKYL_SUBMIT_OK);
   std::vector<bool> just_broadcasted;
   fx.bap.txpool.set_relayed(epee::span<const crypto::hash>(&s.txid, 1),
-    relay_method::fluff, epee::net_utils::zone::public_, just_broadcasted);
+    relay_method::fluff, cryptonote::netzone_public, just_broadcasted);
 
   shekyl_submit_facts_ffi facts;
   uint8_t ki_conflict = 0;
@@ -1558,7 +1558,7 @@ TEST(daemon_submit_shims, embargo_arms_future_deadline_and_expiry_routes_to_rela
   const time_t before = time(nullptr);
   std::vector<bool> just_broadcasted;
   fx.bap.txpool.set_relayed(epee::span<const crypto::hash>(&s.txid, 1),
-    relay_method::stem, epee::net_utils::zone::public_, just_broadcasted);
+    relay_method::stem, cryptonote::netzone_public, just_broadcasted);
 
   ASSERT_EQ(just_broadcasted.size(), 1u);
   EXPECT_FALSE(just_broadcasted[0]) << "stem arming is not a broadcast";
@@ -1620,8 +1620,8 @@ TEST(daemon_submit_shims, relay_nudge_dispatches_local_pool_blob)
     << "the nudge must fetch the local-state blob (relay_category::all)";
   EXPECT_EQ(protocol.method, relay_method::local)
     << "local dispatch is the entry point that arms the D++ embargo";
-  EXPECT_TRUE(protocol.zone == epee::net_utils::zone::invalid ||
-              protocol.zone == epee::net_utils::zone::public_)
+  EXPECT_TRUE(protocol.zone == cryptonote::netzone_invalid ||
+              protocol.zone == cryptonote::netzone_public)
     << "the origination roll maps onto send_txs' two originated origins; "
        "a named anonymity zone here would skip select_anonymity";
 }

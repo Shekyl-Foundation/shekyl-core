@@ -79,7 +79,7 @@ namespace
         if (!address)
         {
             MERROR(
-                "Failed to parse " << epee::net_utils::zone_to_string(T::get_zone()) << " address \"" << value << "\": " << address.error().message()
+                "Failed to parse " << epee::net_utils::connector_id_to_string(T::connector()) << " address \"" << value << "\": " << address.error().message()
             );
             return {};
         }
@@ -235,15 +235,12 @@ namespace nodetool
                 }
             }
 
-            switch (epee::net_utils::zone_from_string(zone))
+            if (zone != "tor")
             {
-            case epee::net_utils::zone::tor:
-                proxies.back().zone = epee::net_utils::zone::tor;
-                break;
-            default:
                 MERROR("Invalid network for --" << arg_tx_proxy.name);
                 return std::nullopt;
             }
+            proxies.back().zone = epee::net_utils::connector_id::tor;
 
             auto endpoint = net::socks::endpoint::get(proxy);
             if (!endpoint)
@@ -397,7 +394,7 @@ namespace nodetool
             break;
         }
 
-        if (address.get_zone() == epee::net_utils::zone::public_)
+        if (address.connector() == epee::net_utils::connector_id::clearnet)
             return false;
 
         MWARNING("Filtered command (#" << command << ") to/from " << address.str());

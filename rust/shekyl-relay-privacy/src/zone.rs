@@ -3,10 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Relay network identity — the Rust mirror of `epee::net_utils::zone`.
+//! Relay network identity — the pool origin byte (`shekyl_types::relay::NetZone`).
 //!
-//! Discriminants match `contrib/epee/include/net/enums.h` exactly because the
-//! value crosses the FFI as a `u8`. There is **no persisted zone field** on the
+//! Discriminants are the FFI `u8`: invalid 0, public 1, tor 3. Discriminant 2
+//! is unused. These are not connector ids (clearnet is 0 there, tor is 1).
+//! There is **no persisted zone field** on the
 //! txpool entry (§89.2): the embargo draw is told the zone at
 //! `set_relayed` time, not reminded of it later.
 
@@ -141,7 +142,7 @@ impl RelayZone {
     }
 
     /// The discriminant as a byte — array index into the per-zone embargo
-    /// table and the value C++ casts from `epee::net_utils::zone`.
+    /// table and the value C++ passes as a `netzone_*` byte.
     #[must_use]
     pub const fn as_u8(self) -> u8 {
         self as u8

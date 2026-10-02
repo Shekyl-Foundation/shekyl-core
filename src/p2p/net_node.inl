@@ -93,7 +93,7 @@ namespace nodetool
     // io_service from public zone.
     for (auto current = m_network_zones.begin(); current != m_network_zones.end(); /* below */)
     {
-      if (current->first != epee::net_utils::zone::public_)
+      if (current->first != epee::net_utils::connector_id::clearnet)
         current = m_network_zones.erase(current);
       else
         ++current;
@@ -142,7 +142,7 @@ namespace nodetool
     if (storage)
       m_peerlist_storage = std::move(*storage);
 
-    network_zone& public_zone = m_network_zones[epee::net_utils::zone::public_];
+    network_zone& public_zone = m_network_zones[epee::net_utils::connector_id::clearnet];
     public_zone.m_config.m_support_flags = P2P_SUPPORT_FLAGS;
     m_first_connection_maker_call = true;
 
@@ -455,7 +455,7 @@ namespace nodetool
     bool stagenet = command_line::get_arg(vm, cryptonote::arg_stagenet_on);
     m_nettype = testnet ? cryptonote::TESTNET : stagenet ? cryptonote::STAGENET : cryptonote::MAINNET;
 
-    network_zone& public_zone = m_network_zones[epee::net_utils::zone::public_];
+    network_zone& public_zone = m_network_zones[epee::net_utils::connector_id::clearnet];
     public_zone.m_connect = &public_connect;
     public_zone.m_bind_ip = command_line::get_arg(vm, arg_p2p_bind_ip);
     public_zone.m_bind_ipv6_address = command_line::get_arg(vm, arg_p2p_bind_ipv6_address);
@@ -507,7 +507,7 @@ namespace nodetool
         expect<epee::net_utils::network_address> adr = net::get_network_address(pr_str, default_port);
         if (adr)
         {
-          add_zone(adr->get_zone());
+          add_zone(epee::net_utils::require_address_connector(*adr));
           pe.adr = std::move(*adr);
           m_command_line_peers.push_back(std::move(pe));
           continue;
@@ -601,7 +601,7 @@ namespace nodetool
     if ( !set_max_out_peers(public_zone, command_line::get_arg(vm, arg_out_peers) ) )
       return false;
     else
-      m_payload_handler.set_max_out_peers(epee::net_utils::zone::public_, public_zone.m_config.m_net_config.max_out_connection_count);
+      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, public_zone.m_config.m_net_config.max_out_connection_count);
 
 
     // Negative is unset. The ceiling is derived in `apply_inbound_ceiling`
@@ -632,7 +632,7 @@ namespace nodetool
       network_zone& zone = add_zone(proxy.zone);
       if (zone.m_connect != nullptr)
       {
-        MERROR("Listed --" << arg_tx_proxy.name << " twice with " << epee::net_utils::zone_to_string(proxy.zone));
+        MERROR("Listed --" << arg_tx_proxy.name << " twice with " << epee::net_utils::connector_id_to_string(proxy.zone));
         return false;
       }
       zone.m_connect = &public_connect;
@@ -660,7 +660,7 @@ namespace nodetool
     {
       if (zone.second.m_connect == nullptr)
       {
-        MERROR("Set outgoing peer for " << epee::net_utils::zone_to_string(zone.first) << " but did not set --" << arg_tx_proxy.name);
+        MERROR("Set outgoing peer for " << epee::net_utils::connector_id_to_string(zone.first) << " but did not set --" << arg_tx_proxy.name);
         return false;
       }
     }
@@ -672,11 +672,11 @@ namespace nodetool
     const std::size_t tx_relay_zones = m_network_zones.size();
     for (auto& inbound : *inbounds)
     {
-      network_zone& zone = add_zone(inbound.our_address.get_zone());
+      network_zone& zone = add_zone(epee::net_utils::require_address_connector(inbound.our_address));
 
       if (!zone.m_bind_ip.empty())
       {
-        MERROR("Listed --" << arg_anonymous_inbound.name << " twice with " << epee::net_utils::zone_to_string(inbound.our_address.get_zone()) << " network");
+        MERROR("Listed --" << arg_anonymous_inbound.name << " twice with " << epee::net_utils::connector_id_to_string(epee::net_utils::require_address_connector(inbound.our_address)) << " network");
         return false;
       }
 
@@ -779,11 +779,11 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  std::set<std::string> node_server<t_payload_net_handler>::get_seed_nodes(epee::net_utils::zone zone)
+  std::set<std::string> node_server<t_payload_net_handler>::get_seed_nodes(epee::net_utils::connector_id zone)
   {
     switch (zone)
     {
-    case epee::net_utils::zone::public_:
+    case epee::net_utils::connector_id::clearnet:
       return get_ip_seed_nodes();
     /* GENESIS BLOCKER until Shekyl's own hidden services exist: without seeds
        here, a node whose only anonymity peers would come from this list has no
@@ -799,7 +799,7 @@ namespace nodetool
        slowly, while announcing Shekyl's Tor population to another network's
        seed operators on the way. An unbootstrapped zone is at least visible as
        what it is. */
-    case epee::net_utils::zone::tor:
+    case epee::net_utils::connector_id::tor:
       return {};
     default:
       break;
@@ -808,13 +808,13 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  typename node_server<t_payload_net_handler>::network_zone& node_server<t_payload_net_handler>::add_zone(const epee::net_utils::zone zone)
+  typename node_server<t_payload_net_handler>::network_zone& node_server<t_payload_net_handler>::add_zone(const epee::net_utils::connector_id zone)
   {
     const auto zone_ = m_network_zones.lower_bound(zone);
     if (zone_ != m_network_zones.end() && zone_->first == zone)
       return zone_->second;
 
-    network_zone& public_zone = m_network_zones[epee::net_utils::zone::public_];
+    network_zone& public_zone = m_network_zones[epee::net_utils::connector_id::clearnet];
     return m_network_zones.emplace_hint(zone_, std::piecewise_construct, std::make_tuple(zone), std::tie(public_zone.m_net_server.get_io_context()))->second;
   }
   //-----------------------------------------------------------------------------------
@@ -830,7 +830,7 @@ namespace nodetool
       MINFO("Ephemeral Tor inbound disabled by --" << arg_no_ephemeral_tor.name);
       return;
     }
-    if (m_network_zones.count(epee::net_utils::zone::tor) != 0)
+    if (m_network_zones.count(epee::net_utils::connector_id::tor) != 0)
     {
       MINFO("Operator-provisioned tor configuration present (--" << arg_tx_proxy.name
           << " / --" << arg_anonymous_inbound.name << "); the default ephemeral posture yields to it");
@@ -879,21 +879,21 @@ namespace nodetool
     // already-bound server. Zone insertion is the commit: bind failure MUST
     // erase the zone, or send_txs fail-closes originated txs onto a dead tor
     // zone whose public bind may still succeed.
-    network_zone& zone = add_zone(epee::net_utils::zone::tor);
+    network_zone& zone = add_zone(epee::net_utils::connector_id::tor);
     zone.m_proxy_address = *proxy_endpoint;
     if (!zone.m_net_server.listen_tor(proxy_endpoint->address, "", "", false,
         reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling(), transport_spans()))
     {
       MERROR("Cannot bind the ephemeral tor forward listener on 127.0.0.1 (OS-assigned port); tearing tor down");
       shekyl_daemon_tor_shutdown();
-      m_network_zones.erase(epee::net_utils::zone::tor);
+      m_network_zones.erase(epee::net_utils::connector_id::tor);
       return;
     }
     const uint16_t local_port = static_cast<uint16_t>(zone.m_net_server.get_binded_port());
 
     zone.m_connect = &public_connect;
     set_max_out_peers(zone, -1);
-    m_payload_handler.set_max_out_peers(epee::net_utils::zone::tor, zone.m_config.m_net_config.max_out_connection_count);
+    m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::tor, zone.m_config.m_net_config.max_out_connection_count);
     set_max_in_peers(zone, -1);
     m_ephemeral_tor_alive = true;
 
@@ -934,7 +934,7 @@ namespace nodetool
     {
       const auto endpoint = net::socks::endpoint::get(proxy);
       CHECK_AND_ASSERT_MES(endpoint, false, "Failed to parse proxy: " << proxy << " - " << endpoint.error().message());
-      network_zone& public_zone = m_network_zones[epee::net_utils::zone::public_];
+      network_zone& public_zone = m_network_zones[epee::net_utils::connector_id::clearnet];
       public_zone.m_connect = &public_connect;
       public_zone.m_proxy_address = *endpoint;
       public_zone.m_can_announce = false;
@@ -954,7 +954,7 @@ namespace nodetool
     }
 
     m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);
-    network_zone& public_zone = m_network_zones.at(epee::net_utils::zone::public_);
+    network_zone& public_zone = m_network_zones.at(epee::net_utils::connector_id::clearnet);
 
     if ((m_nettype == cryptonote::MAINNET && public_zone.m_port != std::to_string(::config::P2P_DEFAULT_PORT))
         || (m_nettype == cryptonote::TESTNET && public_zone.m_port != std::to_string(::config::testnet::P2P_DEFAULT_PORT))
@@ -989,7 +989,7 @@ namespace nodetool
 
     for (auto& zone : m_network_zones)
     {
-      res = zone.second.m_peerlist.init(m_peerlist_storage.take_zone(zone.first), m_allow_local_ip);
+      res = zone.second.m_peerlist.init(m_peerlist_storage.take_connector(zone.first), m_allow_local_ip);
       CHECK_AND_ASSERT_MES(res, false, "Failed to init peerlist.");
     }
 
@@ -1009,7 +1009,7 @@ namespace nodetool
     // a transient local outage would discard reachable peers, which is what
     // the recently-failed retry window exists to avoid.
     for(const auto& p: m_command_line_peers)
-      m_network_zones.at(p.adr.get_zone()).m_peerlist.append_operator_candidate(p);
+      m_network_zones.at(epee::net_utils::require_address_connector(p.adr)).m_peerlist.append_operator_candidate(p);
 
     //only in case if we really sure that we have external visible ip
     m_have_address = true;
@@ -1040,7 +1040,7 @@ namespace nodetool
         const shekyl_inbound_ceiling ceiling = transport_ceiling();
         const shekyl_zone_params spans = transport_spans();
         const std::uint8_t* network_id = reinterpret_cast<const std::uint8_t*>(&m_network_id);
-        if (zone.first == epee::net_utils::zone::tor)
+        if (zone.first == epee::net_utils::connector_id::tor)
         {
           MINFO("Binding tor forward on " << zone.second.m_bind_ip << ":" << zone.second.m_port);
           res = zone.second.m_net_server.listen_tor(zone.second.m_proxy_address.address, zone.second.m_bind_ip, zone.second.m_port, true, network_id, ceiling, spans);
@@ -1062,7 +1062,7 @@ namespace nodetool
         }
         CHECK_AND_ASSERT_MES(res, false, "Failed to bind server");
       }
-      else if (zone.first == epee::net_utils::zone::tor && zone.second.m_proxy_address.address.port() != 0)
+      else if (zone.first == epee::net_utils::connector_id::tor && zone.second.m_proxy_address.address.port() != 0)
       {
         // `--tx-proxy tor,...` without `--anonymous-inbound`: no listener,
         // and the dials still go through the seam, which needs the SOCKS
@@ -1120,7 +1120,7 @@ namespace nodetool
         registries.push_back(zone.second.m_net_server.get_config_shared());
       }
       const bool pad_txs = command_line::get_arg(vm, arg_pad_transactions);
-      network_zone& public_zone_for_relay = m_network_zones.at(epee::net_utils::zone::public_);
+      network_zone& public_zone_for_relay = m_network_zones.at(epee::net_utils::connector_id::clearnet);
       m_notifier = cryptonote::levin::notify{
         public_zone_for_relay.m_net_server.get_io_context(),
         std::move(registries),
@@ -1146,7 +1146,7 @@ namespace nodetool
     mPeersLoggerThread.reset(new boost::thread([&]()
     {
       _note("Thread monitor number of peers - start");
-      const network_zone& public_zone = m_network_zones.at(epee::net_utils::zone::public_);
+      const network_zone& public_zone = m_network_zones.at(epee::net_utils::connector_id::clearnet);
       while (!is_closing && !public_zone.m_net_server.is_stop_signal_sent())
       { // main loop of thread
         //number_of_peers = m_net_server.get_config_object().get_connections_count();
@@ -1174,7 +1174,7 @@ namespace nodetool
       _note("Thread monitor number of peers - done");
     })); // lambda
 
-    network_zone& public_zone = m_network_zones.at(epee::net_utils::zone::public_);
+    network_zone& public_zone = m_network_zones.at(epee::net_utils::connector_id::clearnet);
     public_zone.m_net_server.add_idle_handler(boost::bind(&node_server<t_payload_net_handler>::idle_worker, this), std::chrono::seconds{1});
     public_zone.m_net_server.add_idle_handler(boost::bind(&t_payload_net_handler::on_idle, &m_payload_handler), std::chrono::seconds{1});
 
@@ -1196,7 +1196,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   uint64_t node_server<t_payload_net_handler>::get_public_connections_count()
   {
-    auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
+    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
     if (public_zone == m_network_zones.end())
       return 0;
     return public_zone->second.m_net_server.get_config_object().get_connections_count();
@@ -1274,11 +1274,11 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::do_handshake_with_peer(p2p_connection_context& context_, bool just_take_peerlist)
   {
-    network_zone& zone = m_network_zones.at(context_.m_remote_address.get_zone());
+    network_zone& zone = m_network_zones.at(epee::net_utils::require_session_connector(context_.m_connector));
 
     typename COMMAND_HANDSHAKE::request arg;
     typename COMMAND_HANDSHAKE::response rsp;
-    get_local_node_data(context_.m_remote_address.get_zone(), arg.node_data, zone);
+    get_local_node_data(epee::net_utils::require_session_connector(context_.m_connector), arg.node_data, zone);
     m_payload_handler.get_payload_sync_data(arg.payload_data);
 
     // Self-detection nonce: minted for THIS outbound attempt, inserted into
@@ -1288,7 +1288,7 @@ namespace nodetool
     // A self-connection is one TCP stream, so our own listener reads the
     // request strictly before this invoke can complete: detection is by
     // ordering, not by timing.
-    const epee::net_utils::zone zone_type = context_.m_remote_address.get_zone();
+    const epee::net_utils::connector_id zone_type = epee::net_utils::require_session_connector(context_.m_connector);
     // Recorded before it exists to be written: see mint_recorded_handshake_nonce.
     arg.nonce = mint_recorded_handshake_nonce(zone_type);
     const auto nonce_guard = epee::misc_utils::create_scope_leave_handler([this, zone_type, nonce = arg.nonce](){
@@ -1335,7 +1335,7 @@ namespace nodetool
         }
 
         context.support_flags = rsp.node_data.support_flags;
-        const auto azone = context.m_remote_address.get_zone();
+        const auto azone = epee::net_utils::require_session_connector(context.m_connector);
         network_zone& zone = m_network_zones.at(azone);
         zone.m_peerlist.set_peer_just_seen(context.m_remote_address);
         // Self-connection is detected on the ACCEPTOR side (the inbound
@@ -1379,7 +1379,7 @@ namespace nodetool
     typename COMMAND_TIMED_SYNC::request arg = AUTO_VAL_INIT(arg);
     m_payload_handler.get_payload_sync_data(arg.payload_data);
 
-    network_zone& zone = m_network_zones.at(context_.m_remote_address.get_zone());
+    network_zone& zone = m_network_zones.at(epee::net_utils::require_session_connector(context_.m_connector));
     bool r = epee::net_utils::async_invoke_remote_command2<typename COMMAND_TIMED_SYNC::response>(context_, COMMAND_TIMED_SYNC::ID, arg, zone.m_net_server.get_config_object(),
       [this](int code, const typename COMMAND_TIMED_SYNC::response& rsp, p2p_connection_context& context)
     {
@@ -1393,14 +1393,14 @@ namespace nodetool
       if(!handle_remote_peerlist(rsp.local_peerlist_new, context))
       {
         LOG_WARNING_CC(context, "COMMAND_TIMED_SYNC: failed to handle_remote_peerlist(...), closing connection.");
-        m_network_zones.at(context.m_remote_address.get_zone()).m_net_server.get_config_object().close(context.m_connection_id );
+        m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().close(context.m_connection_id );
         add_host_fail(context.m_remote_address);
       }
       if(!context.m_is_income)
-        m_network_zones.at(context.m_remote_address.get_zone()).m_peerlist.set_peer_just_seen(context.m_remote_address);
+        m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_peerlist.set_peer_just_seen(context.m_remote_address);
       if (!m_payload_handler.process_payload_sync_data(rsp.payload_data, context, false))
       {
-        m_network_zones.at(context.m_remote_address.get_zone()).m_net_server.get_config_object().close(context.m_connection_id );
+        m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().close(context.m_connection_id );
       }
     });
 
@@ -1426,7 +1426,7 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  std::array<uint8_t, 32> node_server<t_payload_net_handler>::mint_recorded_handshake_nonce(const epee::net_utils::zone zone)
+  std::array<uint8_t, 32> node_server<t_payload_net_handler>::mint_recorded_handshake_nonce(const epee::net_utils::connector_id zone)
   {
     std::array<uint8_t, 32> nonce{};
     crypto::generate_random_bytes_thread_safe(nonce.size(), nonce.data());
@@ -1435,7 +1435,7 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::record_outbound_handshake_nonce(const epee::net_utils::zone zone, const std::array<uint8_t, 32>& nonce)
+  void node_server<t_payload_net_handler>::record_outbound_handshake_nonce(const epee::net_utils::connector_id zone, const std::array<uint8_t, 32>& nonce)
   {
     const auto found = m_network_zones.find(zone);
     if (found == m_network_zones.end())
@@ -1445,7 +1445,7 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::erase_outbound_handshake_nonce(const epee::net_utils::zone zone, const std::array<uint8_t, 32>& nonce)
+  void node_server<t_payload_net_handler>::erase_outbound_handshake_nonce(const epee::net_utils::connector_id zone, const std::array<uint8_t, 32>& nonce)
   {
     const auto found = m_network_zones.find(zone);
     if (found == m_network_zones.end())
@@ -1455,7 +1455,7 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::inflight_handshake_nonce_count(const epee::net_utils::zone zone) const
+  size_t node_server<t_payload_net_handler>::inflight_handshake_nonce_count(const epee::net_utils::connector_id zone) const
   {
     const auto found = m_network_zones.find(zone);
     if (found == m_network_zones.end())
@@ -1465,7 +1465,7 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::detect_self_handshake(const epee::net_utils::zone zone, const std::array<uint8_t, 32>& nonce)
+  bool node_server<t_payload_net_handler>::detect_self_handshake(const epee::net_utils::connector_id zone, const std::array<uint8_t, 32>& nonce)
   {
     // Within-zone only, and erase-on-match: see the declaration. The zone
     // is the INBOUND connection's, never one the request claims.
@@ -1479,7 +1479,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::is_self_dial(const epee::net_utils::network_address& na) const
   {
-    const auto found = m_network_zones.find(na.get_zone());
+    const auto found = m_network_zones.find(epee::net_utils::require_address_connector(na));
     const epee::net_utils::network_address unset{};
     const epee::net_utils::network_address& zone_ours =
       found == m_network_zones.end() ? unset : found->second.m_our_address;
@@ -1519,7 +1519,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::is_peer_used(const peerlist_entry& peer)
   {
-    const auto zone = peer.adr.get_zone();
+    const auto zone = epee::net_utils::require_address_connector(peer.adr);
     const auto server = m_network_zones.find(zone);
     if (server == m_network_zones.end())
       return false;
@@ -1545,7 +1545,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::is_addr_connected(const epee::net_utils::network_address& peer)
   {
-    const auto zone = m_network_zones.find(peer.get_zone());
+    const auto zone = m_network_zones.find(epee::net_utils::require_address_connector(peer));
     if (zone == m_network_zones.end())
       return false;
 
@@ -1575,7 +1575,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::try_to_connect_and_handshake_with_new_peer(const epee::net_utils::network_address& na, bool just_take_peerlist, uint64_t last_seen_stamp, PeerType peer_type)
   {
-    network_zone& zone = m_network_zones.at(na.get_zone());
+    network_zone& zone = m_network_zones.at(epee::net_utils::require_address_connector(na));
     if (zone.m_connect == nullptr) // outgoing connections in zone not possible
       return false;
 
@@ -1657,7 +1657,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::check_connection_and_handshake_with_peer(const epee::net_utils::network_address& na, uint64_t last_seen_stamp)
   {
-    network_zone& zone = m_network_zones.at(na.get_zone());
+    network_zone& zone = m_network_zones.at(epee::net_utils::require_address_connector(na));
     if (zone.m_connect == nullptr)
       return false;
 
@@ -1779,7 +1779,7 @@ namespace nodetool
       // any connection changes, re-build the list for every outer try loop pass
       std::set<uint32_t> connected_subnets;
       const uint32_t subnet_mask = ntohl(0xffffff00);
-      const bool is_public_zone = &zone == &m_network_zones.at(epee::net_utils::zone::public_);
+      const bool is_public_zone = &zone == &m_network_zones.at(epee::net_utils::connector_id::clearnet);
       if (is_public_zone)
       {
         zone.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
@@ -1963,7 +1963,7 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::connect_to_seed(epee::net_utils::zone zone)
+  bool node_server<t_payload_net_handler>::connect_to_seed(epee::net_utils::connector_id zone)
   {
       network_zone& server = m_network_zones.at(zone);
       boost::upgrade_lock<boost::shared_mutex> seed_nodes_upgrade_lock(server.m_seed_nodes_lock);
@@ -2008,7 +2008,7 @@ namespace nodetool
         if(++try_count > server.m_seed_nodes.size())
         {
           // only IP zone has fallback (to direct IP) seeds
-          if (zone == epee::net_utils::zone::public_ && !m_fallback_seed_nodes_added.test_and_set())
+          if (zone == epee::net_utils::connector_id::clearnet && !m_fallback_seed_nodes_added.test_and_set())
           {
             MWARNING("Failed to connect to any of seed peers, trying fallback seeds");
             current_index = server.m_seed_nodes.size() - 1;
@@ -2044,7 +2044,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::connections_maker()
   {
-    using zone_type = epee::net_utils::zone;
+    using zone_type = epee::net_utils::connector_id;
 
     if (m_offline) return true;
     if (!connect_to_peerlist(m_exclusive_peers)) return false;
@@ -2062,7 +2062,7 @@ namespace nodetool
         continue;
       }
 
-      if (zone.first == zone_type::public_ && !connect_to_peerlist(m_priority_peers)) continue;
+      if (zone.first == zone_type::clearnet && !connect_to_peerlist(m_priority_peers)) continue;
 
       size_t base_expected_white_connections = (zone.second.m_config.m_net_config.max_out_connection_count*P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT)/100;
 
@@ -2143,7 +2143,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   size_t node_server<t_payload_net_handler>::get_public_outgoing_connections_count()
   {
-    auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
+    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
     if (public_zone == m_network_zones.end())
       return 0;
     return get_outgoing_connections_count(public_zone->second);
@@ -2217,7 +2217,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   size_t node_server<t_payload_net_handler>::get_public_white_peers_count()
   {
-    auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
+    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
     if (public_zone == m_network_zones.end())
       return 0;
     return public_zone->second.m_peerlist.get_white_peers_count();
@@ -2226,7 +2226,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   size_t node_server<t_payload_net_handler>::get_public_gray_peers_count()
   {
-    auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
+    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
     if (public_zone == m_network_zones.end())
       return 0;
     return public_zone->second.m_peerlist.get_gray_peers_count();
@@ -2235,7 +2235,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::get_public_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white)
   {
-    auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
+    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
     if (public_zone != m_network_zones.end())
       public_zone->second.m_peerlist.get_peerlist(gray, white);
   }
@@ -2288,7 +2288,7 @@ namespace nodetool
     if (m_offline)
       return true;
 
-    const auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
+    const auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
     if (public_zone == m_network_zones.end())
       return true;
 
@@ -2307,7 +2307,7 @@ namespace nodetool
     // This does NOT stop advertising, classify, or infer anything about a
     // remote peer -- all three are the deferred action half.
     const size_t inbound_now = get_incoming_connections_count(public_zone->second);
-    const uint32_t announced = get_announced_port(epee::net_utils::zone::public_);
+    const uint32_t announced = get_announced_port(epee::net_utils::connector_id::clearnet);
     const auto uptime_min = std::chrono::duration_cast<std::chrono::minutes>(
         std::chrono::steady_clock::now() - m_started_at).count();
     MGINFO("p2p inbound state: " << inbound_now << " connection(s) held, over "
@@ -2408,10 +2408,10 @@ namespace nodetool
     if(!sanitize_peerlist(peerlist_))
       return false;
 
-    const epee::net_utils::zone zone = context.m_remote_address.get_zone();
+    const epee::net_utils::connector_id zone = epee::net_utils::require_session_connector(context.m_connector);
     for(const auto& peer : peerlist_)
     {
-      if(peer.adr.get_zone() != zone)
+      if(epee::net_utils::require_address_connector(peer.adr) != zone)
       {
         MWARNING(context << " sent peerlist from another zone, dropping");
         return false;
@@ -2420,13 +2420,13 @@ namespace nodetool
 
     LOG_DEBUG_CC(context, "REMOTE PEERLIST: remote peerlist size=" << peerlist_.size());
     LOG_TRACE_CC(context, "REMOTE PEERLIST: " << ENDL << print_peerlist_to_string(peerlist_));
-    return m_network_zones.at(context.m_remote_address.get_zone()).m_peerlist.merge_peerlist(peerlist_, [this](const peerlist_entry &pe) {
+    return m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_peerlist.merge_peerlist(peerlist_, [this](const peerlist_entry &pe) {
       return !is_addr_recently_failed(pe.adr) && is_remote_host_allowed(pe.adr);
     });
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::get_local_node_data(const epee::net_utils::zone zone_type, basic_node_data& node_data, const network_zone& zone) const
+  bool node_server<t_payload_net_handler>::get_local_node_data(const epee::net_utils::connector_id zone_type, basic_node_data& node_data, const network_zone& zone) const
   {
     // The announcement is an ADDRESS -- a hypothesis about WHERE this node
     // can be dialed, never a claim about who it is (see basic_node_data).
@@ -2443,12 +2443,12 @@ namespace nodetool
     // one because `--anonymous-inbound` gave it one, so gating it on the
     // public flag would silently announce the unknown sentinel from a node
     // that is in fact reachable.
-    const bool zone_is_reachable = (zone_type == epee::net_utils::zone::public_)
+    const bool zone_is_reachable = (zone_type == epee::net_utils::connector_id::clearnet)
       ? zone.m_can_announce
       : (zone.m_our_address.get_type_id() != epee::net_utils::address_type::invalid);
     if (zone_is_reachable && zone.m_config.m_net_config.max_in_connection_count > 0)
     {
-      if (zone_type == epee::net_utils::zone::public_)
+      if (zone_type == epee::net_utils::connector_id::clearnet)
       {
         // Port-only advert: the host half is zeroed and carries no meaning
         // -- the receiver never reads it, combining this port with the host
@@ -2465,7 +2465,7 @@ namespace nodetool
       // sentinel. Undialable, and never recorded by any receiver.
       switch (zone_type)
       {
-        case epee::net_utils::zone::tor:
+        case epee::net_utils::connector_id::tor:
           node_data.address = net::tor_address::unknown();
           break;
         default:
@@ -2481,18 +2481,18 @@ namespace nodetool
   template<class t_payload_net_handler>
   int node_server<t_payload_net_handler>::handle_get_support_flags(int command, COMMAND_REQUEST_SUPPORT_FLAGS::request& arg, COMMAND_REQUEST_SUPPORT_FLAGS::response& rsp, p2p_connection_context& context)
   {
-    rsp.support_flags = m_network_zones.at(context.m_remote_address.get_zone()).m_config.m_support_flags;
+    rsp.support_flags = m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_config.m_support_flags;
     return 1;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::request_callback(const epee::net_utils::connection_context_base& context)
   {
-    m_network_zones.at(context.m_remote_address.get_zone()).m_net_server.get_config_object().request_callback(context.m_connection_id);
+    m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().request_callback(context.m_connection_id);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::relay_notify_to_list(int command, epee::levin::message_writer data_buff, std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> connections)
+  bool node_server<t_payload_net_handler>::relay_notify_to_list(int command, epee::levin::message_writer data_buff, std::vector<std::pair<epee::net_utils::connector_id, boost::uuids::uuid>> connections)
   {
     epee::byte_slice message = data_buff.finalize_notify(command);
     epee::byte_slice compressed = epee::levin::try_compress_message(message.clone());
@@ -2506,7 +2506,7 @@ namespace nodetool
       {
         if (zone == m_network_zones.end())
         {
-           MWARNING("Unable to relay all messages, " << epee::net_utils::zone_to_string(c_id.first) << " not available");
+           MWARNING("Unable to relay all messages, " << epee::net_utils::connector_id_to_string(c_id.first) << " not available");
            return false;
         }
         if (c_id.first <= zone->first)
@@ -2541,11 +2541,11 @@ namespace nodetool
 
        Disappears with the p2p migration. */
     using row_t = cryptonote::levin::notify::stem_tally_row;
-    std::vector<std::pair<row_t, epee::net_utils::zone>> rows;
+    std::vector<std::pair<row_t, std::uint8_t>> rows;
     {
       auto part = m_notifier.stem_snapshot();
       for (auto& r : part)
-        rows.emplace_back(std::move(r), epee::net_utils::zone::public_);
+        rows.emplace_back(std::move(r), cryptonote::netzone_public);
     }
     std::sort(rows.begin(), rows.end(),
       [](const auto& a, const auto& b) {
@@ -2566,7 +2566,7 @@ namespace nodetool
       if (m_notifier.floor_snapshot(achieved, floor, below))
       {
         out += "{\"zone\":\"";
-        out += epee::net_utils::zone_to_string(epee::net_utils::zone::public_);
+        out += epee::net_utils::connector_id_to_string(epee::net_utils::connector_id::clearnet);
         out += "\",\"achieved_out_connections\":";
         out += std::to_string(achieved);
         out += ",\"floor\":";
@@ -2603,15 +2603,15 @@ namespace nodetool
   }
 
   template<class t_payload_net_handler>
-  epee::net_utils::zone node_server<t_payload_net_handler>::send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, const cryptonote::relay_method tx_relay, const cryptonote::zone_route route)
+  bool node_server<t_payload_net_handler>::send_txs(std::vector<cryptonote::blobdata> txs, const std::uint8_t origin, const boost::uuids::uuid& source, const cryptonote::relay_method tx_relay, const cryptonote::zone_route route)
   {
     /* One relay. The route token no longer selects a connector: hop 0 is
        inside the relay, and a fluff reaches every session of that relay.
-       Byte 2 (the clearnet route) is retired with this. */
+       Byte 2 (the clearnet route) is retired with this. The origin byte is
+       the pool's NetZone, consumed by the route token at the caller. */
+    (void)origin;
     (void)route;
-    if (m_notifier.send_txs(std::move(txs), source, tx_relay))
-      return origin == epee::net_utils::zone::invalid ? epee::net_utils::zone::public_ : origin;
-    return epee::net_utils::zone::invalid;
+    return m_notifier.send_txs(std::move(txs), source, tx_relay);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -2626,7 +2626,7 @@ namespace nodetool
     if(is_filtered_command(context.m_remote_address, command))
       return false;
 
-    network_zone& zone = m_network_zones.at(context.m_remote_address.get_zone());
+    network_zone& zone = m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector));
     epee::byte_slice msg = message.finalize_notify(command);
     msg = epee::levin::try_compress_message(std::move(msg));
     int res = zone.m_net_server.get_config_object().send(std::move(msg), context.m_connection_id);
@@ -2636,7 +2636,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::drop_connection(const epee::net_utils::connection_context_base& context)
   {
-    m_network_zones.at(context.m_remote_address.get_zone()).m_net_server.get_config_object().close(context.m_connection_id);
+    m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().close(context.m_connection_id);
     return true;
   }
   //-----------------------------------------------------------------------------------
@@ -2649,7 +2649,7 @@ namespace nodetool
       context,
       COMMAND_REQUEST_SUPPORT_FLAGS::ID, 
       support_flags_request, 
-      m_network_zones.at(context.m_remote_address.get_zone()).m_net_server.get_config_object(),
+      m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object(),
       [=](int code, const typename COMMAND_REQUEST_SUPPORT_FLAGS::response& rsp, p2p_connection_context& context_)
       {  
         if(code < 0)
@@ -2677,11 +2677,11 @@ namespace nodetool
     }
 
     //fill response
-    const epee::net_utils::zone zone_type = context.m_remote_address.get_zone();
+    const epee::net_utils::connector_id zone_type = epee::net_utils::require_session_connector(context.m_connector);
     network_zone& zone = m_network_zones.at(zone_type);
 
     //will add self to peerlist if in same zone as outgoing later in this function
-    const bool outgoing_to_same_zone = !context.m_is_income && zone.m_our_address.get_zone() == zone_type;
+    const bool outgoing_to_same_zone = !context.m_is_income && zone.m_our_address.connector() == zone_type;
     const uint32_t max_peerlist_size = P2P_DEFAULT_PEERS_IN_HANDSHAKE - (outgoing_to_same_zone ? 1 : 0);
 
     std::vector<peerlist_entry> local_peerlist_new;
@@ -2742,7 +2742,7 @@ namespace nodetool
       return 1;
     }
 
-    const auto azone = context.m_remote_address.get_zone();
+    const auto azone = epee::net_utils::require_session_connector(context.m_connector);
     network_zone& zone = m_network_zones.at(azone);
 
     // Self-connection: the request carries a nonce; one that THIS node put
@@ -2862,7 +2862,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::on_connection_close(p2p_connection_context& context)
   {
-    network_zone& zone = m_network_zones.at(context.m_remote_address.get_zone());
+    network_zone& zone = m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector));
     if (!zone.m_net_server.is_stop_signal_sent()) {
       m_notifier.on_connection_close(context.m_connection_id);
     }
@@ -2880,7 +2880,7 @@ namespace nodetool
   template<class t_payload_net_handler> template <class Container>
   bool node_server<t_payload_net_handler>::connect_to_peerlist(const Container& peers)
   {
-    const network_zone& public_zone = m_network_zones.at(epee::net_utils::zone::public_);
+    const network_zone& public_zone = m_network_zones.at(epee::net_utils::connector_id::clearnet);
     for(const epee::net_utils::network_address& na: peers)
     {
       if(public_zone.m_net_server.is_stop_signal_sent())
@@ -2906,7 +2906,7 @@ namespace nodetool
       expect<epee::net_utils::network_address> adr = net::get_network_address(pr_str, default_port);
       if (adr)
       {
-        add_zone(adr->get_zone());
+        add_zone(epee::net_utils::require_address_connector(*adr));
         container.push_back(std::move(*adr));
         continue;
       }
@@ -3006,7 +3006,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::apply_inbound_ceiling(std::uint64_t reserved_beyond_p2p)
   {
-    const auto found = m_network_zones.find(epee::net_utils::zone::public_);
+    const auto found = m_network_zones.find(epee::net_utils::connector_id::clearnet);
     if (found == m_network_zones.end())
       return true;
     network_zone& public_zone = found->second;
@@ -3024,15 +3024,15 @@ namespace nodetool
       const std::uint32_t cap = entry.second.m_config.m_net_config.max_in_connection_count;
       if (decision.kind == SHEKYL_INBOUND_CEILING_BOUNDED && cap > decision.ceiling)
       {
-        MERROR("Inbound cap " << cap << " for " << epee::net_utils::zone_to_string(entry.first)
+        MERROR("Inbound cap " << cap << " for " << epee::net_utils::connector_id_to_string(entry.first)
             << " exceeds the descriptor ceiling " << decision.ceiling
             << "; refusing to start.");
         return false;
       }
       std::uint32_t connector = SHEKYL_CONNECTOR_CLEARNET;
-      if (entry.first == epee::net_utils::zone::tor)
+      if (entry.first == epee::net_utils::connector_id::tor)
         connector = SHEKYL_CONNECTOR_TOR;
-      else if (entry.first != epee::net_utils::zone::public_)
+      else if (entry.first != epee::net_utils::connector_id::clearnet)
         continue;
       shekyl_zone_set_connector_cap(connector, cap);
     }
@@ -3129,7 +3129,7 @@ namespace nodetool
           << out_floor << ".");
       count = out_floor;
     }
-    auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
+    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
     if (public_zone != m_network_zones.end())
     {
       const auto current = public_zone->second.m_net_server.get_config_object().get_out_connections_count();
@@ -3137,7 +3137,7 @@ namespace nodetool
       public_zone->second.m_config.m_net_config.max_out_connection_count = count;
       if(current > count)
         public_zone->second.m_net_server.get_config_object().del_out_connections(current - count);
-      m_payload_handler.set_max_out_peers(epee::net_utils::zone::public_, count);
+      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, count);
       // The outbound cap is a term in the inbound ceiling's reservation, so
       // changing it at runtime invalidates a ceiling derived against the old
       // one. Raising `out_peers` without this leaves inbound reserved against
@@ -3151,7 +3151,7 @@ namespace nodetool
       if (!apply_inbound_ceiling(m_reserved_beyond_p2p))
       {
         public_zone->second.m_config.m_net_config.max_out_connection_count = previous;
-        m_payload_handler.set_max_out_peers(epee::net_utils::zone::public_, previous);
+        m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, previous);
         apply_inbound_ceiling(m_reserved_beyond_p2p);
       }
     }
@@ -3159,7 +3159,7 @@ namespace nodetool
 
 
   template<class t_payload_net_handler>
-  epee::net_utils::network_address node_server<t_payload_net_handler>::get_announced_address(const epee::net_utils::zone zone) const
+  epee::net_utils::network_address node_server<t_payload_net_handler>::get_announced_address(const epee::net_utils::connector_id zone) const
   {
     /* The address `get_local_node_data` puts on the wire for this zone.
        On an anonymity zone run dialer-only this is the zone's CONSTANT
@@ -3175,7 +3175,7 @@ namespace nodetool
   }
 
   template<class t_payload_net_handler>
-  uint32_t node_server<t_payload_net_handler>::get_announced_port(const epee::net_utils::zone zone) const
+  uint32_t node_server<t_payload_net_handler>::get_announced_port(const epee::net_utils::connector_id zone) const
   {
     /* The port `get_local_node_data` would put on the wire for this zone.
        Named so the derived advertisement has something a test can observe:
@@ -3192,7 +3192,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   uint32_t node_server<t_payload_net_handler>::get_max_out_public_peers() const
   {
-    const auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
+    const auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
     if (public_zone == m_network_zones.end())
       return 0;
     return public_zone->second.m_config.m_net_config.max_out_connection_count;
@@ -3201,7 +3201,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::change_max_in_public_peers(size_t count)
   {
-    auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
+    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
     if (public_zone != m_network_zones.end())
     {
       const uint32_t cap = count > std::numeric_limits<uint32_t>::max()
@@ -3228,7 +3228,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   uint32_t node_server<t_payload_net_handler>::get_max_in_public_peers() const
   {
-    const auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
+    const auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
     if (public_zone == m_network_zones.end())
       return 0;
     return public_zone->second.m_config.m_net_config.max_in_connection_count;

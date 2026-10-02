@@ -891,7 +891,7 @@ int relay_tx(tx_memory_pool& pool, i_cryptonote_protocol& protocol,
       boost::uuids::nil_uuid(),
       /* One crossing: the roll and its zone mapping both live in Rust
          (rule 40). Byte contract static_asserted in enums.h. */
-      static_cast<epee::net_utils::zone>(shekyl_relay_zone_roll_originated_zone()),
+      shekyl_relay_zone_roll_originated_zone(),
       relay_method::local);
     return SHEKYL_SUBMIT_OK;
   }

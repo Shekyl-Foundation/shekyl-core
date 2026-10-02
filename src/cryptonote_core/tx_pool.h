@@ -479,7 +479,7 @@ namespace cryptonote
      * @param just_broadcasted true if a tx was just broadcasted
      *
      */
-    void set_relayed(epee::span<const crypto::hash> hashes, relay_method tx_relay, epee::net_utils::zone zone, std::vector<bool> &just_broadcasted);
+    void set_relayed(epee::span<const crypto::hash> hashes, relay_method tx_relay, std::uint8_t zone, std::vector<bool> &just_broadcasted);
 
     /*! Record that the stem watch resolved these transactions as PROPAGATED —
         seen arriving from somewhere other than the peer they were stemmed to

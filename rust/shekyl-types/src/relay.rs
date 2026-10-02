@@ -9,7 +9,7 @@
 //! [`RelayMethod`] and [`NetZone`] were born in `shekyl-relay::zone_route`
 //! as the FFI seam's words: an arrival class handed in, a routing plan
 //! handed out, each byte-pinned to the C++ enum it mirrors
-//! (`cryptonote::relay_method`, `epee::net_utils::zone`). The daemon's pool
+//! (`cryptonote::relay_method`, the `netzone_*` bytes). The daemon's pool
 //! store needs the same words and cannot take `shekyl-relay` — a relay
 //! scheduler with an async driver — as a dependency, so they live here and
 //! `shekyl-relay` re-exports them (rule 18: a word two crates need lives
@@ -136,10 +136,10 @@ pub enum RelayCategory {
 }
 
 /// The network zone a transaction arrived on (or, for originated traffic, the
-/// zone the origination roll chose). Mirrors `epee::net_utils::zone` by value
-/// and `static_assert`, same contract discipline as [`RelayMethod`].
+/// zone the origination roll chose). The C++ `netzone_*` constants pin the
+/// same bytes, same contract discipline as [`RelayMethod`].
 ///
-/// `Invalid == 0` is the seam pin with `epee::net_utils::zone::invalid`.
+/// `Invalid == 0` is the seam pin with `cryptonote::netzone_invalid`.
 /// The pool record does not store an arrival zone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]

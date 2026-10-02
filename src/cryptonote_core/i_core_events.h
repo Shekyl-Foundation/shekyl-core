@@ -76,7 +76,7 @@ namespace cryptonote
         earlier draft reserved two bits on `txpool_tx_meta_t` for it; that
         bought an LMDB record change and a pre-upgrade decode question for a
         value nothing reads back. */
-    virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay, epee::net_utils::zone zone) = 0;
+    virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay, std::uint8_t zone) = 0;
 
     /*! The stem watch resolved these transactions as PROPAGATED — each was
         seen arriving from somewhere other than the peer it was stemmed to
