@@ -51,8 +51,8 @@ use serde::Serialize;
 use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 use shekyl_economics::{
     base_block_reward,
-    burn::compute_burn_split_at,
-    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier,
+    burn::{calc_burn_pct_at, compute_burn_split_at},
+    calc_effective_emission_share, calc_release_multiplier,
     params::{EconomicParams, SCALE},
     split_block_emission, ClosedShardCount,
 };
@@ -237,15 +237,10 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         );
 
         // Fee leg — identical under both dispositions.
-        let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
-        let burn_pct = calc_burn_pct(
-            volume,
-            params.tx_volume_baseline,
-            circulating,
-            params.emission_curve_asymptote,
-            params.burn_base_rate,
-            params.burn_cap,
-        );
+        // The circulating supply the burn reads (CEN-F17), net of what the
+        // fold has destroyed, through its owner.
+        let supply = crate::engine::net_supply(already_generated, total_burned);
+        let burn_pct = calc_burn_pct_at(volume, supply, &economic);
         let fee_point = FeePoint {
             already_generated: ag,
             volume,

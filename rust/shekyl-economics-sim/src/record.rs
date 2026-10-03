@@ -137,12 +137,13 @@ fn sample_heights(blocks_per_year: u64, sim_years: u64) -> Vec<u64> {
 ///
 /// The per-block accumulation loop mirrors
 /// [`crate::engine::run_scenario`]'s integer reward/emission math (so
-/// `already_generated` tracks identically). It deliberately does **not**
-/// adopt that modeling tool's emitted-minus-burned `circulating`: the
-/// recorded `circulating_supply` is the **consensus burn-site quantity** —
-/// prev-block `already_generated` (== `ag_start`) — per §5.3 R1 / design
-/// §608–612, **not** `already_generated − total_burned`. Rows are captured
-/// at [`sample_heights`].
+/// `already_generated` tracks identically). The recorded
+/// `circulating_supply` is the quantity the burn reads in consensus:
+/// `coins_generated − total_burned` at parent state (FL-R16c, CEN-F17),
+/// derived by its owner ([`crate::engine::net_supply`]) over the burn this
+/// loop folds. Until ESR-5 it recorded gross `already_generated`, after a
+/// C++ burn site that no longer reads it. Rows are captured at
+/// [`sample_heights`].
 #[must_use]
 pub fn record_baseline_fixture() -> RecordedChainFixture {
     // The fee here is a test-vector input, not a model of what users pay:
@@ -177,6 +178,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
     let samples = sample_heights(blocks_per_year, config.sim_years);
 
     let mut already_generated: u128 = 0;
+    let mut total_burned: u128 = 0;
     let mut records: Vec<RecordedRow> = Vec::with_capacity(samples.len());
 
     for block in 0..total_blocks {
@@ -188,13 +190,12 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             .expect("sim neutral trajectory stays within the arithmetic domain");
 
         let tx_volume = (config.volume.get_volume)(block, blocks_per_year);
-        // `circulating_supply` is the consensus burn-site quantity:
-        // prev-block `already_generated` (== `ag_start`), matching
-        // `validate_miner_transaction` — NOT `already_generated −
-        // total_burned` (§5.3 R1 / design §608–612). stake_ratio,
-        // total_staked, burn input, and the recorded row all use this
-        // same quantity so the fixture exercises the consensus input.
-        let circulating = ag_start;
+        // `circulating_supply` is the burn's consensus operand, net of what
+        // this loop has destroyed. stake_ratio, total_staked, the burn input
+        // and the recorded row all use this one quantity, so the fixture
+        // exercises the consensus input.
+        let supply = crate::engine::net_supply(already_generated, total_burned);
+        let circulating = supply.to_raw();
         let stake_ratio = (config.stake.get_stake_ratio)(block, blocks_per_year, circulating);
 
         let multiplier = calc_release_multiplier(
@@ -229,6 +230,9 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         // `LocalEconomics::burn_amount`'s composition (Bug-2 class). Burn no
         // longer consumes stake (F-D); `total_staked` is recorded below as a
         // scenario observable only.
+        // The engine-core differential composes the burn through
+        // `calc_burn_pct_from_activity`; the recorder calls the same
+        // primitive (module docs), fed the derived supply.
         let burn_pct = calc_burn_pct_from_activity(
             TxVolume::per_block(tx_volume),
             sim.tx_volume_baseline,
@@ -262,6 +266,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         }
 
         already_generated += u128::from(effective_reward);
+        total_burned += u128::from(fee_split.actually_destroyed);
     }
 
     let neutral_milestones = [

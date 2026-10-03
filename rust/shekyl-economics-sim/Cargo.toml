@@ -9,6 +9,10 @@ description = "Eight-scenario economics simulation harness for DESIGN_CONCEPTS p
 
 [dependencies]
 shekyl-economics = { path = "../shekyl-economics" }
+# `AtomicUnits`, the operand type of `CirculatingSupply::derive` — the one
+# owner of the net supply the burn reads (ECONOMICS_SIM_PRODUCTION_REBASE.md
+# ESR-5).
+shekyl-units = { path = "../shekyl-units" }
 # Gate-7 derived-lock model: compile-time tie to the pinned consensus
 # constants (`ARCHIVAL_BOND_FLOOR_ATOMIC`, `SETTLEMENT_EPOCH_BLOCKS`)
 # instead of re-asserting their values locally.
