@@ -29,9 +29,8 @@ use std::fmt;
 use shekyl_types::SHARD_LENGTH;
 
 use crate::burden::honest_leaves_at_closed_shards;
-use crate::calibration::{self, stuffer_campaign, tree_depth_for_leaves};
+use crate::calibration::{self, stuffer_campaign, tree_depth_for_leaves, PerByteRate};
 use crate::escalation::{family, EscalationCurve, SHARE_SCALE};
-use crate::fee_model::PerByteRate;
 use crate::stage2::AdmissionAtShards;
 
 /// Long-term block-weight median floor — the penalty-free zone.

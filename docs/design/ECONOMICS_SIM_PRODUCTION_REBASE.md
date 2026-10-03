@@ -160,9 +160,11 @@ weights the sim feeds the fold, against which the validator records. ESR-6
 pins the sim's window construction against the validator's on a shared
 trace.
 
-The block weight the median needs is `transactions × predict_weight`, and
-three folds already carry the honest fold (`stage2::HonestFold`) for its
-leaf count. The weight accumulator goes there, once, so the folds do not
+The block weight the median needs is `transactions × predict_weight`.
+`burden::HonestOutputs` is the leaf counter the engine, the budget and
+`burden::HonestFold` share: the fee prices `leaves()` before `accrue()`,
+and the fold's archival length is read at that same count. ESR-6 extends
+`HonestOutputs` with the weight accumulator, once, so the folds do not
 grow three copies of it.
 
 ## 4. Declared divergences
@@ -181,7 +183,7 @@ defect.
 | Admission rate sampled at the year's last block | A stuffer picks its moment, and on the production arm the floor falls through the year | Attacker-favouring; stated at the field |
 | A claim is one ordinary transaction at the admission rate | The claim's own envelope and the wallet's claim hold floor (`EMISSION_CLAIM_FEE_FLOOR`) are not modelled. Carried from the pre-ESR report unchanged | Appendix A, class A, row A9 |
 | Median held at the penalty-free zone | Only until ESR-6 lands the median | Stated in the report header |
-| Fee paid unrounded | The wallet rounds each fee up to the daemon's quantization mask (1 000 atomic). The mask has no Rust owner — it is a C++ static — and the fee-floor instrument in this crate already pays unrounded (FL-R22). At most 1 000 atomic per transaction, below print precision | Stated here; closes when the mask gains a Rust owner |
+| Fee paid unrounded | The product is the fixed point of `shekyl_tx_weight::converge_weight_fee` — the wallet's iteration without the mask. The wallet then rounds each fee up to the daemon's quantization mask (1 000 atomic). The mask has no Rust owner — it is a C++ static — and the fee-floor instrument in this crate already pays unrounded (FL-R22). At most 1 000 atomic per transaction, below print precision | Stated here; closes when the mask gains a Rust owner |
 | `REF_TX_WEIGHT = 3_000` | The ladder's reference weight is a C++ macro with no single Rust owner. The crate's one existing declared copy (`fee_ladder.rs`) is reused, not duplicated | Declared at its definition |
 | Fee floor enforced in consensus | Not the current system: the floor is relay policy (C2-R2 Q9, reopened 2026-10-02) | Second arm of ESR-7 |
 | Traffic schedules, opportunity-cost band, SKL price band, storage and Kryder terms, replica target `R = 6` | No production owner exists | Exogenous; each already declared at its definition (Appendix A, class A) |

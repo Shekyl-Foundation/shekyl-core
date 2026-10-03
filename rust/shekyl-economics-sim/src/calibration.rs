@@ -42,14 +42,15 @@
 //! March-2024 figures are an order-of-magnitude anchor + proof-of-willingness
 //! (§12.3 DQ-2C), re-expressed in Shekyl's unit below — never hard-coded.
 
+use serde::Serialize;
 use shekyl_curve_tree::segment::outputs_per_node;
 use shekyl_tx_weight::{
-    predict_archival_len, predict_weight, InputCount, OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
+    converge_weight_fee, predict_archival_len, predict_weight, InputCount, OutputCount,
+    MAX_OUTPUTS, MAX_TREE_DEPTH,
 };
 use shekyl_types::SHARD_LENGTH;
 
 use crate::burden::SHARD_BYTES;
-use crate::fee_model::PerByteRate;
 
 // ── Rucknium March-2024 anchor (DQ-2C; report/calibration only) ──────────────
 /// Sustained duration of the incident, days (report §6). Weeks, not a burst.
@@ -104,6 +105,25 @@ pub fn tree_depth_for_leaves(n: u64) -> u8 {
     MAX_TREE_DEPTH
 }
 
+/// A fee rate: atomic units per byte of transaction weight. A type of its
+/// own so that a rate cannot be passed where a leaf count, a depth or a
+/// shard count is expected — the functions that take one take several
+/// other integers beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct PerByteRate(u64);
+
+impl PerByteRate {
+    #[must_use]
+    pub const fn from_atomic(atomic_per_byte: u64) -> Self {
+        Self(atomic_per_byte)
+    }
+
+    #[must_use]
+    pub const fn atomic(self) -> u64 {
+        self.0
+    }
+}
+
 /// A transaction shape the builder accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Shape {
@@ -113,26 +133,22 @@ pub struct Shape {
 
 impl Shape {
     /// Block weight of one transaction of this shape at `tree_depth`, paying
-    /// `rate`, via the **converge fixpoint** the build path runs (fee feeds
-    /// `varint(fee)` into the weight, so it is circular by a few bytes; two
-    /// iterations from zero settle it). Integer throughout (DQ-2G).
+    /// `rate`. The weight includes `varint(fee)`, so the fee is
+    /// [`converge_weight_fee`] and this is [`predict_weight`] at that fee.
+    /// Integer throughout (DQ-2G).
     #[must_use]
     pub fn tx_weight(self, tree_depth: u8, rate: PerByteRate) -> u64 {
-        let mut fee = 0u64;
-        let mut weight = 0u64;
-        for _ in 0..2 {
-            weight = predict_weight(self.n_in, self.n_out, tree_depth, fee) as u64;
-            fee = weight.saturating_mul(rate.atomic());
-        }
-        weight
+        let fee = self.tx_fee_atomic(tree_depth, rate);
+        u64::try_from(predict_weight(self.n_in, self.n_out, tree_depth, fee)).unwrap_or(u64::MAX)
     }
 
-    /// Weight-fee (atomic) of one transaction of this shape at `tree_depth`:
-    /// `tx_weight × rate`.
+    /// Unrounded weight-fee (atomic) of one transaction of this shape at
+    /// `tree_depth`: the fixed point of `weight × rate`. No quantization
+    /// mask — that rounding is the wallet's, and this crate's declared
+    /// divergence from it.
     #[must_use]
     pub fn tx_fee_atomic(self, tree_depth: u8, rate: PerByteRate) -> u64 {
-        self.tx_weight(tree_depth, rate)
-            .saturating_mul(rate.atomic())
+        converge_weight_fee(rate.atomic(), self.n_in, self.n_out, tree_depth)
     }
 
     /// Archival bytes one transaction of this shape adds to the fold at

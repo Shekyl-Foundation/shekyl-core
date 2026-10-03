@@ -28,7 +28,6 @@ pub fn scenario_1_baseline(params: &SimParams) -> ScenarioConfig {
             get_volume: Box::new(move |_block, _bpy| baseline),
         },
         stake: default_stake_schedule(),
-        fee: params.fee,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -52,7 +51,6 @@ pub fn scenario_2_boom_bust(params: &SimParams) -> ScenarioConfig {
             }),
         },
         stake: default_stake_schedule(),
-        fee: params.fee,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -73,7 +71,6 @@ pub fn scenario_3_sustained_growth(params: &SimParams) -> ScenarioConfig {
             }),
         },
         stake: default_stake_schedule(),
-        fee: params.fee,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -99,7 +96,6 @@ pub fn scenario_4_stuffing_attack(params: &SimParams) -> ScenarioConfig {
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 200_000),
         },
-        fee: params.fee,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -118,7 +114,6 @@ pub fn scenario_5_stake_concentration(params: &SimParams) -> ScenarioConfig {
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 300_000),
         },
-        fee: params.fee,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -151,7 +146,6 @@ pub fn scenario_6_mass_unstaking(params: &SimParams) -> ScenarioConfig {
                 }
             }),
         },
-        fee: params.fee,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -190,7 +184,6 @@ pub fn scenario_7_bootstrap(params: &SimParams) -> ScenarioConfig {
                 }
             }),
         },
-        fee: params.fee,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -217,7 +210,6 @@ pub fn scenario_8_late_tail(params: &SimParams) -> ScenarioConfig {
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 400_000),
         },
-        fee: params.fee,
         initial_emitted_fraction: 0.95,
         // ~year 30 in the configured chain timing (derived, not a literal —
         // byte-identical at the default 262_800; see `fee_era` in
@@ -244,7 +236,7 @@ pub const SCENARIO_9_TAIL_TX_PER_BLOCK: u64 = 15;
 /// budget and escalation is decisive (A1's binding case; F-G). None of
 /// scenarios 1–8 reach it (`scenario_8` is high-history but *busy* and only 5
 /// years long).
-pub fn scenario_9_high_history_low_activity(params: &SimParams) -> ScenarioConfig {
+pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConfig {
     ScenarioConfig {
         name: "high_history_low_activity".into(),
         description: "post-boom settled chain: a large shard corpus accreted in an early boom, then a low-activity fee-era tail over 60 years (emission near the tail: ~1 SKL/block at year 60, the 0.6 SKL/block floor binds from ~year 64) — the §11.2 quadrant where escalation is decisive".into(),
@@ -265,7 +257,6 @@ pub fn scenario_9_high_history_low_activity(params: &SimParams) -> ScenarioConfi
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 400_000),
         },
-        fee: params.fee,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -339,7 +330,6 @@ fn gate7_scenario(
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 0),
         },
-        fee: params.fee,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: Some(model),
@@ -386,7 +376,6 @@ fn gate7_asserted_comparator(
         sim_years: GATE7_YEARS,
         volume: VolumeSchedule { get_volume },
         stake: default_stake_schedule(),
-        fee: params.fee,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,

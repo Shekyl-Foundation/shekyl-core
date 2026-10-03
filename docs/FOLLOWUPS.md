@@ -22,7 +22,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **Re-base `shekyl-staking-sim` on production code.** The population sim models three mechanisms production has retired (the per-pseudonym reward plateau with pseudonym splitting, in-place holdings updates, a Foundation floor that decays to zero), computes work in `f64` beside `scarcity_micro`, and pays from an abstract purse of 100 units per epoch. Five consensus constants were calibrated from its runs, the `0.75 SKL` bond floor among them. What remains is to move the reward path, the bond lifecycle and the unit system onto production code and feed the population from the production purse; every L11–L19 figure then becomes a records-was row and those constants are re-derived. Separate from the `ESR-` items because it is a separate validation surface (rule 19). **Falsifier:** an abstract-purse control arm reproduces the existing L11 and L13 pins.
+- **Re-base `shekyl-staking-sim` on production code.** What remains is the reward path, the bond lifecycle and the unit system on production code, fed from the production purse, with L11–L19 re-derived. Separate validation surface from ESR- (rule 19). Falsifier: an abstract-purse control arm reproduces the existing L11 and L13 pins.
   - Owner: [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6, Appendix B
   - Target: pre-genesis
 

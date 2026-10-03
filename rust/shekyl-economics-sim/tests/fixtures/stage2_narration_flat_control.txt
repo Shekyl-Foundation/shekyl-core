@@ -57,12 +57,10 @@ chain n(shards) depth        shape   fee/tx (SKL)  tx/shard   cost/shard (SKL)  
 500000              5   8-in/1-out       0.017936        52             0.9327               1.0045
 2250000             6   8-in/1-out       0.018109        52             0.9417               0.9992
 10000000            6   8-in/1-out       0.018109        52             0.9417               0.9992
-  -> cost/shard is depth-FLAT to within a few percent (the FCMP proof grows with
-depth, but it is archival good the stuffer is buying, so only the archival/weight
-ratio moves): one-shot drifts UP ~1%, sustained DOWN ~3%. The leaf era's
-'cheapest early' is gone with its unit. The A4 ROI gate below weighs the one-shot
-(binding, attacker-favouring) cost against the escalation Delta-pool a stuffing
-staker captures: a survivor of A1 must ALSO price the stuffer out.
+  -> Depth moves the archival/weight ratio by only a few percent (the FCMP proof grows
+with depth, and it is archival good the stuffer is buying). The rate is constant on this arm, so that ratio is the whole of the movement: one-shot drifts up about 1%, sustained down about 3%. The leaf era's 'cheapest early' is gone with its unit. The A4 ROI gate
+below weighs the one-shot (binding, attacker-favouring) cost against the escalation
+Delta-pool a stuffing staker captures: a survivor of A1 must ALSO price the stuffer out.
 
 A1 — burden clearance (§12.2, F-G): min budget / (bond-opp-cost + storage) ratio.
 budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor 0.75 x R6 x n x rate.
@@ -190,7 +188,7 @@ shape with a longer fuse, not a structural answer. The lever is the bond itself
 A3 — budget stranding (§12.2): fraction of budget(E) that NEVER MINTS.
 budget is a minting ENTITLEMENT — unclaimed past MAX_CLAIM_AGE_W=26 is "supply
 never created" (ARCHIVAL_BUDGET_SCHEDULE §4). A class claims iff its reward
-covers one claim tx (0.003778..0.004585 SKL early..late @ the 300 atomic/byte
+covers one claim tx (0.004393..0.004393 SKL early..late @ the 300 atomic/byte
 floor, via the production predictor at each year's tree depth). PRE-D1 vs
 POST-D1 scoring = the §1 Stage-0 coupling claim, measured: pre-D1 zeroes bulk
 holders past the co-holder cliff (r_market > g_milli ≈ 1000), and a
@@ -526,11 +524,7 @@ Both ends of the family are reported so the verdict is a RANGE, not a
 point chosen by which operand happened to be at hand.
   -> WHY it breaks even so low: the burned bond is worth 4.43 EPOCHS of the
 per-shard reward it secures (0.750 SKL vs 0.1691 SKL/epoch at the median).
-A slash that costs a fraction of one epoch's earnings is not a penalty,
-which is TJ-4's BOND_FLOOR coupling made quantitative: the (m,n) re-pin
-cannot carry attestation-resistance while the collateral it forfeits is
-this cheap relative to the flow. Raising m/lowering n does not fix a
-floor problem.
+That is more than one epoch of earnings, so a slash at this reward is a penalty of that size. The 'fraction of one epoch' reading does not apply on this arm; the comparison itself is TJ-4's BOND_FLOOR coupling. Raising m/lowering n does not fix a floor problem.
 
   REMEDY CURVE — break-even f vs a hypothetical POST-SLASH COOLDOWN c
 (Reinstate not admitted until c epochs after the slash; excluded span =

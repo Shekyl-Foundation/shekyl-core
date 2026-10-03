@@ -9,6 +9,7 @@ mod distribution;
 mod engine;
 mod escalation;
 mod fee_floor;
+mod fee_horizon;
 mod fee_ladder;
 mod fee_model;
 mod mn_feasibility;

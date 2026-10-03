@@ -57,9 +57,9 @@ use shekyl_economics::{
     split_block_emission, ClosedShardCount, TxVolume,
 };
 
+use crate::burden::HonestOutputs;
 use crate::engine::SimParams;
-use crate::fee_model::{FeeModel, FeePoint};
-use crate::stage2::HonestFold;
+use crate::fee_model::FeePoint;
 
 const COIN: f64 = 1_000_000_000.0;
 
@@ -70,8 +70,6 @@ pub struct BudgetScenario {
     pub description: String,
     pub sim_years: u64,
     pub get_volume: Box<dyn Fn(u64, u64) -> u64>,
-    /// The run's fee arm ([`SimParams::fee`]).
-    pub fee: FeeModel,
     pub initial_emitted_fraction: f64,
     pub genesis_height_offset: u64,
 }
@@ -174,9 +172,9 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
     let mut current_epoch: u64 = 0;
 
     let mut epochs: Vec<EpochRecord> = Vec::new();
-    // Read for the curve tree's leaf count alone: it sets the ordinary
-    // transaction's weight, and so its fee.
-    let mut honest = HonestFold::default();
+    // Leaves the block's transactions are built against. The fee prices this
+    // count; the block's outputs accrue after it is charged.
+    let mut outputs = HonestOutputs::default();
 
     for block in 0..total_blocks {
         let abs_height = block + scenario.genesis_height_offset;
@@ -247,16 +245,19 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
             params.burn_base_rate,
             params.burn_cap,
         );
-        honest.add_block(tx_volume);
-        let fee_per_tx = scenario.fee.per_tx_atomic(&FeePoint {
-            already_generated: ag,
-            volume: TxVolume::per_block(tx_volume),
-            sigma_scaled: emission_share,
-            burn_pct_scaled: burn_pct,
-            chain_leaves: honest.leaves(),
-            params: &economic,
-        });
-        let total_fees = (tx_volume as u128 * fee_per_tx as u128).min(u64::MAX as u128) as u64;
+        let charged = params.fee.charge(
+            tx_volume,
+            &FeePoint {
+                already_generated: ag,
+                volume: TxVolume::per_block(tx_volume),
+                sigma_scaled: emission_share,
+                burn_pct_scaled: burn_pct,
+                chain_leaves: outputs.leaves(),
+                params: &economic,
+            },
+        );
+        outputs.accrue(tx_volume);
+        let total_fees = charged.total_atomic;
         // Canonical escalated entry; n = 0 (no corpus trajectory in this arm —
         // see engine.rs). Genesis-neutral asymptote ⇒ bit-identical to flat.
         let fee_split =
