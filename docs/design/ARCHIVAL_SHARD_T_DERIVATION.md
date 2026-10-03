@@ -897,7 +897,7 @@ that gate's bookkeeping:
 |---|---|---|
 | **`SHT-1`** | `T = 200` is 3.33 MB ÷ 16.7 KB/tx, and 3.33 MB is the **retired leaf segment's** size (`SEGMENT_LEAF_COUNT × ~128 B`). `T`'s justification is inheritance from a retired geometry. 16.7 KB/tx is **not** circular — it is a component estimate predating `T` by ten days. | CONFIRMED — the round's subject |
 | **`SHT-2`** | The JSON comment's *"typical shard at ~16.7 KB/tx lands near 3.33 MB"* holds only under the **non-coinbase ordinal**. Under the landed storage-id domain, 3.33 MB is the *saturation* case; at 1 listed tx/block a shard holds ~1.7 MB. The sizing rationale presumes the answer to `SHT-Q1`. | CONFIRMED |
-| **`SHT-3`** | `SF-D7` still states *"`N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`)"* ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):183). Item 5 retired the whole-shard materialise and refuted F32's reason 2 on that ground. Stale premise on a RULED row, and it is the text a future reader would use to derive a memory bound on `T`. | STALE TEXT on a RULED row — owner `SF-` |
+| **`SHT-3`** | `SF-D7` still states *"`N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`)"* ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):183). Item 5 retired the whole-shard materialise and refuted F32's reason 2 on that ground. Stale premise on a RULED row, and it is the text a future reader would use to derive a memory bound on `T`. | STALE TEXT on a RULED row — owner `SF-`. **FIXED 2026-10-03:** `SF-D7` carries a dated amendment — the floor is in-flight bytes, `N × MAX_TX_SIZE` under per-tx streaming verification, with what the shipped client buffers until fetch Sub-PR 2 |
 | **`SHT-4`** | `U1` is not bounded by `CHALLENGE_RESPONSE_BLOCKS` (500 blocks ⇒ a 10.8 GB budget against a 3.34 MB shard) and the memory leg is retired by item 5. **AMENDED on review:** the first pass then derived the real bound against the 180 KB/s *burst floor* and reported the row as slack, having missed W₂'s **measured** single-attempt figures on the same page (`:1091-1095`). On the measurement the heavy-end ceiling is ~[140, 490] and **`T = 200` is inside it** — `U1a` is unresolved at 200, not slack. The steering prediction that `U1` is the bound most likely to set `T` is **reinstated**; what was wrong in it was only the denominator. | CONFIRMED, then AMENDED — the amendment is the round's headline |
 | **`SHT-7`** | **`L`'s fetch-span component is justified by a byte count from the retired segment, and its own page already contradicts it.** `L = 4`'s span was sized on "~20 s for 3.33 MB" (`ARCHIVAL_SHARD_FETCH.md`:1074-1090, the 180 KB/s floor); W₂ at `:1091-1095` then measured **48.27 / 86.06 s** for the same object — 2.4–4.3× worse — and `L` stayed 4 on a *different* argument ("seven attempts of the cold p99 fit under six minutes"). So the span text is stale relative to the measurement one paragraph below it, and **deriving `T` from that span would be circular**: it would feed the retired 3.33 MB back into `T`'s own bound, which is exactly what this round was opened to remove. The independent half is `SF-D6`'s retry budget; that is the part to keep. Restate `L`'s span **per byte**, or re-pin `T` and `L` together — but do not call selecting inside the current span "the cheaper option", which the first pass did. | CONFIRMED — owner `SF-`, and it is why §4's rule selects from the lower edge. **CLOSED 2026-10-02 (§10.6 item 3):** the span is restated per byte on the worse measured day and `L = 4` holds |
 | **`SHT-5`** | `U1b` — an honest server's sustained egress on the rule-76 floor device — **has no authority anywhere in the tree**. The only transport figure (180 KB/s) is requester-side and a burst floor from a null result. This is the one bound that cannot be closed by reasoning. | OPEN — FOLLOWUPS row, measurement owed |
@@ -2144,12 +2144,12 @@ testnet gate (§5, §9.5).
   (`pd-f2-ceiling`).
 
 **Closed.** `SHT-1` (the inherited 3.33 MB: `W` is derived in bytes), `SHT-2` (by
-`SHT-Q1`), `SHT-4` (`U1a` is read and does not bind), `SHT-6`, `SHT-7`, `SHT-8`,
+`SHT-Q1`), `SHT-3` (2026-10-03: `SF-D7`'s memory floor restated as
+`N × MAX_TX_SIZE`), `SHT-4` (`U1a` is read and does not bind), `SHT-6`, `SHT-7`, `SHT-8`,
 `SHT-10`, `SHT-11`, `SHT-12` (by `SHT-Q2`).
 
 **Handed off.** Each is a `FOLLOWUPS.md` row whose owner is another document:
 
-- `SHT-3`, the stale materialise premise on `SF-D7`: `ARCHIVAL_SHARD_FETCH.md`.
 - `SHT-9`, the fixture consensus refuses: `CHAIN_RULES_SLICE_5.md`.
 - The `PDM-Q-F34` coverage row and its sim arms, and the single home of the production
   `W`: `ARCHIVAL_PRUNED_DAEMON_MODE.md`.
