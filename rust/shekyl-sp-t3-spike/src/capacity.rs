@@ -47,8 +47,8 @@ use shekyl_archival_retention::constants::{
 use shekyl_difficulty::T_SECONDS;
 use shekyl_types::archival::MAX_HOLDINGS_SHARDS;
 
-use crate::ceiling::DEADLINE;
-use crate::measure::Observation;
+use crate::ceiling::{Void, DEADLINE};
+use crate::measure::{FailureKind, Observation};
 
 /// One settlement epoch of wall-clock time: its blocks at the target block
 /// time.
@@ -83,13 +83,39 @@ fn shown(n: usize) -> f64 {
     f64::from(u32::try_from(n).unwrap_or(u32::MAX))
 }
 
+/// Why an arm's attempts give no capacity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoCapacity {
+    /// The arm is not a reading at all — no attempts, or a refused exchange,
+    /// which says the rig was wrong while it measured. The same [`Void`] that
+    /// [`crate::ceiling::SizeReading::of`] returns, by the same rule, so an
+    /// arm reading A refuses cannot give reading B a number.
+    Void(Void),
+    /// The attempts took no measurable time, so there is nothing to divide by.
+    NoTime,
+}
+
 impl Capacity {
     /// The capacity the attempts show, with one read in flight.
     ///
-    /// `None` when there is nothing to divide by: no attempts, or attempts
-    /// that took no time.
-    #[must_use]
-    pub fn of(observations: &[Observation]) -> Option<Self> {
+    /// # Errors
+    ///
+    /// [`NoCapacity::Void`] for no attempts or any refused exchange, and
+    /// [`NoCapacity::NoTime`] when the attempts took no measurable time.
+    pub fn of(observations: &[Observation]) -> Result<Self, NoCapacity> {
+        if observations.is_empty() {
+            return Err(NoCapacity::Void(Void::NoAttempts));
+        }
+        let refused = observations
+            .iter()
+            .filter(|o| o.failure == Some(FailureKind::Refused))
+            .count();
+        if refused > 0 {
+            return Err(NoCapacity::Void(Void::Refused {
+                refused,
+                attempts: observations.len(),
+            }));
+        }
         let completions = observations
             .iter()
             .filter(|o| o.is_success() && o.elapsed <= DEADLINE)
@@ -97,7 +123,10 @@ impl Capacity {
         let busy = observations
             .iter()
             .fold(Duration::ZERO, |sum, o| sum.saturating_add(o.elapsed));
-        (busy.as_millis() > 0).then_some(Self { completions, busy })
+        if busy.as_millis() == 0 {
+            return Err(NoCapacity::NoTime);
+        }
+        Ok(Self { completions, busy })
     }
 
     /// Completed reads per second. For display; no verdict reads it.
@@ -160,7 +189,7 @@ mod tests {
     #[test]
     fn the_threshold_is_three_reads_per_pair_against_the_epochs_reads() {
         let observations: Vec<Observation> = (0..10).map(|_| ok(100)).collect();
-        let capacity = Capacity::of(&observations).expect("attempts");
+        let capacity = Capacity::of(&observations).expect("a reading");
         assert_eq!(capacity.reads_per_epoch(), 12_000);
         assert_eq!(capacity.max_sustainable_holding(), 4_000);
         assert!(capacity.sustains(4_000));
@@ -180,7 +209,7 @@ mod tests {
             ok(150), // past the deadline: a miss
             Observation::failure(Duration::from_secs(50), FailureKind::Circuit),
         ];
-        let capacity = Capacity::of(&observations).expect("attempts");
+        let capacity = Capacity::of(&observations).expect("a reading");
         // Two completions in 400 s: 6,000 reads an epoch, 2,000 pairs.
         assert_eq!(capacity.reads_per_epoch(), 6_000);
         assert_eq!(capacity.max_sustainable_holding(), 2_000);
@@ -189,16 +218,38 @@ mod tests {
             Duration::from_secs(30),
             FailureKind::Timeout,
         )];
-        let none = Capacity::of(&all_missed).expect("attempts");
+        let none = Capacity::of(&all_missed).expect("a reading");
         assert_eq!(none.max_sustainable_holding(), 0);
         assert!(!none.sustains(1));
         assert!(none.sustains(0));
     }
 
+    /// An arm that is not a reading gives no capacity, by the rule that
+    /// voids it for reading A; and attempts that took no time give nothing to
+    /// divide by.
     #[test]
-    fn nothing_to_divide_by_is_no_capacity() {
-        assert_eq!(Capacity::of(&[]), None);
-        assert_eq!(Capacity::of(&[ok(0)]), None);
+    fn a_void_arm_or_no_time_is_no_capacity() {
+        assert_eq!(Capacity::of(&[]), Err(NoCapacity::Void(Void::NoAttempts)));
+        let refused = [
+            ok(100),
+            Observation::failure(Duration::from_secs(5), FailureKind::Refused),
+        ];
+        assert_eq!(
+            Capacity::of(&refused),
+            Err(NoCapacity::Void(Void::Refused {
+                refused: 1,
+                attempts: 2
+            }))
+        );
+        assert_eq!(
+            crate::ceiling::SizeReading::of(3_326_976, &refused).map(|_| ()),
+            Err(Void::Refused {
+                refused: 1,
+                attempts: 2
+            }),
+            "the same arm is void for reading A"
+        );
+        assert_eq!(Capacity::of(&[ok(0)]), Err(NoCapacity::NoTime));
     }
 
     /// A worked example through the whole path, on a committed file that is
@@ -211,20 +262,23 @@ mod tests {
         let sizes = crate::ceiling::soak_ladder(file).expect("the committed file parses");
         let (bytes, largest) = sizes.iter().next_back().expect("three sizes");
         assert_eq!(*bytes, 3_326_976);
-        let capacity = Capacity::of(largest).expect("attempts");
+        let capacity = Capacity::of(largest).expect("a reading");
         assert_eq!(capacity.completions, 306);
         assert_eq!(capacity.reads_per_epoch(), 64_040);
         assert_eq!(capacity.max_sustainable_holding(), 21_346);
         assert!(capacity.sustains(16_384) && !capacity.sustains(21_347));
     }
 
-    /// The table is fixed, ordered, and carries the list bound as one row
-    /// among holdings above and below it.
+    /// The table is pre-registered (§9.3a's amendment), so it is pinned
+    /// value by value: a changed row is a changed registration, not a
+    /// refactor. The list bound is one row, with holdings above and below.
     #[test]
-    fn the_list_bound_is_a_row_not_the_anchor() {
-        assert!(HOLDING_TABLE.windows(2).all(|w| w[0] < w[1]));
-        assert!(HOLDING_TABLE.contains(&LIST_BOUND));
-        assert!(HOLDING_TABLE.iter().any(|&h| h < LIST_BOUND));
-        assert!(HOLDING_TABLE.iter().any(|&h| h > LIST_BOUND));
+    fn the_holding_table_is_the_pre_registered_one() {
+        assert_eq!(LIST_BOUND, 4_096);
+        assert_eq!(
+            HOLDING_TABLE,
+            [1, 16, 128, 512, 1_024, 2_048, 4_096, 8_192, 16_384]
+        );
+        assert_eq!(HOLDING_TABLE[6], LIST_BOUND);
     }
 }

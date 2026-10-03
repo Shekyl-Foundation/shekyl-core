@@ -1510,27 +1510,11 @@ rate at the 1× object with its 95 % Wilson interval, against 0.30.
 - Anything else: no verdict. The rig cannot tell the device as a reader from the
   device as a server. It triggers the split rig (below).
 
-**Read 2 — an epoch of reads.** *Superseded before the reading by the amendment
-below (2026-10-03): this is not a bound on `W`, and the list bound is not its anchor.*
-From the device's 1× arm, with one read always in flight:
-
-- `c = completions / Σ elapsed` reads per second. A miss costs the time it took and
-  delivers nothing.
-- capacity `R = c × 1,200,000` reads per epoch (`settlement_epoch_blocks` = 10,000
-  blocks of 120 s).
-- load `3 × H`: three challenge reads per drawable pair per epoch
-  (`CHALLENGES_PER_PAIR_PER_EPOCH`), `H` the pairs one `P` holds.
-- **`H` is pre-registered at 4,096**, the list bound (`archival_max_holdings_shards`),
-  so the load is 12,288 reads. That is the most one record can hold, which is the
-  conservative reading. The honest-operator holding §5 owes is the design owner's and
-  is not stated yet, so the reading also reports `R / 3`, the `H` at which this leg
-  binds.
-- `R ≥ 12,288`: `U1b` does not bind at the list bound. One read in flight is a floor
-  on capacity, since the server admits concurrent reads and `SPIKE-F-11` found
-  reader concurrency does not materially degrade a persona.
-- `R < 12,288`: no verdict, for the same reason as read 1. It triggers the split rig.
-- Organic and band-2 reads have no authority in the tree, so they are not in the
-  verdict. The headroom `R / 12,288` is reported as the room left for them.
+**Read 2 — WITHDRAWN 2026-10-03, before the reading.** As pre-registered at
+`ebb1d73b54` it was a verdict on `U1b` at the list bound: capacity with one read in
+flight, against 12,288 challenge reads (4,096 pairs). It is replaced by reading B in
+the amendment below, which keeps the computation and drops both the anchor and the
+verdict.
 
 **Reported, not judged.**
 
@@ -1550,8 +1534,9 @@ and readers on other hosts. The reader half does not exist since `SF` (a) made t
 reader `shekyl-p-fetch`. It is built and pre-registered then, with a concurrency
 sweep, and `W` stays provisional until it is read.
 
-**Direction.** This can only lower `W`'s ceiling. If both reads pass, `W` rests on
-no open measurement and goes to the Round-2 gate as it stands.
+**Direction.** This can only lower `W`'s ceiling, and only through reading A (the
+amendment below): if it passes, `W` rests on no open measurement and goes to the
+Round-2 gate as it stands.
 
 #### Amendment, 2026-10-03 (design owner) — before the reading
 
@@ -1580,13 +1565,17 @@ block time, and a holding of `H` pairs is sustainable when `3 H ≤ c × epoch`.
 reported across a fixed table of holdings — 1, 16, 128, 512, 1,024, 2,048, 4,096,
 8,192 and 16,384 pairs — in which the list bound is one row and not the anchor. It is
 an input to the participation floor (gates 4 and 5), not to this derivation. No row
-triggers the split rig or moves `W`. Computed by `shekyl_sp_t3_spike::capacity`.
+triggers the split rig or moves `W`. One read in flight is a floor on capacity (the
+server admits concurrent reads, and `SPIKE-F-11` found reader concurrency does not
+materially degrade a persona). Organic and band-2 reads have no rate in the tree, so
+they are not load; each row's headroom is the room left for them. An arm with a
+refused exchange gives no capacity, by the rule that voids it for reading A.
+Computed by `shekyl_sp_t3_spike::capacity`.
 
 `pd-f2-u1b` prints both for the device's file. The tests pin each computation and its
 threshold. Everything else in this section stands: the rig, the control, what is
-reported without a verdict and the voids. The direction now rests on reading A alone:
-if it passes, `W` rests on no open measurement and goes to the Round-2 gate as it
-stands.
+reported without a verdict and the voids. The direction rests on reading A alone,
+as stated above.
 
 ### 9.4 Soft upward pressure: bookkeeping
 

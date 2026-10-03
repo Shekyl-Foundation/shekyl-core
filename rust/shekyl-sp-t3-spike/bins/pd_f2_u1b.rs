@@ -22,7 +22,7 @@
 use std::path::Path;
 
 use shekyl_sp_t3_spike::capacity::{
-    Capacity, CHALLENGE_READS_PER_PAIR, EPOCH, HOLDING_TABLE, LIST_BOUND,
+    Capacity, NoCapacity, CHALLENGE_READS_PER_PAIR, EPOCH, HOLDING_TABLE, LIST_BOUND,
 };
 use shekyl_sp_t3_spike::ceiling::{
     floor_device_read, soak_ladder, BelowTheHeaviestShard, Decision, FloorDeviceRead, SizeReading,
@@ -58,7 +58,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let largest_reading = readings.last().ok_or("no readings")?;
     let (low, high) = largest_reading.miss_interval();
     println!(
-        "  at {} B (bounds the heaviest shard from above): {} of {} missed, 95 % [{:.2}, {:.2}] %",
+        "  at {} B: {} of {} missed, 95 % [{:.2}, {:.2}] %",
         largest_reading.bytes(),
         largest_reading.misses(),
         largest_reading.attempts(),
@@ -67,7 +67,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     match a {
         Ok(FloorDeviceRead::DoesNotLowerTheCeiling) => {
-            println!("  verdict: the floor device does NOT lower W's ceiling");
+            println!("  the object bounds the heaviest shard from above; verdict: the floor device does NOT lower W's ceiling");
         }
         Ok(FloorDeviceRead::NoVerdict(decision)) => {
             let shape = match decision {
@@ -75,7 +75,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Decision::Inconclusive => "straddles the target",
                 Decision::Stands => "under the target",
             };
-            println!("  NO VERDICT: the interval {shape}; this rig cannot separate the device as a server, so the split rig runs");
+            println!("  the object bounds the heaviest shard from above; NO VERDICT: the interval {shape}, and this rig cannot separate the device as a server, so the split rig runs");
         }
         Err(BelowTheHeaviestShard { largest_bytes }) => {
             println!("  NOT READING A: the largest object, {largest_bytes} B, is smaller than the heaviest shard");
@@ -86,9 +86,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "reading B — sustainable holding per floor device, one read in flight, {CHALLENGE_READS_PER_PAIR} challenge reads per pair per {} s epoch (does NOT bear on W; a gate 4/5 participation-floor input):",
         EPOCH.as_secs()
     );
-    let Some(capacity) = Capacity::of(largest) else {
-        println!("  no capacity: the {largest_bytes} B arm took no time");
-        return Ok(());
+    let capacity = match Capacity::of(largest) {
+        Ok(capacity) => capacity,
+        Err(NoCapacity::Void(void)) => {
+            return Err(format!(
+                "{path}: {SOAK_ARM_PREFIX}{largest_bytes} is not a reading — {void}"
+            )
+            .into());
+        }
+        Err(NoCapacity::NoTime) => {
+            println!("  no capacity: the {largest_bytes} B arm took no time");
+            return Ok(());
+        }
     };
     println!(
         "  at {largest_bytes} B: {:.4} reads/s, {} reads per epoch; maximum sustainable holding {} pairs",
