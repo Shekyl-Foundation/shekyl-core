@@ -169,7 +169,9 @@ pub use rule_set::{
     RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
 };
 pub use rules::anchors::{AnchorConflict, Remedy};
-pub use rules::block_weight::{effective_median_at, EffectiveMedian, Weights};
+pub use rules::block_weight::{
+    cxx_median, effective_median_at, medians_from, medians_over, EffectiveMedian, Weights,
+};
 pub use rules::body::ArchivalKey;
 pub use rules::difficulty::Target;
 pub use rules::miner::{
