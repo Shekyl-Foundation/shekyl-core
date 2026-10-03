@@ -119,8 +119,26 @@ pub struct FoldedChunk<'a> {
     /// That node's index within its layer.
     pub index: u64,
     /// Inclusive leaf position at which the chunk closed — its **finality
-    /// coordinate**. A rollback below or at this position un-finalizes the
-    /// chunk, whatever happened to any particular leaf inside it.
+    /// coordinate**.
+    ///
+    /// A truncation un-finalizes this chunk when its **first removed leaf
+    /// position** is `<= end_leaf`; the chunk survives when that position is
+    /// `> end_leaf`. The store's truncation takes exactly that quantity
+    /// (`delete_pos_keys_batched` deletes `range(start..)`, so `start` is the
+    /// first removed position), and it is also the surviving leaf **count**,
+    /// because positions `0..start` are what remain.
+    ///
+    /// So one comparison serves twice, and the units cannot be mixed:
+    /// `end_leaf < surviving_leaf_count` is both *"this chunk survived the
+    /// cut"* and *"this chunk is usable at that tip"* — the same test the
+    /// reference-height rule applies as `end_leaf < drained_leaf_count_at(h)`.
+    ///
+    /// Stated this precisely because the coordinate is where a fencepost
+    /// hides: "a rollback at this position" is ambiguous between the first
+    /// removed leaf and the new leaf count, and the ring's own
+    /// `(h - horizon, h]` boundary was found in that kind of seam. What
+    /// matters is the chunk's own end, never the owned leaf's position — leaf
+    /// 100 survives a cut to 150 while its layer-1 chunk (`0..683`) does not.
     pub end_leaf: u64,
     /// The children, in order. Scalars at layer 0, nodes above it.
     pub children: &'a [[u8; 32]],
