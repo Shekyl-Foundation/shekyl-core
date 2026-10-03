@@ -29,10 +29,10 @@
 //! (`SHT-Q2`; `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F step 3).
 
 use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
-use shekyl_tx_weight::{predict_archival_len, InputCount, OutputCount};
+use shekyl_tx_weight::{predict_archival_len, InputCount, OutputCount, MAX_TREE_DEPTH};
 use shekyl_types::{shard_of, ArchivalLength, SHARD_LENGTH};
 
-use crate::calibration::tree_depth_for_leaves;
+use crate::calibration::{tree_depth_for_leaves, PerByteRate, Shape};
 
 /// Atomic units per SKL — the SKL/atomic conversion factor.
 pub const COIN: u64 = 1_000_000_000;
@@ -84,21 +84,103 @@ pub fn normal_tx_archival_bytes(chain_leaves: u64) -> u64 {
     predict_archival_len(n_in, n_out, tree_depth_for_leaves(chain_leaves)) as u64
 }
 
+/// Fee of one ordinary (1-in / 2-out) transaction when the curve tree holds
+/// `chain_leaves` outputs and weight is priced at `rate`. The fee is the
+/// unrounded fixed point of `rate × weight(fee)`
+/// ([`shekyl_tx_weight::converge_weight_fee`], through [`Shape::tx_fee_atomic`]).
+#[must_use]
+pub(crate) fn ordinary_tx_fee(chain_leaves: u64, rate: PerByteRate) -> u64 {
+    let (n_in, n_out) = normal_tx_shape();
+    Shape { n_in, n_out }.tx_fee_atomic(tree_depth_for_leaves(chain_leaves), rate)
+}
+
+/// Outputs the honest chain has added, in fold order.
+///
+/// The fee prices against [`leaves`](Self::leaves) before [`accrue`](Self::accrue):
+/// that count is the tree the block's transactions are built against. ESR-6's
+/// block-weight accumulator extends this type, so the engine, the budget and
+/// [`HonestFold`] share one counter instead of growing three.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct HonestOutputs {
+    cumulative: f64,
+}
+
+impl HonestOutputs {
+    /// Outputs in the curve tree at this point of the fold.
+    #[must_use]
+    pub(crate) fn leaves(self) -> u64 {
+        self.cumulative as u64
+    }
+
+    /// Record `txs` ordinary transactions. Callers price the fee at
+    /// [`leaves`](Self::leaves) before this.
+    pub(crate) fn accrue(&mut self, txs: u64) {
+        self.cumulative += txs as f64 * OUTPUTS_PER_TX_NORMAL;
+    }
+}
+
+/// The honest chain's outputs and the archival bytes those outputs wrote.
+///
+/// Archival length is read at the pre-block leaf count, then the outputs
+/// accrue — the same order [`HonestOutputs`] prices a fee in, so a fold that
+/// only charges and a fold that also counts shards cannot disagree about depth.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct HonestFold {
+    outputs: HonestOutputs,
+    cumulative_archival_bytes: u64,
+}
+
+impl HonestFold {
+    /// Fold `txs` ordinary transactions. Archival bytes use the tree as it
+    /// stands; the outputs accrue after.
+    pub(crate) fn add_block(&mut self, txs: u64) {
+        let per_tx = normal_tx_archival_bytes(self.outputs.leaves());
+        self.cumulative_archival_bytes = self
+            .cumulative_archival_bytes
+            .saturating_add(txs.saturating_mul(per_tx));
+        self.outputs.accrue(txs);
+    }
+
+    /// Outputs in the curve tree at this point of the fold.
+    #[must_use]
+    pub(crate) fn leaves(&self) -> u64 {
+        self.outputs.leaves()
+    }
+
+    /// Archival bytes written so far.
+    #[must_use]
+    pub(crate) fn archival_bytes(&self) -> u64 {
+        self.cumulative_archival_bytes
+    }
+
+    /// The D2 operand at this point of the fold — the partition, not a
+    /// re-derivation.
+    #[must_use]
+    pub(crate) fn closed_shard_count(&self) -> u64 {
+        closed_shards(self.cumulative_archival_bytes)
+    }
+}
+
 /// Leaves (outputs) an honest 1-in / 2-out chain holds once it has closed
-/// `closed_shards` shards — the inverse of the honest fold, for arms that
+/// `closed_shard_count` shards — the inverse of the honest fold, for arms that
 /// sample the operand `n` directly and need the curve-tree depth at that
 /// chain size. `n · W` archival bytes at `normal_tx_archival_bytes` per tx,
-/// `OUTPUTS_PER_TX_NORMAL` leaves per tx; the per-tx length depends on the
-/// depth it is solving for, so two iterations settle it (the same converge
-/// the fee path runs). A **modelling** map (honest composition), not a
-/// consensus derivation: the chain does not record leaves-per-shard.
+/// `OUTPUTS_PER_TX_NORMAL` leaves per tx. The per-tx length depends on the
+/// depth, and the depth on the leaf count, so the two are solved together: a
+/// pass that is not yet stable has changed the depth, and the depth has at
+/// most [`MAX_TREE_DEPTH`] values. A **modelling** map (honest composition),
+/// not a consensus derivation: the chain does not record leaves-per-shard.
 #[must_use]
-pub fn honest_leaves_at_closed_shards(closed_shards: u64) -> u64 {
-    let bytes = closed_shards.saturating_mul(SHARD_LENGTH.to_raw());
+pub fn honest_leaves_at_closed_shards(closed_shard_count: u64) -> u64 {
+    let bytes = closed_shard_count.saturating_mul(SHARD_LENGTH.to_raw());
     let mut leaves: u64 = 0;
-    for _ in 0..2 {
+    for _ in 0..=MAX_TREE_DEPTH {
         let per_tx = normal_tx_archival_bytes(leaves).max(1);
-        leaves = ((bytes / per_tx) as f64 * OUTPUTS_PER_TX_NORMAL) as u64;
+        let next = ((bytes / per_tx) as f64 * OUTPUTS_PER_TX_NORMAL) as u64;
+        if next == leaves {
+            return leaves;
+        }
+        leaves = next;
     }
     leaves
 }

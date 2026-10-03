@@ -115,9 +115,9 @@ namespace net
             return epee::net_utils::address_type::tor;
         }
 
-        static constexpr epee::net_utils::zone get_zone() noexcept
+        static constexpr epee::net_utils::connector_id connector() noexcept
         {
-            return epee::net_utils::zone::tor;
+            return epee::net_utils::connector_id::tor;
         }
 
         //! \return `!is_unknown()`.

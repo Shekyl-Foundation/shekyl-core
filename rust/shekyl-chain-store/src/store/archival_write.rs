@@ -282,14 +282,14 @@ impl<'id> WriteBatch<'_, 'id> {
     /// (`blockchain_db.cpp:689–693`).
     pub(super) fn record_archival_epoch<V: ChainView<'id>>(
         &self,
-        height: u64,
+        connecting: BlockHeight,
         valid: &ChainValid<'id, V>,
     ) -> Result<(), StoreError> {
         let delta = valid.block().archival();
         if self.apply_policy().applies(ArchivalFamily::BudgetAccrual) {
             self.write_accrual(delta)?;
         }
-        self.write_slashes(height, delta)?;
+        self.write_slashes(connecting, delta)?;
         if let Some(close) = delta.close() {
             let policy = self.apply_policy();
             let epoch = close.epoch();
@@ -377,23 +377,45 @@ impl<'id> WriteBatch<'_, 'id> {
     /// is not dense at this height. A repeated applied key is
     /// [`SlashFault::AlreadyApplied`] for that key — the persona is not
     /// known when the handle opens, so the insert names it.
-    fn write_slashes(&self, height: u64, delta: &ArchivalDelta) -> Result<(), StoreError> {
+    ///
+    /// **The log row's `h` is the connecting height** — the block whose
+    /// connect ran the deadline scan that decided the slash — and the
+    /// signature says so: `connecting: BlockHeight`, the ordinal of a block
+    /// that exists at decision time, never the [`ChainCount`] the schedule
+    /// comparisons take (`Transition::count()`, one above). The C++ keys
+    /// the same row by that count (`db_lmdb.cpp` `apply_archival_slash_one`
+    /// is handed `prev_height + 1`), so the two writers' rows for one fold
+    /// sit one apart. No document specified which was meant; the choice was
+    /// **ruled** from the read the log exists for (`DRS_E4_ARCHIVAL_WRITER.md`
+    /// `ARW-Q17`, 2026-10-02): `holds_shard_at(h)` is *yes iff a logged
+    /// slash strictly above `h` removed it*, which is correct only with the
+    /// connecting height as the key — the count would read a shard as held
+    /// at the very block that removed it. The C++'s count-keyed row against
+    /// its height-denominated reader is that off-by-one, live (`ARW-27`);
+    /// this signature is what makes it unspellable here.
+    ///
+    /// [`ChainCount`]: shekyl_types::ChainCount
+    fn write_slashes(
+        &self,
+        connecting: BlockHeight,
+        delta: &ArchivalDelta,
+    ) -> Result<(), StoreError> {
         let policy = self.apply_policy();
         let log_applies = policy.applies(ArchivalFamily::SlashLog);
         let applied_applies = policy.applies(ArchivalFamily::SlashApplied);
         let slashes = delta.slashes();
+        let height = connecting.to_raw();
         let not_dense = StoreInvariant::SlashLogNotDense {
             height,
             observed: SlashFault::NotDense,
         };
         if log_applies && !slashes.is_empty() {
             let mut log = self.open_insert_table(ARCHIVAL_SLASH_LOG, not_dense)?;
-            let at_height = BlockHeight::from_raw(height);
             // Dense means `(h, 0)` is the first row at or above `(h, 0)`
             // only if nothing sits at `h` yet: the first key from there
             // being `h`'s is a prior append at this height.
             let first_at_or_above = log
-                .range(SlashLogKey::new(at_height, 0).key()..)?
+                .range(SlashLogKey::new(connecting, 0).key()..)?
                 .next()
                 .transpose()
                 .map_err(EngineError::Storage)?
@@ -403,7 +425,7 @@ impl<'id> WriteBatch<'_, 'id> {
             }
             for (seq, slash) in (0u32..).zip(slashes) {
                 log.insert(
-                    SlashLogKey::new(at_height, seq).key(),
+                    SlashLogKey::new(connecting, seq).key(),
                     slash.entry.encoded().as_encoded(),
                 )?;
             }

@@ -64,7 +64,6 @@ pub mod path;
 pub mod release_cooldown;
 pub mod reward_arithmetic;
 pub mod segment_freeze;
-pub mod serve_credit_decisions;
 pub mod serve_eligibility;
 pub mod settlement_row;
 pub mod shard_coverage;
@@ -142,10 +141,10 @@ pub use conservation::{verify_conservation_snapshot, ConservationError, Conserva
 pub use constants::{
     arm_settlement_epoch_override_for_regtest, effective_archival_reorg_depth_blocks,
     effective_settlement_epoch_blocks, parse_reorg_cap_override, parse_settlement_epoch_override,
-    settlement_epoch_blocks_overridden, settlement_epoch_override_floor,
-    settlement_epoch_override_ignored, settlement_epoch_override_present,
-    SettlementEpochOverrideError, CHALLENGES_PER_PAIR_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS,
-    CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
+    settlement_epoch_override_floor, settlement_epoch_override_ignored,
+    settlement_epoch_override_present, SettlementEpochOverrideError, CHALLENGES_PER_PAIR_PER_EPOCH,
+    CHALLENGE_BEACON_SEAL_BLOCKS, CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
+    SLASH_GRACE_EPOCHS,
 };
 pub use debit_auth::{
     cold_authority_pin, debit_auth_pin, requires_cold_authority, ColdAuthorityError, DebitAuthError,
@@ -197,12 +196,6 @@ pub use reward_arithmetic::{
 pub use segment_freeze::{
     challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, frozen_segment_count,
     LeafChunkBounds, SEGMENT_LEAF_COUNT,
-};
-pub use serve_credit_decisions::{
-    pair_epoch_key_be, serve_credit_block_key, serve_credit_block_unique,
-    serve_credit_gate_decision, serve_credit_key_be, serve_credit_preblock_duplicate,
-    BlockUniqueVerdict, GateReject, GateVerdict, ServeCreditGateInputs, PAIR_EPOCH_KEY_LEN,
-    SERVE_CREDIT_KEY_LEN,
 };
 pub use serve_eligibility::serve_credit_epoch_ok;
 pub use shard_coverage::{

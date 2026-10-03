@@ -563,7 +563,7 @@ fn fluff_return_dominates_the_embargo_derivation() {
                     nodes: 512,
                     reach: shekyl_relay_privacy::conformance::FloodReach::EveryPeer,
                     transit_ms: shekyl_relay_privacy::conformance::transit_for(
-                        shekyl_relay_privacy::conformance::FloodReach::EveryPeer,
+                        shekyl_relay_privacy::MeasuredConnector::Clearnet,
                     ),
                 },
                 20,

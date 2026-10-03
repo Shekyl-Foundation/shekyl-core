@@ -79,9 +79,9 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 /// for `local`, `fluff` and `block`. §15.4 cleared it from the embargo's
 /// neighbourhood on the ground that it *"governs an already-fluffed
 /// transaction, a different state from the embargo"* — true when written, and
-/// **vacated** by `originated_stays_in_zone`, which pins an anonymity-zone
-/// origin at `Local` permanently and so created a class that is never fluffed
-/// and lives on that branch for its whole life.
+/// **vacated** by the own-edge plan, which keeps a hidden-address origin
+/// at `Local` for its whole life, so that class is never fluffed and lives
+/// on that branch until the stem is observed.
 ///
 /// At 300 s that origin re-emits **below the anonymity embargo's median**
 /// (346 s): more than half the embargoes along its own stem are still running,
@@ -193,6 +193,21 @@ pub const P2P_DEFAULT_OUT_PEERS: u32 = 12;
 /// moves with `fluff_return_ms`, not independently of it — which is why it is
 /// its own constant and not an alias of [`P2P_DEFAULT_OUT_PEERS`].
 pub const MIN_PROVISIONED_OUT_PEERS: u32 = 12;
+
+/// How many hidden-address outbound connections a restricted node opens.
+///
+/// The own-edge is one peer drawn uniformly from that pool, once per epoch.
+/// The paper's anonymity graph is 4-regular; a pool smaller than that does
+/// not rotate the way the epoch model assumes, and a pool of one never
+/// rotates. This is not [`MIN_PROVISIONED_OUT_PEERS`]: that floor is the
+/// fluff measurement's degree, and relayed stems draw over every outbound
+/// session rather than over this pool.
+pub const HOP0_OUTBOUND_TARGET: u32 = 4;
+
+const _: () = {
+    assert!(HOP0_OUTBOUND_TARGET == 4);
+    assert!(HOP0_OUTBOUND_TARGET < MIN_PROVISIONED_OUT_PEERS);
+};
 
 /// The stem-graph shape, which fixes how many outbound peers carry stem
 /// traffic in an epoch — i.e. the stem graph's out-degree.
@@ -358,16 +373,17 @@ impl DandelionParams {
             // fluff flood (`simulate_fluff_return`), by deployed fluff rule at
             // Shekyl's `P2P_DEFAULT_OUT_PEERS = 12`:
             //
-            //   clearnet (EveryPeer, usable degree ~24)      ~1250 ms
-            //   Tor-C  (OutboundOnly, usable degree 12 exact) ~3250 ms  <- binding
+            //   EveryPeer (usable degree ~24)                 ~1250 ms
+            //   retired D7 OutboundOnly (degree 12 exact)     ~3250 ms  <- binding
             //
-            // The old 2250 was an `EveryPeer` measurement at `peers = 8` fed
-            // to the derivation for EVERY transport, so the anonymity zone was
-            // provisioned from a fluff rule it does not use (~44 % low). The
-            // gap is a DEGREE effect, not a direction effect: at matched
-            // usable degree (EveryPeer@8 vs OutboundOnly@16) the two rules
-            // measure 2500 vs 2250 ms — the direction constraint costs
-            // nothing; halving the usable degree is what costs (§40.1).
+            // Production fluff is EveryPeer on every connector (D7 deleted
+            // 2026-10-02). 3250 ms stays the constant: it was measured on the
+            // longer graph and has not been remeasured on the production one.
+            // Over-estimating F lengthens the embargo, which is the
+            // privacy-safe direction. The old 2250 was an EveryPeer
+            // measurement at peers = 8. The gap to 3250 is a degree effect:
+            // at matched usable degree the two rules measure close together;
+            // halving the usable degree is what costs (§40.1).
             //
             // One process-wide F for every zone: a fluff wave returns over
             // whatever network the *node* is on, so there is no per-zone F to
@@ -505,10 +521,19 @@ impl DandelionParams {
     #[must_use]
     pub fn adopted_for(zone: RelayZone) -> Self {
         let transit = Self::TRANSIT_BY_CLASS[Self::adopted_class(zone)];
+        Self::adopted_for_transit_ms(transit)
+    }
+
+    /// The adopted parameter set for one measured transit term.
+    ///
+    /// The embargo draw uses this with the forwarded connector's measured
+    /// transit. Only `time_between_hop_ms` changes.
+    #[must_use]
+    pub fn adopted_for_transit_ms(transit_ms: f64) -> Self {
         let hop = crate::verify_cost::adopted_hop_ms_with_transit(
             1,
             crate::verify_cost::GENESIS_TREE_DEPTH,
-            transit,
+            transit_ms,
         )
         .expect("the modal genesis cell is a pinned §85.3 measurement");
         Self {

@@ -613,8 +613,8 @@ P2B-7 exit). Four questions the specs left thin are pinned here so the impl land
 
 **Pin (source-grounded).** **Derive it — no per-shard stored field.** The serve-credit table is keyed
 **`P_id[32] ‖ BE64(shard_id) ‖ BE64(settlement_epoch)`** — a big-endian composite whose byte-sort *is*
-`(P_id, shard, epoch)` ascending (`serve_credit_decisions.rs:58-62`; BE is load-bearing for LMDB sort
-order, `shekyl_types.h:405`, SCE audit). So *shard `s`'s last-served epoch* = the max `E` carrying a
+`(P_id, shard, epoch)` ascending (`ArchivalPairEpochKey`, `shekyl_types.h:405`; BE is load-bearing for
+LMDB sort order — SCE audit; its Rust mirror `serve_credit_decisions.rs` was deleted 2026-10-02). So *shard `s`'s last-served epoch* = the max `E` carrying a
 bit = a single **reverse-cursor seek** over the `P_id ‖ BE64(shard)` prefix (`MDB_SET_RANGE` to
 `‖ BE64(u64::MAX)`, one `MDB_PREV`; guard the "no bit for `s`" empty case → shard never served, drop
 cooldown anchors at its add epoch). At drop **connect**, capture that value into the **`bond_event_log`

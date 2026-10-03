@@ -20,7 +20,6 @@ fn baseline(params: &SimParams) -> BudgetScenario {
         description: "Steady 1x baseline volume over 30 years (release mult = 1.0; a == b)".into(),
         sim_years: 30,
         get_volume: Box::new(move |_blk, _bpy| b),
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
     }
@@ -37,7 +36,6 @@ fn sustained_low(params: &SimParams) -> BudgetScenario {
             .into(),
         sim_years: 30,
         get_volume: Box::new(move |_blk, _bpy| (b as f64 * 0.1) as u64),
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
     }
@@ -66,7 +64,6 @@ fn bootstrap(params: &SimParams) -> BudgetScenario {
                 _ => b * 3 / 2,
             }
         }),
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
     }
@@ -89,7 +86,6 @@ fn boom_bust(params: &SimParams) -> BudgetScenario {
                 (b as f64 * 0.3) as u64
             }
         }),
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
     }
@@ -113,7 +109,6 @@ fn prolonged_bust(params: &SimParams) -> BudgetScenario {
                 (b as f64 * 0.2) as u64
             }
         }),
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
     }
@@ -140,7 +135,6 @@ fn fee_era(params: &SimParams) -> BudgetScenario {
                 _ => 220,
             }
         }),
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.95,
         // ~year 30 in the configured chain timing. Derived from
         // `blocks_per_year` (not a literal) because the emission-share decay —

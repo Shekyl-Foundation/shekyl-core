@@ -1,6 +1,13 @@
 # Archival serve-credit — C++ decision equivalence audit (V3.0)
 
 **Status:** CLOSED-as-record (archived from `docs/design/` 2026-08-26).
+**Artifacts deleted 2026-10-02 (DRS-E4 commit 10d):** the D-SC-A/B/C mirror
+(`serve_credit_decisions.rs`), the standing KAT (both legs and the fixture) and
+the two fuzz targets this document specifies are gone from the tree. Nothing
+called the mirror, it implemented the leaf preimage `PDM-Q6` item 4 retired, and
+its presence read as a Rust serve-credit verifier where there is none. The
+successor rule is built from that ruling, not from this record — FOLLOWUPS
+*Serve-credit acceptance (CEN-J8–J10) has no Rust rule*. This file is history.
 
 **Status:** design rounds CLOSED (§10, round 3 + post-closure pins);
 **implementation go issued 2026-07-09** — mirrors + standing KAT + fuzz land in

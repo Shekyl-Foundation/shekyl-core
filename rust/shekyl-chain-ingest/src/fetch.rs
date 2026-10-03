@@ -18,6 +18,17 @@
 //!
 //! Generic over `Rpc` so the loop is tested against a scripted transport;
 //! the binary supplies `shekyl_rpc_transport::HttpRpc`.
+//!
+//! **Injections** (DRS-E4 §3.8 item 3). A regtest daemon's state can carry
+//! one row no block produced — a serve credit the injector wrote at the
+//! tip of the moment — and `/get_blocks_by_height.bin` cannot see it. The
+//! caller hands the fetch the injector's receipts ([`Injection`]: the
+//! credit and the height it was attributed to), and the fetch writes each
+//! `Inject` record right after the block at its height, so the corpus
+//! carries the event at its capture position. A receipt whose height the
+//! fetch does not reach is refused before any block is requested
+//! ([`FetchFault::InjectionOutOfRange`]): a receipt silently dropped would
+//! be a corpus mislabelled as wholly block-derived.
 
 use std::io::{Seek, Write};
 use std::num::NonZeroUsize;
@@ -25,8 +36,10 @@ use std::ops::Range;
 
 use shekyl_rpc_client::{Rpc, RpcError};
 use shekyl_rpc_types::{BinError, GetBlocksByHeightRequest, GetBlocksByHeightResponse, RpcStatus};
+use shekyl_types::BlockHeight;
 
 use crate::corpus::{CorpusFault, CorpusWriter};
+use crate::source::Injection;
 
 /// The daemon route, as the wallet's client already spells it.
 pub const ROUTE: &str = "get_blocks_by_height.bin";
@@ -64,23 +77,41 @@ pub enum FetchFault {
     /// verification).
     #[error(transparent)]
     Corpus(#[from] CorpusFault),
+    /// An injection receipt names a height the fetch does not reach, so
+    /// its record could never be placed beside its block.
+    #[error("injection {injection} is attributed to a height outside the fetched range")]
+    InjectionOutOfRange {
+        /// The receipt.
+        injection: Injection,
+    },
 }
 
 /// Fetch `heights` in batches of `batch` and write them through `writer`,
-/// which must be positioned at `heights.start`. Returns the records written.
-/// A batch is non-zero by type: a batch of zero heights would fetch nothing
-/// forever, and the caller's flag refuses it before a file is created.
+/// which must be positioned at `heights.start`, placing each of
+/// `injections` right after the block at its height (module docs; any
+/// order, any count — several at one height land in the order given).
+/// Returns the **block** records written. A batch is non-zero by type: a
+/// batch of zero heights would fetch nothing forever, and the caller's
+/// flag refuses it before a file is created.
 ///
 /// # Errors
 ///
-/// Any [`FetchFault`]; the writer is left at the height that failed, so a
-/// caller can report exactly how far the corpus reached.
+/// Any [`FetchFault`]; [`FetchFault::InjectionOutOfRange`] before any
+/// block is requested. Otherwise the writer is left at the height that
+/// failed, so a caller can report exactly how far the corpus reached.
 pub async fn fetch_corpus<R: Rpc, W: Write + Seek>(
     rpc: &R,
     heights: Range<u64>,
     batch: NonZeroUsize,
+    injections: &[Injection],
     writer: &mut CorpusWriter<W>,
 ) -> Result<u64, FetchFault> {
+    if let Some(stray) = injections
+        .iter()
+        .find(|i| !heights.contains(&i.at.to_raw()))
+    {
+        return Err(FetchFault::InjectionOutOfRange { injection: *stray });
+    }
     let mut written = 0u64;
     let mut first = heights.start;
     while first < heights.end {
@@ -106,9 +137,13 @@ pub async fn fetch_corpus<R: Rpc, W: Write + Seek>(
                 got: reply.blocks.len(),
             });
         }
-        for entry in reply.blocks {
+        for (height, entry) in asked.iter().zip(reply.blocks) {
             writer.append(&entry.block, &entry.txs)?;
             written += 1;
+            let at = BlockHeight::from_raw(*height);
+            for injection in injections.iter().filter(|i| i.at == at) {
+                writer.inject(at, injection.credit)?;
+            }
         }
         first = end;
     }

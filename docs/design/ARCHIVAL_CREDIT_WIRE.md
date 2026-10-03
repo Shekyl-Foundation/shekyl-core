@@ -539,9 +539,11 @@ headers double-writes the bit. So:
 challenge outcome, old-path (vin writes the bit at add) and new-path (settlement
 folds headers to the bit) produce the **identical `serve_credit_bit` state at the
 epoch's settlement**, compared against the actual `m_archival_serve_credit` table
-— "provably the same bit," not "looks right." Written before step 1 lands; it
-supersedes `serve_credit_equivalence_kat_v1.json`, which pins the old path and
-cannot outlive it. **Correction (2026-08-04): `42-serialization-policy` and its
+— "provably the same bit," not "looks right." Written before step 1 lands. (It
+was to supersede `serve_credit_equivalence_kat_v1.json`, which pinned the old
+path; that fixture and its mirror were deleted ahead of it, 2026-10-02, DRS-E4
+commit 10d — there is nothing to supersede, and nothing for the successor to
+inherit from.) **Correction (2026-08-04): `42-serialization-policy` and its
 `schema-snapshot.yml` CI cover only `rust/shekyl-engine-state/**` wallet-state
 blocks — NOT the C++ consensus `block` wire or the LMDB store `VERSION`
 (`db_lmdb.cpp:103`). This surface has no automatic version-bump gate.** So the

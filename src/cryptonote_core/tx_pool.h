@@ -32,6 +32,7 @@
 #include "include_base_utils.h"
 
 #include <atomic>
+#include <optional>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
@@ -149,8 +150,7 @@ namespace cryptonote
      */
     bool add_tx(transaction &tx, const crypto::hash &id, const cryptonote::blobdata &blob,
       size_t tx_weight, tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-      uint8_t version, epee::net_utils::zone origin_zone,
-      uint8_t nic_verified_hf_version = 0);
+      uint8_t version, uint8_t nic_verified_hf_version = 0);
 
     /**
      * @brief add a transaction to the transaction pool
@@ -176,8 +176,7 @@ namespace cryptonote
      * @return true if the transaction passes validations, otherwise false
      */
     bool add_tx(transaction &tx, tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-      uint8_t version, epee::net_utils::zone origin_zone,
-      uint8_t nic_verified_hf_version = 0);
+      uint8_t version, uint8_t nic_verified_hf_version = 0);
 
     /**
      * @brief RPC-submit commit tail: insert an engine-verified transaction
@@ -478,10 +477,11 @@ namespace cryptonote
      *
      * @param hashes list of tx hashes that are about to be relayed
      * @param tx_relay update how the tx left this node
+     * @param stem_connector connector a stem was forwarded on; empty for fluff
      * @param just_broadcasted true if a tx was just broadcasted
      *
      */
-    void set_relayed(epee::span<const crypto::hash> hashes, relay_method tx_relay, epee::net_utils::zone zone, std::vector<bool> &just_broadcasted);
+    void set_relayed(epee::span<const crypto::hash> hashes, relay_method tx_relay, std::optional<std::uint8_t> stem_connector, std::vector<bool> &just_broadcasted);
 
     /*! Record that the stem watch resolved these transactions as PROPAGATED —
         seen arriving from somewhere other than the peer they were stemmed to

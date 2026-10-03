@@ -735,7 +735,9 @@ underlines that rather than softening it.
 The challenge change is a **four-surface change, not a Rust-local one**, and
 the TJ-A design pass must specify it as such: **Rust**
 (`shekyl-archival-retention`: `wire.rs` response format, `path.rs` opening
-verification, `serve_credit_decisions.rs` decision logic), the **FFI**
+verification; the `serve_credit_decisions.rs` mirror this list once named was
+deleted 2026-10-02, DRS-E4 commit 10d — the Rust decision logic is CEN-J8–J10's
+to build from `PDM-Q6` item 4), the **FFI**
 surface those cross, and **C++** (`blockchain.cpp` `txin_archival_serve_credit_response`
 verification, ~:3190) — plus KAT regeneration and whatever rule-42
 version-constant surface the wire change touches. dev's code currently does

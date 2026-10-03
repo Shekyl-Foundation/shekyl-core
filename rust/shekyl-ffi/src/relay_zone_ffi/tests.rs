@@ -6,16 +6,13 @@
 use super::*;
 use std::cell::RefCell;
 
-/// Zone byte for the cases that do not exercise the per-zone parameter split.
-/// Spelled out rather than `1` so a change to the discriminant cannot silently
-/// re-point every fixture at a different transport.
-const PUBLIC: u8 = RelayZone::Public.as_u8();
-/// A noise carrier only exists on an encrypted zone, so covert fixtures build
-/// on tor rather than on the cleartext default. Both flags travel together for
-/// the same reason: the pair is what production forms at `make_relay_zone`.
-const TOR: u8 = RelayZone::Tor.as_u8();
-const NOISE_ON_ENCRYPTED: u32 =
-    SHEKYL_RELAY_ZONE_NOISE_ENABLED | SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
+/// Connector byte and configured-mask bit for the Tor link. Stem-only
+/// fixtures name this connector. Cover runs on the open link, byte 0.
+const TOR_LINK: u8 = 1;
+const TOR_CONFIGURED: u32 = 1 << TOR_LINK;
+const OPEN_LINK: u8 = 0;
+const OPEN_CONFIGURED: u32 = 1 << OPEN_LINK;
+const NOISE_ON: u32 = SHEKYL_RELAY_ZONE_NOISE_ENABLED;
 
 // The "C++ side", simulated: recording callbacks that capture exactly what
 // crosses the boundary. This is the Effect seam test §18.4a asks for, and it
@@ -134,8 +131,8 @@ fn id(byte: u8) -> [u8; 16] {
 fn fluff_effects_cross_with_peer_and_payload_intact() {
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), true);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), true, 0);
         let blob = [0xAB, 0xCD, 0xEF];
         let batch = [ShekylRelayBlob {
             ptr: blob.as_ptr(),
@@ -178,8 +175,8 @@ fn a_peers_batch_crosses_as_one_call_sorted_and_deduplicated() {
     //    every peer downstream.
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), true);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), true, 0);
         // Offered high-to-low, with a repeat: order and duplication both
         // have to be removed for the assertion below to hold.
         let raw = [[0x33u8], [0x11], [0x22], [0x11]];
@@ -224,9 +221,12 @@ fn a_peers_batch_crosses_as_one_call_sorted_and_deduplicated() {
 fn an_unbound_slots_due_ticks_cross_as_noise_unbind_at_its_index() {
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
-        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, NOISE_ON, OPEN_CONFIGURED);
+        // The survivor has to be an open link. A volume-cover peer is not a
+        // noise destination, so the bound channel would emit nothing and the
+        // liveness check below would be vacuous.
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, OPEN_LINK);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false, OPEN_LINK);
 
         // Ground truth from the owning structure: which peer holds slot 1.
         let zone = h.as_ref().expect("live zone").driver.zone();
@@ -314,12 +314,12 @@ fn live_stems_atomic_tracks_the_derived_value_after_every_mutation() {
     // this asserts the published value equals the derived one after each
     // kind of mutation — a second writer, or a missed publish, shows here.
     unsafe {
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
         assert_eq!(shekyl_relay_zone_live_stems(h), 0, "fresh zone");
 
-        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, 0);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false, 0);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false, 0);
         assert_eq!(
             shekyl_relay_zone_live_stems(h),
             2,
@@ -346,13 +346,14 @@ fn live_stems_atomic_tracks_the_derived_value_after_every_mutation() {
 
 #[test]
 fn the_three_plan_outcomes_stay_distinct_across_the_boundary() {
-    // The C++ caller branches three ways on this code: send, refresh-and-
-    // retry, or fluff. Collapsing any two of them here is invisible to the
-    // 33 gtests as a *routing* failure — the transaction still goes
-    // somewhere — but it changes which `relay_method` event is emitted and
+    // The stem-map plans the shim still refreshes: no route, then stem or
+    // fluff. Own-edge plans are terminal and are not this fixture (no
+    // hidden-address connector is configured). Collapsing no-route into
+    // fluff here is invisible as a routing failure — the transaction still
+    // goes somewhere — but it changes which `relay_method` is recorded and
     // whether a recoverable stem is abandoned.
     unsafe {
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
         let mut out = [0u8; 16];
 
         assert_eq!(
@@ -363,9 +364,9 @@ fn the_three_plan_outcomes_stay_distinct_across_the_boundary() {
         assert_eq!(out, NIL, "no successor to report");
 
         // Refresh, exactly as `dandelionpp_notify`'s retry does.
-        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, 0);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false, 0);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false, 0);
 
         // Drive to a fluff epoch. The role is drawn from OS entropy, so it
         // is reached by re-drawing rather than by construction; at q = 20%
@@ -397,9 +398,9 @@ fn an_unsynchronised_origin_is_withheld_across_the_boundary() {
     // `node_synchronised == false` is NodeSync::Unsynchronised, not a second
     // spelling of `local_origin`. A forwarded transaction still routes.
     unsafe {
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, 0);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false, 0);
         let stems = shekyl_relay_zone_live_stems(h);
         let mut out = [0xABu8; 16];
         assert_eq!(
@@ -468,10 +469,10 @@ fn the_nil_uuid_means_locally_originated_which_is_what_cpp_actually_sends() {
     // nil-source + local_origin must stem during a fluff epoch exactly as
     // the null-source path does.
     unsafe {
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, 0);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false, 0);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false, 0);
 
         let mut rolls = 0;
         while !h.as_ref().expect("live zone").driver.zone().is_fluffing() {
@@ -512,8 +513,8 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
     // agree was due and nothing in the tree would notice.
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), true);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), true, 0);
 
         let blob = [0x5Au8];
         let batch = [ShekylRelayBlob {
@@ -591,14 +592,14 @@ fn polling_across_the_epoch_boundary_gathers_and_rebuilds() {
     // epoch deadline, so polling there is a rollover.
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
         assert!(!h.is_null(), "these params build a zone");
 
         // The set the rollover draws its two slots from: established outbound
         // sessions, not a height-filtered snapshot.
-        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, 0);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false, 0);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false, 0);
 
         let due = shekyl_relay_zone_next_wake(h);
         shekyl_relay_zone_poll(
@@ -625,11 +626,11 @@ fn a_zone_that_would_spin_is_refused_rather_than_built() {
     // re-arm in the past forever. Refusing construction turns a silent
     // busy-loop in the p2p reactor into a loud startup failure.
     assert!(
-        shekyl_relay_zone_new(0, PUBLIC, 2, 0, 30, 0).is_null(),
+        shekyl_relay_zone_new(0, 2, 0, 30, 0, 0).is_null(),
         "zero epoch"
     );
     assert!(
-        shekyl_relay_zone_new(0, PUBLIC, usize::MAX, 600, 30, 0).is_null(),
+        shekyl_relay_zone_new(0, usize::MAX, 600, 30, 0, 0).is_null(),
         "unrepresentable stem width"
     );
 }
@@ -639,7 +640,7 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
     reset();
     unsafe {
         let null: *mut RelayZoneHandle = std::ptr::null_mut();
-        shekyl_relay_zone_on_session_established(null, id(1).as_ptr(), true);
+        shekyl_relay_zone_on_session_established(null, id(1).as_ptr(), true, 0);
         shekyl_relay_zone_on_close(null, id(1).as_ptr());
         assert_eq!(shekyl_relay_zone_live_stems(null), 0);
         assert_eq!(shekyl_relay_zone_next_wake(null), 0);
@@ -701,7 +702,7 @@ fn an_outbound_handshake_fills_the_map_across_the_boundary() {
     // with_refresh; plan_relay then stems.
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
         let mut out = [0u8; 16];
         assert_eq!(
             shekyl_relay_zone_plan_relay_with_refresh(
@@ -714,9 +715,9 @@ fn an_outbound_handshake_fills_the_map_across_the_boundary() {
             SHEKYL_RELAY_PLAN_NO_ROUTE,
         );
         assert_eq!(shekyl_relay_zone_live_stems(h), 0);
-        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, 0);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false, 0);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false, 0);
         assert_eq!(shekyl_relay_zone_live_stems(h), 2);
         let plan = shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, true, out.as_mut_ptr());
         assert_eq!(plan, SHEKYL_RELAY_PLAN_STEM, "local origin stems");
@@ -726,21 +727,26 @@ fn an_outbound_handshake_fills_the_map_across_the_boundary() {
 }
 
 /// The dispatch crossing is additive: same plan as `plan_relay_with_refresh`,
-/// plus a carrier. Covert-on + local origin (RD-4: always stems) so the
-/// epoch cannot make this vacuous. This bites against a seam that starts
-/// re-deciding the phase, and against a covert-on stem that forgets to
-/// name a slot inside the stem width.
+/// plus a carrier.
+///
+/// A hidden-address origin is [`SHEKYL_RELAY_PLAN_OWN_EDGE`] even while the
+/// carrier is on (RD-4). No cover on Tor by ruling, so that plan leaves on
+/// the ordinary connection and the epoch cannot hide it. A forwarded stem
+/// on the open link, once the epoch is a stem epoch, names the slot's
+/// channel: that is the cover-bearing link, and the own-edge there is the
+/// slot.
 #[test]
 fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
     reset();
+    const MIXED: u32 = OPEN_CONFIGURED | TOR_CONFIGURED;
     unsafe {
-        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
-        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, NOISE_ON, MIXED);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, TOR_LINK);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false, TOR_LINK);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false, TOR_LINK);
         assert!(
             shekyl_relay_zone_noise_enabled(h),
-            "fixture must actually have covert on or the carrier cell is vacuous"
+            "fixture must actually have the carrier on or the cell is vacuous"
         );
 
         let mut dest_plan = [0u8; 16];
@@ -753,10 +759,10 @@ fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
         );
 
         shekyl_relay_zone_free(h);
-        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
-        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
-        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, NOISE_ON, MIXED);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, TOR_LINK);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false, TOR_LINK);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false, TOR_LINK);
         let mut dest_dispatch = [0u8; 16];
         let mut carrier = 0xFFu8;
         let mut channel = 0xFFFF_FFFFu32;
@@ -774,14 +780,55 @@ fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
             via_dispatch, via_plan,
             "dispatch must not re-decide the phase"
         );
-        assert_eq!(via_dispatch, SHEKYL_RELAY_PLAN_STEM, "RD-4: origin stems");
         assert_eq!(
-            carrier, SHEKYL_RELAY_CARRIER_NOISE,
-            "covert is on and this is a stem"
+            via_dispatch, SHEKYL_RELAY_PLAN_OWN_EDGE,
+            "a hidden-address origin is the own-edge, not a stem slot"
+        );
+        assert_ne!(dest_dispatch, NIL, "the own-edge names its peer");
+        assert_eq!(
+            carrier, SHEKYL_RELAY_CARRIER_ORDINARY,
+            "no cover on Tor by ruling: the own-edge leaves immediately"
+        );
+        shekyl_relay_zone_free(h);
+
+        // A forwarded stem on the open link, once the epoch stems, names a slot.
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, NOISE_ON, OPEN_CONFIGURED);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, OPEN_LINK);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false, OPEN_LINK);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false, OPEN_LINK);
+        let source = id(9);
+        let mut now = 0u64;
+        let mut forwarded = SHEKYL_RELAY_PLAN_FLUFF_EPOCH;
+        let mut fwd_carrier = 0xFFu8;
+        let mut fwd_channel = 0xFFFF_FFFFu32;
+        let mut fwd_dest = [0u8; 16];
+        for _ in 0..32 {
+            forwarded = shekyl_relay_zone_plan_dispatch_with_refresh(
+                h,
+                source.as_ptr(),
+                false,
+                true,
+                fwd_dest.as_mut_ptr(),
+                &raw mut fwd_carrier,
+                &raw mut fwd_channel,
+            );
+            if forwarded == SHEKYL_RELAY_PLAN_STEM {
+                break;
+            }
+            now += 600_000;
+            shekyl_relay_zone_force_epoch(h, now);
+        }
+        assert_eq!(
+            forwarded, SHEKYL_RELAY_PLAN_STEM,
+            "a stem epoch did not appear"
+        );
+        assert_eq!(
+            fwd_carrier, SHEKYL_RELAY_CARRIER_NOISE,
+            "a forwarded stem on the open link names the slot's channel"
         );
         assert!(
-            (channel as usize) < 2,
-            "channel is the stem slot (§20.3); {channel} is outside the width"
+            (fwd_channel as usize) < 2,
+            "channel is the stem slot (§20.3); {fwd_channel} is outside the width"
         );
         shekyl_relay_zone_free(h);
     }
@@ -792,8 +839,8 @@ fn queue_fluff_rejects_a_null_ptr_with_nonzero_len() {
     // Contract: empty blobs may pass a null ptr; non-empty must not. Fail
     // closed on the whole batch so a bad span cannot drop a sibling silently.
     unsafe {
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), true);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), true, 0);
         let bad = [ShekylRelayBlob {
             ptr: std::ptr::null(),
             len: 4,
@@ -827,20 +874,13 @@ fn queue_fluff_rejects_a_null_ptr_with_nonzero_len() {
     }
 }
 
-/// The zone-flag bits do not transpose, and the noise bit round-trips.
+/// The noise flag is bit 1, and cover follows the configured connectors.
 ///
-/// This test is the *reason* [`SHEKYL_RELAY_ZONE_NOISE_ENABLED`] is a named bit
-/// rather than a second `bool` parameter, so it must be able to fail if the two
-/// bits were ever swapped. It is written as a **negative control on
-/// transposition**: each bit is set *alone*, so a swap flips both assertions
-/// rather than cancelling out — which a both-bits-set case would not catch.
-///
-/// Why the stakes justify a dedicated test: transposing these two swaps the
-/// Tor outbound-only fluff rule with the covert enable, which is exactly the
-/// regression RP-3a's first pass shipped. That one survived only because eight
-/// `private_*` gtests happened to cover the fluff side; nothing covered this
-/// side, and the C++ header is hand-written, so no codegen would catch a
-/// mismatched declaration either.
+/// The number is the ABI contract with the hand-written header. Reading the
+/// flag back through the same constant would stay green if both definitions
+/// moved together, so the pin is the literal `2`. Bit 0 alone must still
+/// build: if noise moved onto it, that call would request cover with an
+/// empty mask and return null.
 #[test]
 fn zone_flag_bits_do_not_transpose() {
     // **The ABI pin, and the reason it comes first.** A first version of this
@@ -856,108 +896,59 @@ fn zone_flag_bits_do_not_transpose() {
     // are the actual ABI contract; the round-trip cases below are then
     // meaningful because these are pinned.
     assert_eq!(
-        SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY, 1,
-        "ABI value; `shekyl_ffi.h` hardcodes 1u"
-    );
-    assert_eq!(
         SHEKYL_RELAY_ZONE_NOISE_ENABLED, 2,
-        "ABI value; `shekyl_ffi.h` hardcodes 2u"
+        "ABI value; `shekyl_ffi.h` hardcodes 2u. Bit 0 is not a flag."
     );
 
     unsafe {
-        /* Noise bit ALONE on the CLEARTEXT zone byte. Refused because the
-        zone is cleartext, not because the fluff-reach bit is missing —
-        secrecy is the discriminant, reach is a different axis.
-
-        The negative control survives and is strictly sharper. Under a
-        transposition this call would decode as *fluff-only*, which is a
-        perfectly ordinary zone and would build — so a swap turns this
-        null into a handle, and the assertion flips. The refusal is the
-        observation; a readback is no longer available here because the
-        zone does not exist to be read. */
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_NOISE_ENABLED);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, SHEKYL_RELAY_ZONE_NOISE_ENABLED, 0);
         assert!(
             h.is_null(),
-            "noise bit set alone on the cleartext zone is refused; a handle \
-             here means the bits are transposed and this decoded as the \
-             harmless fluff-only zone"
+            "noise with an empty mask is refused: nothing configured is an open link"
         );
 
-        // Fluff bit ALONE. A swap makes this read the noise bit → refused
-        // on this cleartext zone, so the handle would be null and BOTH
-        // assertions below would fail.
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY);
-        assert!(
-            !h.is_null(),
-            "an outbound-fluff-only zone is ordinary and builds"
-        );
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 1, 0);
+        assert!(!h.is_null(), "bit 0 is ignored; the relay still builds");
         assert!(
             !shekyl_relay_zone_noise_enabled(h),
-            "outbound-fluff bit set alone must NOT enable noise; \
-             reading true here means the bits are transposed"
+            "bit 0 must not enable noise"
         );
         shekyl_relay_zone_free(h);
 
-        // Neither, and both — the two ends, so an always-true or always-false
-        // decode cannot pass the set above by accident.
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
         assert!(!shekyl_relay_zone_noise_enabled(h), "no flags ⇒ no noise");
         shekyl_relay_zone_free(h);
 
-        /* Both flags, on an ENCRYPTED zone — the only configuration a noise
-        carrier is allowed in. Swap-blind by construction (both bits set),
-        so it is the positive readback and not part of the control. */
-        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
-        assert!(
-            shekyl_relay_zone_noise_enabled(h),
-            "both flags on an encrypted zone ⇒ noise on"
-        );
-        shekyl_relay_zone_free(h);
-
-        /* An OUT-OF-DOMAIN zone byte with noise flags — refused. The two
-        fail-safe directions point opposite ways on purpose: an unknown zone
-        draws the *anonymity* parameters (the longer embargo, the safe
-        direction there), but it is not presumed *encrypted*, so it earns no
-        noise. Pinned because an asymmetry that is not stated reads as an
-        accident, and the next reader "fixing" it would silently hand a
-        noise carrier to a link nobody could identify. */
-        let h = shekyl_relay_zone_new(0, 0xFF, 2, 600, 30, NOISE_ON_ENCRYPTED);
-        assert!(
-            h.is_null(),
-            "an unknown link is not presumed encrypted and earns no noise"
-        );
-
-        /* Both flags on a CLEARTEXT zone — refused. This pins the axis split
-        the flags used to hide: outbound-only fluff does not imply an
-        encrypted link. It is a real configuration (§25.5 keeps
-        outbound-only fluff on clearnet open) and it is still cleartext, so
-        it earns no noise. Before secrecy was read from the zone byte this
-        case built a zone, because reach was standing in for encryption. */
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, NOISE_ON_ENCRYPTED);
-        assert!(
-            h.is_null(),
-            "outbound-only fluff is not encryption; a cleartext zone earns no \
-             noise however its fluff reach is configured"
-        );
-
-        /* Noise bit ALONE on an ENCRYPTED zone — builds. Missing the fluff
-        bit is not "noise on cleartext": secrecy comes from TOR, reach
-        defaults to EveryPeer, and that pairing is the case the axis exists
-        for. A comment that treated the flag pair as the encryption proxy
-        would refuse this. */
-        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, SHEKYL_RELAY_ZONE_NOISE_ENABLED);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, NOISE_ON, OPEN_CONFIGURED);
         assert!(
             !h.is_null(),
-            "noise on an encrypted zone is not refused for lack of the fluff bit"
+            "an open link with the carrier requested builds"
         );
         assert!(
             shekyl_relay_zone_noise_enabled(h),
-            "encrypted + noise, reach = every peer — the axis split, built"
+            "the open-link bit is where the substitution carrier runs"
         );
         shekyl_relay_zone_free(h);
 
-        // A null handle answers false rather than aborting: a caller that lost
-        // its zone has no noise channels by construction.
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 1 << 2);
+        assert!(
+            h.is_null(),
+            "a bit past the connector count refuses the handle"
+        );
+
+        let h = shekyl_relay_zone_new(
+            0,
+            2,
+            600,
+            30,
+            SHEKYL_RELAY_ZONE_NOISE_ENABLED,
+            TOR_CONFIGURED,
+        );
+        assert!(
+            h.is_null(),
+            "volume cover takes no envelope: Tor-only refuses the carrier"
+        );
+
         assert!(!shekyl_relay_zone_noise_enabled(std::ptr::null()));
     }
 }
@@ -975,8 +966,8 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
         shekyl_relay_privacy::stem_map::ConnectionId::from_bytes(id(byte))
     }
     unsafe {
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_on_session_established(h, id(9).as_ptr(), true);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
+        shekyl_relay_zone_on_session_established(h, id(9).as_ptr(), true, 0);
 
         let mut hashes = [0u8; 64]; // two packed 32-byte canonical tx hashes
         hashes[0] = 0xA1;
@@ -1119,7 +1110,7 @@ fn an_overflowing_batch_length_trips_the_guard_not_the_multiply() {
 #[test]
 fn a_nil_successor_arms_no_observation_but_a_real_one_does() {
     unsafe {
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
         let mut hashes = [0u8; 32];
         hashes[0] = 0xA1;
 
@@ -1138,6 +1129,7 @@ fn a_nil_successor_arms_no_observation_but_a_real_one_does() {
              resolve would age into a silence against a peer that does not exist"
         );
 
+        shekyl_relay_zone_on_session_established(h, id(9).as_ptr(), false, 0);
         shekyl_relay_zone_record_stem(h, hashes.as_ptr(), 1, id(9).as_ptr(), std::ptr::null(), 0);
         assert_eq!(
             shekyl_relay_zone_stem_in_flight(h),
@@ -1149,30 +1141,29 @@ fn a_nil_successor_arms_no_observation_but_a_real_one_does() {
     }
 }
 
-/// The zone byte selects the transport-bound parameters, and the stem
-/// observation window is where that shows.
+/// The forwarded connector selects the stem observation window.
 ///
-/// §89.2 makes `hop` per-zone, but the handle was still built from
-/// `DandelionParams::adopted()` for every zone — so an anonymity zone armed a
-/// clearnet 190 s observation against the 499 s embargo its own successor
-/// draws. Every honest Tor peer would age into `silent` before it was even
-/// allowed to re-relay, and `stem_tallies` would report the whole anonymity
-/// peer set as withholding.
+/// The window is the successor's measured transit, not a property of the
+/// relay. A Tor successor waits longer than a clearnet successor. An
+/// unregistered successor arms nothing, so each sample establishes the
+/// session before it records.
 ///
 /// Sampled rather than pinned: the deadline is a geometric draw on `OsRng`.
 /// The epoch is set far past both means so `next_wake` reports the observation
-/// rather than the epoch roll. The means differ by ~2.6x, so a 1.5x threshold
-/// cannot flake.
+/// rather than the epoch roll. The means differ by enough that a 1.5×
+/// threshold cannot flake.
 #[test]
-fn the_zone_byte_selects_the_observation_window() {
+fn the_forwarded_connector_selects_the_observation_window() {
     const ROUNDS: u32 = 200;
     const EPOCH_BEYOND_BOTH_MEANS_SECS: u32 = 1_000_000;
+    const CLEAR_LINK: u8 = 0;
 
-    let mean_wake = |zone: u8| -> f64 {
+    let mean_wake = |connector: u8| -> f64 {
         let mut total = 0f64;
         for _ in 0..ROUNDS {
             unsafe {
-                let h = shekyl_relay_zone_new(0, zone, 2, EPOCH_BEYOND_BOTH_MEANS_SECS, 0, 0);
+                let h = shekyl_relay_zone_new(0, 2, EPOCH_BEYOND_BOTH_MEANS_SECS, 0, 0, 0);
+                shekyl_relay_zone_on_session_established(h, id(9).as_ptr(), false, connector);
                 let mut hashes = [0u8; 32];
                 hashes[0] = 0xA1;
                 shekyl_relay_zone_record_stem(
@@ -1196,17 +1187,15 @@ fn the_zone_byte_selects_the_observation_window() {
         total / f64::from(ROUNDS)
     };
 
-    let clearnet = mean_wake(PUBLIC);
-    let anonymity = mean_wake(RelayZone::Tor.as_u8());
+    let clearnet = mean_wake(CLEAR_LINK);
+    let tor = mean_wake(TOR_LINK);
     assert!(
-        anonymity > clearnet * 1.5,
-        "the anonymity zone must arm a longer observation window than clearnet \
-         (§89.2): clearnet {clearnet:.0} ms vs anonymity {anonymity:.0} ms"
+        tor > clearnet * 1.5,
+        "a Tor successor waits longer than a clearnet successor: \
+         clearnet {clearnet:.0} ms vs tor {tor:.0} ms"
     );
 
-    // Negative control: two samples of the SAME zone must not separate, or the
-    // assertion above would pass on any source of variance at all.
-    let clearnet_again = mean_wake(PUBLIC);
+    let clearnet_again = mean_wake(CLEAR_LINK);
     assert!(
         clearnet_again < clearnet * 1.5 && clearnet < clearnet_again * 1.5,
         "two clearnet samples must not separate: {clearnet:.0} vs {clearnet_again:.0} ms"
@@ -1219,8 +1208,8 @@ fn the_zone_byte_selects_the_observation_window() {
 #[test]
 fn stem_snapshot_reports_row_count_and_writes_only_when_it_fits() {
     unsafe {
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        shekyl_relay_zone_on_session_established(h, id(9).as_ptr(), true);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
+        shekyl_relay_zone_on_session_established(h, id(9).as_ptr(), true, 0);
 
         // Empty zone: zero rows, not an error.
         let mut rows = [std::mem::zeroed::<ShekylStemTallyRow>(); 4];
@@ -1248,6 +1237,8 @@ fn stem_snapshot_reports_row_count_and_writes_only_when_it_fits() {
             propagated: 0xEEEE_EEEE_EEEE_EEEE,
             silent: 0xEEEE_EEEE_EEEE_EEEE,
             distinct_sources: 0xEEEE_EEEE_EEEE_EEEE,
+            connector: 0xEE,
+            _pad: [0xEE; 7],
         }];
         assert_eq!(
             shekyl_relay_zone_stem_snapshot(h, small.as_mut_ptr(), 0),
@@ -1264,74 +1255,8 @@ fn stem_snapshot_reports_row_count_and_writes_only_when_it_fits() {
             rows[0].distinct_sources, 1,
             "local origin (null source) is still one distinct source key"
         );
+        assert_eq!(rows[0].connector, 0, "the stem was forwarded on clearnet");
         shekyl_relay_zone_free(h);
-    }
-}
-
-/// The zone-route byte policy, exercised through the REAL exports — the C++
-/// static_asserts pin known values, so these pin what happens OUTSIDE them.
-///
-/// The load-bearing arm is the inverted one: for `originated_stays_in_zone`
-/// an unknown ZONE byte on a `local` origin must return `true`, because
-/// `false` lets the record upgrade to `stem`/`fluff` and the next pool
-/// re-relay puts an anonymity-origin transaction on clearnet (§30.5). A
-/// future zone added on the C++ side before this crate learns its byte must
-/// fail toward liveness loss, never toward the leak.
-#[test]
-fn zone_route_unknown_bytes_fail_toward_refusal_never_clearnet() {
-    const LOCAL: u8 = 1;
-    const STEM: u8 = 2;
-    const TOR: u8 = 3;
-    const UNKNOWN_ZONE: u8 = 4; // first byte a future zone would claim
-    const UNKNOWN_METHOD: u8 = 9;
-    const FAIL_CLOSED: u8 = 1;
-
-    // The inverted arm: local + undecodable zone keeps `local`.
-    assert!(shekyl_relay_zone_originated_stays_in_zone(
-        LOCAL,
-        UNKNOWN_ZONE
-    ));
-    // No `local` claim is invented for an undecodable method…
-    assert!(!shekyl_relay_zone_originated_stays_in_zone(
-        UNKNOWN_METHOD,
-        TOR
-    ));
-    // …and a relayed class on an unknown zone keeps its own record.
-    assert!(!shekyl_relay_zone_originated_stays_in_zone(
-        STEM,
-        UNKNOWN_ZONE
-    ));
-
-    // The send-path decision on any undecodable input is fail-closed — send
-    // nothing is the one default that cannot leak.
-    assert_eq!(
-        shekyl_relay_zone_once_at_origin_route(STEM, UNKNOWN_ZONE),
-        FAIL_CLOSED
-    );
-    assert_eq!(
-        shekyl_relay_zone_once_at_origin_route(UNKNOWN_METHOD, TOR),
-        FAIL_CLOSED
-    );
-
-    // No coherence claim is invented for a zone that does not decode; the
-    // fail-closed token above is what actually guards the send.
-    assert!(!shekyl_relay_zone_r1_coherence_keeps_origin(
-        STEM,
-        UNKNOWN_ZONE
-    ));
-    assert!(!shekyl_relay_zone_is_pre_fluff_relay(UNKNOWN_METHOD));
-}
-
-/// The composed roll export returns only the two zone bytes the contract
-/// names — whichever way the draw lands, the byte is `invalid` (0) or
-/// `public_` (1), never a third value and never an anonymity zone directly
-/// (the zone map resolves `invalid`; that indirection is the fail-closed
-/// design, §30.5).
-#[test]
-fn roll_originated_zone_returns_only_the_two_contract_bytes() {
-    for _ in 0..64 {
-        let z = shekyl_relay_zone_roll_originated_zone();
-        assert!(z == 0 || z == 1, "roll returned byte {z}");
     }
 }
 
@@ -1362,7 +1287,7 @@ fn the_enqueue_crossing_cannot_express_a_batch() {
 fn a_zone_without_the_carrier_refuses_to_enqueue() {
     // SAFETY: constructed here, freed below, not shared.
     unsafe {
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0, 0);
         assert!(!h.is_null());
         let tx = [7u8; 32];
         assert!(
@@ -1383,8 +1308,8 @@ fn a_zone_without_the_carrier_refuses_to_enqueue() {
 /// # Safety
 /// `h` must be a live zone handle.
 unsafe fn drive_one_noise_send(h: *mut RelayZoneHandle) {
-    shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
-    shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
+    shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, OPEN_LINK);
+    shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false, OPEN_LINK);
 
     let before = REC.with(|r| r.borrow().noise.len());
     // Covert ticks average 5 s (3.333 s + U[0, 3.334 s]) and the epoch minimum
@@ -1419,7 +1344,7 @@ fn every_emission_is_a_levin_frame_even_the_dummy() {
     reset();
     // SAFETY: constructed here, freed below, not shared.
     unsafe {
-        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, NOISE_ON, OPEN_CONFIGURED);
         assert!(!h.is_null());
         drive_one_noise_send(h);
         shekyl_relay_zone_free(h);
@@ -1466,7 +1391,7 @@ fn a_failed_send_restarts_the_message_from_its_first_fragment() {
     let real = vec![7u8; 40_000];
     // SAFETY: constructed here, freed below, not shared.
     unsafe {
-        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, NOISE_ON, OPEN_CONFIGURED);
         assert!(!h.is_null());
         assert!(shekyl_relay_zone_noise_enqueue(
             h,
@@ -1539,7 +1464,7 @@ fn a_failed_send_restarts_the_message_from_its_first_fragment() {
 fn a_carrier_zone_accepts_one_framed_transaction() {
     // SAFETY: constructed here, freed below, not shared.
     unsafe {
-        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, NOISE_ON, OPEN_CONFIGURED);
         assert!(!h.is_null(), "an encrypted zone may carry");
         let tx = vec![9u8; 4_096];
         assert!(
@@ -1569,7 +1494,7 @@ fn a_carrier_message_resolves_sent_across_the_boundary_with_its_token() {
     let real = vec![3u8; 40_000];
     // SAFETY: constructed here, freed below, not shared.
     unsafe {
-        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, NOISE_ON, OPEN_CONFIGURED);
         assert!(!h.is_null());
         NOISE_DELIVERS.with(|d| d.set(true));
         assert!(shekyl_relay_zone_noise_enqueue(
@@ -1638,7 +1563,7 @@ fn a_discarded_carrier_message_resolves_not_sent_across_the_boundary() {
     let real = vec![5u8; 40_000];
     // SAFETY: constructed here, freed below, not shared.
     unsafe {
-        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, NOISE_ON, OPEN_CONFIGURED);
         assert!(!h.is_null());
         assert!(shekyl_relay_zone_noise_enqueue(
             h,
@@ -1691,8 +1616,8 @@ fn a_discarded_carrier_message_resolves_not_sent_across_the_boundary() {
 /// discards what it held. Tests that care about surviving a roll depend on
 /// that overlap, so it is a precondition and not a coincidence.
 unsafe fn drive_one_wake(h: *mut RelayZoneHandle) {
-    shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false);
-    shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false);
+    shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, OPEN_LINK);
+    shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false, OPEN_LINK);
     let due = shekyl_relay_zone_next_wake(h);
     shekyl_relay_zone_poll(
         h,
@@ -1735,7 +1660,7 @@ fn a_queued_message_survives_an_epoch_roll() {
         // 60 s still affords a full-size message, and rolls an order of
         // magnitude sooner than the 600 s the other cases use, so the boundary
         // arrives inside a bounded loop.
-        let h = shekyl_relay_zone_new(0, TOR, 2, 60, 30, NOISE_ON_ENCRYPTED);
+        let h = shekyl_relay_zone_new(0, 2, 60, 30, NOISE_ON, OPEN_CONFIGURED);
         assert!(!h.is_null(), "60 s affords MAX_FRAGMENTS windows");
         GATHER.with(|g| g.borrow_mut().supply = vec![id(1), id(2), id(3)]);
 

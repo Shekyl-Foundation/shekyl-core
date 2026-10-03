@@ -275,7 +275,11 @@ count_pattern() {
 # (shekyl/chain-store/undo-log/post-image-v1, the undo entry's post-image
 # digest) -- plus one inline #[cfg(test)] site: the domain-separation
 # negative control hashes one preimage under an unrelated customization.
-MECH1_EXPECTED=57
+# Network id (2026-10-01): 57 -> 58. One production site in
+# rust/shekyl-p2p-transport/src/prefix.rs -- `network_id_from_genesis`
+# (shekyl/p2p-network-id-v1, first 16 bytes). The KAT calls that function;
+# it does not add a second cSHAKE site.
+MECH1_EXPECTED=58
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

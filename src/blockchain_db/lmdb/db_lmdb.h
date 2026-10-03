@@ -40,6 +40,10 @@
 
 #define ENABLE_AUTO_RESIZE
 
+// The Rust archival-snapshot builder (shekyl/shekyl_ffi.h); opaque here so
+// this header does not pull the whole FFI surface in.
+struct ShekylE2ArchivalSnapshot;
+
 namespace cryptonote
 {
 
@@ -649,6 +653,20 @@ public:
   // (same shape as apply_archival_slash_one below) so DRS-C and the
   // walker tests can call it; BlockchainDB overrides stay private.
   std::array<uint8_t, 32> logical_state_digest_v0() const;
+
+  // DRS-E4 (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, ARW-25): the
+  // archival state the digest excludes, as rows — the checkpoint's other
+  // encoding. Walks the ten archival families under ONE read snapshot and
+  // hands each row's DECODED fields to the Rust builder (ARW-Q10 (a)); the
+  // row encodings are Rust's. The one arithmetic this walker performs is
+  // the open epoch's accruing total (a checked sum over
+  // `archival_budget_accrual`, which the redb store keeps as a singleton
+  // the LMDB keeps per height). Returns the builder for
+  // `shekyl_e2_trace_push_archival_snapshot` or
+  // `shekyl_e2_archival_snapshot_write_json`; throws DB_ERROR on a row the
+  // builder refuses. HARVEST SHIM — dies with the exporter (E2 §1.3). Not a
+  // BlockchainDB virtual, same as the digest above.
+  ::ShekylE2ArchivalSnapshot* archival_snapshot_rows() const;
 
   // spent_keys writes are BlockchainDB-private (add_transaction). The
   // digest walker tests mutate that family without a spend tx; these

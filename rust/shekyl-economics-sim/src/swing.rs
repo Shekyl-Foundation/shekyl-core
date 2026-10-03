@@ -29,8 +29,9 @@ use std::fmt;
 use shekyl_types::SHARD_LENGTH;
 
 use crate::burden::honest_leaves_at_closed_shards;
-use crate::calibration::{self, stuffer_campaign, tree_depth_for_leaves};
+use crate::calibration::{self, stuffer_campaign, tree_depth_for_leaves, PerByteRate};
 use crate::escalation::{family, EscalationCurve, SHARE_SCALE};
+use crate::stage2::AdmissionAtShards;
 
 /// Long-term block-weight median floor — the penalty-free zone.
 pub const BLOCK_WEIGHT_FLOOR: u64 = shekyl_economics::FULL_REWARD_ZONE;
@@ -58,19 +59,26 @@ pub const REORG_DEPTH_BLOCKS: u64 = 720;
 /// over every shape the builder accepts
 /// ([`calibration::max_archival_bytes_per_block`]: whole transactions in a
 /// finite block, so the cheapest-per-byte shape is not always the one that
-/// lands the most); depth from the honest chain at `n_shards`.
+/// lands the most); depth from the honest chain at `n_shards`. `rate` is
+/// what the flood pays per byte: it enters only through the fee's varint,
+/// which is a byte or two of each transaction's weight.
 #[must_use]
-pub fn max_archival_bytes_per_block(block_weight: u64, n_shards: u64) -> u64 {
+pub fn max_archival_bytes_per_block(block_weight: u64, n_shards: u64, rate: PerByteRate) -> u64 {
     let depth = tree_depth_for_leaves(honest_leaves_at_closed_shards(n_shards.max(1)));
-    calibration::max_archival_bytes_per_block(block_weight, depth)
+    calibration::max_archival_bytes_per_block(block_weight, depth, rate)
 }
 
 /// Shards a flood can close over `blocks` at `block_weight` — the max slew of
 /// the D2 operand: the bytes the flood lands, through the partition's unit `W`.
 /// Integer throughout.
 #[must_use]
-pub fn max_shards_per_window(blocks: u64, block_weight: u64, n_shards: u64) -> u64 {
-    let bytes = max_archival_bytes_per_block(block_weight, n_shards).saturating_mul(blocks);
+pub fn max_shards_per_window(
+    blocks: u64,
+    block_weight: u64,
+    n_shards: u64,
+    rate: PerByteRate,
+) -> u64 {
+    let bytes = max_archival_bytes_per_block(block_weight, n_shards, rate).saturating_mul(blocks);
     bytes / SHARD_LENGTH.to_raw()
 }
 
@@ -108,6 +116,7 @@ pub fn a6_report(
     out: &mut impl fmt::Write,
     n_samples: &[u64],
     base_block_reward_atomic: u64,
+    admission: &AdmissionAtShards,
 ) -> fmt::Result {
     let curve = family()
         .iter()
@@ -147,9 +156,10 @@ pub fn a6_report(
     let mut worst_dn_at_n = 0u64;
     let mut worst_pen_pts = 0.0_f64;
     for &n in n_samples {
-        let dn_epoch = max_shards_per_window(EPOCH_BLOCKS, surge, n);
-        let dn_pen = max_shards_per_window(EPOCH_BLOCKS, BLOCK_WEIGHT_MAX, n);
-        let dn_reorg = max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n);
+        let rate = admission.at(n);
+        let dn_epoch = max_shards_per_window(EPOCH_BLOCKS, surge, n, rate);
+        let dn_pen = max_shards_per_window(EPOCH_BLOCKS, BLOCK_WEIGHT_MAX, n, rate);
+        let dn_reorg = max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n, rate);
         let ds_epoch = delta_share(&curve, n, dn_epoch);
         let ds_reorg = delta_share(&curve, n, dn_reorg);
         let pts = ds_epoch as f64 / SHARE_SCALE as f64 * 100.0;
@@ -212,8 +222,12 @@ pub fn a6_report(
         RDP = worst_reorg_pts,
         W = worst_epoch_pts,
         WP = worst_pen_pts,
-        C = stuffer_campaign(honest_leaves_at_closed_shards(worst_dn_at_n), worst_dn).cost_atomic
-            as f64
+        C = stuffer_campaign(
+            honest_leaves_at_closed_shards(worst_dn_at_n),
+            worst_dn,
+            admission.at(worst_dn_at_n),
+        )
+        .cost_atomic as f64
             / 1.0e9,
         P = penalty_compensation_skl_per_epoch(base_block_reward_atomic),
     )?;
@@ -225,11 +239,15 @@ pub fn a6_report(
 mod tests {
     use super::*;
 
+    /// The flood's rate reaches the ceiling only through the fee's varint, so
+    /// these structural tests take one representative rate: the control arm's.
+    const RATE: PerByteRate = crate::fee_model::SECTION_12_13_ADMISSION_RATE;
+
     #[test]
     fn flood_ceiling_is_finite_and_nearly_depth_flat() {
         let surge = BLOCK_WEIGHT_PENALTY_FREE;
-        let early = max_shards_per_window(EPOCH_BLOCKS, surge, 1_000);
-        let late = max_shards_per_window(EPOCH_BLOCKS, surge, 5_000_000);
+        let early = max_shards_per_window(EPOCH_BLOCKS, surge, 1_000, RATE);
+        let late = max_shards_per_window(EPOCH_BLOCKS, surge, 5_000_000, RATE);
         assert!(early > 0, "a flood must be able to move n at all");
         // Byte-keyed, the ceiling is `B × (archival/weight) / W` per block: the
         // weight the flooder pays for and the archival bytes the operand counts
@@ -269,7 +287,7 @@ mod tests {
                 "single-shard jump at n={n}: {step}"
             );
             // The adversarial slew is finite and reported, not gated here.
-            let dn = max_shards_per_window(EPOCH_BLOCKS, surge, n.max(1));
+            let dn = max_shards_per_window(EPOCH_BLOCKS, surge, n.max(1), RATE);
             assert!(dn > 0 && delta_share(&curve, n, dn) < SHARE_SCALE);
         }
     }
@@ -282,8 +300,8 @@ mod tests {
         const _: () = assert!(REORG_DEPTH_BLOCKS < EPOCH_BLOCKS);
         let n = 50_000;
         assert!(
-            max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n)
-                <= max_shards_per_window(EPOCH_BLOCKS, surge, n)
+            max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n, RATE)
+                <= max_shards_per_window(EPOCH_BLOCKS, surge, n, RATE)
         );
     }
 }

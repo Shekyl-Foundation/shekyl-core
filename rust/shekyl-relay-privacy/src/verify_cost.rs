@@ -464,6 +464,35 @@ impl SpecVerifyCost {
 /// under-estimating shortens the embargo, the privacy-losing direction.
 pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 
+/// Row names for the flood instrument.
+///
+/// Not a connector identity. The privacy crate stays dependency-free, so it
+/// does not import `ConnectorId`, and these variants are not that enum's
+/// indexes. Production transit is `shekyl-relay`'s match on `ConnectorId`.
+/// A new measurement is a variant here; it does not by itself make a
+/// connector stemmable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MeasuredConnector {
+    /// [`ADOPTED_TRANSIT_ASSUMPTION_MS`].
+    Clearnet,
+    /// [`ANON_ZONE_TRANSIT_ASSUMPTION_MS`].
+    Tor,
+}
+
+impl MeasuredConnector {
+    /// Closed set of instrument rows. A new variant is a member here.
+    pub const ALL: [Self; 2] = [Self::Clearnet, Self::Tor];
+}
+
+/// Measured transit for one [`MeasuredConnector`].
+#[must_use]
+pub const fn transit_ms_for_connector(connector: MeasuredConnector) -> f64 {
+    match connector {
+        MeasuredConnector::Clearnet => ADOPTED_TRANSIT_ASSUMPTION_MS,
+        MeasuredConnector::Tor => ANON_ZONE_TRANSIT_ASSUMPTION_MS,
+    }
+}
+
 /// The transit assumption for the **anonymity zones** (Tor), in
 /// milliseconds.
 ///
@@ -476,8 +505,9 @@ pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 /// > `forward` class never reached `send_txs` at arrival, and the remaining
 /// > hops this constant spaces ran on a network it is not sized for.
 /// >
-/// > **Q12-U2 closed that path.** Arrivals now enter as `stem`, coherence
-/// > keeps them on the arrival zone (`KeepArrival`), and `set_relayed` draws
+/// > **Q12-U2 closed that path.** Arrivals enter as `stem`. Arrival-coherence
+/// > (`KeepArrival`) is deleted: the session's notifier stems a forward, and
+/// > `set_relayed` draws
 /// > the per-zone embargo — the zone is a parameter beside `tx_relay`, which
 /// > is the input §89.2 already had. Originated traffic still keeps `local`
 /// > and does not draw, by §89.8.3. The checklist at §89.8.4 is the current
@@ -791,6 +821,22 @@ mod tests {
             "worst-cell crypto fraction is {:.4} — outside the recorded \
              1.07 % band, so the arithmetic moved",
             worst.2
+        );
+    }
+
+    #[test]
+    fn measured_connector_rows_name_their_transit_assumptions() {
+        assert_eq!(
+            transit_ms_for_connector(MeasuredConnector::Clearnet).to_bits(),
+            ADOPTED_TRANSIT_ASSUMPTION_MS.to_bits()
+        );
+        assert_eq!(
+            transit_ms_for_connector(MeasuredConnector::Tor).to_bits(),
+            ANON_ZONE_TRANSIT_ASSUMPTION_MS.to_bits()
+        );
+        assert!(
+            transit_ms_for_connector(MeasuredConnector::Tor)
+                > transit_ms_for_connector(MeasuredConnector::Clearnet)
         );
     }
 }

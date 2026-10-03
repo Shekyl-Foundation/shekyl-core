@@ -106,6 +106,9 @@ shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 # single zstd in the binary (system-libzstd link dropped).
 shekyl-levin = { path = "../shekyl-levin" }
 shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
+# Genesis block-hash pins (`genesis_hash_for`). `shekyl_network_id` derives
+# the handshake id from that pin; this crate does not restate the hash.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # Daemon ephemeral-onion posture (`daemon_tor_ffi.rs`, PWD-E7 piece 3): the
 # blocking facade over DaemonTorControl. The facade owns its tokio runtime,
 # so this crate takes no tokio edge of its own.
