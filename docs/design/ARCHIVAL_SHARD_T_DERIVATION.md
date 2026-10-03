@@ -1765,6 +1765,12 @@ the build:
   region digest has no second definition to drift — which bytes it covers is the
   serializer's fact either way, and the parity pins hold it. *Reopens if* a C++
   region digest gains a term that is not the bytes' hash.
+  **Overruled for the prunable digest (design owner, 2026-10-02):** it is a txid
+  operand a wallet mixes, so it is computed where the mixer is.
+  `calculate_transaction_prunable_hash` now hands its range to Rust
+  (`shekyl_tx_prunable_hash`) and its separate serialize path is deleted.
+  `get_transaction_prefix_hash` stays C++ and is recorded as transitional
+  ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md) §F).
 - **The pruned RPC reply.** `get_transactions` entries gain a required
   `archival_len` (`CORE_RPC_VERSION` 3.39). The Rust server measures it from the
   pruned half and the prunable half LMDB hands it, and fails the reply rather than
@@ -2015,8 +2021,9 @@ add to it.
 
 **Confirmed, no change.** The recalibration row's removal from `FOLLOWUPS.md` is
 accepted: the question is answered, and its reopening condition lives in §10.6 item 1
-and at the constant. (The other confirmation concerns the prunable digest in §10.3 and
-is recorded with that change.)
+and at the constant. The other confirmation is that §10.3 had recorded the C++
+prunable digest as an as-built choice for ratification; the note marking it overruled
+there stands.
 
 **1. The sim credits one attempt per read, deliberately.**
 
@@ -2117,6 +2124,7 @@ testnet gate (§5, §9.5).
 | The target witness-miss rate | the failure window's `p_attempt`, judged with PoW on | §10.1 |
 | The overshoot tolerance | 5 % | §10.2 |
 | A pruned form's length | measured at serve time from full segments | §10.3 |
+| The prunable digest | computed by the mixer's function; the as-built C++ digest overruled | §10.3 |
 | `p_attempt` | 0.30 retained, measured-supported | §10.6 |
 | The PoW finding | no measurable cost, sign unresolved | §10.6 |
 | `L` | 4 holds on the worse day's per-byte rate | §10.6 |
@@ -2128,6 +2136,8 @@ testnet gate (§5, §9.5).
 - The domain's equivalence test (§2.1).
 - The byte partition: the store half, the txid's length term and the C++ call into the
   one mixer, the regenerated pins (`ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F).
+- The prunable digest in Rust: C++ finds the range and calls the mixer's function, pinned
+  per transaction class (`prunable_digest_parity`).
 - The canonical-form fixes for `SHT-10` and `SHT-11`.
 - `SHT-8`'s two re-keys and the re-derived `escalation_knee_n` (§10.4).
 - The W₂ size ladder, its three observation files, and the tool that reads them
@@ -2143,7 +2153,8 @@ testnet gate (§5, §9.5).
 - `SHT-9`, the fixture consensus refuses: `CHAIN_RULES_SLICE_5.md`.
 - The `PDM-Q-F34` coverage row and its sim arms, and the single home of the production
   `W`: `ARCHIVAL_PRUNED_DAEMON_MODE.md`.
-- What the Rust store must carry when it backs the daemon RPC:
+- What the txid still takes from C++ until the engine swap — the stored length on the
+  serve path, `get_transaction_prefix_hash`, and the two facts the FFI entry is told:
   `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F.
 - The retry budget's consumer: the schedulers that retry, unbuilt (`SF-D6`).
 

@@ -1356,7 +1356,9 @@ pub struct Transaction {
 }
 
 mod txid;
-pub use txid::{carries_archival_good, empty_region_prunable_hash, TxidParts, TxidSegments};
+pub use txid::{
+    carries_archival_good, empty_region_prunable_hash, prunable_hash_of, TxidParts, TxidSegments,
+};
 
 mod signing_preimage;
 pub use signing_preimage::PqcSigningPreimage;

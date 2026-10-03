@@ -893,28 +893,49 @@ namespace cryptonote
     return get_transaction_hash(t, res, NULL);
   }
   //---------------------------------------------------------------
+  // The prunable digest is computed in Rust, by the function the txid mixer
+  // uses (shekyl-wire `prunable_hash_of`, over shekyl_tx_prunable_hash). This
+  // function finds the prunable range -- the bytes after `unprunable_size` --
+  // and hands it over; it hashes nothing.
+  //
+  // The range comes from `blob` when the caller has the serialized
+  // transaction and its offsets are known, and otherwise from serializing
+  // the transaction here. There is no second derivation: the bytes hashed are
+  // always the tail of the transaction's own serialization, never a separate
+  // write of the prunable fields.
   bool calculate_transaction_prunable_hash(const transaction& t, const cryptonote::blobdata_ref *blob, crypto::hash& res)
   {
     if (t.version == 1)
       return false;
-    const unsigned int unprunable_size = t.unprunable_size;
-    if (blob && unprunable_size)
+    // A pruned body holds no prunable region: its range would be empty, and
+    // the digest of nothing is the row of a transaction that never had one.
+    CHECK_AND_ASSERT_MES(!t.pruned, false, "Cannot calculate the prunable hash of a pruned transaction");
+
+    blobdata serialized;
+    blobdata_ref bytes;
+    if (blob && t.unprunable_size)
     {
-      CHECK_AND_ASSERT_MES(unprunable_size <= blob->size(), false, "Inconsistent transaction unprunable and blob sizes");
-      cryptonote::get_blob_hash(blobdata_ref(blob->data() + unprunable_size, blob->size() - unprunable_size), res);
+      bytes = *blob;
     }
     else
     {
-      transaction &tt = const_cast<transaction&>(t);
-      std::stringstream ss;
-      binary_archive<true> ba(ss);
-      // pseudoOuts are sized by the spend subset, not vin.size() — see
-      // count_spend_inputs (cryptonote_basic.h).
-      const size_t outputs = t.vout.size();
-      bool r = tt.ct_signatures.p.serialize_ctsig_prunable(ba, t.ct_signatures.type, count_spend_inputs(t.vin), count_serve_credit_inputs(t.vin), outputs);
-      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize rct signatures prunable");
-      cryptonote::get_blob_hash(ss.str(), res);
+      // Serializing is what sets `unprunable_size`.
+      CHECK_AND_ASSERT_MES(tx_to_blob(t, serialized), false, "Failed to serialize transaction for its prunable hash");
+      bytes = blobdata_ref(serialized);
     }
+    // The same ordering the txid function requires of the offsets. It also
+    // refuses a transaction with no inputs, whose serializer never records
+    // where the unprunable part ends.
+    const size_t prefix_size = t.prefix_size;
+    const size_t unprunable_size = t.unprunable_size;
+    CHECK_AND_ASSERT_MES(prefix_size <= unprunable_size && unprunable_size <= bytes.size(), false,
+      "Inconsistent transaction prefix, unprunable and blob sizes");
+
+    const bool hashed = shekyl_tx_prunable_hash(
+      reinterpret_cast<const uint8_t*>(bytes.data()) + unprunable_size,
+      bytes.size() - unprunable_size,
+      reinterpret_cast<uint8_t*>(res.data));
+    CHECK_AND_ASSERT_MES(hashed, false, "Failed to hash the transaction's prunable range");
     return true;
   }
   //---------------------------------------------------------------
@@ -924,7 +945,7 @@ namespace cryptonote
     if (t.is_prunable_hash_valid())
     {
 #ifdef ENABLE_HASH_CASH_INTEGRITY_CHECK
-      CHECK_AND_ASSERT_THROW_MES(!calculate_transaction_prunable_hash(t, blobdata, res) || t.hash == res, "tx hash cash integrity failure");
+      CHECK_AND_ASSERT_THROW_MES(!calculate_transaction_prunable_hash(t, blobdata, res) || t.prunable_hash == res, "tx prunable hash cache integrity failure");
 #endif
       res = t.prunable_hash;
       ++tx_hashes_cached_count;

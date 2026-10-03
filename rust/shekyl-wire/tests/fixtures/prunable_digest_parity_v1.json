@@ -1,0 +1,52 @@
+{
+  "description": "Prunable digest of one body per transaction class. prunable_hash_hex = keccak256 of the body's prunable region (shekyl-wire prunable_hash_of), which is keccak256 of nothing for a coinbase. An entry with tx_hex carries its own bytes; an entry without takes them from the transaction of the same name in pqc_signing_preimage_v1.json. The C++ leg (tests/unit_tests/prunable_digest_parity.cpp) parses the same bytes and asserts get_transaction_prunable_hash returns the same value.",
+  "format_version": 1,
+  "transactions": [
+    {
+      "class": "coinbase",
+      "name": "coinbase-regtest-h1",
+      "prunable_hash_hex": "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+      "tx_hex": "033d01000101a1f884efc328005f3670d7e75cfac6249836fe7c1776687c227718fb56db6d1abaeefe329435d268d009012e91b96421ac95bfb57f17f8a9bb6c4e4a4be9dc66c4ddf935040f19e23168820208000000000000000006e008ee3b87c50c59454b8a9c64aee448072f145771bad223f3fbf4325e5e98593257ac2415a84a2c95fd5ba71b5bbcec9dc7af6dca5a2609a40de358f94354c250252c4b176acc7f98612321021270cf17e61fcde1a5a1b785e76760d2d6dab073b86c8d186a9516ca10559b01811495b7af08fd23fbb0bc73b8c4280c431edbdc502d1ab5e57da69ef1987b349b2610723feaf319ca865f238973785b810e9348f51120166cdd624174c5fe7e5463ea892df253e70a6ea63679947b79a8fb9440d787fd30d2cc59eafdb5451f14c92a5e438350e88f3f0b1bad5e5c4040defa63d3273bf83483456fffab660af353589d9ae3b14cc9d67feabed804f7daf07ede02c4615fae3ed61810ef5f4eafa72a4587de6146863f5eb5c1a7c3a4aeee7ada41b89307ffc6df04c8fd58720876435a8379833ec44d4d2cb9e9ad13e801c9d9f1702b92069979092fce37d8cf3cd96c4c95d0e648c6636373e8fc51bd415b88ff8270190cc7401727c4d4699b0e35318346c9824bb76d52ddaff81cecb38b0bbc2fc8959c85c2ace5855c36dcbd1ade028cd53d8cc00dbc81dd32a209323eb1a896ec364fe7a05acb9ca007d3f9618e987ebf24fc428e2bdb307892d3cbc97e796de2fd4b082946558396fe687ee6f160a474f67ca20cb788d41b1a2a42e7da75306999765fbc653025a05fab82d1ee1361cbe23e120ddf60a226d766146c6449a906e3048876b8ef6b4c3c7c16017b134d61287d7369d1c8342935c182ada6d3ea6e08cb3ef3b42292a1313b2a83a8662f10bd434f851c0c4ad2a402a2847295be9c9c378fd44954d7bb67412606f523d270043564fa9a14924d796ec7d2dcb078f1788f97ff2092b522d241c9b579b552ad225c5a57f328ad285ca532732cd2207bdb3699226190cfe850999d4e96a3b1c726b9cda5fc67e793e01a3fde793dc239fa4beae8c9ad8e92fb7ab042679a6137317d1eb3a7a3a5532186fbac7f51580ac16af1d92fc182f7cfe3ce63925805311b3a9c8b4d34ca75602a2c420c82c15e469b2504601e2dac7cb3599949da08b3672f4fdd458d3f42ec7c512477d6bf567ae2eed4836af733e5553e0f8115b9aa37f43acaeddfb3a6920b1d893af1d8d20baea70796f900ea546427c9a75097201bbb46a27147608472d26daf5722def0cc1188de3c6cee16fefbd4464b89fc5e1671dada45085c7cb81213539d257a29df99862f79f41f85177916f7fa64dcf4bd3f6d8a3d0b2a70caaa360284636320f270f590d993f5a735068d67f118a6f505e1bc5b3bc15247458dab43acfd626be984294c91f542f4b79de6153246b115c3eda649f7d6f11d4ca28475c9cb9b44920cfec9c20a42595ac7fbd39c67792707751d6ccd365fc86ae4b3de20b59b9859556b312b0352292fd472e7ae200e1259ae1593f521a384b50faaae549bedb08503dd983ad55bfbc71eb1d1bd3b2b62ac61ff2d97081b1b6aa858518af6bd77240d470e00b1e6bfd9092913f72ca76cb0109c57058d2efae1dcea5b274e42cd035b31e2cfca5105e293cd2f69aa067fcff794d011926e2f3864420d939a07403ac0072dbacf6eeaacbb333515705cb288583bd7c7baed169845dbd259fdb82c8d4b01ea2eab6f78512883389b6451e483a9b32f509f8e1e2860105be28774070044a4119c7ede78a79cd1af52a650449d733f83a49e11a9d7836e099d037bc0538df97bec8e2b6640c83d8a3962604bb17162"
+    },
+    {
+      "class": "spend",
+      "name": "spend-1in-2out",
+      "prunable_hash_hex": "f67e60cfb0fb3184d4dd4236bb52fc67fbfe0fcf8eed747889565a325f3a4ae2"
+    },
+    {
+      "class": "spend",
+      "name": "spend-2in-2out",
+      "prunable_hash_hex": "3e2b7bcb17251dbecc5d900fbc9691b753328c9f97b18ebed42d7cf717d1fe1a"
+    },
+    {
+      "class": "spend",
+      "name": "spend-6in-2out",
+      "prunable_hash_hex": "61de208ed05c9632583c6e4bbbe067bafb85c51c674066699173e2bb7363a6f9"
+    },
+    {
+      "class": "spend",
+      "name": "spend-6in-2out-live-oracle",
+      "prunable_hash_hex": "57326f9e8cd485d3d85a3a5d32f2af74ca93cc4af9c33c640fd36d63b17a0371"
+    },
+    {
+      "class": "bond-post",
+      "name": "bond-post-to_key-bond_post",
+      "prunable_hash_hex": "06674043d2fba727b1df5560c854c0e56176b3cef597bd1fe6d18f0a56d3237e"
+    },
+    {
+      "class": "bond-post",
+      "name": "emission-bond-post-to_key-bond_post",
+      "prunable_hash_hex": "aa33f2daba112c9e034bb4a356a133fc80509051e9a2940297fc358b8bf2384e"
+    },
+    {
+      "class": "emission",
+      "name": "emission-to_key-to_key-emission",
+      "prunable_hash_hex": "e74070650d7ab2dec2d6167963fe7d254a07e75a133fe1c4217bd1385b978620"
+    },
+    {
+      "class": "serve-credit-only",
+      "name": "serve-credit-only",
+      "prunable_hash_hex": "be5649926d540219c2c21a7864b062bbae44ca2e5e07467fb7b6cc835e019ca6"
+    }
+  ]
+}

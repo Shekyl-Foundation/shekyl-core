@@ -851,7 +851,10 @@ int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
         // the base, which is how the C++ handler split it.
         if (td.tx_blob.size() > owned->pruned[slot].size())
           owned->prunable[slot] = td.tx_blob.substr(owned->pruned[slot].size());
-        const crypto::hash ph = cryptonote::get_transaction_prunable_hash(td.tx);
+        // From the blob in hand, so the digest is of the bytes served above
+        // and the transaction is not serialized a second time to find them.
+        const cryptonote::blobdata_ref pool_blob(td.tx_blob);
+        const crypto::hash ph = cryptonote::get_transaction_prunable_hash(td.tx, &pool_blob);
         std::memcpy(facts[slot].prunable_hash, ph.data, 32);
         facts[slot].where = 2;
         facts[slot].double_spend_seen = td.double_spend_seen ? 1 : 0;
