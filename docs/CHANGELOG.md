@@ -7,8 +7,9 @@
 - The Rust validator admitted a serve-credit transaction with no prunable
   region, which live consensus refuses and the chain store cannot hold: ten
   heights after connecting it, the store halted on SI-7. CEN-H20 now
-  requires the region with one pruned pass record per serve-credit input,
-  as the C++ does. A conformance correction: the live path is unchanged.
+  requires the region, and CEN-J2 is implemented: one pruned pass record
+  per serve-credit input, each within its bound, as the C++ does. A
+  conformance correction: the live path is unchanged.
 - The serve-credit fixtures carry the region, and a serve credit is tested
   end to end through a prune (`SHT-Q1` leg (f)).
 

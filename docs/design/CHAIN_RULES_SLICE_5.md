@@ -422,19 +422,28 @@ the C++ refuses any pass-record count other than the serve-credit vin count
 no region fails its parse. Rust's parser yields `prunable: None` for a body
 whose bytes end after the base, so a peer could produce it, and the chain
 store cannot hold it: the drain's reconstruction at `tx_spendable_age` names
-another transaction and the store halts on SI-7. H20 now requires the region,
-no spend material in it, and one pass record per serve-credit vin (`RF-D1`).
+another transaction and the store halts on SI-7. H20 now requires the region
+with no spend material in it, and **CEN-J2 is implemented**: one pass record per
+serve-credit vin, each non-empty and within `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES`
+(`RF-D1`), refused on its own row.
 
-- **Shape and count only.** What a record holds is CEN-J10's. The census row
-  for H20 is unchanged; the count is the live serve-credit arm's, carried here
-  because H20 is the row that sees the region.
+- **The count is J2's, not H20's.** The design owner's go-ahead put the count
+  in H20. The census already names it, as CEN-J2's rule with the live serve-credit
+  arm as its site, and J2 was `pending`; refusing the count under H20 would have
+  left J2 recorded as unenforced while its rule ran under another row. So H20
+  is the shape (the region is there) and J2 the count and bound, each refusing
+  on the row the census gives it. The census's H20 row now names the region.
+- **J2's upper bound is unreachable through `tx_form`.** The bound (1,053,185 B)
+  is above `MAX_TX_SIZE`, so CEN-H1 refuses a transaction holding such a record
+  first, as the C++ does; the bound is held on the rule itself in its test.
+- **What a record holds is CEN-J10's**, not this slice's.
 - **Not a consensus change.** The live path is untouched, so no rule-07 cutover
   applies. It had to land before the engine swap, when this crate becomes the
   only validator; it lands now.
 - **Why the conformance test missed it.** §3.1.1's table keys the twin's
   serve-credit shape check to one trip (a `pqc_auth`), so the check's other
-  clauses were held to nothing. `the_h20_sites_other_clauses_are_h20_too` holds
-  the two this concerns.
+  clauses were held to nothing. `the_h20_sites_other_clauses_are_refused_on_their_rows`
+  holds the two this concerns: no region on H20, a miscount on J2.
 - **Fixtures:** `harness::fixture::serve_credit_only` and the ingest scenario's
   credit carry the region (`fixture::PRUNED_PASS_RECORD`, a marker).
 - **Cross-reference:** PR #939's serve-credit verifier round (CEN-J8–J10) cites

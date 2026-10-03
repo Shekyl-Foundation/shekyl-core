@@ -7,7 +7,7 @@
 //! sites — the pool's `Lone` slot through `tx_form`, and a `Listed` slot
 //! through `validate`.
 
-use super::{I14, I5};
+use super::{I14, I5, J2};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::harness::fixture::{coinbase, listed, point, serve_credit_only, G, TWO_G};
@@ -333,4 +333,65 @@ fn i16_every_structural_departure_of_a_pqc_auth_is_refused() {
     assert!(tx_form(&minimal_multisig, TxSlot::Lone, &RuleSet::GENESIS)
         .expect("the multisig header alone is I16's floor; the parse is I17/I18's")
         .contains(CenRow::I16));
+}
+
+/// CEN-J2: one pruned pass record per serve-credit vin, each non-empty and
+/// within `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES`. None, one too many and
+/// an empty record are refused on J2, alone and listed; one record per
+/// credit passes, for one credit and for two. The row is vacuous on a spend.
+///
+/// The upper bound is held on the rule itself: through `tx_form` a record
+/// past it never reaches J2, because the bound (1,053,185 B) is above
+/// `MAX_TX_SIZE` and CEN-H1 refuses the transaction first, as the C++ does.
+#[test]
+fn j2_one_bounded_record_per_serve_credit_vin() {
+    use shekyl_wire::transaction::ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES;
+    let with_records = |credits: usize, records: Vec<Vec<u8>>| {
+        let mut tx = serve_credit_only([0x77; 32]);
+        let vin = tx.prefix.inputs[0].clone();
+        tx.prefix.inputs = vec![vin; credits];
+        if let Ct::Fcmp {
+            prunable: Some(p), ..
+        } = &mut tx.ct
+        {
+            p.serve_credit_pruned = records;
+        }
+        tx
+    };
+    let record = || vec![0x01, 0x02];
+    for refused in [
+        with_records(1, Vec::new()),
+        with_records(1, vec![record(), record()]),
+        with_records(2, vec![record()]),
+        with_records(1, vec![Vec::new()]),
+    ] {
+        refused_lone(&refused, CenRow::J2);
+        refused_listed(&refused, CenRow::J2);
+    }
+    for admitted in [
+        with_records(1, vec![record()]),
+        with_records(2, vec![record(), record()]),
+    ] {
+        assert!(tx_form(&admitted, TxSlot::Lone, &RuleSet::GENESIS)
+            .expect("one bounded record per credit")
+            .contains(CenRow::J2));
+    }
+
+    let on_the_rule = |tx: &Transaction| {
+        let mut coverage = RuleCoverage::EMPTY;
+        let cx = TxContext::derive(tx, TxSlot::Lone, &mut coverage).expect("a serve credit");
+        J2::check(&cx)
+    };
+    let max = ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES;
+    let over = with_records(1, vec![vec![0x01; max + 1]]);
+    assert!(on_the_rule(&over).is_err(), "a record past the bound");
+    refused_lone(&over, CenRow::H1);
+    assert!(
+        on_the_rule(&with_records(1, vec![vec![0x01; max]])).is_ok(),
+        "a record at the bound"
+    );
+
+    assert!(tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
+        .expect("a spend")
+        .contains(CenRow::J2));
 }

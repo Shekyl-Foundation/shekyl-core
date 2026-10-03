@@ -4,7 +4,8 @@
 // BSD-3-Clause
 
 //! Census 4.I, the stateless rows — input-path predicates decidable from
-//! the bytes alone (`CHAIN_RULES_SLICE_6.md` commit 2).
+//! the bytes alone (`CHAIN_RULES_SLICE_6.md` commit 2) — and the one
+//! stateless row of the serve-credit family in 4.J, CEN-J2.
 //!
 //! These run in `tx_form` **after** the 4.H line, the archival shape arms
 //! (H20–H22) and H19's layout check. A transaction that fails its shape and
@@ -24,7 +25,8 @@ use crate::verdict::{InvalidBlock, Verdict};
 use shekyl_crypto_pq::multisig::HYBRID_SCHEME_ID_MULTISIG;
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
 use shekyl_wire::transaction::{
-    MAX_FCMP_INPUTS, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
+    ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES, MAX_FCMP_INPUTS, PQC_HYBRID_SINGLE_KEY_LEN,
+    PQC_MAX_PUBLIC_KEY_BLOB,
 };
 use shekyl_wire::{Ct, Input};
 
@@ -320,3 +322,45 @@ impl TxRule for I16 {
 #[cfg(test)]
 #[path = "tx_inputs_tests.rs"]
 mod tx_inputs_tests;
+
+// ---- census 4.J, the stateless serve-credit row ---------------------------
+
+/// CEN-J2: one pruned pass record per serve-credit vin, in vin order, each
+/// non-empty and within `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES` (`RF-D1`).
+/// The live C++ states it in the serve-credit arm of `check_tx_inputs`
+/// (the record count against the vins, then each record's length in
+/// `check_archival_serve_credit_input`) before any chain read, so it is
+/// `tx_form`'s.
+///
+/// It runs after H20, which has already required the region: an absent
+/// region is H20's, never this row's. Order only pairs a record with its
+/// vin; what a record holds is CEN-J10's.
+pub(crate) struct J2;
+
+impl Rule for J2 {
+    const ROW: CenRow = CenRow::J2;
+}
+
+impl TxRule for J2 {
+    const SCOPE: TxScope = TxScope::NonCoinbase;
+
+    fn check(cx: &TxContext<'_>) -> Verdict<()> {
+        let TxClass::ServeCreditOnly { credits } = cx.class else {
+            return Ok(());
+        };
+        let records: &[Vec<u8>] = match &cx.tx.ct {
+            Ct::Fcmp {
+                prunable: Some(p), ..
+            } => &p.serve_credit_pruned,
+            _ => &[],
+        };
+        if records.len() != credits
+            || records
+                .iter()
+                .any(|r| r.is_empty() || r.len() > ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES)
+        {
+            return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        }
+        Ok(())
+    }
+}

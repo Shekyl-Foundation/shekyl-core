@@ -62,7 +62,7 @@ use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
 use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
 use crate::rules::tx_extra::{I19, I20};
-use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9};
+use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9, J2};
 use crate::rules::{self, BlockContext, FormContext};
 use crate::substrate::Substrate;
 use crate::trust::Trust;
@@ -580,13 +580,15 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //    `check_tx_inputs`). Pulling I1 or I4 ahead of H21 would hide the
     //    class failure. H19's verification half is the later `validate`
     //    fold (slice 6 commit 8), so this call stays unrecorded.
-    // 3. The stateless input-path rows. The cap does not have to precede
-    //    the shape rules to bound proof work: I15 and the H19 batch verify
-    //    run after `tx_form` returns, so I4 has already refused.
+    // 3. The stateless input-path rows, and J2 (the serve credit's pass
+    //    records against its vins, after H20 has required the region). The
+    //    cap does not have to precede the shape rules to bound proof work:
+    //    I15 and the H19 batch verify run after `tx_form` returns, so I4 has
+    //    already refused.
     judge_tx!(cx, coverage; H1, H3, H4, H7, I19, I20, H9, H10, H11, H14, H15, H16, H17, H18);
     judge_tx!(cx, coverage; H20, H21, H22);
     rules::run_tx_unrecorded::<H19>(&cx)?;
-    judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16);
+    judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16, J2);
     Ok(coverage)
 }
 

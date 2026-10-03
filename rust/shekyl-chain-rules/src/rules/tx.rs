@@ -541,16 +541,15 @@ impl H19 {
 /// so the row is complete without a curve operation. Applies to the
 /// serve-credit-only class; recorded vacuous on every other class.
 ///
-/// **The prunable region is required, with one pruned pass record per
-/// serve-credit vin (`RF-D1`).** The live C++ refuses any other count
-/// (`blockchain.cpp`, the serve-credit arm of `check_tx_inputs`:
-/// *"pruned records for … vins"*), and a body with no region at all fails
-/// its parse. This row first admitted `prunable: None`, which no later row
-/// catches and the chain store cannot hold (`SHT-9`): a conformance
-/// correction, recorded in `CHAIN_RULES_SLICE_5.md` §5.
+/// **The prunable region is required (`RF-D1`).** A serve-credit body with
+/// no region fails the live C++'s parse; this row first admitted
+/// `prunable: None`, which the chain store cannot hold (`SHT-9`): a
+/// conformance correction, recorded in `CHAIN_RULES_SLICE_5.md` §5.
 ///
-/// **Shape and count only.** What each record holds — its structure, `P`'s
-/// countersignature, the retention-proof legs — is CEN-J10's, not this row's.
+/// **The shape only.** How many records the region holds and how long each
+/// is is CEN-J2's ([`crate::rules::tx_inputs::J2`]); what each record holds —
+/// its structure, `P`'s countersignature, the retention-proof legs — is
+/// CEN-J10's.
 pub(crate) struct H20;
 
 impl Rule for H20 {
@@ -561,9 +560,9 @@ impl TxRule for H20 {
     const SCOPE: TxScope = TxScope::NonCoinbase;
 
     fn check(cx: &TxContext<'_>) -> Verdict<()> {
-        let TxClass::ServeCreditOnly { credits } = cx.class else {
+        if !matches!(cx.class, TxClass::ServeCreditOnly { .. }) {
             return Ok(());
-        };
+        }
         let refuse = || Err(InvalidBlock::new(Self::ROW, cx.locus()));
         let Ct::Fcmp {
             fee,
@@ -582,7 +581,6 @@ impl TxRule for H20 {
             || !p.bulletproofs.is_empty()
             || !p.fcmp_proof.is_empty()
             || !p.pseudo_outs.is_empty()
-            || p.serve_credit_pruned.len() != credits
         {
             return refuse();
         }
