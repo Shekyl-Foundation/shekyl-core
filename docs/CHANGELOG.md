@@ -6,7 +6,8 @@
 
 - An inbound accept with a ceiling of 0, or a connector cap of 0,
   closes as `InboundNotAccepted`. A positive cap that is full, and a
-  ban, still close as `AdmissionRefused`.
+  ban, still close as `AdmissionRefused`. The accepting node's seam
+  info line names which one. The cause is not sent to the dialer.
 
 ### A Tor session carries the chain
 

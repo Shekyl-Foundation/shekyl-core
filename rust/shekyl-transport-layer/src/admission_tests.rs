@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-use super::{CloseResult, ObservedEndpoint, OpenError};
+use super::{CloseResult, LimitStance, ObservedEndpoint, OpenError};
 pub(super) use super::{Direction, Sockets};
 use crate::ban::Ipv4Subnet;
 pub(super) use crate::declaration::ConnectorId;
@@ -29,6 +29,27 @@ fn refused(error: OpenError) -> CloseKind {
         OpenError::Refused(cause) => cause.kind(),
         OpenError::Exhausted => panic!("exhausted"),
     }
+}
+
+#[test]
+fn a_closed_limit_outranks_a_full_one() {
+    assert_eq!(LimitStance::classify(Some(0), 7), LimitStance::Closed);
+    assert_eq!(LimitStance::classify(Some(3), 0), LimitStance::Open);
+    assert_eq!(LimitStance::classify(Some(3), 3), LimitStance::Full);
+    assert_eq!(LimitStance::classify(None, 7), LimitStance::Open);
+    let closed_over_full = LimitStance::prefer(LimitStance::Full, LimitStance::Closed);
+    assert_eq!(
+        closed_over_full.refusal(),
+        Err(OpenError::Refused(CloseCause::new(
+            CloseKind::InboundNotAccepted
+        )))
+    );
+    assert_eq!(
+        LimitStance::prefer(LimitStance::Full, LimitStance::Open).refusal(),
+        Err(OpenError::Refused(CloseCause::new(
+            CloseKind::AdmissionRefused
+        )))
+    );
 }
 
 #[test]

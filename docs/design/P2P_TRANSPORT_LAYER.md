@@ -1801,8 +1801,11 @@ connection closes. It is not a dropped write.
 connector cap that is positive and full. `InboundNotAccepted` is a
 ceiling of 0 or a connector cap of 0: this node will not take the
 accept. A zero bound is named even when a positive cap is already
-full. The seam info line names whichever of the two was returned. `DialFailed` is an
-outbound TCP connect that did not complete.
+full. The seam info line on this node names whichever of the two was
+returned. The accept closes the socket before any handshake byte.
+The dialer records its own before-channel cause for that close. It
+does not learn which refusal this node chose: this table is not on
+the pipe. `DialFailed` is an outbound TCP connect that did not complete.
 `ProxyRefused` is a SOCKS or overlay failure and carries the reply
 code (an unreachable onion is this cause, not a generic I/O error).
 `LocalClose` is this node closing, including a shutdown during the
