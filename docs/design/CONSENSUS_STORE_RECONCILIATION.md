@@ -459,13 +459,15 @@ re-derived 26 times:
 
 - **Walk W-SC** — serve-credit: `Blockchain::check_archival_serve_credit_input`
   (`blockchain.cpp:5349–5560`) plus the tx-shape gate (`:3720–3800`).
-  **Every verdict is discriminated and checked**; the whole ordered predicate
-  sequence is mirrored in Rust (`shekyl-archival-retention::serve_credit_decisions`)
-  and **pinned by the standing equivalence KAT**
-  (`serve_credit_equivalence_kat_v1.json`, Rust leg
-  `serve_credit_equivalence_kat.rs`, C++ leg
-  `archival_serve_credit_equivalence.cpp`) — the AUDITED DECISION header
-  requires re-authoring the fixture on any predicate change.
+  **Every verdict is discriminated and checked.** At the walk date the whole
+  ordered predicate sequence was mirrored in Rust
+  (`shekyl-archival-retention::serve_credit_decisions`) and pinned by a
+  standing equivalence KAT; **mirror, KAT, fixture and both legs were deleted
+  2026-10-02 (DRS-E4 commit 10d)** — nothing called the mirror, and it
+  implemented the leaf preimage `PDM-Q6` item 4 retired. The C++ gate is now
+  the only serve-credit acceptance that runs (Rust CEN-J8–J10 pending;
+  FOLLOWUPS *Serve-credit acceptance (CEN-J8–J10) has no Rust rule*), and it
+  retires with its FFI at the LMDB cutover (`DEL-008`).
 - **Walk W-BP** — bond-post: `blockchain.cpp:4839–5260`. Four kind arms plus
   the shared cold-authority gate (`shekyl_archival_cold_authority_pin`, all
   non-OK reject; **selector in Rust** as `requires_cold_authority`) and the
@@ -514,11 +516,15 @@ Rust-side FFI calls, with the exceptions noted per row.
 | CEN-J26 | **CHECKED-CONFORMANT** *(re-reviewed post-fix — history: DIVERGENT coupled to M8, round 2)* | Re-reviewed at `a45916c66` (round 6). W-EM + the FCMP arm. Absent⇔zero-fee-inputs enforced both directions (`:4186`/`:3889`); "present ⇒ verifies" now holds: a present fee-input proof either verifies at connect (`shekyl_fcmp_verify` rc-checked, `:4351+`) or carried an admission-verified matching hash — the only skip the hash-gated cache grants. **REWRITE-NOTE:** `skip_fcmp_verify` is a **pool-admission verification cache**, embargo-load-bearing per the in-code note (`DAEMON_RELAY_PRIVACY.md` §71). The Rust pool store already types it — `FcmpVerificationHash`, CEN-M8's cache key, and the embargo clock, [`DRS_E1_SPOOL.md`](DRS_E1_SPOOL.md) — and the admission semantics are E5's, owned there *(rewritten 2026-09-26 from "the rewrite must preserve that timing semantics")* | Digest identity **required**; a match on this row **is** correctness evidence |
 
 **Section-level REWRITE-NOTE (routed to the rewrite through this register):**
-W-SC's correctness is currently held by a **deliberate two-implementation
-mirror** (C++ predicate sequence + Rust `serve_credit_decisions`) kept honest
-by the equivalence KAT. That is the right *interim* structure and exactly the
-arrangement the rewrite exists to retire: one implementation, the KAT surviving
-as its pinning vectors, the mirror deleted.
+W-SC's correctness was held, at the walk date, by a **deliberate
+two-implementation mirror** (C++ predicate sequence + Rust
+`serve_credit_decisions`) kept honest by the equivalence KAT. **Retired
+2026-10-02 (DRS-E4 commit 10d), and not in the shape this note anticipated:**
+the KAT did not survive as the successor's pinning vectors, because the
+successor is a different rule — `PDM-Q6` item 4 signs `shard_id` and the
+shard's bounds, not the leaf preimage the vectors pin. Mirror and KAT were
+deleted together; the rewrite builds CEN-J8–J10 from the ruling, with its own
+vectors.
 
 > **On REWRITE-NOTE markers (ruled 2026-09-26, E6 slice 6 commit 10). The
 > register records what *is*; what the rewrite *owes* belongs in a plan.** A

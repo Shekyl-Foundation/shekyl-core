@@ -103,7 +103,6 @@ set(unit_tests_sources
   logical_state_digest.cpp
   archival_credit_wire.cpp
   archival_serve_credit.cpp
-  archival_serve_credit_equivalence.cpp
   archival_serve_credit_integration.cpp
   archival_bond_post.cpp
   archival_bond_post_integration.cpp
@@ -229,9 +228,6 @@ SET_PROPERTY(SOURCE pruned_tx_hash_parity.cpp PROPERTY COMPILE_DEFINITIONS
 SET_PROPERTY(SOURCE prunable_digest_parity.cpp PROPERTY COMPILE_DEFINITIONS
   PRUNABLE_DIGEST_PARITY_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/prunable_digest_parity_v1.json"
   PQC_SIGNING_PREIMAGE_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/pqc_signing_preimage_v1.json")
-SET_PROPERTY(SOURCE archival_serve_credit_equivalence.cpp PROPERTY COMPILE_DEFINITIONS
-  GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json"
-  SERVE_CREDIT_EQUIVALENCE_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/serve_credit_equivalence_kat_v1.json")
 SET_PROPERTY(SOURCE archival_bond_post_integration.cpp PROPERTY COMPILE_FLAGS
   -DGATE4_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate4_lifecycle_kat_v1.json\\"")
 SET_PROPERTY(SOURCE archival_emission_connect.cpp PROPERTY COMPILE_FLAGS

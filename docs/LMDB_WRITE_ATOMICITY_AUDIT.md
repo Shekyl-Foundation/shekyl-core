@@ -574,9 +574,13 @@ path that mutates something else and *does* change the digest is a
 v0-scope leak (the txpool exclusion test guards the leak direction).
 
 Archival journals are a **named exclusion** (`DAEMON_REDB_STORE.md`
-§7.1.1). They are not digest-v0 reads. Do not extract S-ARCH, and do
+§7.1.1). They are not digest-v0 reads. ~~Do not extract S-ARCH, and do
 not implement archival apply in `shekyl-chain-store`, until those
-journals are in the digest or carry a replacement KAT.
+journals are in the digest or carry a replacement KAT.~~ *(Retired
+2026-10-01, DRS-E4 commit 6: the archival state is compared by the
+`0x04` archival snapshot paired with every checkpoint, not by this
+digest — §11's archival-families UPDATE has the per-table disposition.
+v0's read set below is unchanged.)*
 
 | Family | Digest read | Write paths that must move the digest | Notes |
 | --- | --- | --- | --- |
@@ -1250,6 +1254,37 @@ is the whole justification, and it is a domain claim, not a safety claim.
   in `shekyl-chain-store` until these are digested *or* carry a replacement
   KAT that **forces apply/revert to run**. **The obligation is live and unmet
   for all sixteen** (ruled 2026-09-13).
+
+  **UPDATE 2026-10-01 (DRS-E4 commit 6, `DRS_E4_ARCHIVAL_WRITER.md`
+  §3.8.1, `ARW-25`): the §7.1.1 exclusion is retired — the sixteen now have
+  a cross-backend instrument, and it is not digest v0.** The `Digest v0`
+  column in §10 keeps `excluded` for every archival row, because that column
+  states what *v0* sees and v0 is unchanged (P0d's read set, pinned). What
+  changed is the checkpoint: under `TRACE_VERSION 0x01` the `0x02` digest
+  record is paired with a `0x04` **archival snapshot** — the archival state
+  at the covered tip as canonical rows, the C++ walker's reading over LMDB
+  (`src/blockchain_db/lmdb/archival_snapshot.cpp`) against
+  `ReadSnapshot::archival_snapshot()` over redb, compared **row by row** by
+  the grader's snapshot oracle, a divergence naming the family and the key.
+  Per table, the sixteen dispose as: **nine in the snapshot by row** —
+  `archival_bond`, `archival_serve_credit`, `archival_r_market` (non-zero
+  rows), `archival_sigma_work`, `archival_budget`,
+  `archival_attestation_witness`, `archival_slash_log` (epoch markers and
+  the slashed amount projected out), `archival_slash_applied`,
+  `archival_budget_accrual` (as the open epoch's accrued total, zero or one
+  row) — plus the `archival_last_slash_epoch` cell of `properties`;
+  **six dissolved** — the five journals (`archival_bond_holdings_update_log`,
+  `archival_bond_reinstate_log`, `archival_bond_unbond_log`,
+  `archival_emission_claim_log`, `archival_epoch_close_log`) and
+  `archival_shard_segment` are `NOT_PORTED` on the redb side (revert
+  pre-images held by `undo_log`; a cache the fold recomputes — E4 §3.4),
+  so there is no state to compare and the exclusion is recorded in the
+  snapshot's own `Disposition::Excluded` arm, not silently; **one held** —
+  `archival_settlement`, no writer on either side until SO-D8. The clause
+  that the instrument *watch LMDB run those paths* is what the `0x04`
+  record is: the C++'s own reading, committed as data in every captured
+  trace (E4 commit 7 re-captures the six). The settlement paragraphs below
+  are records-was of the v0-era argument and stay.
 
   This line read "the replacement KAT that rule requires does not exist yet"
   until 2026-09-13, was briefly corrected to record `archival_settlement` as

@@ -6,7 +6,9 @@
 use std::io::Cursor;
 
 use shekyl_chain_rules::Candidate;
-use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot};
+use shekyl_types::{
+    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, SettlementEpoch, ShardId,
+};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
 use super::*;
@@ -96,7 +98,9 @@ fn a_corpus_round_trips_as_an_extend_only_source_in_height_order() {
         );
         match event {
             IngestEvent::Extend(cand) => seen.push((seq, *cand)),
-            IngestEvent::Rewind { .. } => unreachable!("a corpus is Extend-only"),
+            IngestEvent::Rewind { .. } | IngestEvent::Inject(_) => {
+                unreachable!("this corpus is Extend-only")
+            }
         }
     }
     assert_eq!(seen.len(), 3);
@@ -418,6 +422,7 @@ fn a_corpus_with_a_rewind_round_trips_as_events() {
         kinds.push(match ev.event {
             IngestEvent::Extend(c) => format!("E{}", c.block.transaction_hashes.len()),
             IngestEvent::Rewind { to } => format!("R{}", to.to_raw()),
+            IngestEvent::Inject(_) => unreachable!("the reorg family carries no inject"),
         });
     }
     // main: nothing listed below the floor, one spend at the floor and the
@@ -498,5 +503,128 @@ fn a_rewind_must_be_backward_inside_the_corpus_and_after_a_block() {
     assert!(matches!(
         reader.next().expect_err("tag"),
         CorpusFault::UnknownTag(0x7f)
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Inject — the one out-of-band record (DRS-E4 §3.8 item 3)
+// ---------------------------------------------------------------------------
+
+fn credit(tag: u8) -> ServeCredit {
+    ServeCredit {
+        persona: PCanonicalId::from_bytes([tag; 32]),
+        shard: ShardId::from_raw(u64::from(tag) + 100),
+        epoch: SettlementEpoch::from_raw(u64::from(tag)),
+    }
+}
+
+/// An inject sits beside the block it was attributed to, round-trips with
+/// every field, counts as a record and occupies no height, is a barrier,
+/// and does not disturb the extend after it.
+#[test]
+fn an_inject_round_trips_at_its_position_and_occupies_no_height() {
+    let (c0, b0, t0) = blobs(0, 0);
+    let (c1, b1, t1) = blobs(1, 1);
+    let (c2, b2, t2) = blobs(2, 0);
+    let mut w = CorpusWriter::create(
+        Cursor::new(Vec::new()),
+        CorpusNet::Fakechain,
+        BlockHeight::ZERO,
+    )
+    .expect("header");
+    w.append(&b0, &t0).expect("0");
+    w.append(&b1, &t1).expect("1");
+    w.inject(BlockHeight::from_raw(1), credit(0x5a))
+        .expect("at the tip");
+    w.append(&b2, &t2).expect("2 follows at the next height");
+    let bytes = w.finish().expect("finish").into_inner();
+
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    assert_eq!(reader.declared(), 4, "the inject is a record");
+    let mut events = Vec::new();
+    while let Some(Sequenced { seq, event }) = reader.next().expect("event") {
+        events.push((seq.to_raw(), event));
+    }
+    assert_eq!(events.len(), 4);
+    assert_eq!(events[0].1, IngestEvent::Extend(Box::new(c0)));
+    assert_eq!(events[1].1, IngestEvent::Extend(Box::new(c1)));
+    assert_eq!(events[2].0, 2, "numbered like any event");
+    assert!(events[2].1.is_barrier(), "an inject is a barrier");
+    assert_eq!(events[2].1, IngestEvent::Inject(credit(0x5a)));
+    assert_eq!(events[3].1, IngestEvent::Extend(Box::new(c2)));
+}
+
+/// The inject law on both sides: a regtest corpus, a tip, and `at` equal
+/// to it. A refused inject writes nothing.
+#[test]
+fn an_inject_needs_a_regtest_corpus_a_tip_and_the_tips_height() {
+    let (_, b0, t0) = blobs(0, 0);
+    let (_, b1, t1) = blobs(1, 0);
+    let mut w = CorpusWriter::create(
+        Cursor::new(Vec::new()),
+        CorpusNet::Fakechain,
+        BlockHeight::ZERO,
+    )
+    .expect("header");
+    assert!(matches!(
+        w.inject(BlockHeight::ZERO, credit(1)).expect_err("no tip"),
+        CorpusFault::InjectOnEmpty
+    ));
+    w.append(&b0, &t0).expect("0");
+    w.append(&b1, &t1).expect("1");
+    let refused = w
+        .inject(BlockHeight::from_raw(2), credit(1))
+        .expect_err("not the tip");
+    assert!(
+        matches!(refused, CorpusFault::InjectNotAtTip { at, tip } if at.to_raw() == 2 && tip.to_raw() == 1),
+        "{refused}"
+    );
+    let refused = w
+        .inject(BlockHeight::from_raw(0), credit(1))
+        .expect_err("not the tip");
+    assert!(
+        matches!(refused, CorpusFault::InjectNotAtTip { at, tip } if at.to_raw() == 0 && tip.to_raw() == 1),
+        "{refused}"
+    );
+    let bytes = w.finish().expect("finish").into_inner();
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    assert_eq!(reader.declared(), 2, "the refused injects wrote nothing");
+    assert!(reader.next().expect("0").is_some());
+    assert!(reader.next().expect("1").is_some());
+    assert!(reader.next().expect("end").is_none());
+
+    // Off regtest: the writer refuses, and so does the reader when a
+    // regtest corpus's net tag is patched to another chain.
+    let mut main = CorpusWriter::create(
+        Cursor::new(Vec::new()),
+        CorpusNet::Testnet,
+        BlockHeight::ZERO,
+    )
+    .expect("header");
+    main.append(&b0, &t0).expect("0");
+    assert!(matches!(
+        main.inject(BlockHeight::ZERO, credit(1))
+            .expect_err("no injector off regtest"),
+        CorpusFault::InjectOffFakechain {
+            net: CorpusNet::Testnet
+        }
+    ));
+    let mut w = CorpusWriter::create(
+        Cursor::new(Vec::new()),
+        CorpusNet::Fakechain,
+        BlockHeight::ZERO,
+    )
+    .expect("header");
+    w.append(&b0, &t0).expect("0");
+    w.inject(BlockHeight::ZERO, credit(1)).expect("at the tip");
+    let mut bytes = w.finish().expect("finish").into_inner();
+    bytes[12] = CorpusNet::Testnet as u8;
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    assert!(reader.next().expect("0").is_some());
+    assert!(matches!(
+        reader.next().expect_err("the reader applies the same law"),
+        CorpusFault::InjectOffFakechain {
+            net: CorpusNet::Testnet
+        }
     ));
 }

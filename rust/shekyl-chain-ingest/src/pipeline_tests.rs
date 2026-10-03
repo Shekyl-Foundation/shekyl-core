@@ -228,6 +228,47 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
 
 // ------------------------------------------------------------ the run
 
+/// An `Inject` under a public network's rules is refused at the connector
+/// before the store is asked (DRS-E4 §3.8 item 3: the out-of-band write
+/// has one producer, the regtest injector, and no public chain carries
+/// one) — and the refusal is not a halt: the writer answers afterwards.
+/// The regtest path, with a bonded persona, is
+/// `scenario_archival_tests::an_injected_serve_credit_lands_at_the_tip_and_is_one_snapshot_row`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_inject_off_regtest_is_refused_before_the_store_is_asked() {
+    let path = tmp("connector-inject-off-regtest");
+    let rules = ChainRules::Scheduled(shekyl_address::Network::Testnet);
+    let joined = JoinedConnector::spawn(ConnectorArgs {
+        store: open_store(&path),
+        rules,
+    });
+    let credit = crate::source::ServeCredit {
+        persona: shekyl_types::PCanonicalId::from_bytes([0x51; 32]),
+        shard: shekyl_types::ShardId::from_raw(7),
+        epoch: shekyl_types::SettlementEpoch::from_raw(1),
+    };
+    let refused = joined
+        .actor
+        .ask(crate::connector::Inject(credit))
+        .await
+        .expect_err("regtest-only");
+    assert!(
+        matches!(
+            refused,
+            SendError::HandlerError(RunFault::InjectOffRegtest {
+                credit: named,
+                rules: under,
+            }) if named == credit && under == rules
+        ),
+        "{refused:?}"
+    );
+    // The store was never asked (an empty chain would have been
+    // `ChainEmpty`, a different refusal), and the connector is not over.
+    joined.actor.ask(Digest).await.expect("the writer is up");
+    joined.stop_and_join().await;
+    cleanup(&path);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_checkpoint() {
     let path = tmp("pipeline-replay");
@@ -980,7 +1021,33 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
     assert_eq!(at, h(5));
     assert_eq!(ours, theirs, "the fork's tip matches its own trace");
     assert_eq!(ours, expected_state(&r.after));
-    assert_eq!(report.observations().digest_identical, Some(true));
+    let obs = report.observations();
+    assert_eq!(obs.digest_identical, Some(true));
+    // The checkpoint's other encoding (ARW-25): the redb archival rows
+    // against the trace's `0x04` record, at the same height, row for row.
+    let archival = report
+        .archival
+        .as_ref()
+        .expect("archival rows at the checkpoint");
+    assert_eq!(archival.at, h(5));
+    assert!(
+        archival.identical(),
+        "{:?}",
+        archival.diff.diverged().collect::<Vec<_>>()
+    );
+    assert!(obs.archival.compared);
+    assert_eq!(obs.archival.at, Some(5));
+    assert!(obs.archival.diverged.is_empty());
+    assert_eq!(
+        obs.archival.rows_equal,
+        u64::try_from(
+            GrownTree::over(&r.after)
+                .archival_snapshot_after(5)
+                .row_count()
+        )
+        .expect("fits"),
+        "every row the fixture accrued was compared"
+    );
     cleanup(&path);
 }
 
@@ -1012,6 +1079,8 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
             .expect("facts");
         }
         w.push_checkpoint(&[0xEE; 32]).expect("a wrong checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+            .expect("the true archival rows: this control is the digest's alone");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
@@ -1088,6 +1157,8 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+            .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
@@ -1179,6 +1250,8 @@ async fn a_wrong_recorded_median_at_one_height_goes_red_and_names_the_height() {
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+            .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
@@ -1271,6 +1344,8 @@ async fn a_wrong_recorded_accumulator_at_one_height_goes_red_and_names_the_heigh
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+            .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
@@ -1342,6 +1417,8 @@ async fn a_wrong_recorded_burn_at_one_height_goes_red_and_names_the_height() {
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+            .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);

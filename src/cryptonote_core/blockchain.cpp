@@ -4707,7 +4707,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
 // consensus-state write, and the core boundary must not trust the RPC
 // layer to have checked the nettype.
 bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_canonical_id,
-  uint64_t shard_id, uint64_t settlement_epoch)
+  uint64_t shard_id, uint64_t settlement_epoch, uint64_t& attributed_height)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   if (m_nettype != FAKECHAIN)
@@ -4733,6 +4733,7 @@ bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_cano
   const uint64_t block_height = chain_height - 1;
   db_wtxn_guard wtxn_guard(m_db);
   m_db->set_archival_serve_credit_bit(p_canonical_id, shard_id, settlement_epoch, block_height);
+  attributed_height = block_height;
   MWARNING("Injected archival serve-credit bit (regtest Gate-6 stand-in): P="
     << p_canonical_id << " shard=" << shard_id << " E=" << settlement_epoch
     << " height=" << block_height
@@ -4740,14 +4741,18 @@ bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_cano
   return true;
 }
 //------------------------------------------------------------------
-// AUDITED DECISION (ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md, D-SC-B wide /
-// D-SC-A dedup): this gate's ordered predicate sequence is mirrored in Rust
-// (shekyl-archival-retention::serve_credit_decisions) and pinned by the
-// standing equivalence KAT (serve_credit_equivalence_kat_v1.json; Rust leg
-// serve_credit_equivalence_kat.rs, C++ leg archival_serve_credit_equivalence.cpp).
-// Reordering predicates, adding one, or changing a reject condition requires
-// re-authoring the fixture's expected-reason column and updating the mirror
-// in the same change.
+// THE ONLY SERVE-CREDIT ACCEPTANCE GATE THAT RUNS. The Rust validator has no
+// rule for CEN-J8–J10 (shekyl-chain-rules census.rs: pending), and the Rust
+// mirror of this predicate sequence (serve_credit_decisions, D-SC-A/B of
+// ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md) and its equivalence KAT were
+// deleted 2026-10-02 (DRS-E4 commit 10d): they pinned this gate to a copy
+// nothing called, and the leaf preimage they both check is retired
+// (PDM-Q6 item 4; the successor signs shard_id and the shard's bounds under
+// the SHT-Q2 key). This gate and the FFI it calls (segment_freeze.rs,
+// challenge.rs) retire together at the LMDB cutover, DEL-008
+// (DAEMON_REDB_STORE.md §12). Do not rebuild the successor from this
+// function; build it from the ruling — docs/FOLLOWUPS.md "Serve-credit
+// acceptance (CEN-J8–J10) has no Rust rule".
 bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
   const std::vector<uint8_t>& pruned_record, uint64_t current_height,
   const crypto::hash& prev_block_hash, tx_verification_context *tvc) const
@@ -4833,9 +4838,8 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   }
 
   // block_hash(H_seal) must be committed to derive the H_fire beacon. The
-  // seal-on-chain predicate is Rust-authoritative (challenge_seal_on_chain):
-  // called here and mirrored by shekyl-archival-retention::serve_credit_decisions
-  // from that one source, so the boundary never drifts. Rejecting a future-epoch
+  // seal-on-chain predicate is Rust-authoritative (challenge_seal_on_chain,
+  // challenge.rs — kept for this caller under DEL-008). Rejecting a future-epoch
   // (attacker-chosen settlement_epoch) input by predicate keeps the seal read
   // below from throwing BLOCK_DNE on it; the slash-eligibility consumer
   // (db_lmdb.cpp) applies the same boundary against its connected block height.
@@ -5666,13 +5670,15 @@ leave:
   // Per-tx serve-credit idempotency checks run against pre-block DB state; reject
   // duplicate (P, shard, E) credits across multiple txs in the same block.
   //
-  // AUDITED DECISION (ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md, D-SC-C):
-  // mirrored in Rust (serve_credit_decisions::serve_credit_block_unique) and
-  // transcribed verbatim in archival_serve_credit_equivalence.cpp. The key is
-  // ArchivalPairEpochKey — the same big-endian encoding, unchanged by PC-D4 —
-  // do not change it independently of the mirror, the transcription, and the
-  // fixture's key pins. (SCE-1 unified post-equivalence; the LMDB comparator
-  // setup forbids native-endian composite keys.)
+  // CEN-G7. The Rust validator's G7 (shekyl-chain-rules rules/body.rs) is
+  // its own set-membership scan over the parsed (P, shard, E) triple — the
+  // same three fields this key encodes — so the two agree wherever both
+  // parse the vin. The Rust mirror of this body (D-SC-C,
+  // ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md) and the equivalence KAT
+  // that pinned it were deleted 2026-10-02 (DRS-E4 commit 10d). The key is
+  // ArchivalPairEpochKey — the same big-endian encoding, unchanged by PC-D4.
+  // (SCE-1 unified post-equivalence; the LMDB comparator setup forbids
+  // native-endian composite keys.)
   //
   // PC-D4 widened the LEDGER key and deliberately did NOT widen this one. The
   // natural inference — "the key grew, so this should too" — is wrong: within
@@ -5680,8 +5686,8 @@ leave:
   // common-mode here and adds no discrimination. Two records for the same pair
   // in one block collide at the same (P, s, E, h) ledger key regardless, which
   // leaves the (P, s, E) check the correct within-block enforcer rather than a
-  // leftover. The bytes must not move; the equivalence fixture's key pin is
-  // what says so.
+  // leftover. The bytes must not move: ArchivalPairEpochKey is an LMDB key
+  // the comparator sorts on, and db_lmdb.cpp reads it back.
   {
     std::unordered_set<std::string> block_serve_credits;
     block_serve_credits.reserve(txs.size());

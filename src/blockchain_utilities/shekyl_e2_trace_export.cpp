@@ -10,8 +10,10 @@
 // are read from the record (the replay compares its own derivations
 // against them; none is handed to `connect`); the checkpoint is the daemon's own
 // BlockchainLMDB::logical_state_digest_v0 (hashed in Rust through the
-// FFI, over the same snapshot); the one value this file re-derives is the
-// long-term effective median, and it says so below.
+// FFI, over the same snapshot) paired with the archival rows of
+// BlockchainLMDB::archival_snapshot_rows (DRS_E4_ARCHIVAL_WRITER.md §3.8.1,
+// the state the digest excludes, encoded in Rust); the one value this file
+// re-derives is the long-term effective median, and it says so below.
 //
 // This file, its CMake target and the FFI it calls are deleted in the same
 // commit that deletes the daemon. Nobody improves it into something with a
@@ -204,7 +206,17 @@ int export_trace(const BlockchainDB& db, const BlockchainLMDB& lmdb, const expor
       LOG_ERROR("trace writer refused the checkpoint at the tip (rc " << rc << ")");
       return 1;
     }
-    LOG_PRINT_L0("Checkpoint written after height " << range.tip);
+    // The checkpoint's other encoding (DRS_E4_ARCHIVAL_WRITER.md §3.8.1):
+    // the archival state the digest excludes, as decoded rows, read under
+    // this same snapshot. The writer requires it once it holds a checkpoint.
+    ShekylE2ArchivalSnapshot* rows = lmdb.archival_snapshot_rows();
+    const int32_t rows_rc = shekyl_e2_trace_push_archival_snapshot(guard.w, rows);
+    if (rows_rc != SHEKYL_E2_TRACE_OK)
+    {
+      LOG_ERROR("trace writer refused the archival snapshot at the tip (rc " << rows_rc << ")");
+      return 1;
+    }
+    LOG_PRINT_L0("Checkpoint and archival snapshot written after height " << range.tip);
   }
   else
   {

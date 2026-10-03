@@ -2671,12 +2671,6 @@ uint64_t shekyl_archival_settlement_epoch_blocks(void);
 /// regtest lever beside the epoch's). Read only to report the schedule.
 uint64_t shekyl_archival_reorg_depth_blocks(void);
 
-/// True iff a SHEKYL_SETTLEMENT_EPOCH_BLOCKS override is active (effective
-/// schedule differs from the genesis default — which requires this process
-/// to have armed via shekyl_archival_settlement_epoch_arm_regtest). Drives
-/// the daemon's loud fakechain warning.
-bool shekyl_archival_settlement_epoch_overridden(void);
-
 /// True iff SHEKYL_SETTLEMENT_EPOCH_BLOCKS or SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS
 /// is present in the environment at all (no validation, no schedule latch).
 /// Drives Blockchain::init's
@@ -4091,6 +4085,150 @@ int32_t shekyl_e2_trace_push_checkpoint(
     struct ShekylE2TraceWriter* writer,
     const uint8_t* digest);
 
+// ---------------------------------------------------------------------------
+// DRS-E4 archival snapshot (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, ARW-25):
+// the checkpoint's other encoding. The C++ walker
+// (`BlockchainLMDB::archival_snapshot_rows`) decodes each archival LMDB row
+// and hands the FIELDS over (ARW-Q10 (a)); Rust encodes every row in its
+// canonical form, so the two sides share one encoder and the C++ never
+// writes a byte of the record. A trace at `TRACE_VERSION 0x01` carries
+// exactly one snapshot, pushed after the checkpoint; `finish` refuses a
+// writer holding one and not the other.
+//
+// Every pusher returns SHEKYL_E2_TRACE_OK or an error code. A row the
+// snapshot refuses (a duplicate key, a second singleton, a holdings set the
+// typed domain rejects, an epoch-marker seq) is SHEKYL_E2_TRACE_ERR_ROW
+// (-6): the LMDB state is what the C++ wrote, so the walker throws rather
+// than drops the row.
+//
+// Lifecycle: snapshot_new -> push_* (any order; Rust sorts) ->
+// trace_push_archival_snapshot (consumes the builder) | snapshot_free.
+// `write_json` does not consume: the ARW-Q15 capture dumps the rows beside
+// the trace.
+// ---------------------------------------------------------------------------
+struct ShekylE2ArchivalSnapshot;
+
+/// An empty snapshot builder. NULL only on allocation failure.
+struct ShekylE2ArchivalSnapshot* shekyl_e2_archival_snapshot_new(void);
+
+/// Free an unconsumed builder. NULL is a no-op.
+void shekyl_e2_archival_snapshot_free(struct ShekylE2ArchivalSnapshot* snapshot);
+
+/// One `archival_bond` row from the decoded `ArchivalBondValue`:
+/// `holdings_kind` is the record's kind byte (0 compact / 1 complete tree);
+/// `held_shards` and `add_epochs` are the compact set's two index-parallel
+/// arrays of `holdings_count` each (ignored for a complete tree);
+/// `bad_intervals` is `bad_interval_count` `(start_epoch, end_exclusive)`
+/// pairs laid out as `2 × count` u64s; `first_paying_emission_height` keeps
+/// the record's 0 = unset sentinel. A NULL array pointer is permitted only
+/// with a zero count.
+int32_t shekyl_e2_archival_snapshot_push_bond(
+    struct ShekylE2ArchivalSnapshot* snapshot,
+    const uint8_t* persona,
+    const uint8_t* hybrid_pubkey,
+    size_t hybrid_pubkey_len,
+    const uint8_t* bond_spend_pk,
+    size_t bond_spend_pk_len,
+    const uint8_t* endpoint,
+    uint64_t join_settlement_epoch,
+    uint64_t bonded_total,
+    uint8_t holdings_kind,
+    const uint64_t* held_shards,
+    const uint64_t* add_epochs,
+    size_t holdings_count,
+    const uint64_t* bad_intervals,
+    size_t bad_interval_count,
+    const uint64_t* claimed_epochs,
+    size_t claimed_count,
+    uint64_t first_paying_emission_height);
+
+/// One `archival_serve_credit` pass bit: the key `(P, shard, E, height)`.
+int32_t shekyl_e2_archival_snapshot_push_serve_credit(
+    struct ShekylE2ArchivalSnapshot* snapshot,
+    const uint8_t* persona,
+    uint64_t shard,
+    uint64_t epoch,
+    uint64_t height);
+
+/// One `archival_r_market` count. `r == 0` is dropped on the Rust side
+/// (§3.8.1: a zero count is the row's absence).
+int32_t shekyl_e2_archival_snapshot_push_r_market(
+    struct ShekylE2ArchivalSnapshot* snapshot,
+    uint64_t shard,
+    uint64_t epoch,
+    uint64_t r);
+
+/// One `archival_sigma_work` row.
+int32_t shekyl_e2_archival_snapshot_push_sigma_work(
+    struct ShekylE2ArchivalSnapshot* snapshot,
+    uint64_t epoch,
+    uint64_t sigma_work_milli);
+
+/// One frozen `archival_budget` row.
+int32_t shekyl_e2_archival_snapshot_push_budget(
+    struct ShekylE2ArchivalSnapshot* snapshot,
+    uint64_t epoch,
+    uint64_t budget);
+
+/// One `archival_attestation_witness` blob at `height`. An empty blob is
+/// the row's absence; do not push it.
+int32_t shekyl_e2_archival_snapshot_push_attestation_witness(
+    struct ShekylE2ArchivalSnapshot* snapshot,
+    uint64_t height,
+    const uint8_t* bytes,
+    size_t len);
+
+/// One `archival_slash_log` entry at `(height, seq)` from the decoded
+/// `ArchivalSlashRevertValue`: `holding_pre_kind` is its pre-slash holdings
+/// kind byte (0 compact / 1 complete tree), `slashed_shard_add_epoch` the
+/// erased shard's add-epoch (compact only). Epoch-marker rows
+/// (`kArchivalSlashLogEpochMarkerSeq`) are not rows of the snapshot and
+/// are refused with SHEKYL_E2_TRACE_ERR_ROW; the walker skips them. The
+/// slashed amount is projected out (§3.8.1).
+int32_t shekyl_e2_archival_snapshot_push_slash_log(
+    struct ShekylE2ArchivalSnapshot* snapshot,
+    uint64_t height,
+    uint32_t seq,
+    const uint8_t* persona,
+    uint64_t shard,
+    uint64_t epoch,
+    uint8_t holding_pre_kind,
+    uint64_t slashed_shard_add_epoch);
+
+/// One `archival_slash_applied` key `(P, shard, E)`.
+int32_t shekyl_e2_archival_snapshot_push_slash_applied(
+    struct ShekylE2ArchivalSnapshot* snapshot,
+    const uint8_t* persona,
+    uint64_t shard,
+    uint64_t epoch);
+
+/// The singleton `archival_budget_accruing` row: the open epoch and the
+/// checked sum of its per-height accruals so far. Omit when the open epoch
+/// has accrued no row yet.
+int32_t shekyl_e2_archival_snapshot_set_budget_accruing(
+    struct ShekylE2ArchivalSnapshot* snapshot,
+    uint64_t epoch,
+    uint64_t total);
+
+/// The singleton `archival_last_slash_epoch` watermark. Omit when the
+/// property is unset (the C++ UINT64_MAX reading).
+int32_t shekyl_e2_archival_snapshot_set_last_slash_epoch(
+    struct ShekylE2ArchivalSnapshot* snapshot,
+    uint64_t epoch);
+
+/// The `0x04` record after the checkpoint, at the writer's last facts
+/// row. Consumes `snapshot` on every return; `writer` stays usable.
+int32_t shekyl_e2_trace_push_archival_snapshot(
+    struct ShekylE2TraceWriter* writer,
+    struct ShekylE2ArchivalSnapshot* snapshot);
+
+/// Write the rows as `shekyl_e4_archival_rows_v1` JSON to `path`
+/// (`path_len` UTF-8 bytes, not NUL-terminated). Does not consume.
+int32_t shekyl_e2_archival_snapshot_write_json(
+    const struct ShekylE2ArchivalSnapshot* snapshot,
+    const uint8_t* path,
+    size_t path_len);
+
 /// Trailer, flush, free. Consumes the handle either way.
 int32_t shekyl_e2_trace_finish(struct ShekylE2TraceWriter* writer);
 
@@ -4118,10 +4256,16 @@ struct ShekylOwnedBuffer {
 #define SHEKYL_E2_TRACE_ERR_NULL_PTR    -1
 #define SHEKYL_E2_TRACE_ERR_OVERFLOW    -2
 /// A facts height gap, a height past u64::MAX, an unanchored checkpoint, a
-/// duplicate checkpoint, or facts after the checkpoint.
+/// duplicate checkpoint, facts after the checkpoint — or, for the archival
+/// snapshot, one pushed before the checkpoint, a second one, or a `finish`
+/// with the checkpoint and no snapshot.
 #define SHEKYL_E2_TRACE_ERR_SEQUENCE    -3
 #define SHEKYL_E2_TRACE_ERR_IO          -4
 #define SHEKYL_E2_TRACE_ERR_BAD_PATH    -5
+/// An archival row the snapshot refuses (DRS_E4_ARCHIVAL_WRITER.md §3.8.1):
+/// a duplicate key, a second singleton, a holdings set or kind byte the
+/// typed domain rejects, an epoch-marker slash-log seq.
+#define SHEKYL_E2_TRACE_ERR_ROW         -6
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and
 /// `*out_next_difficulty` carries the next-block difficulty target.

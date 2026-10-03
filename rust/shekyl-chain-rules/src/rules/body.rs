@@ -39,20 +39,26 @@
 //!
 //! # CEN-G7, G9, G10 — cross-transaction uniqueness of the archival keys
 //!
-//! After the slot loop, beside L1 (`blockchain.cpp:5666–5803`, three
+//! After the slot loop, beside L1 (`blockchain.cpp:5670–5812`, three
 //! passes over every listed body's inputs): no two serve-credit vins with
 //! one `(P, shard, E)` (**G7**, `D-SC-C`), no two emission claims naming one
 //! `(P, E)` — an emission vin claims a *list* of epochs, each a pair
 //! (**G9**), and at most one bond post per `P`, whatever its kind (**G10**).
-//! The decision bodies are `shekyl-archival-retention`'s, the same ones the
-//! C++ calls (`serve_credit_block_unique`, `emission_block_claims_unique`,
-//! `bond_post_block_unique`): one owner, both languages. What this crate
-//! adds is the **locus** — `Locus::Input { slot, input }` at the **second**
-//! occurrence, the vin the colliding key was read from — which the
-//! serve-credit body names by index and the other two do not, so those two
-//! are located by a scan the body's verdict has already licensed. Should the
-//! scan disagree with the body (it cannot; both are set-membership over the
-//! same keys), the refusal falls to `Locus::Block`, never to a panic.
+//! G9's and G10's decision bodies are `shekyl-archival-retention`'s, the
+//! same ones the C++ calls (`emission_block_claims_unique`,
+//! `bond_post_block_unique`): one owner, both languages. G7's is this
+//! module's own set-membership scan (`second_occurrence`) over the parsed
+//! `(P, shard, E)` triples: its retention-crate body was the D-SC-C arm of
+//! the serve-credit C++ mirror, deleted 2026-10-02 (DRS-E4 commit 10d) with
+//! the rest of that mirror — see `docs/FOLLOWUPS.md` "Serve-credit
+//! acceptance (CEN-J8–J10) has no Rust rule". The C++ keeps its own G7
+//! (`blockchain.cpp:5670`), on `ArchivalPairEpochKey`'s big-endian bytes;
+//! this scan is over the same three fields, so the two agree wherever both
+//! parse the vin. What this crate adds for all three is the **locus** —
+//! `Locus::Input { slot, input }` at the **second** occurrence, the vin the
+//! colliding key was read from. Should the scan find no second occurrence
+//! after the body refused (it cannot; both are set-membership over the same
+//! keys), the refusal falls to `Locus::Block`, never to a panic.
 //!
 //! **A vin that does not parse is not this rule's.** The parse of a
 //! serve-credit vin is CEN-J1's row, of an emission vin the emission rows'
@@ -110,8 +116,7 @@ use std::io::Cursor;
 
 use shekyl_archival_retention::{
     bond_post_block_unique, emission_block_claims_unique, p_canonical_id_from_hybrid_pubkey,
-    serve_credit_block_unique, ArchivalRewardEmissionVin, ArchivalServeCreditResponse,
-    BlockUniqueVerdict,
+    ArchivalRewardEmissionVin, ArchivalServeCreditResponse,
 };
 use shekyl_types::TxHash;
 use shekyl_wire::{Input, Transaction};
@@ -283,6 +288,10 @@ fn second_occurrence<K: Ord>(keys: &[(Locus, K)]) -> Option<Locus> {
         .map(|(locus, _)| *locus)
 }
 
+/// G7's collision key: `(P, shard, E)` — the three fields the C++'s
+/// `ArchivalPairEpochKey` encodes, as values rather than bytes.
+type ServeCreditKey = ([u8; 32], u64, u64);
+
 /// CEN-G7: no two serve-credit vins in one block carry the same
 /// `(P, shard, E)`.
 pub(crate) struct G7;
@@ -296,20 +305,17 @@ impl BlockRule for G7 {
         cx: &BlockContext<'_>,
         _view: &V,
     ) -> Result<Verdict<()>, V::Fault> {
-        let mut loci = Vec::new();
-        let mut triples = Vec::new();
-        for (locus, item) in listed_inputs(cx) {
-            if let Some(ArchivalKey::ServeCredit { p, shard, epoch }) = ArchivalKey::of(item) {
-                loci.push(locus);
-                triples.push((p, shard, epoch));
-            }
-        }
-        Ok(match serve_credit_block_unique(&triples) {
-            BlockUniqueVerdict::Unique => Ok(()),
-            BlockUniqueVerdict::DuplicateAt { index } => Err(InvalidBlock::new(
-                Self::ROW,
-                loci.get(index).copied().unwrap_or(Locus::Block),
-            )),
+        let triples: Vec<(Locus, ServeCreditKey)> = listed_inputs(cx)
+            .filter_map(|(locus, item)| match ArchivalKey::of(item) {
+                Some(ArchivalKey::ServeCredit { p, shard, epoch }) => {
+                    Some((locus, (p, shard, epoch)))
+                }
+                _ => None,
+            })
+            .collect();
+        Ok(match second_occurrence(&triples) {
+            None => Ok(()),
+            Some(locus) => Err(InvalidBlock::new(Self::ROW, locus)),
         })
     }
 }

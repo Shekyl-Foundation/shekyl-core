@@ -664,3 +664,128 @@ fn a13_budget_accruing_is_the_open_epochs_row_and_none_otherwise() {
     assert_eq!(snap.budget_accruing(epoch(5)).unwrap(), None);
     cleanup(&path);
 }
+
+// ---------------------------------------------------------------------------
+// The archival snapshot (E4 §3.8.1) — every family, the two projections
+// ---------------------------------------------------------------------------
+
+#[test]
+fn archival_snapshot_is_every_family_as_rows_with_the_projections_applied() {
+    use crate::archival_snapshot::{ArchivalSnapshot, SnapshotFamily};
+
+    let path = tmp("arch-snapshot");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    // An empty store is ten families of no rows — never an omitted record.
+    let empty = store.begin_read().unwrap().archival_snapshot().unwrap();
+    assert_eq!(empty, ArchivalSnapshot::empty());
+    // Two connected blocks accrue into the open epoch: the one row the
+    // production writer puts in `archival_budget_accruing` is a snapshot
+    // row from the first connect on, which is why the C++ walker sums its
+    // per-height accruals rather than reporting "no open epoch".
+    connect_chain(&store, &[vec![], vec![]]); // tip 1
+    let after_connect = store.begin_read().unwrap().archival_snapshot().unwrap();
+    assert_eq!(after_connect.rows(SnapshotFamily::BudgetAccruing).len(), 1);
+    assert_eq!(after_connect.row_count(), 1);
+    let accrued = store
+        .begin_read()
+        .unwrap()
+        .budget_accruing(epoch(0))
+        .unwrap()
+        .expect("the open epoch accrued");
+    drop(store);
+
+    let p = persona(0xd1);
+    let q = persona(0xd2);
+    let entry = slash_entry(&p, 7, 3, 0);
+    plant(&path, |txn| {
+        plant_bond(txn, &p, &record());
+        plant_bond(txn, &q, &record());
+        plant_pass(txn, &p, 7, 3, 300);
+        let mut m = txn.open_table(ARCHIVAL_R_MARKET).expect("t");
+        m.insert((7u64, 2u64), RMarket::from_raw(0).encoded().as_encoded())
+            .expect("insert");
+        m.insert((7u64, 3u64), RMarket::from_raw(2).encoded().as_encoded())
+            .expect("insert");
+        let mut w = txn.open_table(ARCHIVAL_SIGMA_WORK).expect("t");
+        w.insert(3u64, SigmaWorkMilli::from_raw(5).encoded().as_encoded())
+            .expect("insert");
+        let mut b = txn.open_table(ARCHIVAL_BUDGET).expect("t");
+        b.insert(3u64, AtomicUnits::from_raw(9).encoded().as_encoded())
+            .expect("insert");
+        let mut a = txn.open_table(ARCHIVAL_ATTESTATION_WITNESS).expect("t");
+        a.insert(1u64, Raw::<AttestationWitnessBytes>::new(&[1, 2, 3]))
+            .expect("insert");
+        plant_slash(txn, 1, 0, &entry);
+        let mut s = txn.open_table(ARCHIVAL_SLASH_APPLIED).expect("t");
+        s.insert(SlashAppliedKey::new(p, shard(7), epoch(3)).key(), Present)
+            .expect("insert");
+        let mut props = txn.open_table(crate::schema::PROPERTIES).expect("t");
+        props
+            .insert(
+                ArchivalLastSlashEpochCell::KEY,
+                Raw::<crate::codec::PropertyCellBytes>::new(&epoch(3).encode()),
+            )
+            .expect("insert");
+    });
+
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let got = store.begin_read().unwrap().archival_snapshot().unwrap();
+
+    // What the same state looks like built through the constructors — the
+    // path the C++ walker's marshalled fields take.
+    let mut want = ArchivalSnapshot::empty();
+    want.push_bond(&p, &record()).unwrap();
+    want.push_bond(&q, &record()).unwrap();
+    want.push_serve_credit(&p, shard(7), epoch(3), BlockHeight::from_raw(300))
+        .unwrap();
+    want.push_r_market(shard(7), epoch(3), RMarket::from_raw(2))
+        .unwrap();
+    want.push_sigma_work(epoch(3), SigmaWorkMilli::from_raw(5))
+        .unwrap();
+    want.push_budget(epoch(3), AtomicUnits::from_raw(9))
+        .unwrap();
+    want.push_attestation_witness(BlockHeight::from_raw(1), &[1, 2, 3])
+        .unwrap();
+    want.push_slash_log(BlockHeight::from_raw(1), 0, &entry)
+        .unwrap();
+    want.push_slash_applied(&p, shard(7), epoch(3)).unwrap();
+    want.set_budget_accruing(epoch(0), accrued).unwrap();
+    want.set_last_slash_epoch(epoch(3)).unwrap();
+    assert_eq!(got, want);
+    assert!(got.diff(&want).is_identical());
+
+    // The written `RMarket(0)` at epoch 2 is a stored row (A6 reads it) and
+    // not a snapshot row (§3.6): the C++ close writes zeros redb's does not.
+    assert_eq!(got.rows(SnapshotFamily::RMarket).len(), 1);
+    assert_eq!(got.rows(SnapshotFamily::Bond).len(), 2);
+    assert_eq!(got.row_count(), 11);
+
+    // The body round-trips, so what the trace carries is what the read saw.
+    let back = ArchivalSnapshot::read_body(&mut got.body().as_slice()).unwrap();
+    assert_eq!(back, got);
+    cleanup(&path);
+}
+
+#[test]
+fn archival_snapshot_refuses_a_second_accruing_row_as_si23() {
+    let path = tmp("arch-snapshot-si23");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    drop(store);
+    plant(&path, |txn| {
+        let mut acc = txn.open_table(ARCHIVAL_BUDGET_ACCRUING).expect("t");
+        acc.insert(4u64, AtomicUnits::from_raw(1).encoded().as_encoded())
+            .expect("insert");
+        acc.insert(5u64, AtomicUnits::from_raw(2).encoded().as_encoded())
+            .expect("insert");
+    });
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let err = store.begin_read().unwrap().archival_snapshot().unwrap_err();
+    assert!(
+        matches!(
+            err,
+            StoreError::InvariantViolated(StoreInvariant::AccruingNotSingular { .. })
+        ),
+        "{err}"
+    );
+    cleanup(&path);
+}

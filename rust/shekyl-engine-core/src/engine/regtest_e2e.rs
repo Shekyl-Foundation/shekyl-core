@@ -62,10 +62,11 @@ fn regtest_expectation() -> super::DaemonExpectation {
 
 use serde::Deserialize;
 use serde_json::json;
+use shekyl_chain_ingest::source::{Injection, ServeCredit};
 use shekyl_rpc_client::Rpc;
 use shekyl_rpc_transport::HttpRpc;
 use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse};
-use shekyl_types::{BlockCount, TxHash};
+use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId, TxHash};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 /// `cargo test` runs tests in parallel; spawning multiple daemons concurrently
@@ -524,23 +525,44 @@ impl RegtestDaemon {
     /// desyncs the bit, so every reorg leg floors its depth above it). The
     /// injected bit gives the epoch a non-zero `Σwork` and the persona a
     /// positive claimant share at close.
+    ///
+    /// Returns the injector's **receipt**: the credit with the tip index
+    /// the daemon attributed it to, read under its lock with the write.
+    /// The height is the daemon's, never a `height()` read around the
+    /// call — that is the block count, one above (ARW-26) — and the
+    /// receipt is the `Injection` the chain-vector capture hands
+    /// `shekyl-chain-replay fetch --inject` and writes into the manifest
+    /// (DRS-E4 §3.8 item 3).
     pub(super) async fn inject_serve_credit(
         &self,
         p_canonical_id: &shekyl_types::PCanonicalId,
-        shard_id: u64,
-        settlement_epoch: u64,
-    ) {
-        self.rpc
-            .json_rpc_call::<serde_json::Value>(
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Injection {
+        #[derive(Debug, serde::Deserialize)]
+        struct Receipt {
+            height: u64,
+        }
+        let receipt = self
+            .rpc
+            .json_rpc_call::<Receipt>(
                 "inject_archival_serve_credit",
                 Some(json!({
                     "p_canonical_id": hex::encode(p_canonical_id.to_bytes()),
-                    "shard_id": shard_id,
-                    "settlement_epoch": settlement_epoch,
+                    "shard_id": shard.to_raw(),
+                    "settlement_epoch": epoch.to_raw(),
                 })),
             )
             .await
             .expect("inject_archival_serve_credit");
+        Injection {
+            at: BlockHeight::from_raw(receipt.height),
+            credit: ServeCredit {
+                persona: *p_canonical_id,
+                shard,
+                epoch,
+            },
+        }
     }
 
     /// The ephemeral RPC port the daemon bound. Observability harnesses open
@@ -3334,13 +3356,20 @@ async fn e2e_emission_claim_accepted_and_applied() {
 
     // (A2) Inject one serve-credit bit for (persona, shard 0, TARGET_EPOCH).
     // The bit store is epoch-keyed and injection is height-free, but the
-    // injection HEIGHT is what the pop legs must stay above (the store is
-    // not pop-symmetric), so it is recorded here. Single claimant holding
-    // all Σwork ⇒ its share is the whole epoch budget.
-    let inject_height = daemon.height().await;
-    daemon
-        .inject_serve_credit(&fixture.persona_id, SHARD_ID, TARGET_EPOCH)
+    // height the daemon ATTRIBUTED the bit to is what the pop legs must
+    // stay above (the store is not pop-symmetric), so the injector's
+    // receipt is kept — the daemon's own index, not a `height()` read
+    // around the call, which is the block count one above it (ARW-26).
+    // Single claimant holding all Σwork ⇒ its share is the whole epoch
+    // budget.
+    let injection = daemon
+        .inject_serve_credit(
+            &fixture.persona_id,
+            ShardId::from_raw(SHARD_ID),
+            SettlementEpoch::from_raw(TARGET_EPOCH),
+        )
         .await;
+    let inject_height = injection.at.to_raw();
     eprintln!("serve credit injected for epoch {TARGET_EPOCH} at height {inject_height}");
 
     // (A1 close) Mine until the daemon reports TARGET_EPOCH closed (budget
@@ -3541,18 +3570,11 @@ async fn e2e_emission_claim_accepted_and_applied() {
         "e2e_emission_claim_accepted_and_applied",
         None,
         // The one row in this chain no block produced (A2 above): the
-        // serve credit the claim is priced on. `DRS_E4_ARCHIVAL_WRITER.md`
-        // ARW-1 — a block-driven replay cannot reach it.
-        &[format!(
-            "archival_serve_credit row (persona {}, shard {SHARD_ID}, epoch {TARGET_EPOCH}) \
-             injected at height {inject_height} through regtest_inject_archival_serve_credit \
-             (blockchain.cpp: db_wtxn_guard + set_archival_serve_credit_bit under the \
-             blockchain lock, outside any block's write batch). State no block produced: a \
-             block-driven replay cannot reproduce it, and an archival digest over this chain \
-             diverges by construction unless the injection is replayed as an event \
-             (DRS_E4_ARCHIVAL_WRITER.md ARW-1, ARW-Q5).",
-            hex::encode(fixture.persona_id.to_bytes()),
-        )],
+        // serve credit the claim is priced on, as the injector's receipt.
+        // The fetch writes it into the corpus as an `Inject` at its
+        // height, so the replay reaches the archival state the claim was
+        // judged against (`DRS_E4_ARCHIVAL_WRITER.md` ARW-1, §3.8 item 3).
+        &[injection],
     )
     .await;
     let claim_mined_by_height = daemon.height().await;
@@ -4705,16 +4727,23 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
 /// `spend_txid` is recorded when the generator knows it; the archival
 /// shapes are located by their vin class at load, so it is `None` there.
 ///
-/// `out_of_band_writes` is **every row in the daemon's state that no block
+/// `injections` is **every row in the daemon's state that no block
 /// produced** — a regtest injector's direct LMDB write, made under the
-/// blockchain lock outside any block's write batch. Empty for a chain whose
-/// state is wholly block-derived, and the manifest says so positively rather
-/// than by omission, because the corpus travels and the inference is drawn
-/// where the data is: a block-driven replay cannot reach such a row, so an
-/// archival digest over the chain diverges *by construction*, at exactly the
-/// height a writer bug would produce one (`DRS_E4_ARCHIVAL_WRITER.md` ARW-1;
-/// the replay's `IngestEvent` for it is `ARW-Q5`'s). A generator that injects
-/// and does not list it here has mislabelled its corpus.
+/// blockchain lock outside any block's write batch — as the injector's
+/// receipts. Empty for a chain whose state is wholly block-derived, and
+/// the manifest says so positively rather than by omission, because the
+/// corpus travels and the inference is drawn where the data is: a
+/// block-driven replay cannot reach such a row, so an archival digest over
+/// the chain diverges *by construction*, at exactly the height a writer
+/// bug would produce one (`DRS_E4_ARCHIVAL_WRITER.md` ARW-1). The receipts
+/// go two places from one value: `shekyl-chain-replay fetch --inject`
+/// writes each as an `IngestEvent::Inject` record beside the block at its
+/// height, so the replay reaches the daemon's archival state (DRS-E4 §3.8
+/// item 3); and the manifest's `out_of_band_writes` rows carry the same
+/// spelling, so the replay test can hold the corpus's `Inject` records to
+/// the manifest in both directions. A generator that injects and does not
+/// pass the receipt here has mislabelled its corpus — and the archival
+/// oracle will say so at the tip.
 ///
 /// **Why the manifest stamps `genesis_hash` and `built_at_dev_sha`.** These
 /// blobs are consensus-pinned test data: valid against one genesis and one
@@ -4733,7 +4762,7 @@ async fn maybe_capture_chain_vector(
     shape: &str,
     generator: &str,
     spend_txid: Option<TxHash>,
-    out_of_band_writes: &[String],
+    injections: &[Injection],
 ) {
     if std::env::var_os("SHEKYL_CAPTURE_CHAIN_VECTORS").is_none() {
         return;
@@ -4763,15 +4792,18 @@ async fn maybe_capture_chain_vector(
     let corpus = root.join("corpus.e2");
     let trace = root.join("trace.e2");
 
-    let fetch = Command::new(&replay_bin)
+    let mut fetch = Command::new(&replay_bin);
+    fetch
         .args(["fetch", "--daemon"])
         .arg(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .args(["--chain", "regtest", "--from", "0", "--to"])
         .arg(count.to_string())
         .arg("--out")
-        .arg(&corpus)
-        .output()
-        .expect("spawn shekyl-chain-replay fetch");
+        .arg(&corpus);
+    for injection in injections {
+        fetch.arg("--inject").arg(injection.to_string());
+    }
+    let fetch = fetch.output().expect("spawn shekyl-chain-replay fetch");
     assert!(
         fetch.status.success(),
         "shekyl-chain-replay fetch failed: {}\n{}",
@@ -4878,8 +4910,11 @@ async fn maybe_capture_chain_vector(
         ),
     };
 
+    // Format 4 (DRS-E4 commit 7): `out_of_band_writes` rows are structured
+    // — the kind and the injector's receipt in the corpus's one spelling —
+    // where format 3 carried prose.
     let manifest = json!({
-        "format_version": 3,
+        "format_version": 4,
         "tx_count": tx_count,
         "genesis_hash": genesis_hash,
         "built_at_dev_sha": built_at_dev_sha,
@@ -4901,7 +4936,16 @@ async fn maybe_capture_chain_vector(
         "spend_txid": spend_txid.map(|h| h.to_string()),
         // Rows no block produced (see the doc comment). Empty is the
         // positive claim "wholly block-derived"; absent would be silence.
-        "out_of_band_writes": out_of_band_writes,
+        // Each row is the receipt the fetch was given, in the same
+        // spelling, so the corpus and the manifest cannot name different
+        // heights for one injection.
+        "out_of_band_writes": injections
+            .iter()
+            .map(|injection| json!({
+                "kind": "archival_serve_credit",
+                "receipt": injection,
+            }))
+            .collect::<Vec<_>>(),
         // What `replay --chain regtest --fixed-difficulty n` must be given:
         // the value this harness spawned the daemon with, recorded rather
         // than remembered.

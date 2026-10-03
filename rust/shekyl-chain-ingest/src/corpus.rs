@@ -29,12 +29,14 @@
 //! header  = MAGIC(8) ‖ version u32 ‖ net u8 ‖ first_height u64 ‖ count u64
 //! extend  = 0x01 ‖ height u64 ‖ block_len u32 ‖ block ‖ tx_count u32 ‖ (tx_len u32 ‖ tx)*
 //! rewind  = 0x02 ‖ to u64
+//! inject  = 0x03 ‖ at u64 ‖ persona[32] ‖ shard u64 ‖ epoch u64
 //! ```
 //!
-//! `count` counts records of both kinds — a `rewind` occupies no height,
-//! so it is a record count, not a height span — and is written at
-//! [`CorpusWriter::finish`]; a file whose header count disagrees with its
-//! records, or that ends inside one, was not finished and is refused.
+//! `count` counts records of every kind — a `rewind` or an `inject`
+//! occupies no height, so it is a record count, not a height span — and is
+//! written at [`CorpusWriter::finish`]; a file whose header count disagrees
+//! with its records, or that ends inside one, was not finished and is
+//! refused.
 //!
 //! # Rewind — the reorg family's switch (RD-Q13, §7 commit 8c)
 //!
@@ -46,6 +48,26 @@
 //! ([`CorpusFault::RewindOutOfCorpus`]), and one before any block has no
 //! tip ([`CorpusFault::RewindOnEmpty`]). Version 1 had no record tag and
 //! no rewind; the tag byte is the version-2 change.
+//!
+//! # Inject — the one out-of-band write (DRS-E4 §3.8 item 3)
+//!
+//! `inject { at, persona, shard, epoch }` is [`IngestEvent::Inject`] as a
+//! record: a serve-credit pass bit the regtest injector wrote **beside**
+//! the chain — no block carries it, so no `extend` can — at its capture
+//! position, so a replay reaches the archival state the daemon held. `at`
+//! is the height the injector attributed the bit to (its receipt), and the
+//! record sits right after the `extend` at that height: writer and reader
+//! both require `at` to be the tip at the record's position
+//! ([`CorpusFault::InjectNotAtTip`]), so a record filed at the wrong
+//! position is refused rather than replayed to a different height than the
+//! daemon wrote. Before any block there is no tip
+//! ([`CorpusFault::InjectOnEmpty`]). The reader emits the event without
+//! the height: the pipeline applies it at the committed tip, which is that
+//! height by this law. Regtest-only at every layer that can say so: the
+//! writer and reader refuse the record under any net tag but `Fakechain`
+//! ([`CorpusFault::InjectOffFakechain`] — no injector exists off it), and
+//! the store refuses the write under any rules but regtest. The record is
+//! the version-3 change.
 //!
 //! # Verified, not declared (RD-F15)
 //!
@@ -71,28 +93,33 @@
 use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
 
 use shekyl_chain_rules::Candidate;
-use shekyl_types::{BlockCount, BlockHeight, TxHash};
+use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId, TxHash};
 use shekyl_wire::block::MAX_BLOCK_BLOB_SIZE;
 use shekyl_wire::transaction::MAX_TX_SIZE;
 use shekyl_wire::{Block, Transaction};
 
-use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
+use crate::source::{IngestEvent, SequenceNo, Sequenced, ServeCredit, Source};
 
 /// The artifact's magic: eight bytes no other Shekyl artifact starts with.
 pub const CORPUS_MAGIC: [u8; 8] = *b"SHKCORPS";
 
 /// The layout version this module writes and the only one it reads.
 /// A layout change bumps it; the reader refuses every other value.
-pub const CORPUS_FORMAT_VERSION: u32 = 2;
+pub const CORPUS_FORMAT_VERSION: u32 = 3;
 
 /// Record tags (module docs).
 mod tag {
     pub const EXTEND: u8 = 0x01;
     pub const REWIND: u8 = 0x02;
+    pub const INJECT: u8 = 0x03;
 }
 
 /// A `rewind` record: tag ‖ `to` u64.
 const REWIND_RECORD_LEN: usize = 1 + core::mem::size_of::<u64>();
+
+/// An `inject` record: tag ‖ `at` u64 ‖ persona[32] ‖ shard u64 ‖ epoch u64.
+const INJECT_RECORD_LEN: usize =
+    1 + core::mem::size_of::<u64>() + 32 + 2 * core::mem::size_of::<u64>();
 
 /// Which chain the corpus was taken from — the artifact's own tag, and the
 /// one spelling of "which chain" the driver's command line takes (`--chain
@@ -194,8 +221,24 @@ pub enum CorpusFault {
         /// The parser's error.
         cause: io::Error,
     },
-    /// A record tag neither `extend` nor `rewind`.
+    /// A record tag none of `extend`, `rewind`, `inject`.
     UnknownTag(u8),
+    /// An `inject` whose `at` is not the tip at its position: the record
+    /// was filed somewhere other than where the injector wrote the bit.
+    InjectNotAtTip {
+        /// The height the record claims the bit was attributed to.
+        at: BlockHeight,
+        /// Where the tip is at the record's position.
+        tip: BlockHeight,
+    },
+    /// An `inject` before any block: there is no tip to attribute it to.
+    InjectOnEmpty,
+    /// An `inject` in a corpus whose net tag is not `Fakechain`: no
+    /// injector exists off regtest.
+    InjectOffFakechain {
+        /// The corpus's net tag.
+        net: CorpusNet,
+    },
     /// A `rewind` to the tip or above it: nothing to pop.
     RewindNotBackward {
         /// Where the rewind wanted the tip.
@@ -279,6 +322,15 @@ impl core::fmt::Display for CorpusFault {
                 "rewind to {to} is below the corpus's first height {first_height}"
             ),
             Self::RewindOnEmpty => write!(f, "rewind before any block"),
+            Self::InjectNotAtTip { at, tip } => write!(
+                f,
+                "inject attributed to {at} is filed where the tip is {tip}"
+            ),
+            Self::InjectOnEmpty => write!(f, "inject before any block"),
+            Self::InjectOffFakechain { net } => write!(
+                f,
+                "inject in a {net:?} corpus; the regtest injector is the only producer"
+            ),
             Self::CountMismatch { declared, present } => write!(
                 f,
                 "header declares {declared} records, {present} present; the corpus was not finished"
@@ -384,6 +436,7 @@ const COUNT_OFFSET: u64 = 8 + 4 + 1 + 8;
 /// after finish" is unrepresentable — there is no finished flag.
 pub struct CorpusWriter<W: Write + Seek> {
     out: W,
+    net: CorpusNet,
     first: BlockHeight,
     /// The height the next `append` records; `None` once `u64::MAX` has
     /// been written.
@@ -411,10 +464,37 @@ impl<W: Write + Seek> CorpusWriter<W> {
         out.write_all(&0u64.to_le_bytes())?;
         Ok(Self {
             out,
+            net,
             first: first_height,
             next: Some(first_height),
             count: 0,
         })
+    }
+
+    /// Append `inject { at, persona, shard, epoch }`: the reader will emit
+    /// [`IngestEvent::Inject`] at this position (module docs). `at` is the
+    /// height the injector's receipt attributed the bit to; it must be the
+    /// tip here, so the record cannot be filed away from the block it
+    /// belongs beside.
+    ///
+    /// # Errors
+    ///
+    /// [`CorpusFault::InjectOffFakechain`], [`CorpusFault::InjectOnEmpty`],
+    /// [`CorpusFault::InjectNotAtTip`]; I/O.
+    pub fn inject(&mut self, at: BlockHeight, credit: ServeCredit) -> Result<(), CorpusFault> {
+        check_inject(self.net, self.first, self.next, at)?;
+        let mut record = Vec::with_capacity(INJECT_RECORD_LEN);
+        record.push(tag::INJECT);
+        record.extend_from_slice(&at.to_raw().to_le_bytes());
+        record.extend_from_slice(credit.persona.as_bytes());
+        record.extend_from_slice(&credit.shard.to_raw().to_le_bytes());
+        record.extend_from_slice(&credit.epoch.to_raw().to_le_bytes());
+        self.out.write_all(&record)?;
+        self.count = self
+            .count
+            .checked_add(1)
+            .expect("corpus record count exhausted");
+        Ok(())
     }
 
     /// Append `rewind { to }`: the reader will emit [`IngestEvent::Rewind`]
@@ -507,6 +587,28 @@ fn check_rewind(
     Ok(())
 }
 
+/// The inject law shared by writer and reader: the corpus is a regtest
+/// chain's, there is a tip, and `at` is that tip (`next − 1`).
+fn check_inject(
+    net: CorpusNet,
+    first: BlockHeight,
+    next: Option<BlockHeight>,
+    at: BlockHeight,
+) -> Result<(), CorpusFault> {
+    if net != CorpusNet::Fakechain {
+        return Err(CorpusFault::InjectOffFakechain { net });
+    }
+    let tip = match next {
+        Some(n) if n == first => return Err(CorpusFault::InjectOnEmpty),
+        Some(n) => BlockHeight::from_raw(n.to_raw() - 1),
+        None => BlockHeight::from_raw(u64::MAX),
+    };
+    if at != tip {
+        return Err(CorpusFault::InjectNotAtTip { at, tip });
+    }
+    Ok(())
+}
+
 /// One `extend` as the on-disk layout: `0x01 ‖ height ‖ block_len ‖ block ‖ tx_count ‖ (tx_len ‖ tx)*`.
 fn encode_record(
     height: BlockHeight,
@@ -566,7 +668,7 @@ fn write_len_only<W: Write>(
     Ok(())
 }
 
-/// Reads a corpus as an Extend-only [`Source`], re-verifying every record.
+/// Reads a corpus as a [`Source`], re-verifying every record.
 pub struct CorpusReader<R: BufRead> {
     input: R,
     net: CorpusNet,
@@ -679,6 +781,23 @@ impl<R: BufRead> CorpusReader<R> {
                     .checked_add(1)
                     .expect("corpus record count exhausted");
                 return Ok(Some(IngestEvent::Rewind { to }));
+            }
+            tag::INJECT => {
+                let at = BlockHeight::from_raw(read_u64(&mut self.input)?);
+                let mut persona = [0u8; 32];
+                self.input.read_exact(&mut persona)?;
+                let shard = ShardId::from_raw(read_u64(&mut self.input)?);
+                let epoch = SettlementEpoch::from_raw(read_u64(&mut self.input)?);
+                check_inject(self.net, self.first, self.next, at)?;
+                self.read = self
+                    .read
+                    .checked_add(1)
+                    .expect("corpus record count exhausted");
+                return Ok(Some(IngestEvent::Inject(ServeCredit {
+                    persona: PCanonicalId::from_bytes(persona),
+                    shard,
+                    epoch,
+                })));
             }
             other => return Err(CorpusFault::UnknownTag(other)),
         }

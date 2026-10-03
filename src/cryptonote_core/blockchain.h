@@ -1145,8 +1145,16 @@ namespace cryptonote
     /// and the "not block-owned" warning stays literal — nothing pops the
     /// bit, so a later pop below the attributed height strands a row that
     /// claims a block it did not come from.
+    ///
+    /// `attributed_height` is the **receipt**: the tip index the row was
+    /// keyed at, written on success only. The caller cannot re-derive it
+    /// after the fact (a post-call tip read is the same stale snapshot the
+    /// missing parameter refuses, and it is a block count, not the index —
+    /// `DRS_E4_ARCHIVAL_WRITER.md` ARW-26), so the injector hands it back
+    /// and the RPC carries it to the capture that replays the injection
+    /// as a corpus event (DRS-E4 §3.8 item 3).
     bool regtest_inject_archival_serve_credit(const crypto::hash& p_canonical_id,
-      uint64_t shard_id, uint64_t settlement_epoch);
+      uint64_t shard_id, uint64_t settlement_epoch, uint64_t& attributed_height);
 
 #ifndef IN_UNIT_TESTS
   private:

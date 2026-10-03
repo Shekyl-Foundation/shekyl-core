@@ -16,6 +16,7 @@ use shekyl_archival_retention::{
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
 use shekyl_peer_policy::DropVerdict;
+use shekyl_types::BlockHeight;
 use std::ffi::CStr;
 use std::ptr;
 
@@ -1270,7 +1271,7 @@ fn epoch_close_compute_ffi_full_pipeline() {
     ];
     let rust_shards = [EpochCloseShard {
         shard_id: 7,
-        close: ShardClose::ClosedAt(0),
+        close: ShardClose::ClosedAt(BlockHeight::from_raw(0)),
     }];
     let rust_pairs: Vec<CreditPair> = (0..4)
         .map(|bond_idx| CreditPair {
@@ -1696,11 +1697,11 @@ impl EmissionFfiFixture {
         let shards = [
             EpochCloseShard {
                 shard_id: EM_SHARD_A,
-                close: ShardClose::ClosedAt(close - 5_000),
+                close: ShardClose::ClosedAt(BlockHeight::from_raw(close - 5_000)),
             },
             EpochCloseShard {
                 shard_id: EM_SHARD_B,
-                close: ShardClose::ClosedAt(close - 8_000),
+                close: ShardClose::ClosedAt(BlockHeight::from_raw(close - 8_000)),
             },
         ];
         let pairs = [

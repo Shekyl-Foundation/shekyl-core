@@ -188,9 +188,9 @@ pub fn shard_close<'id, V: ChainView<'id>>(
         UniverseState::Genesis => Ok(ShardClose::Open),
         UniverseState::At { parent, count } => {
             if shard.to_raw() < count.get() {
-                Ok(ShardClose::ClosedAt(
-                    shard_close_height(view, shard, parent)?.to_raw(),
-                ))
+                Ok(ShardClose::ClosedAt(shard_close_height(
+                    view, shard, parent,
+                )?))
             } else {
                 Ok(ShardClose::Open)
             }
@@ -243,7 +243,9 @@ impl super::Transition {
         view: &V,
         accrual: Accrual,
     ) -> Result<Option<EpochClose>, ViewRead<V::Fault>> {
-        let count = self.count();
+        // The schedule's edge is `u64` (Phase 2g); the count is decoded
+        // once, as the count it is.
+        let count = self.count().to_raw();
         let Some(closing) = self.schedule.close_due_at_height(count) else {
             return Ok(None);
         };

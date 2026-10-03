@@ -832,8 +832,9 @@ Ed25519-scalar `k` pins plus `CM` vectors);
 (639 blocks of real `0x07` blobs and consensus roots; regenerated from a
 daemon running the new leaf); `rust/shekyl-genesis-tool/tests/golden_kat.rs:28–34`
 (genesis blob sha256, tx hash, block id — the genesis freeze artifact);
-`rust/shekyl-archival-retention/tests/fixtures/{emission_connect,gate2_serve_credit,serve_credit_equivalence}_kat_v1.json`
-and their C++ consumers; `rust/shekyl-wire/tests/fixtures/serve_credit_tx_parity_v1.json`.
+`rust/shekyl-archival-retention/tests/fixtures/{emission_connect,gate2_serve_credit}_kat_v1.json`
+and their C++ consumers (`serve_credit_equivalence_kat_v1.json` was in this
+list until deleted 2026-10-02, DRS-E4 commit 10d); `rust/shekyl-wire/tests/fixtures/serve_credit_tx_parity_v1.json`.
 Layout-only vectors (`WITNESS_HEADER.json`, `TX_EXTRA_PQC_ROUND_TRIP.json`,
 `EMISSION_AUTH_MSG_V1`) survive a content-only change.
 

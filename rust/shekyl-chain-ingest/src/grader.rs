@@ -13,8 +13,12 @@
 //! figure. The run arrives as [`Observations`]: which rules' verdicts the
 //! connected blocks exercised (the union of every `ChainValid`'s coverage),
 //! the refusal if one ended the run, whether the redb digest agreed with
-//! the trace's checkpoint, and the per-height root oracle. The oracle is
-//! its own fact: the checkpoint carries only the live root.
+//! the trace's checkpoint, the per-height root oracle, and the archival
+//! oracle at the checkpoint. Each oracle is its own fact: the digest
+//! carries only the live root, and no archival state at all — the archival
+//! rows travel beside it as the checkpoint's other encoding
+//! (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1) and are diffed, not hashed, so a
+//! disagreement names its row (`shekyl_e2_grade_v3`).
 //!
 //! # The two clauses (RD-Q9, RULED)
 //!
@@ -36,7 +40,8 @@
 //!   declaration so a slice deriving a fact flipped its rows to real
 //!   evidence with no harness change (RD-Q6). The last fact derived on
 //!   2026-09-29 and the arm went with the declaration: every row's
-//!   component is real replay output now (`shekyl_e2_grade_v2`).
+//!   component is real replay output now (`shekyl_e2_grade_v2`; `v3` added
+//!   the archival oracle beside the root oracle, 2026-10-01).
 //!
 //! # The grader's law and the adjudication sentence (§1.3)
 //!
@@ -75,13 +80,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use shekyl_chain_rules::CenRow;
+use shekyl_chain_store::archival_snapshot::{hex, SnapshotDiff};
 use shekyl_chain_store::conformance::{grade, Acceptance, ConformanceState, FailureReason};
 use shekyl_types::BlockHeight;
 
 /// The JSON the extractor emits.
 pub const REGISTER_SCHEMA: &str = "shekyl_e2_register_v1";
 /// The JSON this module emits.
-pub const GRADE_SCHEMA: &str = "shekyl_e2_grade_v2";
+pub const GRADE_SCHEMA: &str = "shekyl_e2_grade_v3";
 
 /// One register row as extracted.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,6 +213,10 @@ pub struct Observations {
     /// Derived root against the trace, per covered height. Independent of
     /// [`Self::digest_identical`]: the digest carries only the live root.
     pub roots: RootOracle,
+    /// The redb archival rows against the trace's `0x04` record at the
+    /// checkpoint (DRS-E4 §3.8.1). Independent of the digest, which
+    /// carries no archival state at all.
+    pub archival: ArchivalOracle,
 }
 
 /// The per-height derived-vs-trace root comparison (DRS-E3 CTW-5), as the
@@ -223,6 +233,83 @@ pub struct RootOracle {
     /// Heights where the derived root differed from the trace, in the order
     /// the run saw them.
     pub diverged_at: Vec<BlockHeight>,
+}
+
+/// The covered-tip archival comparison (DRS-E4 §3.8.1, `ARW-25`), as the
+/// grade records it: the redb side's rows against the trace's, family by
+/// family, with every disagreeing row named by its key. Rows, not a hash —
+/// at one checkpoint per chain a diff says *which* row, which a digest
+/// cannot; the digest clause stays what it was.
+///
+/// `compared == false` is a run that never connected the checkpoint
+/// height: **not compared**, never identical. A
+/// non-empty [`Self::diverged`] fails the run on its own
+/// ([`GradedRun::passes`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct ArchivalOracle {
+    /// Whether the two sides' rows were taken and diffed.
+    pub compared: bool,
+    /// The checkpoint height, when compared.
+    pub at: Option<u64>,
+    /// Rows present on both sides with equal bytes, summed over the ten
+    /// families.
+    pub rows_equal: u64,
+    /// Every family with at least one disagreeing row; empty when the
+    /// sides agree or were not compared.
+    pub diverged: Vec<ArchivalFamilyDivergence>,
+}
+
+/// One family's disagreement, keys and values as lowercase hex.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ArchivalFamilyDivergence {
+    /// The family's §3.8.1 name.
+    pub family: &'static str,
+    /// Rows under the same key with different bytes.
+    pub unequal: Vec<ArchivalUnequalRow>,
+    /// Keys only the redb side holds.
+    pub only_ours: Vec<String>,
+    /// Keys only the trace holds.
+    pub only_theirs: Vec<String>,
+}
+
+/// A key both sides hold under different bytes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ArchivalUnequalRow {
+    /// The row key.
+    pub key: String,
+    /// The redb side's value bytes.
+    pub ours: String,
+    /// The trace's value bytes.
+    pub theirs: String,
+}
+
+impl ArchivalOracle {
+    /// The oracle a compared checkpoint yields.
+    #[must_use]
+    pub fn from_diff(at: BlockHeight, diff: &SnapshotDiff) -> Self {
+        Self {
+            compared: true,
+            at: Some(at.to_raw()),
+            rows_equal: diff.families.iter().map(|f| f.equal).sum(),
+            diverged: diff
+                .diverged()
+                .map(|f| ArchivalFamilyDivergence {
+                    family: f.family.name(),
+                    unequal: f
+                        .unequal
+                        .iter()
+                        .map(|r| ArchivalUnequalRow {
+                            key: hex(&r.key),
+                            ours: hex(&r.ours),
+                            theirs: hex(&r.theirs),
+                        })
+                        .collect(),
+                    only_ours: f.only_ours.iter().map(|k| hex(k)).collect(),
+                    only_theirs: f.only_theirs.iter().map(|k| hex(k)).collect(),
+                })
+                .collect(),
+        }
+    }
 }
 
 impl Observations {
@@ -372,6 +459,9 @@ pub struct GradedRun {
     /// The root oracle. A non-empty `diverged_at` fails the run even when
     /// [`Self::unadjudicated`] is empty.
     pub root_oracle: RootOracle,
+    /// The archival oracle (DRS-E4 §3.8.1). A non-empty `diverged` fails
+    /// the run even when [`Self::unadjudicated`] is empty.
+    pub archival_oracle: ArchivalOracle,
     /// Rows with a verdict clause that accepted as correct — **progress is
     /// this count** (RD-Q6).
     pub derived_and_conformant: usize,
@@ -385,12 +475,14 @@ pub struct GradedRun {
 }
 
 impl GradedRun {
-    /// §1.3's success condition: no open census adjudication, and the root
-    /// oracle did not diverge. An oracle that was not compared does not
-    /// fail the run.
+    /// §1.3's success condition: no open census adjudication, and neither
+    /// the root oracle nor the archival oracle diverged. An oracle that was
+    /// not compared does not fail the run.
     #[must_use]
     pub fn passes(&self) -> bool {
-        self.unadjudicated.is_empty() && self.root_oracle.diverged_at.is_empty()
+        self.unadjudicated.is_empty()
+            && self.root_oracle.diverged_at.is_empty()
+            && self.archival_oracle.diverged.is_empty()
     }
 
     /// The artifact as JSON.
@@ -509,6 +601,7 @@ pub fn grade_run(register: &Register, obs: &Observations) -> GradedRun {
         rows,
         refusal,
         root_oracle: obs.roots.clone(),
+        archival_oracle: obs.archival.clone(),
         derived_and_conformant,
         not_exercised,
         unadjudicated,
@@ -752,6 +845,57 @@ mod tests {
             row(&g, "CEN-A1").component,
             ComponentEvidence::Real { identical: true }
         );
+    }
+
+    #[test]
+    fn an_archival_divergence_fails_the_run_and_names_its_row() {
+        // The digest matched and the roots agreed; one archival row —
+        // the open epoch's accrued total — differed. The run fails on the
+        // archival oracle with the census list empty, and the artifact
+        // names the family and the key (ARW-25: a diff, not a hash).
+        use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
+        use shekyl_types::SettlementEpoch;
+        use shekyl_units::AtomicUnits;
+
+        let mut ours = ArchivalSnapshot::empty();
+        ours.set_budget_accruing(SettlementEpoch::from_raw(0), AtomicUnits::from_raw(7))
+            .expect("one row");
+        let mut theirs = ArchivalSnapshot::empty();
+        theirs
+            .set_budget_accruing(SettlementEpoch::from_raw(0), AtomicUnits::from_raw(8))
+            .expect("one row");
+        let mut obs = Observations::default();
+        obs.checkpoint(true);
+        obs.archival = ArchivalOracle::from_diff(BlockHeight::from_raw(3), &ours.diff(&theirs));
+        let conformant = Register::from_json(
+            r#"{"schema_version":"shekyl_e2_register_v1","rows":[{"id":"CEN-A1","state":"CHECKED-CONFORMANT"}],"unrecorded_ratified":[]}"#,
+        )
+        .expect("register");
+        let g = grade_run(&conformant, &obs);
+        assert!(!g.passes());
+        assert!(g.unadjudicated.is_empty());
+        assert!(g.root_oracle.diverged_at.is_empty());
+        assert!(g.archival_oracle.compared);
+        assert_eq!(g.archival_oracle.at, Some(3));
+        assert_eq!(g.archival_oracle.rows_equal, 0);
+        assert_eq!(g.archival_oracle.diverged.len(), 1);
+        let family = &g.archival_oracle.diverged[0];
+        assert_eq!(family.family, "archival_budget_accruing");
+        assert_eq!(family.unequal.len(), 1);
+        assert_eq!(family.unequal[0].key, "0000000000000000");
+        assert_eq!(family.unequal[0].ours, "0700000000000000");
+        assert_eq!(family.unequal[0].theirs, "0800000000000000");
+        assert!(family.only_ours.is_empty() && family.only_theirs.is_empty());
+
+        // Agreement is a compared oracle with nothing diverged.
+        obs.archival = ArchivalOracle::from_diff(BlockHeight::from_raw(3), &ours.diff(&ours));
+        let g = grade_run(&conformant, &obs);
+        assert!(g.passes());
+        assert!(g.archival_oracle.compared);
+        assert_eq!(g.archival_oracle.rows_equal, 1);
+        // Not compared is the default: `compared == false`, and it does not
+        // fail the run.
+        assert!(!ArchivalOracle::default().compared);
     }
 
     #[test]
