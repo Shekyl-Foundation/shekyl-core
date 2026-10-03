@@ -82,9 +82,8 @@ pub enum FeeModel {
 pub const SECTION_12_14_FLAT_FEE_ATOMIC: u64 = 100_000_000;
 
 /// The admission rate the §12.13 stuffer was priced at: 300 atomic per
-/// byte. It was read from a C++ macro, `FEE_PER_BYTE`, that no code calls;
-/// the chain's admission rate is the relay floor. Kept as the control arm's
-/// value and nowhere else.
+/// byte. Nothing in the chain charges it — the chain's admission rate is
+/// the relay floor. Kept as the control arm's value and nowhere else.
 pub const SECTION_12_13_ADMISSION_RATE: PerByteRate = PerByteRate::from_atomic(300);
 
 /// A fee rate: atomic units per byte of transaction weight. A type of its

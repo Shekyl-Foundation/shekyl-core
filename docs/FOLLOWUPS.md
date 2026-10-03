@@ -26,10 +26,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6, Appendix B
   - Target: pre-genesis
 
-- **Delete the C++ macro `FEE_PER_BYTE`.** It is defined in `src/cryptonote_config.h` and nothing calls it: the daemon's per-byte floor is `shekyl_economics::relay_fee_floor`. The economics sim mirrored it as the stuffer's rate until ESR-2 removed the mirror; the macro is what is left. A one-line C++ deletion that needs a C++ build to confirm. **Falsifier:** a word-match grep for `FEE_PER_BYTE` over `src/` and `tests/` returns nothing and the daemon builds.
-  - Owner: [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §2 (ESR-2)
-  - Target: pre-genesis
-
 - **Move `shekyl-p-transport` onto `shekyl-socks`.** The handshake there already requires `Isolation::Principal` or `Isolation::Persona`, offers a persona only username/password, and fails closed if the proxy selects anything else. What remains is ureq's `socks` 0.3.4 connector, which is that crate's HTTP client. Falsify by `shekyl-p-transport` dialing through `shekyl_socks::connect` with `Isolation::Persona` and no longer enabling ureq's `socks-proxy`.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis

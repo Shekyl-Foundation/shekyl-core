@@ -106,9 +106,12 @@ the result.
 **Landed.** ESR-2, 2026-10-02, at `354bc5d52`. The registered test went
 red first: at the production genesis floor a shard cost 211.67 SKL against
 its 0.5–2 SKL band. The control arm is byte-identical to its fixture. §5.3
-has the result. The C++ macro `FEE_PER_BYTE` itself still exists with no
-caller; deleting it is a C++ change and is carried by a `FOLLOWUPS.md`
-row.
+has the result. The C++ macro `FEE_PER_BYTE` the mirror copied had no
+caller, and neither had four legacy fee macros beside it (`FEE_PER_KB`,
+`FEE_PER_KB_OLD`, `DYNAMIC_FEE_PER_KB_BASE_FEE`,
+`DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD`); all five are deleted from
+`src/cryptonote_config.h` in this PR, with the C++ tree built after the
+deletion.
 
 **Landed.** ESR-3, 2026-10-02, at `08925a981`. Six folds read the
 validator's `EMISSION_SPLIT_EPOCH`; the fee-ladder instrument's pinned
@@ -167,7 +170,7 @@ defect.
 | Control arm: flat `0.1 SKL` per transaction | Reproduces §12.14, so the old and new tables differ by the fee and nothing else | Named arm, printed beside the production arm |
 | Fee multiplier on the Standard rung | What users pay above the default is not knowable before launch | `×1`, the production default, is what runs. The sweep is ESR-10 and is not printed yet |
 | Rung mix (economy / standard / priority shares) | Same. At the defaulted 15/80/5 mix ([`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §5.5) the 5 % on Priority pay roughly three quarters of all fees at the zone median | Not modelled yet: every ordinary transaction pays Standard. ESR-10 |
-| Control arm: admission at a flat 300 atomic/byte | The rate §12.13's stuffer and claim were priced at. Read from a C++ macro with no caller; the chain's admission rate is the relay floor | Part of the control arm; printed in its stuffer table |
+| Control arm: admission at a flat 300 atomic/byte | The rate §12.13's stuffer and claim were priced at. Nothing in the chain charges it; the chain's admission rate is the relay floor | Part of the control arm; printed in its stuffer table |
 | The admission rate at a shard count (`AdmissionAtShards`) | Arms that sample the chain by shard count alone have no height, and the rate depends on emission, not on traffic. The pairing is fixed as the baseline scenario's: the rate at the year the baseline reaches that count, and its last year's rate beyond | Stated in the stuffer table's footer |
 | Admission rate sampled at the year's last block | A stuffer picks its moment, and on the production arm the floor falls through the year | Attacker-favouring; stated at the field |
 | A claim is one ordinary transaction at the admission rate | The claim's own envelope and the wallet's claim hold floor (`EMISSION_CLAIM_FEE_FLOOR`) are not modelled. Carried from the pre-ESR report unchanged | Appendix A, class A, row A9 |
