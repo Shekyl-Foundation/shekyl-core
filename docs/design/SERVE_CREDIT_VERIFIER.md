@@ -1,7 +1,10 @@
 # The serve-credit verifier hole (CEN-J8, J9, J10) — Round 0 (`SCV-`)
 
 **Status: ROUND 0 — OPEN; six questions POSED (§8), none ruled.** Written
-2026-10-02 at `dev@d0bcc0c5e`. Pre-flight under
+2026-10-02 at `dev@d0bcc0c5e`; **re-verified the same day against PR #937**
+(DRS-E4 PR-b, opened after this was written, head `f10ebea9d5`) and
+`dev@b9a793a03e`. That review retracted one finding, added one, and folded
+in `ARW-27` (§10). Pre-flight under
 [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc):
 **no implementation commit cuts against this document until §8 is ruled**
 (rule 26's halt condition). Identifier families **`SCV-`** (findings) and
@@ -33,10 +36,12 @@ and whether to authorize it (`SCV-Q3`).
 Read at **`dev@d0bcc0c5e`** in a fresh worktree. Every line cite below is at
 that pin unless it is marked **[PR-b]**.
 
-**[PR-b]** means `origin/feat/drs-e4-commit6-digest@583214b5f`. That branch
-is DRS-E4's PR-b: **22 commits not on `dev`, and no open pull request** at
-the time of writing (`gh pr list --state all --search head:…` returns
-nothing). The brief was written as if PR-b were `dev`. The following
+**[PR-b]** means `feat/drs-e4-commit6-digest`, which is DRS-E4's PR-b.
+Round 0 grounded at `583214b5f`, when it had 22 commits not on `dev` and no
+pull request. It became **PR #937** later the same day, at head
+`f10ebea9d5`, which adds two commits (`ARW-Q18`'s slash pin and a rule-08
+line). Neither touches the serve-credit surface. `[PR-b]` cites below are
+re-checked at `f10ebea9d5`. The brief was written as if PR-b were `dev`. The following
 resolve **only** on PR-b:
 
 - `DEL-008` (`DAEMON_REDB_STORE.md:2670`);
@@ -67,6 +72,17 @@ recorded here for it to act on.
 | --- | --- | --- |
 | Rust (`shekyl-chain-rules`) | H20 shape; G7 block-level `(P, shard, E)` uniqueness; L7 "the persona has a record"; then it is recorded | `rules/tx.rs:543–556`; `rules/body.rs:286–311`; `archival/inputs.rs:40–58` |
 | C++ (`blockchain.cpp`) | parse, size, pair-epoch dedup (J3), record (J4), `E_first` (J5), `good_through` (J6), `h_close` and seal-on-chain (J7), held at `H_fire` (J8), segment at `H_fire`, derived leaf index (J9), chunk bounds, chunk read, FFI verify (J10) | `check_archival_serve_credit_input`, `:4751–4968` |
+
+**The C++'s J8 carries a known live defect, `ARW-27`** [PR-b]
+(`docs/completed/DRS_E4_ARCHIVAL_WRITER.md`, the `ARW-27` row; `CHANGELOG.md:295`).
+The C++ writer keys a slash-log row at the post-connect **count**
+(`blockchain_db.cpp:691`; `:689` [PR-b]; `prev_height + 1`). Its reader scans strictly
+above a **height**. So `archival_bond_holds_shard(…, h_fire)`
+(`blockchain.cpp:4877`) answers *held* at the block whose connect removed
+the shard. That happens when `H_fire` lands on `H_close(e + 1)`, the
+height at which epoch `e`'s slash connects. The Rust `holds_shard_at`
+agrees with the predicate and the C++ does not. The disposition is **no
+C++ fix** (rule 20), the same as `SO-D8` Q15's prohibition (§2.5).
 
 CEN-I18's vacuity on the credit form is correct, as the brief says
 (`tx_against_tests.rs:668`). `census.rs:492–494` lists J8–J10 as `pending`,
@@ -249,9 +265,12 @@ The brief calls this a new question. **It is ruled three times over:**
 3. **`DEL-008`** [PR-b]: the gate and its FFI delete at the cutover.
 
 The C++ keeps running unchanged and is deleted at the cutover. It is the
-divergent validator by design, the same way CEN-L10 is. Divergence
-on real chains is nil, because no chain carries a vin credit the C++
-could have accepted from a real signer (`ARW-13`).
+divergent validator by design, the same way CEN-L10 is. For **serve
+credits**, divergence on real chains is nil, because no chain carries a
+vin credit the C++ could have accepted from a real signer (`ARW-13`). The
+C++'s J8 is also known-wrong on one boundary (`ARW-27`, §1), and that
+defect is likewise left unfixed. The C++'s slash-eligibility scan shares
+that defect, but it is outside this round's rows.
 
 **The one gap left: `DEL-008`'s trigger has no conjunct requiring the
 successor's Rust rows to exist.** The trigger is "the Rust daemon is
@@ -360,7 +379,7 @@ them.
 
 | ID | Finding | Ground | Addressed to |
 | --- | --- | --- | --- |
-| **SCV-1** | **The successor's authorization waits in a circle, and the lane on the circle has closed.** (1) SO-D8 §8 precondition 2 (`:2272–2286`): membership against `assignment(h)` and dedup `(P,s,E,h)` "wait here, with the writer call site", and the falsifier is "a production caller of the settlement write on the Rust apply/slash path". (2) DRS-E4 §2.2 (`DRS_E4_ARCHIVAL_WRITER.md:316`; `:337` [PR-b]) scopes "the settlement writer … out: blocked on the per-challenge admission cutover". (3) `ARCHIVAL_SETTLEMENT_WRITER.md` §5.1 (`:324`) says the writer "cannot be live before the cutover". Each document hands the unit to the other, and DRS-E4 is closed as record [PR-b]. No open lane can fire precondition 2's falsifier. This is a deferral whose blocker is a deferral (rule 22's new section [PR-b]), and it now has no owner. The same event goes by four names: "the cutover", "the assignment cutover", "the per-challenge admission cutover", "E4 / S-ARCH". | the three cites | maintainer — `SCV-Q3` |
+| **SCV-1** | **The successor's authorization waits in a circle, and the lane on the circle has closed.** (1) SO-D8 §8 precondition 2 (`:2272–2286`): membership against `assignment(h)` and dedup `(P,s,E,h)` "wait here, with the writer call site", and the falsifier is "a production caller of the settlement write on the Rust apply/slash path". (2) DRS-E4 §2.2 (`DRS_E4_ARCHIVAL_WRITER.md:316`; `:338` [PR-b]) scopes "the settlement writer … out: blocked on the per-challenge admission cutover". (3) `ARCHIVAL_SETTLEMENT_WRITER.md` §5.1 (`:324`) says the writer "cannot be live before the cutover". Each document hands the unit to the other, and DRS-E4 is closed as record [PR-b]. No open lane can fire precondition 2's falsifier. This is a deferral whose blocker is a deferral (rule 22's new section [PR-b]), and it now has no owner. The same event goes by four names: "the cutover", "the assignment cutover", "the per-challenge admission cutover", "E4 / S-ARCH". | the three cites | maintainer — `SCV-Q3` |
 | **SCV-2** | `PDM-Q6` item 4 row 1's signed bounds term is unreconciled with `SF-D8`, and under `SHT-Q2` it binds nothing (§2.2). Three places carry it forward as the successor: the C++ comment PR-b wrote (`blockchain.cpp` above `check_archival_serve_credit_input` [PR-b]), PR-b's FOLLOWUPS row, and the brief. | PDM `:794–797`, `:850`; `ARCHIVAL_SHARD_FETCH.md` `SF-D8`; `shard_of` | maintainer — `SCV-Q2` |
 | **SCV-3** | No single document states the R-B record's layout. SO-D8 §2.1 item 1 says "the RF round reopens" (`h` on the kept side, rule 42), but `ARCHIVAL_RESPONSE_FORMAT.md` records no reopen. The `PDM-Q6` item-4 rule ("reopenings get a dated sub-section in the owning doc") is unmet in RF, CREDIT_WIRE and PER_CHALLENGE_RECORD. A grep for `PDM`, `SHT`, `tx_id` and "tx unit" returns zero hits in each. So item 4's own reversion falsifier ("the owning doc's dated sub-section cites no leaf-specific premise") cannot be evaluated. | PDM `:843–845`, `:866–868`; RF banner | Slice C's precondition (§6 sizing) |
 | **SCV-4** | **The pass record has two ruled carriers.** CEN-B4 verifies `SF-D8` countersignatures in the block's attestation witness, recomputed against the header's `attestation_root` (census `:338`; `ARCHIVAL_CREDIT_WIRE.md` §3 shape 4; landed C++ `verify_block_attestation`). SO-D8 Q9 (§7.6, RULED 2026-09-16) puts records in ordinary `serve_credit_only` transactions, "never the coinbase", with residence per `RF-D10`. Both verify through the same function (§2.2), so the verify code is one. The **carrier** is two. | census B4; SO-D8 §2.1 item 8; `SETTLEMENT_WRITER.md:651–654` | maintainer — `SCV-Q4` |
@@ -369,9 +388,10 @@ them.
 | **SCV-7** | The brief's account of how the C++ gate depends on the freeze has three errors. (1) It cites `blockchain.cpp:1504`, which is CEN-F17's operand; the gate reads LMDB `archival_shard_segment` (`db_lmdb.cpp:5090`). (2) It says the verifier "supplies [the terms] from `LeafStore::frozen_segment`". That echoes `wire.rs:352`'s table, which is wrong about the live verifier: `LeafStore::frozen_segment` (`shekyl-curve-tree/src/store/redb_backend.rs:2189`) has no consensus caller, only a bench and a test. (3) It calls the C++ disposition unruled (§2.5). Recorded under rule 16's corollary: a grouping someone else drew is a claim about its members. | §1, §2.5 | this round (corrected here); `wire.rs:352` dies with the preimage at Slice C |
 | **SCV-8** | Under R-B, `SLK-Q1`'s premise that the fold is asked at `h_fire ∈ (H_seal, H_close]` loses its height term: `H_fire`'s function is deleted, and its successor is unwritten (`SCV-12`). The horizon arithmetic re-derives once `SCV-12` is answered, not before. | [PR-b] `DRS_E4_SLASH_LOG_ROUND.md` §2 | the `SLK-` round |
 | **SCV-9** | On `dev`, the deleted-on-PR-b mirror **had** a production caller. The Rust validator's G7 calls `serve_credit_decisions::serve_credit_block_unique` (`rules/body.rs:307`). The brief's "zero production callers" was true of D-SC-A/B (the gate mirror) and false of D-SC-C. Commit 10d handled it (G7 re-homed to `second_occurrence` [PR-b]), so this is not a defect in PR-b. It is a precision note on a claim that will otherwise be cited as precedent. | `body.rs:307`; `583214b5f` | record |
-| **SCV-10** | PR-b's FOLLOWUPS row has two problems. (a) It is **duplicated**: lines 17 and 18 are byte-identical. (b) It labels the rows "J8 (seal on chain), J9 (fire-height schedule) and J10 (the leaf-preimage signature)". The census defines seal-on-chain as **J7**, J8 as holding at `H_fire`, J9 as the derived leaf index, and J10 as the response verify (`CONSENSUS_RULE_CENSUS.md:490–493`). | [PR-b] `docs/FOLLOWUPS.md:17–18` | PR-b's lane (not edited here) |
+| **SCV-10** | PR-b's FOLLOWUPS row labels the rows "J8 (seal on chain), J9 (fire-height schedule) and J10 (the leaf-preimage signature)". The census defines seal-on-chain as **J7**, J8 as holding at `H_fire`, J9 as the derived leaf index, and J10 as the response verify (`CONSENSUS_RULE_CENSUS.md:490–493`). Still present at `f10ebea9d5`. *Retracted 2026-10-02 on review against PR #937: a part (a) said the row was duplicated at `:17–18`. It never was; the row occurs once at both `583214b5f` and `f10ebea9d5` (`grep -c` → 1). The duplicate was this round's instrument: `grep -n` printed the line and `sed -n 17,…p` printed it again.* | [PR-b] `docs/FOLLOWUPS.md:17` | PR-b's lane (not edited here) |
 | **SCV-11** | Leaf-unit and `T`-era text is still stated as current in the docs Slice C reads first. The grep surface is `rg -n 'LeafStore::frozen_segment\|segment_subroot_rk\|\(b_k, b_\{k\+1\}\)\|k·T' docs/design`. Owners: RF (`:501–556`, `:579–585`), PER_CHALLENGE_RECORD (`:175–181`), CREDIT_WIRE (`:59–64`; its banner still says "Round opened … No wire byte-layout is pinned yet" against its own `:342` "RESOLVED"), CHALLENGE_MECHANISM (`:108–114`, `:163`), and PDM item 4 (`:850–856`, `T`). Separately, five documents attribute "the test IS a read" to `ARCHIVAL_CHALLENGE_MECHANISM.md` §9. It is `ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §9 (`:988`). | the grep | each owning doc; **not this PR** (rule 26: not a redesign) |
-| **SCV-12** | **"The fire height" has no referent under R-B.** SO-D8 §8's enumeration row asks `holds_shard_of` "at the fire height" (Q3 (3.3)). The same section's "Deleted" row removes the `challenge_fire_height` path. Nothing in SO-D8 names the replacement. The draw block `h` is the natural reading, but it is a reading. This is a term in the holding predicate's operand, the place the brief's §8 says the height/count family recurs. | SO-D8 §8 (enumeration and "Deleted" rows); `:1347` | Slice C's pre-flight; `SLK-Q1` |
+| **SCV-12** | **"The fire height" has no referent under R-B.** SO-D8 §8's enumeration row asks `holds_shard_of` "at the fire height" (Q3 (3.3)). The same section's "Deleted" row removes the `challenge_fire_height` path. Nothing in SO-D8 names the replacement. The draw block `h` is the natural reading, but it is a reading. This is a term in the holding predicate's operand, the place the brief's §8 says the height/count family recurs. `ARW-27` [PR-b] shows where the choice bites: epoch `e`'s slash connects at `slash_deadline_height(e) = H_close(e + 1)` (`settlement_schedule.rs:190`), inside `e + 1`'s range. So whatever height replaces `H_fire` must state which side of a same-block slash it reads, and the answer must be strictly-above, as `holds_shard_at` is. | SO-D8 §8 (enumeration and "Deleted" rows); `:1347` | Slice C's pre-flight; `SLK-Q1` |
+| **SCV-13** | **PR #937's closing banner points slice 8's pass admission at one leg of it.** `docs/completed/DRS_E4_ARCHIVAL_WRITER.md:25` [PR-b] says "slice 8's pass admission is `ARCHIVAL_SHARD_FETCH.md` `SF-D8`'s", and `:1536` calls that file "slice 8's doc". `SF-D8` owns `P`'s signed message and the anchor window. It does not specify membership in `assignment(h)`, the `W₂` deadline, witness authentication, the `(P, s, E, h)` dedup, or the carrier; those are SO-D8 §8's (§2.2, §3). A slice 8 built from `SF-D8` alone admits a `P`-countersigned read for a pair nobody was assigned, which is SO-D8 §8 evidence item 8, collusion. The same shape as `SCV-2`: one ruling's leg read as the whole rule. | [PR-b] banner `:25`, §9 `:1536`; SF doc status block | PR #937's lane; `SCV-Q3` |
 
 ---
 
@@ -464,6 +484,7 @@ pre-flight, not here.
   Slice C is **one unit**: the admission rows plus the settlement writer's
   Rust call site, which `SCV-1` shows each document assigning to the other.
   It is owned by E6 slice 8, the lane the census already gives 4.J. Its
+  spec is SO-D8 §8, not `ARCHIVAL_SHARD_FETCH.md` alone (`SCV-13`). Its
   authorization is gated on items 2–5 of §6's sizing paragraph, not on a
   falsifier that no lane will fire. *Alternative:* a named successor round
   (an `SO-` continuation) that owns it, with slice 8 consuming its rows.
@@ -508,3 +529,4 @@ pre-flight or rules this round's questions in place.
 | Date | Entry |
 | --- | --- |
 | 2026-10-02 | **Round 0 executed at `dev@d0bcc0c5e`.** Families `SCV-` / `SCV-Q` registered at birth. Twelve findings and six questions posed, none ruled (`SCV-12` and the interim's ordering added on self-review the same day). The brief's chain (PDM-Q6 item 4 → SHT-Q2 → slice 8) is replaced by its real one: SO-D8 R-B ← {Q9 bytes, the R-B record layout, the carrier, the bond shard predicate, an owner for the writer call site}. The brief's `dev` premises that resolve only on DRS-E4 PR-b are marked [PR-b] throughout. |
+| 2026-10-02 | **Re-verified against PR #937** (head `f10ebea9d5`) **and `dev@b9a793a03e`.** `dev`'s delta (#933, the prunable digest moved to Rust) touches none of this round's surfaces; every `dev` cite re-resolved after the merge. PR #937 adds two commits beyond the Round-0 pin, neither on the serve-credit surface. **`SCV-10` (a) retracted**: the "duplicated row" was this round's own `grep -n` plus `sed` printing one line twice. (b) stands. **`SCV-13` added** (the closing banner's `SF-D8` pointer). **`ARW-27` folded in** (§1, §2.5, `SCV-12`). `SCV-1` re-checked: E4 §2.2's settlement-writer line is unchanged at `:338`, and the closing banner re-homes every residue except that one, so the circle stands. |
