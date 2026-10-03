@@ -34,6 +34,40 @@ const OWNED_IDENTITIES_TABLE: TableDefinition<TreePositionKey, &[u8; 128]> =
     TableDefinition::new("owned_identities");
 const PINNED_SEGMENTS_TABLE: TableDefinition<SegmentId, u32> =
     TableDefinition::new("pinned_segments");
+/// Captured chunks (`CT-6` increment 5), keyed by the leaf position at which
+/// the chunk **closed** — its finality coordinate.
+///
+/// ## Why the key is `end_leaf` and not `(layer, index)`
+///
+/// A chunk's identity is its layer and index, but keying on that pair buys
+/// nothing and costs two things. It does not fit: at layer 0 the index
+/// reaches ~1.0e17 against the 2^56 a packed `(u8, u56)` leaves, and every
+/// other key in this store is a `u64` newtype. And it would need its own
+/// truncation rule, because the coordinate a rollback speaks in is a
+/// position.
+///
+/// `end_leaf` is **derivable** from what a reader already has — for an owned
+/// leaf at `p` and layer `L`, the chunk is `p / outputs_per_node(L)` and ends
+/// at `(index + 1) * outputs_per_node(L) - 1` — so a spend-time lookup is a
+/// direct key read rather than a scan. And truncation becomes the *same*
+/// `delete_pos_keys_batched(start)` call every other position-keyed table
+/// here uses: captures roll back in the ring's own transaction, by the same
+/// mechanism, rather than by a second rule that has to be kept in step.
+///
+/// Several layers close on one leaf when a fold cascades, so the value holds
+/// every chunk that closed at this position — which is also why they share a
+/// key naturally.
+///
+/// **Plaintext, deliberately, and pre-genesis only.** These rows mark which
+/// leaves are the wallet's. They are here rather than in the sealed ledger so
+/// capture's reorg behaviour can be audited with a redb dump while it is new
+/// — a bug found in a readable table is far cheaper than one found behind a
+/// seal. Nothing but testnet exists to expose. `FOLLOWUPS.md` carries the row
+/// that retires this table for sealed persistence before genesis; it is a
+/// tracked promise, not a mechanism, and it is deleted rather than migrated
+/// when that lands (rule 15).
+const CAPTURED_CHUNKS_TABLE: TableDefinition<TreePositionKey, &[u8]> =
+    TableDefinition::new("captured_chunks");
 // Pending (created but not yet drained) leaves, keyed by global output
 // index. Value = 128-byte leaf || 192-byte leaf-meta payload (the same
 // encoders as `LEAVES_TABLE`/`LEAF_META_TABLE` — one layout, two tables),
@@ -124,14 +158,23 @@ const META_PRUNE_DISABLED: &str = "prune_disabled";
 /// falls through to `root_at_count`, and the ring refills as blocks arrive. No
 /// row has to be reconstructed from anything.
 ///
-/// The bump exists to stop a ≤5 **writer**: a pre-ring binary does not know
-/// [`FRONTIER_SNAPSHOTS_TABLE`], so it can roll back and replay without
+/// The bump to 6 exists to stop a ≤5 **writer**: a pre-ring binary does not
+/// know [`FRONTIER_SNAPSHOTS_TABLE`], so it can roll back and replay without
 /// truncating it, and a stale row left at a replayed height can carry the
 /// expected leaf count while composing the abandoned branch's root. Nothing
 /// in-band can stop a writer that cannot see the table, so the version cell
 /// is the only mechanism that closes it, and refusing the store is exactly
 /// C8's `refuse-and-resync`.
-const SCHEMA_VERSION: u64 = 6;
+///
+/// **7 is the same hazard, one table along.** A ≤6 writer does not know
+/// [`CAPTURED_CHUNKS_TABLE`], so it can truncate the leaves and the ring
+/// while leaving captures that are no longer final — and a surviving capture
+/// is worse than a stale ring row, because the ring is consulted against an
+/// expected leaf count while a capture is read as a path's branches. The
+/// store is a cache either way, so the bump buys the absence of migration
+/// code rather than compatibility: after the resync the table starts empty
+/// and refills as blocks arrive.
+const SCHEMA_VERSION: u64 = 7;
 
 /// The CT-3a layout version: same byte layout as [`SCHEMA_VERSION`] 3 but
 /// without the maintained-pending-table contract. Test-only — production
@@ -810,6 +853,7 @@ impl LeafStore {
         txn.open_table(PINNED_SEGMENTS_TABLE)?;
         txn.open_table(PENDING_TABLE)?;
         txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+        txn.open_table(CAPTURED_CHUNKS_TABLE)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
             if meta.get(META_LEAF_COUNT)?.is_none() {
@@ -839,6 +883,8 @@ impl LeafStore {
         txn.delete_table(FROZEN_SEGMENTS_TABLE)?;
         txn.delete_table(OWNED_IDENTITIES_TABLE)?;
         txn.delete_table(PINNED_SEGMENTS_TABLE)?;
+        // Captures are derived from the leaves being wiped here.
+        txn.delete_table(CAPTURED_CHUNKS_TABLE)?;
         // A missed table here leaves stale pending rows that would corrupt
         // a subsequent `from_blocks` rebuild — pinned by the clear test.
         txn.delete_table(PENDING_TABLE)?;
@@ -1666,6 +1712,19 @@ impl LeafStore {
             delete_pos_keys_batched(&mut owned, TreePositionKey::from_raw(pos))?;
         }
         {
+            // A capture is final only while every leaf under it survives, and
+            // its key IS the position of its last leaf — so the rule is the
+            // same batched delete as above, on the same coordinate, in the
+            // same transaction. A chunk whose `end_leaf >= pos` lost a child
+            // and is dropped; one whose `end_leaf < pos` is untouched.
+            //
+            // Keying on the owned leaf's own position would keep stale
+            // chunks: leaf 100 survives a cut to 150 while its layer-1 chunk
+            // (0..683) does not.
+            let mut captures = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+            delete_pos_keys_batched(&mut captures, TreePositionKey::from_raw(pos))?;
+        }
+        {
             let mut pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
             let e = leaves_per_segment() as u64;
             if pos == 0 {
@@ -2185,6 +2244,50 @@ impl LeafStore {
         Ok(())
     }
 
+    /// Write every chunk that closed at `end_leaf`.
+    ///
+    /// A fold cascade closes several layers on one leaf, and they are written
+    /// together because they share a finality coordinate: they became final
+    /// at the same instant and a rollback un-finalizes them at the same
+    /// instant. Replaces any row at that position rather than merging — the
+    /// set is a property of the leaf count, so a second write for one
+    /// position means the same chunks recomputed, not more of them.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`] on a write failure.
+    pub fn put_captured_chunks(
+        &self,
+        end_leaf: TreePosition,
+        chunks: &[CapturedChunk],
+    ) -> Result<(), StoreError> {
+        let encoded = encode_captured_chunks(chunks);
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+            table.insert(TreePositionKey::from(end_leaf), encoded.as_slice())?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// The chunks that closed at `end_leaf`, empty when none were captured.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::CorruptMeta`] if the stored row does not decode.
+    pub fn captured_chunks(
+        &self,
+        end_leaf: TreePosition,
+    ) -> Result<Vec<CapturedChunk>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+        match table.get(TreePositionKey::from(end_leaf))? {
+            Some(v) => decode_captured_chunks(v.value()),
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// Read frozen segment record, if present.
     pub fn frozen_segment(&self, id: SegmentId) -> Result<Option<FrozenSegmentRecord>, StoreError> {
         let txn = self.db.begin_read()?;
@@ -2289,6 +2392,70 @@ impl LeafStore {
         }
         Ok(())
     }
+}
+
+/// One captured chunk: the layer whose node it is the child set of, and the
+/// chunk's bytes.
+///
+/// Two value shapes share this type, and the layer says which:
+///
+/// - **layer 0** — the leaf chunk, stored as its siblings' *identities*
+///   (`O ‖ C ‖ CM.x`, 96 B each). Not the frontier's scalars: a path needs the
+///   siblings as compressed points, and `O.x` is a one-way projection of `O`.
+///   `I` is **not stored** — it is `Hp(O)`, derived at assembly, because a
+///   stored copy of a recomputable value is a second copy that can disagree.
+/// - **layer >= 1** — the node chunk as the frontier folded it, 32 B per
+///   child.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CapturedChunk {
+    /// Absolute tree layer of the node these children belong to.
+    pub layer: u8,
+    /// The chunk's bytes, in the shape the layer implies.
+    pub bytes: Vec<u8>,
+}
+
+/// `layer ‖ len ‖ bytes`, repeated. Self-describing, because a cascade writes
+/// a variable number of chunks of two different shapes under one key and a
+/// reader must be able to walk them without consulting the fold schedule.
+fn encode_captured_chunks(chunks: &[CapturedChunk]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for chunk in chunks {
+        out.push(chunk.layer);
+        let len = u32::try_from(chunk.bytes.len()).expect("a captured chunk fits u32 bytes");
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&chunk.bytes);
+    }
+    out
+}
+
+/// Inverse of [`encode_captured_chunks`], refusing anything it did not write.
+fn decode_captured_chunks(mut raw: &[u8]) -> Result<Vec<CapturedChunk>, StoreError> {
+    const HEADER: usize = 1 + 4;
+    let mut out = Vec::new();
+    while !raw.is_empty() {
+        if raw.len() < HEADER {
+            return Err(StoreError::CorruptMeta(
+                "captured chunk header is truncated",
+            ));
+        }
+        let layer = raw[0];
+        let mut len_bytes = [0u8; 4];
+        len_bytes.copy_from_slice(&raw[1..HEADER]);
+        let len = usize::try_from(u32::from_le_bytes(len_bytes))
+            .expect("a captured chunk length fits usize");
+        let end = HEADER
+            .checked_add(len)
+            .ok_or(StoreError::CorruptMeta("captured chunk length overflows"))?;
+        if raw.len() < end {
+            return Err(StoreError::CorruptMeta("captured chunk body is truncated"));
+        }
+        out.push(CapturedChunk {
+            layer,
+            bytes: raw[HEADER..end].to_vec(),
+        });
+        raw = &raw[end..];
+    }
+    Ok(out)
 }
 
 fn delete_pos_keys_batched<V: redb::Value>(
@@ -4210,6 +4377,118 @@ mod tests {
             leaves_per_segment() * LEAF_BYTES,
             "the pinned shard stays servable across the reorg — the point of the pin"
         );
+    }
+
+    /// The truncation fencepost, asserted on **both** sides of the edge.
+    ///
+    /// A chunk is final only while every leaf under it survives, and its key
+    /// is the position of its last leaf. So the boundary is exact: a cut
+    /// whose first removed position **is** `end_leaf` takes that leaf away
+    /// and must drop the capture; a cut at `end_leaf + 1` leaves the chunk
+    /// whole and must keep it.
+    ///
+    /// Both sides, because one side alone cannot tell `<` from `<=`. A
+    /// scenario deep inside the region — leaf 100 against a cut to 150 —
+    /// passes under either inequality, which is the flat-region failure this
+    /// round has been bitten by before.
+    #[test]
+    fn a_capture_survives_a_cut_above_its_end_and_not_at_it() {
+        let end = 40_u64;
+        let chunks = vec![CapturedChunk {
+            layer: 1,
+            bytes: vec![7u8; 32],
+        }];
+
+        // Above the edge: the chunk's last leaf survives, so the chunk does.
+        let keep = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&keep, end + 2);
+        keep.put_captured_chunks(TreePosition::from_raw(end), &chunks)
+            .unwrap();
+        keep.truncate_from_tree_position(TreePosition::from_raw(end + 1))
+            .unwrap();
+        assert_eq!(
+            keep.captured_chunks(TreePosition::from_raw(end)).unwrap(),
+            chunks,
+            "a cut whose first removed position is end_leaf + 1 leaves the chunk whole"
+        );
+
+        // At the edge: the chunk's last leaf is removed, so the chunk is not
+        // final any more.
+        let drop = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&drop, end + 2);
+        drop.put_captured_chunks(TreePosition::from_raw(end), &chunks)
+            .unwrap();
+        drop.truncate_from_tree_position(TreePosition::from_raw(end))
+            .unwrap();
+        assert!(
+            drop.captured_chunks(TreePosition::from_raw(end))
+                .unwrap()
+                .is_empty(),
+            "a cut whose first removed position IS end_leaf takes the chunk's last leaf, \
+             so the capture must go"
+        );
+    }
+
+    /// A cascade's chunks share a key, and the codec round-trips both value
+    /// shapes under it.
+    #[test]
+    fn a_cascade_round_trips_both_value_shapes() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&store, 8);
+        // Layer 0 is identities (96 B per sibling); above it, nodes (32 B).
+        let chunks = vec![
+            CapturedChunk {
+                layer: 0,
+                bytes: vec![1u8; 96 * 38],
+            },
+            CapturedChunk {
+                layer: 1,
+                bytes: vec![2u8; 32 * 18],
+            },
+            CapturedChunk {
+                layer: 2,
+                bytes: vec![3u8; 32 * 38],
+            },
+        ];
+        let at = TreePosition::from_raw(5);
+        store.put_captured_chunks(at, &chunks).unwrap();
+        assert_eq!(
+            store.captured_chunks(at).unwrap(),
+            chunks,
+            "the value is self-describing, so a cascade of mixed shapes walks back out"
+        );
+        assert!(
+            store
+                .captured_chunks(TreePosition::from_raw(6))
+                .unwrap()
+                .is_empty(),
+            "a position with no capture reads empty, not an error"
+        );
+    }
+
+    /// A truncated row is refused rather than read as a short chunk.
+    #[test]
+    fn a_truncated_capture_row_is_refused() {
+        let full = encode_captured_chunks(&[CapturedChunk {
+            layer: 1,
+            bytes: vec![9u8; 64],
+        }]);
+        for cut in [1_usize, 3, 5, full.len() - 1] {
+            assert!(
+                decode_captured_chunks(&full[..cut]).is_err(),
+                "a row cut at {cut} bytes must refuse, not decode short"
+            );
+        }
+        assert!(decode_captured_chunks(&full).is_ok());
+    }
+
+    /// Leaves so a truncation has something to partition; the capture rows
+    /// are the subject, the leaves are only the setup.
+    fn seed_leaves(store: &LeafStore, count: u64) {
+        let entries: Vec<_> = (0..count).map(|i| sample_entry(i, 0)).collect();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
     }
 
     #[test]

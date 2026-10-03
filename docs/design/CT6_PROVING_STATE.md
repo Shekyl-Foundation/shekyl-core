@@ -1070,3 +1070,60 @@ One related correction: the `k` arm's field was an **absolute** spread, so a
 reported as a 70 % *cost*, inverting `#842`'s `n + k` finding. It is now a
 signed change, and a negative value reads as what it is: the `k` term lost in
 the noise of `n`.
+
+### 11.8 The capture table, as a reader dumping it will find it
+
+`captured_chunks` is **plaintext on purpose** (RULED by Rick, 2026-10-02):
+nothing but testnet exists to expose, and a bug in capture's reorg behaviour
+is far cheaper to find in a readable table than behind a seal. Sealed
+persistence is PR3, and `FOLLOWUPS.md` carries the row that retires this
+table before genesis — **deleted, not migrated** (rule 15), testnet wallets
+resync. That row is a *tracked promise with a grep surface*, not an
+enforcement: the FOLLOWUPS gates check a row's target, owner and prose, never
+its discharge.
+
+**No nettype branch exists or may be added.** A table that refused on mainnet
+would be `nettype` selecting a code path on `rust/**`, which rule 71 forbids —
+and it would defeat the reason for plaintext, since testnet would then never
+exercise the persistence mainnet ships.
+
+| | |
+| --- | --- |
+| key | `TreePositionKey` — the leaf position at which the chunk **closed** |
+| value | `layer u8 ‖ len u32le ‖ bytes`, repeated |
+| schema | `SCHEMA_VERSION` 6 → **7** |
+
+**Why the key is `end_leaf`.** A chunk's identity is `(layer, index)`, but
+that pair does not fit a `u64` — at layer 0 the index reaches ~`1.0e17`
+against the `2^56` a packed `(u8, u56)` leaves — and every other key in this
+store is a `u64` newtype. `end_leaf` is *derivable* from what a reader has
+(for an owned leaf at `p` and layer `L`, the chunk is `p / outputs_per_node(L)`
+and ends at `(index + 1) * outputs_per_node(L) - 1`), so a spend-time lookup
+stays a direct key read. And truncation becomes the **same**
+`delete_pos_keys_batched(start)` call every other position-keyed table uses,
+in the ring's own transaction — one undo path literally, not by analogy.
+
+**Two value shapes, and `I` is not stored.** The `layer` byte says which:
+
+| layer | contents | size |
+| --- | --- | --- |
+| `0` | the leaf chunk's siblings as **identities**: `O ‖ C ‖ CM.x`, 96 B each | 38 × 96 = **3 648 B** stored |
+| `>= 1` | the node chunk as the frontier folded it, 32 B per child | 18 × 32 = 576 B (Helios) or 38 × 32 = **1 216 B** (Selene) |
+
+Layer 0 is identities rather than the frontier's scalars because a path needs
+the siblings as compressed points and `O.x` is a one-way projection of `O`.
+The prover consumes four fields per sibling (`O`, `I`, `C`, `CM.x` — 128 B,
+which is the leaf term in row 4's 9 024 B path figure), but **`I` is not
+stored**: it is `Hp(O)`, derived at assembly. A stored copy of a recomputable
+value is a second copy that can disagree, and the re-derivation is one
+hash-to-point per sibling against ~6 s of proving.
+
+A fold cascade closes several layers on one leaf; those chunks share a key,
+because they became final at one instant and a rollback un-finalizes them at
+one instant.
+
+**Cross-reference note.** `CURVE_TREE_STORE_SHAPES.md` §3 enumerates the
+store's tables *at the CTS round's own pin*, where `SCHEMA_VERSION` was 5.
+This table arrived after it. Neither document is wrong; the enumeration is
+dated, and it is not edited here because rewriting a pinned list would make
+the pin a fiction.
