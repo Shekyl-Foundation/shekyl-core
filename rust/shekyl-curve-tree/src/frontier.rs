@@ -36,7 +36,7 @@
 //! [`shekyl_fcmp::tree::chunk_width`] and the depth the tree can reach.
 
 use shekyl_fcmp::tree::{
-    chunk_width, hash_grow_selene, layer_count_for_leaves, selene_hash_init,
+    chunk_width, hash_grow_selene, layer_count_for_leaves, outputs_per_node, selene_hash_init,
     try_build_upper_layers, try_promote_to_layer, LEAF_CHUNK_SCALARS, SCALARS_PER_LEAF,
     SELENE_CHUNK_WIDTH,
 };
@@ -90,6 +90,40 @@ pub struct Frontier {
     /// currently being built; folds at `chunk_width(k + 1)`.
     partial: Vec<Vec<[u8; 32]>>,
     leaf_count: u64,
+}
+
+/// A chunk that **finalized** during a push: the complete child set of a node
+/// that just closed, with the coordinates that identify it.
+///
+/// A chunk is final once its last child has arrived, and from that moment its
+/// contents never change — which is what makes it capturable. Before that it
+/// is the rightmost partial chunk at its layer, which is what the frontier
+/// itself holds.
+///
+/// # The two shapes, and why layer 0 is reported anyway
+///
+/// At `layer >= 1` the children are tree **nodes**, and they are everything a
+/// membership path needs at that layer.
+///
+/// At `layer == 0` the children are leaf **scalars** — four per leaf. A path
+/// needs the siblings as compressed *points* (`O`, `I`, `C`) beside `CM.x`,
+/// and `O.x` is a one-way projection of `O`, so the points cannot be
+/// recovered from here. Layer 0 is still reported, because the *event* is what
+/// a capturing caller needs: it says which leaf chunk closed and at which
+/// index, and the caller assembles the identities from the leaf entries it
+/// already holds.
+#[derive(Clone, Copy, Debug)]
+pub struct FoldedChunk<'a> {
+    /// Absolute tree layer of the node whose children these are.
+    pub layer: u8,
+    /// That node's index within its layer.
+    pub index: u64,
+    /// Inclusive leaf position at which the chunk closed — its **finality
+    /// coordinate**. A rollback below or at this position un-finalizes the
+    /// chunk, whatever happened to any particular leaf inside it.
+    pub end_leaf: u64,
+    /// The children, in order. Scalars at layer 0, nodes above it.
+    pub children: &'a [[u8; 32]],
 }
 
 impl Frontier {
@@ -182,6 +216,30 @@ impl Frontier {
     /// fails hash growth; [`FrontierError::TooDeep`] past
     /// [`MAX_PARTIAL_LAYERS`].
     pub fn push_leaf(&mut self, leaf: &[u8; LEAF_BYTES]) -> Result<(), FrontierError> {
+        self.push_leaf_observed(leaf, &mut |_| {})
+    }
+
+    /// [`Self::push_leaf`], reporting every chunk that **finalized** during
+    /// the push.
+    ///
+    /// Zero, one, or several chunks close on a single leaf: none for most
+    /// pushes, and a cascade when a leaf completes a run of nested chunks at
+    /// once. They are reported bottom-up, in the order they closed.
+    ///
+    /// The observer takes a borrow of the chunk the frontier is about to
+    /// consume, so a caller that wants to keep it copies it; one that does not
+    /// pays nothing. [`Self::push_leaf`] passes a no-op, which is why adding
+    /// this did not move any of its callers — and why the fold logic stays in
+    /// one place rather than being duplicated into a capturing variant.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::push_leaf`].
+    pub fn push_leaf_observed(
+        &mut self,
+        leaf: &[u8; LEAF_BYTES],
+        observe: &mut impl FnMut(FoldedChunk<'_>),
+    ) -> Result<(), FrontierError> {
         for chunk in leaf.chunks_exact(32) {
             let mut scalar = [0u8; 32];
             scalar.copy_from_slice(chunk);
@@ -192,12 +250,35 @@ impl Frontier {
             return Ok(());
         }
         let node = hash_leaf_chunk(&self.leaf_chunk)?;
+        observe(FoldedChunk {
+            layer: 0,
+            index: Self::closed_node_index(self.leaf_count, 0),
+            end_leaf: self.leaf_count - 1,
+            children: &self.leaf_chunk,
+        });
         self.leaf_chunk.clear();
-        self.carry(0, node)
+        self.carry(0, node, observe)
+    }
+
+    /// Index of the layer-`layer` node that closes when the tree reaches
+    /// `leaf_count` leaves.
+    ///
+    /// Each node at that layer covers [`outputs_per_node`] leaves and they
+    /// fill left to right, so the one that just closed is the last complete
+    /// one. Derived rather than counted: a running tally would be a second
+    /// copy of the fold schedule.
+    fn closed_node_index(leaf_count: u64, layer: u8) -> u64 {
+        let covered = u64::try_from(outputs_per_node(layer)).expect("node capacity fits u64");
+        leaf_count / covered - 1
     }
 
     /// Fold `node` into `partial[k]`, cascading while chunks fill.
-    fn carry(&mut self, mut k: usize, mut node: [u8; 32]) -> Result<(), FrontierError> {
+    fn carry(
+        &mut self,
+        mut k: usize,
+        mut node: [u8; 32],
+        observe: &mut impl FnMut(FoldedChunk<'_>),
+    ) -> Result<(), FrontierError> {
         loop {
             if k >= MAX_PARTIAL_LAYERS {
                 return Err(FrontierError::TooDeep);
@@ -210,6 +291,16 @@ impl Frontier {
                 return Ok(());
             }
             let full = std::mem::take(&mut self.partial[k]);
+            // `partial[k]` is the child set of a layer-`k + 1` node, so that
+            // is the node which just closed. Reported before `promote_one`
+            // consumes the chunk.
+            let layer = u8::try_from(k + 1).expect("frontier layer fits u8");
+            observe(FoldedChunk {
+                layer,
+                index: Self::closed_node_index(self.leaf_count, layer),
+                end_leaf: self.leaf_count - 1,
+                children: &full,
+            });
             node = promote_one(full, k)?;
             k += 1;
         }
@@ -627,6 +718,137 @@ mod tests {
             Frontier::decode(&bytes[..bytes.len() - 1]),
             Err(FrontierError::Malformed)
         );
+    }
+
+    /// Every finalized chunk the observer reports **equals the corresponding
+    /// slice of the canonical tree** at that layer.
+    ///
+    /// This is the oracle that matters for capture: a captured chunk is only
+    /// usable if it is bit-identical to what `build_layers` would have put
+    /// there. The frontier reaches it incrementally and `build_layers` from
+    /// the whole leaf set, so agreement is a real cross-check rather than a
+    /// restatement — the same relationship `curve_tree_freeze` pins for roots,
+    /// applied to the chunks beneath them.
+    #[test]
+    fn folded_chunks_equal_the_canonical_tree_slice() {
+        // Past the first layer-1 fold (684 leaves) so both layers are covered.
+        const LEAVES: u64 = 700;
+
+        let mut scalars: Vec<[u8; 32]> = Vec::new();
+        let mut folds: Vec<(u8, u64, u64, Vec<[u8; 32]>)> = Vec::new();
+        let mut f = Frontier::new();
+        for i in 0..LEAVES {
+            let l = leaf(i);
+            for c in l.chunks_exact(32) {
+                let mut sc = [0u8; 32];
+                sc.copy_from_slice(c);
+                scalars.push(sc);
+            }
+            f.push_leaf_observed(&l, &mut |chunk| {
+                folds.push((
+                    chunk.layer,
+                    chunk.index,
+                    chunk.end_leaf,
+                    chunk.children.to_vec(),
+                ));
+            })
+            .expect("advance");
+        }
+
+        let layers = shekyl_fcmp::tree::build_layers(&scalars);
+        assert!(
+            folds.iter().any(|(layer, ..)| *layer == 1),
+            "the fixture must cross a layer-1 fold, or the upper shape is untested"
+        );
+
+        for (layer, index, end_leaf, children) in &folds {
+            let covered = u64::try_from(outputs_per_node(*layer)).expect("node capacity fits u64");
+            // The identity that makes the chunk addressable at all.
+            assert_eq!(
+                *end_leaf,
+                (index + 1) * covered - 1,
+                "layer-{layer} chunk {index} must end where its capacity says"
+            );
+
+            if *layer == 0 {
+                // Layer 0's children are leaf scalars, so they are compared
+                // against the scalar stream rather than against a tree layer.
+                let start = usize::try_from(index * covered * SCALARS_PER_LEAF as u64)
+                    .expect("scalar offset fits usize");
+                let end = start + LEAF_CHUNK_SCALARS;
+                assert_eq!(
+                    children.as_slice(),
+                    &scalars[start..end],
+                    "layer-0 chunk {index} is not the leaf scalars it covers"
+                );
+                continue;
+            }
+
+            // At layer >= 1 the children are the layer below's nodes.
+            let below = &layers[usize::from(*layer) - 1];
+            let width = chunk_width(*layer);
+            let start = usize::try_from(*index).expect("index fits usize") * width;
+            assert_eq!(
+                children.as_slice(),
+                &below[start..start + width],
+                "layer-{layer} chunk {index} is not the canonical node slice"
+            );
+        }
+    }
+
+    /// A chunk is reported exactly once, and only when it is complete.
+    #[test]
+    fn a_chunk_folds_once_and_only_when_full() {
+        const LEAVES: u64 = 700;
+        let mut seen: Vec<(u8, u64)> = Vec::new();
+        let mut f = Frontier::new();
+        for i in 0..LEAVES {
+            f.push_leaf_observed(&leaf(i), &mut |c| seen.push((c.layer, c.index)))
+                .expect("advance");
+        }
+
+        let mut sorted = seen.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            seen.len(),
+            "a chunk was reported twice: {seen:?}"
+        );
+
+        // Count against the schedule rather than a literal: a layer's chunks
+        // are the complete multiples of its capacity.
+        for layer in 0..=1u8 {
+            let covered = u64::try_from(outputs_per_node(layer)).expect("node capacity fits u64");
+            let expected = LEAVES / covered;
+            let got = seen.iter().filter(|(l, _)| *l == layer).count() as u64;
+            assert_eq!(
+                got, expected,
+                "layer {layer}: {got} chunks folded, {expected} are complete in {LEAVES} leaves"
+            );
+        }
+    }
+
+    /// `push_leaf` is `push_leaf_observed` with a no-op, so the two must leave
+    /// the frontier in the same state — otherwise the capturing path and the
+    /// production path would diverge silently.
+    #[test]
+    fn observing_does_not_change_the_frontier() {
+        const LEAVES: u64 = 700;
+        let mut plain = Frontier::new();
+        let mut observed = Frontier::new();
+        for i in 0..LEAVES {
+            plain.push_leaf(&leaf(i)).expect("advance");
+            observed
+                .push_leaf_observed(&leaf(i), &mut |_| {})
+                .expect("advance");
+        }
+        assert_eq!(
+            plain.encode(),
+            observed.encode(),
+            "observing changed the frontier's state"
+        );
+        assert_eq!(plain.root().expect("root"), observed.root().expect("root"));
     }
 }
 
