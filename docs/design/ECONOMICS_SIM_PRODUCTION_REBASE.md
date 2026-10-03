@@ -140,6 +140,12 @@ ESR-10 prints A1-T at a swept multiplier and at the defaulted 15/80/5
 mix, including a zero-Priority arm. Its falsifier: the `×1` column equals
 the default report's.
 
+**Where the items land (design owner, 2026-10-02).** ESR-1, ESR-2 and
+ESR-3 land in PR #935, which goes to review with them. ESR-4 onward
+land in a second PR stacked on #935's branch, so the remaining fold
+changes — the volume window, the supply operand, the median and the
+miner stuffer — are reviewed apart from the fee arm they build on.
+
 ## 3. The median is a production change inside a sim PR
 
 `shekyl_chain_rules::rules::block_weight::effective_median_at` needs a
