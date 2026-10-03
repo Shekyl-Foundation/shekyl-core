@@ -183,7 +183,7 @@ inherited as "the client waits."
 | **Unauthenticated SOCKS, no isolation flags.** The fetch client presents no SOCKS credentials and sets no isolation flags on the zone proxy. Circuit assignment is Tor's, per its own defaults — this is not a one-circuit guarantee. Fetches then share circuits with overlay P2P (no credentials on the same SOCKS); that blending is a consequence, not a cover mechanism. Cover is TRC's subject | `SF-D3` RULED 2026-09-12 |
 | **The virtual port is 80**, a shared constant both sides read from `shekyl-curve-tree` (`SF-D4` named the home). Today's `SERVING_VIRTUAL_PORT` is `pub(crate)` in `shekyl-engine-core` (`serving/task.rs:52`) — the current location, not the home; the implementation PR moves it. Two `80`s that happen to agree are still not the ratification — this row is the number; the implementation PR puts one constant in `shekyl-curve-tree` and both sides read it. **Request amendment:** same `GET /shard/{id}`, one required header decoding to `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`, no path token, query string, or body; every production call uses it | `SF-D5` RULED 2026-09-12; AMENDED 2026-09-13 (×2) |
 | **Timeout / miss / retry taxonomy.** One table, two caller columns. Per-attempt handling is the client's (`SF-D1`); the axis is whom the scheduler names next and what exhaustion means. Organic draw bound `k` is the fill scheduler's (`TJ-D`), not the fetch crate's (`client-need` on remaining-empty or `k`). No-endpoint on the bond record is unrepresentable (`EU-D3` narrowed 2026-09-13), so the former filter / pre-dial non-row is void. 404 is a completed exchange (immediate miss), not a retry. Over-capacity silent close is stall-class (`RF-R1`), not a 404. Any other complete-head is malformed. Stall retries of that `P` reuse the same 72-byte header. `content-length` above `signature_envelope_len + max framed_len()` is refused from the HTTP headers; otherwise it must equal `signature_envelope_len + framed_len()`, known after fixed metadata but before segment bytes. The envelope is a fixed-width slice, then parsed. Parse, root-mismatch, and bad-countersignature remain typed separately. Reopen if W₂ retry budget and `CHALLENGE_RESPONSE_BLOCKS` cannot coexist | `SF-D6` RULED 2026-09-12; AMENDED 2026-09-13 |
-| **One fixed client in-flight cap `N`, one shared admission path, no caller differentiation.** Challenge and organic use the same client code, admission, and request; no priority, reservation, caller tag, or second entry point. The API is `fetch(&FetchTarget, &header, verifier)` — **AMENDED 2026-09-13, implemented 2026-09-14:** the target is typed (`ServingEndpoint`, `HybridPublicKey`, `u64`); expected content is the per-call `ContentVerify` hole, caller-supplied from local chain state, never from a response; schedulers name `P`; the HTTP path names only `s`. `N` slots, no unbounded buffer: a scheduler waits for a slot. `N` is also a memory cap on the Pi 4 floor: in-flight bytes, `N × MAX_TX_SIZE` under per-tx streaming verification (re-keyed from `N × SHARD_BYTES`, whose premise — the client materialising a segment to verify `R_k` — `PDM-Q6` retired; amendment 2026-10-03, `SHT-3`). Not organic draw cap `k` and not a function of `D`. SP-T3 re-base / W₂ owns the upper bound as min(circuit-churn, memory); the implementation PR owns the lower-bound judgement. Reopen if capped reconstruct throughput falls below TJ-D's chain-growth requirement, or wait-for-a-slot plus transfer approaches `CHALLENGE_RESPONSE_BLOCKS` | `SF-D7` RULED 2026-09-12; AMENDED 2026-09-13; memory premise re-keyed 2026-10-03 (`SHT-3`) |
+| **One fixed client in-flight cap `N`, one shared admission path, no caller differentiation.** Challenge and organic use the same client code, admission, and request; no priority, reservation, caller tag, or second entry point. The API is `fetch(&FetchTarget, &header, verifier)` — **AMENDED 2026-09-13, implemented 2026-09-14:** the target is typed (`ServingEndpoint`, `HybridPublicKey`, `u64`); expected content is the per-call `ContentVerify` hole, caller-supplied from local chain state, never from a response; schedulers name `P`; the HTTP path names only `s`. `N` slots, no unbounded buffer: a scheduler waits for a slot. `N` is also bounded by memory on the Pi 4 floor: it is at most the widest `N` whose in-flight bytes, `N × MAX_TX_SIZE` under per-tx streaming verification, fit the floor's fetch memory (re-keyed from `N × SHARD_BYTES`, whose premise — the client materialising a segment to verify `R_k` — `PDM-Q6` retired; amendment 2026-10-03, `SHT-3`). Not organic draw cap `k` and not a function of `D`. SP-T3 re-base / W₂ owns the upper bound as min(circuit-churn, memory); the implementation PR owns the lower-bound judgement. Reopen if capped reconstruct throughput falls below TJ-D's chain-growth requirement, or wait-for-a-slot plus transfer approaches `CHALLENGE_RESPONSE_BLOCKS` | `SF-D7` RULED 2026-09-12; AMENDED 2026-09-13; memory premise re-keyed 2026-10-03 (`SHT-3`) |
 | **Organic selection is a uniform memoryless draw** over the drawable holder set of shard `s`, performed by the organic scheduler, not by `shekyl-p-fetch`. Per-need exclusion is scratch, not memory. The fetch client forms no opinions — it is given a destination | `SF-D10` RULED; `SF-D12` corollary |
 | **Countersign with the bond record's hybrid identity key**, `BondPost.hybrid_public_key`, both Ed25519 and ML-DSA legs. This rules the key, not the message (the message is `SF-D8`'s). This is not the onion key and never the cold `bond_spend_pk`. `shekyl-p-serve` holds no key material: `PServeEndpoint` takes a signer callback; tests inject a test key; SH-2 wires the persona secret. The onion endpoint is authenticated by the Tor rendezvous and bound beside the identity key on P's authorized bond record; the response signature proves the live responder also controls P's identity key | `SF-D13` RULED 2026-09-13 |
 | **The signed message is the decoded header ‖ `shard_id_le[8]`: `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`** (80 bytes) — requester-random, the requester's chain anchor at `tip − 720`, then the `u64` `P` parsed from `/shard/{id}`, under `shekyl/archival-attestation-scheme-v2` (the v1 nonce-only domain is retired). The challenge tuple and `cb_out_key` are not in this message: the fetch proves `P` served, not which miner asked. `shard_id` stops a decoy-route signature being filed as a pass for a different shard. The pass record **carries** `nonce` and `anchor_height` (neither is recomputable); admission rebuilds the transcript with the connecting chain's hash at `anchor_height`, requires `anchor_height ∈ [h − 720 − L, h − 720]` with `h` the validated predecessor, and refuses every pass record while `h < 720 + L` (724). Domain string, fixture, and boundary KATs (723/724) LANDED 2026-09-13 by (a0) | `SF-D8` message half RULED 2026-09-13; AMENDED 2026-09-13 (×2); LANDED (a0) |
@@ -775,17 +775,11 @@ Pi: its binding constraint is uplink and Tor circuit throughput, not
 its ability to track a handful of outstanding transfers. A
 floor-derived number is adequate for both, for different reasons.
 
-*Superseded premise, kept as the record of the ruling: `R_k` is retired, so
-nothing materialises a segment (amendment 2026-10-03 below, `SHT-3`).*
-**The client materialises the segment.** `recompute_segment_r_k`
-takes `&[[u8; 128]]`. `SF-D8` returns verified-or-refused, so the
-in-flight body is resident until verify finishes. The server streams
-chunks so `MAX_INFLIGHT` is not `N × 3.33 MB` on the serve side; the
-client cannot. `N` is therefore also a memory cap:
-`N × SHARD_BYTES` must fit the Pi 4 floor. Copying the server's
-placeholder 64 is 213 MB resident and is refused for the same reason
-the server refused to materialise. The SP-T3 / W₂ upper bound is the
-**min** of circuit-churn and this memory cap.
+**Memory — WITHDRAWN premise (2026-10-03, `SHT-3`).** The ruling sized a
+memory leg on the client materialising a segment to verify `R_k`, so that
+`N × SHARD_BYTES` had to fit the Pi 4 floor; the server's placeholder 64 was
+refused at 213 MB on that ground. `R_k` is retired, nothing materialises a
+segment, and the leg is restated in the amendment below.
 
 **No unbounded buffer.** "Shared queue" is one admission path, not a
 list of thousands of pending shards. There are `N` in-flight slots.
@@ -798,10 +792,11 @@ not an internal queue the challenge caller sits behind.
 `N`, one shared admission path, `fetch(&FetchTarget, &header)` for
 both callers — target typed per the 2026-09-13 amendment below). Caller-blind is the HTTP request, not the API:
 the path is `/shard/{id}`; the scheduler supplies the destination.
-"Small fixed" is not a number. The range: bounded above by the **min** of (what a Pi 4's Tor client
-handles without circuit churn — SP-T3 re-base / W₂ over this topology)
-and (`N × SHARD_BYTES` on that same floor — now `N × MAX_TX_SIZE`, amendment
-2026-10-03); bounded below by enough
+"Small fixed" is not a number. The range: bounded above by the **min** of two
+widths — the widest `N` a Pi 4's Tor client handles without circuit churn
+(SP-T3 re-base / W₂ over this topology), and the widest `N` whose in-flight
+bytes fit that same floor's fetch memory (`N × MAX_TX_SIZE` since the amendment
+of 2026-10-03; `N × SHARD_BYTES` at ruling); bounded below by enough
 parallelism that reconstruct is not serialised one shard at a time.
 The lower endpoint is the implementation PR's own judgement: that PR
 records why its chosen parallelism is acceptable for fill throughput;
@@ -839,9 +834,11 @@ segment to verify `R_k`. `PDM-Q6` retired that premise: `R_k` is gone
 (item 4), the read is still whole-shard (`SF-D1`), and content is verified
 per transaction against the retained hash rows, aborting on the first miss
 (item 5; `ARCHIVAL_PRUNED_DAEMON_MODE.md`, `SF-D7`'s row in its downstream
-table). So the floor is in-flight bytes, **one transaction per fetch:
-`N × MAX_TX_SIZE`** (`shekyl_wire::transaction::MAX_TX_SIZE`, 1 MB, so 8 MB
-at `N = 8`). It does not grow with the shard length `W`.
+table). So the memory leg of `N`'s upper bound is **the widest `N` whose
+in-flight bytes, one transaction per fetch, fit the floor's fetch memory**:
+`N × MAX_TX_SIZE` must fit it (`shekyl_wire::transaction::MAX_TX_SIZE`, 1 MB,
+so 8 MB at `N = 8`). That is taken with the circuit-churn width as their
+minimum, as before, and it does not grow with the shard length `W`.
 
 - **What ships today sits between the two.** `shekyl-p-fetch` still buffers
   each body whole (`Vec<u8>`, bounded by `max_body_bytes()`, which is still
