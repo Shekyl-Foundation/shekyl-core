@@ -722,10 +722,14 @@ fn an_outbound_handshake_fills_the_map_across_the_boundary() {
 }
 
 /// The dispatch crossing is additive: same plan as `plan_relay_with_refresh`,
-/// plus a carrier. Covert-on + local origin (RD-4: always stems) so the
-/// epoch cannot make this vacuous. This bites against a seam that starts
-/// re-deciding the phase, and against a covert-on stem that forgets to
-/// name a slot inside the stem width.
+/// plus a carrier.
+///
+/// A Tor own-edge always stems (RD-4) and takes the ordinary connection:
+/// no cover on Tor by ruling, so the epoch cannot hide the phase and the
+/// carrier must not be a noise channel. A forwarded stem in a stem epoch
+/// is the cell that names a slot: on a cover-bearing link that slot is
+/// the own-edge's channel, and this fixture is the only link-encrypted
+/// connector the build has.
 #[test]
 fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
     reset();
@@ -772,12 +776,49 @@ fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
         );
         assert_eq!(via_dispatch, SHEKYL_RELAY_PLAN_STEM, "RD-4: origin stems");
         assert_eq!(
-            carrier, SHEKYL_RELAY_CARRIER_NOISE,
-            "covert is on and this is a stem"
+            carrier, SHEKYL_RELAY_CARRIER_ORDINARY,
+            "no cover on Tor by ruling: a local origin leaves immediately"
+        );
+        shekyl_relay_zone_free(h);
+
+        // A forwarded stem, once the epoch is a stem epoch, names a slot.
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, NOISE_ON_ENCRYPTED, TOR_CONFIGURED);
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, TOR_LINK);
+        shekyl_relay_zone_on_session_established(h, id(2).as_ptr(), false, TOR_LINK);
+        shekyl_relay_zone_on_session_established(h, id(3).as_ptr(), false, TOR_LINK);
+        let source = id(9);
+        let mut now = 0u64;
+        let mut forwarded = SHEKYL_RELAY_PLAN_FLUFF_EPOCH;
+        let mut fwd_carrier = 0xFFu8;
+        let mut fwd_channel = 0xFFFF_FFFFu32;
+        let mut fwd_dest = [0u8; 16];
+        for _ in 0..32 {
+            forwarded = shekyl_relay_zone_plan_dispatch_with_refresh(
+                h,
+                source.as_ptr(),
+                false,
+                true,
+                fwd_dest.as_mut_ptr(),
+                &raw mut fwd_carrier,
+                &raw mut fwd_channel,
+            );
+            if forwarded == SHEKYL_RELAY_PLAN_STEM {
+                break;
+            }
+            now += 600_000;
+            shekyl_relay_zone_force_epoch(h, now);
+        }
+        assert_eq!(
+            forwarded, SHEKYL_RELAY_PLAN_STEM,
+            "a stem epoch did not appear"
+        );
+        assert_eq!(
+            fwd_carrier, SHEKYL_RELAY_CARRIER_NOISE,
+            "a forwarded stem on a noise-enabled link names the slot's channel"
         );
         assert!(
-            (channel as usize) < 2,
-            "channel is the stem slot (§20.3); {channel} is outside the width"
+            (fwd_channel as usize) < 2,
+            "channel is the stem slot (§20.3); {fwd_channel} is outside the width"
         );
         shekyl_relay_zone_free(h);
     }
