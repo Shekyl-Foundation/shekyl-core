@@ -1122,6 +1122,22 @@ A fold cascade closes several layers on one leaf; those chunks share a key,
 because they became final at one instant and a rollback un-finalizes them at
 one instant.
 
+**Writes merge by layer; they do not replace.** They do not always arrive
+together, and the coordinates are shared: layer-0 chunk 17 and layer-1 chunk 0
+both end at leaf **683**. So an output discovered *late*, whose layer-0 chunk
+ends there, would silently erase another output's layer-1 chunk already at that
+key. A first revision replaced, on the reasoning that the chunk set is a
+property of the leaf count — it is not: it is a property of the leaf count
+**and of which outputs are owned**, and ownership can be learned after the
+fold, which is precisely what the backfill does.
+
+Re-offering identical bytes is a **no-op**, so reconciliation may recompute
+freely. Offering *different* bytes for one `(end_leaf, layer)` is refused with
+`StoreError::ConflictingCapture`: a chunk's contents are fixed by the leaves
+under it, so one coordinate has one correct value, and two sources disagreeing
+is the condition a capture exists to be trusted against rather than a merge to
+resolve in either direction.
+
 **Cross-reference note.** `CURVE_TREE_STORE_SHAPES.md` §3 enumerates the
 store's tables *at the CTS round's own pin*, where `SCHEMA_VERSION` was 5.
 This table arrived after it. Neither document is wrong; the enumeration is

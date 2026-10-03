@@ -576,6 +576,21 @@ pub enum StoreError {
     /// store's declared posture forbids, and must learn it here rather
     /// than at the first failed challenge.
     PruneDisabledPosture,
+    /// Two different contents were offered for one `(end_leaf, layer)`
+    /// capture (`CT-6` §11.8).
+    ///
+    /// A chunk's contents are fixed by the leaves under it, so one coordinate
+    /// has exactly one correct value. Re-offering the same bytes is fine and
+    /// expected — reconciliation recomputes what is already there. *Different*
+    /// bytes mean two sources disagree about the tree, which is the condition
+    /// a capture exists to be trusted against, so it is refused rather than
+    /// resolved in either direction.
+    ConflictingCapture {
+        /// The coordinate offered twice.
+        end_leaf: u64,
+        /// The layer whose contents disagreed.
+        layer: u8,
+    },
     /// A [`LeafStore::pin_serve_set`] member does not fit the store's `u32`
     /// [`SegmentId`] space, so it cannot name a segment in *any* store — a
     /// construction bug in whatever built the serve-set, not a freeze race.
@@ -721,6 +736,7 @@ impl StoreError {
             | StoreError::FrozenSegmentRecordMissing { .. }
             | StoreError::FrozenSegmentRkMismatch { .. } => StoreOpenFault::Corrupt,
             StoreError::InvalidTruncate { .. }
+            | StoreError::ConflictingCapture { .. }
             | StoreError::LeafCountOutOfBounds { .. }
             | StoreError::TruncatedIntoPrunedRange { .. }
             | StoreError::FrozenSegmentPruned { .. }
@@ -2244,28 +2260,64 @@ impl LeafStore {
         Ok(())
     }
 
-    /// Write every chunk that closed at `end_leaf`.
+    /// Add chunks that closed at `end_leaf`, **merging by layer**.
     ///
-    /// A fold cascade closes several layers on one leaf, and they are written
-    /// together because they share a finality coordinate: they became final
-    /// at the same instant and a rollback un-finalizes them at the same
-    /// instant. Replaces any row at that position rather than merging — the
-    /// set is a property of the leaf count, so a second write for one
-    /// position means the same chunks recomputed, not more of them.
+    /// A fold cascade closes several layers on one leaf, and they share a
+    /// finality coordinate: they became final at one instant and a rollback
+    /// un-finalizes them at one instant. But they do not always arrive
+    /// together, and that is why this merges rather than replaces.
+    ///
+    /// # Why replacing would lose data
+    ///
+    /// An earlier revision inserted, on the reasoning that "the set is a
+    /// property of the leaf count, so a second write means the same chunks
+    /// recomputed". That is false: the set is a property of the leaf count
+    /// **and of which outputs are owned**, and ownership can be learned after
+    /// the fold. Cascade coordinates are shared between layers — layer-0
+    /// chunk 17 and layer-1 chunk 0 both end at leaf 683 — so an output
+    /// discovered late, whose layer-0 chunk ends there, would have **silently
+    /// erased** another output's layer-1 chunk already at that key. Latent
+    /// only until the backfill exists, which is exactly what triggers it.
+    ///
+    /// Re-offering identical bytes is a no-op, so reconciliation may recompute
+    /// freely. Offering *different* bytes for one `(end_leaf, layer)` is
+    /// refused: a chunk's contents are fixed by the leaves under it, so two
+    /// sources disagreeing is a defect rather than a merge to resolve.
     ///
     /// # Errors
     ///
-    /// [`StoreError`] on a write failure.
+    /// [`StoreError::ConflictingCapture`] if a layer already holds different
+    /// bytes; [`StoreError`] on a read or write failure.
     pub fn put_captured_chunks(
         &self,
         end_leaf: TreePosition,
         chunks: &[CapturedChunk],
     ) -> Result<(), StoreError> {
-        let encoded = encode_captured_chunks(chunks);
+        let key = TreePositionKey::from(end_leaf);
         let txn = self.db.begin_write()?;
         {
             let mut table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
-            table.insert(TreePositionKey::from(end_leaf), encoded.as_slice())?;
+            let mut merged = match table.get(key)? {
+                Some(v) => decode_captured_chunks(v.value())?,
+                None => Vec::new(),
+            };
+            for incoming in chunks {
+                match merged.iter().find(|held| held.layer == incoming.layer) {
+                    Some(held) if held.bytes == incoming.bytes => {}
+                    Some(_) => {
+                        return Err(StoreError::ConflictingCapture {
+                            end_leaf: end_leaf.to_raw(),
+                            layer: incoming.layer,
+                        })
+                    }
+                    None => merged.push(incoming.clone()),
+                }
+            }
+            // Deterministic order, so one set of chunks has one encoding
+            // however it arrived.
+            merged.sort_unstable_by_key(|c| c.layer);
+            let encoded = encode_captured_chunks(&merged);
+            table.insert(key, encoded.as_slice())?;
         }
         txn.commit()?;
         Ok(())
@@ -4391,6 +4443,94 @@ mod tests {
     /// scenario deep inside the region — leaf 100 against a cut to 150 —
     /// passes under either inequality, which is the flat-region failure this
     /// round has been bitten by before.
+    /// A late capture at a cascade key must not erase the chunk already there.
+    ///
+    /// This is the sequence an `insert` would have lost, and it is reachable
+    /// as soon as ownership can be learned after a fold. Cascade coordinates
+    /// are shared between layers: layer-0 chunk 17 and layer-1 chunk 0 both
+    /// end at leaf **683**. So an output owned early contributes the layer-1
+    /// chunk there, and an output discovered *late* in layer-0 chunk 17
+    /// contributes a layer-0 chunk at the same key. Replacing the row would
+    /// have dropped the first silently — no error, no missing key, just a
+    /// path that cannot be built later.
+    #[test]
+    fn a_late_layer_zero_capture_does_not_erase_the_layer_one_chunk() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&store, 8);
+        // 683 is the first coordinate a layer-0 and a layer-1 chunk share.
+        let at = TreePosition::from_raw(683);
+
+        let upper = CapturedChunk {
+            layer: 1,
+            bytes: vec![0xAA; 32 * 18],
+        };
+        let lower = CapturedChunk {
+            layer: 0,
+            bytes: vec![0xBB; 96 * 38],
+        };
+
+        // Owned early: the cascade's upper chunk lands first.
+        store
+            .put_captured_chunks(at, std::slice::from_ref(&upper))
+            .unwrap();
+        // Discovered late: the backfill contributes only layer 0.
+        store
+            .put_captured_chunks(at, std::slice::from_ref(&lower))
+            .unwrap();
+
+        let held = store.captured_chunks(at).unwrap();
+        assert_eq!(
+            held,
+            vec![lower, upper],
+            "both layers must survive, ordered by layer; a replace would leave only the \
+             late one and the loss would be silent"
+        );
+    }
+
+    /// Re-offering identical bytes is a no-op, so reconciliation may
+    /// recompute freely; different bytes for one coordinate are refused.
+    #[test]
+    fn an_identical_recapture_is_idempotent_and_a_conflicting_one_refuses() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&store, 8);
+        let at = TreePosition::from_raw(683);
+        let chunk = CapturedChunk {
+            layer: 1,
+            bytes: vec![0xAA; 32 * 18],
+        };
+
+        store
+            .put_captured_chunks(at, std::slice::from_ref(&chunk))
+            .unwrap();
+        store
+            .put_captured_chunks(at, std::slice::from_ref(&chunk))
+            .unwrap();
+        assert_eq!(
+            store.captured_chunks(at).unwrap(),
+            vec![chunk.clone()],
+            "recomputing the same chunk must not duplicate it"
+        );
+
+        let disagreeing = CapturedChunk {
+            layer: 1,
+            bytes: vec![0xCC; 32 * 18],
+        };
+        match store.put_captured_chunks(at, &[disagreeing]) {
+            Err(StoreError::ConflictingCapture { end_leaf, layer }) => {
+                assert_eq!((end_leaf, layer), (683, 1));
+            }
+            other => panic!(
+                "two contents for one coordinate is a defect, not a merge to resolve; \
+                 got {other:?}"
+            ),
+        }
+        assert_eq!(
+            store.captured_chunks(at).unwrap(),
+            vec![chunk],
+            "a refused write must leave the held chunk untouched"
+        );
+    }
+
     #[test]
     fn a_capture_survives_a_cut_above_its_end_and_not_at_it() {
         let end = 40_u64;
