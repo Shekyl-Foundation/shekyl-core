@@ -848,21 +848,38 @@ pub fn spent_keys_of(chain: &[(Block, Vec<Transaction>)]) -> Vec<[u8; 32]> {
         .collect()
 }
 
+/// What a test trace's covered-tip checkpoint records. The checkpoint's two
+/// encodings travel together (`trace.rs`), so this names both at once.
+#[derive(Clone, Copy, Debug)]
+pub enum Pinned<'a> {
+    /// The grown tree's own state after the tip: its digest, and the
+    /// archival rows the store writes for a chain that posts no bonds
+    /// ([`GrownTree::archival_snapshot_after`]).
+    OfTree,
+    /// A state read from a reference store — the pair as the LMDB walker
+    /// would have taken it, for chains the tree cannot derive (bond posts,
+    /// an injected credit).
+    Read {
+        /// The reference digest.
+        digest: Digest,
+        /// The reference rows.
+        archival: &'a ArchivalSnapshot,
+    },
+}
+
 /// A trace for `chain`. Each row's `root_after` is [`GrownTree::root_after`]
 /// of this chain and its three weight values are the tree's derivation at
 /// that height ([`GrownTree::weights_of`], [`GrownTree::median_for`]);
 /// `economics` supplies the rest and is called once per height, from
-/// genesis, in order. `checkpoint` appends the digest of that same tree
-/// after the tip, and with it the archival snapshot the store writes for
-/// a chain that posts no bonds ([`GrownTree::archival_snapshot_after`]) —
-/// the checkpoint's two encodings travel together (`trace.rs`).
+/// genesis, in order. `pinned` appends the checkpoint — both encodings —
+/// after the tip, when given.
 ///
 /// Heights are the chain's indices. A chain whose first block is not
 /// genesis is not this constructor's input.
-pub fn trace_with(
+pub fn trace_pinned(
     chain: &[(Block, Vec<Transaction>)],
     mut economics: impl FnMut(u64) -> TraceEconomics,
-    checkpoint: bool,
+    pinned: Option<Pinned<'_>>,
 ) -> Trace {
     let mut w = TraceWriter::new(Vec::new()).expect("header");
     let tree = GrownTree::over(chain);
@@ -871,19 +888,54 @@ pub fn trace_with(
         let facts = economics(height).over(&tree, height);
         w.push_facts(h(height), &facts).expect("facts");
     }
-    if checkpoint && !chain.is_empty() {
-        let tip = u64::try_from(chain.len() - 1).expect("a non-empty chain has a tip");
-        w.push_checkpoint(&digest_of(chain, tree.root_after(tip).as_bytes()))
-            .expect("checkpoint");
-        w.push_archival_snapshot(&tree.archival_snapshot_after(tip))
+    if let Some(pinned) = pinned {
+        let (digest, archival) = match pinned {
+            Pinned::OfTree => {
+                let tip = chain
+                    .len()
+                    .checked_sub(1)
+                    .and_then(|t| u64::try_from(t).ok())
+                    .expect("a checkpoint of the tree needs a tip: the chain is empty");
+                (
+                    digest_of(chain, tree.root_after(tip).as_bytes()),
+                    tree.archival_snapshot_after(tip),
+                )
+            }
+            Pinned::Read { digest, archival } => (digest, archival.clone()),
+        };
+        w.push_checkpoint(&digest).expect("checkpoint");
+        w.push_archival_snapshot(&archival)
             .expect("archival snapshot");
     }
     Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read")
 }
 
+/// [`trace_pinned`] with the tree's own checkpoint, or none.
+pub fn trace_with(
+    chain: &[(Block, Vec<Transaction>)],
+    economics: impl FnMut(u64) -> TraceEconomics,
+    checkpoint: bool,
+) -> Trace {
+    trace_pinned(chain, economics, checkpoint.then_some(Pinned::OfTree))
+}
+
 /// [`trace_with`] with the synthetic economics: distinct per height, zero burn.
 pub fn trace_of(chain: &[(Block, Vec<Transaction>)], checkpoint: bool) -> Trace {
     trace_with(chain, synthetic_economics, checkpoint)
+}
+
+/// [`trace_pinned`] with the synthetic economics and a checkpoint read
+/// from a reference store ([`Pinned::Read`]).
+pub fn trace_read(
+    chain: &[(Block, Vec<Transaction>)],
+    digest: Digest,
+    archival: &ArchivalSnapshot,
+) -> Trace {
+    trace_pinned(
+        chain,
+        synthetic_economics,
+        Some(Pinned::Read { digest, archival }),
+    )
 }
 
 /// The redb-shaped digest of `chain` given the root after its tip.

@@ -37,12 +37,14 @@
 //! # Sinks
 //!
 //! The trace carries at most one checkpoint, at its covered tip (RD-F18).
-//! After that height connects, the loop asks the connector for the
-//! redb-side [`crate::trace::Digest`] and records it beside the trace's
-//! expectation; when the trace carries the checkpoint's other encoding —
-//! the archival rows (DRS-E4 §3.8.1, version `0x01`) — it asks for the
-//! redb side's rows too and records the diff. A refusal is a **recorded
-//! verdict**: the writer stays up;
+//! When the run is over and its committed tip is that height, the loop
+//! asks the connector once for the redb side's state — the
+//! [`crate::trace::Digest`] and the archival rows (DRS-E4 §3.8.1, version
+//! `0x01`), one read — and records the digest beside the trace's
+//! expectation and the rows' diff against the trace's `0x04` record. At the
+//! end, not at the connect: an `Inject` filed at the covered tip commits
+//! after the block it is attributed to, and the trace's rows already carry
+//! it. A refusal is a **recorded verdict**: the writer stays up;
 //! this driver ends the run (an honest chain that refuses is a
 //! disagreement; E3 and the mutation family keep the same actor and decide
 //! for themselves). A store halt is a fault.
@@ -66,7 +68,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::connector::{
-    Apply, ArchivalState, Connector, ConnectorArgs, Digest, HashAt, Inject, Rewind, RunFault,
+    Apply, CheckpointState, Connector, ConnectorArgs, Digest, HashAt, Inject, Rewind, RunFault,
 };
 use crate::grader::Observations;
 use crate::metrics::{Concurrency, Metrics, MetricsArtifact};
@@ -128,13 +130,14 @@ pub struct RunReport {
     /// The refusal that ended the run, if a verdict did.
     pub refused: Option<(BlockHeight, InvalidBlock)>,
     /// The redb-side digest at the trace's covered-tip checkpoint, beside
-    /// the trace's expectation, when that height connected.
+    /// the trace's expectation — read after the run's last committed event,
+    /// when the committed tip is that height. `None` when the run ended
+    /// elsewhere: **not compared**, never identical.
     pub checkpoint: Option<Checkpoint>,
     /// The checkpoint's other encoding (DRS-E4 §3.8.1, `ARW-25`): the
     /// redb-side archival rows at the covered tip diffed against the
-    /// trace's `0x04` record, family by family, when that height connected.
-    /// `None` when the run ended before the covered tip: **not compared**,
-    /// never identical.
+    /// trace's `0x04` record, family by family, from the same read as
+    /// `checkpoint` and `None` exactly when it is.
     pub archival: Option<ArchivalCheckpoint>,
     /// The derived-vs-trace root comparison, per connected height the trace
     /// has facts for (DRS-E3 CTW-5, `DRS_E3_CURVE_WRITER.md` §3.8): how many
@@ -815,6 +818,7 @@ where
                 break;
             }
         }
+        self.compare_checkpoint().await?;
         self.report.metrics = self.metrics.snapshot();
         Ok(std::mem::take(&mut self.report))
     }
@@ -1000,34 +1004,58 @@ where
                     .record(*at, *ours, RecordedEmissionFacts::from(facts.value()));
             }
         }
-        if let Some(at) = self.checkpoint_at {
-            if applied.connected.iter().any(|(h, _)| *h == at) {
-                let ours = self.connector.ask(Digest).await.map_err(collapse)?;
-                let theirs = *self
-                    .trace
-                    .expect(at)
-                    .expect("checkpoint_at comes from the trace")
-                    .value();
-                self.report.checkpoint = Some(Checkpoint { at, ours, theirs });
-                // The checkpoint's other encoding (DRS-E4 §3.8.1): the
-                // trace's archival rows at the same height, diffed against
-                // the redb side's. A trace carries both encodings or
-                // neither (`TraceFault::MissingSnapshot`), so a checkpoint
-                // height without a snapshot is unreachable here.
-                let (_, theirs) = self
-                    .trace
-                    .archival_snapshot()
-                    .expect("a trace with a checkpoint carries its archival snapshot");
-                let ours = self.connector.ask(ArchivalState).await.map_err(collapse)?;
-                self.report.archival = Some(ArchivalCheckpoint {
-                    at,
-                    diff: ours.diff(theirs.value()),
-                });
-            }
-        }
         if let Some(refused) = applied.refused {
             self.report.refused = Some(refused);
         }
+        Ok(())
+    }
+
+    /// The covered-tip checkpoint (RD-F18; DRS-E4 §3.8.1), both encodings
+    /// in one read, taken **after the run's last committed event**. The
+    /// trace's walker read one LMDB snapshot after the daemon's last write
+    /// — blocks and the regtest injector's out-of-band row alike — and the
+    /// redb side is read the same way: once, at the end, through
+    /// [`CheckpointState`]. Not when the covered tip connects: an `Inject`
+    /// attributed to that tip is a barrier that commits *after* the block
+    /// it is attributed to, so a comparison at the connect would hold the
+    /// trace's rows (credit included) against a redb side that had not yet
+    /// written it, and a faithful replay would read as divergent.
+    ///
+    /// Compared only when the committed tip *is* the covered tip; a run
+    /// that ended elsewhere leaves both fields `None` — not compared, never
+    /// identical. A trace carries both encodings or neither
+    /// (`TraceFault::MissingSnapshot`), so a checkpoint height without a
+    /// snapshot is unreachable here.
+    async fn compare_checkpoint(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+        let Some(at) = self.checkpoint_at else {
+            return Ok(());
+        };
+        let ours = self
+            .connector
+            .ask(CheckpointState)
+            .await
+            .map_err(collapse)?;
+        if ours.tip != Some(at) {
+            return Ok(());
+        }
+        let theirs = *self
+            .trace
+            .expect(at)
+            .expect("checkpoint_at comes from the trace")
+            .value();
+        self.report.checkpoint = Some(Checkpoint {
+            at,
+            ours: ours.digest,
+            theirs,
+        });
+        let (_, theirs) = self
+            .trace
+            .archival_snapshot()
+            .expect("a trace with a checkpoint carries its archival snapshot");
+        self.report.archival = Some(ArchivalCheckpoint {
+            at,
+            diff: ours.archival.diff(theirs.value()),
+        });
         Ok(())
     }
 

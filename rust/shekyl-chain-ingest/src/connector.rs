@@ -259,11 +259,36 @@ pub struct Injected {
 pub struct Digest;
 
 /// The redb-side archival state now, as `DRS_E4_ARCHIVAL_WRITER.md`
-/// §3.8.1's rows (`ReadSnapshot::archival_snapshot`), for the archival
-/// oracle: the checkpoint's other encoding, diffed against the trace's
-/// `0x04` record rather than hashed (`ARW-25`).
+/// §3.8.1's rows (`ReadSnapshot::archival_snapshot`): the checkpoint's
+/// other encoding, diffed against the trace's `0x04` record rather than
+/// hashed (`ARW-25`). The scenario driver's read for holding the writer to
+/// its archival rows after one step; the pipeline's checkpoint takes both
+/// encodings together through [`CheckpointState`].
 #[derive(Clone, Copy, Debug)]
 pub struct ArchivalState;
+
+/// The redb side's covered-tip checkpoint, read in **one** snapshot: the
+/// recorded tip, the logical-state digest and the archival rows. The
+/// trace's two checkpoint records came from one LMDB snapshot the walker
+/// took after the daemon's last write; this is the redb side's one read
+/// after the replay's, so the two encodings describe the same state and
+/// the tip says which. A tip other than the trace's covered tip is the
+/// pipeline's signal not to compare.
+#[derive(Clone, Copy, Debug)]
+pub struct CheckpointState;
+
+/// [`CheckpointState`]'s reply: the state at the recorded tip, both
+/// encodings from the same read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TipEncodings {
+    /// The recorded tip the digest and rows describe; `None` on an empty
+    /// chain.
+    pub tip: Option<BlockHeight>,
+    /// The logical-state digest (commit 2).
+    pub digest: crate::trace::Digest,
+    /// §3.8.1's rows (`ARW-25`).
+    pub archival: ArchivalSnapshot,
+}
 
 /// The hash of the block recorded at a height, for the driver's seed claim
 /// when its ledger's window has moved past that height (`seed` module
@@ -607,6 +632,23 @@ impl Message<ArchivalState> for Connector {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         Ok(self.writer.read()?.archival_snapshot()?)
+    }
+}
+
+impl Message<CheckpointState> for Connector {
+    type Reply = Result<TipEncodings, RunFault>;
+
+    async fn handle(
+        &mut self,
+        _: CheckpointState,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let read = self.writer.read()?;
+        Ok(TipEncodings {
+            tip: read.tip()?.recorded.map(|t| t.height),
+            digest: read.logical_state_digest_v0()?,
+            archival: read.archival_snapshot()?,
+        })
     }
 }
 

@@ -353,6 +353,38 @@
   proof's content, length, and framing are unchanged
   (`GENESIS_TX_WIRE_FORMAT.md` Q6).
 
+### Replay driver — the checkpoint is read once, after the run's last committed event (DRS-E4 commit 11, PR #937 review)
+
+- **The hazard.** The pipeline compared the covered-tip checkpoint — the
+  digest and the archival rows — inside `apply_ready`, at the connect of
+  the checkpoint block. An `inject` is filed at the tip (`CorpusFault::
+  InjectNotAtTip`), so a corpus whose last event is an injection at the
+  covered tip would have had its rows read **before** the credit
+  committed: a faithful replay of a faithfully captured chain graded
+  `DIVERGE`, the credit row `only_theirs`. No committed corpus has that
+  shape (the six carry `out_of_band_writes: []` or an injection below the
+  tip), which is why the oracle has been green; the next capture with an
+  injection at its tip would have been red for the driver's reason, not
+  the writer's. Surfaced by the PR's Copilot review; the shape was
+  confirmed by running the new test under the old placement.
+- **The fix is the walker's shape, not a refresh.** One connector message,
+  `CheckpointState`, answers `TipEncodings { tip, digest, archival }` from
+  **one** redb read snapshot, asked **once** by `run_loop` after the event
+  loop drains — the moment the LMDB exporter reads the chain, after its
+  last committed write. `compare_checkpoint` records the digest and the
+  archival diff only when that read's `tip` is the checkpoint height;
+  otherwise both `RunReport::checkpoint` and `RunReport::archival` are
+  `None` (not compared), never identical by accident. `ArchivalState` and
+  `Digest` stay for their other callers (the scenario driver; rewind's
+  `Switch`).
+- **Pinned:** `an_inject_at_the_covered_tip_commits_before_the_checkpoint_is_compared`
+  — a bonded chain, the credit injected through the scenario connector,
+  the trace minted from that state (`test_support::trace_read`), the
+  pipeline driven with `Inject` as its last event → digest and rows
+  identical; its control, the same trace replayed without the inject →
+  digest identical (`ARW-25`), rows divergent in exactly `ServeCredit`,
+  one key `only_theirs`.
+
 ### Archival — the serve-credit C++ mirror and its equivalence KAT are deleted; the tree now says there is no Rust serve-credit verifier (DRS-E4 commit 10d)
 
 - **Behaviour unchanged; what the tree *claims* changed.** Deleted:

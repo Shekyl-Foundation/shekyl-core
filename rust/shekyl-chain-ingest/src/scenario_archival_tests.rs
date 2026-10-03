@@ -74,14 +74,14 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{BondPostKind, Holdings as WireHoldings};
 use shekyl_wire::{Input, Transaction};
 
-use crate::connector::{ArchivalState, Inject, Injected, RunFault};
+use crate::connector::{ArchivalState, CheckpointState, Inject, Injected, RunFault};
 use crate::metrics::Metrics;
 use crate::pipeline::{run, PipelineConfig, PipelineFault};
 use crate::scenario::{Clocked, FreeHash, Mined, Scenario, StepOutcome, RULES};
 use crate::scenario_archival::{complete_tree, shard_set, Persona};
 use crate::scenario_spend::Spender;
 use crate::source::{IngestEvent, Injection, ServeCredit};
-use crate::test_support::{cleanup, open_store, tmp, trace_of, Scripted};
+use crate::test_support::{cleanup, open_store, tmp, trace_of, trace_read, Scripted};
 
 /// The first height that can spend block 0's coinbase against a root that
 /// holds it (`scenario_tests`: unlock window + spendable age + 1).
@@ -718,6 +718,121 @@ async fn a_replayed_inject_is_reported_as_its_receipt_and_a_rewind_below_it_is_r
             } if to == below && reported == injected_at && stranded == credit
         ),
         "{fault:?}"
+    );
+    cleanup(&path);
+}
+
+/// An `Inject` filed at the **covered tip** — where a capture files it: the
+/// injector writes at the daemon's tip and the walker reads after, so the
+/// corpus's last event is the credit and the trace's `0x04` record carries
+/// it. The checkpoint is compared after that barrier commits
+/// (`Drive::compare_checkpoint`), not when the tip connected; compared at
+/// the connect, the redb side had not yet written the row and a faithful
+/// replay read as divergent (PR #937 review, finding 1). The reference is
+/// the scenario's own store after the injection, read once through
+/// [`CheckpointState`] as the walker reads LMDB. The control — the same
+/// chain without the injection, against the same trace — diverges in
+/// exactly `ServeCredit`, so the comparison that passes is one that sees
+/// the row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_inject_at_the_covered_tip_commits_before_the_checkpoint_is_compared() {
+    let (scenario, mined, persona) = bonded_chain("scenario-archival-inject-at-tip").await;
+    let tip = mined.last().expect("mined").height;
+    let credit = ServeCredit {
+        persona: persona.id(),
+        shard: ShardId::from_raw(7),
+        epoch: epoch_at(tip.to_raw()),
+    };
+    let connector = scenario.connector();
+    let Injected { at } = connector
+        .ask(Inject(credit))
+        .await
+        .expect("a bonded persona's credit is injected");
+    assert_eq!(at, tip, "attributed to the covered tip");
+    let reference = connector
+        .ask(CheckpointState)
+        .await
+        .expect("one read of both encodings");
+    assert_eq!(reference.tip, Some(tip));
+    scenario.close().await;
+
+    let chain: Vec<(shekyl_wire::Block, Vec<Transaction>)> = mined
+        .iter()
+        .map(|m| (m.template.block.clone(), m.template.transactions.clone()))
+        .collect();
+    let trace = Arc::new(trace_read(&chain, reference.digest, &reference.archival));
+    let extend = |m: &Mined| {
+        IngestEvent::Extend(Box::new(Candidate::new(
+            m.template.block.clone(),
+            m.template.transactions.clone(),
+        )))
+    };
+    let clock = || {
+        let clock = Clocked::new(FreeHash);
+        for _ in &mined {
+            clock.tick();
+        }
+        Arc::new(clock)
+    };
+
+    // As captured: every block, then the credit at the tip, last.
+    let path = tmp("pipeline-inject-at-tip");
+    let mut events: Vec<IngestEvent> = mined.iter().map(extend).collect();
+    events.push(IngestEvent::Inject(credit));
+    let mut source = Scripted::new(events);
+    let report = run(
+        &mut source,
+        clock(),
+        Arc::new(Metrics::new()),
+        RULES,
+        open_store(&path),
+        Arc::clone(&trace),
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("the injected chain replays");
+    assert_eq!(report.injected, vec![Injection { at: tip, credit }]);
+    let checkpoint = report
+        .checkpoint
+        .expect("the committed tip is the covered tip: compared");
+    assert_eq!(checkpoint.at, tip);
+    assert!(checkpoint.identical(), "the digests agree");
+    let archival = report.archival.expect("compared with the digest");
+    assert_eq!(archival.at, tip);
+    assert!(
+        archival.identical(),
+        "the credit committed before the rows were read: {:?}",
+        archival.diff.diverged().collect::<Vec<_>>()
+    );
+    cleanup(&path);
+
+    // The control: no injection, the same trace. The digest still agrees
+    // (it carries no archival state, ARW-25); the rows differ by the one
+    // credit the trace holds and this replay never wrote.
+    let path = tmp("pipeline-inject-at-tip-control");
+    let mut source = Scripted::new(mined.iter().map(extend).collect());
+    let report = run(
+        &mut source,
+        clock(),
+        Arc::new(Metrics::new()),
+        RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("the uninjected chain replays");
+    assert!(report.injected.is_empty());
+    assert!(report.checkpoint.expect("compared").identical());
+    let archival = report.archival.expect("compared");
+    let diverged: Vec<_> = archival.diff.diverged().collect();
+    assert_eq!(diverged.len(), 1, "one family moved: {diverged:?}");
+    assert_eq!(diverged[0].family, SnapshotFamily::ServeCredit);
+    assert!(diverged[0].only_ours.is_empty() && diverged[0].unequal.is_empty());
+    assert_eq!(
+        diverged[0].only_theirs.len(),
+        1,
+        "the trace's one credit row, which this replay did not write"
     );
     cleanup(&path);
 }
