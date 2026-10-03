@@ -657,6 +657,43 @@ block on the growth schedule, and the waiting queue was re-summed every
 block. Both are fixed in the owner and the sim. The batch offer is held
 to the one-at-a-time walk by test.
 
+### 5.8 ESR-5, predicted before it is built (2026-10-03)
+
+**The production definition.** Circulating supply is `coins_generated −
+total_burned` at parent state (FL-R16c; CEN-F17). `CirculatingSupply::derive`
+is its one owner, and the burn reads it through `calc_burn_pct_at`. Both
+validators use it: the C++ hands the pair to Rust (`blockchain.cpp`, "derived
+in Rust from this pair"), and the Rust validator derives it in
+`rules/miner.rs`.
+
+**Where the sim stands.**
+
+- The stage-2, budget and legacy-engine folds already net the burn, as a
+  `u64` subtraction of their own.
+- The gate-7 path (`engine.rs`) and the recorder (`record.rs`) use gross
+  `already_generated`, citing a "consensus burn-site quantity" pinned to a
+  C++ `validate_miner_transaction` that no longer reads it.
+- The recorder does not fold the burn at all.
+
+**ESR-5.** Every fold derives the supply through `CirculatingSupply::derive`
+and prices the burn through `calc_burn_pct_at`, and the recorder folds what
+it destroys. Registered:
+
+1. **The `--stage2` report does not move on either arm, byte for byte.** Its
+   folds already pass the same numbers, and gate-7 is not in it. Any moved
+   cell means the old subtraction and the owner disagree somewhere, and is a
+   finding.
+2. **The recorder's vectors move only in their net columns, and only a
+   little.** `circulating_supply` falls by the cumulative burn, about 0.1 %
+   of supply by year 10. The burn is proportional to the supply ratio, so
+   `burn_pct_bp` falls by at most a few basis points, and only in the later
+   samples; the genesis row does not move. `staker_fee_pool` and
+   `actually_destroyed` follow the burn. Every other column is identical.
+   The engine-core differential stays green, because it recomputes the burn
+   from the recorded supply.
+3. **The gate-7 set's burn fraction falls by the cumulative-burn share of
+   supply, below 0.1 % relative.** No verdict moves.
+
 ## 6. The staking sim — a separate PR
 
 Appendix B is the work list. It is a re-base, not a wiring change: the
