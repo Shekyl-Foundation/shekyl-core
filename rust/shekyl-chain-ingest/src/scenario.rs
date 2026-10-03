@@ -57,6 +57,8 @@ use shekyl_chain_rules::{
     form, seed_height, ArchivalDelta, Candidate, CenRow, FormAttempt, InvalidBlock, PaidEmission,
     RuleSet, Substrate, EMISSION_SPLIT_EPOCH,
 };
+use shekyl_chain_store::apply_policy::ApplyPolicy;
+use shekyl_chain_store::store::ChainStore;
 use shekyl_crypto_pq::kem::{HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation};
 use shekyl_economics::EconomicParams;
 use shekyl_types::archival::BondRecord;
@@ -73,7 +75,7 @@ use crate::connector::{
     Rewound, RootAt, RunFault, TemplateFacts,
 };
 use crate::schedule::ChainRules;
-use crate::test_support::{cleanup, open_store, tmp};
+use crate::test_support::{cleanup, open_store, open_store_under, tmp};
 
 /// The seconds between the driver's blocks — the DAA target, so a
 /// scripted chain's timestamps look like a chain's.
@@ -218,10 +220,35 @@ where
 {
     /// A scenario over `pow`'s longhash, at a fresh store named `name`.
     pub fn open_with(name: &str, pow: P) -> Self {
+        Self::open_under_with(name, pow, RULES, open_store)
+    }
+
+    /// A scenario under `rules` rather than [`RULES`] — a levered regtest
+    /// schedule, with the store opened under that schedule's pair the way
+    /// the daemon opens it (`test_support::open_store_under`, `ARW-15`).
+    /// The one caller is the ARW-Q15 fixture replica
+    /// (`archival_fixture_replica_tests`), which needs the slash deadline
+    /// of epoch eleven inside a chain a test can mine.
+    pub fn open_under(name: &str, pow: P, rules: ChainRules) -> Self {
+        Self::open_under_with(name, pow, rules, |path| {
+            open_store_under(
+                path,
+                &rules.in_force(BlockHeight::from_raw(0)),
+                ApplyPolicy::Full,
+            )
+        })
+    }
+
+    fn open_under_with(
+        name: &str,
+        pow: P,
+        rules: ChainRules,
+        store: impl FnOnce(&std::path::Path) -> ChainStore,
+    ) -> Self {
         let path = tmp(name);
         let connector = Connector::spawn(ConnectorArgs {
-            store: open_store(&path),
-            rules: RULES,
+            store: store(&path),
+            rules,
         });
         Self {
             path,
@@ -229,7 +256,7 @@ where
             substrate: Clocked::new(pow),
             wallet: MinerWallet::deterministic(),
             params: EconomicParams::default(),
-            rules: RULES,
+            rules,
             next_tx_secret: 1,
         }
     }

@@ -34,6 +34,15 @@ Three consequences follow immediately:
 
 - **Stems go out over the ordinary connection, immediately.** No fixed slots, no
   waiting for the next cadence tick.
+- **Two draws.** Relayed stems draw uniformly over every outbound session.
+  The own-edge draws uniformly over the hidden-address outbound sessions.
+  Both re-draw per epoch. A hidden-address pool of one is a degraded state
+  the node reports (`hop-0 edge cannot rotate`), not a configuration it
+  accepts quietly. The managed Tor zone opens `HOP0_OUTBOUND_TARGET` (4)
+  outbound connections so that pool has the paper's degree to rotate over.
+  `--out-peers` does not change that cap. A live own-edge is not
+  re-pointed; a dead one is replaced from the peers still up. No cover
+  on Tor by ruling; on cover-bearing links the own-edge is slot-aligned.
 - **Every fixed-slot artifact stops having a subject on this zone** —
   fragmentation, `MAX_FRAGMENTS`, epoch-miss arithmetic, the in-flight
   remainder, the length leak, the empty-message wedge.
@@ -260,8 +269,11 @@ managed Tor stays client-only; do not add relay flags to it.
 
 **A second Tor process for the daemon's SOCKS/onion, as cover.** Rejected as a
 cover configuration. Originated cells then travel that client's own OR
-connections. The default managed ephemeral Tor is that second process;
-`--tx-proxy` / `--anonymous-inbound` against the operator relay yields it.
+connections. The default managed ephemeral Tor is that second process.
+`--anonymous-inbound` against the operator relay yields it.
+`--tx-proxy` names that relay's SOCKS and does not: the per-boot
+onion still publishes on the managed Tor. `--no-ephemeral-tor` is
+what turns the publish off.
 This is not a new ruling — it is the §3 mixing claim stated so "separate
 process" cannot be read as a sidecar client Tor.
 

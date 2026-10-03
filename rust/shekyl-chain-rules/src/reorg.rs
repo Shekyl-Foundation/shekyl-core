@@ -87,8 +87,12 @@ const _: () = assert!(
 /// and reorg cap**.
 ///
 /// Minted here because `D_max` lives here and `k`, `n` and `SEB` live in
-/// `shekyl-archival-retention`; consumed by S-ARCH's journal writers when
-/// they land (they have no Rust writer yet). `shekyl_archival_failure_window_params`
+/// `shekyl-archival-retention`. Its consumer is the slash log's retirement
+/// site — `write_slashes`' batch in `shekyl-chain-store` (the writer landed
+/// 2026-09-30, DRS-E4 commit 5b; the other six journals dissolved into
+/// `undo_log`, which S-PRUNE retires at `D_max`) — and that assertion is
+/// what remains to build: `DRS_E4_SLASH_LOG_ROUND.md` `SLK-Q1`. Until it
+/// lands this function has no caller. `shekyl_archival_failure_window_params`
 /// is *not* this — it returns the m-of-n `(m, n, serve_budget)`. A session
 /// running a shortened schedule (the store's `Horizons`) uses
 /// [`journal_horizon_under`] with its own pair.

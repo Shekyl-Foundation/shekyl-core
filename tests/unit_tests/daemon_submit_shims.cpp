@@ -361,7 +361,6 @@ struct RecordingProtocol final : cryptonote::i_cryptonote_protocol
 {
   size_t calls = 0;
   std::vector<cryptonote::blobdata> txs;
-  epee::net_utils::zone zone = epee::net_utils::zone::public_;
   cryptonote::relay_method method = cryptonote::relay_method::none;
 
   bool is_synchronized() const override { return true; }
@@ -370,11 +369,10 @@ struct RecordingProtocol final : cryptonote::i_cryptonote_protocol
     return true;
   }
   bool relay_transactions(NOTIFY_NEW_TRANSACTIONS::request& arg, const boost::uuids::uuid&,
-    epee::net_utils::zone z, cryptonote::relay_method m) override
+    cryptonote::relay_method m) override
   {
     ++calls;
     txs.assign(arg.txs.begin(), arg.txs.end());
-    zone = z;
     method = m;
     return true;
   }
@@ -937,7 +935,7 @@ TEST(daemon_submit_shims, a_broadcast_resubmit_does_not_buy_the_scan)
   ASSERT_EQ(fx.commit(s, fresh, fresh_ki), SHEKYL_SUBMIT_OK);
   std::vector<bool> just_broadcasted;
   fx.bap.txpool.set_relayed(epee::span<const crypto::hash>(&s.txid, 1),
-    relay_method::fluff, epee::net_utils::zone::public_, just_broadcasted);
+    relay_method::fluff, std::nullopt, just_broadcasted);
 
   shekyl_submit_facts_ffi facts;
   uint8_t ki_conflict = 0;
@@ -1532,8 +1530,7 @@ TEST(daemon_submit_shims, legacy_add_tx_double_spend_pin)
   // fee now lives in the transaction (`settle_fee`), so reaching this gate
   // is a property of the fixture rather than of the current fee schedule.
   EXPECT_FALSE(fx.bap.txpool.add_tx(mine.tx, tvc, relay_method::local,
-    /*relayed=*/false, /*version=*/1, /*origin=*/epee::net_utils::zone::invalid,
-    /*nic_verified_hf_version=*/1));
+    /*relayed=*/false, /*version=*/1, /*nic_verified_hf_version=*/1));
   EXPECT_TRUE(tvc.m_verifivation_failed);
   EXPECT_TRUE(tvc.m_double_spend)
     << "legacy path pins the foreign-key-image conflict on tvc.m_double_spend";
@@ -1553,14 +1550,14 @@ TEST(daemon_submit_shims, embargo_arms_future_deadline_and_expiry_routes_to_rela
   uint8_t fresh_ki = 0;
   ASSERT_EQ(fx.commit(s, fresh, fresh_ki), SHEKYL_SUBMIT_OK);
 
-  // Public-zone stem dispatch calls on_transactions_relayed(stem) before
-  // the send (levin_notify.cpp:562); pool-level that is set_relayed(stem).
-  // The zone rides with it since §89.2 — the embargo is drawn per zone, and
-  // this case is the public one, so it draws the clearnet distribution.
+  // A stem record draws the embargo of the connector it was forwarded on.
+  // Connector 0 is clearnet, the short window.
   const time_t before = time(nullptr);
   std::vector<bool> just_broadcasted;
   fx.bap.txpool.set_relayed(epee::span<const crypto::hash>(&s.txid, 1),
-    relay_method::stem, epee::net_utils::zone::public_, just_broadcasted);
+    relay_method::stem,
+    std::optional<std::uint8_t>{static_cast<std::uint8_t>(epee::net_utils::connector_id::clearnet)},
+    just_broadcasted);
 
   ASSERT_EQ(just_broadcasted.size(), 1u);
   EXPECT_FALSE(just_broadcasted[0]) << "stem arming is not a broadcast";
@@ -1622,10 +1619,6 @@ TEST(daemon_submit_shims, relay_nudge_dispatches_local_pool_blob)
     << "the nudge must fetch the local-state blob (relay_category::all)";
   EXPECT_EQ(protocol.method, relay_method::local)
     << "local dispatch is the entry point that arms the D++ embargo";
-  EXPECT_TRUE(protocol.zone == epee::net_utils::zone::invalid ||
-              protocol.zone == epee::net_utils::zone::public_)
-    << "the origination roll maps onto send_txs' two originated origins; "
-       "a named anonymity zone here would skip select_anonymity";
 }
 
 TEST(daemon_submit_shims, relay_nudge_on_absent_tx_is_a_skipped_fault_without_dispatch)

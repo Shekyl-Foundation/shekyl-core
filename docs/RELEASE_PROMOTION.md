@@ -159,7 +159,7 @@ the candidate SHA:
 
 - [ ] `config::testnet::GENESIS_TX`
 - [ ] `config::testnet::GENESIS_NONCE`
-- [ ] `config::testnet::NETWORK_ID`
+- [ ] handshake id: `shekyl_network_id(TESTNET)`, derived from the genesis block hash (`cSHAKE256`, domain `shekyl/p2p-network-id-v1`). The header does not carry the bytes. Diff the genesis tx and nonce above, and confirm the recorded testnet KAT.
 - [ ] testnet hardfork table (including the genesis HF height)
 - [ ] generated economics constants from `config/economics_params.json`
 

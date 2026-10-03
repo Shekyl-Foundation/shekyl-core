@@ -95,7 +95,9 @@ impl super::Transition {
         &mut self,
         view: &V,
     ) -> Result<(), ViewRead<V::Fault>> {
-        let count = self.count();
+        // The schedule is `u64` at its edge (Phase 2g); the count crosses
+        // it as the count it is, decoded once here.
+        let count = self.count().to_raw();
         let mut next = view
             .last_settled_slash_epoch()
             .map_err(ViewRead::View)?
@@ -194,7 +196,7 @@ impl super::Transition {
         ) {
             return Ok(false);
         }
-        if self.count() <= self.schedule.slash_deadline_height(e) {
+        if self.count().to_raw() <= self.schedule.slash_deadline_height(e) {
             return Ok(false);
         }
         let h_open = self.schedule.open_height(e);

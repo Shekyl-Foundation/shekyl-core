@@ -1,14 +1,17 @@
 {
   "block_count": 1026,
-  "built_at_dev_sha": "92d56536d",
-  "captured_by_daemon_version": "3.1.0-caf1e1f33",
+  "built_at_dev_sha": "f10ebea9d",
+  "captured_by_daemon_version": "3.1.0-f10ebea9d",
   "description": "A regtest chain captured whole as the DRS-E2 replay pair. corpus.e2: every block 0..=tip_height with the FULL bytes of every listed transaction (shekyl-chain-replay fetch, RD-F15-verified). trace.e2: the passed-through facts per block and the daemon's logical-state digest at the tip (shekyl-e2-trace-export, one LMDB snapshot). Consumed by replay: shekyl-chain-ingest connects the chain against a real store, so the state the 4.I rules read is derived, not asserted. Regenerate with SHEKYL_CAPTURE_CHAIN_VECTORS=1, SHEKYLD_BIN, SHEKYL_CHAIN_REPLAY_BIN and SHEKYL_E2_TRACE_EXPORT_BIN set, running the named generator --ignored.",
   "fixed_difficulty": 1,
-  "format_version": 3,
+  "format_version": 4,
   "generator": "e2e_emission_claim_accepted_and_applied",
   "genesis_hash": "16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3",
   "out_of_band_writes": [
-    "archival_serve_credit row (persona abd6ada59cacc507c0c9840f8bdb4e3a14ee14c37514ca9d123cfbecfea9e733, shard 0, epoch 1) injected at height 116 through regtest_inject_archival_serve_credit (blockchain.cpp: db_wtxn_guard + set_archival_serve_credit_bit under the blockchain lock, outside any block's write batch). State no block produced: a block-driven replay cannot reproduce it, and an archival digest over this chain diverges by construction unless the injection is replayed as an event (DRS_E4_ARCHIVAL_WRITER.md ARW-1, ARW-Q5)."
+    {
+      "kind": "archival_serve_credit",
+      "receipt": "abd6ada59cacc507c0c9840f8bdb4e3a14ee14c37514ca9d123cfbecfea9e733:0:1@115"
+    }
   ],
   "reorg_cap_blocks": 64,
   "settlement_epoch_blocks": 512,

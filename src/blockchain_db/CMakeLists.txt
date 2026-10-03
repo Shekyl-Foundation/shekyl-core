@@ -30,6 +30,7 @@ set(blockchain_db_sources
   blockchain_db.cpp
   lmdb/db_lmdb.cpp
   lmdb/logical_state_digest.cpp
+  lmdb/archival_snapshot.cpp
   )
 
 set(blockchain_db_headers)

@@ -367,13 +367,13 @@ fn shard_close_is_the_fold_height_below_the_universe_and_open_at_it() {
         for shard in 0..universe.count().get() {
             let close = shard_close(&view, ShardId::from_raw(shard), &universe)
                 .expect("a shard below the count has a close height");
-            let ShardClose::ClosedAt(height) = close else {
+            let ShardClose::ClosedAt(closed_at) = close else {
                 panic!("shard {shard} is below the closed universe");
             };
             assert_eq!(
                 shard_close_height(&view, ShardId::from_raw(shard), parent)
                     .expect("the search places the same height"),
-                BlockHeight::from_raw(height)
+                closed_at
             );
         }
         let open = universe.count().get();

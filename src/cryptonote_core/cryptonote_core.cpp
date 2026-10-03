@@ -716,7 +716,7 @@ namespace cryptonote
     return false;
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::handle_incoming_tx(const blobdata& tx_blob, tx_verification_context& tvc, relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone)
+  bool core::handle_incoming_tx(const blobdata& tx_blob, tx_verification_context& tvc, relay_method tx_relay, bool relayed)
   {
     tvc = {};
 
@@ -742,7 +742,7 @@ namespace cryptonote
     }
 
     const uint64_t tx_weight = get_transaction_weight(tx, tx_blob.size());
-    if (!add_new_tx(tx, txid, tx_blob, tx_weight, tvc, tx_relay, relayed, origin_zone))
+    if (!add_new_tx(tx, txid, tx_blob, tx_weight, tvc, tx_relay, relayed))
       return false;
 
     if (tvc.m_verifivation_failed)
@@ -996,13 +996,13 @@ namespace cryptonote
     return true;
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::add_new_tx(transaction& tx, tx_verification_context& tvc, relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone)
+  bool core::add_new_tx(transaction& tx, tx_verification_context& tvc, relay_method tx_relay, bool relayed)
   {
     crypto::hash tx_hash = get_transaction_hash(tx);
     blobdata bl;
     t_serializable_object_to_blob(tx, bl);
     size_t tx_weight = get_transaction_weight(tx, bl.size());
-    return add_new_tx(tx, tx_hash, bl, tx_weight, tvc, tx_relay, relayed, origin_zone);
+    return add_new_tx(tx, tx_hash, bl, tx_weight, tvc, tx_relay, relayed);
   }
   //-----------------------------------------------------------------------------------------------
   size_t core::get_blockchain_total_transactions() const
@@ -1010,7 +1010,7 @@ namespace cryptonote
     return m_blockchain_storage.get_total_transactions();
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::add_new_tx(transaction& tx, const crypto::hash& tx_hash, const cryptonote::blobdata &blob, size_t tx_weight, tx_verification_context& tvc, relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone)
+  bool core::add_new_tx(transaction& tx, const crypto::hash& tx_hash, const cryptonote::blobdata &blob, size_t tx_weight, tx_verification_context& tvc, relay_method tx_relay, bool relayed)
   {
     if(m_mempool.have_tx(tx_hash, relay_category::broadcasted))
     {
@@ -1025,7 +1025,7 @@ namespace cryptonote
     }
 
     uint8_t version = m_blockchain_storage.get_current_hard_fork_version();
-    const bool res = m_mempool.add_tx(tx, tx_hash, blob, tx_weight, tvc, tx_relay, relayed, version, origin_zone);
+    const bool res = m_mempool.add_tx(tx, tx_hash, blob, tx_weight, tvc, tx_relay, relayed, version);
 
     // If new incoming tx passed verification and entered the pool, notify subscribers
     if (!tvc.m_verifivation_failed && tvc.m_added_to_pool && matches_category(tx_relay, relay_category::broadcasted))
@@ -1064,9 +1064,8 @@ namespace cryptonote
          would let an entry re-stem indefinitely instead of diffusing.
 
          The leak the #427 tripwire recorded was the `forward` arm, which put
-         STILL-STEMMING anonymity traffic into `stem_req` at `zone::public_` —
-         stemming on the wrong network. Deleting the class closes it; there is
-         nothing left here to route by origin. */
+         still-stemming traffic onto the clearnet fluff request. Deleting
+         the class closes it; there is nothing left here to route by origin. */
       for (auto& tx : txs)
       {
         switch (std::get<2>(tx))
@@ -1091,15 +1090,12 @@ namespace cryptonote
          re-relaying public and private _should_ be acceptable here. */
       const boost::uuids::uuid source = boost::uuids::nil_uuid();
       if (!public_req.txs.empty())
-        get_protocol()->relay_transactions(public_req, source, epee::net_utils::zone::public_, relay_method::fluff);
+        get_protocol()->relay_transactions(public_req, source, relay_method::fluff);
       if (!private_req.txs.empty())
-        /* `invalid`+`local` is the fail-closed backstop for originated
-           traffic that chose anonymity and kept its `local` record. It is
-           ALSO the first send of a missed submit nudge, whose origination
-           roll never ran — a second chooser, D5a in miniature. Those two
-           are indistinguishable here without persisting the roll, and
-           rolling here is the `source.is_nil()` reversal. FOLLOWUPS. */
-        get_protocol()->relay_transactions(private_req, source, epee::net_utils::zone::invalid, relay_method::local);
+        /* `local` is the origin's record, including a missed submit nudge.
+           Hop 0 inside the relay fail-closes when the construction bit is
+           set and no eligible edge exists. */
+        get_protocol()->relay_transactions(private_req, source, relay_method::local);
     }
     return true;
   }
@@ -1140,7 +1136,7 @@ namespace cryptonote
     m_mempool.on_stem_propagated(txids);
   }
   //-----------------------------------------------------------------------------------------------
-  void core::on_transactions_relayed(const epee::span<const cryptonote::blobdata> tx_blobs, const relay_method tx_relay, const epee::net_utils::zone zone)
+  void core::on_transactions_relayed(const epee::span<const cryptonote::blobdata> tx_blobs, const relay_method tx_relay, const std::optional<std::uint8_t> stem_connector)
   {
     // lock ensures duplicate txs aren't notified twice
     CRITICAL_REGION_LOCAL(m_incoming_tx_lock);
@@ -1163,7 +1159,7 @@ namespace cryptonote
     std::vector<bool> just_broadcasted{};
     just_broadcasted.reserve(tx_hashes.size());
 
-    m_mempool.set_relayed(epee::to_span(tx_hashes), tx_relay, zone, just_broadcasted);
+    m_mempool.set_relayed(epee::to_span(tx_hashes), tx_relay, stem_connector, just_broadcasted);
 
     if (matches_category(tx_relay, relay_category::broadcasted))
       notify_txpool_event(tx_blobs, epee::to_span(tx_hashes), epee::to_span(txs), just_broadcasted);

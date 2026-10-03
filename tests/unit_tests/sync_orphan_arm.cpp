@@ -90,7 +90,7 @@ public:
   bool get_short_chain_history(std::list<crypto::hash>& ids, uint64_t& current_height) const
   { ids.push_back(crypto::null_hash); current_height = chain_height; return true; }
   void get_blockchain_top(uint64_t& height, crypto::hash& top_id) const { height = chain_height ? chain_height - 1 : 0; top_id = crypto::null_hash; }
-  bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone) { return true; }
+  bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed) { return true; }
   bool handle_single_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *b, cryptonote::block_verification_context& bvc, cryptonote::block_connect_supplement& connect, bool update_miner_blocktemplate = true) { return true; }
   void pause_mine(){}
   void resume_mine(){}
@@ -103,7 +103,7 @@ public:
   bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return true; }
   uint64_t get_target_blockchain_height() const { return target_height; }
   size_t get_block_sync_size(uint64_t height) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
-  void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, epee::net_utils::zone) {}
+  void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, std::optional<std::uint8_t>) {}
   void on_stem_propagated(epee::span<const crypto::hash>) {}
   cryptonote::network_type get_nettype() const { return cryptonote::MAINNET; }
   bool get_pool_transaction(const crypto::hash& id, cryptonote::blobdata& tx_blob, cryptonote::relay_category tx_category) const { return false; }

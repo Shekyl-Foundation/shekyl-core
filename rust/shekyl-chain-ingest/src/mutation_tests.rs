@@ -568,7 +568,7 @@ fn the_wrapper_keeps_numbering_and_heights_and_mutates_exactly_one_block() {
     }
     let block_at = |i: usize| match &seen[i].event {
         IngestEvent::Extend(c) => c.block.clone(),
-        IngestEvent::Rewind { .. } => panic!("Extend-only"),
+        IngestEvent::Rewind { .. } | IngestEvent::Inject(_) => panic!("Extend-only"),
     };
     assert_eq!(block_at(0), chain[0].0, "below: untouched");
     assert_eq!(block_at(2), chain[2].0, "above: untouched");

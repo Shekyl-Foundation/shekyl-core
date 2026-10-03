@@ -873,26 +873,12 @@ int relay_tx(tx_memory_pool& pool, i_cryptonote_protocol& protocol,
       return SHEKYL_SUBMIT_INTERNAL_FAULT;
     }
 
-    // The exact dispatch the deleted legacy on_send_raw_tx handler used
-    // (§9.3): relay_method::local arms the Dandelion++ embargo machinery.
-    //
-    // Q12-D5a once-at-origin: this is the one roll. `true` → `invalid`,
-    // which `send_txs` fail-closes onto the anonymity zone. `false` →
-    // `public_`, which `send_txs` sends on clearnet *by design* — not as
-    // a fallback from an unusable chosen zone. Pool re-relays of `local`
-    // keep passing `invalid` and do not come through this function, so
-    // they cannot re-roll. A missed nudge is a second chooser (the pool
-    // then first-decides always-anon) — D5a in miniature, FOLLOWUPS —
-    // not a reason to roll on the pool path.
+    // relay_method::local. Hop 0 is the relay's construction bit.
+    // A missed nudge takes the same path from the pool. There is no
+    // second roll here.
     NOTIFY_NEW_TRANSACTIONS::request r;
     r.txs.push_back(std::move(txblob));
-    protocol.relay_transactions(
-      r,
-      boost::uuids::nil_uuid(),
-      /* One crossing: the roll and its zone mapping both live in Rust
-         (rule 40). Byte contract static_asserted in enums.h. */
-      static_cast<epee::net_utils::zone>(shekyl_relay_zone_roll_originated_zone()),
-      relay_method::local);
+    protocol.relay_transactions(r, boost::uuids::nil_uuid(), relay_method::local);
     return SHEKYL_SUBMIT_OK;
   }
   catch (const std::exception& e)

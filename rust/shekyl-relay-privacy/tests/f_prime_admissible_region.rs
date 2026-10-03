@@ -138,7 +138,9 @@ fn shipped_topology() -> FloodParams {
         // set to the floor so the struct does not misdescribe the run.
         peers: FLOOR,
         reach: FloodReach::OutboundOnly,
-        transit_ms: shekyl_relay_privacy::conformance::transit_for(FloodReach::OutboundOnly),
+        transit_ms: shekyl_relay_privacy::conformance::transit_for(
+            shekyl_relay_privacy::MeasuredConnector::Tor,
+        ),
     }
 }
 
@@ -665,7 +667,7 @@ fn the_step_is_not_a_degraded_source_artifact() {
 /// axis.
 #[test]
 fn leak_at_each_candidate_region() {
-    use shekyl_relay_privacy::conformance::{simulate_passive_neighbor_leak, Transport};
+    use shekyl_relay_privacy::conformance::{simulate_passive_neighbor_leak, FloodReach};
     use shekyl_relay_privacy::derive::derive_embargo;
     use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
     use shekyl_relay_privacy::schedule::{EmbargoTimer, DEFAULT_EMBARGO_TICK_MILLIS};
@@ -682,9 +684,10 @@ fn leak_at_each_candidate_region() {
     // the tolerance below a real bound instead of a restatement of the sampling
     // error. This one does not move.
     const CANDIDATE_TRIALS: usize = 1_000_000;
-    // The anonymity rows assert a STRUCTURAL zero (§6.6: fluff never traverses
-    // the supernode's inbound edges). Any nonzero reading is a defect whatever
-    // the count, so precision buys nothing — this is not a statistical claim.
+    // The retired D7 graph (OutboundOnly) asserts a structural zero: fluff
+    // never traverses the supernode's inbound edges. Production reach is
+    // EveryPeer, measured in the column above. Any nonzero reading on the
+    // retired graph is a defect whatever the count.
     const STRUCTURAL_TRIALS: usize = 100_000;
     // The sensitivity control demonstrates a ~14x separation; at p ~ 0.06 that
     // is some eighty standard errors at this count. Raising it would not make
@@ -698,7 +701,7 @@ fn leak_at_each_candidate_region() {
     const NOISE_3SIGMA: f64 = 3.2e-4;
 
     println!("\n  §6.6 passive inbound-supernode leak at each candidate (phi = {PHI})");
-    println!("  F' ms   clearnet E   leak rate   origin share   tor leak");
+    println!("  F' ms   embargo      leak rate   origin share   retired-graph leak");
     println!("  -----   ----------   ---------   ------------   --------");
 
     let mut rows = Vec::new();
@@ -713,7 +716,7 @@ fn leak_at_each_candidate_region() {
             &params,
             &e,
             PHI,
-            Transport::Clearnet,
+            FloodReach::EveryPeer,
             CANDIDATE_TRIALS,
             &mut cr,
         );
@@ -722,7 +725,7 @@ fn leak_at_each_candidate_region() {
             &params,
             &e,
             PHI,
-            Transport::Anonymity,
+            FloodReach::OutboundOnly,
             STRUCTURAL_TRIALS,
             &mut tr,
         );
@@ -737,7 +740,7 @@ fn leak_at_each_candidate_region() {
         // assumed to survive the re-baselining.
         assert!(
             t.leak_rate < 1e-12,
-            "the anonymity-zone leak must be structurally zero at F' = {f_prime}, got {}",
+            "the retired OutboundOnly graph must leak nothing at F' = {f_prime}, got {}",
             t.leak_rate
         );
         rows.push((f_prime, c.leak_rate));
@@ -780,7 +783,7 @@ fn leak_at_each_candidate_region() {
             &params,
             &e,
             PHI,
-            Transport::Clearnet,
+            FloodReach::EveryPeer,
             CONTROL_TRIALS,
             &mut r,
         )

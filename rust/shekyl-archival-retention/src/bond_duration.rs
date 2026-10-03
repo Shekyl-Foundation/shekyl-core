@@ -62,6 +62,8 @@
 //! WORK_MILLI_SCALE)` has no integer solution), so the sweep passes clean; the KAT is
 //! the tripwire if a constant re-pin ever introduces one.
 
+use shekyl_types::BlockHeight;
+
 use crate::bond_floor::{BOND_DURATION_AGE_SCALE, BOND_DURATION_BASE_EPOCHS};
 use crate::consensus_state::{epoch_close_height, shard_age_milli};
 use crate::constants::effective_settlement_epoch_blocks;
@@ -120,7 +122,11 @@ impl ShardAgeAtAdd {
         let age_milli = if freeze_height >= close {
             WORK_MILLI_SCALE
         } else {
-            shard_age_milli(close, freeze_height, seb)
+            shard_age_milli(
+                BlockHeight::from_raw(close),
+                BlockHeight::from_raw(freeze_height),
+                seb,
+            )
         };
         Self { age_milli }
     }
@@ -236,7 +242,11 @@ mod tests {
         let add_epoch = 3u64;
         let freeze_height = 5_000u64;
         let close = (add_epoch + 1) * seb;
-        let expected = shard_age_milli(close, freeze_height, seb);
+        let expected = shard_age_milli(
+            BlockHeight::from_raw(close),
+            BlockHeight::from_raw(freeze_height),
+            seb,
+        );
         assert_eq!(
             ShardAgeAtAdd::from_add(add_epoch, freeze_height).age_milli(),
             expected

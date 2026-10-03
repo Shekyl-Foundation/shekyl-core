@@ -173,8 +173,15 @@ retirement below `tip − D_max` is also this surface's** — `pop.rs` says the
 floor is `1` "until the retention prune lands", so the retirement has no
 other owner; it runs in the same batch, after the body discard, and is
 what makes `StoreCannot::PopBelowFloor` reachable above genesis. The seven
-F16 journals are **S-ARCH's** to retire (they have no Rust writer yet), at
-F19's horizon, through the one function this surface mints for it (§12).
+F16 journals are **S-ARCH's** to retire, at F19's horizon, through the one
+function this surface mints for it (§12). *Corrected 2026-10-02 — the
+parenthetical "they have no Rust writer yet" is refuted:* the writer landed
+with DRS-E4 commit 5b, 2026-09-30 (`write_slashes`; the fired condition was
+noticed at commit 8), six of the seven dissolved into
+`undo_log` (`ARW-Q2`) and so retire with it, and the slash log — the one
+with a retirement left to build — is `DRS_E4_SLASH_LOG_ROUND.md` `SLK-Q1`'s,
+asserted at the writer's batch and retired beside this surface's body
+discard.
 
 ## 4. The batch — an enumeration from `close_height`; no retention exceptions
 

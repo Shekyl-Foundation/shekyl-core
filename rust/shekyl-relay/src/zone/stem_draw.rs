@@ -13,30 +13,32 @@ use super::*;
 
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
-use shekyl_relay_privacy::{LinkSecrecy, RelayZone};
-
 fn id(byte: u8) -> ConnectionId {
     let mut bytes = [0u8; 16];
     bytes[0] = byte;
     ConnectionId::from_bytes(bytes)
 }
 
-fn zone(rng: &mut SplitMix64) -> Zone {
-    Zone::new(
+fn zone(rng: &mut SplitMix64) -> Relay {
+    Relay::new(
         DandelionParams::inherited(),
         2,
-        FluffReach::EveryPeer,
-        LinkSecrecy::of(RelayZone::Public),
         false,
+        &[ConnectorId::Clearnet],
         0,
         rng,
     )
     .unwrap()
 }
 
-fn establish_outbound(zone: &mut Zone, peers: &[u8], rng: &mut SplitMix64) {
+fn establish_outbound(zone: &mut Relay, peers: &[u8], rng: &mut SplitMix64) {
     for peer in peers {
-        zone.on_session_established(id(*peer), PeerDirection::Outbound, rng);
+        zone.on_session_established(
+            id(*peer),
+            PeerDirection::Outbound,
+            ConnectorId::Clearnet,
+            rng,
+        );
     }
 }
 
@@ -124,7 +126,12 @@ fn a_source_pins_to_one_stem_for_the_epoch() {
 fn rollover_candidates_are_established_outbound_sessions() {
     let mut rng = SplitMix64::new(99);
     let mut z = zone(&mut rng);
-    z.on_session_established(id(1), PeerDirection::Inbound, &mut rng);
+    z.on_session_established(
+        id(1),
+        PeerDirection::Inbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
     establish_outbound(&mut z, &[2, 3], &mut rng);
     z.rebuild_stems(&mut rng);
     let mut chosen: Vec<_> = z.stem_slots().iter().flatten().copied().collect();
@@ -142,12 +149,11 @@ fn stem_draws_are_not_biased_toward_one_outbound_peer() {
     // for reporting a higher one. Two outbound sessions, one slot: over
     // many independent epochs each peer is the successor about half the time.
     let mut rng = SplitMix64::new(100);
-    let mut z = Zone::new(
+    let mut z = Relay::new(
         DandelionParams::inherited(),
         1,
-        FluffReach::EveryPeer,
-        LinkSecrecy::of(RelayZone::Public),
         false,
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     )
@@ -177,12 +183,11 @@ fn a_two_slot_draw_over_three_peers_uses_each_peer() {
     // two thirds of the epochs include it. Seed 101, n = 3 000, σ ≈ 26;
     // 1 950 is about 1.9σ under the mean of 2 000.
     let mut rng = SplitMix64::new(101);
-    let mut z = Zone::new(
+    let mut z = Relay::new(
         DandelionParams::inherited(),
         2,
-        FluffReach::EveryPeer,
-        LinkSecrecy::of(RelayZone::Public),
         false,
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     )

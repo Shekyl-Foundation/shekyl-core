@@ -11,7 +11,7 @@ use shekyl_archival_retention::{
     CreditPair, EpochCloseShard, HoldingsDescriptor, HoldingsKind, ShardClose, ShardSet,
     EMISSION_KAT_SHAPE,
 };
-use shekyl_types::ChainCount;
+use shekyl_types::{BlockHeight, ChainCount};
 
 pub(crate) const BUDGET: u64 = 1_000_000;
 pub(crate) const SHARD_A: u64 = EMISSION_KAT_SHAPE.shard_a;
@@ -44,11 +44,15 @@ pub(crate) fn snapshot(epoch: u64) -> EpochSnapshot {
         shards: vec![
             EpochCloseShard {
                 shard_id: shape.shard_a,
-                close: ShardClose::ClosedAt(close - shape.shard_a_freeze_offset),
+                close: ShardClose::ClosedAt(BlockHeight::from_raw(
+                    close - shape.shard_a_freeze_offset,
+                )),
             },
             EpochCloseShard {
                 shard_id: shape.shard_b,
-                close: ShardClose::ClosedAt(close - shape.shard_b_freeze_offset),
+                close: ShardClose::ClosedAt(BlockHeight::from_raw(
+                    close - shape.shard_b_freeze_offset,
+                )),
             },
         ],
         credit_pairs: shape

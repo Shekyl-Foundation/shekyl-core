@@ -9,6 +9,8 @@
 //! join-adjusted scarcity and expected-profit and orders the list.
 //! Presentation only — every frozen shard remains legal (SL-D8 reading 1).
 
+use shekyl_types::BlockHeight;
+
 use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
 use crate::consensus_state::shard_age_milli;
 use crate::constants::effective_settlement_epoch_blocks;
@@ -60,10 +62,13 @@ pub fn order_shard_coverage(
     in_rows: &[ShardCoverageIn],
 ) -> Vec<ShardCoverageOut> {
     let seb = effective_settlement_epoch_blocks();
+    // The rows and the tip arrive as the FFI's bare `u64` heights
+    // (grandfathered, `check_inland_height_u64.py`); they decode here, once.
+    let judged_at = BlockHeight::from_raw(tip_height);
     let mut out: Vec<ShardCoverageOut> = in_rows
         .iter()
         .map(|row| {
-            let age = shard_age_milli(tip_height, row.freeze_height, seb);
+            let age = shard_age_milli(judged_at, BlockHeight::from_raw(row.freeze_height), seb);
             let join = join_scarcity_micro(row.bonded_count, age);
             let expected = if sigma_work_milli == 0 {
                 0
@@ -103,7 +108,11 @@ mod tests {
 
     #[test]
     fn join_scarcity_matches_bonded_plus_one() {
-        let age = shard_age_milli(50_000, 1_000, effective_settlement_epoch_blocks());
+        let age = shard_age_milli(
+            BlockHeight::from_raw(50_000),
+            BlockHeight::from_raw(1_000),
+            effective_settlement_epoch_blocks(),
+        );
         assert_eq!(
             join_scarcity_micro(3, age),
             scarcity_micro(4, age, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI)

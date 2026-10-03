@@ -47,8 +47,9 @@ use shekyl_relay_privacy::conformance::{
 use shekyl_relay_privacy::schedule::DelayFamily;
 use shekyl_relay_privacy::SplitMix64;
 
-/// The shipped derivation's inputs, so the criterion is exercised on the
-/// measurement it is meant to govern rather than a convenient one.
+/// The graph the shipped 3250 ms was measured on (retired D7, degree 12).
+/// Production fluff is `EveryPeer`; this directed graph is the longer one,
+/// and the constant stays until that production graph is remeasured.
 /// `mean_quarter_secs = 20` and `Geometric` are `f7_directed.rs`'s.
 const MEAN_QUARTER_SECS: u32 = 20;
 const FAMILY: DelayFamily = DelayFamily::Geometric;
@@ -66,7 +67,9 @@ fn shipped_topology() -> FloodParams {
         nodes: 512,
         peers: 12,
         reach: FloodReach::OutboundOnly,
-        transit_ms: shekyl_relay_privacy::conformance::transit_for(FloodReach::OutboundOnly),
+        transit_ms: shekyl_relay_privacy::conformance::transit_for(
+            shekyl_relay_privacy::MeasuredConnector::Tor,
+        ),
     }
 }
 
@@ -88,7 +91,7 @@ fn the_shipped_topology_converges_and_reports_its_cost() {
         },
         SplitMix64::new,
     )
-    .expect("the shipped OutboundOnly@12 topology should converge inside 1024 trials");
+    .expect("the retired OutboundOnly@12 derivation graph should converge inside 1024 trials");
 
     println!("\n  converged fluff-return p90");
     println!("  --------------------------");
@@ -187,7 +190,9 @@ fn a_stranding_topology_is_refused_on_the_topology_not_the_budget() {
         nodes: 512,
         peers: 1,
         reach: FloodReach::OutboundOnly,
-        transit_ms: shekyl_relay_privacy::conformance::transit_for(FloodReach::OutboundOnly),
+        transit_ms: shekyl_relay_privacy::conformance::transit_for(
+            shekyl_relay_privacy::MeasuredConnector::Tor,
+        ),
     };
     let degrees = vec![1_usize; flood.nodes];
 

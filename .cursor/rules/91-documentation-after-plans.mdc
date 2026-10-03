@@ -81,6 +81,29 @@ the changes.
   enclosing block, not the line, and ask which of the three a match is. Run the
   inverse sweep too: a line-grep cannot find the claim it did not spell.
 
+- **A finding that refutes a premise edits the premise's own text in the same
+  commit — not only a findings register.** The asserts-is / records-was
+  discipline above is the fix for stale claims, and it fails in one specific
+  way: the finding is recorded somewhere *new* — a findings list, a charter
+  row, a commit message, a FOLLOWUPS update — while the sentence that carried
+  the wrong premise stays as written, because the finding's *subject* looked
+  like a file or a mechanism rather than like the sentence. The next reader
+  starts from the sentence. Three instances in one lane (DRS-E4, 2026-09-25 →
+  2026-10-02): S-PRUNE corrected the closed-shard frontier and recorded it as
+  `SPR-1`, and E4's pre-flight re-derived the same formula from the C++ four
+  days later (`05-system-thinking.mdc` §"a formula two lanes need");
+  FOLLOWUPS' journal-horizon row had its condition fire at commit 8 and read
+  *pending* until the lane that fired it re-read the row (`22-no-lazy-deferral.mdc`);
+  commit 3 found `segment_freeze.rs` had live C++ callers and re-scheduled it
+  in §3.7, while §3.9's sentence *"the Rust half deletes in this increment"*
+  stayed, and commit 9 re-derived the same fact. So, when a finding refutes a
+  premise: `rg` for the premise's **wording** — the claim, not the symbol —
+  and edit every asserts-is hit in the commit that records the finding,
+  keeping the posed text as a records-was beside the correction
+  (`16-architectural-inheritance.mdc` §"refuted, not superseded"). A finding
+  recorded only where it was found has not reached the reader who will
+  inherit the premise.
+
 **Why this discipline exists at all, stated plainly:** the tree's **executable**
 surface is checked continuously — by builds, tests, const-asserts, CI gates. Its
 **descriptive** surface is checked *never*. One round in August 2026 turned up
