@@ -40,7 +40,12 @@ Three consequences follow immediately:
   the node reports (`hop-0 edge cannot rotate`), not a configuration it
   accepts quietly. The managed Tor zone opens `HOP0_OUTBOUND_TARGET` (4)
   outbound connections so that pool has the paper's degree to rotate over.
-  `--out-peers` does not change that cap.
+  `--out-peers` does not change that cap. A live own-edge is not
+  re-pointed; a dead one is replaced from the peers still up. An own-edge
+  that is not a stem slot still leaves on the ordinary connection. Protocol
+  cover frames are not Tor's wire-observer defence — that defence is the
+  operator relay's volume, above — and production noise stays the
+  development opt-in.
 - **Every fixed-slot artifact stops having a subject on this zone** —
   fragmentation, `MAX_FRAGMENTS`, epoch-miss arithmetic, the in-flight
   remainder, the length leak, the empty-message wedge.

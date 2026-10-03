@@ -386,11 +386,9 @@ pub struct Relay {
     /// draws from every outbound edge.
     hop0_restricted: bool,
     /// This epoch's own-edge, once a non-empty hidden-address pool has been
-    /// drawn. Not a stem-map slot. Cleared by [`Relay::rebuild_stems`].
+    /// drawn. Not a stem-map slot. Kept while that peer is live; a dead peer
+    /// is replaced on the next origination. Cleared by [`Relay::rebuild_stems`].
     hop0_edge: Option<ConnectionId>,
-    /// Set when [`Relay::hop0_edge`] was drawn. A later disconnect does not
-    /// draw a replacement: one edge per epoch, re-drawn at the boundary.
-    hop0_committed: bool,
     /// Noise schedule (enable + cadence + per-channel deadlines), or off.
     ///
     /// **Single owner of the enable fact** (§20.4). Before RP-3b it lived only
@@ -502,7 +500,6 @@ impl Relay {
             stems,
             hop0_restricted: any_hides_address_from_peer(configured),
             hop0_edge: None,
-            hop0_committed: false,
             noise,
         })
     }
@@ -766,19 +763,21 @@ impl Relay {
     ///
     /// Relayed stems draw uniformly over every outbound session. This draw
     /// is the other one: uniform over the hidden-address outbound sessions,
-    /// once per epoch, and not a stem-map slot. Both are re-drawn at
-    /// [`Relay::rebuild_stems`]. A pool of one is the same edge every epoch;
-    /// that is reported, and the transaction still leaves.
-    /// Empty is [`RelayPlan::NoRoute`].
+    /// and not a stem-map slot. A live edge is not re-pointed. A dead one is
+    /// replaced from the pool that is still up — the old path is gone, so
+    /// there is nothing left to intersect with. [`Relay::rebuild_stems`]
+    /// clears the edge so the next epoch draws again. A pool of one is the
+    /// same edge every epoch; that is reported, and the transaction still
+    /// leaves. Empty is [`RelayPlan::NoRoute`].
     fn restricted_first_hop<R: RelayRng + ?Sized>(&mut self, rng: &mut R) -> RelayPlan {
-        if self.hop0_committed {
-            return match self.hop0_edge {
-                Some(id) if self.hop0_peer_live(id) => RelayPlan::Stem(id),
-                _ => RelayPlan::NoRoute,
-            };
+        if let Some(id) = self.hop0_edge {
+            if self.hop0_peer_live(id) {
+                return RelayPlan::Stem(id);
+            }
         }
         let pool = self.hidden_outbound_ids();
         if pool.is_empty() {
+            self.hop0_edge = None;
             return RelayPlan::NoRoute;
         }
         if pool.len() == 1 {
@@ -790,7 +789,6 @@ impl Relay {
             .expect("the draw is bounded by the pool length");
         let edge = pool[index];
         self.hop0_edge = Some(edge);
-        self.hop0_committed = true;
         RelayPlan::Stem(edge)
     }
 
@@ -886,7 +884,6 @@ impl Relay {
         // on the next local origin, from the hidden-address pool.
         self.map = StemMap::new(self.outbound_ids(), self.stems, rng);
         self.hop0_edge = None;
-        self.hop0_committed = false;
     }
 
     /// Begin a new epoch at `now`: re-draw the fluff/stem role and the end time.
@@ -1207,6 +1204,11 @@ impl Relay {
                         RelayCarrier::Noise { channel: slot }
                     }
                     Some(_) => RelayCarrier::Ordinary,
+                    // Tor's wire-observer defence is the operator relay's volume,
+                    // not these frames (`TOR_COVER_POSTURE.md`). Production
+                    // noise is a development opt-in and defaults off. An
+                    // own-edge that is not a stem slot therefore loses no
+                    // cover the Tor link was receiving.
                     None if self.hop0_edge == Some(destination) => RelayCarrier::Ordinary,
                     None => {
                         debug_assert!(

@@ -15,7 +15,8 @@
   turns off the per-boot onion. `--anonymous-inbound` and
   `--no-ephemeral-tor` are what turn that publish off.
 - A transaction this node originates leaves on one connection that does
-  not reveal its address, chosen once per epoch from those connections.
+  not reveal its address, chosen for the epoch from those connections
+  and replaced if that connection drops.
   A relayed transaction still leaves on a draw over every outbound
   connection. One such connection is reported (`hop-0 edge cannot
   rotate`) rather than treated as a normal configuration. The managed

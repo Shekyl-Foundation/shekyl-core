@@ -276,7 +276,7 @@ fn four_hidden_peers_share_the_own_edge() {
 }
 
 #[test]
-fn a_dead_own_edge_is_not_replaced_until_the_epoch_rebuilds() {
+fn a_dead_own_edge_is_replaced_and_a_live_one_is_not() {
     let mut rng = SplitMix64::new(11);
     let mut z = Relay::new(
         DandelionParams::inherited(),
@@ -292,17 +292,39 @@ fn a_dead_own_edge_is_not_replaced_until_the_epoch_rebuilds() {
     let RelayPlan::Stem(dest) = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng) else {
         panic!("hop 0 had two hidden peers");
     };
+    z.on_session_established(id(3), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    assert_eq!(
+        z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+        RelayPlan::Stem(dest),
+        "a live own-edge is not re-pointed when another hidden peer connects"
+    );
     z.on_connection_close(&dest);
+    let RelayPlan::Stem(replaced) = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng)
+    else {
+        panic!("a dead own-edge with peers still up returned no route");
+    };
+    assert_ne!(replaced, dest);
+    assert!(
+        replaced == id(1) || replaced == id(2) || replaced == id(3),
+        "replacement {replaced:?} is not in the remaining pool"
+    );
+    assert_eq!(
+        z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+        RelayPlan::Stem(replaced),
+        "the replacement stays while it is live"
+    );
+    z.on_connection_close(&replaced);
+    for byte in 1..=3 {
+        let peer = id(byte);
+        if peer != dest && peer != replaced {
+            z.on_connection_close(&peer);
+        }
+    }
     assert_eq!(
         z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
         RelayPlan::NoRoute,
-        "a dropped own-edge must not draw the other hidden peer mid-epoch"
+        "an empty hidden-address pool has nothing to draw"
     );
-    z.rebuild_stems(&mut rng);
-    let RelayPlan::Stem(next) = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng) else {
-        panic!("the next epoch did not draw");
-    };
-    assert_ne!(next, dest);
 }
 
 #[test]
