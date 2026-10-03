@@ -86,8 +86,8 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](design/ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md) §10.4 (TJ-4), with [`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md) §12.14 *Ruling* as the measurement home
   - Target: pre-genesis
 
-- **No authority exists for an honest server's sustained egress over Tor on the rule-76 floor device (`SHT-5`, `U1b`).** The only transport figure in the tree is a requester-side burst floor near 180 KB/s, "a floor from a null result, not a sustained figure" (`ARCHIVAL_SHARD_FETCH.md`:1079). `U1b` — whether a `P` on a Pi 4 can serve its epoch's challenge, organic and band-2 reads at the selected `W` — has no value. It can only lower `W`'s ceiling (§9.3), and it cannot be closed by reasoning. **Blocker: the floor device.** The measurement is a sustained Tor serve from a Pi 4 at the drawable-pair count the epoch implies, which needs that hardware in the loop; the shard lane runs it when the device is available.
-  - Owner: [`ARCHIVAL_SHARD_T_DERIVATION.md`](design/ARCHIVAL_SHARD_T_DERIVATION.md) §9.3 `U1b`
+- **`U1b` (`SHT-5`) is measured but not yet read: the floor device's 24-hour run with a same-window control started 2026-10-02 (§9.3a), and only its reading A — whether a Pi 4 serves one whole-shard read inside the deadline — can lower `W`'s ceiling, while reading B, the sustainable holding per floor device, goes to the gate 4/5 participation floor.** *Falsifier:* `pd-f2-u1b` on the committed device file.
+  - Owner: [`ARCHIVAL_SHARD_T_DERIVATION.md`](design/ARCHIVAL_SHARD_T_DERIVATION.md) §9.3a `U1b`
   - Target: pre-genesis
 
 - **`SF-D7` still states the whole-shard materialise premise that `PDM-Q6` item 5 retired (`SHT-3`).** `ARCHIVAL_SHARD_FETCH.md`:183 reads *"`N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`)"*, while item 5 kept `SF-D1`'s whole-shard *read* and retired its *materialise*, refuting F32's reason 2 on that ground. Stale premise on a RULED row, and it is the text a future reader would use to derive a memory bound on `T`.
