@@ -81,7 +81,7 @@ use std::time::{Duration, Instant};
 use shekyl_archival_retention::{ARCHIVAL_BOND_FLOOR_ATOMIC, FAILURE_WINDOW_M, FAILURE_WINDOW_N};
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{FakechainSchedule, RuleSet};
-use shekyl_crypto_hash::cshake256_32;
+use shekyl_crypto_hash::keccak256;
 use shekyl_types::archival::SlashedHolding;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -438,9 +438,9 @@ impl SlashedChain {
 
         // The whole record, pinned: the only `0x04` body in the tree with
         // the slash families populated.
-        let got_hash = hex(&cshake256_32(SNAPSHOT_PIN_CUSTOMIZATION, &body));
+        let got_hash = hex(&keccak256(&body));
         assert_eq!(
-            got_hash, SLASHED_SNAPSHOT_BODY_CSHAKE,
+            got_hash, SLASHED_SNAPSHOT_BODY_KECCAK,
             "the 0x04 body at the slashing tip ({} bytes, {} rows) moved — a §3.8.1 / codec change re-pins it with its version bump",
             body.len(),
             got.row_count()
@@ -456,15 +456,15 @@ impl SlashedChain {
     }
 }
 
-/// The test-local cSHAKE customization for the body pin.
-const SNAPSHOT_PIN_CUSTOMIZATION: &[u8] = b"shekyl.chain-store.test.slashed-snapshot-body.v1";
-/// `cshake256_32(SNAPSHOT_PIN_CUSTOMIZATION, body)` of the `0x04` body at
-/// the witness's slashing tip under `RULES`, `WITNESS_PERSONAS` personas:
-/// 17 536 bytes, 39 rows — four bonds, thirteen closed epochs' budget and
-/// Σwork rows, the open epoch's accrual, and the slash families above.
-/// Pinned 2026-10-02 (`ARW-Q18`).
-const SLASHED_SNAPSHOT_BODY_CSHAKE: &str =
-    "b443654c6435f7e8d389d5b6f3f1391b897d3d13bdf2a20a9cb077a064919c1f";
+/// `keccak256(body)` of the `0x04` body at the witness's slashing tip
+/// under `RULES`, `WITNESS_PERSONAS` personas: 17 536 bytes, 39 rows — four
+/// bonds, thirteen closed epochs' budget and Σwork rows, the open epoch's
+/// accrual, and the slash families above. A fingerprint of bytes, not a
+/// domain: the plain hash, so the pin registers nothing in
+/// `CRYPTO_DOMAIN_REGISTRY.tsv` and moves no cSHAKE count-pin. Pinned
+/// 2026-10-02 (`ARW-Q18`).
+const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
+    "6b1d14e89834bee02ad080ca3e9809ef3bd39e4411513d9ee474c1f2c501f76a";
 
 /// Each family's byte range inside a body, walked by the record framing
 /// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own
