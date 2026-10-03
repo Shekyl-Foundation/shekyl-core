@@ -622,6 +622,14 @@ shekyl-fcmp-proofs = { opt-level = 3 }
 # of every debug `cargo test` run, here and in CI.
 fips205 = { opt-level = 3 }
 sha2 = { opt-level = 3 }
+# The economics sim's tests fold every scenario block by block, up to sixty
+# years of 262 800 blocks each; unoptimised, the fold and the four crates on
+# its per-block path (the reward, the fill rule, the weight predictor) set
+# the length of every debug `cargo test` run, here and in CI.
+shekyl-economics-sim = { opt-level = 3 }
+shekyl-economics = { opt-level = 3 }
+shekyl-block-template = { opt-level = 3 }
+shekyl-tx-weight = { opt-level = 3 }
 
 [profile.dev]
 panic = "abort"
