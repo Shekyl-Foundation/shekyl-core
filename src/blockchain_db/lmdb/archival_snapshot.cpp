@@ -28,8 +28,8 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-// DRS-E4 archival snapshot walker (`docs/design/DRS_E4_ARCHIVAL_WRITER.md`
-// §3.8.1, ARW-25). The C++ reading of the archival state the digest excludes
+// DRS-E4 archival snapshot walker (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1,
+// ARW-25). The C++ reading of the archival state the digest excludes
 // (`LMDB_WRITE_ATOMICITY_AUDIT.md` §7.1.1), handed to Rust as DECODED FIELDS:
 // this file opens one cursor per archival family, decodes each key from its
 // big-endian layout and each value through the codec that wrote it, and calls

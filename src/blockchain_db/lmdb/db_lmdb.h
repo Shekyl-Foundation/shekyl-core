@@ -654,7 +654,7 @@ public:
   // walker tests can call it; BlockchainDB overrides stay private.
   std::array<uint8_t, 32> logical_state_digest_v0() const;
 
-  // DRS-E4 (`docs/design/DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, ARW-25): the
+  // DRS-E4 (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, ARW-25): the
   // archival state the digest excludes, as rows — the checkpoint's other
   // encoding. Walks the ten archival families under ONE read snapshot and
   // hands each row's DECODED fields to the Rust builder (ARW-Q10 (a)); the

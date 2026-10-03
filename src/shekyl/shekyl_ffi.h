@@ -4102,8 +4102,8 @@ int32_t shekyl_e2_trace_push_checkpoint(
     const uint8_t* digest);
 
 // ---------------------------------------------------------------------------
-// DRS-E4 archival snapshot (`docs/design/DRS_E4_ARCHIVAL_WRITER.md` §3.8.1,
-// ARW-25): the checkpoint's other encoding. The C++ walker
+// DRS-E4 archival snapshot (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, ARW-25):
+// the checkpoint's other encoding. The C++ walker
 // (`BlockchainLMDB::archival_snapshot_rows`) decodes each archival LMDB row
 // and hands the FIELDS over (ARW-Q10 (a)); Rust encodes every row in its
 // canonical form, so the two sides share one encoder and the C++ never
