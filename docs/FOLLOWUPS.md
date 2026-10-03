@@ -90,10 +90,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ARCHIVAL_SHARD_T_DERIVATION.md`](design/ARCHIVAL_SHARD_T_DERIVATION.md) §9.3 `U1b`
   - Target: pre-genesis
 
-- **`SF-D7` still states the whole-shard materialise premise that `PDM-Q6` item 5 retired (`SHT-3`).** `ARCHIVAL_SHARD_FETCH.md`:183 reads *"`N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`)"*, while item 5 kept `SF-D1`'s whole-shard *read* and retired its *materialise*, refuting F32's reason 2 on that ground. Stale premise on a RULED row, and it is the text a future reader would use to derive a memory bound on `T`.
-  - Owner: [`ARCHIVAL_SHARD_FETCH.md`](design/ARCHIVAL_SHARD_FETCH.md) `SF-D7`
-  - Target: pre-genesis
-
 - **Gate 4/5 budget sizing: paid whole-shard challenge egress at a low SKL price outruns the archival budget (F34's funding finding).** Every calibrated cell that breaches has holding cost 2.9–29× the whole archival budget (`STAKER_ARCHIVAL_SIM.md` §L19i): paid egress (AWS-rate reads, three whole-shard reads per pair per epoch), years 5–10, SKL ≤ $0.01. No partition or price shape fixes a network that cannot pay its archivers, so this stands independent of `SHT-Q2`. The analysis is done: §L19h/§L19i give the break-even budget per era, and the fiat budget per epoch for the fee era. **Blocker: a design decision, the design owner's and Rick's.** Either re-size or re-shape the archival budget, or make challenges cheaper, since the three whole-shard reads per pair per epoch are what drive paid egress. The shard lane builds whichever is ruled.
   - Owner: [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L19i
   - Target: pre-genesis
