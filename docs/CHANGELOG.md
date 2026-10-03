@@ -31,6 +31,27 @@
   it shares the id until it has a genesis of its own. The harness
   goldens keep their synthetic id.
 
+### Daemon — the prunable digest is computed in Rust
+
+- `calculate_transaction_prunable_hash` no longer hashes. It finds the
+  transaction's prunable range, the bytes after `unprunable_size`, and
+  hands it to `shekyl_wire::prunable_hash_of` over a new FFI entry,
+  `shekyl_tx_prunable_hash` (one byte range; no archival length, which
+  stays the mixer's to measure). The digest is a txid
+  operand that also travels alone — the `txs_prunable_hash` row, and
+  `prunable_hash` beside a pruned body in `get_transactions`, which the
+  wallet mixes into the id it checks — so it has the mixer's definition and
+  no second one.
+- The function's other derivation, a separate write of the prunable fields
+  when no blob was in hand, is deleted: without a blob the transaction is
+  serialized and its tail is the range. A pruned transaction is refused
+  instead of answered with the digest of nothing, and so is one whose
+  offsets are out of order.
+- `prunable_digest_parity` pins the digest on a body of every transaction
+  class (coinbase, spend, bond post, emission, serve-credit), in Rust and in
+  C++. No digest changes: every pinned value equals the one the previous
+  C++ code produced.
+
 ### Archival shards — the W₂ size ladder is read: `W = 3,000,000 B` stands on `U1a`
 
 - With onion PoW on, 13 of 319 single-attempt fetches of the largest served
