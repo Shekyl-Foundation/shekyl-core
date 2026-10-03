@@ -46,8 +46,11 @@
 //! reader (`ARW-27`), which this pin records rather than inherits.
 //! It does **not** make the slash families corpus-exercised: the
 //! sufficiency stamp's census still finds zero slash rows on every captured
-//! chain, and whether that red stands or a slash-bearing capture is owed is
-//! `ARW-Q18`, posed with this module's finding attached.
+//! chain. Whether that red stands or a slash-bearing capture is owed was
+//! `ARW-Q18`, posed with this module's finding attached and ruled
+//! 2026-10-02: no capture — the `0x04` record's slash families are pinned
+//! at non-empty by `shekyl-chain-store`'s slash witness, from the
+//! production writer's own state.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU128;

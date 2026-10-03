@@ -28,8 +28,10 @@
 //! The families the corpus does **not** witness are the stamp's declared
 //! red, enumerated by the exhaustive [`witness`] match so a family added to
 //! the X-macro without a witness does not compile: the slash families
-//! (`ARW-13`: no capture slashes, which is §6.2 item 5's decision point,
-//! posed as `ARW-Q18`) and the attestation witness. For them this module
+//! (`ARW-13`: no capture slashes, which was §6.2 item 5's decision point,
+//! `ARW-Q18` — ruled 2026-10-02: no capture; the `0x04` slash families are
+//! pinned at non-empty by `shekyl-chain-store`'s slash witness instead)
+//! and the attestation witness. For them this module
 //! asserts the *absence* — zero rows on every chain — so the empty slash
 //! rows of every `0x04` record are a pre-declared fact of the corpus, not a
 //! silence the oracle happens to agree with. One cell cuts across that
@@ -106,8 +108,9 @@ const fn witness(family: ArchivalFamily) -> Witness {
         },
         ArchivalFamily::SlashLog => Witness::Unwitnessed {
             rows: SnapshotFamily::SlashLog,
-            why: "ARW-13: no capture slashes — E4 §6.2 item 5's deferred slash-bearing \
-                  capture, posed as ARW-Q18; the m-of-n fixture is evidence of the two \
+            why: "ARW-13: no capture slashes — E4 §6.2 item 5's slash-bearing capture, \
+                  ARW-Q18, ruled refused: the 0x04 slash families are pinned at non-empty \
+                  by the store's slash witness; the m-of-n fixture is evidence of the two \
                   writers' disagreement (ARW-26 / ARW-Q17), not a corpus witness. The \
                   family's *gate* is seen through the watermark cell \
                   (`stubbing_the_slash_log_is_noticed_through_the_watermark_alone`); its \

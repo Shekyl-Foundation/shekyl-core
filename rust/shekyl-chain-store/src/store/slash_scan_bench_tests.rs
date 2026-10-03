@@ -34,6 +34,21 @@
 //! epochs the predicate needs, and out of the unit lane — so the 9b arm
 //! had only the ignored bench for a witness.
 //!
+//! The witness also **pins the `0x04` archival snapshot at the slashing
+//! tip** (`ARW-Q18`, ruled 2026-10-02): the three slash families' bytes
+//! spelled from the facts — `n_rows ‖ (len ‖ height ‖ seq ‖ persona ‖
+//! shard ‖ epoch ‖ 0x01)*` and the rest — against the body
+//! `ReadSnapshot::archival_snapshot` encodes, and the whole body by hash.
+//! Every captured corpus chain carries those families **empty**
+//! (`ARW-13`), so until this pin the record's slash encoding had been
+//! serialized only in its degenerate case and only in a writer-reader
+//! round trip a symmetric change passes. This is the state a slash-bearing
+//! capture would have exported, produced by the production writer in a
+//! test that already runs — the cheaper instrument `ARW-Q18` was closed
+//! with, in place of a seventh chain captured against a departing C++
+//! walker. A change to these bytes is a §3.8.1 / codec change and is
+//! re-pinned with its version bump, never silently.
+//!
 //! **`slash_scan_bench`** (`#[ignore]`) is the measurement §3.1 owes for
 //! "the scan runs once per epoch on the floor": sixty-four personas by
 //! default, and it prints
@@ -66,6 +81,8 @@ use std::time::{Duration, Instant};
 use shekyl_archival_retention::{ARCHIVAL_BOND_FLOOR_ATOMIC, FAILURE_WINDOW_M, FAILURE_WINDOW_N};
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{FakechainSchedule, RuleSet};
+use shekyl_crypto_hash::cshake256_32;
+use shekyl_types::archival::SlashedHolding;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Transaction};
@@ -75,7 +92,8 @@ use super::connect_fixtures::{
 };
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
-use crate::codec::SettlementEpochBlocks;
+use crate::archival_snapshot::{hex, ArchivalSnapshot, SnapshotFamily};
+use crate::codec::{SettlementEpochBlocks, SlashLogEntry};
 
 const SEB: u64 = 100;
 const RETENTION: u64 = 50;
@@ -326,10 +344,147 @@ impl SlashedChain {
         }
     }
 
+    /// The `0x04` record at the slashing tip (`ARW-Q18`): the slash
+    /// families' bytes spelled from the facts — not read back through the
+    /// codec — against the body the read encodes, and the whole body
+    /// pinned by hash. The structural half first, so a failure names the
+    /// row before it names the byte.
+    fn assert_snapshot_pins_the_slash_families(&self) {
+        let m = SettlementEpoch::from_raw(self.m);
+        let at = BlockHeight::from_raw(self.slashing_height);
+        let shard = ShardId::from_raw(0);
+        let snap = self.store.begin_read().expect("read");
+        let got = snap
+            .archival_snapshot()
+            .expect("the slashed state snapshots");
+
+        // The rows, as the constructors spell them: one log row per persona
+        // at the connecting height (`ARW-Q17`), `seq` in persona order —
+        // the deadline scan walks the bond table — one `slash_applied`
+        // member each, and the watermark at the slashing epoch.
+        let mut want = ArchivalSnapshot::empty();
+        for i in 0..self.personas {
+            let persona = PCanonicalId::from_bytes(persona(i));
+            let seq = u32::try_from(i).expect("fits");
+            want.push_slash_log(
+                at,
+                seq,
+                &SlashLogEntry {
+                    persona,
+                    shard,
+                    epoch: m,
+                    holding: SlashedHolding::CompleteTree,
+                },
+            )
+            .expect("distinct keys");
+            want.push_slash_applied(&persona, shard, m)
+                .expect("distinct keys");
+        }
+        want.set_last_slash_epoch(m).expect("the one row");
+        for family in [
+            SnapshotFamily::SlashLog,
+            SnapshotFamily::SlashApplied,
+            SnapshotFamily::LastSlashEpoch,
+        ] {
+            assert_eq!(got.rows(family), want.rows(family), "{family}");
+        }
+        assert!(
+            got.rows(SnapshotFamily::ServeCredit).is_empty(),
+            "nobody served"
+        );
+
+        // The bytes, spelled: `n_rows u64 ‖ (len u32 ‖ key ‖ value)*`, little-
+        // endian throughout, `Canonical(SlashLogEntry)` as `persona[32] ‖
+        // shard u64 ‖ epoch u64 ‖ 0x01` for a complete-tree demotion.
+        let n = self.personas.to_le_bytes();
+        let mut slash_log = n.to_vec();
+        let mut slash_applied = n.to_vec();
+        for i in 0..self.personas {
+            slash_log.extend_from_slice(&(8u32 + 4 + 32 + 8 + 8 + 1).to_le_bytes());
+            slash_log.extend_from_slice(&at.to_raw().to_le_bytes());
+            slash_log.extend_from_slice(&u32::try_from(i).expect("fits").to_le_bytes());
+            slash_log.extend_from_slice(&persona(i));
+            slash_log.extend_from_slice(&0u64.to_le_bytes());
+            slash_log.extend_from_slice(&self.m.to_le_bytes());
+            slash_log.push(0x01);
+            slash_applied.extend_from_slice(&(32u32 + 8 + 8).to_le_bytes());
+            slash_applied.extend_from_slice(&persona(i));
+            slash_applied.extend_from_slice(&0u64.to_le_bytes());
+            slash_applied.extend_from_slice(&self.m.to_le_bytes());
+        }
+        let mut last_slash_epoch = 1u64.to_le_bytes().to_vec();
+        last_slash_epoch.extend_from_slice(&8u32.to_le_bytes());
+        last_slash_epoch.extend_from_slice(&self.m.to_le_bytes());
+
+        let body = got.body();
+        let sections = body_sections(&body);
+        assert_eq!(sections.len(), SnapshotFamily::ALL.len());
+        let section = |family: SnapshotFamily| &body[sections[family as usize].clone()];
+        assert_eq!(
+            hex(section(SnapshotFamily::SlashLog)),
+            hex(&slash_log),
+            "archival_slash_log section"
+        );
+        assert_eq!(
+            hex(section(SnapshotFamily::SlashApplied)),
+            hex(&slash_applied),
+            "archival_slash_applied section"
+        );
+        assert_eq!(
+            hex(section(SnapshotFamily::LastSlashEpoch)),
+            hex(&last_slash_epoch),
+            "archival_last_slash_epoch section"
+        );
+
+        // The whole record, pinned: the only `0x04` body in the tree with
+        // the slash families populated.
+        let got_hash = hex(&cshake256_32(SNAPSHOT_PIN_CUSTOMIZATION, &body));
+        assert_eq!(
+            got_hash, SLASHED_SNAPSHOT_BODY_CSHAKE,
+            "the 0x04 body at the slashing tip ({} bytes, {} rows) moved — a §3.8.1 / codec change re-pins it with its version bump",
+            body.len(),
+            got.row_count()
+        );
+        // And the trace's reader decodes exactly what the read encoded.
+        let back = ArchivalSnapshot::read_body(&mut body.as_slice()).expect("reads");
+        assert_eq!(back, got);
+    }
+
     fn finish(self) {
         drop(self.store);
         cleanup(&self.path);
     }
+}
+
+/// The test-local cSHAKE customization for the body pin.
+const SNAPSHOT_PIN_CUSTOMIZATION: &[u8] = b"shekyl.chain-store.test.slashed-snapshot-body.v1";
+/// `cshake256_32(SNAPSHOT_PIN_CUSTOMIZATION, body)` of the `0x04` body at
+/// the witness's slashing tip under `RULES`, `WITNESS_PERSONAS` personas:
+/// 17 536 bytes, 39 rows — four bonds, thirteen closed epochs' budget and
+/// Σwork rows, the open epoch's accrual, and the slash families above.
+/// Pinned 2026-10-02 (`ARW-Q18`).
+const SLASHED_SNAPSHOT_BODY_CSHAKE: &str =
+    "b443654c6435f7e8d389d5b6f3f1391b897d3d13bdf2a20a9cb077a064919c1f";
+
+/// Each family's byte range inside a body, walked by the record framing
+/// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own
+/// reading of the layout, so a framing drift in the reader cannot hide one
+/// in the writer.
+fn body_sections(body: &[u8]) -> Vec<std::ops::Range<usize>> {
+    let mut at = 0usize;
+    let mut sections = Vec::with_capacity(SnapshotFamily::ALL.len());
+    for _ in SnapshotFamily::ALL {
+        let start = at;
+        let n_rows = u64::from_le_bytes(body[at..at + 8].try_into().expect("8 bytes"));
+        at += 8;
+        for _ in 0..n_rows {
+            let len = u32::from_le_bytes(body[at..at + 4].try_into().expect("4 bytes"));
+            at += 4 + usize::try_from(len).expect("fits");
+        }
+        sections.push(start..at);
+    }
+    assert_eq!(at, body.len(), "the ten families are the whole body");
+    sections
 }
 
 /// The 9b slash writes, witnessed in the unit lane: `M` epochs of misses
@@ -345,6 +500,7 @@ fn slash_writes_land_at_the_m_epoch_deadline() {
     );
     chain.assert_nothing_slashed_before_m();
     chain.assert_slashed();
+    chain.assert_snapshot_pins_the_slash_families();
     chain.finish();
 }
 

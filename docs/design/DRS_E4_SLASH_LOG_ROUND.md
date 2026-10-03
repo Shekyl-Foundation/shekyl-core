@@ -157,9 +157,11 @@ rust/shekyl-chain-store/src/schema.rs` returning two definitions).
 
 ## 4. What this round does not do
 
-- It does not make the slash families corpus-exercised. That is `ARW-Q18`
-  (`DRS_E4_ARCHIVAL_WRITER.md` §8, `../completed/`), posed on the stamp's
-  declared red and not reopened here.
+- It does not make the slash families corpus-exercised. That was `ARW-Q18`
+  (`DRS_E4_ARCHIVAL_WRITER.md` §8, `../completed/`), ruled 2026-10-02:
+  refused, the stamp's declared red standing, and the `0x04` record's
+  slash-family encoding pinned at non-empty in the slash witness instead
+  (`slash_scan_bench_tests.rs`). Not reopened here.
 - It does not touch the C++ side of the key. `ARW-27`'s count-keyed row is a
   live off-by-one against its own height-denominated reader and is a deletion
   target under `DEL-008`, not a fix.

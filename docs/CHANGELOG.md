@@ -285,7 +285,13 @@
   exists for (`holds_shard_at(h)` is *yes iff a logged slash strictly
   above `h` removed it* — only the connecting-height key makes a shard
   not-held at the block that removed it). The slash-bearing corpus
-  capture is posed as `ARW-Q18`.
+  capture was posed as `ARW-Q18` and **ruled 2026-10-02: refused** — the
+  one thing a seventh chain would have added, the `0x04` record's slash
+  families serialized at non-empty, is pinned instead in the slash
+  witness (`slash_writes_land_at_the_m_epoch_deadline` now snapshots its
+  slashing tip and holds the slash sections to bytes spelled from the
+  facts, the whole body to a hash), from the production writer's state,
+  with no chain captured against the departing C++ walker.
 - **Known defect in the C++ archival path (`ARW-27`), not inherited.**
   The C++ keys `archival_slash_log` by the post-connect count
   (`prev_height + 1`) while its `archival_bond_holds_shard` reader scans
