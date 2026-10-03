@@ -60,6 +60,19 @@ question, and nothing in this sim can respond to it.
 
 **What would change it.**
 
+- **The two constants the condition reads.** Both are Monero's, and both
+  were sized for a Monero transaction:
+  - `w_ref = 3 000` is `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT`. CEN-M3
+    finds no examination record of it as a choice.
+  - The 300 000-byte zone holds 100 Monero-sized transactions and about
+    22 of ours. Its transaction-capacity leg was ratified on a 4–8 KB
+    estimate per spend (C2-R2 Q1; CEN-G6b's provenance gap).
+
+  The post-quantum transaction made both wrong by a factor of 4–5. ESR-6's
+  fee re-base is the first thing that priced them. Re-deriving them is a
+  ruling for their owners (`docs/FOLLOWUPS.md`), not this lane's. Until it
+  lands, the sim keeps the inherited values, and ESR-10 runs a second
+  declared arm with the pair re-derived.
 - A share of Priority transactions (ESR-10's rung mix). Priority pays
   `max(2RC/M, 4F)` per byte, which buys deep into the penalty zone, so blocks
   grow from genesis.
@@ -79,6 +92,36 @@ Each is an input, not a result, and none is modelled.
 - **Every onset year** (§5.7).
 
 None of these should be quoted without the assumption above beside it.
+
+## Reading-pass finding 2: block growth is gated by the fee correction (2026-10-03, ESR-6)
+
+A Standard-rung transaction buys one more transaction's room past the
+median when `w ≤ 4ρ·w_ref·(m/M)²`, with `ρ = (1 − σ)/(1 − b)`. That is the
+fee correction `C = (1 − σ)·M_r/(1 − b)` with the release multiplier taken
+out: `M_r` scales the reward and the fee alike and cancels. So **the year
+the default fee starts growing blocks is set by the staker emission share
+`σ` and the burn fraction `b`.** Those are two economic levers, with jobs of
+their own: the staker bootstrap leg and the fee burn. Block-size growth is a
+third job carried by the same term, and nothing chose it.
+
+Measured on the ESR-6 baseline, production arm, years 1 → 10:
+
+| | Year 1 | Year 10 | Factor |
+| --- | ---: | ---: | ---: |
+| `σ` | 0.143 | 0.055 | `1 − σ`: × 1.10 |
+| `b` | 0.016 | 0.203 | `1/(1 − b)`: × 1.24 |
+| `ρ` | 0.871 | 1.185 | × 1.36 |
+
+`ρ` crosses the threshold `w/(4·w_ref)` = 1.22 in year 11. About
+**two-thirds of the rise is the burn fraction** climbing as the supply is
+emitted, and one-third is `σ` decaying. Any change to the decay schedule,
+the burn curve or the `(1 − σ)` correction therefore moves the year blocks
+can first grow, and with it the corpus, the purse and the onsets. Under
+re-derived `w_ref` and zone (finding 1) the threshold itself moves.
+
+The greenfield economics note this belongs in does not exist yet: the
+design round is not opened here (§7). The finding is recorded here so the
+note can cite it when that round opens.
 
 ## 0. Why this round exists
 
@@ -201,6 +244,27 @@ the type and nothing sweeps it, and the rung mix is not modelled at all.
 ESR-10 prints A1-T at a swept multiplier and at the defaulted 15/80/5
 mix, including a zero-Priority arm. Its falsifier: the `×1` column equals
 the default report's.
+
+**Amended 2026-10-03 (design owner, after ESR-6).** ESR-10 runs every rung
+mix twice:
+
+- with `w_ref` and the zone as inherited;
+- with both re-derived from the post-quantum ordinary weight, as a
+  declared arm that states its derivation until the owners' ruling
+  replaces it.
+
+The reason is reading-pass finding 1. A Priority share grows blocks from
+genesis, and a table that showed only that would credit users paying
+several times Standard with what is partly a reference weight wrong by
+4–5×. Run on both constants, the ceremony sees which part of block growth
+is demand paying up and which part is the constant.
+
+One implementation fact for the re-derived arm:
+`shekyl_chain_rules::medians_from` floors the medians at the shipped
+`FULL_REWARD_ZONE` constant, not at `EconomicParams::full_reward_zone`.
+The arm therefore cannot be expressed through parameters alone, and either
+the floor takes its zone from the parameter set or the arm declares the
+divergence.
 
 **Where the items land (design owner, 2026-10-02).** ESR-1, ESR-2 and
 ESR-3 land in PR #935, which goes to review with them. ESR-4 onward
