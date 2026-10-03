@@ -79,7 +79,7 @@ use crate::rule_set::RuleSet;
 use crate::trust::Trust;
 use crate::validate::{form, tx_form, validate};
 use crate::verdict::{ChainValid, Locus, TxSlot, Verdict};
-use shekyl_wire::Transaction;
+use shekyl_wire::{Ct, Transaction};
 
 #[path = "tx_conformance_trips.rs"]
 mod trips;
@@ -950,6 +950,47 @@ fn the_i19_sites_nonce_rendering_is_i19_at_both_sites() {
             CenRow::I19,
             Locus::Tx { slot },
         );
+    }
+}
+
+/// The H20 site's other clauses. The twin's serve-credit shape check is one
+/// site, keyed in [`SITES`] to one trip (a `pqc_auth`), so its other clauses
+/// were held to nothing. Two of them concern the prunable region: a body
+/// with **no region**, and one whose pass-record count is not the
+/// serve-credit vin count. The twin refused both while `tx_form` admitted
+/// them (`SHT-9`: the live C++ refuses them, and the store cannot hold the
+/// first). This holds both: the twin refuses each with the shape message,
+/// and `tx_form` refuses the first on H20 (the region is the shape) and the
+/// second on J2 (the census row that names the count), at both slots.
+#[test]
+fn the_h20_sites_other_clauses_are_refused_on_their_rows() {
+    let base = || crate::harness::fixture::serve_credit_only([0x77; 32]);
+    let mut no_region = base();
+    let mut miscounted = base();
+    if let Ct::Fcmp { prunable, .. } = &mut no_region.ct {
+        *prunable = None;
+    }
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut miscounted.ct
+    {
+        p.serve_credit_pruned.push(p.serve_credit_pruned[0].clone());
+    }
+    for (body, row) in [(&no_region, CenRow::H20), (&miscounted, CenRow::J2)] {
+        let err = body
+            .validate()
+            .expect_err("the twin refuses the serve-credit shape");
+        assert!(
+            err.to_string().contains("serve_credit tx must be fee-only"),
+            "the twin refused on another arm: {err}"
+        );
+        for slot in [TxSlot::Lone, TxSlot::Listed(0)] {
+            assert_refused(
+                tx_form(body, slot, &RuleSet::GENESIS).map(|_| ()),
+                row,
+                Locus::Tx { slot },
+            );
+        }
     }
 }
 

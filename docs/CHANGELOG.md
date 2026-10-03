@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Chain rules — CEN-H20 requires the serve credit's pass records (`SHT-9`)
+
+- The Rust validator admitted a serve-credit transaction with no prunable
+  region, which live consensus refuses and the chain store cannot hold: ten
+  heights after connecting it, the store halted on SI-7. CEN-H20 now
+  requires the region, and CEN-J2 is implemented: one pruned pass record
+  per serve-credit input, each within its bound, as the C++ does. A
+  conformance correction: the live path is unchanged.
+- The serve-credit fixtures carry the region, and a serve credit is tested
+  end to end through a prune (`SHT-Q1` leg (f)).
+
 ### A Tor session carries the chain
 
 - Commands are no longer dropped because the peer is a Tor address.
