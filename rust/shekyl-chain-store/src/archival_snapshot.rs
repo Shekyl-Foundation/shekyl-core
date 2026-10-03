@@ -106,12 +106,19 @@ pub const FAMILY_COUNT: usize = SnapshotFamily::ALL.len();
 /// Bytes of an empty snapshot's body: ten zero counts.
 pub const EMPTY_BODY_LEN: usize = FAMILY_COUNT * 8;
 
-/// Reader allocation bound on one row. A format fact only in the sense that
-/// a reader refuses above it; the largest real row (a `BondRecord` at every
-/// cap, or a witness at [`MAX_ATTESTATION_WITNESS_BYTES`]) is well under it.
+/// Bound on one row, `key ‖ value`, held at both ends of the codec:
+/// [`ArchivalSnapshot::insert`] refuses a longer row, so every snapshot that
+/// can be built can be written and read back; [`ArchivalSnapshot::read_body`]
+/// refuses a longer declared length before allocating for it. The largest
+/// real row (a `BondRecord` at every cap, or a witness at
+/// [`MAX_ATTESTATION_WITNESS_BYTES`]) is well under it.
 ///
 /// [`MAX_ATTESTATION_WITNESS_BYTES`]: shekyl_types::archival::MAX_ATTESTATION_WITNESS_BYTES
 pub const MAX_ROW_BYTES: usize = 1 << 20;
+
+// The body writes each row's length as a `u32`; the insert-side bound is
+// what makes that conversion total.
+const _: () = assert!(MAX_ROW_BYTES <= u32::MAX as usize);
 
 impl SnapshotFamily {
     /// Every family, in record order.
@@ -284,11 +291,13 @@ pub enum SnapshotFault {
         /// The length offered.
         len: usize,
     },
-    /// A row longer than [`MAX_ROW_BYTES`].
+    /// A row longer than [`MAX_ROW_BYTES`] — offered to
+    /// [`ArchivalSnapshot::insert`], or declared to
+    /// [`ArchivalSnapshot::read_body`].
     RowTooLong {
         /// Which family.
         family: SnapshotFamily,
-        /// The length declared.
+        /// The length offered or declared.
         len: usize,
     },
     /// A row shorter than its family's key.
@@ -393,12 +402,15 @@ impl ArchivalSnapshot {
         self.families.iter().map(BTreeMap::len).sum()
     }
 
-    /// Insert one row given as its parts, checking the family's shape.
+    /// Insert one row given as its parts, checking the family's shape and
+    /// the row bound — the same [`MAX_ROW_BYTES`] [`Self::read_body`]
+    /// refuses above, so what this builds, the codec round-trips.
     ///
     /// # Errors
     ///
     /// [`SnapshotFault::KeyWidth`], [`SnapshotFault::ValueWidth`],
-    /// [`SnapshotFault::DuplicateKey`], [`SnapshotFault::SecondSingletonRow`].
+    /// [`SnapshotFault::RowTooLong`], [`SnapshotFault::DuplicateKey`],
+    /// [`SnapshotFault::SecondSingletonRow`].
     pub fn insert(
         &mut self,
         family: SnapshotFamily,
@@ -418,6 +430,10 @@ impl ArchivalSnapshot {
                     found: value.len(),
                 });
             }
+        }
+        let len = key.len() + value.len();
+        if len > MAX_ROW_BYTES {
+            return Err(SnapshotFault::RowTooLong { family, len });
         }
         let rows = &mut self.families[family as usize];
         if family.is_singleton() && !rows.is_empty() {
@@ -647,13 +663,14 @@ impl ArchivalSnapshot {
     ///
     /// # Errors
     ///
-    /// I/O only; every row was shape-checked at insert.
+    /// I/O only; every row was shape-checked and bounded by
+    /// [`MAX_ROW_BYTES`] at [`Self::insert`].
     pub fn write_body<W: Write>(&self, out: &mut W) -> io::Result<()> {
         for rows in &self.families {
             out.write_all(&(rows.len() as u64).to_le_bytes())?;
             for (key, value) in rows {
                 let len = u32::try_from(key.len() + value.len())
-                    .expect("a row was bounded by MAX_ROW_BYTES at insert");
+                    .expect("insert bounds a row by MAX_ROW_BYTES, which fits a u32");
                 out.write_all(&len.to_le_bytes())?;
                 out.write_all(key)?;
                 out.write_all(value)?;
@@ -1080,5 +1097,36 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// The row bound is held where rows are built, not only where they are
+    /// read: a variable-width row one byte over [`MAX_ROW_BYTES`] is refused
+    /// by `insert`, so no constructible snapshot writes a body `read_body`
+    /// rejects; a row exactly at the bound round-trips.
+    #[test]
+    fn the_row_bound_is_held_at_insert_so_every_snapshot_round_trips() {
+        let family = SnapshotFamily::Bond;
+        let key = vec![7u8; family.key_len()];
+        let value_at_bound = vec![1u8; MAX_ROW_BYTES - family.key_len()];
+
+        let mut over = ArchivalSnapshot::empty();
+        let mut value_over = value_at_bound.clone();
+        value_over.push(1);
+        assert_eq!(
+            over.insert(family, key.clone(), value_over).unwrap_err(),
+            SnapshotFault::RowTooLong {
+                family,
+                len: MAX_ROW_BYTES + 1,
+            }
+        );
+        assert_eq!(over.row_count(), 0, "a refused row leaves no trace");
+
+        let mut at = ArchivalSnapshot::empty();
+        at.insert(family, key, value_at_bound).unwrap();
+        let body = at.body();
+        assert_eq!(
+            ArchivalSnapshot::read_body(&mut body.as_slice()).unwrap(),
+            at
+        );
     }
 }
