@@ -40,6 +40,14 @@
 //! carries it — so the `SlashLog` *gate* has a stub witness through the
 //! watermark while the slash *rows* have none.
 
+// A whole-file test module, gated at `lib.rs` by
+// `#[cfg(all(test, feature = "pipeline"))]`. The inner attribute is the
+// file's own declaration of the same fact, for the debug-macro lint
+// (`build.yml`), which keys on it — the shape `vectors_tests.rs` and
+// `regtest_e2e.rs` use. The census and stub lines below are a test's
+// report lines, not production output.
+#![cfg(test)]
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
