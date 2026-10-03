@@ -292,6 +292,16 @@ same amounts as before the review. §5.5 has the result.
 records it. The reading-pass finding at the head of this document is its
 first consequence.
 
+**Landed.** ESR-5, 2026-10-03, at `eb501b15d`, in PR #936. Every fold
+derives the circulating supply through `CirculatingSupply::derive`
+(`engine::net_supply`). The engine, budget and stage-2 folds price the burn
+through `calc_burn_pct_at`. The recorder folds its burn and keeps the
+primitive engine-core's differential composes. Two stale statements of the
+gross convention are corrected in the same change: `ActivityMetric`'s
+field documentation in `shekyl-economics`, and the 2026-06-11 pinned
+constraint in [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md). §5.8
+registered the prediction (`da1a6b082`) and §5.9 records it.
+
 ## 3. The median is a production change inside a sim PR
 
 `shekyl_chain_rules::rules::block_weight::effective_median_at` needs a
@@ -693,6 +703,14 @@ it destroys. Registered:
    from the recorded supply.
 3. **The gate-7 set's burn fraction falls by the cumulative-burn share of
    supply, below 0.1 % relative.** No verdict moves.
+
+### 5.9 ESR-5 — what the run said (2026-10-03, at `eb501b15d`)
+
+| Prediction (§5.8) | Outcome |
+| --- | --- |
+| 1. `--stage2` does not move on either arm, byte for byte | **Held.** Both reports are byte-identical to their fixtures, so the three folds' own subtraction and the owner agreed everywhere. |
+| 2. The recorder's vectors move only in their net columns, a few basis points late, genesis untouched | **Held in the columns named, missed in the count.** `circulating_supply` is down 0.069 % at year 10. `burn_pct_bp` moves by at most 2 bp in six later rows. `actually_destroyed` and `staker_fee_pool` follow the burn at full precision, so they move in rows whose basis-point value did not. The genesis row is untouched, and engine-core's differential passes on the regenerated vector. But `total_staked` and `total_weighted_stake_lo` move too: they are the supply times the stake ratio, and the prediction overlooked them. |
+| 3. The gate-7 burn fraction falls by under 0.1 % relative; no verdict moves | **Missed in size.** The fall is 0.5 % relative (last-year burn 48.47 % → 48.22 %, total burned −0.48 %). Gate-7 runs 30 years on the production fee, and its cumulative burn, about 21 M SKL, is about 0.5 % of supply; the estimate was sized at the recorder's year 10. The gate-7 mode prints no verdicts, so the second half holds only trivially. |
 
 ## 6. The staking sim — a separate PR
 
