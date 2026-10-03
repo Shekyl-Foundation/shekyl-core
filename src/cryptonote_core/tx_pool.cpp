@@ -2130,6 +2130,15 @@ namespace cryptonote
       }
 
       // start using the optimal filling algorithm from v5
+      //
+      // This comparison has a Rust owner: shekyl_block_template::Fill::admit
+      // (rust/shekyl-block-template/src/fill.rs), which the economics sim
+      // calls. This copy is deleted when the pool's template fill moves to
+      // Rust (DRS_E1_SPOOL.md); do not repair a divergence by editing it.
+      // Known divergence: template_accept_threshold rounds best_coinbase to
+      // the nearest float, so within that rounding this copy can admit a
+      // body that lowers the coinbase or refuse one that raises it; the
+      // owner compares exactly.
       if (version >= 5)
       {
         // If we're getting lower coinbase tx,

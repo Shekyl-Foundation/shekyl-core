@@ -123,14 +123,20 @@ pub fn effective_emission(
 /// The zone is read from `params`, never taken from the caller: a
 /// consensus constant a caller could vary per call is a second source
 /// (E6 slice 4 §3.1 S8 — the C++ used to supply it on every call).
+/// The heaviest block [`apply_weight_penalty`] pays in full under
+/// `median_weight`: the median, raised to the penalty-free zone when below
+/// it ("make it soft").
+fn penalty_free_weight(median_weight: u64, params: &EconomicParams) -> u64 {
+    median_weight.max(params.full_reward_zone)
+}
+
 pub(crate) fn apply_weight_penalty(
     amount: u64,
     median_weight: u64,
     current_block_weight: u64,
     params: &EconomicParams,
 ) -> Result<u64, EmissionError> {
-    // "make it soft" — a median below the free zone is raised to it.
-    let median = median_weight.max(params.full_reward_zone);
+    let median = penalty_free_weight(median_weight, params);
 
     if current_block_weight <= median {
         return Ok(amount);
@@ -179,12 +185,67 @@ pub fn paid_block_reward(
     tx_volume: TxVolume,
     params: &EconomicParams,
 ) -> Result<u64, EmissionError> {
-    apply_weight_penalty(
-        effective_emission(already_generated_coins, tx_volume, params)?,
+    PrePenaltyEmission::of(already_generated_coins, tx_volume, params)?.penalised(
         median_weight,
         current_block_weight,
         params,
     )
+}
+
+/// The paid emission of one block before the weight penalty — the first
+/// factor of [`paid_block_reward`], and the only value the penalty is ever
+/// applied to.
+///
+/// It depends on the block's supply and volume, not on its weight, so a
+/// producer weighing many candidate bodies for one block prices it once and
+/// penalises it at each weight ([`Self::penalised`]). The type is what keeps
+/// FL-R12′'s order: no other amount can reach the penalty, so a floor can
+/// never be applied after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrePenaltyEmission(u64);
+
+impl PrePenaltyEmission {
+    /// [`effective_emission`] at the block's operands.
+    ///
+    /// # Errors
+    ///
+    /// [`effective_emission`]'s.
+    pub fn of(
+        already_generated_coins: u64,
+        tx_volume: TxVolume,
+        params: &EconomicParams,
+    ) -> Result<Self, EmissionError> {
+        effective_emission(already_generated_coins, tx_volume, params).map(Self)
+    }
+
+    /// The paid reward at `current_block_weight` under `median_weight`.
+    ///
+    /// # Errors
+    ///
+    /// [`EmissionError::BlockTooBig`] above twice the median;
+    /// [`EmissionError::Overflow`] where the penalty's product leaves `u128`.
+    pub fn penalised(
+        self,
+        median_weight: u64,
+        current_block_weight: u64,
+        params: &EconomicParams,
+    ) -> Result<u64, EmissionError> {
+        apply_weight_penalty(self.0, median_weight, current_block_weight, params)
+    }
+
+    /// The heaviest block this emission is paid in full at under
+    /// `median_weight`: [`Self::penalised`] returns the whole amount at any
+    /// weight up to this one.
+    #[must_use]
+    pub fn full_weight(self, median_weight: u64, params: &EconomicParams) -> u64 {
+        penalty_free_weight(median_weight, params)
+    }
+
+    /// The amount, atomic units.
+    #[must_use]
+    pub fn to_raw(self) -> u64 {
+        self.0
+    }
 }
 
 /// Neutral-trajectory `already_generated` at `height` under interpretation (A) (0h′).
@@ -818,6 +879,32 @@ mod tests {
     /// "Never panics" — not "always exact". Past the exact domain the
     /// function reports `Overflow`; the last case pins that, and pins that it
     /// is an error rather than a panic or a wrap.
+    /// `full_weight` is the boundary the penalty keys on: paid whole at it,
+    /// less one byte past it — and the zone stands in for a lower median.
+    #[test]
+    fn full_weight_is_the_last_weight_paid_whole() {
+        let p = EconomicParams::default();
+        let zone = p.full_reward_zone;
+        let emission = PrePenaltyEmission::of(0, TxVolume::per_block(p.tx_volume_baseline), &p)
+            .expect("genesis emission");
+        for median in [0, zone / 2, zone, zone + 12_345, 3 * zone] {
+            let full = emission.full_weight(median, &p);
+            assert_eq!(full, median.max(zone), "median {median}");
+            assert_eq!(
+                emission.penalised(median, full, &p),
+                Ok(emission.to_raw()),
+                "whole at the full weight, median {median}"
+            );
+            assert!(
+                emission
+                    .penalised(median, full + 1, &p)
+                    .expect("within the limit")
+                    < emission.to_raw(),
+                "penalised one byte past it, median {median}"
+            );
+        }
+    }
+
     #[test]
     fn block_reward_with_penalty_never_panics_at_u64_extremes() {
         let p = EconomicParams::default();
