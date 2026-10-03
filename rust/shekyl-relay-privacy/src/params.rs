@@ -194,6 +194,21 @@ pub const P2P_DEFAULT_OUT_PEERS: u32 = 12;
 /// its own constant and not an alias of [`P2P_DEFAULT_OUT_PEERS`].
 pub const MIN_PROVISIONED_OUT_PEERS: u32 = 12;
 
+/// How many hidden-address outbound connections a restricted node opens.
+///
+/// The own-edge is one peer drawn uniformly from that pool, once per epoch.
+/// The paper's anonymity graph is 4-regular; a pool smaller than that does
+/// not rotate the way the epoch model assumes, and a pool of one never
+/// rotates. This is not [`MIN_PROVISIONED_OUT_PEERS`]: that floor is the
+/// fluff measurement's degree, and relayed stems draw over every outbound
+/// session rather than over this pool.
+pub const HOP0_OUTBOUND_TARGET: u32 = 4;
+
+const _: () = {
+    assert!(HOP0_OUTBOUND_TARGET == 4);
+    assert!(HOP0_OUTBOUND_TARGET < MIN_PROVISIONED_OUT_PEERS);
+};
+
 /// The stem-graph shape, which fixes how many outbound peers carry stem
 /// traffic in an epoch — i.e. the stem graph's out-degree.
 ///

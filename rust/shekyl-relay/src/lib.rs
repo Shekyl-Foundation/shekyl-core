@@ -38,7 +38,7 @@
 //! makes that move a non-event. So the inventory is an invariant this crate
 //! maintains rather than a check it passed once:
 //!
-//! - Zone state — peer fluff queues, the stem map, the epoch role, and the
+//! - Relay state — peer fluff queues, the stem map, the epoch role, and the
 //!   noise schedule — is owned **here**, mutated only through `&mut Relay`.
 //!   C++ connection events do not mutate it; they arrive as calls into the
 //!   owner. Noise **schedule** is owned here. Noise **buffers** live here

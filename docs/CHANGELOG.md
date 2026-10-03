@@ -14,6 +14,13 @@
   `--tx-proxy` still names the SOCKS address dials use, and it no longer
   turns off the per-boot onion. `--anonymous-inbound` and
   `--no-ephemeral-tor` are what turn that publish off.
+- A transaction this node originates leaves on one connection that does
+  not reveal its address, chosen once per epoch from those connections.
+  A relayed transaction still leaves on a draw over every outbound
+  connection. One such connection is reported (`hop-0 edge cannot
+  rotate`) rather than treated as a normal configuration. The managed
+  Tor zone dials 4 outbound peers for that pool. `--out-peers` does
+  not change that number.
 
 ### Handshake network id derives from the genesis block
 

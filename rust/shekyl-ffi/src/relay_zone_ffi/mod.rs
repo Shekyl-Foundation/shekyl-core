@@ -1156,6 +1156,16 @@ pub extern "C" fn shekyl_p2p_default_out_peers() -> u32 {
     shekyl_relay_privacy::params::P2P_DEFAULT_OUT_PEERS
 }
 
+/// Hidden-address outbound connections a restricted node opens.
+///
+/// The own-edge rotates over that pool. Not
+/// [`shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS`]: that floor
+/// is the fluff measurement's degree.
+#[no_mangle]
+pub extern "C" fn shekyl_hop0_outbound_target() -> u32 {
+    shekyl_relay_privacy::params::HOP0_OUTBOUND_TARGET
+}
+
 /// A local origin keeps the pool record at `local` when hop 0 cannot draw
 /// a clearnet edge.
 ///

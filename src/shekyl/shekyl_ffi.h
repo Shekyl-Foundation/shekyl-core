@@ -3240,12 +3240,10 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 /// deadline up to ~999 ms in the past, which shortens an embargo, and a shorter
 /// embargo is the privacy-losing direction at every draw value including zero.
 ///
-/// \param zone The relay zone the transaction is embargoed on, as
-/// a `NetZone` byte (`netzone_*` in `cryptonote_protocol/enums.h`). The embargo is per-zone since §89.2:
-/// the anonymity zone stems, and a rendezvous hop needs a longer embargo than a
-/// clearnet one. Anything outside 0..=3 resolves to `zone::invalid`, which is
-/// provisioned as the worst case — a corrupt byte costs recovery latency rather
-/// than embargo length. (Masking would send 5 to `public_`, the shortest.)
+/// \param zone The embargo-class byte, not a connector index. 1 is the
+/// clearnet-class window. 3 is the anonymity-class window. 0 and any other
+/// byte take the longest window: a corrupt byte costs recovery latency
+/// rather than embargo length. (Masking would send 5 to the shortest.)
 uint64_t shekyl_dandelionpp_embargo_draw_seconds(uint8_t zone);
 
 /// Not a connector index. The connector embargo draws the longest measured
@@ -3532,6 +3530,11 @@ std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 //! FROM those measurements. Same value today, opposite derivations -- do not
 //! substitute one for the other.
 std::uint32_t shekyl_p2p_default_out_peers();
+
+//! Hidden-address outbound connections a restricted node opens. The
+//! own-edge rotates over that pool. Not the fluff floor: relayed stems
+//! draw over every outbound session.
+std::uint32_t shekyl_hop0_outbound_target();
 
 //! Inbound safety-bound decision (PWD-I7). Rust observes the process and
 //! decides. C++ passes `reserved` — descriptors it has promised but not

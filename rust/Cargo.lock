@@ -4640,6 +4640,7 @@ dependencies = [
  "shekyl-relay-privacy",
  "shekyl-transport-layer",
  "shekyl-types",
+ "tracing",
 ]
 
 [[package]]

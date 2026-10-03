@@ -1064,9 +1064,8 @@ namespace cryptonote
          would let an entry re-stem indefinitely instead of diffusing.
 
          The leak the #427 tripwire recorded was the `forward` arm, which put
-         STILL-STEMMING anonymity traffic into `stem_req` at `zone::public_` —
-         stemming on the wrong network. Deleting the class closes it; there is
-         nothing left here to route by origin. */
+         still-stemming traffic onto the clearnet fluff request. Deleting
+         the class closes it; there is nothing left here to route by origin. */
       for (auto& tx : txs)
       {
         switch (std::get<2>(tx))

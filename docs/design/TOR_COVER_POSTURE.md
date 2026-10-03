@@ -34,6 +34,13 @@ Three consequences follow immediately:
 
 - **Stems go out over the ordinary connection, immediately.** No fixed slots, no
   waiting for the next cadence tick.
+- **Two draws.** Relayed stems draw uniformly over every outbound session.
+  The own-edge draws uniformly over the hidden-address outbound sessions.
+  Both re-draw per epoch. A hidden-address pool of one is a degraded state
+  the node reports (`hop-0 edge cannot rotate`), not a configuration it
+  accepts quietly. The managed Tor zone opens `HOP0_OUTBOUND_TARGET` (4)
+  outbound connections so that pool has the paper's degree to rotate over.
+  `--out-peers` does not change that cap.
 - **Every fixed-slot artifact stops having a subject on this zone** —
   fragmentation, `MAX_FRAGMENTS`, epoch-miss arithmetic, the in-flight
   remainder, the length leak, the empty-message wedge.

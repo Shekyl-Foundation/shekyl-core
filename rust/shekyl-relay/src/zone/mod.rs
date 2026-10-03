@@ -22,7 +22,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
-use shekyl_relay_privacy::rng::RelayRng;
+use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
 use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
@@ -385,6 +385,12 @@ pub struct Relay {
     /// says the peer does not learn this node's address. False means hop 0
     /// draws from every outbound edge.
     hop0_restricted: bool,
+    /// This epoch's own-edge, once a non-empty hidden-address pool has been
+    /// drawn. Not a stem-map slot. Cleared by [`Relay::rebuild_stems`].
+    hop0_edge: Option<ConnectionId>,
+    /// Set when [`Relay::hop0_edge`] was drawn. A later disconnect does not
+    /// draw a replacement: one edge per epoch, re-drawn at the boundary.
+    hop0_committed: bool,
     /// Noise schedule (enable + cadence + per-channel deadlines), or off.
     ///
     /// **Single owner of the enable fact** (§20.4). Before RP-3b it lived only
@@ -495,6 +501,8 @@ impl Relay {
             params,
             stems,
             hop0_restricted: any_hides_address_from_peer(configured),
+            hop0_edge: None,
+            hop0_committed: false,
             noise,
         })
     }
@@ -753,31 +761,54 @@ impl Relay {
         self.fluff.forget(*id);
     }
 
-    /// Hop 0 when a configured connector declares the peer does not learn
+    /// The own-edge for a local origin, when a configured connector hides
     /// this node's address.
     ///
-    /// The destination is a stem-map slot whose peer declares the same, and
-    /// the local source stays pinned to that set for the epoch. An anonymity
-    /// peer the map did not slot is not a candidate: drawing one would be a
-    /// stem with no slot, which the carrier treats as map corruption.
+    /// Relayed stems draw uniformly over every outbound session. This draw
+    /// is the other one: uniform over the hidden-address outbound sessions,
+    /// once per epoch, and not a stem-map slot. Both are re-drawn at
+    /// [`Relay::rebuild_stems`]. A pool of one is the same edge every epoch;
+    /// that is reported, and the transaction still leaves.
     /// Empty is [`RelayPlan::NoRoute`].
     fn restricted_first_hop<R: RelayRng + ?Sized>(&mut self, rng: &mut R) -> RelayPlan {
-        let allowed: Vec<ConnectionId> = self
-            .map
-            .slots()
-            .iter()
-            .flatten()
-            .copied()
-            .filter(|id| {
-                self.contexts.get(id).is_some_and(|peer| {
-                    Self::stem_candidate(peer) && address_hidden_from_peer(peer.connector)
-                })
-            })
-            .collect();
-        match self.map.stem_for_among(None, &allowed, rng) {
-            Some(destination) => RelayPlan::Stem(destination),
-            None => RelayPlan::NoRoute,
+        if self.hop0_committed {
+            return match self.hop0_edge {
+                Some(id) if self.hop0_peer_live(id) => RelayPlan::Stem(id),
+                _ => RelayPlan::NoRoute,
+            };
         }
+        let pool = self.hidden_outbound_ids();
+        if pool.is_empty() {
+            return RelayPlan::NoRoute;
+        }
+        if pool.len() == 1 {
+            tracing::error!(
+                "hop-0 edge cannot rotate: one outbound connection hides this node's address, so every transaction this node originates uses that connection until another such peer connects"
+            );
+        }
+        let index = usize::try_from(bounded_uniform(rng, (pool.len() - 1) as u64))
+            .expect("the draw is bounded by the pool length");
+        let edge = pool[index];
+        self.hop0_edge = Some(edge);
+        self.hop0_committed = true;
+        RelayPlan::Stem(edge)
+    }
+
+    fn hop0_peer_live(&self, id: ConnectionId) -> bool {
+        self.contexts.get(&id).is_some_and(|peer| {
+            Self::stem_candidate(peer) && address_hidden_from_peer(peer.connector)
+        })
+    }
+
+    /// Hidden-address outbound sessions, in connection-id order.
+    fn hidden_outbound_ids(&self) -> Vec<ConnectionId> {
+        self.contexts
+            .iter()
+            .filter(|(_, peer)| {
+                Self::stem_candidate(peer) && address_hidden_from_peer(peer.connector)
+            })
+            .map(|(id, _)| *id)
+            .collect()
     }
 
     /// Outbound, and the connector has a measured transit. An unmeasured
@@ -850,7 +881,12 @@ impl Relay {
     /// channel picks up its new peer at the next send, and a channel the redraw
     /// leaves unbound clears at its next due tick, both read from the map itself.
     pub fn rebuild_stems<R: RelayRng + ?Sized>(&mut self, rng: &mut R) {
+        // Class-blind. A hidden-address peer is one outbound candidate among
+        // the rest, not a reserved slot. The own-edge is drawn separately,
+        // on the next local origin, from the hidden-address pool.
         self.map = StemMap::new(self.outbound_ids(), self.stems, rng);
+        self.hop0_edge = None;
+        self.hop0_committed = false;
     }
 
     /// Begin a new epoch at `now`: re-draw the fluff/stem role and the end time.
@@ -1153,18 +1189,13 @@ impl Relay {
     /// is total. That carrier is unread: the plan is the refusal, and the
     /// caller returns before any send.
     ///
-    /// The slot lookup is consistent by construction — the destination came
-    /// from this same map in this same call, so `slot_of` cannot miss it, and
-    /// the `None` arm is unreachable rather than a fallback.
-    ///
-    /// **What it does when reached, stated exactly.** It `debug_assert!`s, and
-    /// in release it returns [`RelayCarrier::Ordinary`] — so the stem still
-    /// goes out, over the ordinary connection. That is a **cover** degradation,
-    /// not a routing one, and it is deliberate: §92.4's rule is that carrier
-    /// unavailability must never travel as a routing verdict. Dropping the send
-    /// would convert a map inconsistency into a routing failure, which is the
-    /// inversion the inherited covert branch made in the other direction —
-    /// keeping the carrier and degrading the phase (§42.5a).
+    /// A relayed stem's destination came from this map, so `slot_of` finds
+    /// it. The own-edge did not: it is drawn from the hidden-address pool,
+    /// and noise channels follow stem slots, so that send takes the ordinary
+    /// connection. A relayed stem with no slot is map corruption. In release
+    /// that arm still returns [`RelayCarrier::Ordinary`] — the stem goes out.
+    /// That is a **cover** degradation, not a routing one: §92.4's rule is
+    /// that carrier unavailability must never travel as a routing verdict.
     fn carrier_for(&self, plan: RelayPlan) -> RelayCarrier {
         match plan {
             RelayPlan::Stem(destination) if self.noise_enabled() => {
@@ -1176,11 +1207,12 @@ impl Relay {
                         RelayCarrier::Noise { channel: slot }
                     }
                     Some(_) => RelayCarrier::Ordinary,
+                    None if self.hop0_edge == Some(destination) => RelayCarrier::Ordinary,
                     None => {
                         debug_assert!(
                             false,
-                            "planned a stem to a peer with no slot: the destination came from \
-                             this map in this call, so this is map corruption, not a posture"
+                            "planned a relayed stem to a peer with no slot: the destination came \
+                             from this map in this call, so this is map corruption, not a posture"
                         );
                         RelayCarrier::Ordinary
                     }
