@@ -188,9 +188,9 @@ pub fn shard_close<'id, V: ChainView<'id>>(
         UniverseState::Genesis => Ok(ShardClose::Open),
         UniverseState::At { parent, count } => {
             if shard.to_raw() < count.get() {
-                Ok(ShardClose::ClosedAt(
-                    shard_close_height(view, shard, parent)?.to_raw(),
-                ))
+                Ok(ShardClose::ClosedAt(shard_close_height(
+                    view, shard, parent,
+                )?))
             } else {
                 Ok(ShardClose::Open)
             }

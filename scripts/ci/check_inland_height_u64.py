@@ -110,8 +110,12 @@ SCOPE = (
 # 172 at E4 commit 8 (2026-10-02: `record_archival_epoch` / `write_slashes`
 # take the connecting `BlockHeight`, `ARW-Q17`); 170 at E4 commit 10d
 # (2026-10-02: the serve-credit C++ mirror `serve_credit_decisions.rs`
-# deleted with its two sites — not typed, gone).
-GRANDFATHER_CEILING = 170
+# deleted with its two sites — not typed, gone); 167 at E4 commit 12
+# (2026-10-02: `ShardClose::ClosedAt` and `shard_age_milli` take
+# `BlockHeight` — the merge with `dev`'s SHT-Q2 close operand surfaced the
+# sites as this gate's first red on a merged tree, and they were typed, not
+# recorded).
+GRANDFATHER_CEILING = 167
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

@@ -14,6 +14,7 @@
 use super::*;
 use crate::engine::emission_claim::test_fixtures::source_json;
 use shekyl_archival_retention::{ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, SETTLEMENT_EPOCH_BLOCKS};
+use shekyl_types::BlockHeight;
 
 /// A response as the daemon's epee KV JSON store emits it: one window
 /// epoch with rows, one empty-row epoch (absent arrays omitted, as epee
@@ -301,7 +302,7 @@ fn fixture() -> Value {
                 }],
                 shards: vec![EpochCloseShard {
                     shard_id: 4,
-                    close: ShardClose::ClosedAt(15),
+                    close: ShardClose::ClosedAt(BlockHeight::from_raw(15)),
                 }],
                 credit_pairs: vec![CreditPair {
                     bond_idx: 0,

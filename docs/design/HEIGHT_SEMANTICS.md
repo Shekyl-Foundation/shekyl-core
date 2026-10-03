@@ -10,10 +10,12 @@ difference constants); height-semantics Phase 2e RULED 2026-09-21
 (C4 `bond_post_offset_blocks` + wallet-ledger tip/reorg wrap);
 height-semantics Phase 2f RULED 2026-09-21 (ScanResult and the remaining
 inland ordinals are `BlockHeight`; reference spans are `BlockCount`);
-height-semantics Phase 2g RULED-as-slice 2026-10-01, retype not started
+height-semantics Phase 2g RULED-as-slice 2026-10-01, burn-down begun
 (the daemon-store and archival surface the census did not walk; its
 gate `check_inland_height_u64.py` landed first, grandfathered at 174;
-§3.5, `DRS_E4_ARCHIVAL_WRITER.md` `ARW-Q16`).
+UPDATE 2026-10-02: list 174 → 167 through DRS-E4 commits 8, 10d and 12,
+the slice itself not yet opened; §3.5, `DRS_E4_ARCHIVAL_WRITER.md`
+`ARW-Q16`).
 Stamp-clock COUNT→ORDINAL conversion is optional-not-owed. The
 `get_version` `target_height` wire `0` was retired at `CORE_RPC_VERSION`
 3.40 (2026-10-01); `get_info` still uses the C++ convention. Numerics are frozen
@@ -397,8 +399,13 @@ quantity.
   was retired at `CORE_RPC_VERSION` 3.40. `get_info` still writes `0`
   when synchronized. No numeric change.
 - **Height-semantics Phase 2g — the daemon-store and archival surface —
-  RULED 2026-10-01 as a separate slice, gate landed, retype not started**
-  (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-Q16` (b), (c)). The census above (§2–§3.3) walked
+  RULED 2026-10-01 as a separate slice, gate landed, burn-down begun**
+  (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-Q16` (b), (c)). *UPDATE 2026-10-02:*
+  the list stands at 167 (174 → 172 `ARW-Q17`; → 170 the serve-credit
+  mirror deleted; → 167 `ShardClose::ClosedAt` and `shard_age_milli` on
+  `BlockHeight`, DRS-E4 commit 12 — surfaced by the merge with SHT-Q2's
+  close operand, the gate's first red on a merged tree). The slice's own
+  work is not opened. The census above (§2–§3.3) walked
   the wallet side and the daemon-admission reads; the Rust daemon store
   and the archival settlement schedule are in it nowhere, and Phase 2e's
   *C2-complete* is true of the census and false of the tree. Read at the
