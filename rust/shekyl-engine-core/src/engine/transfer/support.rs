@@ -7,7 +7,7 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use shekyl_curve_tree::{AssembleInput, CommitmentBytes, OneTimePubkey};
+use shekyl_curve_tree::{AssembleInput, ClientError, CommitmentBytes, OneTimePubkey};
 use shekyl_engine_state::TransferDetails;
 
 use super::super::curve_tree_actor::CurveTreeHandleError;
@@ -98,22 +98,69 @@ pub(super) fn map_curve_tree_handle_error_for_send(err: &CurveTreeHandleError) -
     }
 }
 
+/// How a [`ClientError`] is reported on the re-anchor path.
+///
+/// One arm per remedy. [`client_reanchor_class`] names every
+/// [`ClientError`] variant, so a new one does not compile until it is
+/// placed.
+enum ClientReanchorClass {
+    /// Discard the selection and rebuild.
+    ///
+    /// [`ClientError::OutputNotDrained`] is the case this remedy describes:
+    /// the selected input is not in the tree at the fresh reference.
+    /// The other variants on this arm keep the remedy this path gave every
+    /// client error before the artifact fold existed. They are listed so a
+    /// new variant cannot join them by falling through.
+    Reselect,
+    /// The assembled path does not commit to the root it claims.
+    ///
+    /// A different selection reproduces it. The reservation stays, and the
+    /// failure is terminal (rule 82: do not name a remedy that cannot help).
+    Terminal,
+}
+
+/// Classify `err` for [`map_handle_err_to_reanchor`].
+///
+/// [`ClientError::PathRootMismatch`] is [`ClientReanchorClass::Terminal`].
+/// Every other variant is [`ClientReanchorClass::Reselect`].
+fn client_reanchor_class(err: &ClientError) -> ClientReanchorClass {
+    match err {
+        ClientError::PathRootMismatch { .. } => ClientReanchorClass::Terminal,
+        ClientError::RootMismatch { .. }
+        | ClientError::OutputNotDrained { .. }
+        | ClientError::IdentityMismatch { .. }
+        | ClientError::TooManyInputs { .. }
+        | ClientError::Store(_)
+        | ClientError::NonConsecutiveBlockHeight { .. }
+        | ClientError::ReferenceBeyondIngestedTip { .. }
+        | ClientError::ResumeFromPrunedStore { .. }
+        | ClientError::ResumeFromCorruptStore { .. }
+        | ClientError::Poisoned
+        | ClientError::LeafEntries { .. }
+        | ClientError::LeafPoint { .. }
+        | ClientError::Frontier { .. }
+        | ClientError::SnapshotLeafCountMismatch { .. } => ClientReanchorClass::Reselect,
+    }
+}
+
 /// Classify a curve-tree handle error encountered during a CT-5d re-anchor
-/// (`docs/design/CT5D_REANCHOR.md` §3): the two `CurveTreeHandleError` variants
-/// map to the two re-anchor failure modes.
+/// (`docs/design/CT5D_REANCHOR.md` §3).
+///
+/// Three outcomes. [`ClientReanchorClass::Terminal`] keeps the reservation
+/// and reports the tree unavailable. [`ClientReanchorClass::Reselect`] tells
+/// the consumer to discard and rebuild. [`CurveTreeHandleError::Unavailable`]
+/// is a stopped actor: retry once it resyncs.
 pub(super) fn map_handle_err_to_reanchor(err: &CurveTreeHandleError) -> ReanchorError {
     match err {
-        // The client returned an error *inside* the handler: the selected input
-        // is not resolvable at the fresh reference — almost always a
-        // reorg-orphaned output. Content-preserving reprove is impossible;
-        // reselection (CT-5d-deferred) is the fix, so tell the consumer to
-        // discard and rebuild rather than carry a proof that cannot be built.
-        CurveTreeHandleError::Client(_) => ReanchorError::ReselectionRequired {
-            detail:
-                "membership assembly failed at the fresh reference (input likely reorg-orphaned); discard and rebuild",
+        CurveTreeHandleError::Client(client) => match client_reanchor_class(client) {
+            ClientReanchorClass::Terminal => {
+                ReanchorError::Failed(map_curve_tree_handle_error_for_send(err))
+            }
+            ClientReanchorClass::Reselect => ReanchorError::ReselectionRequired {
+                detail:
+                    "membership assembly failed at the fresh reference (input likely reorg-orphaned); discard and rebuild",
+            },
         },
-        // The actor is fail-stopped / timed out — transient, recoverable by
-        // respawn; retriable once the tree resyncs.
         CurveTreeHandleError::Unavailable => ReanchorError::ReferenceResyncing {
             detail: "curve tree actor unavailable; retry once it resyncs",
         },
@@ -186,5 +233,47 @@ pub(super) fn map_signer_error(err: &SignerError) -> SendError {
     match err {
         SignerError::Unavailable => SendError::SignerUnavailable,
         SignerError::RemoteFailure { reason } => SendError::SignerFailed { reason },
+    }
+}
+
+#[cfg(test)]
+mod reanchor_classification_tests {
+    use super::{map_handle_err_to_reanchor, CurveTreeHandleError, ReanchorError};
+    use shekyl_curve_tree::{ClientError, CurveTreeRoot, Gindex, OneTimePubkey, PathRootFault};
+
+    /// A tree inconsistency must not be reported as "reselect your inputs".
+    ///
+    /// `PathRootMismatch` means the assembled path did not hash to the root
+    /// it claimed — the wallet's two views of one tree disagree. The selected
+    /// inputs are not implicated, and a rebuild with different ones
+    /// reproduces it, so `ReselectionRequired` would send the user to do work
+    /// that cannot help and would lose their selection on the way. Rule 82:
+    /// a named remedy that is wrong is worse than a generic failure.
+    #[test]
+    fn a_path_root_mismatch_is_not_a_reselection() {
+        let err = CurveTreeHandleError::Client(ClientError::PathRootMismatch {
+            claimed: CurveTreeRoot::EMPTY,
+            fault: PathRootFault::RootDisagrees,
+        });
+        match map_handle_err_to_reanchor(&err) {
+            ReanchorError::Failed(_) => {}
+            other => panic!(
+                "a tree inconsistency must be terminal, not a reselection request; got {other:?}"
+            ),
+        }
+    }
+
+    /// The arm above is specific, not a widening: an unresolvable input still
+    /// asks for reselection, which is the case that remedy exists for.
+    #[test]
+    fn an_unresolvable_input_still_asks_for_reselection() {
+        let err = CurveTreeHandleError::Client(ClientError::OutputNotDrained {
+            gindex: Gindex::from_raw(7),
+            output_key: OneTimePubkey::from_bytes([0u8; 32]),
+        });
+        match map_handle_err_to_reanchor(&err) {
+            ReanchorError::ReselectionRequired { .. } => {}
+            other => panic!("an orphaned input is the reselection case; got {other:?}"),
+        }
     }
 }

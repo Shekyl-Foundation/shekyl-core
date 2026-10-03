@@ -64,6 +64,7 @@ pub mod serving_route;
 pub mod store;
 pub mod types;
 
+pub use assemble::PathRootFault;
 pub use client::{
     BlockLeaves, ClientError, CurveTreeClient, RawOutput, TxLeafInputs, WriterRecovery,
 };
