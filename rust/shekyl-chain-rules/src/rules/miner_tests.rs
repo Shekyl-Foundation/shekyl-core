@@ -650,6 +650,38 @@ fn cen_f20_a_decreasing_prefix_sum_is_a_corrupt_view() {
     });
 }
 
+/// F20's span without the store, at the heights where its shape changes:
+/// empty at genesis, growing while it reaches genesis (no lower term), full
+/// from `W + 1` on (a lower term `W` blocks below the upper). The three
+/// tests above pin [`tx_volume_window`] on a chain; this pins the
+/// definition a caller with its own prefix sums reads, so the two cannot
+/// part company without one of them going red.
+#[test]
+fn cen_f20_span_is_the_window_without_the_store() {
+    let w = shekyl_economics::params::TX_VOLUME_WINDOW;
+    let at = BlockHeight::from_raw;
+    let span = |h| crate::rules::miner::tx_volume_span(at(h));
+    assert_eq!(span(0).blocks, 0);
+    assert_eq!((span(0).upper, span(0).lower), (None, None));
+    for h in [1, 2, w - 1, w] {
+        let s = span(h);
+        assert_eq!(s.blocks, h, "h = {h}: the window reaches genesis");
+        assert_eq!((s.upper, s.lower), (Some(at(h - 1)), None), "h = {h}");
+    }
+    for h in [w + 1, w + 2, 10 * w] {
+        let s = span(h);
+        assert_eq!(s.blocks, w, "h = {h}: the window is full");
+        assert_eq!(
+            (s.upper, s.lower),
+            (Some(at(h - 1)), Some(at(h - 1 - w))),
+            "h = {h}"
+        );
+    }
+    // The subtraction refuses a decrease rather than saturating to zero.
+    assert_eq!(span(w + 2).volume(5, 10), None);
+    assert_eq!(span(w + 2).volume(10, 5), Some(TxVolume::window(5, w)));
+}
+
 /// The shipped parameter set prices the tail. That overflow is the only
 /// `Err` the emission functions return, and [`economics`] refuses a
 /// parameter set that produces it before a block is priced.

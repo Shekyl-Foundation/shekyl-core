@@ -29,7 +29,9 @@
 //! (`SHT-Q2`; `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F step 3).
 
 use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
-use shekyl_tx_weight::{predict_archival_len, InputCount, OutputCount, MAX_TREE_DEPTH};
+use shekyl_tx_weight::{
+    predict_archival_len, predict_weight, InputCount, OutputCount, MAX_TREE_DEPTH,
+};
 use shekyl_types::{shard_of, ArchivalLength, SHARD_LENGTH};
 
 use crate::calibration::{tree_depth_for_leaves, PerByteRate, Shape};
@@ -94,12 +96,21 @@ pub(crate) fn ordinary_tx_fee(chain_leaves: u64, rate: PerByteRate) -> u64 {
     Shape { n_in, n_out }.tx_fee_atomic(tree_depth_for_leaves(chain_leaves), rate)
 }
 
+/// Weight of one ordinary (1-in / 2-out) transaction paying `fee_atomic`
+/// when the curve tree holds `chain_leaves` outputs — the production
+/// predictor's, the fee's varint included.
+#[must_use]
+pub(crate) fn ordinary_tx_weight(chain_leaves: u64, fee_atomic: u64) -> u64 {
+    let (n_in, n_out) = normal_tx_shape();
+    predict_weight(n_in, n_out, tree_depth_for_leaves(chain_leaves), fee_atomic) as u64
+}
+
 /// Outputs the honest chain has added, in fold order.
 ///
 /// The fee prices against [`leaves`](Self::leaves) before [`accrue`](Self::accrue):
-/// that count is the tree the block's transactions are built against. ESR-6's
-/// block-weight accumulator extends this type, so the engine, the budget and
-/// [`HonestFold`] share one counter instead of growing three.
+/// that count is the tree the block's transactions are built against. The
+/// engine, the budget and [`HonestFold`] share this one counter rather than
+/// growing three.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct HonestOutputs {
     cumulative: f64,

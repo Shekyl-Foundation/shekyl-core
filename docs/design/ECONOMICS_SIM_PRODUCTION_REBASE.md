@@ -18,6 +18,111 @@ fee-share verdict in
 
 ---
 
+## Reading-pass finding 1: the production default carries 22 of 50 (2026-10-03, ESR-6)
+
+**What the run says.** On the baseline schedule, 50 ordinary transactions a
+block, at the production Standard rung and under the production
+block-template fill rule:
+
+- Blocks carry **22 transactions** for the first eleven years.
+- The median stays within one transaction of the 300 KB zone (314–322 KB).
+- About **28 a block go unserved**, roughly 7.4 M a year.
+- The median starts to climb in year 11. By year 12 blocks carry all 50, and
+  it settles at 732–764 KB.
+
+On the flat control fee the same thing lasts until **year 38**.
+
+**The mechanism is production code.** The producer lists a transaction only
+when it does not lower the gross coinbase (`fill_block_template`, now
+`shekyl_block_template::Fill`). Past the median, one more transaction of
+weight `w` therefore needs a fee that covers its penalty:
+`w ≤ 4ρ·w_ref·(m/M)²` at the Standard rung, with `ρ = (1 − σ)/(1 − b)`. The
+fee grows with `w` and the penalty with `w²`. The ladder's reference weight
+`w_ref = 3 000` is a quarter to a fifth of a post-quantum ordinary
+transaction (12.6–15.3 KB), so the condition fails until `ρ` reaches about 1.2. That
+happens in year 11 on this trajectory (§5.6–§5.7).
+
+**The demand assumption, named. The sim has no demand response.** Demand is
+the scenario's schedule. It is exogenous, the same whatever the fee or the
+congestion, with no elasticity, and nothing in it is deterred by price.
+Every transaction pays the Standard rung. No wallet escalates to Priority
+under congestion: the production wallet has no automatic escalation, and the
+tier is the user's choice. A refused transaction waits in the pool, is
+offered again to the next block at that block's fee, and is dropped unserved
+after `CRYPTONOTE_MEMPOOL_TX_LIVETIME`, three days or 2 160 blocks. It is
+never resubmitted.
+
+So "unserved" means **expired for want of block space**, not "deterred by
+the fee". 22/50 is a supply-side result: what production's block-space rule
+does to an inelastic, all-Standard, non-escalating demand. It is not an
+adoption estimate. ESR-1's early-fee number (§5.1) is the usability
+question, and nothing in this sim can respond to it.
+
+**What would change it.**
+
+- **The two constants the condition reads.** Both are Monero's, and both
+  were sized for a Monero transaction:
+  - `w_ref = 3 000` is `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT`. CEN-M3
+    finds no examination record of it as a choice.
+  - The 300 000-byte zone holds 100 Monero-sized transactions and about
+    22 of ours. Its transaction-capacity leg was ratified on a 4–8 KB
+    estimate per spend (C2-R2 Q1; CEN-G6b's provenance gap).
+
+  The post-quantum transaction made both wrong by a factor of 4–5. ESR-6's
+  fee re-base is the first thing that priced them. Re-deriving them is a
+  ruling for their owners (`docs/FOLLOWUPS.md`), not this lane's. Until it
+  lands, the sim keeps the inherited values, and ESR-10 runs a second
+  declared arm with the pair re-derived.
+- A share of Priority transactions (ESR-10's rung mix). Priority pays
+  `max(2RC/M, 4F)` per byte, which buys deep into the penalty zone, so blocks
+  grow from genesis.
+- An elasticity. It would lower demand instead of expiring it.
+- A wallet that escalates its rung under congestion.
+
+Each is an input, not a result, and none is modelled.
+
+**What it feeds.**
+
+- **Corpus growth.** The baseline's closed shards at year 10 are 229 864,
+  against 523 841 before.
+- **The purse.** Emission is paced at the release multiplier's 0.8 floor
+  for eleven years, so the reward is 1.313× higher at every later year.
+- **The escalation knee.** Its band's low anchor moved with the corpus
+  (`docs/FOLLOWUPS.md`; GF-7's, after ESR-10).
+- **Every onset year** (§5.7).
+
+None of these should be quoted without the assumption above beside it.
+
+## Reading-pass finding 2: block growth is gated by the fee correction (2026-10-03, ESR-6)
+
+A Standard-rung transaction buys one more transaction's room past the
+median when `w ≤ 4ρ·w_ref·(m/M)²`, with `ρ = (1 − σ)/(1 − b)`. That is the
+fee correction `C = (1 − σ)·M_r/(1 − b)` with the release multiplier taken
+out: `M_r` scales the reward and the fee alike and cancels. So **the year
+the default fee starts growing blocks is set by the staker emission share
+`σ` and the burn fraction `b`.** Those are two economic levers, with jobs of
+their own: the staker bootstrap leg and the fee burn. Block-size growth is a
+third job carried by the same term, and nothing chose it.
+
+Measured on the ESR-6 baseline, production arm, years 1 → 10:
+
+| | Year 1 | Year 10 | Factor |
+| --- | ---: | ---: | ---: |
+| `σ` | 0.143 | 0.055 | `1 − σ`: × 1.10 |
+| `b` | 0.016 | 0.203 | `1/(1 − b)`: × 1.24 |
+| `ρ` | 0.871 | 1.185 | × 1.36 |
+
+`ρ` crosses the threshold `w/(4·w_ref)` = 1.22 in year 11. About
+**two-thirds of the rise is the burn fraction** climbing as the supply is
+emitted, and one-third is `σ` decaying. Any change to the decay schedule,
+the burn curve or the `(1 − σ)` correction therefore moves the year blocks
+can first grow, and with it the corpus, the purse and the onsets. Under
+re-derived `w_ref` and zone (finding 1) the threshold itself moves.
+
+The greenfield economics note this belongs in does not exist yet: the
+design round is not opened here (§7). The finding is recorded here so the
+note can cite it when that round opens.
+
 ## 0. Why this round exists
 
 Production prices a byte as `F = R·C·w_ref/M²`
@@ -87,7 +192,7 @@ tables has one cause. Each item names what would show it wrong.
 | **ESR-3** | Emission-split epoch read from `shekyl_chain_rules::EMISSION_SPLIT_EPOCH`. | A fold sampled at an exact year-boundary height moves by one decay step; a mid-year sample does not. |
 | **ESR-4** | Transaction volume through `TxVolume::window` over `TX_VOLUME_WINDOW`, as the validator reads it. | A step schedule's burn and release ramp over 720 blocks instead of jumping. |
 | **ESR-5** | Net circulating supply (`CirculatingSupply::derive`) in the gate-7 path and the recorder; the fixture is regenerated. | Each regenerated column is justified from the production formula, not from the run that produced it. |
-| **ESR-6** | The weight penalty (`block_reward_with_penalty`) and a block-weight median enter the fold. The pure median fold is **exposed from `shekyl-chain-rules`**, not restated — see §3. | With traffic above the penalty-free zone the median rises and the floor falls as `1/M²`. |
+| **ESR-6** | The weight penalty (`paid_block_reward`) and a block-weight median enter the fold. The pure median fold is **exposed from `shekyl-chain-rules`**, not restated — see §3. What a block carries is the producer's fill rule, lifted from `fill_block_template` to `shekyl_block_template::Fill` and called. | With traffic above the penalty-free zone the median rises and the floor falls as `1/M²` — **amended by §5.6 before the run**: on an all-Standard chain, only once one more transaction's fee covers its penalty. |
 | **ESR-7** | A miner stuffer: transactions the miner includes in its own blocks. Two arms: the fee floor **unenforced** (the current system — zero fee, bounded only by the penalty) and **enforced** (a declared divergence, §4). | `--stage2` prints a stuffer row at zero fee beside the fee-path one. |
 | **ESR-8** | Restated constants become imports, or are declared in §4. The dead stake schedule is deleted in its own commit (rule 15). | Appendix A's restated-constant rows are each closed by an import, a deletion, or a §4 entry. |
 | **ESR-9** | The documents that quote the old tables: §12.13–§12.14 rows become records-was with the new rows beside them. | No current-tense sentence quotes a flat-fee figure. |
@@ -140,11 +245,62 @@ ESR-10 prints A1-T at a swept multiplier and at the defaulted 15/80/5
 mix, including a zero-Priority arm. Its falsifier: the `×1` column equals
 the default report's.
 
+**Amended 2026-10-03 (design owner, after ESR-6).** ESR-10 runs every rung
+mix twice:
+
+- with `w_ref` and the zone as inherited;
+- with both re-derived from the post-quantum ordinary weight, as a
+  declared arm that states its derivation until the owners' ruling
+  replaces it.
+
+The reason is reading-pass finding 1. A Priority share grows blocks from
+genesis, and a table that showed only that would credit users paying
+several times Standard with what is partly a reference weight wrong by
+4–5×. Run on both constants, the ceremony sees which part of block growth
+is demand paying up and which part is the constant.
+
+One implementation fact for the re-derived arm:
+`shekyl_chain_rules::medians_from` floors the medians at the shipped
+`FULL_REWARD_ZONE` constant, not at `EconomicParams::full_reward_zone`.
+The arm therefore cannot be expressed through parameters alone, and either
+the floor takes its zone from the parameter set or the arm declares the
+divergence.
+
 **Where the items land (design owner, 2026-10-02).** ESR-1, ESR-2 and
 ESR-3 land in PR #935, which goes to review with them. ESR-4 onward
 land in a second PR stacked on #935's branch, so the remaining fold
 changes — the volume window, the supply operand, the median and the
 miner stuffer — are reviewed apart from the fee arm they build on.
+
+**Landed.** ESR-4, 2026-10-02, in PR #936: `fc7d5a9b2` splits CEN-F20's
+window into a span readable without a store (`shekyl_chain_rules::tx_volume_span`),
+with `tx_volume_window` unchanged in behaviour; `896d95c33` has the
+engine, stage-2 and budget folds read it through `VolumeWindow`. Merged
+over the #935 review at `143ca633f`, where it moves the same cells by the
+same amounts as before the review. §5.5 has the result.
+
+**Landed.** ESR-6, 2026-10-03, in PR #936, in four commits:
+
+- `422e40954` exposes the validator's median fold (§3).
+- `3a79a7d7d` lifts the template fill rule to `shekyl_block_template::Fill`
+  and names the pre-penalty emission (`PrePenaltyEmission`).
+- `49b313eeb` puts the medians, the penalty and the fill rule in every fold
+  and regenerates both fixtures.
+- `4a4cbced0` brings the debug test suite from 307 s back to 80 s.
+
+§5.6 registered the prediction before the run (`3a3df4df4`) and §5.7
+records it. The reading-pass finding at the head of this document is its
+first consequence.
+
+**Landed.** ESR-5, 2026-10-03, at `eb501b15d`, in PR #936. Every fold
+derives the circulating supply through `CirculatingSupply::derive`
+(`engine::net_supply`). The engine, budget and stage-2 folds price the burn
+through `calc_burn_pct_at`. The recorder folds its burn and keeps the
+primitive engine-core's differential composes. Two stale statements of the
+gross convention are corrected in the same change: `ActivityMetric`'s
+field documentation in `shekyl-economics`, and the 2026-06-11 pinned
+constraint in [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md). §5.8
+registered the prediction (`da1a6b082`) and §5.9 records it.
 
 ## 3. The median is a production change inside a sim PR
 
@@ -160,12 +316,25 @@ weights the sim feeds the fold, against which the validator records. ESR-6
 pins the sim's window construction against the validator's on a shared
 trace.
 
-The block weight the median needs is `transactions × predict_weight`.
-`burden::HonestOutputs` is the leaf counter the engine, the budget and
-`burden::HonestFold` share: the fee prices `leaves()` before `accrue()`,
-and the fold's archival length is read at that same count. ESR-6 extends
-`HonestOutputs` with the weight accumulator, once, so the folds do not
-grow three copies of it.
+What ESR-6 built, and why it is not the plan above. A sixty-year fold
+cannot select a 100 000-row median per block, so
+`median_window::RollingMedian` keeps the long window as two ordered halves
+and hands the middle value or pair to the validator's own `cxx_median`;
+`medians_from` composes the result exactly as `medians_over` does. Two
+tests hold it to production: the rolling median equals `cxx_median` over
+the explicit window at every step, across capacities that fill, evict and
+churn; and the whole of CEN-G6/G6b equals `medians_over` over the same
+recorded weights through a stream past the 100 000-block window's first
+eviction. The C++ relay-floor ring keeps the same median the same way
+(`epee::misc_utils::rolling_median_t`, `relay_floor_ring.cpp`).
+
+The block's weight is what its transactions weigh, and how many it takes
+is not the schedule's: it is what the producer's fill rule admits
+(`shekyl_block_template::Fill`, §5.6). One type, `median_window::BlockSpace`,
+holds the medians and the waiting transactions for the engine, the budget
+and the stage-2 fold alike; `burden_trajectory` reads the stage-2 fold's
+aggregates instead of folding the schedule a second time, so the burden
+side and the funding side count the same transactions.
 
 ## 4. Declared divergences
 
@@ -181,12 +350,19 @@ defect.
 | Control arm: admission at a flat 300 atomic/byte | The rate §12.13's stuffer and claim were priced at. Nothing in the chain charges it; the chain's admission rate is the relay floor | Part of the control arm; printed in its stuffer table |
 | The admission rate at a shard count (`AdmissionAtShards`) | Arms that sample the chain by shard count alone have no height, and the rate depends on emission, not on traffic. The pairing is fixed as the baseline scenario's: the rate at the year the baseline reaches that count, and its last year's rate beyond | Stated in the stuffer table's footer |
 | Admission rate sampled at the year's last block | A stuffer picks its moment, and on the production arm the floor falls through the year | Attacker-favouring; stated at the field |
+| The recorder's volume operand stays per-block | `record.rs` writes test vectors for the engine-core differential, which recomputes from a recorded per-block volume. That is the vectors' contract, not a model of the chain; the three model folds read the validator's window (ESR-4) | Stated at the recorder |
+| A scenario that starts mid-chain starts with an empty volume window and empty median windows | A fold's heights are its own; `genesis_height_offset` scenarios carry no history before their first block, so their medians start at the zone as a genesis chain's do | Stated in `volume_window.rs` and `median_window.rs` |
+| A block's weight is its bodies' | The coinbase's few hundred bytes are neither priced nor recorded in the median. The fill rule itself prices bodies only, as the C++ does; the template then prices the whole block | Stated at `BlockSpace` |
+| Waiting transactions pay the fee of the block they are offered to | They were built at an earlier block's fee. Every transaction is the same shape, so a refusal of one is a refusal of all, and the pool's order (fee, then age) is age | Stated at `BlockSpace` |
+| The pool's livetime is a restated C++ define | `CRYPTONOTE_MEMPOOL_TX_LIVETIME` has no Rust owner until the pool moves (`DRS_E1_SPOOL.md`); the sim's copy is pinned to the header by a test | Stated at its definition |
+| Budget disposition (b) is unpenalised | (b) is the unmodulated subsidy, a counterfactual of the release multiplier. The penalty in (a) is bounded by the fees of the transactions that crossed the median, since the fill rule admits no other | Stated in `budget.rs` |
+| Every ordinary transaction pays Standard | No wallet escalates its rung under congestion; the user chooses. Blocks past the median are what Priority pays for | ESR-10's rung mix |
 | A claim is one ordinary transaction at the admission rate | The claim's own envelope and the wallet's claim hold floor (`EMISSION_CLAIM_FEE_FLOOR`) are not modelled. Carried from the pre-ESR report unchanged | Appendix A, class A, row A9 |
-| Median held at the penalty-free zone | Only until ESR-6 lands the median | Stated in the report header |
 | Fee paid unrounded | The product is the fixed point of `shekyl_tx_weight::converge_weight_fee` — the wallet's iteration without the mask. The wallet then rounds each fee up to the daemon's quantization mask (1 000 atomic). The mask has no Rust owner — it is a C++ static — and the fee-floor instrument in this crate already pays unrounded (FL-R22). At most 1 000 atomic per transaction, below print precision | Stated here; closes when the mask gains a Rust owner |
 | `REF_TX_WEIGHT = 3_000` | The ladder's reference weight is a C++ macro with no single Rust owner. The crate's one existing declared copy (`fee_ladder.rs`) is reused, not duplicated | Declared at its definition |
 | Fee floor enforced in consensus | Not the current system: the floor is relay policy (C2-R2 Q9, reopened 2026-10-02) | Second arm of ESR-7 |
 | Traffic schedules, opportunity-cost band, SKL price band, storage and Kryder terms, replica target `R = 6` | No production owner exists | Exogenous; each already declared at its definition (Appendix A, class A) |
+| Demand does not respond to the fee or to congestion | A schedule is a number of transactions per block, the same whatever they cost or however long they wait: no elasticity, no rung escalation, no resubmission after expiry. What the chain fails to carry expires; it is not deterred | Stated at the head of this document beside the result it governs |
 
 ## 5. Predictions, written before any run (2026-10-02)
 
@@ -361,6 +537,180 @@ not about cells:
 4. **No onset year and no verdict changes.** If one does, the cell that
    moved was within about 0.3 % of 1.0 before the change; anything larger
    says the window is wired wrong.
+
+### 5.5 ESR-4 — what the run said (2026-10-02, at `896d95c33`, and again over the review at `143ca633f`)
+
+**All four registered points held.**
+
+1. **Shape.** Two tests pin it: the window equals the transactions of
+   the `min(h, 720)` blocks before `h`, against a prefix sum held in
+   full; and a step reaches the operand one block later and fully after
+   720 blocks.
+2. **Where it shows.** Control: 39 cells moved, the largest by 0.12 %.
+   Production: 76 cells; the largest real move is 0.38 %, every large
+   one in boom/bust, which steps every year. Larger relative figures in
+   the diff are two-decimal rounding (0.06 → 0.07).
+3. **Both arms, same direction.** Yes; the production arm moves more
+   because the window also reaches the fee through `C`.
+4. **Onsets.** One moved, on the production arm: boom/bust at 5 %, year
+   22 → year 24. That year's clearance was 0.99854 before and 1.00086
+   after (a probe, not committed), a cell 0.15 % below 1.0. That is the
+   exception the prediction named, not a wiring error. No verdict
+   changed.
+
+The 0.38 % is a little above the "about 0.3 %" registered, and it is the
+production fee itself that moves most: `C = (1 − σ)·M_r/(1 − b)` takes both
+the release multiplier and the burn fraction, so a step reaches the fee
+through two windowed operands at once. The control has no `C`.
+
+### 5.6 ESR-6, predicted again before it runs (2026-10-02)
+
+§5.2 assumed the median settles at the block weight, which assumes blocks
+carry their demand. What a block carries is the producer's choice, and
+production makes it with one comparison (`fill_block_template`, lifted to
+`shekyl_block_template::Fill` for this item): a body is listed when it
+does not lower the gross coinbase. Past the median a body of weight `w`
+costs `paid · w · (2(c − m) + w) / m²` of reward, and a Standard-rung
+transaction pays `4F·w` with `F = R·C·w_ref/M²`. A median that sits at a
+whole number of transactions therefore grows only when one more
+transaction's fee covers its penalty:
+
+> **`w ≤ 4ρ · w_ref · (m/M)²`**, with `ρ = (1 − σ)/(1 − b)`
+
+— independent of the reward level, because the fee and the penalty both
+scale with it. Here `m` is the effective median, `M` the long-term one the
+fee divides by, `w_ref = 3 000`. Production values on the neutral
+baseline trajectory, from the production functions at the zone (not from
+a run):
+
+| Year | σ | b | ρ | `w`, bytes | `4ρ·w_ref` |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 0.150 | 0.000 | 0.85 | 12 595 | 10 200 |
+| 1 | 0.135 | 0.059 | 0.92 | 14 643 | 11 030 |
+| 5 | 0.089 | 0.233 | 1.19 | 14 643 | 14 256 |
+| 10 | 0.052 | 0.357 | 1.47 | 14 643 | 17 692 |
+| 20 | 0.018 | 0.459 | 1.82 | 15 283 | 21 785 |
+
+The ladder's reference weight is a quarter of a post-quantum ordinary
+transaction's, and the penalty grows with `w²` while the fee grows with
+`w`. On an all-Standard chain the median cannot grow until `ρ` reaches
+about 1.22. Registered:
+
+1. **The production arm's blocks do not carry their demand at first.**
+   On the baseline (50 per block) they carry 21–24 transactions, the
+   median stays within one transaction of the zone, and the rest wait and
+   expire after `CRYPTONOTE_MEMPOOL_TX_LIVETIME` (2 160 blocks): roughly
+   26–29 transactions a block, about 7 M a year, turned away.
+2. **That delays its own end.** The volume window counts carried
+   transactions, so the burn fraction is lower than in the table above
+   (the `√V` damper, at about 22/50), `ρ` is lower, and growth starts
+   later than the year 5–6 the table implies: **between year 8 and
+   year 12**. The release multiplier also sits below 1 over the same
+   years, so emission is paid more slowly.
+3. **Once it starts, it finishes in weeks.** The median climbs about one
+   transaction for each half short window (≈ 50 blocks) until the waiting
+   transactions are served, then settles at the demand: 50 × 14.6–15.3 KB
+   ≈ 730–765 KB. From there the floor is **5.9–6.5×** below its zone
+   value. §5.2's 4.3–5.1× used 12.5–13.5 KB weights; the fold's ordinary
+   transaction weighs 14.6–15.3 KB at the depths it reaches.
+4. **The control arm is held at the zone far longer.** A flat 0.1 SKL
+   covers one more transaction's penalty only when the reward is below
+   about `0.1 / (w/m)²` ≈ 42 SKL, around **year 28–32**. Until then it
+   too carries 21–24 transactions a block.
+5. **What A1 does with it.** Early clearance barely moves: emission is
+   99.6 % of the year-1 budget, and the release multiplier trims it by at
+   most a fifth. After the production arm's growth starts, its fee leg
+   falls about sixfold. **Onsets move earlier on the production arm.**
+
+Every ordinary transaction here pays the Standard rung, and users who
+choose Priority (`max(2RC/M, 4F)` per byte, enough to buy deep into the
+penalty zone) are what grows blocks on a real chain. This prediction is
+about the default, not about a chain under congestion with a rung mix;
+that is ESR-10's.
+
+### 5.7 ESR-6 — what the run said (2026-10-03, at `49b313eeb`)
+
+| Prediction (§5.6) | Outcome |
+| --- | --- |
+| 1. Blocks carry 21–24 of 50; the median stays within a transaction of the zone; 26–29 a block expire | **Held.** 22 a block, the long-term median at 314–322 KB, 27.6–28.0 expired a block, through year 10. |
+| 2. Growth starts between year 8 and year 12 | **Held.** Year 11: 25.5 a block on average that year, all 50 from year 12. |
+| 3. Then the demand is carried, the median settles at 730–765 KB, and the floor is 5.9–6.5× below its zone value | **Held in shape, missed in size.** The median settles at 732 KB, then 764 KB from year 19 as the transaction grows with depth. The fee falls **4.9×**, not 5.9–6.5×. The `(M/300 KB)²` part is 6.49× as registered, but the reward is **1.313× higher at every year after the constrained decade**: the release multiplier held emission at its 0.8 floor while blocks carried 22, leaving more supply to emit later. 6.49 / 1.313 = 4.94. The prediction took the reward trajectory as given. |
+| 4. The control is held at the zone until about year 28–32 | **Missed in year, held in mechanism.** Year 38. Same cause: the control's reward is 85 SKL at year 30, not the 48 of the unconstrained trajectory, and it reaches the ≈ 42 SKL a flat 0.1 SKL can cover only in year 37. |
+| 5. Early clearance barely moves; onsets move earlier on the production arm | **The first half is wrong, the second held.** The A1 ratio at year 10 (flat-25 at 10 %) doubled on both arms: production 46.55 → 92.01, control 38.72 → 96.80. The budget side moved as registered; the burden side, which the prediction left out, did not stand still: fewer transactions carried is a smaller corpus, 229 864 closed shards at year 10 against 523 841. Production onsets moved earlier: baseline flat-25 at 10 % from year 27 to year 26, best from 33 to 27; at 2 %, 36 → 32 and 44 → 36. |
+
+Not predicted:
+
+- **The control's onsets moved later**, flat-25 at 10 % from year 24 to
+  year 29 on the baseline. Its blocks carried 20 a block for 37 years, so
+  its corpus is smaller (2.06 M closed shards at year 60 against 3.28 M)
+  and its emission is paid later.
+- **The late-chain tail is the largest move.** It starts in the tail era,
+  where `ρ` is already near 2, so its median grows from the first block:
+  200 a block at 2.9 MB. A median ten times the zone divides the floor by
+  a hundred, and its fee-era clearance collapses. Production flat-25 at
+  10 % now fails from year 4, against year 19; its year-10 ratio is 0.07,
+  against 6.78.
+- **Year-1 fee.** An ordinary transaction pays 2.36 SKL in year 1, against
+  3.26. The median it divides by is within a transaction of the zone, as
+  before. Most of the drop is the correction `C = (1 − σ)·M_r/(1 − b)`: the
+  volume window now counts 22 transactions, which puts the release
+  multiplier at its floor and lowers the burn fraction.
+
+Production fee per ordinary transaction on the baseline, SKL, at y10 / 20 /
+30 / 40 / 50 / 60: **1.2691 / 0.1287 / 0.0401 / 0.0117 / 0.0034 / 0.0009**,
+against 1.7480 / 0.6421 / 0.1960 / 0.0571 / 0.0164 / 0.0047 at ESR-4.
+
+Cost. The `--stage2` report runs in 289 s on the production arm and 220 s
+on the control, against about 150 s before. Getting there took two fixes:
+the fill offered one transaction at a time, which is millions of steps a
+block on the growth schedule, and the waiting queue was re-summed every
+block. Both are fixed in the owner and the sim. The batch offer is held
+to the one-at-a-time walk by test.
+
+### 5.8 ESR-5, predicted before it is built (2026-10-03)
+
+**The production definition.** Circulating supply is `coins_generated −
+total_burned` at parent state (FL-R16c; CEN-F17). `CirculatingSupply::derive`
+is its one owner, and the burn reads it through `calc_burn_pct_at`. Both
+validators use it: the C++ hands the pair to Rust (`blockchain.cpp`, "derived
+in Rust from this pair"), and the Rust validator derives it in
+`rules/miner.rs`.
+
+**Where the sim stands.**
+
+- The stage-2, budget and legacy-engine folds already net the burn, as a
+  `u64` subtraction of their own.
+- The gate-7 path (`engine.rs`) and the recorder (`record.rs`) use gross
+  `already_generated`, citing a "consensus burn-site quantity" pinned to a
+  C++ `validate_miner_transaction` that no longer reads it.
+- The recorder does not fold the burn at all.
+
+**ESR-5.** Every fold derives the supply through `CirculatingSupply::derive`
+and prices the burn through `calc_burn_pct_at`, and the recorder folds what
+it destroys. Registered:
+
+1. **The `--stage2` report does not move on either arm, byte for byte.** Its
+   folds already pass the same numbers, and gate-7 is not in it. Any moved
+   cell means the old subtraction and the owner disagree somewhere, and is a
+   finding.
+2. **The recorder's vectors move only in their net columns, and only a
+   little.** `circulating_supply` falls by the cumulative burn, about 0.1 %
+   of supply by year 10. The burn is proportional to the supply ratio, so
+   `burn_pct_bp` falls by at most a few basis points, and only in the later
+   samples; the genesis row does not move. `staker_fee_pool` and
+   `actually_destroyed` follow the burn. Every other column is identical.
+   The engine-core differential stays green, because it recomputes the burn
+   from the recorded supply.
+3. **The gate-7 set's burn fraction falls by the cumulative-burn share of
+   supply, below 0.1 % relative.** No verdict moves.
+
+### 5.9 ESR-5 — what the run said (2026-10-03, at `eb501b15d`)
+
+| Prediction (§5.8) | Outcome |
+| --- | --- |
+| 1. `--stage2` does not move on either arm, byte for byte | **Held.** Both reports are byte-identical to their fixtures, so the three folds' own subtraction and the owner agreed everywhere. |
+| 2. The recorder's vectors move only in their net columns, a few basis points late, genesis untouched | **Held in the columns named, missed in the count.** `circulating_supply` is down 0.069 % at year 10. `burn_pct_bp` moves by at most 2 bp in six later rows. `actually_destroyed` and `staker_fee_pool` follow the burn at full precision, so they move in rows whose basis-point value did not. The genesis row is untouched, and engine-core's differential passes on the regenerated vector. But `total_staked` and `total_weighted_stake_lo` move too: they are the supply times the stake ratio, and the prediction overlooked them. |
+| 3. The gate-7 burn fraction falls by under 0.1 % relative; no verdict moves | **Missed in size.** The fall is 0.5 % relative (last-year burn 48.47 % → 48.22 %, total burned −0.48 %). Gate-7 runs 30 years on the production fee, and its cumulative burn, about 21 M SKL, is about 0.5 % of supply; the estimate was sized at the recorder's year 10. The gate-7 mode prints no verdicts, so the second half holds only trivially. |
 
 ## 6. The staking sim — a separate PR
 

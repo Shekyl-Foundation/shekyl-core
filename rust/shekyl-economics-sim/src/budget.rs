@@ -51,15 +51,17 @@ use serde::Serialize;
 use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 use shekyl_economics::{
     base_block_reward,
-    burn::compute_burn_split_at,
-    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier, effective_emission,
+    burn::{calc_burn_pct_at, compute_burn_split_at},
+    calc_effective_emission_share, calc_release_multiplier,
     params::{EconomicParams, SCALE},
-    split_block_emission, ClosedShardCount, TxVolume,
+    split_block_emission, ClosedShardCount,
 };
 
 use crate::burden::HonestOutputs;
 use crate::engine::SimParams;
-use crate::fee_model::FeePoint;
+use crate::fee_model::{ChargedBlock, FeePoint};
+use crate::median_window::BlockSpace;
+use crate::volume_window::VolumeWindow;
 
 const COIN: f64 = 1_000_000_000.0;
 
@@ -176,6 +178,8 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
     // count; the block's outputs accrue after it is charged.
     let mut outputs = HonestOutputs::default();
 
+    let mut window = VolumeWindow::default();
+    let mut space = BlockSpace::default();
     for block in 0..total_blocks {
         let abs_height = block + scenario.genesis_height_offset;
         let epoch = abs_height / SETTLEMENT_EPOCH_BLOCKS;
@@ -210,17 +214,19 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
             .expect("sim neutral trajectory stays within the arithmetic domain");
 
         let tx_volume = (scenario.get_volume)(block, params.blocks_per_year);
+        // The validator's operands: CEN-F20's window and CEN-G6's medians
+        // over the blocks before this one (ESR-4, ESR-6). Read before this
+        // block joins them; `tx_volume` is the block's demand, and what it
+        // takes is the fill rule's.
+        let volume = window.operand();
+        let medians = space.medians();
 
         let multiplier = calc_release_multiplier(
-            TxVolume::per_block(tx_volume),
+            volume,
             params.tx_volume_baseline,
             params.release_min,
             params.release_max,
         );
-
-        // Real ledger advance uses the paid emission (both arms share it).
-        let effective_reward = effective_emission(ag, TxVolume::per_block(tx_volume), &economic)
-            .expect("sim paid emission stays within the arithmetic domain");
 
         let emission_share = calc_effective_emission_share(
             abs_height,
@@ -230,34 +236,36 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
             params.blocks_per_year,
         );
 
-        // (a): staker emission leg from the MODULATED reward (shipped).
-        let (_miner_a, staker_emission_a) = split_block_emission(effective_reward, emission_share);
-        // (b): staker emission leg from the UNMODULATED subsidy (counterfactual).
-        let (_miner_b, staker_emission_b) = split_block_emission(base_reward, emission_share);
-
         // Fee leg — identical under both dispositions.
-        let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
-        let burn_pct = calc_burn_pct(
-            TxVolume::per_block(tx_volume),
-            params.tx_volume_baseline,
-            circulating,
-            params.emission_curve_asymptote,
-            params.burn_base_rate,
-            params.burn_cap,
-        );
-        let charged = params.fee.charge(
-            tx_volume,
-            &FeePoint {
-                already_generated: ag,
-                volume: TxVolume::per_block(tx_volume),
-                sigma_scaled: emission_share,
-                burn_pct_scaled: burn_pct,
-                chain_leaves: outputs.leaves(),
-                params: &economic,
-            },
-        );
-        outputs.accrue(tx_volume);
-        let total_fees = charged.total_atomic;
+        // The circulating supply the burn reads (CEN-F17), net of what the
+        // fold has destroyed, through its owner.
+        let supply = crate::engine::net_supply(already_generated, total_burned);
+        let burn_pct = calc_burn_pct_at(volume, supply, &economic);
+        let fee_point = FeePoint {
+            already_generated: ag,
+            volume,
+            long_term_median: medians.long_term_effective_median.to_raw(),
+            sigma_scaled: emission_share,
+            burn_pct_scaled: burn_pct,
+            chain_leaves: outputs.leaves(),
+            params: &economic,
+        };
+        let tx = params.fee.ordinary_tx(&fee_point);
+        let filled = space.fill(block, medians, tx_volume, tx, &fee_point);
+        window.push(filled.included);
+        outputs.accrue(filled.included);
+        let total_fees = ChargedBlock::of_uniform(tx.fee_atomic, filled.included).total_atomic;
+
+        // Real ledger advance uses the paid emission (both arms share it).
+        let effective_reward = filled.paid_reward;
+        // (a): staker emission leg from the MODULATED, penalised reward (shipped).
+        let (_miner_a, staker_emission_a) = split_block_emission(effective_reward, emission_share);
+        // (b): staker emission leg from the UNMODULATED subsidy
+        // (counterfactual). Unpenalised: the fill rule admits a body past
+        // the median only when its fee covers the reward it costs, so the
+        // penalty in (a) is bounded by the fees of the bodies that crossed —
+        // declared in §4 of the design document, not modelled in (b).
+        let (_miner_b, staker_emission_b) = split_block_emission(base_reward, emission_share);
         // Canonical escalated entry; n = 0 (no corpus trajectory in this arm —
         // see engine.rs). Genesis-neutral asymptote ⇒ bit-identical to flat.
         let fee_split =
@@ -267,7 +275,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         emission_a_acc += staker_emission_a as u128;
         emission_b_acc += staker_emission_b as u128;
         fee_acc += fee_split.staker_pool_amount as u128;
-        vol_sum += tx_volume as u128;
+        vol_sum += filled.included as u128;
         mult_sum += multiplier as u128;
         mult_min = mult_min.min(multiplier);
         blocks_in_epoch += 1;

@@ -1,13 +1,16 @@
 use serde::Serialize;
 use shekyl_economics::{
-    burn::{calc_burn_pct_from_activity, compute_burn_split_at},
-    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier, effective_emission,
+    burn::{calc_burn_pct_at, compute_burn_split_at},
+    calc_effective_emission_share, calc_release_multiplier,
     params::{calc_stake_ratio, EconomicParams, SCALE},
-    split_block_emission, ClosedShardCount, TxVolume,
+    split_block_emission, CirculatingSupply, ClosedShardCount,
 };
+use shekyl_units::AtomicUnits;
 
 use crate::burden::HonestOutputs;
-use crate::fee_model::{FeeModel, FeePoint};
+use crate::fee_model::{ChargedBlock, FeeModel, FeePoint};
+use crate::median_window::BlockSpace;
+use crate::volume_window::VolumeWindow;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct YearSnapshot {
@@ -59,10 +62,11 @@ pub struct StakeSchedule {
 /// `block + genesis_height_offset`, so pre-existing history enters through
 /// the offset, not through a separate genesis-shards term.
 ///
-/// Per the pinned build constraint, the derived `stake_ratio` and the burn
-/// input both denominate against the **consensus burn-site circulating**
-/// (prev-block `already_generated`), matching the C4 recorder — not the
-/// modeling loop's emitted-minus-burned gauge.
+/// The derived `stake_ratio` and the burn input both denominate against the
+/// circulating supply the burn reads in consensus: `coins_generated −
+/// total_burned` at parent state ([`net_supply`], FL-R16c). Until ESR-5 this
+/// read gross `already_generated`, after a C++ burn site that no longer
+/// reads it.
 pub struct ArchivalLockModel {
     /// Per-shard-replica bonded collateral (gate-4 §8.1
     /// `ARCHIVAL_BOND_FLOOR_ATOMIC`; pinned 750_000_000).
@@ -178,6 +182,17 @@ const COIN: f64 = 1_000_000_000.0;
 pub(crate) const EMISSION_SPLIT_EPOCH_HEIGHT: u64 =
     shekyl_chain_rules::EMISSION_SPLIT_EPOCH.to_raw();
 
+/// The circulating supply the burn reads at a block: `coins_generated −
+/// total_burned` at parent state (FL-R16c, CEN-F17), derived by its one
+/// owner. The folds keep both accumulators in `u128`, and the chain records
+/// them as `u64`, so both are read at the `u64` rail as the folds' other
+/// chain operands are.
+pub(crate) fn net_supply(already_generated: u128, total_burned: u128) -> CirculatingSupply {
+    let rail = |amount: u128| AtomicUnits::from_raw(amount.min(u128::from(u64::MAX)) as u64);
+    CirculatingSupply::derive(rail(already_generated), rail(total_burned))
+        .expect("a fold destroys only fees, which never exceed what it emitted")
+}
+
 pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResult {
     let economic = EconomicParams {
         release_min: params.release_min,
@@ -211,6 +226,8 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
     // is a different counter and stays zero in this engine.
     let mut outputs = HonestOutputs::default();
 
+    let mut window = VolumeWindow::default();
+    let mut space = BlockSpace::default();
     for block in 0..total_blocks {
         let year = block / params.blocks_per_year;
         let block_in_year = block % params.blocks_per_year;
@@ -223,17 +240,22 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
         let ag = already_generated.min(u64::MAX as u128) as u64;
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
-        let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
-        // Consensus burn-site circulating: prev-block `already_generated`
-        // alone, matching `validate_miner_transaction` / the C4 recorder
-        // (pinned build constraint, STAKER_ARCHIVAL_SIM.md §Iteration-5).
-        let circ_consensus = already_generated.min(u64::MAX as u128) as u64;
+        // The validator's operands: CEN-F20's window and CEN-G6's medians
+        // over the blocks before this one (ESR-4, ESR-6). Read before this
+        // block joins them; `tx_volume` is the block's demand, and what it
+        // takes is the fill rule's.
+        let volume = window.operand();
+        let medians = space.medians();
+        // The circulating supply the burn reads (CEN-F17): net of what the
+        // fold has destroyed, at parent state. One operand for both paths.
+        let supply = net_supply(already_generated, total_burned);
+        let circulating = supply.to_raw();
         let (stake_ratio, staked_atomic) = match &config.archival_lock {
             Some(model) => {
                 let locked = model
                     .locked_atomic(block + config.genesis_height_offset)
-                    .min(u128::from(circ_consensus)) as u64;
-                (calc_stake_ratio(locked, circ_consensus), Some(locked))
+                    .min(u128::from(circulating)) as u64;
+                (calc_stake_ratio(locked, circulating), Some(locked))
             }
             None => (
                 (config.stake.get_stake_ratio)(block, params.blocks_per_year, circulating),
@@ -242,14 +264,11 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         };
 
         let multiplier = calc_release_multiplier(
-            TxVolume::per_block(tx_volume),
+            volume,
             params.tx_volume_baseline,
             params.release_min,
             params.release_max,
         );
-
-        let effective_reward = effective_emission(ag, TxVolume::per_block(tx_volume), &economic)
-            .expect("sim paid emission stays within the arithmetic domain");
 
         let emission_share = calc_effective_emission_share(
             block + config.genesis_height_offset,
@@ -259,42 +278,25 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             params.blocks_per_year,
         );
 
+        let burn_pct = calc_burn_pct_at(volume, supply, &economic);
+
+        let fee_point = FeePoint {
+            already_generated: ag,
+            volume,
+            long_term_median: medians.long_term_effective_median.to_raw(),
+            sigma_scaled: emission_share,
+            burn_pct_scaled: burn_pct,
+            chain_leaves: outputs.leaves(),
+            params: &economic,
+        };
+        let tx = params.fee.ordinary_tx(&fee_point);
+        let filled = space.fill(block, medians, tx_volume, tx, &fee_point);
+        window.push(filled.included);
+        outputs.accrue(filled.included);
+        let total_fees = ChargedBlock::of_uniform(tx.fee_atomic, filled.included).total_atomic;
+        let effective_reward = filled.paid_reward;
         let (miner_emission, staker_emission) =
             split_block_emission(effective_reward, emission_share);
-
-        let burn_pct = match (&config.archival_lock, staked_atomic) {
-            // Gate-7 path: the engine-equivalent composition over the
-            // consensus circulating quantity (follows the recorder).
-            (Some(_), Some(_locked)) => calc_burn_pct_from_activity(
-                TxVolume::per_block(tx_volume),
-                params.tx_volume_baseline,
-                circ_consensus,
-                &economic,
-            ),
-            // Legacy path: byte-identical to the pre-gate-7 modeling loop.
-            _ => calc_burn_pct(
-                TxVolume::per_block(tx_volume),
-                params.tx_volume_baseline,
-                circulating,
-                params.emission_curve_asymptote,
-                params.burn_base_rate,
-                params.burn_cap,
-            ),
-        };
-
-        let charged = params.fee.charge(
-            tx_volume,
-            &FeePoint {
-                already_generated: ag,
-                volume: TxVolume::per_block(tx_volume),
-                sigma_scaled: emission_share,
-                burn_pct_scaled: burn_pct,
-                chain_leaves: outputs.leaves(),
-                params: &economic,
-            },
-        );
-        outputs.accrue(tx_volume);
-        let total_fees = charged.total_atomic;
 
         // Canonical escalated split. This engine has no leaf/corpus trajectory, so
         // n = 0; under the shipped genesis-neutral asymptote that is bit-identical
@@ -381,8 +383,21 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 #[cfg(test)]
 mod tests {
     use super::{
-        run_scenario, ArchivalLockModel, ScenarioConfig, SimParams, StakeSchedule, VolumeSchedule,
+        net_supply, run_scenario, ArchivalLockModel, ScenarioConfig, SimParams, StakeSchedule,
+        VolumeSchedule,
     };
+
+    /// The supply the folds' burn reads is generated minus burned, read at
+    /// the `u64` rail the chain records both at; equal accumulators net to
+    /// nothing rather than failing.
+    #[test]
+    fn net_supply_is_generated_less_burned_at_the_u64_rail() {
+        assert_eq!(net_supply(1_000, 250).to_raw(), 750);
+        assert_eq!(net_supply(1_000, 1_000).to_raw(), 0);
+        assert_eq!(net_supply(1_000, 0).to_raw(), 1_000);
+        let past_rail = u128::from(u64::MAX) + 5;
+        assert_eq!(net_supply(past_rail, 7).to_raw(), u64::MAX - 7);
+    }
     use serde_json::Value;
 
     fn tiny_lock_model(admission_min_atomic: u64) -> ArchivalLockModel {

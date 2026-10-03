@@ -78,8 +78,10 @@
 //! holds the dependency closure to that. It does not **mine**: PoW is the
 //! miner's (the nonce search over the returned block), and difficulty is
 //! CEN-D4's — a template does not know the target and does not need to.
-//! It does not **select** transactions: which bodies to list is mempool
-//! policy, and policy is not consensus.
+//! It holds no **pool**: which bodies are offered, and in what order, is
+//! the mempool's. The one selection decision it owns is the rule a
+//! producer applies to each offered body — [`Fill`], lifted from
+//! `fill_block_template` — and that rule is policy, not consensus.
 //!
 //! # How it is tested, by design
 //!
@@ -110,6 +112,10 @@ use shekyl_wire::block::{Block, BlockHeader};
 use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
 use shekyl_wire::tx_extra::{self, CoinbaseBuildError, COINBASE_NONCE_BYTES};
 use zeroize::Zeroizing;
+
+mod fill;
+
+pub use fill::Fill;
 
 /// The keys a coinbase output is paid to: the miner's Edwards spend key
 /// and the two halves of the hybrid KEM encapsulation target.

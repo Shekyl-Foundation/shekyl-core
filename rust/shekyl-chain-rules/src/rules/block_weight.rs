@@ -262,7 +262,17 @@ pub fn effective_median_at<'id, V: ChainView<'id>>(
 /// the whole long window, the short window its last `W_short` rows.
 /// Pure: the arithmetic the store read feeds, held on its own in
 /// `block_weight_tests` at the clamps' boundaries.
-pub(crate) fn medians_over(window: &[RecordedWeights]) -> EffectiveMedian {
+///
+/// **Public, with [`medians_from`] and [`cxx_median`], for one reason**
+/// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-6): the economics sim folds
+/// sixty years of blocks and cannot afford a selection over the 100 000-row
+/// window at each. It keeps the window's order statistics as it goes and
+/// asks this module for the rest — [`cxx_median`] for the middle values it
+/// selected, [`medians_from`] for the composition — and its tests hold its
+/// per-block result equal to this function over the same window. The
+/// daemon judges one block per two minutes and has no such need.
+#[must_use]
+pub fn medians_over(window: &[RecordedWeights]) -> EffectiveMedian {
     let mut long_term: Vec<u64> = window.iter().map(|w| w.long_term_weight.to_raw()).collect();
     // Total: a window longer than the address space is the whole slice.
     let short_len = usize::try_from(BLOCK_WEIGHT_SHORT_TERM_WINDOW)
@@ -272,8 +282,17 @@ pub(crate) fn medians_over(window: &[RecordedWeights]) -> EffectiveMedian {
         .iter()
         .map(|w| w.weight.to_raw())
         .collect();
-    let long_term_effective = cxx_median(&mut long_term).max(FULL_REWARD_ZONE);
-    let effective = effective_median(long_term_effective, cxx_median(&mut short_term));
+    medians_from(cxx_median(&mut long_term), cxx_median(&mut short_term))
+}
+
+/// CEN-G6/G6b's composition, from the two raw medians: the long-term
+/// median floored at the zone, and the short-term median clamped to
+/// `[LTEM, S · LTEM]` by [`effective_median`]. [`medians_over`] is this
+/// over medians it selects itself.
+#[must_use]
+pub fn medians_from(long_term_median: u64, short_term_median: u64) -> EffectiveMedian {
+    let long_term_effective = long_term_median.max(FULL_REWARD_ZONE);
+    let effective = effective_median(long_term_effective, short_term_median);
     EffectiveMedian {
         long_term_effective_median: LongTermWeight::from_raw(long_term_effective),
         effective_median: BlockWeight::from_raw(effective),
@@ -284,7 +303,7 @@ pub(crate) fn medians_over(window: &[RecordedWeights]) -> EffectiveMedian {
 /// median`): `0` of nothing, the element of one, the middle of an odd
 /// count, and for an even count the floor of the mean of the two middle
 /// elements (`get_mid`). Reorders `values`; `O(n)` by selection.
-pub(crate) fn cxx_median(values: &mut [u64]) -> u64 {
+pub fn cxx_median(values: &mut [u64]) -> u64 {
     let n = values.len();
     if n == 0 {
         return 0;
