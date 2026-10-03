@@ -109,7 +109,7 @@ statement. **Held:** the txid mixer row, on the pruned-form blocker (FOLLOWUPS "
 | the FFI archival shims | `rust/shekyl-ffi/src/archival_ffi/*` (bond, emission, attestation, epoch_close, ct_balance, codes), `archival_admission_ffi.rs` | the C++ boundary for all of the above | consensus | **yes, wherever a shard id crosses** | — |
 | **new (`SHT-Q2`)** the archival-length row | `rust/shekyl-chain-store` schema, beside `txs_prunable_hash` / `txs_pqc_auth_hash` | each in-domain transaction's archival length (prunable + `pqc_auths` bytes, as `write_segments` emits them) | consensus | **new** — written at connect from the body; supplied by storage-pruned and skeleton forms like the prunable hash; a rule-42 schema bump | — |
 | **new (`SHT-Q2`)** the cumulative archival-length cell | `block_info`, beside `cumulative_tx_count` (`rust/shekyl-chain-store/src/codec/chain.rs`) | running total of archival length through each block, `checked_add` under SI-8 | consensus | **new** — the operand of every boundary above; `cumulative_tx_count` stays, because it feeds the fee ladder (CEN-F20) | — |
-| **new (`SHT-Q2`)** the txid mixer | Rust `Transaction::hash_from_components` and `hash_with_supplied_components` (`rust/shekyl-wire/src/transaction/txid.rs`) — **the one mixer**; C++ `calculate_transaction_hash` (`src/cryptonote_basic/cryptonote_format_utils.cpp`) **calls it over FFI**, its body replaced and its hashing deleted (row 3 = (b), RULED 2026-09-29 — the length term is never written in C++) | the transaction id | consensus | **new operand** — the archival length is folded in, so **every txid changes**; the coinbase's 3-part form is unchanged | — |
+| **new (`SHT-Q2`)** the txid mixer | Rust `mix` (`rust/shekyl-wire/src/transaction/txid.rs`) — **the one mixer**, reached from a parsed body (`Transaction::txid_parts`), from a pruned or skeleton body with its components supplied (`hash_with_supplied_prunable`, `hash_with_supplied_components`), and from a serialized body's byte ranges (`TxidSegments::txid`); C++ `calculate_transaction_hash` (`src/cryptonote_basic/cryptonote_format_utils.cpp`) **calls the last over FFI** (`shekyl_txid_from_segments`), its hashing deleted (row 3 = (b), RULED 2026-09-29 — the length term is never written in C++) | the transaction id | consensus | **new operand** — the archival length is folded in, so **every non-coinbase txid changes**; the coinbase's 3-part form is unchanged | — |
 
 **`SCC-2` — a correction to the brief's family-1 list.** It named
 archival-retention's `bond_duration`, `failure_window`, `serve_credit_decisions`,
@@ -147,7 +147,7 @@ Two of the five seeded rows did not survive verification as written.
 | row | verdict at `9d549ead2` |
 |---|---|
 | **D2 `n` / `knee_n` (`SHT-8`)** | **CONFIRMED.** Re-key `n` to a `T`-independent burden count — listed transactions in closed shards, from `cumulative_tx_count` — and re-derive `knee_n` **once, in transactions**. Never shard units. It is monetary policy (`FL-V4`: the escalation splits the *burned* amount and cannot move a fee rung). **Corrected 2026-09-27:** the earlier "it changes coinbase validity" is true only **once the ramp is on** — at the shipped neutral parameters the split is 25 % whatever `n` is (§G `SCC-Q2`), so the re-key is behaviour-neutral now. The atomicity requirement is unchanged and its reason is sharper: the operand is computed on **both** sides, and a mismatch that is harmless while flat becomes a chain split the moment the ceremony raises the asymptote. |
-| **`g(age)`** | **CONFIRMED.** `shard_age_milli`'s no-segment branch is segment-keyed (`rust/shekyl-archival-retention/src/admission.rs:305-341`, function at `rust/shekyl-archival-retention/src/consensus_state.rs:235-252`). Re-key under `SHT-Q1`. It is also one of `SHT-Q1`'s falsifiers: the ruling reopens if the re-keyed form needs height-driven closure. |
+| **`g(age)`** | **CONFIRMED; LANDED 2026-10-01 (Rust-side).** At the pin, `shard_age_milli`'s no-segment branch was segment-keyed (`rust/shekyl-archival-retention/src/admission.rs:305-341`, function at `rust/shekyl-archival-retention/src/consensus_state.rs:235-252`). Re-keyed under `SHT-Q1`: the operand is `ShardClose::{Open, ClosedAt(h)}` (`consensus_state.rs`), `h` placed by `shekyl_chain_rules::shard_close_height` on the fold and wrapped by `archival/close.rs::shard_close`, which takes a `ClosedUniverse` — the count `closed_shards_before` read and the parent it was read through, one value (closed below that count, open at or beyond it); the admission gather takes one `&[ShardClose]` column. The C++ LMDB validator's `has_segment`/`freeze_height` pair (CEN-L10) crosses the admission C ABI, `ArchivalEpochCloseShardFfi` and the `archival_claim_source` RPC **unchanged** and is folded at each edge by `ShardClose::from_wire`, the one divergence site (verify: `rg 'ShardClose::from_wire' rust/`). `SHT-Q1`'s falsifier (i) **run, does not fire**: `shard_close_is_the_fold_height_below_the_universe_and_open_at_it` (`shekyl-chain-rules/src/archival_tests.rs`) — no height closes a shard. Behaviour-neutral: same ages from the same inputs. |
 | **`CompleteTree` challenge/slash** | **CONFIRMED, mechanical only.** Enumerates via the segment registry (`src/blockchain_db/lmdb/db_lmdb.cpp:5720-5728`). Re-key to closed **domain** shards. Landed semantics to preserve: a failure **demotes the whole record** to `ShardSetCompact` and clears its shards (`src/blockchain_db/lmdb/db_lmdb.cpp:5515-5520`), and **`Reinstate` is refused** on a `CompleteTree` record (`rust/shekyl-archival-retention/src/bond_post.rs:75-76`, `:159-162`). `CompleteTree` is a non-economic backstop by construction — no shard ids, so nothing to claim. |
 | **The segment-geometry deletion, incl. the E3 handoff** | **PARTLY REFUTED — `SCC-3`.** The deletion row stands (the JSON's own prose at `:52` already says `segment_leaf_count` "leaves this file when E4 / S-ARCH deletes the freeze"), and the falsifier *"two shard geometries in `consensus_constants.json`"* is right. But the handoff's premise does **not** hold: `connect.rs` carries **no** segment-geometry comment to correct. `:22` is the module doc's *"3. tree — the verdict's drain → `curve_tree_leaves`"* and `:409` is `// ---- 4. root ----`; the only `segment` tokens in that file are **transaction body** segments (`:556-568`). `SCC-1`'s overloaded word produced this row. **What survives:** the deletion must also remove `rust/shekyl-archival-retention/src/segment_freeze.rs:63`'s compile-time assert and the JSON key, and the digest re-pins when it goes. |
 | **`SHARD_BYTES` / 3.33 MB residue** | **CONFIRMED, line numbers corrected.** `rust/shekyl-economics-sim/src/burden.rs:36` and `:168-170` (the 13.6 GB honest-cost figure), `rust/shekyl-economics-sim/src/proxy.rs:56-60` (`max_holdings_bytes`). Docs: `ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md:528`, `:543`; `ARCHIVAL_CHALLENGE_MECHANISM.md:1896`. (The brief's `:243`/`:585` and `:653`/`:1894` do not resolve to those figures.) |
@@ -205,11 +205,11 @@ added-key case answered in place, as `VC-D12` requires.
 
 | constant | value | unit **today** | where it was derived | on cutover |
 |---|---|---|---|---|
-| `escalation_knee_n` | `100000` (`config/economics_params.json:17`) | **J-segments** (`frozen_segment_count`) ⇒ ~2.6 × 10⁹ leaves ⇒ ~1.3 × 10⁹ transactions at 2 outputs | **sim-derived: the middle of the Stage-2 `KNEE_BAND = [25_000, 100_000, 250_000]`** (`rust/shekyl-economics-sim/src/escalation.rs:63`), swept against `ASYMPTOTE_BAND` but **never selected** — Stage 3 froze the *shape* only | **re-expressed, not ported** (§G `SCC-Q2`): the sweep re-runs with its band in transactions below the discard frontier. Inert today — the ramp is flat |
+| `escalation_knee_n` | **`2250000` — RE-DERIVED 2026-10-01** (`config/economics_params.json`; was `100000`) | **closed byte shards** (`closed_shards_before`, `W = 3,000,000 B`). *Was:* J-segments (`frozen_segment_count`) ⇒ ~2.6 × 10⁹ leaves | **sim-derived: the middle of the re-swept `KNEE_BAND = [500_000, 2_250_000, 10_000_000]`** (`rust/shekyl-economics-sim/src/escalation.rs`: baseline `n` at ~10 y, sustained-growth's final `n`, their geometric mean), swept against `ASYMPTOTE_BAND` but **still never selected** — the ceremony picks it with the asymptote. *Was* the middle of `[25_000, 100_000, 250_000]` in J-segments | **DONE (§F step 3; `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13)**: re-derived in the operand the validator consumes, not converted; digest re-pinned `885f700d… → 05a1ba28…`. Inert today — the ramp is flat. See `SCC-Q2`'s 2026-10-01 note on the unit the sweep ran in |
 | `segment_leaf_count` | `25992` (`config/consensus_constants.json:53`) | leaves per level-2 subtree (`38·18·38`) | the curve-tree widths, const-asserted to the proof topology | **leaves the JSON** with the freeze; the digest re-pins |
-| `T` (`archival_shard_tx_count`) → **`W`** | `200`, PROVISIONAL → **`3,000,000 B`, PROVISIONAL (2026-09-29)** | transactions per shard → **archival bytes per shard** | `3.33 MB ÷ 16.7 KB/tx`, where 3.33 MB is the **retired leaf segment's** size (`SHT-1`) → **re-derived in bytes** (`ARCHIVAL_SHARD_T_DERIVATION.md` §9): the smallest `W` within the overshoot tolerance with `U1a` clear at the heavy end | **the unit changes (`SHT-Q2`)**: renamed with its key and generated names; re-pinned at the Round-2 gate by the tolerance, the multi-size W₂ run and `U1b` |
-| `L` (`archival_attestation_anchor_lag`) | `4` blocks | blocks | its fetch-span component was sized on "~20 s for 3.33 MB" — the same retired byte count (`SHT-7`), which its own page's W₂ measurement contradicts 2.4–4.3× | restate the span **per byte**, or re-pin with `T` |
-| `SHARD_BYTES` (sim only) | `3.33e6` (`rust/shekyl-economics-sim/src/burden.rs:36`) | bytes per **leaf segment** | `SEGMENT_LEAF_COUNT × ~128 B` | a modelling mean for a unit that no longer exists; re-baseline with the sims |
+| `T` (`archival_shard_tx_count`) → **`W`** | `200`, PROVISIONAL → **`3,000,000 B`, PROVISIONAL (2026-09-29)** | transactions per shard → **archival bytes per shard** | `3.33 MB ÷ 16.7 KB/tx`, where 3.33 MB is the **retired leaf segment's** size (`SHT-1`) → **re-derived in bytes** (`ARCHIVAL_SHARD_T_DERIVATION.md` §9): the smallest `W` within the overshoot tolerance with `U1a` clear at the heavy end | **the unit changes (`SHT-Q2`)**: renamed with its key and generated names; re-pinned at the Round-2 gate by the tolerance (5 %, confirmed), the multi-size W₂ run (read 2026-10-02: `U1a` does not bind, `ARCHIVAL_SHARD_T_DERIVATION.md` §10.5) and `U1b` (open) |
+| `L` (`archival_attestation_anchor_lag`) | `4` blocks | blocks | its fetch-span component was sized on "~20 s for 3.33 MB" — the same retired byte count (`SHT-7`), which its own page's W₂ measurement contradicts 2.4–4.3× | restate the span **per byte**, or re-pin with `T` — **restated per byte 2026-10-02** on the worse measured day (56.1 s at the heaviest shard); `L = 4` holds (`ARCHIVAL_SHARD_T_DERIVATION.md` §10.6) |
+| `SHARD_BYTES` (sim only) | **DELETED as a literal 2026-10-01** — `burden.rs` reads `shekyl_types::SHARD_LENGTH.to_raw()` (`3,000,000`); *was* `3.33e6` | bytes per **closed shard** (*was* per leaf segment) | the production constant, not a modelling mean; the sim's per-tx archival length comes from `shekyl_tx_weight::predict_archival_len` and its shard count from `shekyl_types::shard_of` — no `/ W` in the sim | **DONE (§F steps 2–3)**: `frozen_shards` deleted, the sims re-baselined and the Stage-2 arms re-measured (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13) |
 | `MAX_HOLDINGS_SHARDS` | `4096` (`config/consensus_constants.json`, `archival_max_holdings_shards`) | **list entries** — not bytes, not operators (`L2`) | the list budget; **no recorded derivation of the 4096 itself** | unchanged by this cutover. Since `SCC-4` it has **one** authority and two generated readers, so §E's couplings can now hold |
 
 ---
@@ -277,6 +277,71 @@ which shard an id names:
   `serve_credit_tx_parity`, `live_oracle_spend_v1.json` and the captured chains —
   because every txid moves.
 
+**How a pruned form supplies the length — RULED 2026-10-01 (design owner, relayed by
+Rick): option (iv).** C++ passes full segments to Rust; Rust measures the length and
+computes the txid; the FFI entry has no length parameter. Verified at source, with two
+premises corrected ([`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md)
+§10.3):
+
+- the C++ pruned-txid path (`get_pruned_transaction_hash`, and the `allow_pruned` arm
+  of the P2P block-entry path) is **unreachable** — a pruned entry is refused as a
+  protocol violation first — so this cutover **deletes** it rather than porting it;
+- the one pruned **wire** is the daemon RPC's pruned `get_transactions`. C++ already
+  hands it the full prunable bytes, so the Rust server measures the length at serve
+  time and the reply carries it; the wallet's block fetch and the console supply it to
+  the mixer.
+
+**Built (the txid-length cutover).** Of the list above, the mixer, the regenerated pins
+and corpora, and every pruned or skeleton transport **that has a reader** are built —
+the store's skeleton rebuild, the daemon RPC reply, the wallet's block fetch and the
+console; the row, the cell, the boundary function and `W` were the Rust-half PR's
+(#910). **One transport is not grown, and is named:** the P2P block entry
+(`tx_blob_entry` / `TxBlobEntry`). Nothing reads a pruned entry on that wire — the C++
+arm that did was unreachable and is deleted — so a length field there would have no
+reader and no writer. The skeleton sync wire is `PDM-Q-F28`'s, unbuilt, and owes the
+`pqc_auths` digest and the length together (FOLLOWUPS, "Skeleton block payload"). The mixer's word
+encoding, its three arities, the shape of the FFI entry and the RPC field are the
+build's choices and are recorded for ratification in
+[`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md) §10.3 ("As
+built"). One consequence is the engine swap's: the Rust store, unlike LMDB, discards
+prunable halves, so when it backs the daemon RPC its transaction slot must carry the
+`txs_archival_len` row — the serve path cannot measure bytes it no longer holds.
+
+**The prunable digest is Rust's too (design owner, 2026-10-02).** The build above left
+two C++ region digests as plain `keccak`. One of them is a txid operand that travels
+on its own — the `txs_prunable_hash` row and the `prunable_hash` a pruned
+`get_transactions` reply carries, which the wallet mixes — so it is now computed by
+the function the mixer uses (`shekyl_wire::prunable_hash_of`, over
+`shekyl_tx_prunable_hash`). `calculate_transaction_prunable_hash` finds the range and
+hashes nothing; its second derivation, a separate write of the prunable fields, is
+deleted. Pinned per transaction class by `prunable_digest_parity`.
+
+**What the txid still takes from C++, until the engine swap.** Three things remain on
+the C++ side of the boundary. Each is transitional, and each ends the same way: when
+Rust holds the parsed transaction, it derives them and nothing is supplied.
+
+1. **The stored archival length on the serve path.** As above: a transaction slot fed
+   from `shekyl-chain-store` carries the `txs_archival_len` row. `TxRecord`'s rows are
+   as recorded, not as verified (a lost length row reads zero), so the slot's producer
+   rebuilds the id from the record and compares it to the hash it asked by before
+   serving, as `leaf_reads::outputs_at` does.
+2. **`get_transaction_prefix_hash`.** C++ hashes the prefix itself, in
+   `blockchain.cpp`: for the signature-verification input, for the emission claim's
+   signed hash (the prefix with that input removed), and to spot a duplicate
+   transaction in an incoming batch. It does not feed a txid, but on a whole prefix
+   it is the same bytes as the txid's first word, hashed by a second implementation.
+3. **Two facts the FFI entry is told and does not check.**
+   `shekyl_txid_from_segments` takes `first_input_is_spend` and `pqc_auth_count` from
+   the caller, because it parses nothing. They decide the mix's arity, and C++ is
+   their only source.
+
+**`g(age)`'s segment-keyed no-segment branch is this cutover's (RULED 2026-10-01,
+`SHT-8`) — LANDED the same day, Rust-side.** It is a row of this census, owned by the
+design-owner lane; it is not part of the family-1 txid change, and it is not a rule-07
+cutover: the C++ side and every wire surface are unchanged, the Rust library's
+vocabulary moved from the segment pair to `ShardClose` (§C's `g(age)` row).
+`escalation_knee_n` stays the sim lane's (`SCC-Q2`).
+
 **The C++ LMDB archival path does not move (row 3 = (b), RULED 2026-09-29).** No new
 LMDB tables, cells or archival logic: LMDB's shards stay the frozen leaf segments
 (CEN-L10; `src/cryptonote_core/blockchain.cpp:1494-1505`,
@@ -297,9 +362,15 @@ above.
    which the `SHT-Q2` build deleted, PR #910*). `SCC-4`'s duplicated cap
    folds into the same home.
 2. **Constants re-derived** in their new units (§D) — `knee_n` in transactions
-   before anything reads it.
+   before anything reads it. **DONE 2026-10-01**: `knee_n = 2,250,000` closed
+   shards, re-derived by the re-swept band (§D row; §G `SCC-Q2` note).
 3. **Sims re-baselined** against the re-derived constants, so the economics
-   verdicts are not measured in retired units.
+   verdicts are not measured in retired units. **DONE 2026-10-01**: the sim
+   calls `shekyl_types::shard_of` / `SHARD_LENGTH` and the `shekyl-tx-weight`
+   predictors; every Stage-2 arm re-measured in
+   `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13 — including one verdict
+   that **flipped** (A1, high-history / low-activity, now cleared by no
+   candidate), which is the design owner's, not this cutover's.
 4. **Then the two cutovers**, family 2 before family 1: family 2 owns the operand
    family 1's economics read.
 
@@ -311,13 +382,19 @@ Numbered, and none resolved here.
 
 1. **`SCC-Q1` — `n`'s replacement burden count. ANSWERED (design owner,
    2026-09-27): transactions below the discard frontier, not transactions
-   archived.** The escalation exists to redirect burned value toward stakers *as
-   the burden on archivers grows*, and that burden starts when bodies **leave
-   ordinary daemons** — not when shards close. Inside the retention window every
-   daemon still holds them, so nothing is yet borne by archivers. Computable at the
-   parent state from `cumulative_tx_count` and `D(E)` on both sides, and it moves
-   in **epoch steps**, as the segment count did — so the operand keeps the step
-   shape the ramp was built against.
+   archived — SUPERSEDED 2026-10-01 (design owner): the burden is locked
+   capital, borne at close + freeze, so the operand is closed shards at parent
+   state, a pure fold; see the `SCC-Q2` note below.** *Records-was — the
+   2026-09-27 rationale, SUPERSEDED, kept so the reversal is legible:* that
+   answer held the burden to start when bodies **leave ordinary daemons**,
+   not when shards close, on the ground that inside the retention window every
+   daemon still holds them; its operand was `cumulative_tx_count` against
+   `D(E)` at the parent state, moving in epoch steps like the segment count.
+   *Why it was superseded:* the archiver's burden is the **bond** — capital
+   locked at close + freeze, before and regardless of when daemons discard —
+   so the retention window is not a grace period for the burden, and the
+   premise fails. The current operand is closed shards at parent state (the
+   `SCC-Q2` ruling below carries the full reasoning).
 2. **`SCC-Q2` RULED (Rick, 2026-09-27, design-owner lane): `knee_n` is
    re-expressed, not ported.**
    - The Stage-2 escalation sweep (`KNEE_BAND × ASYMPTOTE_BAND`,
@@ -332,6 +409,36 @@ Numbered, and none resolved here.
    - Converting the old band (~13k transactions per J-segment) is a **sanity check
      only, not a derivation**: segments counted coinbase leaves and were never a
      burden measure.
+
+   **UPDATE 2026-10-01 — the sweep re-ran; the knee is `2,250,000`; and the
+   unit it ran in is disclosed, not ruled.** The sweep re-derived
+   `KNEE_BAND = [500_000, 2_250_000, 10_000_000]` and the config carries the
+   middle (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13). Its unit is
+   **closed shards at parent state** — `shekyl_chain_rules::closed_shards_before`,
+   the operand the landed validator consumes (CEN-F17) and the unit
+   `economics_params.json`'s own comment has named since 2026-09-30 — **not**
+   `SCC-Q1`'s *"transactions below the discard frontier"*. The two differ by the
+   retention window (a closed shard is below the frontier only once its bodies
+   leave ordinary daemons) and by unit (byte shards, not transactions). The sim
+   measures what the chain reads; so either `SCC-Q1`'s answer is superseded by the
+   operand that landed, or the operand owes a frontier lag. **That is the design
+   owner's ruling, filed here as a finding**; the re-derivation holds under
+   either reading because the band was swept, not selected. The sanity check
+   above also held: ~13k transactions per J-segment ≈ 43 byte shards, so the old
+   middle `100,000` segments ≈ 4.3 M shards — inside the new band.
+
+   **Recommended disposition (#929 review, 2026-10-01): supersede `SCC-Q1`'s
+   answer, for a reason `SCC-Q1` did not have in hand.** `SCC-Q1` dated the
+   burden from *discard* — bodies leaving ordinary daemons. Under **F-G** the
+   burden the escalation compensates is **locked capital**, and capital locks
+   at **close + freeze**, when the shard's bond is posted — *before* discard.
+   `closed_shards_before` therefore counts the burden from the moment it is
+   borne, which is what `SCC-Q1` asked for; a frontier lag would count it
+   late. The operand stays a pure fold, with no frontier term and no `D(E)`
+   read. **RULED 2026-10-01 (design owner): `SCC-Q1`'s answer is SUPERSEDED
+   on the locked-capital reason; the operand stays a pure fold.** The
+   `SCC-Q1` entry above is the records-was answer; this paragraph is the
+   ruling of record.
 
    **Provenance correction.** `100,000` **is** sim-derived — it is the middle of
    the Stage-2 `KNEE_BAND = [25_000, 100_000, 250_000]`, swept against

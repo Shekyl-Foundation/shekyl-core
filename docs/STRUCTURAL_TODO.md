@@ -571,12 +571,9 @@ asserted a ring component that does not exist.
 The pinned trigger was `wallet2.cpp` retirement; `wallet2` was **deleted**
 outright in the Phase-5 lane (`src/wallet/` is gone), firing it in V3.0.
 
-**Still owed:** `fill_construct_tx_rct_stub`, the last legacy construction
-stand-in. It is a **deletion** target, not a rename target, so the sweep left
-its name alone — it is now the only `Rct`-spelled identifier deliberately
-surviving under `src/fcmp/`. Its sibling `genRctFcmpPlusPlus` was deleted
-2026-08-22 (it had no caller); this one is blocked on the C++ test-construction
-harness that still reaches it. Tracked in `docs/FOLLOWUPS.md` (V3.0).
+**Closed 2026-10-01:** `fill_construct_tx_rct_stub` has no remaining symbol.
+It was a deletion target, not a rename target. Its sibling
+`genRctFcmpPlusPlus` was deleted 2026-08-22. Neither is under `src/fcmp/`.
 
 **Deception observed (April 2026):** during the `chore/cxx-logging-
 consolidation` work we nearly shipped a `make ringct` comment in the

@@ -842,13 +842,15 @@ Layout-only vectors (`WITNESS_HEADER.json`, `TX_EXTRA_PQC_ROUND_TRIP.json`,
 workspace test run (every class-a/b KAT), the C++ unit tests on the
 archival fixtures, the docs citation gates. **Gates that do not fire and
 must be done by hand:** the rule-42 snapshot (silent), the domain registry
-(silent on a *new* domain), the fuzz inventory (file presence only).
+(silent on a *new* domain). The fuzz inventory checked file presence only
+at this census; the compile gate landed 2026-10-01 (`cargo check --locked`
+of `rust/shekyl-fcmp/fuzz` in `rust-audit-test.yml`).
 
 **Census findings outside the asked scope, with dispositions:**
 
 | # | Finding (census §6) | Disposition |
 |---|---|---|
-| d-1 | `fuzz_curve_tree_leaf_hash.rs:33` calls `construct_leaf` with two arguments; the fuzz crate is built nowhere in CI, so it has been uncompilable undetected; `FCMP_PLUS_PLUS.md:1372,1388` advertise it as live | Fix in the implementation PR (it must exercise the new opening anyway); the fuzz-crate build gap is its own FOLLOWUPS line |
+| d-1 | `fuzz_curve_tree_leaf_hash.rs:33` calls `construct_leaf` with two arguments; the fuzz crate is built nowhere in CI, so it has been uncompilable undetected; `FCMP_PLUS_PLUS.md:1372,1388` advertise it as live | CLOSED 2026-10-01 for the CI gap: the implementation PR rebuilt the targets, and `rust-audit-test.yml` now `cargo check --locked`s `rust/shekyl-fcmp/fuzz`. The census sentence above records the gap as it stood at the pin. |
 | d-2 | `legacy_tx.rs:306` routes `hp_of_O` into `h_pqc`; every caller passes the same hex for both | Fix in the implementation PR — with `cm ≠ H(pk)` the aliasing silently breaks |
 | d-3 | The wallet replica keeps the zero-`h_pqc` fallback the daemon retired (CEN-I19): `recon.rs:26–76`, `client.rs:759`, `curve_tree_decode.rs:43–47`; docs `CT2_DRAIN_ORDER.md:161–163`, `CURVE_TREE_CLIENT.md:410` state it as the contract | Rick: fold into this round's PR or its own; unreachable on an admitted chain but a stated contract that is false |
 | d-4 | "32 zero bytes if unavailable" doc strings on `construct_leaf`, `shekyl_construct_curve_tree_leaf`, `shekyl_ffi.h:1389` | Fix with d-3 |
@@ -1050,7 +1052,9 @@ Landed on `feat/pl-d3-pedersen-leaf-commitment` (a clean worktree from
 - Every §9 S1 vector regenerated under the decision-log citation; LMDB
   `VERSION 14` and the wallet curve-tree store `SCHEMA_VERSION 5`.
 - Open by design: A5-1…A5-7 (gate-6 owner, ruling 4, now that the premise
-  is restored), `PL-D4` (`Target: V4`), the fuzz-crate CI gap (FOLLOWUPS).
+  is restored), `PL-D4` (`Target: V4`). The fuzz-crate CI gap closed
+  2026-10-01: `rust-audit-test.yml` `cargo check --locked`s
+  `rust/shekyl-fcmp/fuzz`.
 
 ## 13. What this round did not find (denominator, rule 26)
 

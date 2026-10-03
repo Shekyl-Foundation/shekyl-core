@@ -1386,6 +1386,55 @@ int32_t shekyl_tx_extra_shape_of(
     char* out_msg,
     size_t out_msg_cap);
 
+// ---------------------------------------------------------------------------
+// The transaction id (rust/shekyl-ffi/src/txid_ffi.rs). There is one txid
+// mixer and it is Rust's (shekyl-wire `TxidSegments::txid`, SHT-Q2);
+// cryptonote::calculate_transaction_hash is its only C++ caller.
+//
+// The caller hands over the four byte ranges of a serialized v2+ transaction
+// -- prefix, ct base, tx-level pqc_auths, prunable -- cut at the offsets its
+// serializer recorded, plus the two facts about them that are not bytes. Rust
+// hashes the ranges, measures the archival length from the last two, and
+// mixes. There is no length parameter on purpose: the txid binds the length,
+// so a length the caller supplied would be a second measurement of a
+// consensus operand.
+//
+// The ranges are opaque here -- nothing is parsed -- so no content can make
+// the call fail. It returns false, writing nothing, only for a pointer that
+// cannot be the range it claims: a null out_txid, or a range with a non-zero
+// length that is null or longer than PTRDIFF_MAX bytes. A null pointer is
+// accepted for an empty range. out_txid receives 32 bytes.
+// ---------------------------------------------------------------------------
+bool shekyl_txid_from_segments(
+    const uint8_t* prefix,
+    size_t prefix_len,
+    const uint8_t* ct_base,
+    size_t ct_base_len,
+    const uint8_t* pqc_auths,
+    size_t pqc_auths_len,
+    size_t pqc_auth_count,
+    bool first_input_is_spend,
+    const uint8_t* prunable,
+    size_t prunable_len,
+    uint8_t* out_txid);
+
+/// The prunable digest of a serialized transaction: keccak256 of its prunable
+/// range, by the function the txid mixer uses (shekyl-wire `prunable_hash_of`).
+/// It is the value stored as `txs_prunable_hash` and served beside a pruned
+/// body, which a wallet mixes into the txid it checks that body against -- so
+/// it is computed where the mixer is, and C++ holds no hash of its own for it.
+///
+/// One byte range, nothing parsed, and no archival length: that operand is
+/// the txid mixer's to measure. An empty range (a body with no prunable
+/// region) is valid and may be a null pointer. Returns false, writing
+/// nothing, only for a pointer that cannot be the range it claims: a null
+/// out_hash, or a prunable with a non-zero length that is null or longer
+/// than PTRDIFF_MAX bytes. out_hash receives 32 bytes.
+bool shekyl_tx_prunable_hash(
+    const uint8_t* prunable,
+    size_t prunable_len,
+    uint8_t* out_hash);
+
 /// Build the coinbase extra in the grammar's one layout: [PubKey(tx_pubkey
 /// [32]), Nonce(nonce[SHEKYL_COINBASE_NONCE_BYTES]), PqcKemCiphertext(kem),
 /// PqcLeafEntries(leaf)] — [PubKey, Nonce] when n_outputs == 0 — judged by
@@ -1569,6 +1618,13 @@ ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
 
 /// Gracefully stop the Axum daemon RPC server and free the handle.
 void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
+
+/// Copy the thread-ledger report into `buf`, NUL-terminated.
+/// Always returns the report's full length, excluding the NUL. A null
+/// `buf` or a `len` of 0 writes nothing. A short buffer is truncated and
+/// still NUL-terminated; a return greater than or equal to `len` means
+/// the caller retries with a larger buffer.
+size_t shekyl_thread_ledger_report(char* buf, size_t len);
 
 // ---------------------------------------------------------------------------
 // shekyld control client (`shekyld <command>` → running daemon), the outbound
@@ -3291,14 +3347,6 @@ typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
 // moment the join landed. Its idempotence note went with it: the effect still
 // fires at every due tick while the slot stays unbound, and `unbind` is
 // idempotent on the Rust side where the state now lives.
-//! Supply the outbound connection set on demand: write the id count through
-//! `out_n` and return a pointer to `*out_n` x 16 bytes valid until the poll
-//! returns (nullptr with `*out_n == 0` for none). shekyl_relay_zone_poll calls
-//! this ONLY at an epoch boundary, so a fluff-release wake never pays for the
-//! connection scan. Must not throw across the FFI boundary.
-//! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll.
-typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out_n);
-
 //! Noise channel `channel` is due to send.
 //!
 //! Carries the BYTES and returns whether they went out. Both halves are new
@@ -3403,7 +3451,7 @@ typedef bool (*ShekylRelayNoiseSendCb)(void* ctx, std::size_t channel, const std
 //! went to one peer.
 //!
 //! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll, which states
-//! the precondition once, for all four of its callbacks.
+//! the precondition once, for all three of its callbacks.
 typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, bool sent,
                                              const std::uint8_t* peer);
 
@@ -3413,6 +3461,9 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 #define SHEKYL_RELAY_PLAN_NO_ROUTE    1
 //! Settled for this epoch: fluff. Retrying cannot change the answer.
 #define SHEKYL_RELAY_PLAN_FLUFF_EPOCH 2
+//! Local origin while this node is unsynchronised. Send nothing and record
+//! nothing; the pool retries after sync. Not a refresh, and not a fluff.
+#define SHEKYL_RELAY_PLAN_AWAIT_SYNC  3
 
 //! Carrier: the zone's ordinary connection.
 #define SHEKYL_RELAY_CARRIER_ORDINARY 0
@@ -3637,42 +3688,48 @@ std::size_t shekyl_relay_zone_live_stems(const RelayZoneHandle* handle);
 std::size_t shekyl_relay_zone_stem_width(const RelayZoneHandle* handle);
 //! Earliest time the zone has work; what the asio timer is armed against.
 std::uint64_t shekyl_relay_zone_next_wake(const RelayZoneHandle* handle);
-//! One of the SHEKYL_RELAY_PLAN_* codes. Three-way, not a bool: a transient
-//! routing failure (retry after a refresh) and a settled fluff epoch (do not)
-//! also report different relay_method events. Deciding between them in C++
-//! would mean a second copy of the RD-4 predicate `!fluffing || local_origin`.
-//! A null handle reports NO_ROUTE. Pure plan — production notify prefers
-//! shekyl_relay_zone_plan_relay_with_refresh, which owns the one NoRoute
-//! refresh; keep this for a forced refresh already performed (send-failure
-//! retry) and for tests.
+//! One of the SHEKYL_RELAY_PLAN_* codes. Not a bool: a transient routing
+//! failure (retry after a refresh), a settled fluff epoch (do not), and a
+//! withheld local origin (AWAIT_SYNC: send nothing, record nothing) are
+//! different. The routable outcomes also report different relay_method events.
+//! Deciding between them in C++ would mean a second copy of the RD-4
+//! predicate `!fluffing || local_origin`. `node_synchronised` is this node's
+//! chain sync, not a second spelling of `local_origin`. A null handle reports
+//! NO_ROUTE, not AWAIT_SYNC. Pure plan — production notify prefers
+//! shekyl_relay_zone_plan_dispatch_with_refresh. plan_relay_with_refresh owns
+//! the one NoRoute refresh; keep this pure plan for a forced refresh already
+//! performed (send-failure retry) and for tests. AWAIT_SYNC does not refresh.
 std::int32_t shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::uint8_t* source,
-                                          bool local_origin, std::uint8_t* out_dest);
-//! Plan a relay; on NO_ROUTE merge `outbound` once and re-plan. Settled fluff
-//! epochs do not refresh. This is the production notify path: the refresh
-//! policy lives in Rust with the zone. No callback — commands return nothing;
-//! a noise channel the refresh leaves unbound clears at its next due tick
-//! inside Rust, through NoiseQueues::unbind at the next poll.
+                                          bool local_origin, bool node_synchronised,
+                                          std::uint8_t* out_dest);
+//! Plan a relay; on NO_ROUTE merge this zone's established outbound sessions
+//! once and re-plan. Settled fluff epochs do not refresh, and neither does
+//! AWAIT_SYNC. The candidates are the session registry. No callback — commands
+//! return nothing; a noise channel the refresh leaves unbound clears at its
+//! next due tick inside Rust, through NoiseQueues::unbind at the next poll.
 std::int32_t shekyl_relay_zone_plan_relay_with_refresh(
     RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
-    const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest);
+    bool node_synchronised, std::uint8_t* out_dest);
 //! Plan a relay AND the wire that carries it — phase, carrier and slot in
 //! one crossing (rule 40). Return is the same SHEKYL_RELAY_PLAN_* code as
 //! plan_relay_with_refresh. out_carrier is SHEKYL_RELAY_CARRIER_*;
 //! out_channel is the stem slot and is meaningful only when the carrier is
-//! noise (written 0 otherwise). Every out-param is written on the
-//! null-handle path so a mishandled NO_ROUTE cannot be read as a noise
-//! stem. `dandelionpp_notify` is its production caller as of 2026-08-29 —
-//! COVER_TRAFFIC_RESTORATION.md §3.1a. It stood unused before that, kept
-//! against a caller grep on §1.6's criteria, which still govern deletion.
+//! noise (written 0 otherwise). On AWAIT_SYNC the carrier is ordinary and
+//! unread: the plan is the refusal, and the caller returns before any send.
+//! Every out-param is written on the null-handle path so a mishandled
+//! NO_ROUTE cannot be read as a noise stem. `dandelionpp_notify` is its
+//! production caller as of 2026-08-29 — COVER_TRAFFIC_RESTORATION.md §3.1a.
+//! It stood unused before that, kept against a caller grep on §1.6's
+//! criteria, which still govern deletion.
 std::int32_t shekyl_relay_zone_plan_dispatch_with_refresh(
     RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
-    const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest,
-    std::uint8_t* out_carrier, std::uint32_t* out_channel);
-//! Merge the current outbound set into the stem map mid-epoch. Used for
-//! connection churn, noise-send recovery, and the forced refresh after a stem
-//! send failure. No callback — see plan_relay_with_refresh.
-void shekyl_relay_zone_update_stems(RelayZoneHandle* handle, const std::uint8_t* outbound,
-                                    std::size_t n);
+    bool node_synchronised, std::uint8_t* out_dest, std::uint8_t* out_carrier,
+    std::uint32_t* out_channel);
+//! Merge this zone's established outbound sessions into the stem map. An
+//! outbound handshake already does this. What remains is a covert send that
+//! failed, and the retry after a stem send failure. A full map draws nothing.
+//! No callback — see plan_relay_with_refresh.
+void shekyl_relay_zone_update_stems(RelayZoneHandle* handle);
 //! Accept a batch for fluffing to every peer but `source`. Returns how many
 //! peers took it — zero means nothing is connected to fluff to, or a blob span
 //! was invalid (null ptr with non-zero len). Empty blobs (`len == 0`) are valid
@@ -3681,22 +3738,20 @@ std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t
                                           const ShekylRelayBlob* blobs, std::size_t n,
                                           const std::uint8_t* source);
 //! Run every step due at now_ms, delivering results through the callbacks. The
-//! outbound set is not passed in: `gather_outbound` is called back only when a
-//! wake crosses an epoch boundary and the stem map is rebuilt, so a fluff
-//! release never triggers the connection scan.
+//! stem map is this zone's established outbound sessions. An epoch boundary
+//! rebuilds it from that registry; a fluff release does not scan connections
+//! and does not filter by recorded height.
 //!
-//! \pre NO CALLBACK MAY RE-ENTER THIS HANDLE — all four of them, not only the
-//! newest. This function holds a mutable borrow of the zone for its whole
-//! body, and a second one of the carrier queue across the dispatch that
-//! delivers the effects. Calling any shekyl_relay_zone_*
-//! function on the same handle from inside gather_outbound, on_fluff,
-//! on_noise or on_carrier_resolved constructs an aliasing mutable borrow,
-//! which is undefined behaviour. Buffer whatever the callback learns and
-//! apply it after poll returns — the C++ producer did exactly this, recording
-//! a stem observation from the resolution callback, until review caught it.
-//! No callback may throw across the boundary.
+//! \pre NO CALLBACK MAY RE-ENTER THIS HANDLE — all three of them. This
+//! function holds a mutable borrow of the zone for its whole body, and a
+//! second one of the carrier queue across the dispatch that delivers the
+//! effects. Calling any shekyl_relay_zone_* function on the same handle from
+//! inside on_fluff, on_noise or on_carrier_resolved constructs an aliasing
+//! mutable borrow, which is undefined behaviour. Buffer whatever the callback
+//! learns and apply it after poll returns — the C++ producer did exactly
+//! this, recording a stem observation from the resolution callback, until
+//! review caught it. No callback may throw across the boundary.
 void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
-                            ShekylRelayOutboundCb gather_outbound,
                             ShekylRelayFluffCb on_fluff,
                             ShekylRelayNoiseSendCb on_noise,
                             ShekylRelayCarrierResolvedCb on_carrier_resolved);
@@ -3750,8 +3805,7 @@ void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms
 //! Start a new epoch immediately — what notify::run_epoch() drives. No
 //! callback — the rollover's noise consequences ride the schedule, exactly
 //! as a deadline-crossing rollover's do.
-void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms,
-                                   const std::uint8_t* outbound, std::size_t n);
+void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms);
 
 // ── Levin ingress + emit framing + compression (IMPLEMENTATION_INDEX.md LV row) ──────
 //

@@ -73,8 +73,11 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # The grandfather list's length ratchet. Lower it as rows gain owners; raise
 # it only at a merge that lands rows predating the gate, and say so in the
 # commit. History: 338 at the gate's birth (2026-09-20); 340 at the merge
-# with #792/#800 (three pre-gate rows: two new, one re-titled).
-GRANDFATHER_CEILING = 323
+# with #792/#800 (three pre-gate rows: two new, one re-titled); 317 on
+# 2026-10-01 when five grandfathered rows closed (the stub, the
+# target_height sentinel, the Ledger sources, the fcmp fuzz build, and
+# the false test-only-builder claim).
+GRANDFATHER_CEILING = 317
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

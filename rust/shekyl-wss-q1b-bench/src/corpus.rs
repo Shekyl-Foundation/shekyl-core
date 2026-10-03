@@ -35,7 +35,7 @@ use shekyl_curve_tree::segment::FINALITY_DEPTH_BLOCKS;
 use shekyl_economics::block_weight::BLOCK_WEIGHT_SURGE_FACTOR;
 use shekyl_economics::emission::block_weight_limit;
 use shekyl_economics::EconomicParams;
-use shekyl_fcmp::tree::outputs_per_node;
+use shekyl_fcmp::tree::{chunk_width, SELENE_CHUNK_WIDTH};
 use shekyl_tx_weight::{predict_weight, InputCount, OutputCount, MAX_OUTPUTS};
 use shekyl_wire::transaction::TX_WEIGHT_LIMIT;
 
@@ -271,7 +271,7 @@ pub fn worst_case_window_leaves(tree_depth: u8) -> u64 {
 
 /// The fewest leaves whose tree reaches `depth`.
 ///
-/// Derived from [`outputs_per_node`] — the production capacity function — so
+/// Derived from [`shekyl_fcmp::tree::outputs_per_node`] — the production capacity function — so
 /// the ladder cannot drift from the widths it is built on. `outputs_per_node(j)`
 /// is the leaf capacity of one node at layer `j`, so a tree rooted at layer `j`
 /// holds at most that many leaves and one more leaf forces layer `j + 1`.
@@ -279,6 +279,27 @@ pub fn worst_case_window_leaves(tree_depth: u8) -> u64 {
 ///
 /// Returns `None` for `depth < 2`: the Selene leaf layer is never itself the
 /// root (`shekyl_fcmp::tree`'s topology note), so depth 1 is not a tree shape.
+/// Returns `None` for `depth < 2`, and also for any depth whose floor is not
+/// representable (below).
+///
+/// # Why this does not call [`shekyl_fcmp::tree::outputs_per_node`] directly
+///
+/// [`shekyl_fcmp::tree::outputs_per_node`] documents its overflow as *"a const-eval or **debug**
+/// panic, not a silent wrap"*, on the stated grounds that *"`j` names a layer
+/// of the tree, whose depth is single digits"*. That contract is right for
+/// consensus code and wrong for a harness that takes a depth from a CLI flag:
+/// in a **debug** build a deep depth panics, and in a **release** build — how
+/// this harness runs — the `usize` product **wraps with no panic**, so the
+/// caller receives a plausible-looking but wrong leaf count and measures a
+/// population that does not exist. A valid-looking record is worse than a
+/// crash.
+///
+/// So the product is recomputed here with `checked_mul`, from the chunk widths
+/// at their owner, and an overflow becomes `None` — the same answer this
+/// function already gives for a depth below the ladder. One `Option`, one
+/// meaning: *this depth has no usable floor*. `min_leaves_for_depth_matches_outputs_per_node`
+/// pins the recomputation against [`shekyl_fcmp::tree::outputs_per_node`] across every depth
+/// where that function is itself valid, so the two cannot drift.
 #[must_use]
 pub fn min_leaves_for_depth(depth: u8) -> Option<u64> {
     if depth < 2 {
@@ -287,8 +308,16 @@ pub fn min_leaves_for_depth(depth: u8) -> Option<u64> {
     if depth == 2 {
         return Some(1);
     }
+    // `outputs_per_node(j)` for `j = depth - 2`: the leaf width, then one
+    // chunk width per layer up to `j`. Checked, so the domain limit is a
+    // value rather than a panic or a wrap.
+    let mut covered = u64::try_from(SELENE_CHUNK_WIDTH).expect("leaf chunk width fits u64");
+    for layer in 1..=(depth - 2) {
+        let width = u64::try_from(chunk_width(layer)).expect("a chunk width fits u64");
+        covered = covered.checked_mul(width)?;
+    }
     // Root layer of the next-shallower tree, plus one leaf.
-    Some(outputs_per_node(depth - 2) as u64 + 1)
+    covered.checked_add(1)
 }
 
 /// Reject a control set that cannot license what it is asked to license.

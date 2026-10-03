@@ -5,25 +5,23 @@
 
 // The prunable region has exactly ONE occupant, and until this file nothing said so.
 //
-// `calculate_transaction_prunable_hash` (cryptonote_format_utils.cpp:1135) computes
-// the prunable-region hash two ways:
+// The prunable digest is the hash of the transaction's tail: every byte after
+// `unprunable_size` (`calculate_transaction_prunable_hash`, which hands that
+// range to Rust). The serializer writes exactly one thing there,
+// `ct_signatures.p.serialize_ctsig_prunable(...)`, and that is the last thing
+// transaction::BEGIN_SERIALIZE writes (cryptonote_basic.h, where the object
+// closes immediately after it). The equivalence "tail == ctsig_prunable" is
+// POSITIONAL. It has no name in the code and, before this file, no test.
 //
-//   blob path         get_blob_hash(blob + unprunable_size, blob.size() - unprunable_size)
-//                     -- the whole tail, wholesale
-//   re-serialize path ct_signatures.p.serialize_ctsig_prunable(...)
-//                     -- only ct_signatures.p
-//
-// They agree ONLY because `ctsig_prunable` is the last thing written by
-// transaction::BEGIN_SERIALIZE (cryptonote_basic.h:645-648, where the object closes
-// immediately after it). That equivalence is POSITIONAL. It has no name in the code
-// and, before this file, no test.
-//
-// Append anything after `ctsig_prunable` and the two paths silently diverge: a node
-// that kept the blob hashes the new bytes, a node re-serializing from the parsed
-// struct does not. The failure surfaces at cryptonote_format_utils.cpp:1166 as
-// "tx hash cash integrity failure" -- a THROW, on some nodes and not others,
-// depending on whether they kept the blob. A moving split point would at least be a
-// visible consequence; this is not.
+// It used to guard two C++ derivations of the digest against each other: one
+// hashed the blob's tail, the other re-serialized `ct_signatures.p` alone, and
+// an append after `ctsig_prunable` would have split them, on some nodes and not
+// others. That second derivation is gone -- the digest is always the tail's.
+// What an append would break now is the other side of the tail: shekyl-wire
+// reads the region as a `Prunable` and nothing else, the chain store keeps it
+// as `txs_prunable`, and a wallet rebuilds a txid from its digest. Bytes after
+// `ctsig_prunable` would be committed to by the C++ digest and known to none of
+// them.
 //
 // # Why this test is C++ (rule 20 exception, flagged rather than silent)
 //
@@ -57,27 +55,6 @@ using namespace cryptonote;
 
 namespace {
 
-// The re-serialize path's own output, reproduced here so its LENGTH can be compared
-// against the blob tail. `calculate_transaction_prunable_hash` hashes this and
-// discards the bytes, so the size is not otherwise observable.
-//
-// # Why `transaction&` and not `const transaction&`
-//
-// Binary serialization MUTATES the transaction: `unprunable_size` is a
-// non-`mutable` `std::atomic<unsigned int>` assigned inside the serializer
-// (cryptonote_basic.h:635/707), and `serialize_ctsig_prunable` is a non-const
-// member. Production reaches it through a `const transaction&` plus a local
-// `const_cast` (cryptonote_format_utils.cpp:1147) -- an inherited shape that is
-// well-defined only because every caller happens to hold a non-const object, and
-// undefined the moment one does not.
-//
-// This test deliberately does NOT reproduce that. Mirroring the production
-// *computation* is the point; mirroring its const-incorrectness is not, and a
-// `const_cast` here would be a second instance of the hazard rather than a
-// faithful copy of anything. Taking the reference non-const states the mutation
-// in the signature and needs no cast at all. (The production cast is inherited
-// C++ and stays put under rules 16/20 -- it is fixed by the move to
-// `shekyl-wire`, not by patching it in place.)
 // A serve-credit vin in its RF-D1 form: an OPAQUE kept-half blob. The C++
 // serializer guards only the tag and the ceiling; the interior is the Rust
 // codec's (tag ‖ p_id(32) ‖ shard ‖ epoch ‖ ed25519(64) = 99 bytes).
@@ -100,6 +77,16 @@ std::vector<uint8_t> pruned_record()
   return std::vector<uint8_t>(PRUNED_RECORD_FILLER_BYTES, 0x55);
 }
 
+// `ctsig_prunable` serialized on its own, so its LENGTH can be compared against
+// the blob tail. Production no longer writes it separately; this is the test's
+// statement of what the tail is supposed to hold.
+//
+// # Why `transaction&` and not `const transaction&`
+//
+// Binary serialization MUTATES the transaction: `unprunable_size` is a
+// non-`mutable` `std::atomic<unsigned int>` assigned inside the serializer, and
+// `serialize_ctsig_prunable` is a non-const member. Taking the reference
+// non-const states the mutation in the signature and needs no cast.
 bool prunable_reserialized_size(transaction &t, size_t &out)
 {
   if (t.ct_signatures.type == ct::CTTypeNull)
@@ -132,11 +119,12 @@ void expect_prunable_region_has_one_occupant(transaction &t, const char *what)
   if (t.ct_signatures.type == ct::CTTypeNull)
   {
     // No prunable region at all: the tail must be empty, or something is living
-    // past `unprunable_size` that the CTTypeNull early-out at
-    // cryptonote_format_utils.cpp:1274 would hash as null.
+    // past `unprunable_size` that the txid never reads -- the mixer's null-type
+    // arm (shekyl-wire `TxidSegments::txid`) mixes a null component and no
+    // prunable digest.
     EXPECT_EQ(blob.size(), static_cast<size_t>(unprunable_size))
-        << "a CTTypeNull tx has bytes after unprunable_size; its prunable hash is "
-           "hardcoded null, so those bytes are committed to by NOTHING";
+        << "a CTTypeNull tx has bytes after unprunable_size; its txid mixes a "
+           "null component there, so those bytes are committed to by NOTHING";
     return;
   }
 
@@ -146,31 +134,29 @@ void expect_prunable_region_has_one_occupant(transaction &t, const char *what)
   const size_t tail = blob.size() - unprunable_size;
 
   // THE ASSERTION THIS FILE EXISTS FOR. If it fails, someone appended to the
-  // transaction after `ctsig_prunable`, and the two paths of
-  // calculate_transaction_prunable_hash no longer compute the same thing.
+  // transaction after `ctsig_prunable`.
   EXPECT_EQ(tail, reserialized)
       << "the prunable region has a SECOND OCCUPANT.\n"
          "  blob tail after unprunable_size: " << tail << " bytes\n"
          "  ct_signatures.p re-serialized:  " << reserialized << " bytes\n"
          "Something is now written after ctsig_prunable in "
-         "transaction::BEGIN_SERIALIZE (cryptonote_basic.h). The blob path of "
-         "calculate_transaction_prunable_hash hashes it; the re-serialize path does "
-         "not. Nodes that kept the blob will disagree with nodes that did not, and "
-         "the disagreement surfaces as a 'tx hash cash integrity failure' throw at "
-         "cryptonote_format_utils.cpp:1166.\n"
+         "transaction::BEGIN_SERIALIZE (cryptonote_basic.h). The prunable digest "
+         "commits to it, and nothing that reads the region knows it is there: "
+         "shekyl-wire parses a Prunable and stops.\n"
          "If the new bytes are meant to be prunable, put them INSIDE "
-         "serialize_ctsig_prunable, where both paths see them by construction. "
+         "serialize_ctsig_prunable. "
          "See docs/design/ARCHIVAL_PASS_RECORD_CARRIER.md §1.";
 
-  // The consequence, asserted directly: with the blob and without it, same hash.
+  // With the blob and without it, same digest: a transaction serialized again
+  // gives the tail it was parsed from.
   crypto::hash from_blob = crypto::null_hash;
   crypto::hash from_struct = crypto::null_hash;
   const blobdata_ref blobref(blob);
   ASSERT_TRUE(calculate_transaction_prunable_hash(t, &blobref, from_blob));
   ASSERT_TRUE(calculate_transaction_prunable_hash(t, nullptr, from_struct));
   EXPECT_EQ(from_blob, from_struct)
-      << "blob-present and blob-absent prunable hashes disagree -- a pruned node and "
-         "an archival node would compute different tx ids for the same transaction";
+      << "the digest from the blob and the digest from a fresh serialization "
+         "disagree -- the transaction does not serialize back to its own tail";
 }
 
 } // namespace
@@ -267,7 +253,7 @@ TEST(tx_prunable_region, serve_credit_tx_tail_is_the_empty_prunable_counts)
          "transaction.";
 
   // The file's own property still holds for this shape: whatever the empty
-  // region is, both hash paths see the same bytes.
+  // region is, the tail holds it and nothing else.
   transaction parsed;
   ASSERT_TRUE(parse_and_validate_tx_from_blob(blob, parsed));
   expect_prunable_region_has_one_occupant(parsed, "serve_credit_only");

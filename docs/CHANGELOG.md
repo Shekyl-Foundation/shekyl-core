@@ -2,6 +2,161 @@
 
 ## [Unreleased]
 
+### Daemon — the prunable digest is computed in Rust
+
+- `calculate_transaction_prunable_hash` no longer hashes. It finds the
+  transaction's prunable range, the bytes after `unprunable_size`, and
+  hands it to `shekyl_wire::prunable_hash_of` over a new FFI entry,
+  `shekyl_tx_prunable_hash` (one byte range; no archival length, which
+  stays the mixer's to measure). The digest is a txid
+  operand that also travels alone — the `txs_prunable_hash` row, and
+  `prunable_hash` beside a pruned body in `get_transactions`, which the
+  wallet mixes into the id it checks — so it has the mixer's definition and
+  no second one.
+- The function's other derivation, a separate write of the prunable fields
+  when no blob was in hand, is deleted: without a blob the transaction is
+  serialized and its tail is the range. A pruned transaction is refused
+  instead of answered with the digest of nothing, and so is one whose
+  offsets are out of order.
+- `prunable_digest_parity` pins the digest on a body of every transaction
+  class (coinbase, spend, bond post, emission, serve-credit), in Rust and in
+  C++. No digest changes: every pinned value equals the one the previous
+  C++ code produced.
+
+### Archival shards — the W₂ size ladder is read: `W = 3,000,000 B` stands on `U1a`
+
+- With onion PoW on, 13 of 319 single-attempt fetches of the largest served
+  object missed the 120 s deadline: 4.1 %, 95 % interval 2.4 – 6.9 %, against
+  the 0.30 the failure window is calibrated on
+  (`ARCHIVAL_SHARD_T_DERIVATION.md` §10.5). The provisional shard length
+  stands on the transport ceiling; it is now provisional only on the
+  server-egress measurement (`U1b`). No constant changes.
+- The PoW comparison shows no measurable cost on any judged statistic, with
+  the sign unresolved: one difference is material in PoW's favour, and the
+  design cannot attribute it (`SP_T3_SKELETON_MEASUREMENT.md` §19b). Two
+  PoW-off windows a day apart differ by more than the postures do.
+- `p_attempt = 0.30`, the failure window's calibration, is retained and is no
+  longer a stand-in: every window read sits under it (worst day 0.20, 95 %
+  upper bound 0.238). It reopens if a measured window's upper bound exceeds
+  it; a single good window never tightens it. The label in
+  `shekyl-economics-sim` says so; no value changes.
+- `L = 4` holds, re-derived per byte on the worse measured day: a fetch of
+  the heaviest shard takes 56.1 s at the governing percentile, and one
+  attempt and one retry complete by 149.7 s at p99. This replaces the
+  "~20 s for 3.33 MB" its span was sized on (`SHT-7`).
+- `SF-D6`'s retry budget is 2 retries (`ARCHIVAL_SHARD_T_DERIVATION.md`
+  §10.7): a read of three attempts completes by 190.4 s at p99 on the worse
+  day, inside `L`'s 240 s span, and cannot run past `L`'s six-minute line.
+  The measurement alone does not bound the count; the deadline arithmetic
+  does. It is not a constant yet: `shekyl-p-fetch` does not retry.
+- `shekyl-economics-sim`: `MissSources::retries` is `attempts`, which is
+  what it always held, and stays 1 deliberately. Bad-day misses are
+  correlated circuit failures, so a retry is margin, not calibration.
+- `shekyl-sp-t3-spike` gains `pd-f2-ceiling`, which reads one observations
+  file as §10.1's analysis: miss rate with its Wilson interval, circuit apart
+  from transfer misses, the fit and the ceiling or the reason there is none,
+  the span at the heaviest shard, the read of one attempt and up to three
+  retries, and the retry budget that follows.
+  The three observation files are in `docs/benchmarks/`.
+
+### Daemon RPC — `target_height` is the core's target (`CORE_RPC_VERSION` 3.40)
+
+- `get_version` and `sync_info` no longer write `0` when the node is
+  synchronized. `0` is only a core-reported absence. A synchronized node
+  whose core named a target reports that target. The wallet's `get_info`
+  reading is still the C++ reply, which keeps the old convention until that
+  method moves.
+
+### Build — hardware-wallet packages are not dependencies
+
+- The daemon does not link hidapi, libusb, protobuf, or udev. Install
+  lists, the depends build, and CI package lines no longer fetch them.
+  The software device remains the key helper; both hardware backends stay
+  deleted (`docs/HARDWARE_WALLETS.md`).
+
+### Daemon — `tx_to_blob` no longer has a form that discards the serializer's verdict
+
+- The value-returning `tx_to_blob(const transaction&)` is deleted. It
+  returned whatever bytes were written before the serializer refused, so a
+  caller could not tell a transaction from a fragment. The boolean form is
+  `[[nodiscard]]`. A refusal now fails the caller: `add_block` throws a
+  `DB_ERROR` for a miner transaction that does not serialize, the
+  block-facts export answers `INCONSISTENT` for a block or a transaction,
+  and `shekyl-blockchain-import` fails the chunk for either.
+  `get_transaction_blob_size` reads the verdict and records the length only
+  when the serializer accepts the body. On a refusal it returns the
+  fragment's length and leaves the size unrecorded, so the consensus
+  verifier still receives a length rather than an exception, and a later
+  weight does not treat the fragment as the transaction.
+  `get_transaction_weight(const transaction&)` measures through that
+  function. No behaviour changes for a transaction that serializes.
+
+### Consensus — the txid binds the archival length (`SHT-Q2`, rule 07 cutover)
+
+- **Every non-coinbase txid changes.** The transaction id mixes one more
+  32-byte word: the transaction's archival length, `|pqc_auths| +
+  |prunable|`, as a little-endian `u64` (`GENESIS_TX_WIRE_FORMAT.md` §11).
+  An FCMP++ spend is five words, the serve-credit form four, a coinbase
+  three as before — it carries no archival good, so its id does not move.
+  The shard partition is cut by this length; bound here, a transaction
+  cannot keep its id under another one. It is not on the wire and not
+  signed.
+- **One mixer.** `shekyl-wire` owns it. The C++ `calculate_transaction_hash`
+  serializes, cuts the blob at the offsets its serializer recorded, and
+  calls `shekyl_txid_from_segments`; it hashes nothing and measures
+  nothing, and the entry takes no length. `get_pruned_transaction_hash` and
+  the pruned arm of the P2P block-entry path are deleted: that arm was
+  unreachable (a pruned entry is a protocol violation before it), and a
+  pruned body has no length in C++ to measure.
+- **Pruned forms supply the length beside the digest.** The chain store
+  reads its `txs_archival_len` row into the skeleton rebuild; a row that is
+  wrong or missing no longer hashes to the transaction the block names.
+  `Transaction::hash_with_supplied_prunable` and
+  `hash_with_supplied_components` take the length as a typed operand.
+- **API.** `CORE_RPC_VERSION` 3.38 → 3.39. Every `get_transactions` entry
+  carries `archival_len`, required: the daemon measures it from the two
+  segments it holds when it serves, and the wallet's block fetch and the
+  console mix it into the id they check the body against. A reply that
+  lies about the length is refused like one that lies about the body. A
+  3.38 peer disagrees about every spend's id, not only about this member.
+- **Stores.** LMDB `VERSION` 15 → 16 — content, not layout: a v15 datadir
+  indexes its transactions under ids no current node computes, and is
+  refused at open (`LMDB_SCHEMA.md`). The redb store's `SCHEMA_VERSION`
+  20 → 21 for the same reason: `tx_indices` is keyed by the txid, so a
+  store written before this change is refused at open instead of halting
+  as corruption on its first skeleton rebuild. No snapshot moves.
+  Pre-genesis: delete and resync.
+- Pins and corpora regenerated, because the ids moved:
+  `pruned_tx_hash_parity_v1.json` and `serve_credit_tx_parity_v1.json` (now
+  pinning the length), `live_oracle_spend_v1.json`, the six captured
+  regtest chains, and the `get_transactions` / `get_version` RPC vectors.
+  The interim gate `check_archival_len_source.py` is deleted with its
+  workflow step: it held the length to measured origins while nothing
+  bound it.
+- `PDM-Q-F34` (composition variance) closes by dissolution and has its
+  charter row: equal-length shards have no composition to mis-price.
+
+### Economics — the escalation knee re-derived in the shard unit (`SCC` §F)
+
+- `shekyl_escalation_knee_n` `100000 → 2250000`: the Stage-2 sweep re-ran in
+  the operand the validator consumes (closed archival shards,
+  `closed_shards_before`) and the config carries its middle candidate, not a
+  conversion of the J-segment literal. **No behaviour changes**: the
+  escalation ships flat (asymptote = floor), so the knee is inert until the
+  GF-7 ceremony; the consensus-constants digest re-pins
+  (`885f700d… → 05a1ba28…`). The economics sim now calls `shekyl_types::shard_of`
+  and the `shekyl-tx-weight` predictors; its re-measured verdicts, including
+  one that flipped, are in `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13.
+  `--stage2` also prints the **onset year** of A1 failure for every scenario
+  run to 60 years and a priced **lever table** (§12.14): under the frozen
+  parameters the staker budget stops clearing the archival bond at year 18–24
+  in every constant-traffic world, and no share of the burn or floor on the
+  tail clears the settled-chain case. Ruled (design owner, 2026-10-01): no flow
+  funds a fixed-per-shard bond held forever on a growing corpus; the bond's
+  size — against the per-shard reward it deters cheating on — is the open
+  question, carried in `FOLLOWUPS.md`; under the fixed bond, the Foundation
+  `CompleteTree` is the settled-chain posture by design.
+
 ### Wallet contract — one owner for the error codes
 
 - The wallet contract's error vocabulary moves out of the RPC server into
@@ -339,10 +494,12 @@
   `receipt`, written by the generator from the daemon's
   `regtest_inject_archival_serve_credit` response, which now returns the
   attributed height (C++ + RPC `height`).
-- **API.** `CORE_RPC_VERSION` 3.38 → 3.39. `inject_archival_serve_credit`
-  (regtest only) gains `height` in its response — the tip's block index the
-  row was keyed at, read under the lock with the write. `get_version` gains
-  nothing.
+- **API.** `CORE_RPC_VERSION` 3.40 → 3.41 (minted 3.39 on the branch; 3.39
+  and 3.40 were taken on `dev` by the `archival_len` and `target_height`
+  changes while it was open, so the receipt takes the next minor at the
+  merge). `inject_archival_serve_credit` (regtest only) gains `height` in
+  its response — the tip's block index the row was keyed at, read under the
+  lock with the write. `get_version` gains nothing.
   (`DRS_E4_ARCHIVAL_WRITER.md` §3.8 item 3, §6 row 7;
   `DRS_E2_REPLAY_DRIVER.md` §3.9, RD-Q13.)
 
@@ -513,9 +670,6 @@
   segment partition, and CEN-L10 is re-graded DIVERGENT in the CSR-3a
   register as the ruled, intended difference. The staking sim holds the
   retired `T = 200` locally so its registered runs reproduce.
-- Not yet in this change: the txid mixer's length term and the C++
-  `calculate_transaction_hash` FFI call, which wait on how pruned forms
-  supply the length.
 
 ### Send — a payment answers its request: `TxRecipient.rid` rides the label
 

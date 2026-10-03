@@ -110,7 +110,6 @@ namespace cryptonote
   inline bool make_block_connect_supplement_from_block_entry(
     const std::vector<cryptonote::tx_blob_entry>& tx_entries,
     const CryptoHashContainer& blk_tx_hashes,
-    const bool allow_pruned,
     const cryptonote::blobdata& attestation_witness,
     cryptonote::block_connect_supplement& connect)
   {
@@ -134,8 +133,11 @@ namespace cryptonote
         return false;
       }
 
-      const bool is_pruned = tx_entry.prunable_hash != crypto::null_hash;
-      if (is_pruned && !allow_pruned)
+      // A pruned entry has no place on this wire: pruned spans are never
+      // requested (PDM-Q7), and a pruned body cannot be named here anyway --
+      // its txid mixes an archival length (SHT-Q2) that only the full body
+      // or a store's row can supply, and a block entry carries neither.
+      if (tx_entry.prunable_hash != crypto::null_hash)
       {
         MERROR("Pruned transaction not allowed here");
         return false;
@@ -143,16 +145,7 @@ namespace cryptonote
 
       cryptonote::transaction tx;
       crypto::hash tx_hash;
-      bool parse_success = false;
-      if (is_pruned)
-      {
-        if ((parse_success = cryptonote::parse_and_validate_tx_base_from_blob(tx_entry.blob, tx)))
-          tx_hash = cryptonote::get_pruned_transaction_hash(tx, tx_entry.prunable_hash);
-      }
-      else
-      {
-        parse_success = cryptonote::parse_and_validate_tx_from_blob(tx_entry.blob, tx, tx_hash);
-      }
+      const bool parse_success = cryptonote::parse_and_validate_tx_from_blob(tx_entry.blob, tx, tx_hash);
 
       if (!parse_success)
       {
@@ -202,10 +195,8 @@ namespace cryptonote
       return false;
     }
 
-    // We set `allow_pruned` equal to whether this block entry is pruned since the pruned flag
-    // should be checked anyways by the time we deserialize transactions
     return make_block_connect_supplement_from_block_entry(
-      blk_entry.txs, blk_tx_hashes, blk_entry.pruned, blk_entry.attestation_witness, connect);
+      blk_entry.txs, blk_tx_hashes, blk_entry.attestation_witness, connect);
   }
 
 
@@ -589,7 +580,7 @@ namespace cryptonote
     // Unbypassable beats loud here; a bound only some ingresses check is the defect
     // this replaced.
     block_connect_supplement connect;
-    if (!make_block_connect_supplement_from_block_entry(arg.b.txs, blk_txids_set, /*allow_pruned=*/false, arg.b.attestation_witness, connect))
+    if (!make_block_connect_supplement_from_block_entry(arg.b.txs, blk_txids_set, arg.b.attestation_witness, connect))
     {
       LOG_ERROR_CCONTEXT
       (
@@ -819,7 +810,6 @@ namespace cryptonote
     std::unordered_set<blobdata> seen;
     for (const auto &blob: arg.txs)
     {
-      MLOGIF_P2P_MESSAGE(cryptonote::transaction tx; crypto::hash hash; bool ret = cryptonote::parse_and_validate_tx_from_blob(blob, tx, hash);, ret, "Including transaction " << hash);
       if (seen.find(blob) != seen.end())
       {
         LOG_PRINT_CCONTEXT_L1("Duplicate transaction in notification, dropping connection");
@@ -829,7 +819,9 @@ namespace cryptonote
       seen.insert(blob);
     }
 
-    if(context.m_state != cryptonote_connection_context::state_normal)
+    // A handshake-complete peer that is still synchronising may relay.
+    // Only a session that has not finished the handshake is dropped here.
+    if(context.m_state == cryptonote_connection_context::state_before_handshake)
       return 1;
 
     // while syncing, core will lock for a long time, so we ignore
@@ -839,6 +831,13 @@ namespace cryptonote
     {
       LOG_DEBUG_CC(context, "Received new tx while syncing, ignored");
       return 1;
+    }
+
+    // Passed the duplicate drop and both gates. The pool can still refuse.
+    // The parse exists for this line; it is a second pass, after the decision.
+    for (const auto &blob: arg.txs)
+    {
+      MLOGIF_P2P_MESSAGE(cryptonote::transaction tx; crypto::hash hash; bool ret = cryptonote::parse_and_validate_tx_from_blob(blob, tx, hash);, ret, "Transaction accepted for admission " << hash);
     }
 
     /* §46: hand every arrived blob to every zone's stem-observation watch

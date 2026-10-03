@@ -118,8 +118,9 @@ members = [
 
     # D5's one runtime constructor. The worker count and the blocking
     # cap are inputs. The pool is a row on shekyl-thread-ledger.
-    # Daemon-RPC and Tor-control still build their own until their
-    # budgets are measured. See docs/design/P2P_TRANSPORT_LAYER.md.
+    # Daemon-RPC, Tor-control, and the transport all call it. The D5
+    # pin of those counts is still ahead of any measurement.
+    # See docs/design/P2P_TRANSPORT_LAYER.md.
     "shekyl-runtime",
 
     # Peer-attribution policy (PWD-B7): whether a rejection justifies severing
@@ -375,9 +376,12 @@ members = [
 # Local-only harnesses that must not participate in the parent
 # workspace. Excluded here (rather than relying on the nested
 # `[workspace]` table inside each one) so that `cargo check
-# --workspace` on stable never tries to resolve libfuzzer-sys, which
-# only builds under `cargo +nightly fuzz build`. Hardening-pass
-# commit 8 (`docs/MID_REWIRE_HARDENING.md` §3.8).
+# --workspace` on stable never resolves libfuzzer-sys. The audit
+# workflow checks `shekyl-fcmp/fuzz` on its own manifest: those four
+# harnesses are the signature-drift gate, and libfuzzer-sys 0.4
+# typechecks on the pinned stable toolchain. The other harnesses stay
+# out of that job. Hardening-pass commit 8
+# (`docs/MID_REWIRE_HARDENING.md` §3.8).
 exclude = [
     "shekyl-wire/fuzz",
     "shekyl-engine-state/fuzz",

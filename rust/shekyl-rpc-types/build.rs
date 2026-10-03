@@ -167,7 +167,17 @@ use std::path::PathBuf;
 /// the key (no `build.rs`, no CMake); the Rust constant was hand-pinned. **No
 /// production behaviour changes** — `1 · 10 000 = 10 000`; the digest moves
 /// because the binding shrank.
-const PINNED_DIGEST: &str = "885f700d00009470568047e56be23e8f4810e54a4b989461a286775f1ad2234c";
+///
+/// **Re-pinned 2026-10-01 (`ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F step 3): a
+/// VALUE changed — `shekyl_escalation_knee_n` `100000 → 2250000`.** The knee
+/// was the J-segment-era literal carried across the SHT-Q2 operand re-key
+/// unchanged; it is now the Stage-2 sweep's middle candidate, re-derived in
+/// closed shards of archival bytes (`shekyl-economics-sim` `KNEE_BAND`), not
+/// converted. **No production behaviour changes:** the escalation ships flat
+/// (`asymptote_share == staker_pool_share`), so `staker_pool_share_at` is
+/// bit-identical at every `n` whatever the knee; the number is provisional
+/// until the GF-7 ceremony picks it with the asymptote.
+const PINNED_DIGEST: &str = "05a1ba28da50990199b8d7d9621eceda7f2407033ed950137fd445f270f699ab";
 
 fn main() {
     let manifest_dir =

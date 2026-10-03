@@ -22,7 +22,21 @@ together with findings `SHT-10`…`SHT-12`, the input-count proposal recorded as
 adopted, and `PDM-Q6` item 5's rejection re-read as one of *stored lengths*, not of
 byte-proportional boundaries; the placement of the length (prefix or txid, §8.5) was
 posed on 2026-09-29 and settled by the same ruling: **txid-bound** — "bound through
-the txid" is §8.5's right-hand column. Identifier families **`SHT-`** (findings) and
+the txid" is §8.5's right-hand column. **Four rulings of 2026-10-01 (§10)** fill the
+inputs the build and the fit were held on: the target witness-miss rate is the failure
+window's `p_attempt`, judged in the soak with PoW on; the 5 % overshoot tolerance is
+confirmed; a pruned form's length is measured at serve time from full segments (option
+(iv)), which lifts the cutover's blocker; and `SHT-8`'s two residues have owners. **The
+W₂ run is read (2026-10-02, §10.5): with PoW on, 4.1 % of 1× fetches missed (95 %
+interval 2.4 – 6.9 %) against the 0.30 target, so `W = 3,000,000 B` stands on `U1a` and
+is provisional only on `U1b`.** **Three rulings on that reading the same day (§10.6):
+`p_attempt = 0.30` is retained, re-grounded as a bound the measurements support; the
+PoW finding is "no measurable cost, sign unresolved"; and `L`'s fetch span is
+re-derived per byte on the worse day — `L = 4` holds, which closes `SHT-7`.**
+**Close-out the same day (§10.7): the sim credits one attempt per read, and `SF-D6`'s
+retry budget is 2 retries. §11 is the closing state: the only row `W` waits on is
+`U1b`.**
+Identifier families **`SHT-`** (findings) and
 **`SHT-Q`** (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
 (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a) — 105 prefixes
@@ -310,7 +324,7 @@ of them already has a defined answer for a shard that has not closed:
 | surface | what it needs | an open frontier shard |
 |---|---|---|
 | `h_scarce` and the discard calendar `D(E) = { k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3 }` | the `close_height` of shards **already closed**, reached by id arithmetic and one binary search | is not in the closed set, so not in `D(E)`. Never discarded — which is the cost, not a contradiction (`prune.rs:34-36`, `:472-500`) |
-| `g(age)` | `shard_age_milli(close_block_height, freeze_height, SEB)` — a **freeze** height, *if* frozen. Its no-segment branch is keyed on a **J-segment** (`admission.rs:305-341`, `consensus_state.rs:235-252`) | ⚠️ **NOT A PASS — evaluated against the retired geometry.** "Scores `age_milli = 0` with no frozen segment" is a true statement about *segments*, the leaf partition `PDM-Q12` retired, and says nothing about how an open **T-shard** behaves. The re-keyed form does not exist, so this surface **has not been run** |
+| `g(age)` | **As re-keyed 2026-10-01:** `ShardClose::{Open, ClosedAt(h)}.age_milli(close_block_height, SEB)`, `h` from `shekyl_chain_rules::shard_close_height`, searched at the parent a `ClosedUniverse` carries (`archival/close.rs::shard_close`). *At the pin:* `shard_age_milli(close_block_height, freeze_height, SEB)`, its no-segment branch keyed on a **J-segment** (`admission.rs:305-341`, `consensus_state.rs:235-252`) | ✅ **RUN 2026-10-01, does not fire.** The fold operand (`shard_close_is_the_fold_height_below_the_universe_and_open_at_it`, `shekyl-chain-rules/src/archival_tests.rs`, the same chain as the height search): a shard below the `ClosedUniverse` is `ClosedAt` exactly `shard_close_height` at that universe's parent, and the next shard is `Open`. The age (`shard_close_age_is_zero_while_open_and_the_fold_height_once_closed`, `shekyl-archival-retention/src/consensus_state.rs`): an open shard ages zero at every height, a closed one ages from its close height, and `ClosedAt(0)` stays distinct from open. *Was at `b72aac2fc`:* ⚠️ NOT A PASS — evaluated against the retired geometry; "scores `age_milli = 0` with no frozen segment" was true of *segments* and the re-keyed form did not exist (`SHT-8`) |
 | D2 escalation | `compute_burn_split_at(total_fees, burn_pct, n: FrozenSegmentCount)` (`burn.rs:188-191`); `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and on the C++ side `n` is **derived from the curve-tree leaf count** — `Blockchain::parent_frozen_segment_count` returns `shekyl_archival_frozen_segment_count(m_db->get_curve_tree_leaf_count())` (`src/cryptonote_core/blockchain.cpp:1494-1505`) and feeds `validate_miner_transaction` (`:1508`), under a throwing read-point assert | ⚠️ **NOT A PASS — same defect.** "Not frozen, not counted" is true of segments. See `SHT-8`: the re-key is unspecified, and specifying it wrongly hands `T` a fifth job |
 | Foundation `CompleteTree` / seed coverage | an owed set of *"every **closed**, final shard"* (`WALLET_SIDE_STORE.md`:463, WSS-Q10) | is not owed |
 | Bootstrap | fills from closed shards through the same owed computation | likewise |
@@ -332,6 +346,14 @@ carelessly makes `T` an economic parameter.
 **This round does not claim (B)'s falsifier is discharged.** Three surfaces
 support it; two are unrun and must be specified under the ruled domain before
 the falsifier counts.
+
+**UPDATE 2026-10-01 — four of five run.** `g(age)` is re-keyed (table row above;
+`SHT-8` item 2, the shard-count cutover's Rust-side row) and its falsifier does
+not fire. D2's `n` was re-keyed in the Rust validator 2026-09-30 (`SHT-8`,
+`ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F) — closed shards from the fold, no clock — so
+that surface is run on the Rust side; the C++ validator keeps the segment count under
+CEN-L10's ruled divergence. What (B) still owes is not a surface but a number:
+`escalation_knee_n`'s re-derivation in the new unit (the sim lane's, `SCC-Q2`).
 
 Recorded because it cuts the other way too: **adding "or `H` blocks" to (B)
 would reintroduce exactly the defect (B) removes.** Any time-driven closure rule
@@ -793,7 +815,8 @@ observation exists.
     and not attributed to anything.
   - **What it feeds.** The PoW comparison does not enter `W`'s fit, which reads the
     restart's soak. A *material* PoW cost on a judged statistic goes to Rick as a
-    SPIKE-F-15 finding, alongside the fit.
+    SPIKE-F-15 finding, alongside the fit. **Superseded 2026-10-01 (§10.1):** the fit
+    reads this run's PoW-**on** file. The comparison itself is unchanged.
 - **Fit.** Per percentile (p50, p90, p99), over the **soak** arm: least squares of
   `t = t_fixed + bytes / v` over the three sizes. The cold arm is fitted and reported,
   not used to select.
@@ -807,7 +830,9 @@ observation exists.
   ceiling needs a different model.
 - **The target witness-miss rate (item 3) is owed by the design owner before the fit.**
   The observations are collected, but no fit is computed until that rate is recorded
-  here.
+  here. **RULED 2026-10-01 (§10.1): it is the failure window's `p_attempt`, and the
+  governing arm is the soak with PoW on.** §10.1 records what that supersedes in this
+  list, and what had been read when it was written.
 - **Decision thresholds, restated in `W`** (item 4). The ceiling is
   `W_max = v · (120 s − t_fixed) − 149,400 B`, at the governing percentile (the soak
   p99, until the miss rate replaces it).
@@ -874,10 +899,10 @@ that gate's bookkeeping:
 | **`SHT-2`** | The JSON comment's *"typical shard at ~16.7 KB/tx lands near 3.33 MB"* holds only under the **non-coinbase ordinal**. Under the landed storage-id domain, 3.33 MB is the *saturation* case; at 1 listed tx/block a shard holds ~1.7 MB. The sizing rationale presumes the answer to `SHT-Q1`. | CONFIRMED |
 | **`SHT-3`** | `SF-D7` still states *"`N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`)"* ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):183). Item 5 retired the whole-shard materialise and refuted F32's reason 2 on that ground. Stale premise on a RULED row, and it is the text a future reader would use to derive a memory bound on `T`. | STALE TEXT on a RULED row — owner `SF-` |
 | **`SHT-4`** | `U1` is not bounded by `CHALLENGE_RESPONSE_BLOCKS` (500 blocks ⇒ a 10.8 GB budget against a 3.34 MB shard) and the memory leg is retired by item 5. **AMENDED on review:** the first pass then derived the real bound against the 180 KB/s *burst floor* and reported the row as slack, having missed W₂'s **measured** single-attempt figures on the same page (`:1091-1095`). On the measurement the heavy-end ceiling is ~[140, 490] and **`T = 200` is inside it** — `U1a` is unresolved at 200, not slack. The steering prediction that `U1` is the bound most likely to set `T` is **reinstated**; what was wrong in it was only the denominator. | CONFIRMED, then AMENDED — the amendment is the round's headline |
-| **`SHT-7`** | **`L`'s fetch-span component is justified by a byte count from the retired segment, and its own page already contradicts it.** `L = 4`'s span was sized on "~20 s for 3.33 MB" (`ARCHIVAL_SHARD_FETCH.md`:1074-1090, the 180 KB/s floor); W₂ at `:1091-1095` then measured **48.27 / 86.06 s** for the same object — 2.4–4.3× worse — and `L` stayed 4 on a *different* argument ("seven attempts of the cold p99 fit under six minutes"). So the span text is stale relative to the measurement one paragraph below it, and **deriving `T` from that span would be circular**: it would feed the retired 3.33 MB back into `T`'s own bound, which is exactly what this round was opened to remove. The independent half is `SF-D6`'s retry budget; that is the part to keep. Restate `L`'s span **per byte**, or re-pin `T` and `L` together — but do not call selecting inside the current span "the cheaper option", which the first pass did. | CONFIRMED — owner `SF-`, and it is why §4's rule selects from the lower edge |
+| **`SHT-7`** | **`L`'s fetch-span component is justified by a byte count from the retired segment, and its own page already contradicts it.** `L = 4`'s span was sized on "~20 s for 3.33 MB" (`ARCHIVAL_SHARD_FETCH.md`:1074-1090, the 180 KB/s floor); W₂ at `:1091-1095` then measured **48.27 / 86.06 s** for the same object — 2.4–4.3× worse — and `L` stayed 4 on a *different* argument ("seven attempts of the cold p99 fit under six minutes"). So the span text is stale relative to the measurement one paragraph below it, and **deriving `T` from that span would be circular**: it would feed the retired 3.33 MB back into `T`'s own bound, which is exactly what this round was opened to remove. The independent half is `SF-D6`'s retry budget; that is the part to keep. Restate `L`'s span **per byte**, or re-pin `T` and `L` together — but do not call selecting inside the current span "the cheaper option", which the first pass did. | CONFIRMED — owner `SF-`, and it is why §4's rule selects from the lower edge. **CLOSED 2026-10-02 (§10.6 item 3):** the span is restated per byte on the worse measured day and `L = 4` holds |
 | **`SHT-5`** | `U1b` — an honest server's sustained egress on the rule-76 floor device — **has no authority anywhere in the tree**. The only transport figure (180 KB/s) is requester-side and a burst floor from a null result. This is the one bound that cannot be closed by reasoning. | OPEN — FOLLOWUPS row, measurement owed |
 | **`SHT-6`** | `rust/shekyl-economics-sim/src/burden.rs:33-39`'s `SHARD_BYTES` comment derives 3.33 MB from `SEGMENT_LEAF_COUNT × ~128 B` — the retired **leaf-segment** estimate — while presenting it as the "§2 corpus figure". Corrected in this PR (the only code this round touches). | FIXED here |
-| **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner once the ramp is on, with no economics changed** (it ships flat, so the effect is latent — `SCC-Q2`), and every `T` re-pin thereafter moving when the staker share saturates. **It is a consensus operand, not an economics knob.** `n` reaches consensus through `Blockchain::parent_frozen_segment_count` → `validate_miner_transaction` (`src/cryptonote_core/blockchain.cpp:1494-1508`), derived from `get_curve_tree_leaf_count()` — the **retired leaf geometry** — and read at a pinned parent state with a throwing assert (*"escalation operand read-point violated"*). So the coinbase's fee split depends on it. **CORRECTED 2026-09-27 (`SCC-Q2`'s ruling):** the stronger claim this row first made — *"a wrong re-key changes which coinbases are valid"* — holds only **once the escalation is switched on**. It ships **flat**: `shekyl_escalation_asymptote_share` equals the floor `shekyl_staker_pool_share` (`config/economics_params.json:16-18`, *"the DELIBERATE pre-ceremony NEUTRAL value"*), so the split is 25 % whatever `n` is and a wrong re-key changes no coinbase's validity **today**. The requirement that the re-key be one atomic C++/Rust change is unchanged, and its reason is sharper: the operand is computed on both sides, and a mismatch that is harmless while flat becomes a chain split the moment the GF-7 ceremony raises the asymptote. Likewise the ~65× figure bites only after the ceremony. **Blast radius, otherwise bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so what it clocks is **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table; the re-key specification is **E4 / S-ARCH's**, not this lane's |
+| **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner once the ramp is on, with no economics changed** (it ships flat, so the effect is latent — `SCC-Q2`), and every `T` re-pin thereafter moving when the staker share saturates. **It is a consensus operand, not an economics knob.** `n` reaches consensus through `Blockchain::parent_frozen_segment_count` → `validate_miner_transaction` (`src/cryptonote_core/blockchain.cpp:1494-1508`), derived from `get_curve_tree_leaf_count()` — the **retired leaf geometry** — and read at a pinned parent state with a throwing assert (*"escalation operand read-point violated"*). So the coinbase's fee split depends on it. **CORRECTED 2026-09-27 (`SCC-Q2`'s ruling):** the stronger claim this row first made — *"a wrong re-key changes which coinbases are valid"* — holds only **once the escalation is switched on**. It ships **flat**: `shekyl_escalation_asymptote_share` equals the floor `shekyl_staker_pool_share` (`config/economics_params.json:16-18`, *"the DELIBERATE pre-ceremony NEUTRAL value"*), so the split is 25 % whatever `n` is and a wrong re-key changes no coinbase's validity **today**. The requirement that the re-key be one atomic C++/Rust change is unchanged, and its reason is sharper: the operand is computed on both sides, and a mismatch that is harmless while flat becomes a chain split the moment the GF-7 ceremony raises the asymptote. Likewise the ~65× figure bites only after the ceremony. **Blast radius, otherwise bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so what it clocks is **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table. **Owners RULED 2026-10-01 (§10.4):** `n`'s re-key landed in the Rust validator on 2026-09-30; `g(age)`'s segment-keyed no-segment branch is re-keyed in the **shard-count cutover** ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md)), Rust-side — **LANDED 2026-10-01** (`ShardClose`, `shard_close`; falsifier run, §2's falsifier table); `escalation_knee_n`'s re-derivation is the **sim lane's**, per `SCC-Q2` — **LANDED 2026-10-01** (`2,250,000` closed shards, `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13) |
 | **`SHT-9`** | **A `shekyl-chain-rules` fixture carries a shape consensus refuses.** `harness::fixture::serve_credit_only` builds `prunable: None` with empty `pqc_auths` — the **pre-`RF-D1`** serve-credit form, identified by the *absence* of a prunable region. `RF-D1` inverted that: the region is now present and holds one non-empty pruned pass record per credit vin. Verified empirically rather than read off: `Transaction::validate_context_free_pruned` refuses it — *"serve_credit tx must be fee-only — no outputs, empty `pqc_auths`, no spend-proof material, and exactly one pruned pass record per serve-credit vin (§2.5, RF-D1)"*. It does **not** break `SHT-Q1`'s equivalence (a conforming serve-credit body carries good, and `tx_domain_tests` builds one), but a fixture that consensus would refuse is a false negative waiting for any test that assumes it is valid. | CONFIRMED — found while building the equivalence test; owner the `CHAIN_RULES_SLICE` lane, FOLLOWUPS |
 | **`SHT-10`** | **An FCMP++ proof verifies with trailing bytes.** `Fcmp::read` consumes exactly `proof_size(n, layers)` bytes (`shekyl-oxide/crypto/fcmps/src/lib.rs`), and neither the verifier (`shekyl-fcmp/src/proof.rs`) nor any consensus rule compares `fcmp_proof.len()` with it — the rows check emptiness only (`rules/tx.rs`, `rules/tx_inputs.rs`; C++ `blockchain.cpp`). Probe: a valid proof extended by 1, 64 and 4,096 zero bytes verifies `Ok(true)`. Every hybrid signature binds `prunable_hash`, so only the signer can pad (paying fee), but the good is not a closed function of structure and the encoding is not canonical. Fix: `fcmp_proof.len() == proof_size(n_spend, depth + 1)`. | CONFIRMED by probe — consensus canonical-form gap; **fix directed by the design owner 2026-09-28**, built in PR #899 |
 | **`SHT-11`** | **A serve-credit path verifies with zero scalars appended to a branch layer.** `recompute_subroot` hashes each layer as `hash_grow(init, 0, ZERO, chunk)`, a vector commitment on which a zero scalar contributes nothing (`shekyl-archival-retention/src/path.rs`); widths are bounded only by `MAX_BRANCH_SCALARS = 256`. Probe: the `assembled_path_crosscheck` fixture's Helios layer widened 5 → 6 and 5 → 45 verifies `Ok(())`. The ML-DSA countersignature binds `encode(path)`, so only the bonded signer can pad. Fix: canonical widths for a frozen segment, or refuse trailing zero scalars. | CONFIRMED by probe — consensus canonical-form gap; **fix directed by the design owner 2026-09-28**, built in PR #899 |
@@ -899,7 +924,8 @@ Each is a FOLLOWUPS row, not work for this round:
   specification for the escalation operand `n`.** It belongs beside the segment
   deletion in E4 / S-ARCH's re-key table, not in the `T` lane: this round's job was
   to find that the operand is segment-keyed and that a shard-keyed replacement
-  would price monetary policy off `T`, not to design the replacement.
+  would price monetary policy off `T`, not to design the replacement. *(Since
+  2026-10-01 the residues have named owners — §10.4.)*
 - Any change to channel 1.
 - Composition "attacks" — A4/W9 CLEARED, §12.11.
 - `SHT-5`'s measurement, and `SHT-3`'s stale-text correction in the `SF-` doc.
@@ -907,7 +933,8 @@ Each is a FOLLOWUPS row, not work for this round:
   equation in two unknowns, which is why `U1a` is an interval rather than a
   number and why the 180 KB/s floor is still load-bearing in `L`'s text. The
   harness exists (PR #746). This is the measurement that would make a derivation
-  possible, and it also re-grounds `L`'s span per byte.
+  possible, and it also re-grounds `L`'s span per byte. **Run and read 2026-10-02
+  (§10.5, §10.6).**
 
 ---
 
@@ -1344,14 +1371,19 @@ LMDB/Rust-store partition difference is registered as an intended CSR-3a diverge
 the engine swap completes before genesis, or this is revisited. The census carries both
 (`ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F).
 
+**Build status, 2026-10-01.** The blocker below is **lifted by §10.3's ruling (option
+(iv))**, and the mixer term, the pins and the corpora are being built as the family-1
+cutover (rule 07).
+
 **Build status, 2026-09-29 (PR #910).** Items 2, 4 and 5 are done, and item 1's row and
 cell are built. Item 1's mixer term and item 3's pins and corpora are held on one
-blocker, how a pruned form supplies the length (FOLLOWUPS "Build `SHT-Q2`", where the
-four resolutions and the recommendation are recorded). *Until the term lands, the
-invariant — no boundary reads a value the skeleton cannot bind — holds because every
-stored length is one `connect` measured; `scripts/ci/check_archival_len_source.py`
-(2026-09-30) holds that mechanically (named origins, one writer) and fails asking to
-be deleted once `hash_from_components` takes the length.*
+blocker, how a pruned form supplies the length; §10.3 rules it and records the build.
+**The term has landed (§10.3, "As built"):** the invariant — no boundary reads a value
+the skeleton cannot bind — now holds because the length is an operand of the txid. In
+the interval it held because every stored length was one `connect` measured, which an
+interim gate (`check_archival_len_source.py`, 2026-09-30) checked mechanically; that
+gate was written to fail once the mixer took the length, and is deleted with the
+cutover.
 
 **Consequences recorded with the ruling:**
 
@@ -1412,9 +1444,12 @@ length lies in `(W − max, W + max)`, so its relative deviation is at most `max
 
 How much deviation to accept is a **choice**: the overshoot tolerance `τ`, which sets the
 floor `W ≥ 149.4 KB / τ`. The design owner recommends `τ ≤ 5 %`, which gives
-`W ≥ 2.99 MB`.
+`W ≥ 2.99 MB`. **`τ = 5 %` CONFIRMED 2026-10-01 (§10.2).**
 
 ### 9.3 The upper bound, `U1a`, in bytes
+
+> **Read 2026-10-02 (§10.5):** the multi-size run this section waits on is in. `U1a`
+> does not bind at 3 MB, and the one-size interval below is superseded by that reading.
 
 A whole-shard read must complete in one attempt within one block (120 s), the criterion
 the W₂ measurement was graded against. The measurement is on a ~3.33 MB object: cold
@@ -1431,6 +1466,91 @@ heaviest shard, `W + 149.4 KB`, the ceiling on `W` is:
 
 `U1b`, an honest server's sustained egress on the floor device, still has no value
 (`SHT-5`). It may lower this ceiling, and it cannot raise it.
+
+### 9.3a `U1b`'s run, pre-registered — committed before it starts (2026-10-02)
+
+The floor device is available, so `SHT-5`'s measurement can run. This fixes what it
+measures and how it is read, before any observation exists. The design owner can
+correct an input here; nobody corrects it after the reading.
+
+**What `U1b` asks, in bytes.** Two things of an honest `P` on the Pi 4:
+
+1. *One read.* A witness's read of the heaviest shard completes inside the deadline
+   when the floor device is the server.
+2. *An epoch of reads.* `reads per epoch × heaviest shard ≤ sustained egress × epoch`
+   (§3's bound, restated).
+
+**The rig is W₂'s instrument with the host changed.** `pd-f2-measure`, the soak arm
+alone, the size ladder (§4.1a's three objects), onion PoW on, fresh circuits for every
+fetch, 24 hours.
+
+- **On the floor device:** one persona behind its own pinned Tor (one, because one on
+  the wire is the conformant shape), and the reader behind another Tor on the same
+  device. The binary is built on the device from this PR's commit.
+- **Control, same window:** the identical run, same commit and settings, on the
+  internal node the W₂ runs used, started at the same time. §10.6 item 2 is why: two
+  days differ by more than two postures did, so a floor-device figure set against
+  W₂'s would not be attributable to the device. Against a control in its own window
+  it is.
+- **Each host runs its platform's pinned Tor:** 0.4.9.12 on the floor device (the
+  `linux-aarch64` pin, an alpha Expert Bundle, because the stable line ships none) and
+  0.4.9.11 on the node. That difference is the device as it ships, so it is inside
+  "the host changed" and the run does not separate it from the hardware. Found while
+  setting up, before any observation.
+
+**The bias, stated.** The floor device carries both ends: reader, server and two Tors
+share its four cores, and both hosts share one uplink. Each of these works against
+the device. So both verdicts below are one-sided: a pass holds a fortiori for the
+device as a server alone, and a fail is **not** a verdict.
+
+**Read 1 — one read.** §10.1's analysis, unchanged, on the device's file: the miss
+rate at the 1× object with its 95 % Wilson interval, against 0.30.
+
+- Interval wholly at or under 0.30: `U1b` does not lower `W`'s ceiling on this leg.
+- Anything else: no verdict. The rig cannot tell the device as a reader from the
+  device as a server. It triggers the split rig (below).
+
+**Read 2 — an epoch of reads.** From the device's 1× arm, with one read always in
+flight:
+
+- `c = completions / Σ elapsed` reads per second. A miss costs the time it took and
+  delivers nothing.
+- capacity `R = c × 1,200,000` reads per epoch (`settlement_epoch_blocks` = 10,000
+  blocks of 120 s).
+- load `3 × H`: three challenge reads per drawable pair per epoch
+  (`CHALLENGES_PER_PAIR_PER_EPOCH`), `H` the pairs one `P` holds.
+- **`H` is pre-registered at 4,096**, the list bound (`archival_max_holdings_shards`),
+  so the load is 12,288 reads. That is the most one record can hold, which is the
+  conservative reading. The honest-operator holding §5 owes is the design owner's and
+  is not stated yet, so the reading also reports `R / 3`, the `H` at which this leg
+  binds.
+- `R ≥ 12,288`: `U1b` does not bind at the list bound. One read in flight is a floor
+  on capacity, since the server admits concurrent reads and `SPIKE-F-11` found
+  reader concurrency does not materially degrade a persona.
+- `R < 12,288`: no verdict, for the same reason as read 1. It triggers the split rig.
+- Organic and band-2 reads have no authority in the tree, so they are not in the
+  verdict. The headroom `R / 12,288` is reported as the room left for them.
+
+**Reported, not judged.**
+
+- The device against the control, by `pd-f2-diff` with §4.1a's margins: whether the
+  host moved any of the nine statistics.
+- The device's fit and the ceiling it gives, by `pd-f2-ceiling`, with §4.1a's
+  rejection thresholds.
+- The control against W₂'s PoW-on window: one more between-day figure.
+
+**Void, rerun and not read.** Either run exits non-zero or before its 24 hours; a
+host reboots; an exchange is refused (the tool voids the arm); another claim's load
+lands on either host during the window; the two runs' start times differ by more
+than ten minutes.
+
+**The split rig, if triggered.** The server alone on the floor device (`serve-only`)
+and readers on other hosts. The reader half does not exist since `SF` (a) made the
+reader `shekyl-p-fetch`. It is built and pre-registered then, with a concurrency
+sweep, and `W` stays provisional until it is read.
+
+**Direction.** This can only lower `W`'s ceiling. If both reads pass, `W` rests on
+no open measurement and goes to the Round-2 gate as it stands.
 
 ### 9.4 Soft upward pressure: bookkeeping
 
@@ -1450,6 +1570,9 @@ The rows §3 keeps restate directly:
 
 > **`W ∈ [ max(149.4 KB, 149.4 KB / τ),  U1a ceiling ]`**, with the ceiling between
 > ≈ 4.49 MB (pessimistic) and ≈ 16 MB (optimistic) until the multi-size W₂ run pins it.
+
+**Read 2026-10-02 (§10.5):** the run is in. `U1a` does not bind at 3 MB in any window
+read, and the interval above is superseded by that section.
 
 | `τ` | floor | against the pessimistic ceiling (4.49 MB) |
 |---|---|---|
@@ -1476,12 +1599,570 @@ inside the range, but the rule picks 3 MB, and 3 MB also improves `U1a`'s margin
 (≈ 81 s against ≈ 90 s).
 
 It is re-pinned at the Round-2 gate, like `T` was, by:
-- **the overshoot tolerance `τ`**, Rick's input. It sets the floor;
+- **the overshoot tolerance `τ`**, Rick's input. It sets the floor — **5 %, confirmed
+  2026-10-01 (§10.2)**, so the floor is 2.99 MB and no longer an open input;
 - **the multi-size W₂ run** (§4.1, pre-registered). It separates `t_fixed` from `v`
-  and turns the ceiling into one number;
+  and turns the ceiling into one number — **read 2026-10-02 (§10.5): `U1a` does not
+  bind**;
 - **the `U1b` server-egress measurement** (`SHT-5`). It may lower the ceiling.
 
 **Constant rename, owed in the build, not here.** `archival_shard_tx_count` (the JSON
 key), `shekyl_types::SHARD_TX_COUNT` and its generated C++ name become an
 archival-length constant in bytes. The unit is in the name, so the rename is part of the
 cutover (the FOLLOWUPS build row).
+
+---
+
+## 10. Rulings of 2026-10-01
+
+Four rulings from the design-owner lane, relayed by Rick on 2026-10-01 and recorded as
+given. Each premise that names code was checked at source on `dev@931da263e` before it
+was written here. Two of §10.3's premises did not hold as stated; the ruling's
+conclusion does, and the corrected premises are recorded with it.
+
+### 10.1 The target witness-miss rate — RULED
+
+> The target witness-miss rate is the `p_attempt` the failure window ships against. `W`'s
+> ceiling is the largest `W` at which the measured all-cause single-attempt miss, in the
+> governing regime (soak, PoW on), stays ≤ that `p_attempt`. If the measured miss at
+> 3,000,000 B exceeds it, either `W` comes down or the window is recalibrated on the
+> measured `p`. Either way it comes back to the design owner.
+
+**Why it is not a free choice.** The failure window's floor targets were calibrated on
+a per-attempt read failure of `p_attempt = 0.30` with one retry
+(`rust/shekyl-economics-sim/src/mn_feasibility.rs`, `default_sources`), a stand-in
+measured without PoW. A witness miss **is** that per-attempt failure. A ceiling set
+against any other rate would have two derivations disagreeing about one event.
+
+**What this supersedes in §4.1a, and nothing else:**
+
+- **The governing arm.** §4.1a said the fit reads the restart's PoW-off soak, and that
+  the PoW comparison "does not enter `W`'s fit". Serving personas publish with PoW on,
+  so the ruling judges that regime: **the fit reads the interleaved run's PoW-on
+  file.** The restart's soak is fitted the same way and reported beside it as the
+  PoW-off reading.
+- **The governing percentile.** §4.1a named "the soak p99, until the miss rate replaces
+  it". It is replaced: an attempt **misses** when it does not return the whole object
+  within 120 s — any outcome other than `ok`, or an `ok` slower than 120 s. With a
+  target of 0.30, the governing statistic is the time by which 70 % of **all**
+  attempts have completed, a miss counted as never completing.
+
+Everything else in §4.1a stands: the objects, the harness, the host, the margins and
+verdicts of the PoW comparison, the form `t = t_fixed + bytes / v`, and the two
+model-rejection thresholds.
+
+**The analysis, fixed now.** It is written before any PoW-on observation has been read
+(§"What had been read", below).
+
+1. **The decision at the provisional `W`, with no model.** The heaviest shard at
+   `W = 3,000,000 B` is 3,149,400 B, which is smaller than the 1× object
+   (3,326,976 B). Completion within a deadline cannot improve as an object grows, so
+   the 1× object's miss rate bounds the heaviest shard's from above. Read the PoW-on
+   miss rate at the 1× object with its 95 % Wilson interval:
+   - upper bound ≤ 0.30: the provisional `W` stands, and `U1a` does not bind;
+   - lower bound > 0.30: `U1a` binds, and it goes back to the design owner;
+   - otherwise: *inconclusive*, reported with the interval, and nothing is re-pinned.
+2. **The ceiling as a number.** Fit `t₇₀(bytes) = t_fixed + bytes / v` over the three
+   sizes, where `t₇₀` is the 70th percentile of all attempts with a miss counted as
+   infinite. `W_max = v · (120 s − t_fixed) − 149,400 B`. §4.1a's rejection thresholds
+   apply unchanged. If a size's miss rate is already above 0.30, its `t₇₀` is infinite
+   and the model is not fitted: item 1 has then already answered.
+   Above 3,326,976 B the number is an **extrapolation**, because that is the largest
+   object the production frame serves, and it is labelled as one.
+3. **Fixed against size-driven misses**, per size: circuit failures (`circuit`) apart
+   from transfer failures (`timeout`, `truncated`, and an `ok` past 120 s). This is
+   what says whether a smaller `W` would help at all: only the second kind shrinks
+   with the object.
+4. **The stand-in.** The PoW-on miss rate at the 1× object is reported as the measured
+   value the 0.30 stand-in was standing in for. Whether the failure window is
+   recalibrated on it is the design owner's.
+
+**What had been read when this was written (2026-10-01).** The restart's soak ended at
+11:33 UTC with exit 0 and 1,466 observations, and its summary had been read, after the
+ruling arrived and before this text: PoW **off**, miss rates 16.0 %, 16.6 % and 20.0 %
+at the ¼×, ½× and 1× objects (circuit failures about 15 % at every size), and a 1× p99
+of 122 s. No model had been fitted. Of the interleaved run, started one second later,
+only its line counts had been read (about 170 per posture); no PoW-on outcome or timing
+had. So the arm the ruling makes governing was unread when its analysis was fixed, and
+the PoW-off summary above is recorded so a reader can weigh that for themselves.
+
+### 10.2 The overshoot tolerance — CONFIRMED at 5 %
+
+It depends on no measurement. Its one material effect, `U1a` being judged at
+`W + 149,400 B` rather than at `W`, is already in the ceiling (§9.3, §10.1 item 1).
+So §9.2's floor is 2.99 MB and `W = 3,000,000 B` is its output; `W` stays provisional
+only on the ceiling.
+
+### 10.3 How a pruned form supplies its archival length — option (iv), RULED
+
+> Pruned-form length: option (iv). C++ passes full segments to Rust over FFI; Rust
+> measures and computes the txid. No C++ length measurement; the FFI entry has no length
+> parameter.
+
+**The premise that holds, as verified.** The C++ store never discards a transaction's
+prunable or `pqc_auths` rows: the stripe engine and the C++ tx-data prune are deleted
+(`src/blockchain_db/lmdb/db_lmdb.cpp`, the V15 note), and those rows go only when the
+transaction itself is removed (`remove_transaction_data`). So every C++ txid
+computation has the full segments in hand.
+
+**Two premises corrected at source.** The ruling was given with both; neither changes
+its conclusion, and both change what the build touches.
+
+- *"`get_pruned_transaction_hash` survives only in a comment."* It is a defined
+  function (`src/cryptonote_basic/cryptonote_format_utils.cpp`) with one production
+  caller, the P2P block-entry path
+  (`src/cryptonote_protocol/cryptonote_protocol_handler.inl`,
+  `make_block_connect_supplement_from_block_entry`). **That caller is unreachable:**
+  the new-block path passes `allow_pruned = false`, and the sync path passes the
+  entry's own `pruned` flag only for entries that have already passed the response
+  handler's check, which drops a peer for any pruned entry ("Pruned spans are never
+  requested"). So no reachable C++ path computes a pruned txid, which is the claim
+  the ruling needs. **The build therefore deletes the function and the
+  `allow_pruned` arm** (rules 15 and 16) instead of porting them to FFI.
+- *"Pruned forms exist only in the Rust store."* They also cross one wire: the daemon
+  RPC's pruned `get_transactions`, which the wallet's block fetch and the daemon
+  console read, each rebuilding the txid from a pruned body and a supplied prunable
+  digest. C++ already hands that path the pruned body **and** the full prunable bytes
+  (`TxEntryFfi`), so the Rust RPC server measures the length there, at serve time,
+  and the reply carries it as a supplied component beside the digest. That is option
+  (iv) as posed, and it needs no C++ change. A length a daemon lies about yields a
+  txid the block does not list.
+
+**What the build is, with those corrected.** One mixer in Rust takes the length. C++
+`calculate_transaction_hash` becomes one FFI call that passes segments and receives
+32 bytes. The dead pruned-txid function and branch are deleted. The pruned RPC reply
+gains the length; the wallet and the console supply it. The Rust store supplies it
+from `txs_archival_len`. The interim gate `check_archival_len_source.py` is deleted
+with its workflow step, as it was built to be.
+
+**As built (the txid-length cutover; the lane's choices, stated for ratification).**
+The ruling fixes *that* the length is bound and *who* measures it. These it left to
+the build:
+
+- **The word.** The length is one more 32-byte word after the prunable digest: a
+  `u64`, little-endian in the low 8 bytes, the other 24 zero. Fixed-width so the
+  preimage stays a sequence of words; little-endian because every other integer the
+  wire carries is.
+- **Three arities.** A coinbase mixes three words as before and takes no length — it
+  carries no archival good, and the genesis ids do not move. The serve-credit form
+  mixes four (prefix, base, prunable, length), a spend five (with the `pqc_auths`
+  digest). The word counts differ, so no body of one arity shares a preimage with a
+  body of another.
+- **The FFI entry takes byte ranges, not a transaction.**
+  `shekyl_txid_from_segments` receives the four regions of the blob C++ just
+  serialized, cut at the offsets its serializer recorded, with the authorization
+  count and whether the first input is a spend. Rust parses nothing, so the call
+  cannot fail on content: the daemon names a body before it validates it, and an
+  entry that could refuse a malformed body would leave it without the id the C++
+  mixer used to give it. Rust hashes the ranges and measures the last two.
+- **Of the four C++ sites the Rust-half PR listed as computing a txid part,** two are
+  resolved here — `calculate_transaction_hash` is the FFI call, and
+  `get_pruned_transaction_hash` is deleted. The other two,
+  `calculate_transaction_prunable_hash` and `get_transaction_prefix_hash`, no longer
+  feed a txid: nothing in C++ hands a digest to a mix. They remain as plain `keccak`
+  over a byte range for their other consumers (the `txs_prunable_hash` row and the
+  pool facts; the signing and proof contexts) and are **not** routed through FFI. A
+  region digest has no second definition to drift — which bytes it covers is the
+  serializer's fact either way, and the parity pins hold it. *Reopens if* a C++
+  region digest gains a term that is not the bytes' hash.
+  **Overruled for the prunable digest (design owner, 2026-10-02):** it is a txid
+  operand a wallet mixes, so it is computed where the mixer is.
+  `calculate_transaction_prunable_hash` now hands its range to Rust
+  (`shekyl_tx_prunable_hash`) and its separate serialize path is deleted.
+  `get_transaction_prefix_hash` stays C++ and is recorded as transitional
+  ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md) §F).
+- **The pruned RPC reply.** `get_transactions` entries gain a required
+  `archival_len` (`CORE_RPC_VERSION` 3.39). The Rust server measures it from the
+  pruned half and the prunable half LMDB hands it, and fails the reply rather than
+  guess when it cannot. LMDB never drops a prunable half in place (its tx-data prune
+  was removed, schema v15), so that refusal is unreachable on today's daemon.
+  `shekyl-chain-store` does drop them and keeps `txs_archival_len` for this: when it
+  backs the RPC, its transaction slot carries the row's length. That is the engine
+  swap's to build, named on FOLLOWUPS.
+- **Both stores' versions move, though no layout does.** LMDB `VERSION` 15 → 16 and
+  the redb store's `SCHEMA_VERSION` 20 → 21. Each store indexes transactions by txid
+  and lists them by txid in every block, so a datadir written before the cutover
+  names its spends by ids no current node computes. The version pin is what refuses
+  it at open, as LMDB v14 did for the stale tree; without it the daemon serves bodies
+  a wallet refuses, and the redb store halts at its first skeleton rebuild as
+  corruption. The LMDB bump is a second C++ change beyond the FFI call — a constant
+  and a comment, no table, cell or archival logic.
+- **What C++ still witnesses.** With one mixer, the C++ parity tests no longer derive
+  the mix a second time. They pin what decides which bytes reach it: the serializer's
+  bytes, the three offsets, the prunable digest, and that the bytes after
+  `pqc_auths_offset` number the pinned length. The mix itself is held on the Rust
+  side by a derivation spelled out beside the mixer.
+
+### 10.4 `SHT-8`'s residues have owners
+
+- **`g(age)`'s segment-keyed no-segment branch** is re-keyed in the shard-count
+  cutover ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md)), as a
+  Rust-side row. **LANDED 2026-10-01:** `ShardClose::{Open, ClosedAt(h)}` in
+  `shekyl-archival-retention`, `h` from the fold via
+  `shekyl_chain_rules::shard_close` on a `ClosedUniverse` (the count and the
+  parent it was read through); the C++ pair crosses unchanged and is folded by
+  `ShardClose::from_wire`, written back by `ShardClose::to_wire` (CEN-L10). Falsifier (i) run for the surface
+  (§2's table), does not fire.
+- **`escalation_knee_n`** is re-derived by the sim lane, per `SCC-Q2`. **LANDED
+  2026-10-01**: `2,250,000` closed shards, the middle of the re-swept band
+  (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13).
+
+### 10.5 The W₂ reading — 2026-10-02
+
+**`W = 3,000,000 B` stands on `U1a`.** With PoW on, 13 of 319 fetches of the 1× object
+missed: 4.08 %, 95 % Wilson interval 2.40 % to 6.85 %. The whole interval is under 0.30,
+which is §10.1 item 1's first branch: the provisional `W` stands and `U1a` does not
+bind. `W` is now provisional only on `U1b` (`SHT-5`).
+
+This subsection is the reading. §4.1a and §10.1 above are the analysis as it was fixed
+beforehand, and are not edited.
+
+**The run.** The interleaved run started 2026-10-01 11:33:10 UTC and ended 2026-10-02
+11:34:01 UTC with exit 0: 1,910 fetches, 955 per posture, 318, 318 and 319 per object
+per posture (§4.1a expected about 230). The observations are in
+[`docs/benchmarks/`](../benchmarks/):
+
+| File | Run |
+|---|---|
+| [`w2_ladder_interleaved_pow_on_20261001.tsv`](../benchmarks/w2_ladder_interleaved_pow_on_20261001.tsv) | the interleaved run, PoW on — **the governing arm** |
+| [`w2_ladder_interleaved_pow_off_20261001.tsv`](../benchmarks/w2_ladder_interleaved_pow_off_20261001.tsv) | the interleaved run, PoW off |
+| [`w2_ladder_soak_pow_off_20260930.tsv`](../benchmarks/w2_ladder_soak_pow_off_20260930.tsv) | the restart's soak, PoW off, one persona (2026-09-30 11:26 to 2026-10-01 11:33 UTC) |
+
+Every number below comes from two commands in `rust/`, each a pure function of the
+files it is given:
+
+```text
+cargo run --release -p shekyl-sp-t3-spike --bin pd-f2-ceiling -- <file>
+cargo run --release -p shekyl-sp-t3-spike --bin pd-f2-diff -- <baseline> <treatment>
+```
+
+`pd-f2-ceiling` is §10.1's analysis (`shekyl_sp_t3_spike::ceiling`), written after the
+run and before this section, on the crate's own row parser and percentile rule.
+
+**Items 1 and 3 — the governing arm, per object.** A miss is any outcome but `ok`, or an
+`ok` slower than 120 s.
+
+| Object | n | Missed | 95 % interval | Circuit | Transfer | `t₇₀` |
+|---|---|---|---|---|---|---|
+| 831,744 B | 318 | 4 (1.26 %) | 0.49 – 3.19 % | 2 | 2 | 7.70 s |
+| 1,663,488 B | 318 | 9 (2.83 %) | 1.50 – 5.29 % | 4 | 5 | 10.47 s |
+| 3,326,976 B | 319 | 13 (4.08 %) | 2.40 – 6.85 % | 2 | 11 | 14.07 s |
+
+Transfer misses grow with the object (2, 5, 11); circuit misses do not (2, 4, 2). So a
+smaller `W` would shave the transfer leg only, and at these rates there is little of it
+to shave. No exchange was refused, in any file.
+
+**Item 2 — the ceiling as a number.** The model is kept:
+`t₇₀ = 5.90 s + bytes / 400,358 B/s`, the ½× point 6.1 % of its own value off the line
+through the ends (limit 15 %). `W_max = 45,532,062 B`. That is an **extrapolation**,
+about fourteen times the largest object the production frame serves. It says the
+ceiling is nowhere near 3 MB. It does not say where the ceiling is.
+
+**Item 4 — the stand-in.** The failure window was calibrated on `p_attempt = 0.30`.
+The measured single-attempt miss at the 1× object, PoW on, is **0.041** in this window.
+Whether the window is recalibrated on a measured value is the design owner's, and is
+posed here, not decided. One thing a recalibration has to weigh is the next paragraph.
+**Answered 2026-10-02 (§10.6): 0.30 is retained, re-grounded as a bound the
+measurements support.**
+
+**The PoW-off readings beside it**, fitted the same way, as §10.1 requires:
+
+| Run | 1× missed | 95 % interval | Fit `t₇₀` | Off the line | `W_max` (extrapolated) |
+|---|---|---|---|---|---|
+| interleaved, PoW on | 13 / 319 (4.08 %) | 2.40 – 6.85 % | 5.90 s + bytes / 400,358 B/s | 6.1 % | 45.5 MB |
+| interleaved, PoW off | 18 / 319 (5.64 %) | 3.60 – 8.74 % | 5.08 s + bytes / 247,532 B/s | 7.7 % | 28.3 MB |
+| restart's soak, PoW off | 98 / 489 (20.04 %) | 16.73 – 23.82 % | 12.09 s + bytes / 71,606 B/s | 3.7 % | 7.6 MB |
+
+**The verdict does not depend on which window is read.** The soak a day earlier missed
+five times as often, and its interval is still wholly under 0.30. Its misses were
+mostly circuit failures — 73, 71 and 73 at the three sizes, about 15 % at each — which
+no shard length changes. What does not exist is a PoW-**on** reading on a day like the
+soak's. If PoW on behaved that day as PoW off did, the miss would be about 0.20.
+
+**The PoW comparison (§4.1a), as judged.** PoW-off baseline, PoW-on treatment, inside
+one window. Margins: 3 points on completion, 10 % of the PoW-off value on a
+percentile.
+
+| Object | Completion | p50 | p90 |
+|---|---|---|---|
+| 831,744 B | 0.972 → 0.987, inconclusive | 6.53 → 6.42 s, immaterial | 19.98 → 19.65 s, inconclusive |
+| 1,663,488 B | 0.975 → 0.975, immaterial | 8.59 → 8.02 s, inconclusive | 28.38 → 19.83 s, inconclusive |
+| 3,326,976 B | 0.950 → 0.962, inconclusive | 11.29 → 11.10 s, inconclusive | 49.16 → 27.48 s, **MATERIAL** |
+
+- **No measurable PoW cost; the sign is unresolved** (the finding as ruled, §10.6).
+  No judged statistic is materially worse with PoW on. That is weaker than "PoW
+  costs nothing", and the intervals say how much weaker: on eight of the nine the
+  interval excludes a cost larger than the margin; on the ninth, p90 at the ¼×
+  object, it does not (6.8 s faster to 4.8 s slower, against ±2.0 s), so there a
+  cost is neither shown nor ruled out.
+- **One statistic is material, and in PoW's favour:** the 1× p90 is 21.7 s lower with
+  PoW on (95 % interval −29.6 to −5.7 s against a margin of ±4.9 s). §4.1a sends a
+  material PoW *cost* to Rick as a `SPIKE-F-15` finding; this is a material difference
+  the other way, and goes the same route (`SP_T3_SKELETON_MEASUREMENT.md` §19b).
+- **It is not attributed.** Each posture is two onions in one window, and an
+  observation carries no persona (by design: nothing to correlate), so posture cannot
+  be separated from where two onions' circuits happened to land. `SPIKE-F-18` found
+  that a service at zero effort publishes no PoW parameters, so a client's fetch has
+  nothing PoW-specific in it; that makes a PoW *benefit* an unlikely cause and names
+  no other.
+
+**Secondary — two PoW-off windows a day apart** (the restart's soak against the
+interleaved run's PoW-off file). Eight of the nine judged statistics are material:
+completion is about 13 to 14 points higher at every size on the second day, p50 is 28
+to 42 % lower, p90 is lower at every size (inconclusive at ½×). That is larger than
+anything between the postures, which is why §4.1a compared them inside one window.
+**Reported and not attributed**, as registered. Two things differed besides the day:
+the soak ran one persona and the interleaved run four, and the idle wallet-RPC process
+§4.1a records on the soak's host was stopped by its owner about six and a half hours
+into the interleaved run. Host state at each window is in the internal usage ledger.
+
+**What this replaces.** §9.3 held `U1a`'s ceiling as an interval, 4.49 to 16 MB, from
+one object size. It is replaced by a decision that needs no model (item 1) and by
+fitted maxima of 7.6 MB in the worst window read and 45.5 MB in the governing one,
+both extrapolations past 3.33 MB. `L`'s fetch span is not re-derived in this
+subsection: with PoW off the fitted rate is three and a half times higher on the
+second day than on the first, so which day to provision from is a ruling, not a
+reading. §10.6 item 3 gives it: the worse day.
+
+### 10.6 Rulings on the reading — 2026-10-02
+
+Three rulings from the design-owner lane on §10.5, made on the PR that carries it
+(#932, reviewed at `5bd974090`) and relayed by Rick the same day. Each is recorded as
+given, then grounded.
+
+**1. `p_attempt = 0.30` is retained, re-grounded from stand-in to measured-supported.**
+
+> `p_attempt = 0.30` is retained as the window's calibration, now measured-supported:
+> worst observed day 0.20 (upper 0.238); typical PoW-on 0.041. Reopens if any measured
+> window's upper bound exceeds 0.30. Tightening requires a multi-day series that
+> characterizes the bad-day tail, not a single good window.
+
+The reason is the direction of the error. The failure window has to hold on a bad Tor
+day. Calibrated on 0.04, a day like the soak's — 20 % of fetches missed, three
+quarters of those circuit failures that no shard length changes — would push honest
+holders through the window and slash them falsely. So the value does not move, and what changes is what it
+is: a bound three windows sit under, with the condition that reopens it.
+
+- The constant's label says so where it is defined
+  (`rust/shekyl-economics-sim/src/mn_feasibility.rs`, `MissSources::p_attempt` and the
+  report it prints). No value changes, so no sim verdict moves.
+- *Reopens:* a measured window whose 1× miss interval has its upper bound above 0.30.
+- *Does not reopen it:* a good window. Tightening is a multi-day question.
+
+**2. The PoW finding: no measurable PoW cost; sign unresolved.**
+
+> Record it as showing no cost, with the sign unresolved. Variation between days is
+> larger than variation between postures, so this design can't attribute the
+> PoW-favourable p90 difference. "No measurable PoW penalty" is the finding. "PoW
+> helps" isn't one.
+
+Grounded on the two comparisons §10.5 reports: the difference between the two PoW-off
+days is larger than the difference between the postures on eight of the nine judged
+statistics — every one but the 1× p90, which is the one the posture comparison found
+material. So the favourable p90 is recorded as unattributed, and nothing in this record
+says PoW helps. §10.5's wording and `SP_T3_SKELETON_MEASUREMENT.md` §19b carry it that
+way.
+
+**3. `L`'s fetch span is re-derived per byte against the worse day (`SHT-7`).**
+
+> Re-derive it against the worse day; don't wait. `L`'s own ruling says the asymmetry
+> decides the direction, and it errs large. The pessimistic per-byte rate is the right
+> input, and more days can only refine it.
+
+`L = 4`'s span was sized on "~20 s for 3.33 MB", a burst floor from a null result
+(`ARCHIVAL_SHARD_FETCH.md`, `SF-D8`). Per byte, on the restart's PoW-off soak
+(2026-09-30), at the heaviest shard `W + 149,400 B = 3,149,400 B`:
+
+| Reading, worse day | Line | At 3,149,400 B |
+|---|---|---|
+| governing percentile (`t₇₀`, all attempts) | 12.09 s + bytes / 71,606 B/s | **56.1 s** |
+| p90 of completions | 20.73 s + bytes / 74,639 B/s | 62.9 s |
+| p99 of completions | 54.94 s + bytes / 47,851 B/s | 120.8 s |
+
+So the span's fetch component is **56.1 s at the governing percentile**, nearly three
+times the retired figure for fewer bytes, and a single attempt's p99 fills one block.
+
+`L`'s ruling allots **two blocks, 240 s, to fetch-plus-retry**, and states its own
+falsifier on the p99 of that: under two minutes, drop to 3; over six, the retry budget
+is too generous and `L` must not track it upward. Read on the worse day, one attempt
+and one retry of the 1× object — which is larger than the heaviest shard, so it bounds
+it from above — over every ordered pair of that day's 489 attempts, a miss costing what
+it took and at most the 120 s deadline:
+
+- both attempts miss in **4.02 %** of reads;
+- reads that complete do so by 24.9 s (p50), 85.4 s (p90) and **149.7 s (p99)**.
+
+**`L = 4` holds.** 149.7 s is over two minutes and under six, so neither arm of the
+falsifier fires, and it is inside the two blocks. The 2026-09-16 "drop-to-3 candidate"
+was read off single-attempt p99s and is withdrawn: on this day the retried read's p99
+is two and a half minutes, and even in the PoW-on window it is 128.7 s.
+
+Two blocks are also exactly the most a read of one attempt and one retry can take when
+each ends at the 120 s deadline. A second retry can run to 360 s: past the two blocks,
+and exactly `L`'s six-minute line. This reading does not say whether that is inside
+`SF-D6`'s retry budget; §10.7 does. Whatever the budget, `L`'s own ruling stands: a
+budget that outruns the span is the budget's defect, not a reason to raise `L`.
+
+This closes `SHT-7`'s circularity: `L`'s span no longer rests on a byte count from the
+retired segment, and `W` was not selected inside a span that was sized on it. More
+days refine the rate; under the ruling they move `L` only through the falsifier.
+
+Reproduce, from `rust/`:
+
+```text
+cargo run --release -p shekyl-sp-t3-spike --bin pd-f2-ceiling -- ../docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv
+```
+
+### 10.7 Close-out rulings — 2026-10-02
+
+From the design-owner lane on the close-out of the PR that carries §10.5 and §10.6
+(#932), relayed by Rick the same day. Two confirm what the record already does; three
+add to it.
+
+**Confirmed, no change.** The recalibration row's removal from `FOLLOWUPS.md` is
+accepted: the question is answered, and its reopening condition lives in §10.6 item 1
+and at the constant. The other confirmation is that §10.3 had recorded the C++
+prunable digest as an as-built choice for ratification; the note marking it overruled
+there stands.
+
+**1. The sim credits one attempt per read, deliberately.**
+
+> Keep the value 1, deliberately. Rename the field to `attempts` (the code computes
+> p^attempts) and fix the doc. Bad-day misses were mostly size-independent circuit
+> failures, correlated within a window, so a retry is not an independent draw and
+> crediting it (p²) overstates protection. The protocol's retry is margin, not
+> calibration.
+
+Grounded: `MissSources::retries` was the exponent in `read_failure`
+(`rust/shekyl-economics-sim/src/mn_feasibility.rs`), so the field held attempts, and
+its default of 1 was described as "single-retry". It is `attempts` now, with the
+reason at the field and in the report it prints, and
+`the_calibration_credits_one_attempt_per_read` pins it. On the worse day 73 of the 98
+misses at the 1× object were circuit failures, and the circuit share was about 15 % at
+every size (§10.5). No value changed, so no sim verdict moved.
+
+**2. `SF-D6`'s retry budget is 2 retries (three attempts).**
+
+The criterion as given:
+
+> The largest retry count whose p99 completion fits within `L = 4`'s fetch span on the
+> worse PoW-off day at `W = 3,000,000 B` + 149.4 KB. One retry completes by 149.7 s;
+> compute whether a second fits.
+
+A second fits. So does a third, and that is the finding: **the criterion does not
+select a count.** On the worse day (the 2026-09-30 soak, 489 attempts at the 1×
+object, which is larger than the heaviest shard and so bounds it from above), a miss
+costing what it took and at most the 120 s deadline:
+
+| Retries | Completed reads, p50 | p90 | p99 | Longest possible read |
+|---:|---:|---:|---:|---:|
+| 0 | 19.0 s | 62.9 s | 101.9 s | 120 s |
+| 1 | 24.9 s | 85.4 s | 149.7 s | 240 s |
+| **2** | 25.4 s | 95.6 s | **190.4 s** | **360 s** |
+| 3 | 25.4 s | 99.8 s | 202.9 s | 480 s |
+
+Every row's p99 is inside the 240 s span. The p99 stops moving because few reads get
+that far: in this reading a fourth attempt is reached by under 1 % of them, so it
+cannot set a 99th percentile. In the two windows of 2026-10-01 a second retry's p99 is 129.5 s (PoW on)
+and 133.0 s (PoW off).
+
+What bounds the count is the last column, which is arithmetic on the deadline and not
+a measurement. `L`'s ruling names six minutes as the line past which the budget is too
+generous (`ARCHIVAL_SHARD_FETCH.md`, `SF-D8`). Three attempts can take exactly six
+minutes and no more. Four can take eight.
+
+**Ruled (Rick, 2026-10-02), on that table: 2 retries.** The rule, so that a later day
+is read the same way:
+
+> The retry budget is the largest count whose retried read completes inside `L`'s
+> fetch span (240 s) at p99 on the worst day measured, **and** whose longest possible
+> read is not past `L`'s six-minute line.
+
+- The second leg holds on every day, including one on which the assigned `P` stalls
+  each attempt to the deadline. So the budget cannot trip `L`'s upper falsifier, and
+  `L` is never asked to absorb it.
+- The first leg is the one a measurement can move, and only downward: a day whose
+  two-retry p99 is past 240 s makes the budget 1. That is the **reopening
+  condition**.
+- `SF-D6`'s own requirement on the number is met with room: a `P` that truncates
+  every attempt costs the witness 360 s, three blocks of the 500 in
+  `CHALLENGE_RESPONSE_BLOCKS`.
+- A read that takes all 360 s has used three of `L`'s four blocks, where the ruling
+  allotted two to fetch-plus-retry and one each to skew and margin. At p99 on the
+  worse day it has used 190.4 s. The tail between is what the budget spends of `L`'s
+  margin, and it is bounded.
+
+Two things this does **not** claim:
+
+- **No failure rate.** The table has no "every attempt misses" column on purpose. The
+  tool prints one (0.80 % at two retries), computed as if attempts were independent
+  draws. Item 1 above is the ruling that they are not, so that figure is a floor and
+  nothing is calibrated on it.
+- **No constant.** `shekyl-p-fetch` does not retry; it classifies an outcome and its
+  caller decides (`FetchError::retries_same_p`). The callers that will retry are not
+  built, so the budget is recorded here and in `SF-D6` as their input, and enters the
+  code with them.
+
+The rule is `shekyl_sp_t3_spike::ceiling::retry_budget`, and `pd-f2-ceiling` prints the
+table and the budget for any observations file (the command under §10.6).
+
+---
+
+## 11. Closing state — 2026-10-02
+
+**`W = 3,000,000 B`** (`archival_shard_length_bytes`), provisional on one thing: the
+server-egress measurement `U1b`. It is pinned, together with `L = 4`, at the Round-2
+testnet gate (§5, §9.5).
+
+**Ruled.**
+
+| What | Ruling | Where |
+|---|---|---|
+| The partition domain (`SHT-Q1`) | transactions that carry archival good | §2 |
+| `L2` as a bound on `T` | withdrawn | §3 |
+| The partition unit (`SHT-Q2`) | archival bytes, bound through the txid | §8.6 |
+| The target witness-miss rate | the failure window's `p_attempt`, judged with PoW on | §10.1 |
+| The overshoot tolerance | 5 % | §10.2 |
+| A pruned form's length | measured at serve time from full segments | §10.3 |
+| The prunable digest | computed by the mixer's function; the as-built C++ digest overruled | §10.3 |
+| `p_attempt` | 0.30 retained, measured-supported | §10.6 |
+| The PoW finding | no measurable cost, sign unresolved | §10.6 |
+| `L` | 4 holds on the worse day's per-byte rate | §10.6 |
+| Attempts the sim credits | one, deliberately | §10.7 |
+| `SF-D6`'s retry budget | 2 retries | §10.7 |
+
+**Built.**
+
+- The domain's equivalence test (§2.1).
+- The byte partition: the store half, the txid's length term and the C++ call into the
+  one mixer, the regenerated pins (`ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F).
+- The prunable digest in Rust: C++ finds the range and calls the mixer's function, pinned
+  per transaction class (`prunable_digest_parity`).
+- The canonical-form fixes for `SHT-10` and `SHT-11`.
+- `SHT-8`'s two re-keys and the re-derived `escalation_knee_n` (§10.4).
+- The W₂ size ladder, its three observation files, and the tool that reads them
+  (`pd-f2-ceiling`).
+
+**Closed.** `SHT-1` (the inherited 3.33 MB: `W` is derived in bytes), `SHT-2` (by
+`SHT-Q1`), `SHT-4` (`U1a` is read and does not bind), `SHT-6`, `SHT-7`, `SHT-8`,
+`SHT-10`, `SHT-11`, `SHT-12` (by `SHT-Q2`).
+
+**Handed off.** Each is a `FOLLOWUPS.md` row whose owner is another document:
+
+- `SHT-3`, the stale materialise premise on `SF-D7`: `ARCHIVAL_SHARD_FETCH.md`.
+- `SHT-9`, the fixture consensus refuses: `CHAIN_RULES_SLICE_5.md`.
+- The `PDM-Q-F34` coverage row and its sim arms, and the single home of the production
+  `W`: `ARCHIVAL_PRUNED_DAEMON_MODE.md`.
+- What the txid still takes from C++ until the engine swap — the stored length on the
+  serve path, `get_transaction_prefix_hash`, and the two facts the FFI entry is told:
+  `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F.
+- The retry budget's consumer: the schedulers that retry, unbuilt (`SF-D6`).
+
+**Remaining, in this file's name.**
+
+- **`U1b`** (`SHT-5`): an honest server's sustained egress over Tor on the Pi 4 floor
+  device. It can only lower `W`'s ceiling, and it is the one row the constant waits
+  on. This lane runs it; the run is pre-registered in §9.3a.
+- One row of test coverage, not of the derivation: leg (f) of `SHT-Q1`'s equivalence
+  covers a connected serve-credit transaction only at the row level (§2.1). It waits
+  on `SHT-9`'s fixture.

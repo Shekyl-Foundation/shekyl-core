@@ -10,9 +10,9 @@ use shekyl_archival_retention::{
     as_of_e_served_work, epoch_close_compute, epoch_close_height,
     p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin, BadInterval, CreditPair,
     EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
-    HoldingsKind, LastServedScan, RewardCommit, ShardSet, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-    HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
-    SETTLEMENT_EPOCH_BLOCKS,
+    HoldingsKind, LastServedScan, RewardCommit, ShardClose, ShardSet,
+    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES,
+    MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
 use shekyl_peer_policy::DropVerdict;
@@ -1270,8 +1270,7 @@ fn epoch_close_compute_ffi_full_pipeline() {
     ];
     let rust_shards = [EpochCloseShard {
         shard_id: 7,
-        has_segment: true,
-        freeze_height: 0,
+        close: ShardClose::ClosedAt(0),
     }];
     let rust_pairs: Vec<CreditPair> = (0..4)
         .map(|bond_idx| CreditPair {
@@ -1697,13 +1696,11 @@ impl EmissionFfiFixture {
         let shards = [
             EpochCloseShard {
                 shard_id: EM_SHARD_A,
-                has_segment: true,
-                freeze_height: close - 5_000,
+                close: ShardClose::ClosedAt(close - 5_000),
             },
             EpochCloseShard {
                 shard_id: EM_SHARD_B,
-                has_segment: true,
-                freeze_height: close - 8_000,
+                close: ShardClose::ClosedAt(close - 8_000),
             },
         ];
         let pairs = [
@@ -1825,10 +1822,13 @@ impl EmissionFfiFixture {
                 .collect(),
             ffi_shards: shards
                 .iter()
-                .map(|s| ShekylArchivalEpochCloseShard {
-                    shard_id: s.shard_id,
-                    freeze_height: s.freeze_height,
-                    has_segment: 1,
+                .map(|s| {
+                    let wire = s.close.to_wire();
+                    ShekylArchivalEpochCloseShard {
+                        shard_id: s.shard_id,
+                        freeze_height: wire.freeze_height,
+                        has_segment: u8::from(wire.has_segment),
+                    }
                 })
                 .collect(),
             ffi_pairs: pairs

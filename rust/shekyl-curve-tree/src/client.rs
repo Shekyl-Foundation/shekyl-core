@@ -13,7 +13,7 @@
 //!
 //! The `tx_extra 0x07` parse reuses `shekyl_scanner::extra::Extra` at this
 //! boundary (where blocks are already decoded); the parsed blob is then
-//! validated by [`crate::recon::extract_leaf_hashes`]. No second
+//! validated by [`crate::recon::extract_leaf_commitments`]. No second
 //! `tx_extra` parser is written.
 //!
 //! ## Boundary
@@ -23,8 +23,8 @@
 //! turn raw `tx_extra` into the `0x07` leaf-hash blob and extracts each
 //! output's `O`/`C`/target, then hands this client the reduced
 //! [`BlockLeaves`]. The client owns everything from there: `h_pqc`
-//! resolution ([`recon::extract_leaf_hashes`] + [`recon::per_output_h_pqc`]),
-//! leaf collection + global-index threading ([`recon::collect_block_leaves`]),
+//! resolution ([`crate::recon::extract_leaf_commitments`]), leaf
+//! collection + global-index threading ([`crate::recon::collect_block_leaves`]),
 //! the reference-height → drain-cutoff mapping, store-backed root
 //! reconstruction ([`LeafStore::root_at_count`], CT-1), and the integrity
 //! gate (§3.3): a reconstructed root that does not match the consensus header
@@ -45,7 +45,7 @@
 //!
 //! Membership-path assembly is CT-4 ([`crate::assemble`]); the cached
 //! frozen-`R_k` hot path and persistence are CT-1 ([`crate::store`]). The
-//! CT-2 replay oracle ([`recon::root_from_scalars`]) remains the KAT baseline.
+//! CT-2 replay oracle ([`crate::recon::root_from_scalars`]) remains the KAT baseline.
 //! Production root queries go through [`CurveTreeClient::root_and_depth_at`]:
 //! an in-horizon height answers from its frontier snapshot, and a miss falls
 //! through to the store's count-keyed hot path.

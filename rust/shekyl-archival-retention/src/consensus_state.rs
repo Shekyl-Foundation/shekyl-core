@@ -212,35 +212,144 @@ pub fn credited_work_milli(work_milli: u64, is_member: bool) -> u64 {
 /// Shard age as a **relative depth fraction** in milli at `close_block_height`
 /// (ARCHIVAL_REWARD_ARITHMETIC.md §"Shard age", normalization pinned 2026-06-11).
 ///
-/// `age = floor((close − freeze) / SEB) / floor(close / SEB)` — settlement
-/// epochs since freeze over chain depth in settlement epochs — scaled by
-/// [`WORK_MILLI_SCALE`] and floored, so the result is bounded to
-/// `[0, WORK_MILLI_SCALE]` and `g(age)` spans exactly `[1, 1 + age_weight]`
-/// for the life of the chain (the scale-free shape the Layer-2 band run
-/// sealed; raw epoch counts would grow `g` without bound, concentrating
-/// `Σwork` onto oldest-band holders over mission timeframes).
+/// `age = floor((close − shard_close) / SEB) / floor(close / SEB)` —
+/// settlement epochs since the shard closed over chain depth in settlement
+/// epochs — scaled by [`WORK_MILLI_SCALE`] and floored, so the result is
+/// bounded to `[0, WORK_MILLI_SCALE]` and `g(age)` spans exactly
+/// `[1, 1 + age_weight]` for the life of the chain (the scale-free shape the
+/// Layer-2 band run sealed; raw epoch counts would grow `g` without bound,
+/// concentrating `Σwork` onto oldest-band holders over mission timeframes).
 ///
-/// Zero when the segment is not yet frozen past the close height, before the
+/// `shard_close_height` is the height at which the shard **closed** — on
+/// `SHT-Q2`'s partition, the block whose archival fold first reached the
+/// shard's end, `shekyl_chain_rules::shard_close_height` (no height closes
+/// a shard; bytes do). A shard that is still open has no close height and
+/// no age: callers reach this through [`ShardClose::age_milli`], whose
+/// `Open` arm is zero without calling here.
+///
+/// Zero when the shard closed at or after the close height, before the
 /// first settlement epoch completes (`chain_epochs = 0` — everything is hot
 /// at genesis), or when `settlement_epoch_blocks` is zero.
 #[must_use]
 pub fn shard_age_milli(
     close_block_height: u64,
-    freeze_height: u64,
+    shard_close_height: u64,
     settlement_epoch_blocks: u64,
 ) -> u64 {
-    if settlement_epoch_blocks == 0 || close_block_height <= freeze_height {
+    if settlement_epoch_blocks == 0 || close_block_height <= shard_close_height {
         return 0;
     }
-    let age_epochs = (close_block_height - freeze_height) / settlement_epoch_blocks;
+    let age_epochs = (close_block_height - shard_close_height) / settlement_epoch_blocks;
     let chain_epochs = close_block_height / settlement_epoch_blocks;
     if chain_epochs == 0 {
         return 0;
     }
-    // `age_epochs <= chain_epochs` (freeze_height >= 0, floor is monotone),
-    // so the quotient is bounded by WORK_MILLI_SCALE and the fallback is
-    // unreachable for in-range inputs.
+    // `age_epochs <= chain_epochs` (shard_close_height >= 0, floor is
+    // monotone), so the quotient is bounded by WORK_MILLI_SCALE and the
+    // fallback is unreachable for in-range inputs.
     mul_div_floor(age_epochs, WORK_MILLI_SCALE, chain_epochs).unwrap_or(WORK_MILLI_SCALE)
+}
+
+/// Whether a shard has closed, and where — the one operand `g(age)` reads
+/// (`ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F, the `g(age)` row; `SHT-8` item 2).
+///
+/// On `SHT-Q2`'s partition a shard is a run of `W` archival bytes: it is
+/// **open** while the chain's fold has not reached its end, and **closed at**
+/// the height of the block whose fold did (`shekyl_chain_rules::shard_close_height`,
+/// a binary search over `cumulative_archival_len`). Nothing closes a shard by
+/// height — the `SHT-Q1` falsifier this type makes unrepresentable: there is no
+/// field a height-driven closure could be written into.
+///
+/// An open shard **counts and has no age**: it is credited (its `r_market`
+/// is real; it is served) but `g(age) = 1`. That is the former "no frozen
+/// segment" branch, re-keyed: a shard with no close is not a shard with a
+/// missing row, it is a shard whose bytes are still arriving.
+///
+/// `Open` is a variant, not a sentinel height, for the reason the admission
+/// gather's docs once gave for carrying a presence bit: `0` is a legitimate
+/// close height (the genesis band), so presence cannot be recovered from the
+/// height, and defaulting an open shard to `0` would score the **maximum**
+/// age where the reward path scores zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShardClose {
+    /// The fold has not reached the shard's end: it counts, it has no age.
+    Open,
+    /// The shard closed at this height — the block whose archival fold first
+    /// reached `shard_start(k + 1)`.
+    ClosedAt(u64),
+}
+
+/// The C++ LMDB validator's `(has_segment, freeze_height)` pair, as the
+/// admission ABI, `shekyl_archival_epoch_close_shard`, and the
+/// `archival_claim_source` RPC's `shards[]` rows carry it.
+///
+/// **CEN-L10's divergence site** (`CONSENSUS_STORE_RECONCILIATION.md`
+/// §5.4.1; `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F): LMDB keeps no archival
+/// fold, so the C++ feeds the frozen J-segment's freeze height where the
+/// Rust store reads the archival fold's close height. The field names are
+/// the wire's. Rust reads the pair only through [`ShardClose::from_wire`]
+/// and writes it only through [`ShardClose::to_wire`]. `has_segment` false
+/// is [`ShardClose::Open`] whatever `freeze_height` says — the presence
+/// bit decides. Callers: the admission FFI, the epoch-close decoder, the
+/// submit shim, the engine's RPC decoder, and the KAT parser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShardCloseWire {
+    pub has_segment: bool,
+    pub freeze_height: u64,
+}
+
+impl ShardCloseWire {
+    /// An open shard on the wire. The height column is present because the
+    /// ABI has one; [`ShardClose::from_wire`] ignores it, and
+    /// [`ShardClose::to_wire`] writes this value so an open shard has one
+    /// encoding.
+    pub const OPEN: Self = Self {
+        has_segment: false,
+        freeze_height: 0,
+    };
+
+    /// A shard the wire reports closed at `freeze_height`.
+    #[must_use]
+    pub const fn closed(freeze_height: u64) -> Self {
+        Self {
+            has_segment: true,
+            freeze_height,
+        }
+    }
+}
+
+impl ShardClose {
+    /// The age term [`shard_contribution_micro`] and the admission gather
+    /// feed `g(age)`: zero for an open shard, [`shard_age_milli`] from the
+    /// close height otherwise.
+    #[must_use]
+    pub fn age_milli(self, at_height: u64, settlement_epoch_blocks: u64) -> u64 {
+        match self {
+            Self::Open => 0,
+            Self::ClosedAt(height) => shard_age_milli(at_height, height, settlement_epoch_blocks),
+        }
+    }
+
+    /// Fold a [`ShardCloseWire`] into the operand. The presence bit decides:
+    /// a false `has_segment` is [`Self::Open`] and the height is unread.
+    #[must_use]
+    pub const fn from_wire(wire: ShardCloseWire) -> Self {
+        if wire.has_segment {
+            Self::ClosedAt(wire.freeze_height)
+        } else {
+            Self::Open
+        }
+    }
+
+    /// The wire pair for this operand. [`Self::Open`] encodes as
+    /// [`ShardCloseWire::OPEN`]: the height column is filled, not a close.
+    #[must_use]
+    pub const fn to_wire(self) -> ShardCloseWire {
+        match self {
+            Self::ClosedAt(height) => ShardCloseWire::closed(height),
+            Self::Open => ShardCloseWire::OPEN,
+        }
+    }
 }
 
 /// One market candidate's bond fields at epoch close (LMDB-shape-free gather output).
@@ -264,15 +373,14 @@ pub struct EpochCloseBond<'a> {
     pub bad_intervals: &'a [BadInterval],
 }
 
-/// One shard's registry row at epoch close.
+/// One shard in the epoch-close snapshot: its id and its [`ShardClose`].
 ///
-/// `has_segment` is `false` when no frozen segment row exists for the shard;
-/// its age is then zero (pre-freeze shards accrue no age weighting).
-#[derive(Debug, Clone, Copy)]
+/// An open shard (`ShardClose::Open`) is in the snapshot because a credit
+/// named it; it counts toward `R_market` and scores age zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EpochCloseShard {
     pub shard_id: u64,
-    pub has_segment: bool,
-    pub freeze_height: u64,
+    pub close: ShardClose,
 }
 
 /// One credited (bond, shard) pair at epoch close, as indices into the
@@ -530,10 +638,10 @@ pub fn as_of_e_served_work(
 /// Single source for the per-shard math so the close's denominator and the
 /// verify body's per-shard `ScarcityMismatch` recompute cannot drift (WS-1
 /// §5.5): a shard's contribution is `shard_work_micro(r_market[s], age[s],
-/// age_weight)` with `age[s] = 0` for a shard with no frozen segment. The caller
-/// establishes membership and credit; this computes the term those two facts
-/// imply. The claim carries this micro value per entry; the floor to milli is
-/// deferred to the per-bond aggregate.
+/// age_weight)` with `age[s] = 0` for an open shard ([`ShardClose::age_milli`]).
+/// The caller establishes membership and credit; this computes the term those
+/// two facts imply. The claim carries this micro value per entry; the floor to
+/// milli is deferred to the per-bond aggregate.
 #[must_use]
 pub fn shard_contribution_micro(
     inputs: &EpochCloseInputs<'_>,
@@ -541,15 +649,9 @@ pub fn shard_contribution_micro(
     shard_idx: usize,
 ) -> u64 {
     let shard = &inputs.shards[shard_idx];
-    let age_milli = if shard.has_segment {
-        shard_age_milli(
-            inputs.close_block_height,
-            shard.freeze_height,
-            inputs.settlement_epoch_blocks,
-        )
-    } else {
-        0
-    };
+    let age_milli = shard
+        .close
+        .age_milli(inputs.close_block_height, inputs.settlement_epoch_blocks);
     shard_work_micro(
         r_market_by_shard[shard_idx],
         age_milli,
@@ -657,12 +759,72 @@ mod tests {
         }
     }
 
-    fn shard(shard_id: u64, freeze_height: u64) -> EpochCloseShard {
+    fn shard(shard_id: u64, close_height: u64) -> EpochCloseShard {
         EpochCloseShard {
             shard_id,
-            has_segment: true,
-            freeze_height,
+            close: ShardClose::ClosedAt(close_height),
         }
+    }
+
+    /// `SHT-Q1`'s falsifier for `g(age)`, run (`ARCHIVAL_SHARD_T_DERIVATION.md`
+    /// §2's falsifier table, the `g(age)` row): the age operand is a shard's close, and a
+    /// shard's close is either a height the fold placed or nothing. An open
+    /// shard scores zero age at every height — no height drives it closed —
+    /// and a closed shard's age reads off its close height exactly as
+    /// [`shard_age_milli`] always did. The wire pair marshals the same way:
+    /// the presence bit decides, the height is read only when it is a close.
+    #[test]
+    fn shard_close_age_is_zero_while_open_and_the_fold_height_once_closed() {
+        let seb = 10_000;
+        for at in [0, 9_999, 60_000, u64::MAX] {
+            assert_eq!(ShardClose::Open.age_milli(at, seb), 0, "open at {at}");
+        }
+        assert_eq!(
+            ShardClose::ClosedAt(20_000).age_milli(60_000, seb),
+            shard_age_milli(60_000, 20_000, seb)
+        );
+        assert_eq!(ShardClose::ClosedAt(20_000).age_milli(60_000, seb), 666);
+        // Closed at the height judged, or after it: no age yet.
+        assert_eq!(ShardClose::ClosedAt(60_000).age_milli(60_000, seb), 0);
+        assert_eq!(ShardClose::ClosedAt(70_000).age_milli(60_000, seb), 0);
+        // The genesis band closes at 0 and is the oldest — distinguishable
+        // from an open shard only because `Open` is a variant, not a height.
+        assert_eq!(
+            ShardClose::ClosedAt(0).age_milli(60_000, seb),
+            WORK_MILLI_SCALE
+        );
+        // The presence bit decides. A height beside `has_segment = false`
+        // is unread, and encoding an open shard fills that column with
+        // [`ShardCloseWire::OPEN`] rather than preserving the stale height.
+        // `ClosedAt(0)` stays distinguishable: genesis-band oldest, not open.
+        assert_eq!(
+            ShardClose::from_wire(ShardCloseWire {
+                has_segment: false,
+                freeze_height: 0,
+            }),
+            ShardClose::Open
+        );
+        assert_eq!(
+            ShardClose::from_wire(ShardCloseWire {
+                has_segment: false,
+                freeze_height: 20_000,
+            }),
+            ShardClose::Open
+        );
+        assert_eq!(ShardClose::Open.to_wire(), ShardCloseWire::OPEN);
+        assert_eq!(
+            ShardClose::from_wire(ShardCloseWire {
+                has_segment: false,
+                freeze_height: 20_000,
+            })
+            .to_wire(),
+            ShardCloseWire::OPEN
+        );
+        let closed = ShardCloseWire::closed(20_000);
+        assert_eq!(ShardClose::from_wire(closed), ShardClose::ClosedAt(20_000));
+        assert_eq!(ShardClose::ClosedAt(20_000).to_wire(), closed);
+        assert_eq!(ShardClose::ClosedAt(0).to_wire(), ShardCloseWire::closed(0));
+        assert_ne!(ShardClose::ClosedAt(0).to_wire(), ShardCloseWire::OPEN);
     }
 
     #[test]
@@ -683,8 +845,8 @@ mod tests {
         assert_eq!(out.sigma_work_milli, 1_000);
     }
 
-    /// `work_P(E)` for one bond that credits `n_shards` **fresh** shards
-    /// (`has_segment == false` ⇒ age 0 ⇒ `g_milli == 1000`), each also credited
+    /// `work_P(E)` for one bond that credits `n_shards` **open** shards
+    /// (`ShardClose::Open` ⇒ age 0 ⇒ `g_milli == 1000`), each also credited
     /// by `crowd` other market members so `r_market == crowd + 1`. The victim is
     /// bond 0; the crowd is bonds `1..=crowd`. Every bond is a member
     /// (`join_epoch 0`, no bad intervals, not Foundation).
@@ -699,8 +861,7 @@ mod tests {
         let shards: Vec<EpochCloseShard> = (0..n_shards)
             .map(|i| EpochCloseShard {
                 shard_id: i as u64,
-                has_segment: false,
-                freeze_height: 0,
+                close: ShardClose::Open,
             })
             .collect();
         // Every bond credits every shard ⇒ r_market[s] = crowd + 1.
@@ -775,14 +936,13 @@ mod tests {
             is_foundation_complete_tree: false,
             bad_intervals: &[],
         }];
-        // `has_segment: true` so the age term is LIVE — with it false the age is
-        // zeroed (`epoch_close_missing_segment_zeroes_age_not_scarcity`) and the
-        // fixture would silently exercise a weaker `g`, weakening the arm.
+        // `ClosedAt(0)` so the age term is LIVE — open, the age is zeroed
+        // (`epoch_close_open_shard_zeroes_age_not_scarcity`) and the fixture
+        // would silently exercise a weaker `g`, weakening the arm.
         let shards: Vec<EpochCloseShard> = (0..N_SHARDS)
             .map(|i| EpochCloseShard {
                 shard_id: i as u64,
-                has_segment: true,
-                freeze_height: 0,
+                close: ShardClose::ClosedAt(0),
             })
             .collect();
         let pairs: Vec<CreditPair> = (0..N_SHARDS)
@@ -1053,7 +1213,7 @@ mod tests {
     }
 
     #[test]
-    fn epoch_close_missing_segment_zeroes_age_not_scarcity() {
+    fn epoch_close_open_shard_zeroes_age_not_scarcity() {
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
             is_foundation_complete_tree: false,
@@ -1061,8 +1221,7 @@ mod tests {
         }];
         let shards = [EpochCloseShard {
             shard_id: 7,
-            has_segment: false,
-            freeze_height: 0,
+            close: ShardClose::Open,
         }];
         let pairs = [CreditPair {
             bond_idx: 0,

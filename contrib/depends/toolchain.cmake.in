@@ -4,14 +4,12 @@ SET(CMAKE_SYSTEM_PROCESSOR @arch@)
 SET(CMAKE_BUILD_TYPE @release_type@)
 
 OPTION(STATIC "Link libraries statically" ON)
-OPTION(TREZOR_DEBUG "Main trezor debugging switch" OFF)
 OPTION(BUILD_TESTS "Build tests." OFF)
 
 SET(STATIC ON)
 SET(ARCH "default")
 
 SET(BUILD_TESTS @build_tests@)
-SET(TREZOR_DEBUG @build_tests@)
 
 # where is the target environment 
 SET(CMAKE_FIND_ROOT_PATH @prefix@ /usr)
@@ -27,18 +25,6 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
 SET(LIBUNWIND_INCLUDE_DIR @prefix@/include)
 SET(LIBUNWIND_LIBRARIES @prefix@/lib/libunwind.a)
 SET(LIBUNWIND_LIBRARY_DIRS @prefix@/lib)
-
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
-SET(LIBUSB-1.0_LIBRARY @prefix@/lib/libusb-1.0.a)
-SET(LIBUDEV_LIBRARY @prefix@/lib/libudev.a)
-
-SET(Protobuf_FOUND 1)
-SET(Protobuf_PROTOC_EXECUTABLE @prefix@/native/bin/protoc CACHE FILEPATH "Path to the native protoc")
-SET(Protobuf_INCLUDE_DIR @prefix@/include CACHE PATH "Protobuf include dir")
-SET(Protobuf_INCLUDE_DIRS @prefix@/include CACHE PATH "Protobuf include dir")
-SET(Protobuf_LIBRARY @prefix@/lib/libprotobuf.a CACHE FILEPATH "Protobuf library")
-endif()
-
 endif()
 
 SET(Boost_IGNORE_SYSTEM_PATH ON)

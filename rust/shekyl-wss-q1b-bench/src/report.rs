@@ -94,6 +94,13 @@ use crate::timing::Series;
 ///   read off the same axis. A `v2` record's value is not wrong for what it
 ///   was — it is a model estimate — but it is not the graded quantity, and
 ///   `per_block_advance_provenance` now says which one a record carries.
+///
+///   [`AssembleEdgeRecord`]'s flatness numbers later moved under `reading`.
+///   That nesting is a shape change of a record type that has never had a
+///   cited run — the first shape run was discarded (`CT6_PROVING_STATE.md`
+///   §11.5) — so it does not bump this constant. Spend and verify records
+///   at v3 are already emitted, and a bump would re-label them for a reader
+///   of a record that does not exist yet.
 ///   The retired quotient beside the measurement divides by `replayed_blocks`
 ///   — the blocks the corpus covers, `window_leaves / leaves_per_block` — and
 ///   not by `REPLAY_WINDOW_BLOCKS`. At the default window the two denominators
@@ -515,6 +522,90 @@ pub struct VerifyEdgeRecord {
     /// Where the cost is paid, by citation, so the record says why it is not
     /// covered by rows 2 and 3.
     pub call_site: &'static str,
+}
+
+/// One arm of the path-assembly cost instrument, as measured.
+///
+/// The role, the population and the depth travel with the series: a cost is
+/// evidence for one half of the flatness claim only once a reader can see
+/// which rung it was measured on.
+#[derive(Clone, Debug, Serialize)]
+pub struct AssembleArmRecord {
+    /// [`crate::assembleedge::ArmRole::as_str`].
+    pub role: &'static str,
+    /// Drained leaves the call assembled against.
+    pub leaf_count: u64,
+    /// Depth that leaf count implies, read from the population and confirmed
+    /// against the client.
+    pub depth: u8,
+    /// Owned outputs assembled per call — the `k` in `n + k`.
+    pub owned_inputs: usize,
+    /// Per-call series.
+    pub series: Series,
+}
+
+/// The path-assembly cost record (`CT-6` increment 5).
+///
+/// Carries the **pre-registered** [`crate::assembleedge::FlatnessCriterion`]
+/// and the grade it yields, so increment 6's re-grade reads the same criterion
+/// this run was written under rather than one chosen after seeing the curve.
+///
+/// The flatness numbers are [`Self::reading`], one value from
+/// [`crate::assembleedge::read_flatness`]. Nesting them did not bump
+/// [`SCHEMA_VERSION`]: this record type has never had a cited run.
+#[derive(Clone, Debug, Serialize)]
+pub struct AssembleEdgeRecord {
+    /// [`SCHEMA_VERSION`].
+    pub schema_version: u32,
+    /// The measurement this record is of.
+    pub measurement: &'static str,
+    /// What the grade means for this era, in words a later reader can act on.
+    pub grading: &'static str,
+    /// The machine.
+    pub environment: Environment,
+    /// What was enforced and what was attested.
+    pub rig: RigVerdict,
+    /// Where the measured call is paid in production.
+    pub call_site: &'static str,
+    /// Which plan ran, as a type rather than prose.
+    ///
+    /// Load-bearing. Every plan's arms carry the same roles and the same
+    /// criterion, so without this field a reader cannot tell a one-day-old
+    /// chain's figure from a rung chosen to fit in minutes.
+    pub plan: crate::assembleedge::PlanKind,
+    /// What [`Self::plan`]'s figures do and do not mean, from
+    /// [`crate::assembleedge::PlanKind::note`] — one source for the record and
+    /// the console, so they cannot disagree.
+    pub plan_note: &'static str,
+    /// The criterion, fixed before capture existed.
+    pub criterion: crate::assembleedge::FlatnessCriterion,
+    /// Every arm, in plan order.
+    pub arms: Vec<AssembleArmRecord>,
+    /// Change from the canonical owned count to `MAX_INPUTS` at one
+    /// population, in percent — `#842`'s `n + k` claim, measured.
+    ///
+    /// **Signed.** A negative value means the `MAX_INPUTS` arm was *cheaper*,
+    /// which is evidence the `k` term is lost in the noise of `n` rather than
+    /// a cost at all. An absolute spread reported that case as a 70 % cost and
+    /// said raising `k` was dearer, which inverts the finding.
+    pub input_cap_change_pct: f64,
+    /// Spread, cross-rung ratio, expected ceiling, and outcome, from
+    /// [`crate::assembleedge::read_flatness`]. One value, so the record
+    /// cannot publish a ratio the grade did not judge.
+    pub reading: crate::assembleedge::FlatnessReading,
+    /// Whether the board stayed quiet for the control pair.
+    pub load_control: LoadControl,
+    /// [`crate::assembleedge::ArmRole::RungTop`] timed a second time, on the
+    /// same client, immediately after its own sample.
+    ///
+    /// The other arms have already been measured and their rigs dropped, so
+    /// both timings of this client are the only resident population. Whatever
+    /// separates them is the board. The control does not span the earlier
+    /// arms: holding this client across them would time the smaller arm beside
+    /// the larger working set. Two `assemble_paths` calls over the same leaves
+    /// are taxed by load at the same rate, which is the cancellation
+    /// `CT6_PROVING_STATE.md` §10.4's retired ratio could not claim.
+    pub control_series: Series,
 }
 
 #[cfg(test)]

@@ -4107,6 +4107,7 @@ dependencies = [
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
+ "shekyl-runtime",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
@@ -4148,6 +4149,7 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-economics",
  "shekyl-tx-weight",
+ "shekyl-types",
 ]
 
 [[package]]
@@ -4902,6 +4904,7 @@ version = "3.1.0"
 dependencies = [
  "getrandom 0.2.17",
  "kameo",
+ "shekyl-runtime",
  "shekyl-tor-control-client",
  "tempfile",
  "tokio",

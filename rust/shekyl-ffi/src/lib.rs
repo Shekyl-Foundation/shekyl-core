@@ -107,6 +107,12 @@ pub mod tx_extra_ffi;
 // replacement, one call per site.
 pub mod tx_extra_codec_ffi;
 
+// The transaction id (ARCHIVAL_SHARD_COUNT_CUTOVER.md SHT-Q2): shekyl-wire
+// mixes — hashing the segments and measuring the archival length the id
+// binds — and the daemon's calculate_transaction_hash serializes and cuts.
+// One mixer; the C++ one is deleted.
+pub mod txid_ffi;
+
 // The PQC signing preimage (CHAIN_RULES_SLICE_6.md §5 commit 7, Q7 (c)):
 // shekyl-wire derives every input's signed hash; the daemon verifies against
 // it. Replaces the C++ assembly in tx_pqc_verify.cpp, one call per tx.
@@ -147,8 +153,9 @@ pub mod inbound_ceiling_ffi;
 // cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
 pub mod seam_ffi;
 
-// The socketless asio executor. One ledger row. The floor check is
-// ExecutorBudget::above_floor; this module does not reimplement it.
+// The thread ledger at the C boundary: one executor row, and the report
+// of every row. The floor check is ExecutorBudget::above_floor; this
+// module does not reimplement it.
 pub mod executor_ffi;
 
 // Zone listen and dial. The seam stays connector-agnostic; this module is

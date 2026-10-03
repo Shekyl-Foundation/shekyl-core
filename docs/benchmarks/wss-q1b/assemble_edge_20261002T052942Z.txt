@@ -1,0 +1,21 @@
+start 2026-10-02T05:29:42Z
+  building  rung_below  n=467856     depth=4 k=2 ...
+  building  rung_floor  n=467857     depth=5 k=2 ...
+  building   input_cap  n=765600     depth=5 k=8 ...
+  building    rung_top  n=765600     depth=5 k=2 ...
+  re-timing rung_top as the board control ...
+
+path assembly — CurveTreeClient::assemble_paths across leaf populations [REPLAY WINDOW]
+   rung_below  n=467856     depth=4  k=2  103.4255 s/call (converged: true)
+   rung_floor  n=467857     depth=5  k=2  102.9124 s/call (converged: true)
+     rung_top  n=765600     depth=5  k=2  169.3632 s/call (converged: true)
+    input_cap  n=765600     depth=5  k=8  168.8630 s/call (converged: true)
+  same rung      64.6 % spread across n (bound 10.0 %) — must reach 0 for flatness
+  cross rung     0.995x measured, 1.250x the one-layer ceiling (a pass is not a match)
+  input cap      -0.3 % to raise k to MAX_INPUTS at one population (#842's n + k; negative means cheaper, so k is lost in n)
+  board          0.7 % control divergence (bound 5.0 %), quiet: true
+  READING        Graded(SameRungSlope { spread_pct: 64.57021735293293, tolerance_pct: 10.0 })
+  PLAN           REPLAY WINDOW — 725 blocks, about one day of chain. NOT the graded assembly population: assembly's n is the whole chain, so a graded figure is a ruling about chain age rather than a measurement. These seconds are a one-day-old chain's.
+  GRADING        baseline — capture is unbuilt, so a same-rung slope is the EXPECTED reading and is the evidence for why capture must exist. The criterion carried here was fixed before capture existed; CT-6 increment 6 re-grades these same arms against it. A cross-rung pass is a ceiling (no dearer than one layer), not evidence the step matched the uniform-layer model. The integrity gate's verdict is green by construction (the reference root is taken from the client); root agreement is graded in-crate by shekyl-curve-tree's client::ct6_oracle, not here.
+EXIT=0
+end 2026-10-02T09:07:58Z

@@ -21,5 +21,10 @@ shekyl-tx-weight = { path = "../shekyl-tx-weight" }
 # function — so the stuffer's FCMP proof cost rides real chain depth, not a
 # mirrored width product (DQ-2G).
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# The D2 operand's unit (SHT-Q2): `SHARD_LENGTH` (W) and `shard_of`, the one
+# boundary function — the sim folds archival bytes and calls the partition, it
+# never divides by W itself (05-system-thinking "a formula two lanes need is a
+# function"; ARCHIVAL_SHARD_COUNT_CUTOVER.md §F step 3).
+shekyl-types = { path = "../shekyl-types" }
 serde = { workspace = true }
 serde_json = "1"

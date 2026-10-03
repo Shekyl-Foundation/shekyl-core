@@ -18,9 +18,8 @@
 //! Names are labels. Two rows may share a name. [`LedgerId`] is the identity.
 //! A name is a [`ThreadName`]: non-empty, and no interior NUL.
 //!
-//! The daemon prints [`report`] once every runtime it builds is recorded
-//! here. Daemon-RPC and Tor-control still build their own, so that print is
-//! not wired yet: a total taken before the move would omit those pools.
+//! The daemon prints [`report`] once, before the p2p loop, after every
+//! runtime it builds has been recorded here.
 
 #![deny(unsafe_code)]
 

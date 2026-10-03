@@ -527,8 +527,7 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
                 .iter()
                 .map(|sh| EpochCloseShard {
                     shard_id: sh.shard_id,
-                    has_segment: sh.has_segment,
-                    freeze_height: sh.freeze_height,
+                    close: sh.close,
                 })
                 .collect()
         })

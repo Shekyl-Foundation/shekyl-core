@@ -851,7 +851,10 @@ int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
         // the base, which is how the C++ handler split it.
         if (td.tx_blob.size() > owned->pruned[slot].size())
           owned->prunable[slot] = td.tx_blob.substr(owned->pruned[slot].size());
-        const crypto::hash ph = cryptonote::get_transaction_prunable_hash(td.tx);
+        // From the blob in hand, so the digest is of the bytes served above
+        // and the transaction is not serialized a second time to find them.
+        const cryptonote::blobdata_ref pool_blob(td.tx_blob);
+        const crypto::hash ph = cryptonote::get_transaction_prunable_hash(td.tx, &pool_blob);
         std::memcpy(facts[slot].prunable_hash, ph.data, 32);
         facts[slot].where = 2;
         facts[slot].double_spend_seen = td.double_spend_seen ? 1 : 0;
@@ -1048,14 +1051,30 @@ int blocks_by_height(cryptonote::Blockchain& bc, const uint64_t* heights, size_t
         failed = true;
         break;
       }
-      owned->blocks.push_back(cryptonote::block_to_blob(blk));
+      // A stored block or transaction that will not serialize is the store
+      // contradicting itself. A fragment is not a body to hand a client.
+      std::string block_blob;
+      if (!cryptonote::block_to_blob(blk, block_blob))
+      {
+        MERROR("rpc facts: block " << heights[i] << " did not serialize");
+        return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+      }
+      owned->blocks.push_back(std::move(block_blob));
       std::vector<cryptonote::transaction> txs;
       std::vector<crypto::hash> missed;
       bc.get_transactions(blk.tx_hashes, txs, missed);
       std::vector<std::string> blobs;
       blobs.reserve(txs.size());
       for (const cryptonote::transaction& tx : txs)
-        blobs.push_back(cryptonote::tx_to_blob(tx));
+      {
+        std::string blob;
+        if (!cryptonote::tx_to_blob(tx, blob))
+        {
+          MERROR("rpc facts: a transaction of block " << heights[i] << " did not serialize");
+          return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+        }
+        blobs.push_back(std::move(blob));
+      }
       owned->txs.push_back(std::move(blobs));
     }
 

@@ -1,7 +1,7 @@
 # LMDB Schema Reference
 
 **Last updated:** August 2026
-**DB version:** 15 (schema v15: two tables leave the X-macro — `txs_prunable_tip` and `output_metadata` — with the C++ tx-data prune (2026-09-22); a v14 datadir holds two named DBs a v15 binary never opens and is refused at open; v14: `PL-D3` — the curve-tree leaf's 4th scalar is `CM.x`, the x-coordinate of the output's `0x07` leaf-commitment point, and the `0x07` entry is 64 B per output (`CM ‖ record`); a v13 datadir's leaves and roots were computed from the retired leaf hash and the datadir is refused (`FCMP_SPEND_LINKABILITY.md` §6.2); v13: the `archival_bond` value v6 → v7 gains the 32-byte serving `endpoint` committed at JoinMarket (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`); a v12 datadir's records fail the value's version pin and the datadir is refused; v12: the prune-watermark receipt — `properties` key `archival_prune_watermark_epoch`, the pop floor's source (C2-R1b-Q1c); a v11 datadir pruned without receipts and is refused; v11: `prune_tx_data` retention corrected — the depth pass keeps `txs_prunable_hash` and `txs_pqc_auths`, the pruned-txid operands, when it drops the prunable body; a v10-pruned datadir may lack them and is refused; v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
+**DB version:** 16 (schema v16: content, not layout — the transaction id binds the archival length (`SHT-Q2`), so a v15 datadir indexes its transactions under ids no current node computes and is refused at open; v15: two tables leave the X-macro — `txs_prunable_tip` and `output_metadata` — with the C++ tx-data prune (2026-09-22); a v14 datadir holds two named DBs a v15 binary never opens and is refused at open; v14: `PL-D3` — the curve-tree leaf's 4th scalar is `CM.x`, the x-coordinate of the output's `0x07` leaf-commitment point, and the `0x07` entry is 64 B per output (`CM ‖ record`); a v13 datadir's leaves and roots were computed from the retired leaf hash and the datadir is refused (`FCMP_SPEND_LINKABILITY.md` §6.2); v13: the `archival_bond` value v6 → v7 gains the 32-byte serving `endpoint` committed at JoinMarket (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`); a v12 datadir's records fail the value's version pin and the datadir is refused; v12: the prune-watermark receipt — `properties` key `archival_prune_watermark_epoch`, the pop floor's source (C2-R1b-Q1c); a v11 datadir pruned without receipts and is refused; v11: `prune_tx_data` retention corrected — the depth pass keeps `txs_prunable_hash` and `txs_pqc_auths`, the pruned-txid operands, when it drops the prunable body; a v10-pruned datadir may lack them and is refused; v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
 **Source:** `src/blockchain_db/lmdb/db_lmdb.cpp`, `src/blockchain_db/lmdb/db_lmdb.h`, `src/blockchain_db/blockchain_db.h`, `src/blockchain_db/shekyl_types.h`
 
 ## Conventions
@@ -1229,7 +1229,8 @@ v9.
 DB v11: retention semantics, not layout. `prune_tx_data`'s depth pass must
 **keep** `txs_prunable_hash` and `txs_pqc_auths` when it drops the prunable
 body: both are operands of the pruned v3 txid
-(`get_pruned_transaction_hash`), and neither has a hash table of its own.
+(then `get_pruned_transaction_hash`; since `SHT-Q2` the one Rust mixer,
+`shekyl-wire` `transaction/txid.rs`), and neither has a hash table of its own.
 v10 code deleted them, so a v10 datadir that ever ran `--prune-blockchain`
 holds transactions the v11 reader cannot name — the RPC facts export
 answers `INCONSISTENT` for each of them, forever, with no repair path (the
@@ -1274,6 +1275,15 @@ The `tx_prune_next_block` / `last_pruned_tx_data_height` properties are
 retired with the prune. The discard that replaces all of it is S-PRUNE,
 Rust, on the redb store (`DRS_E1_SPRUNE.md`; redb `SCHEMA_VERSION` 9 → 10 in
 the same PR). Pre-genesis: delete and resync.
+
+DB v16: the transaction id (`SHT-Q2`, 2026-10-01) — content, not layout. A
+non-coinbase txid mixes the transaction's archival length
+(`GENESIS_TX_WIRE_FORMAT.md` §11), so every `tx_indices` key and every block's
+transaction-hash list in a v15 datadir names its transactions by ids no
+current node computes: a lookup by the current id misses, and a body served
+under the stored id is refused by the wallet that recomputes it. No table's
+bytes change; only the version pin makes the stale index loud, as v14's did
+for the stale tree. Pre-genesis: delete and resync.
 
 `BlockchainLMDB::migrate` refuses any pre-`VERSION` database with a message
 that tracks the constant, so each bump extends the refusal automatically.

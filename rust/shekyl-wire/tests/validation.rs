@@ -11,7 +11,7 @@
 mod common;
 use common::conforming_pqc_extra;
 
-use shekyl_types::{BlockHash, PCanonicalId, PqcAuthHash, PrunableHash};
+use shekyl_types::{ArchivalLength, BlockHash, PCanonicalId, PqcAuthHash, PrunableHash};
 use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
 use shekyl_wire::{
     Block, BondPost, BondPostKind, BpPlus, Ct, CtBase, Holdings, Input, Output, PqcAuth, Prunable,
@@ -511,10 +511,11 @@ fn txid_arity_is_the_predicate_s_not_the_input_arm_s() {
     assert_eq!(
         coinbase.hash_with_supplied_components(
             Some(PqcAuthHash::from_bytes([0xAB; 32])),
-            PrunableHash::from_bytes([0xCD; 32])
+            PrunableHash::from_bytes([0xCD; 32]),
+            ArchivalLength::from_raw(0xEF)
         ),
         coinbase.hash(),
-        "a coinbase ignores supplied components: it has neither region"
+        "a coinbase ignores supplied components: it has neither region, and no length"
     );
 
     let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
@@ -527,7 +528,7 @@ fn txid_arity_is_the_predicate_s_not_the_input_arm_s() {
         .pqc_auth_hash()
         .expect("a bond-post spend is 4-part: the identity signature is a tx-level auth");
     assert_eq!(
-        tx.hash_with_supplied_components(Some(pqc_auth), tx.prunable_hash()),
+        tx.hash_with_supplied_components(Some(pqc_auth), tx.prunable_hash(), tx.archival_len()),
         tx.hash()
     );
 }
@@ -555,7 +556,8 @@ fn a_body_with_no_inputs_and_an_auth_is_3_part_like_the_oracle() {
     assert_eq!(
         tx.hash_with_supplied_components(
             Some(PqcAuthHash::from_bytes([0xAB; 32])),
-            tx.prunable_hash()
+            tx.prunable_hash(),
+            tx.archival_len()
         ),
         tx.hash(),
         "a supplied component is ignored where the txid has no slot for it"

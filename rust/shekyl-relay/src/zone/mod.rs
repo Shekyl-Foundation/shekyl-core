@@ -69,12 +69,25 @@ impl PeerFluff {
     }
 }
 
+/// Whether this node has finished synchronizing its chain.
+///
+/// Origination reads this once, as its own type, so it cannot be transposed
+/// with `local_origin`. The FFI boundary is a `bool`; the conversion happens
+/// once, there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeSync {
+    /// The node may originate. A local transaction enters the stem graph.
+    Synchronised,
+    /// The node is still synchronizing. A local origin is withheld.
+    Unsynchronised,
+}
+
 /// What the relay path should do with a batch of transactions.
 ///
 /// The zone decides; the caller performs. Framing and the socket stay C++,
 /// so this returns a destination rather than sending to one.
 ///
-/// # Why the two non-stem outcomes are distinct
+/// # Why the non-stem outcomes are distinct
 ///
 /// They differ in what the caller must do next, so collapsing them to one
 /// "fluff" answer would lose the distinction the relay path is built on:
@@ -84,13 +97,18 @@ impl PeerFluff {
 ///   set and re-plan before accepting the fallback.
 /// - [`RelayPlan::FluffEpoch`] is *settled for the epoch*. Refreshing changes
 ///   nothing, so a retry would be wasted work.
+/// - [`RelayPlan::AwaitSync`] is a *hold*. The batch is this node's own and
+///   the node has not caught up. Nothing is sent and nothing is recorded, so
+///   the pool retries after sync. A refresh cannot make it routable, and
+///   falling through to fluff would publish it early.
 ///
-/// The daemon also reports them differently: the inherited `dandelionpp_notify`
-/// emits `relay_method::stem` on *entering* the stem-eligible branch, before any
-/// routing is attempted, and `relay_method::fluff` only on falling through. A
-/// caller holding one bool cannot reconstruct which event to emit, and would
-/// have to re-evaluate `!fluffing || local_origin` itself — a second copy of the
-/// RD-4 predicate this type exists to keep single-owned.
+/// The daemon also reports the routable outcomes differently: the inherited
+/// `dandelionpp_notify` emits `relay_method::stem` on *entering* the
+/// stem-eligible branch, before any routing is attempted, and
+/// `relay_method::fluff` only on falling through. A caller holding one bool
+/// cannot reconstruct which event to emit, and would have to re-evaluate
+/// `!fluffing || local_origin` itself — a second copy of the RD-4 predicate
+/// this type exists to keep single-owned. `AwaitSync` emits nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayPlan {
     /// Forward to this stem successor.
@@ -101,6 +119,13 @@ pub enum RelayPlan {
     /// This zone is fluffing this epoch and the transaction is not locally
     /// originated. Fluff: batch to every peer but the source.
     FluffEpoch,
+    /// Locally originated while this node is unsynchronised. Send nothing
+    /// and record nothing.
+    ///
+    /// The plan is the refusal. [`Zone::carrier_for`] still names an ordinary
+    /// carrier so the match stays total, and the caller must not read it:
+    /// there is no send.
+    AwaitSync,
 }
 
 /// Why [`Zone::new`] refused a configuration.
@@ -511,13 +536,28 @@ impl Zone {
     /// A peer's Levin handshake finished (session established) and it may
     /// now carry relay traffic.
     ///
-    /// Mirrors `notify::on_session_established`. Idempotent: a repeated
-    /// call for a live connection keeps the existing batch rather than
-    /// discarding queued transactions.
-    pub fn on_session_established(&mut self, id: ConnectionId, direction: PeerDirection) {
+    /// Idempotent on the context: [`BTreeMap::entry`] keeps the first
+    /// direction and any queued batch. An **outbound** handshake also merges
+    /// the stem map, including a repeat: re-offering the survivor after a
+    /// close fills a hole, and a map that is already full returns unchanged
+    /// and draws nothing. An inbound handshake does not merge. Inbound peers
+    /// are not stem candidates, and a repeat of an outbound peer that arrives
+    /// as inbound must not consume `rng`.
+    ///
+    /// A close does not merge. A dead slot stays until the next outbound
+    /// handshake or an explicit [`Zone::update_stems`].
+    pub fn on_session_established<R: RelayRng + ?Sized>(
+        &mut self,
+        id: ConnectionId,
+        direction: PeerDirection,
+        rng: &mut R,
+    ) {
         self.contexts
             .entry(id)
             .or_insert_with(|| PeerFluff::new(direction));
+        if direction == PeerDirection::Outbound {
+            self.update_stems(rng);
+        }
     }
 
     /// Record that `txs` were stemmed to `successor`, keyed under `source`
@@ -648,24 +688,52 @@ impl Zone {
         self.fluff.forget(*id);
     }
 
+    /// Established outbound sessions. Inbound peers are not stem candidates.
+    ///
+    /// The set is this zone's session registry. A handshake-complete peer
+    /// that is still synchronizing is included: recorded height is not a
+    /// filter, and neither is `state_normal`.
+    fn outbound_ids(&self) -> Vec<ConnectionId> {
+        self.contexts
+            .iter()
+            .filter(|(_, peer)| peer.direction == PeerDirection::Outbound)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    /// Drop every outbound session. Tests use this where a stem refresh
+    /// used to be handed an empty candidate list.
+    #[cfg(test)]
+    pub fn drop_outbound_for_test(&mut self) {
+        let ids = self.outbound_ids();
+        for id in ids {
+            self.on_connection_close(&id);
+        }
+    }
+
     /// Merge the currently live outbound connections into the stem map,
     /// **keeping** slots whose peer is still connected.
     ///
-    /// The mid-epoch refresh: the inherited `connection_map::update`, reached
-    /// through `update_channels::run`. Post-inversion (§20.3) the stem-set
-    /// change predicate has no consumer: a rebound channel picks up its new
-    /// peer at the next send, and a channel the merge leaves unbound clears at
-    /// its next due tick — both read from the map itself via [`Driver::poll`].
+    /// The mid-epoch refresh: the inherited `connection_map::update`. An
+    /// outbound handshake calls it. So does a stem-send failure. When every
+    /// slot is live and the map is at full width, the merge returns unchanged
+    /// and draws nothing: a bound slot is taken out of the candidate pool
+    /// rather than re-drawn, so the call cannot re-point an existing stem.
+    /// Post-inversion (§20.3) nothing else re-points either: a rebound channel
+    /// picks up its new peer at the next send, and a channel the merge leaves
+    /// unbound clears at its next due tick — both read from the map itself
+    /// via [`Driver::poll`].
     ///
     /// **Not what an epoch boundary does.** See [`Zone::rebuild_stems`]; the two
     /// are separate methods because collapsing them freezes the stem graph, and
-    /// nothing about the merged result looks wrong when it happens.
-    pub fn update_stems<R: RelayRng + ?Sized>(&mut self, outbound: Vec<ConnectionId>, rng: &mut R) {
+    /// nothing about the merged result looks wrong when it happens. A close
+    /// does not call this. The dead slot stays until the next merge.
+    pub fn update_stems<R: RelayRng + ?Sized>(&mut self, rng: &mut R) {
         // `StemMap::update` still returns `StemSetChange` for its own callers
         // and tests; the zone no longer surfaces it — nothing re-points on push.
         // Named bind: the value is `Copy + must_use`, so neither `drop` nor
         // `let _ =` is available under the workspace lint table.
-        let _change = self.map.update(outbound, rng);
+        let _change = self.map.update(self.outbound_ids(), rng);
     }
 
     /// Draw a wholly new stem set over `outbound` — what an epoch rollover does.
@@ -680,12 +748,8 @@ impl Zone {
     /// Post-inversion (§20.3) nothing re-points on this signal — a rebound
     /// channel picks up its new peer at the next send, and a channel the redraw
     /// leaves unbound clears at its next due tick, both read from the map itself.
-    pub fn rebuild_stems<R: RelayRng + ?Sized>(
-        &mut self,
-        outbound: Vec<ConnectionId>,
-        rng: &mut R,
-    ) {
-        self.map = StemMap::new(outbound, self.stems, rng);
+    pub fn rebuild_stems<R: RelayRng + ?Sized>(&mut self, rng: &mut R) {
+        self.map = StemMap::new(self.outbound_ids(), self.stems, rng);
     }
 
     /// Begin a new epoch at `now`: re-draw the fluff/stem role and the end time.
@@ -750,12 +814,21 @@ impl Zone {
     /// Reporting [`RelayPlan::NoRoute`] rather than a bare fluff when no slot is
     /// routable is what lets the caller mirror the inherited retry-then-fluff:
     /// re-offer connections, ask again, and only then accept the fallback.
+    ///
+    /// [`NodeSync::Unsynchronised`] combined with `local_origin` is checked
+    /// *before* that predicate. The hold must not draw a stem, pin a source,
+    /// or consume `rng`. A fluff epoch does not override it: publishing now
+    /// is the outcome the hold exists to prevent.
     pub fn plan_relay<R: RelayRng + ?Sized>(
         &mut self,
         source: Option<ConnectionId>,
         local_origin: bool,
+        node_sync: NodeSync,
         rng: &mut R,
     ) -> RelayPlan {
+        if local_origin && node_sync == NodeSync::Unsynchronised {
+            return RelayPlan::AwaitSync;
+        }
         // The inherited predicate, transcribed rather than restated:
         // `if (!zone_->fluffing || tx_relay == relay_method::local)`.
         if !self.fluffing || local_origin {
@@ -767,28 +840,28 @@ impl Zone {
         RelayPlan::FluffEpoch
     }
 
-    /// Plan a relay; on a transient [`RelayPlan::NoRoute`], merge `outbound`
-    /// into the stem map once and re-plan.
+    /// Plan a relay; on a transient [`RelayPlan::NoRoute`], merge this zone's
+    /// established outbound sessions into the stem map once and re-plan.
     ///
-    /// This is the refresh policy the inherited `dandelionpp_notify` looped in
-    /// C++ (`plan` → empty map → `update` → `plan`). Keeping it here means the
-    /// shim only offers the connection snapshot and performs transport — it does
-    /// not own "empty / stale map ⇒ refresh" scheduling, which is zone logic the
-    /// 33-gtest oracle cannot see through the FFI (§18.4a).
+    /// The candidates are the session registry, not a snapshot the shim
+    /// passes in. Keeping the refresh here means the shim performs transport
+    /// and does not own "empty map ⇒ refresh", which is zone logic the
+    /// gtest oracle cannot see through the FFI (§18.4a).
     ///
-    /// A settled [`RelayPlan::FluffEpoch`] does **not** refresh: retrying cannot
-    /// change an epoch decision.
+    /// A settled [`RelayPlan::FluffEpoch`] does not refresh: retrying cannot
+    /// change an epoch decision. [`RelayPlan::AwaitSync`] does not either:
+    /// the map is not what is withholding the batch.
     pub fn plan_relay_with_refresh<R: RelayRng + ?Sized>(
         &mut self,
         source: Option<ConnectionId>,
         local_origin: bool,
-        outbound: Vec<ConnectionId>,
+        node_sync: NodeSync,
         rng: &mut R,
     ) -> RelayPlan {
-        match self.plan_relay(source, local_origin, rng) {
+        match self.plan_relay(source, local_origin, node_sync, rng) {
             RelayPlan::NoRoute => {
-                self.update_stems(outbound, rng);
-                self.plan_relay(source, local_origin, rng)
+                self.update_stems(rng);
+                self.plan_relay(source, local_origin, node_sync, rng)
             }
             plan => plan,
         }
@@ -979,6 +1052,10 @@ impl Zone {
     /// ordinary connection: fluff by §42.3's design, no-route because there is
     /// nothing to carry.
     ///
+    /// [`RelayPlan::AwaitSync`] names [`RelayCarrier::Ordinary`] so the match
+    /// is total. That carrier is unread: the plan is the refusal, and the
+    /// caller returns before any send.
+    ///
     /// The slot lookup is consistent by construction — the destination came
     /// from this same map in this same call, so `slot_of` cannot miss it, and
     /// the `None` arm is unreachable rather than a fallback.
@@ -1006,7 +1083,12 @@ impl Zone {
                     }
                 }
             }
-            _ => RelayCarrier::Ordinary,
+            // The plan is the refusal. Ordinary keeps the match total; the
+            // caller returns before it reads the carrier.
+            RelayPlan::AwaitSync => RelayCarrier::Ordinary,
+            RelayPlan::Stem(_) | RelayPlan::NoRoute | RelayPlan::FluffEpoch => {
+                RelayCarrier::Ordinary
+            }
         }
     }
 
@@ -1015,9 +1097,10 @@ impl Zone {
         &mut self,
         source: Option<ConnectionId>,
         local_origin: bool,
+        node_sync: NodeSync,
         rng: &mut R,
     ) -> RelayDispatch {
-        let plan = self.plan_relay(source, local_origin, rng);
+        let plan = self.plan_relay(source, local_origin, node_sync, rng);
         RelayDispatch {
             carrier: self.carrier_for(plan),
             plan,
@@ -1032,10 +1115,10 @@ impl Zone {
         &mut self,
         source: Option<ConnectionId>,
         local_origin: bool,
-        outbound: Vec<ConnectionId>,
+        node_sync: NodeSync,
         rng: &mut R,
     ) -> RelayDispatch {
-        let plan = self.plan_relay_with_refresh(source, local_origin, outbound, rng);
+        let plan = self.plan_relay_with_refresh(source, local_origin, node_sync, rng);
         RelayDispatch {
             carrier: self.carrier_for(plan),
             plan,
@@ -1043,5 +1126,7 @@ impl Zone {
     }
 }
 
+#[cfg(test)]
+mod stem_draw;
 #[cfg(test)]
 mod tests;

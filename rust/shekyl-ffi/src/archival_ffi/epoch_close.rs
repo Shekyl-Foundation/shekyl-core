@@ -10,8 +10,9 @@ use shekyl_archival_retention::{
     claim_window_floor, effective_settlement_epoch_blocks, epoch_close_compute,
     epoch_close_due_at_height, failure_window_slashable, good_through, prune_below_epoch_at_height,
     serve_credit_epoch_ok, settlement_epoch_at_height, slash_open_interval_to_append, BadInterval,
-    BaselineObservation, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
-    FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET, MAX_CLAIM_AGE_W,
+    BaselineObservation, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard, ShardClose,
+    ShardCloseWire, FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET,
+    MAX_CLAIM_AGE_W,
 };
 /// Returns `1` when `settlement_epoch >= join_settlement_epoch + 1` (gate-4 §2.2 `E_first` lower bound).
 #[no_mangle]
@@ -372,11 +373,16 @@ pub struct ShekylArchivalEpochCloseBond {
 /// One gathered shard-registry row for `shekyl_archival_epoch_close_compute`.
 ///
 /// Layout must match `struct shekyl_archival_epoch_close_shard` in `shekyl_ffi.h`.
+/// The `freeze_height` / `has_segment` pair is the C++ LMDB validator's
+/// segment-keyed reading of a shard's close (CEN-L10); it crosses this ABI
+/// as-is and becomes a `ShardClose` via `ShardClose::from_wire` in the
+/// decoder below.
 #[repr(C)]
 pub struct ShekylArchivalEpochCloseShard {
     pub shard_id: u64,
     pub freeze_height: u64,
-    /// `0` when no frozen segment row exists (shard age is then zero).
+    /// `0` when no frozen segment row exists (the shard is open; its age
+    /// is then zero).
     pub has_segment: u8,
 }
 
@@ -475,8 +481,10 @@ pub(super) unsafe fn decode_epoch_rows(
         .iter()
         .map(|s| EpochCloseShard {
             shard_id: s.shard_id,
-            has_segment: s.has_segment != 0,
-            freeze_height: s.freeze_height,
+            close: ShardClose::from_wire(ShardCloseWire {
+                has_segment: s.has_segment != 0,
+                freeze_height: s.freeze_height,
+            }),
         })
         .collect();
     let pairs: Vec<CreditPair> = raw_pairs

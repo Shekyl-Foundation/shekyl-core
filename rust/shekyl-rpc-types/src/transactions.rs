@@ -112,6 +112,14 @@ pub struct TxEntry {
     pub pruned_as_hex: String,
     pub prunable_as_hex: String,
     pub prunable_hash: HashHex,
+    /// The transaction's **archival length** in bytes: its prunable region
+    /// plus its `pqc_auths` segment, measured by the daemon from the segments
+    /// it holds (`SHT-Q2`). The txid binds it, so a client that rebuilds an
+    /// identity from a pruned body supplies this beside `prunable_hash`, and
+    /// a wrong value yields a txid the block does not list. Zero for a
+    /// coinbase. Always present: a reply that omitted it would leave a
+    /// pruned body's identity unverifiable.
+    pub archival_len: u64,
     pub as_json: String,
     /// `KV_SERIALIZE_OPT(pruned, false)` — omitted at its default. True when
     /// the daemon holds no prunable data for the transaction.
@@ -136,6 +144,7 @@ struct RawTxEntry {
     pruned_as_hex: String,
     prunable_as_hex: String,
     prunable_hash: HashHex,
+    archival_len: u64,
     as_json: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pruned: bool,
@@ -230,6 +239,7 @@ impl TryFrom<RawTxEntry> for TxEntry {
             pruned_as_hex: raw.pruned_as_hex,
             prunable_as_hex: raw.prunable_as_hex,
             prunable_hash: raw.prunable_hash,
+            archival_len: raw.archival_len,
             as_json: raw.as_json,
             pruned: raw.pruned,
             double_spend_seen: raw.double_spend_seen,
@@ -247,6 +257,7 @@ impl From<TxEntry> for RawTxEntry {
             pruned_as_hex: e.pruned_as_hex,
             prunable_as_hex: e.prunable_as_hex,
             prunable_hash: e.prunable_hash,
+            archival_len: e.archival_len,
             as_json: e.as_json,
             pruned: e.pruned,
             in_pool,
@@ -407,6 +418,7 @@ mod tests {
             pruned_as_hex: String::new(),
             prunable_as_hex: String::new(),
             prunable_hash: HashHex::from_bytes([2u8; 32]),
+            archival_len: 42,
             as_json: String::new(),
             pruned: false,
             double_spend_seen: false,
@@ -499,7 +511,7 @@ mod tests {
         let doc = r#"{"tx_hash":"0101010101010101010101010101010101010101010101010101010101010101",
             "as_hex":"00","pruned_as_hex":"","prunable_as_hex":"",
             "prunable_hash":"0202020202020202020202020202020202020202020202020202020202020202",
-            "as_json":"","in_pool":false,"double_spend_seen":false,
+            "archival_len":42,"as_json":"","in_pool":false,"double_spend_seen":false,
             "confirmations":2,"block_timestamp":99}"#;
         let err = serde_json::from_str::<TxEntry>(doc).expect_err("block_height is missing");
         assert!(
@@ -515,6 +527,23 @@ mod tests {
         );
     }
 
+    /// The archival length is an operand of the txid a client rebuilds from a
+    /// pruned body, so a reply without it is refused rather than read as zero
+    /// — a zero would be a length the client then fails its own identity
+    /// check against, with nothing saying why.
+    #[test]
+    fn an_entry_without_its_archival_length_is_refused() {
+        let with = serde_json::to_string(&entry(pooled())).expect("serialize");
+        assert!(with.contains("\"archival_len\":42"), "{with}");
+        let without = with.replace("\"archival_len\":42,", "");
+        assert_ne!(with, without, "the member was removed from the document");
+        let err = serde_json::from_str::<TxEntry>(&without).expect_err("archival_len is missing");
+        assert!(
+            err.to_string().contains("archival_len"),
+            "the refusal names the member: {err}"
+        );
+    }
+
     /// A document carrying both groups is read by `in_pool`, and the members
     /// of the arm it did not select are ignored rather than refused — the
     /// same additive-evolution rule the crate applies to unknown fields.
@@ -523,7 +552,7 @@ mod tests {
         let doc = r#"{"tx_hash":"0101010101010101010101010101010101010101010101010101010101010101",
             "as_hex":"00","pruned_as_hex":"","prunable_as_hex":"",
             "prunable_hash":"0202020202020202020202020202020202020202020202020202020202020202",
-            "as_json":"","in_pool":true,"double_spend_seen":false,
+            "archival_len":42,"as_json":"","in_pool":true,"double_spend_seen":false,
             "block_height":5,"confirmations":2,"block_timestamp":99,"output_indices":[3],
             "relayed":true,"received_timestamp":77}"#;
         let e: TxEntry = serde_json::from_str(doc).expect("in_pool selects the pool arm");

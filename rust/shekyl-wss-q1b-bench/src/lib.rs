@@ -56,6 +56,7 @@
 //! [`47-gate-subject-assertion`]: ../../../.cursor/rules/47-gate-subject-assertion.mdc
 
 pub mod advance;
+pub mod assembleedge;
 pub mod corpus;
 pub mod fixture;
 pub mod openedge;
