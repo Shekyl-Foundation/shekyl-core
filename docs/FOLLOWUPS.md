@@ -38,10 +38,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
 
-- **A node that accepts no inbound refuses with the same cause as a full cap.** A derived ceiling of 0 and an explicit `--in-peers 1` at capacity both surface as `AdmissionRefused` on the seam, so a dialer's log cannot tell "try later" from "this node will never accept inbound" (rule 82). D12's set gains a distinct cause for the second. Blocker lifted: #909 merged 2026-10-01. Falsify by the dialer's `seam close` line naming the ceiling-0 case differently from the full-cap case.
-  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D12
-  - Target: pre-genesis
-
 - **Fakechain derives mainnet's handshake id.** The derivation is per genesis hash, and fakechain's pin is mainnet's genesis, so the two ids match. That is the collision the derivation exists to prevent, confined to a test network. Give fakechain its own genesis hash, or make it offline by construction so it never handshakes. Falsify by `shekyl_network_id` for fakechain differing from mainnet, or by fakechain refusing a handshake.
   - Owner: [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md)
   - Target: pre-genesis

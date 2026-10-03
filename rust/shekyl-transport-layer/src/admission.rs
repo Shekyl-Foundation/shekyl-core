@@ -153,6 +153,10 @@ fn admission_refused() -> OpenError {
     OpenError::Refused(CloseCause::new(CloseKind::AdmissionRefused))
 }
 
+fn inbound_not_accepted() -> OpenError {
+    OpenError::Refused(CloseCause::new(CloseKind::InboundNotAccepted))
+}
+
 /// Per-connector, per-direction reservation counts.
 ///
 /// Indexed by [`ConnectorId::index`] and [`Direction::index`], both dense
@@ -245,6 +249,9 @@ fn refuse_over_process_ceiling(inner: &Inner, ceiling: InboundCeiling) -> Result
         .process_inbound()
         .ok_or(OpenError::Exhausted)?;
     if let InboundCeiling::Bounded(limit) = ceiling {
+        if limit == 0 {
+            return Err(inbound_not_accepted());
+        }
         if total >= u64::from(limit) {
             return Err(admission_refused());
         }
@@ -255,12 +262,19 @@ fn refuse_over_process_ceiling(inner: &Inner, ceiling: InboundCeiling) -> Result
 /// Refuse when this connector's cap is full, and when the process
 /// ceiling is full. The cap does not replace the ceiling: each connector
 /// can be under its own number while the sum still exhausts the descriptors.
+///
+/// A ceiling of 0 and a connector cap of 0 are [`CloseKind::InboundNotAccepted`]:
+/// this node will not take the accept. A positive bound that is full is
+/// [`CloseKind::AdmissionRefused`]. A ban is that same refusal.
 fn refuse_inbound(
     inner: &Inner,
     connector: ConnectorId,
     ceiling: InboundCeiling,
 ) -> Result<(), OpenError> {
     if let Some(cap) = inner.zone_caps[connector.index()] {
+        if cap == 0 {
+            return Err(inbound_not_accepted());
+        }
         let held = inner.occupancy.get(connector, Direction::Inbound);
         if held >= u64::from(cap) {
             return Err(admission_refused());
