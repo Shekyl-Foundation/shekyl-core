@@ -1510,8 +1510,9 @@ rate at the 1× object with its 95 % Wilson interval, against 0.30.
 - Anything else: no verdict. The rig cannot tell the device as a reader from the
   device as a server. It triggers the split rig (below).
 
-**Read 2 — an epoch of reads.** From the device's 1× arm, with one read always in
-flight:
+**Read 2 — an epoch of reads.** *Superseded before the reading by the amendment
+below (2026-10-03): this is not a bound on `W`, and the list bound is not its anchor.*
+From the device's 1× arm, with one read always in flight:
 
 - `c = completions / Σ elapsed` reads per second. A miss costs the time it took and
   delivers nothing.
@@ -1551,6 +1552,41 @@ sweep, and `W` stays provisional until it is read.
 
 **Direction.** This can only lower `W`'s ceiling. If both reads pass, `W` rests on
 no open measurement and goes to the Round-2 gate as it stands.
+
+#### Amendment, 2026-10-03 (design owner) — before the reading
+
+Made after the run started (2026-10-02 20:40:19 UTC, both hosts) and before either
+reading was computed. The only look at the data so far was a liveness check that
+counted outcomes on each host at about 260 observations; no statistic below was
+computed. The instrument that computes both readings is committed with this
+amendment, so it is fixed before the reading too.
+
+Read 2 used `MAX_HOLDINGS_SHARDS` as its anchor, which contradicts `L2`'s ruling
+(§3): the cap bounds one record's list, not an operator, who can post another record.
+And capacity is not what bounds `W`. So the two reads become two separate questions.
+
+**Reading A — bears on `W`.** Read 1, restated as the server-side twin of `U1a`: does
+the floor device serve one whole-shard read inside the single-attempt deadline? The
+miss interval at the largest object, which must bound the heaviest shard
+(`W` + 149.4 KB = 3,149,400 B) from above, against the same 0.30 target. A wholly
+lower interval is the verdict that the device does not lower `W`'s ceiling. Anything
+else is no verdict and triggers the split rig, as before. Computed by
+`shekyl_sp_t3_spike::ceiling::floor_device_read`.
+
+**Reading B — does not bear on `W`.** Read 2's computation, reported as the
+**maximum sustainable holding per floor device**: with one read in flight,
+`c = completions / Σ elapsed`, the epoch is `settlement_epoch_blocks` at the target
+block time, and a holding of `H` pairs is sustainable when `3 H ≤ c × epoch`. It is
+reported across a fixed table of holdings — 1, 16, 128, 512, 1,024, 2,048, 4,096,
+8,192 and 16,384 pairs — in which the list bound is one row and not the anchor. It is
+an input to the participation floor (gates 4 and 5), not to this derivation. No row
+triggers the split rig or moves `W`. Computed by `shekyl_sp_t3_spike::capacity`.
+
+`pd-f2-u1b` prints both for the device's file. The tests pin each computation and its
+threshold. Everything else in this section stands: the rig, the control, what is
+reported without a verdict and the voids. The direction now rests on reading A alone:
+if it passes, `W` rests on no open measurement and goes to the Round-2 gate as it
+stands.
 
 ### 9.4 Soft upward pressure: bookkeeping
 
