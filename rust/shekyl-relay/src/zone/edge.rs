@@ -362,6 +362,35 @@ fn an_unslotted_own_edge_uses_the_ordinary_carrier() {
 }
 
 #[test]
+fn a_slotted_tor_own_edge_still_leaves_immediately() {
+    let mut rng = SplitMix64::new(6);
+    let mut z = Relay::new(
+        DandelionParams::inherited(),
+        2,
+        true,
+        &[ConnectorId::Clearnet, ConnectorId::Tor],
+        0,
+        &mut rng,
+    )
+    .unwrap();
+    z.on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    z.on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    let dispatch = z.plan_dispatch(None, true, NodeSync::Synchronised, &mut rng);
+    let RelayPlan::Stem(dest) = dispatch.plan else {
+        panic!("hop 0 returned {:?}", dispatch.plan);
+    };
+    assert!(
+        z.stem_slots().contains(&Some(dest)),
+        "both Tor peers fill the two slots"
+    );
+    assert_eq!(
+        dispatch.carrier,
+        RelayCarrier::Ordinary,
+        "no cover on Tor, even when the own-edge occupies a stem slot"
+    );
+}
+
+#[test]
 fn a_clearnet_slot_stems_on_the_ordinary_carrier() {
     let mut rng = SplitMix64::new(5);
     let mut z = None;

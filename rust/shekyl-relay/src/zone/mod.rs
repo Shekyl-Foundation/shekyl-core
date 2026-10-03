@@ -531,7 +531,8 @@ impl Relay {
     ///
     /// The carrier follows the destination connector's encryption cell.
     /// A session whose connector is not link-encrypted stems on the ordinary
-    /// connection.
+    /// connection. Tor is link-encrypted and still takes no cover channel
+    /// for the own-edge: that ruling is [`Relay::volume_cover_own_edge`].
     pub(crate) fn noise_destination(&self, peer: ConnectionId) -> bool {
         self.contexts
             .get(&peer)
@@ -792,6 +793,17 @@ impl Relay {
         RelayPlan::Stem(edge)
     }
 
+    /// The own-edge on a link whose wire-observer defence is volume, not an
+    /// envelope. Tor is that link. A cover-bearing own-edge is not: it is a
+    /// stem slot, drawn by [`Relay::plan_relay`] when hop 0 is not restricted.
+    fn volume_cover_own_edge(&self, destination: ConnectionId) -> bool {
+        self.hop0_edge == Some(destination)
+            && self
+                .contexts
+                .get(&destination)
+                .is_some_and(|peer| address_hidden_from_peer(peer.connector))
+    }
+
     fn hop0_peer_live(&self, id: ConnectionId) -> bool {
         self.contexts.get(&id).is_some_and(|peer| {
             Self::stem_candidate(peer) && address_hidden_from_peer(peer.connector)
@@ -966,6 +978,9 @@ impl Relay {
         if local_origin && self.hop0_restricted {
             return self.restricted_first_hop(rng);
         }
+        // No hidden-address connector: the own-edge is this stem slot. On a
+        // cover-bearing link that is the channel's cadence. Tor does not
+        // take this path.
         // The inherited predicate, transcribed rather than restated:
         // `if (!zone_->fluffing || tx_relay == relay_method::local)`.
         if !self.fluffing || local_origin {
@@ -1186,30 +1201,30 @@ impl Relay {
     /// is total. That carrier is unread: the plan is the refusal, and the
     /// caller returns before any send.
     ///
-    /// A relayed stem's destination came from this map, so `slot_of` finds
-    /// it. The own-edge did not: it is drawn from the hidden-address pool,
-    /// and noise channels follow stem slots, so that send takes the ordinary
-    /// connection. A relayed stem with no slot is map corruption. In release
-    /// that arm still returns [`RelayCarrier::Ordinary`] — the stem goes out.
-    /// That is a **cover** degradation, not a routing one: §92.4's rule is
-    /// that carrier unavailability must never travel as a routing verdict.
+    /// No cover on Tor by ruling: a hidden-address own-edge leaves on the
+    /// ordinary connection, slotted or not. On a cover-bearing link the
+    /// own-edge is a stem slot, and the noise arm is that slot's channel.
+    /// A relayed stem with no slot is map corruption. In release that arm
+    /// still returns [`RelayCarrier::Ordinary`] — the stem goes out. That
+    /// is a **cover** degradation, not a routing one: §92.4's rule is that
+    /// carrier unavailability must never travel as a routing verdict.
     fn carrier_for(&self, plan: RelayPlan) -> RelayCarrier {
         match plan {
             RelayPlan::Stem(destination) if self.noise_enabled() => {
                 match self.map.slot_of(destination) {
-                    // Noise is for a session whose connector declares native
-                    // encryption. A cleartext slot stems on the ordinary
-                    // connection.
-                    Some(slot) if self.noise_destination(destination) => {
+                    // No cover on Tor by ruling: the own-edge leaves immediately
+                    // on the ordinary connection, slotted or not
+                    // (`TOR_COVER_POSTURE.md`). On a cover-bearing link the
+                    // own-edge is a stem slot, so this arm is that slot's
+                    // channel and the send is not off-cadence.
+                    Some(slot)
+                        if self.noise_destination(destination)
+                            && !self.volume_cover_own_edge(destination) =>
+                    {
                         RelayCarrier::Noise { channel: slot }
                     }
                     Some(_) => RelayCarrier::Ordinary,
-                    // Tor's wire-observer defence is the operator relay's volume,
-                    // not these frames (`TOR_COVER_POSTURE.md`). Production
-                    // noise is a development opt-in and defaults off. An
-                    // own-edge that is not a stem slot therefore loses no
-                    // cover the Tor link was receiving.
-                    None if self.hop0_edge == Some(destination) => RelayCarrier::Ordinary,
+                    None if self.volume_cover_own_edge(destination) => RelayCarrier::Ordinary,
                     None => {
                         debug_assert!(
                             false,
