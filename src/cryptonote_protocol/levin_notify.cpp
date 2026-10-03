@@ -54,6 +54,7 @@
 #include <map>
 #include <limits>
 #include <cstdint>
+#include <optional>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
@@ -255,30 +256,28 @@ namespace levin
         Carrying opaque bytes OUTWARD, chosen by Rust after the cadence has
         already decided when and to whom, tells the scheduler nothing. See
         `NoiseSendCb`'s own note, which is about the inbound direction. */
-    RelayZoneHandle* make_relay_zone(const epee::net_utils::zone nzone)
+    RelayZoneHandle* make_relay(const std::uint32_t configured)
     {
       const relay_zone_params params = public_zone_params();
 
-      /* One bit, and it is NOT the noise enable. The transposition hazard the
-         named bits were introduced for (RP-3a shipped it once: the Tor
-         outbound-only fluff rule swapped with the noise enable) cannot recur
-         from here, because only one of the two is ever set. The Rust side
-         still pins both values and refuses noise on a cleartext zone. */
+      /* Noise stays the development opt-in. Rust refuses the ask when no
+         configured connector is an open link. Tor is volume cover and
+         takes no envelope. This side does not scan encryption cells. */
       std::uint32_t flags = 0;
-      if (nzone != epee::net_utils::zone::public_)
-        flags |= SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
+      if (carrier_development_enabled())
+        flags |= SHEKYL_RELAY_ZONE_NOISE_ENABLED;
 
       /* A DEVELOPMENT FLAG, and deliberately not an operator switch. The
          distinction is a ruling, not caution.
 
          The carrier changes `hop` by roughly an order of magnitude — a
          cadence residual of ~6.25 s against a cleartext-link transit of
-         ~715 ms — and `shekyl_dandelionpp_embargo_draw_seconds` takes a zone
-         and nothing else. So an operator switch would put two populations on
-         one encrypted zone drawing from ONE embargo distribution with hops
-         that differ ~9x. Provision at the low end and carrier-on nodes run
-         alpha far below the 0.90 pin; provision at the high end and every
-         carrier-off node on that zone pays a large over-provision.
+         ~715 ms. The pool embargo is the forwarded connector's window, and
+         that window does not know whether the carrier was on. An operator
+         switch would put two populations on links whose hops differ ~9x.
+         Provision at the low end and carrier-on nodes run alpha far below
+         the 0.90 pin; provision at the high end and every carrier-off node
+         pays a large over-provision.
 
          A carrier-adaptive embargo is not the escape. §18 refused a
          degree-adaptive embargo because embargo length is inferable from
@@ -294,24 +293,10 @@ namespace levin
          `SHEKYL_RELAY_ZONE_NOISE_ENABLED` stays off in every build that is
          not one. See COVER_TRAFFIC_RESTORATION.md §3.1 for the two reopening
          criteria that turn it into a shippable switch. */
-      /* The carrier needs an ENCRYPTED link — it hides by payload
-         indistinguishability, which needs encryption at step one. That is
-         `LinkSecrecy`, a different axis from the outbound-fluff rule above
-         even though today's zone set makes the two conditions coincide: Tor
-         is both encrypted AND anonymizing, and this line must not be
-         read as testing the second. P2P link encryption on a cleartext zone
-         would separate them.
-
-         Not duplicated: `LinkSecrecy::of` in Rust is the authority and
-         `Zone::new` REFUSES noise on a cleartext link, so if these ever
-         disagree the zone fails to construct rather than carrying quietly. */
-      if (carrier_development_enabled() && nzone != epee::net_utils::zone::public_)
-        flags |= SHEKYL_RELAY_ZONE_NOISE_ENABLED;
-
       return shekyl_relay_zone_new(
-        now_ms(), std::uint8_t(nzone), params.stems,
+        now_ms(), params.stems,
         std::uint32_t(params.min_epoch.count()), std::uint32_t(params.epoch_range.count()),
-        flags
+        flags, configured
       );
     }
 
@@ -426,17 +411,47 @@ namespace levin
   {
     struct zone
     {
-      explicit zone(boost::asio::io_context& io_service, std::shared_ptr<connections> p2p, epee::net_utils::zone zone, bool pad_txs)
-        : p2p(std::move(p2p)),
+      explicit zone(boost::asio::io_context& io_service, std::vector<connector_registry> registries_in, std::uint32_t configured, bool pad_txs)
+        : registries(std::move(registries_in)),
           wake(io_service),
           strand(io_service),
-          relay(make_relay_zone(zone), &shekyl_relay_zone_free),
+          relay(make_relay(configured), &shekyl_relay_zone_free),
           pending_wakes(0),
-          nzone(zone),
           pad_txs(pad_txs)
       {}
 
-      const std::shared_ptr<connections> p2p;
+      std::optional<held_session> session_of(const boost::uuids::uuid& id) const
+      {
+        for (const auto& entry : registries)
+        {
+          if (!entry.registry)
+            continue;
+          bool found = false;
+          entry.registry->for_connection(id, [&found](detail::p2p_context&) {
+            found = true;
+            return true;
+          });
+          if (found)
+            return held_session{entry.registry.get(), entry.connector};
+        }
+        return std::nullopt;
+      }
+
+      connections* registry_holding(const boost::uuids::uuid& id) const
+      {
+        if (const auto held = session_of(id))
+          return held->registry;
+        return nullptr;
+      }
+
+      std::optional<std::uint8_t> connector_of(const boost::uuids::uuid& id) const
+      {
+        if (const auto held = session_of(id))
+          return held->connector;
+        return std::nullopt;
+      }
+
+      const std::vector<connector_registry> registries;
       /*! One timer for every scheduled relay step, armed from
           `shekyl_relay_zone_next_wake()`. The zone owns the deadline *value*;
           this owns the *sleep*. A second timer would need a second deadline,
@@ -450,7 +465,6 @@ namespace levin
           forever — so only the last outstanding callback does work. The
           inherited `flush_callbacks` guarded the same hazard on `flush_txs`. */
       std::uint32_t pending_wakes;
-      const epee::net_utils::zone nzone;         //!< Zone is public ipv4/ipv6 connections, or Tor or tor
       const bool pad_txs;                        //!< Pad txs to the next boundary for privacy
 
       /*! One transaction handed to the carrier, awaiting its verdict.
@@ -460,8 +474,8 @@ namespace levin
           which is opaque by design. `blob` because `on_transactions_relayed`
           takes blobs; `txid` because that is what the stem watch is keyed on;
           `source` because F-10's source mapping needs the peer this arrived
-          FROM; `requested` because `originated_stays_in_zone` takes the method
-          the caller asked for, not the one the wire used.
+          FROM; `requested` because a discard of a local origin must leave
+          the entry unrelayed, and a success records the stem the wire used.
 
           NOT the successor. The peer a stem was given to is not knowable when
           it is accepted — the channel binds at send time — so it arrives with
@@ -485,13 +499,12 @@ namespace levin
             originated and collapse every forwarded stem into the local bucket
             of `distinct_sources`. */
         boost::uuids::uuid source;
-        /*! The relay method the CALLER asked for, not the one the wire used.
+        /*! The relay method the caller asked for.
 
-            `originated_stays_in_zone` takes the requested method — an origin
-            asking for `local` on an anonymity zone keeps `local` however it
-            travelled. Recording `stem` here would strip that pin off every
-            carrier-borne origin, which is the §92 carve-out the pool arm
-            exists to protect. */
+            A discard of a local origin leaves the entry unrelayed so the
+            short grid retries a send that never left. A success records
+            `stem`: a hidden-address origin is `SHEKYL_RELAY_PLAN_OWN_EDGE`
+            and never enters the carrier, so this path is not that record. */
         relay_method requested;
       };
 
@@ -645,11 +658,11 @@ namespace levin
         try
         {
           detail::zone& z = *static_cast<relay_effects*>(ctx)->zone;
-          if (!z.p2p)
-            return;
-
           boost::uuids::uuid destination{};
           std::memcpy(std::addressof(destination), peer, sizeof(destination));
+          connections* registry = z.registry_holding(destination);
+          if (!registry)
+            return;
 
           std::vector<blobdata> txs;
           txs.reserve(n);
@@ -672,12 +685,13 @@ namespace levin
              graph. The sybil-substitution reasoning is retired with it — §64
              priced it, and minting onion addresses is free, so it was the
              outbound-only reach rule doing that work, never the network.
+             D7 deleted that reach rule: a fluff reaches every session.
 
              A stem send on this zone now clears the flag (`dandelionpp_notify`).
              Which arm set it is load-bearing downstream: a receiver keeps its
              `forward` default when the flag is clear, so `still_stemming`
              holds and R-1's coherence branch fires (`net_node.inl`, §89.7). */
-          make_payload_send_txs(*z.p2p, std::move(txs), destination, z.pad_txs, true);
+          make_payload_send_txs(*registry, std::move(txs), destination, z.pad_txs, true);
         }
         catch (const std::exception& e)
         {
@@ -729,11 +743,14 @@ namespace levin
         try
         {
           detail::zone& z = *static_cast<relay_effects*>(ctx)->zone;
-          if (!z.p2p || bytes == nullptr || len == 0)
+          if (bytes == nullptr || len == 0)
             return false;
 
           boost::uuids::uuid destination{};
           std::memcpy(std::addressof(destination), peer, sizeof(destination));
+          connections* registry = z.registry_holding(destination);
+          if (!registry)
+            return false;
 
           /* Spelled as a span of the type it actually is. The cast that stood
              here was not merely redundant: `epee::span`'s converting ctor
@@ -752,7 +769,7 @@ namespace levin
              the token with `sent` and the fragment is dropped for good — the
              precise failure the status return exists to prevent, inverted.
              Same check `net_node.inl` uses at its own send site. */
-          const int res = z.p2p->send(std::move(blob), destination);
+          const int res = registry->send(std::move(blob), destination);
           return res > 0;
         }
         catch (const std::exception& e)
@@ -802,7 +819,7 @@ namespace levin
 
       void operator()(const boost::system::error_code error)
       {
-        if (!zone_ || !zone_->pending_wakes || --zone_->pending_wakes || !zone_->p2p)
+        if (!zone_ || !zone_->pending_wakes || --zone_->pending_wakes || zone_->registries.empty())
           return;
 
         assert(zone_->strand.running_in_this_thread());
@@ -879,7 +896,7 @@ namespace levin
           connected — the caller decides whether that is worth reporting. */
       static std::size_t run(std::shared_ptr<detail::zone> zone, epee::span<const blobdata> txs, const boost::uuids::uuid& source, i_core_events* core)
       {
-        if (!zone || !zone->p2p || txs.empty())
+        if (!zone || zone->registries.empty() || txs.empty())
           return 0;
 
         assert(zone->strand.running_in_this_thread());
@@ -1027,7 +1044,7 @@ namespace levin
             if (core)
             {
               core->on_transactions_relayed(
-                epee::to_span(one), relay_method::fluff, z.nzone);
+                epee::to_span(one), relay_method::fluff, std::nullopt);
             }
             if (relay_fluff::run(zone, epee::to_span(one), pending.source, core) == 0)
             {
@@ -1041,10 +1058,7 @@ namespace levin
           if (core)
           {
             core->on_transactions_relayed(
-              epee::to_span(one),
-              cryptonote::originated_stays_in_zone(pending.requested, z.nzone)
-                ? relay_method::local : relay_method::stem,
-              z.nzone);
+              epee::to_span(one), relay_method::stem, z.connector_of(v.peer));
           }
           /* A SECOND POOL CHECK, DOING A DIFFERENT JOB FROM THE FIRST.
 
@@ -1191,27 +1205,21 @@ namespace levin
         const bool local_origin = (tx_relay == relay_method::local);
         const bool node_synchronised = core_->is_synchronized();
 
-        /* What the wire does and what the txpool is told are the same thing on
-           clearnet and deliberately not the same for an origin on an anonymity
-           zone. §89 opened the stem gates here; the pool class is what keeps
-           the *backstop* in-zone, and §30.5 forbids that backstop reaching
-           clearnet. So an originated transaction keeps its `local` record
-           whatever the transport did — it still stems on the wire below. */
-        /* Takes WHAT WAS SENT rather than closing over `txs_`, because after
+        /* The plan names the pool record. `OWN_EDGE` records `local`.
+           `STEM` records `stem`. `FLUFF_EPOCH` records `fluff`. The caller
+           passes that method; this does not re-derive it.
+           Takes WHAT WAS SENT rather than closing over `txs_`, because after
            the carrier the two differ. A batch can split — the carrier accepts
            some transactions and refuses others — and recording `txs_` would
            record the accepted ones as relayed AT SEND TIME, which is the
            precise falsification this change exists to remove, and then record
            them a second time when their carrier verdict arrives. */
         const auto record_relayed = [this](const relay_method method,
-                                           const std::vector<blobdata>& sent) {
+                                           const std::vector<blobdata>& sent,
+                                           const std::optional<std::uint8_t> stem_connector) {
           if (sent.empty())
             return;
-          core_->on_transactions_relayed(
-            epee::to_span(sent),
-            cryptonote::originated_stays_in_zone(tx_relay, zone_->nzone) ? relay_method::local : method,
-            zone_->nzone
-          );
+          core_->on_transactions_relayed(epee::to_span(sent), method, stem_connector);
         };
 
         /* `plan_dispatch`, not `plan_relay`: phase, carrier and slot in ONE
@@ -1231,6 +1239,32 @@ namespace levin
           // The zone withheld a local origin. Nothing was sent and nothing is
           // recorded, so the pool retries after this node synchronises.
           MDEBUG("unsynchronised node originates no stem");
+          return;
+        }
+        if (plan == SHEKYL_RELAY_PLAN_NO_OWN_EDGE)
+        {
+          // No outbound edge hides this node's address. Nothing is sent and
+          // nothing is recorded, so the pool retries on the short grid.
+          // Refreshing the stem map cannot manufacture that edge, and a fluff
+          // would publish the origin on a clear link.
+          MDEBUG("no outbound edge hides this node's address; originating nothing");
+          return;
+        }
+        if (plan == SHEKYL_RELAY_PLAN_OWN_EDGE)
+        {
+          // One ordinary send. Success records local — the plan is that
+          // record — and arms the stem observation. Failure returns. No
+          // refresh, no second plan, no fluff: a still-live own-edge that
+          // failed to write must not be published on a clear link.
+          connections* registry = zone_->registry_holding(destination);
+          if (registry && make_payload_send_txs(*registry, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
+          {
+            record_relayed(relay_method::local, txs_, zone_->connector_of(destination));
+            record_stem_observation(zone_->relay.get(), txs_, destination, source_);
+            MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " on the own-edge");
+            return;
+          }
+          MDEBUG("own-edge write failed; originating nothing");
           return;
         }
 
@@ -1400,10 +1434,11 @@ namespace levin
              pool is not left un-told; it is told the thing that actually
              happened. `record_stem_observation` was already placed this way,
              and the two records now arm on the same event. */
-          if (plan == SHEKYL_RELAY_PLAN_STEM &&
-              make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{to_send}, destination, zone_->pad_txs, false))
+          connections* registry = zone_->registry_holding(destination);
+          if (plan == SHEKYL_RELAY_PLAN_STEM && registry &&
+              make_payload_send_txs(*registry, std::vector<blobdata>{to_send}, destination, zone_->pad_txs, false))
           {
-            record_relayed(relay_method::stem, to_send);
+            record_relayed(relay_method::stem, to_send, zone_->connector_of(destination));
             record_stem_observation(zone_->relay.get(), to_send, destination, source_);
             /* Source is intentionally omitted in debug log for privacy - a
                nil uuid indicates source is that node. */
@@ -1425,10 +1460,11 @@ namespace levin
             MDEBUG("unsynchronised node originates no stem");
             return;
           }
-          if (plan == SHEKYL_RELAY_PLAN_STEM &&
-              make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{to_send}, destination, zone_->pad_txs, false))
+          registry = zone_->registry_holding(destination);
+          if (plan == SHEKYL_RELAY_PLAN_STEM && registry &&
+              make_payload_send_txs(*registry, std::vector<blobdata>{to_send}, destination, zone_->pad_txs, false))
           {
-            record_relayed(relay_method::stem, to_send);
+            record_relayed(relay_method::stem, to_send, zone_->connector_of(destination));
             record_stem_observation(zone_->relay.get(), to_send, destination, source_);
             MDEBUG("Sent " << to_send.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
             return;
@@ -1459,10 +1495,10 @@ namespace levin
            sent changes what is recorded with it, and the record assertion
            therefore covers both.
 
-           Order is load-bearing: `record_relayed` reads `zone_->nzone`, and
-           `relay_fluff::run` moves `zone_`. */
+           Order is load-bearing: `relay_fluff::run` moves `zone_`, so the
+           record is taken before that move. */
         const auto fluff_and_record = [this, &record_relayed](const std::vector<blobdata>& batch) {
-          record_relayed(relay_method::fluff, batch);
+          record_relayed(relay_method::fluff, batch, std::nullopt);
           relay_fluff::run(std::move(zone_), epee::to_span(batch), source_, core_);
         };
         fluff_and_record(to_send);
@@ -1471,12 +1507,17 @@ namespace levin
 
   } // anonymous
 
-  notify::notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::net_utils::zone zone, const bool pad_txs, i_core_events& core)
-    : zone_(std::make_shared<detail::zone>(service, std::move(p2p), zone, pad_txs))
+  notify::notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::net_utils::connector_id connector, const bool pad_txs, i_core_events& core)
+    : notify(service, std::vector<connector_registry>{connector_registry{connector_byte(connector), std::move(p2p)}},
+        std::uint32_t{1} << connector_byte(connector), pad_txs, core)
+  {}
+
+  notify::notify(boost::asio::io_context& service, std::vector<connector_registry> registries, const std::uint32_t configured, const bool pad_txs, i_core_events& core)
+    : zone_(std::make_shared<detail::zone>(service, std::move(registries), configured, pad_txs))
     , core_(std::addressof(core))
   {
-    if (!zone_->p2p)
-      throw std::logic_error{"cryptonote::levin::notify cannot have nullptr p2p argument"};
+    if (zone_->registries.empty())
+      throw std::logic_error{"cryptonote::levin::notify cannot have an empty connection registry"};
     if (!zone_->relay)
       throw std::logic_error{"cryptonote::levin::notify could not open its relay zone"};
 
@@ -1499,6 +1540,11 @@ namespace levin
        construction and the single `wake` timer serves them (§20.2a). */
   }
 
+  std::uint8_t notify::connector_byte(const epee::net_utils::connector_id connector) noexcept
+  {
+    return static_cast<std::uint8_t>(connector);
+  }
+
   notify::~notify() noexcept
   {}
 
@@ -1515,17 +1561,27 @@ namespace levin
     const bool noise = shekyl_relay_zone_noise_enabled(zone_->relay.get());
     bool has_outgoing = connection_count;
     if (!noise)
-      has_outgoing = zone_->p2p->get_out_connections_count();
+    {
+      std::size_t outs = 0;
+      for (const auto& entry : zone_->registries)
+        if (entry.registry)
+          outs += entry.registry->get_out_connections_count();
+      has_outgoing = outs != 0;
+    }
     return {noise, CRYPTONOTE_NOISE_CHANNELS <= connection_count, has_outgoing};
   }
 
-  void notify::on_session_established(const boost::uuids::uuid &id, bool is_income)
+  void notify::on_session_established(const boost::uuids::uuid &id, bool is_income, const std::uint8_t connector)
   {
     if (!zone_)
+    {
+      MERROR("session established with no relay; the session is not registered");
       return;
+    }
 
-    boost::asio::dispatch(zone_->strand, [z = zone_, id, is_income] {
-      shekyl_relay_zone_on_session_established(z->relay.get(), uuid_bytes(id), is_income);
+    boost::asio::dispatch(zone_->strand, [z = zone_, id, is_income, connector] {
+      shekyl_relay_zone_on_session_established(
+        z->relay.get(), uuid_bytes(id), is_income, connector);
     });
   }
 
@@ -1561,28 +1617,37 @@ namespace levin
        transition is Rust's answer (the floor comparison lives there, on the
        logging path only); this site owns the operator-facing WARN. Wire
        behavior is untouched by construction: nothing below reads the note. */
-    if (zone_ && zone_->p2p)
+    if (zone_ && !zone_->registries.empty())
     {
       /* size_t -> u32, bounded explicitly rather than narrowed implicitly. A
          count above u32 is already garbage (outbound connections are capped
          orders of magnitude below), and clamping keeps the reading on the
          side the diagnostic treats as healthy — above-floor is Steady, so a
-         clamped value can never fabricate a below-floor WARN. */
-      switch (shekyl_relay_zone_note_achieved_out(
-        static_cast<std::uint8_t>(zone_->nzone),
-        static_cast<std::uint32_t>(std::min<std::size_t>(
-          zone_->p2p->get_out_connections_count(),
-          std::numeric_limits<std::uint32_t>::max()))))
+         clamped value can never fabricate a below-floor WARN.
+         One note per connector. Summing them under one key made twelve
+         clearnet peers look like a healthy Tor floor. */
+      for (const auto& entry : zone_->registries)
       {
-        case 1:
-          MWARNING("Anonymity zone below the provisioned outbound-connection floor"
-                " (D9/§18.4: stemming CONTINUES; diagnostic only — see"
-                " /get_stem_tallies on the admin listener)");
-          break;
-        case 2:
-          MWARNING("Anonymity zone recovered to the provisioned outbound-connection floor");
-          break;
-        default: break;
+        if (!entry.registry)
+          continue;
+        const char* label = "unnamed";
+        if (const auto id = epee::net_utils::connector_from_byte(entry.connector))
+          label = epee::net_utils::connector_id_to_string(*id);
+        const auto achieved = static_cast<std::uint32_t>(std::min<std::size_t>(
+          entry.registry->get_out_connections_count(),
+          std::numeric_limits<std::uint32_t>::max()));
+        switch (shekyl_relay_zone_note_achieved_out(entry.connector, achieved))
+        {
+          case 1:
+            MWARNING(label << " below the provisioned outbound-connection floor"
+                  " (D9/§18.4: stemming CONTINUES; diagnostic only — see"
+                  " /get_stem_tallies on the admin listener)");
+            break;
+          case 2:
+            MWARNING(label << " recovered to the provisioned outbound-connection floor");
+            break;
+          default: break;
+        }
       }
     }
     if (!zone_)
@@ -1735,17 +1800,16 @@ namespace levin
     return out;
   }
 
-  bool notify::floor_snapshot(std::uint32_t& achieved, std::uint32_t& floor, bool& below) const
+  bool notify::floor_snapshot(const std::uint8_t connector, std::uint32_t& achieved, std::uint32_t& floor, bool& below) const
   {
-    /* §18.4 admin-surface read; same handle discipline as stem_snapshot. */
+    /* §18.4 admin-surface read. The note is process-global and keyed by
+       connector; a notifier that was never opened has nothing to report. */
     if (!zone_)
       return false;
-    return shekyl_relay_zone_floor_snapshot(
-      static_cast<std::uint8_t>(zone_->nzone), &achieved, &floor, &below);
+    return shekyl_relay_zone_floor_snapshot(connector, &achieved, &floor, &below);
   }
 
-  std::string format_stem_tally_row_json(
-    const notify::stem_tally_row& row, epee::net_utils::zone z)
+  std::string format_stem_tally_row_json(const notify::stem_tally_row& row)
   {
     static constexpr char HEX[] = "0123456789abcdef";
     std::string out = "{\"peer\":\"";
@@ -1754,8 +1818,11 @@ namespace levin
       out += HEX[b >> 4];
       out += HEX[b & 0xf];
     }
-    out += "\",\"zone\":\"";
-    out += epee::net_utils::zone_to_string(z);
+    out += "\",\"connector\":\"";
+    if (const auto id = epee::net_utils::connector_from_byte(row.connector))
+      out += epee::net_utils::connector_id_to_string(*id);
+    else
+      out += "unnamed";
     out += "\",\"propagated\":";
     out += std::to_string(row.propagated);
     out += ",\"silent\":";
@@ -1808,15 +1875,13 @@ namespace levin
        §3's status table, the row headed "§2.9 step 2 — covert executor".
 
        Recording parity was checked before the deletion. `fluff` makes the
-       identical `on_transactions_relayed` call below. `stem`/`local` are
-       recorded inside `dandelionpp_notify`'s `record_relayed`, with
-       `originated_stays_in_zone` applied — the *planned* method rather than
-       the blanket `local` downgrade. `none`/`block` were being RELAYED by
-       the deleted branch, which had no switch at all; the arm below refuses
-       them, and `none` means do not relay.
-
-       What is *not* symmetric is the txpool class an origin keeps — see
-       `originated_stays_in_zone` at the record sites in `dandelionpp_notify`. */
+       `on_transactions_relayed` call below and carries no connector.
+       `stem`/`local` are recorded inside `dandelionpp_notify`'s
+       `record_relayed` as the method the plan named. `OWN_EDGE` is
+       `local`. A stem, including one the carrier completed, is `stem`.
+       `none`/`block` were being RELAYED by the deleted branch, which had
+       no switch at all; the arm below refuses them, and `none` means do
+       not relay. */
 
     switch (tx_relay)
     {
@@ -1826,24 +1891,15 @@ namespace levin
         return false;
       case relay_method::stem:
       case relay_method::local:
-        /* GATE 3 of 3, deleted at §89.5. This was gated on
-           `zone_->nzone == public_`, so stem/local on Tor fell
-           through into the fluff arm and the anonymity zone diffused where
-           the design said it stemmed (§63). Tor is a transport like the
-           clear internet; changing the transport does not change the graph.
-
-           The outbound-only fluff rule is unaffected and still applies when
-           this stem later fluffs — it travels with the zone's `reach`
-           (`FluffReach::OutboundOnly`, set from `nzone != public_` in
-           `make_relay_zone`), which no stemming decision touches. */
-        // this will change a local tx to stem or fluff ...
+        /* The relay chooses the phase. Hop 0 is the construction bit
+           inside the relay, not a branch in this switch. */
         boost::asio::dispatch(
           zone_->strand,
           dandelionpp_notify{zone_, core_, std::move(txs), source, tx_relay}
         );
         break;
       case relay_method::fluff:
-        core_->on_transactions_relayed(epee::to_span(txs), tx_relay, zone_->nzone);
+        core_->on_transactions_relayed(epee::to_span(txs), tx_relay, std::nullopt);
         boost::asio::dispatch(zone_->strand, relay_fluff{zone_, std::move(txs), source, core_});
         break;
     }

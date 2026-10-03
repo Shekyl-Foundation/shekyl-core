@@ -420,13 +420,6 @@ namespace cryptonote
       return true;
     }
 
-    // No chain synchronization over hidden networks (tor, Tor, etc.)
-    if(context.m_remote_address.get_zone() != epee::net_utils::zone::public_)
-    {
-      context.set_state_normal();
-      return true;
-    }
-
     if (hshd.current_height > target)
     {
     /* As I don't know if accessing hshd from core could be a good practice,
@@ -853,20 +846,17 @@ namespace cryptonote
        selectable path with a latency price, not a property a transaction
        inherits from the peer that handed it over.
 
-       The class change is what makes coherence execute. `forward` was refused
-       propagation into `tvc.m_relay` (tx_pool.cpp), so the batching switch
-       below dropped it and `relay_transactions` was never called at arrival
-       with an anonymity origin — leaving the coherence branch in
-       `net_node.inl` correct but unreachable (it said so, at §89.8.5). As
-       `stem`, the arrival flows to `relay_transactions` with its real origin,
-       and coherence keeps it on the zone it arrived over.
+       `forward` was refused propagation into `tvc.m_relay` (tx_pool.cpp), so
+       the batching switch below dropped it and `relay_transactions` was
+       never called at arrival with an anonymity origin. As `stem`, the
+       arrival flows to `relay_transactions`. The session's notifier stems
+       it; arrival-coherence is not a routing decision.
 
        `dandelionpp_fluff` is unchanged and still overrides below: a sender who
        disabled white noise over Tor is fluffing, and the receiving hidden
        service fluffs immediately — that is the deliberate exit from the
        anonymity zone (§59.1), not a routing inference about the transport. */
 
-    const epee::net_utils::zone zone = context.m_remote_address.get_zone();
     relay_method tx_relay = relay_method::stem;
 
     std::vector<blobdata> stem_txs{};
@@ -882,11 +872,7 @@ namespace cryptonote
     for (auto& tx : arg.txs)
     {
       tx_verification_context tvc{};
-      // `zone` is the arrival transport, computed above. It is passed ALONGSIDE
-      // `tx_relay` rather than folded into it: the relay method is a routing
-      // decision that may be revised, the zone is a fact about where the bytes
-      // came from that must not be.
-      if (!m_core.handle_incoming_tx(tx, tvc, tx_relay, true, zone))
+      if (!m_core.handle_incoming_tx(tx, tvc, tx_relay, true))
       {
         if (shekyl_drop_verdict_severs(tvc.m_drop_verdict))
         {
@@ -921,14 +907,14 @@ namespace cryptonote
       //TODO: add announce usage here
       arg.dandelionpp_fluff = false;
       arg.txs = std::move(stem_txs);
-      relay_transactions(arg, context.m_connection_id, context.m_remote_address.get_zone(), relay_method::stem);
+      relay_transactions(arg, context.m_connection_id, relay_method::stem);
     }
     if (!fluff_txs.empty())
     {
       //TODO: add announce usage here
       arg.dandelionpp_fluff = true;
       arg.txs = std::move(fluff_txs);
-      relay_transactions(arg, context.m_connection_id, context.m_remote_address.get_zone(), relay_method::fluff);
+      relay_transactions(arg, context.m_connection_id, relay_method::fluff);
     }
     return 1;
   }
@@ -1719,7 +1705,7 @@ skip:
       return true;
 
     MTRACE("Checking for outgoing syncing peers...");
-    std::unordered_map<epee::net_utils::zone, unsigned> n_syncing, n_synced;
+    std::unordered_map<epee::net_utils::connector_id, unsigned> n_syncing, n_synced;
     // NOT the most-recently-synced connection, despite what the inherited name
     // said: this is assigned for every `state_normal` connection the scan
     // visits, and that scan walks a `boost::unordered_map` keyed on random
@@ -1731,14 +1717,17 @@ skip:
     // would be better; imposing one would be invented policy. The name is what
     // needed fixing -- it asserted a temporal property the code never provided,
     // and it produced exactly that misreading in a design doc.
-    std::unordered_map<epee::net_utils::zone, boost::uuids::uuid> some_synced_connection;
-    std::vector<epee::net_utils::zone> zones;
+    std::unordered_map<epee::net_utils::connector_id, boost::uuids::uuid> some_synced_connection;
+    std::vector<epee::net_utils::connector_id> zones;
     m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
     {
       if (!context.session_established() || context.m_is_income) // only consider connected outgoing peers
         return true;
 
-      const epee::net_utils::zone zone = context.m_remote_address.get_zone();
+      const auto connector = epee::net_utils::connector_from_byte(context.m_connector);
+      if (!connector)
+        return true;
+      const epee::net_utils::connector_id zone = *connector;
       if (n_syncing.find(zone) == n_syncing.end())
       {
         n_syncing[zone] = 0;
@@ -1760,7 +1749,7 @@ skip:
     for (const auto& zone : zones)
     {
       const unsigned int max_out_peers = get_max_out_peers(zone);
-      MTRACE("[" << epee::net_utils::zone_to_string(zone) << "] " << n_syncing[zone] << " syncing, " << n_synced[zone] << " synced, " << max_out_peers << " max out peers");
+      MTRACE("[" << epee::net_utils::connector_id_to_string(zone) << "] " << n_syncing[zone] << " syncing, " << n_synced[zone] << " synced, " << max_out_peers << " max out peers");
 
       // if we're at max out peers, and not enough are syncing, drop one of the synced peers
       if (n_synced[zone] + n_syncing[zone] >= max_out_peers && n_syncing[zone] < P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT && some_synced_connection[zone] != boost::uuids::nil_uuid())
@@ -2510,15 +2499,16 @@ skip:
   template<class t_core>
   bool t_cryptonote_protocol_handler<t_core>::relay_block(NOTIFY_NEW_COMPACT_BLOCK::request& arg, cryptonote_connection_context& exclude_context)
   {
-    // Public-zone peers only: compact-block announce is the sole block path (PWD-B6).
-    std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> connections;
+    // Compact-block announce is the sole block path (PWD-B6), on every session.
+    std::vector<std::pair<epee::net_utils::connector_id, boost::uuids::uuid>> connections;
     m_p2p->for_each_connection([&exclude_context, &connections](connection_context& context, uint32_t)
     {
       // session_established() filters out connections before the Levin handshake
-      if (context.session_established() && exclude_context.m_connection_id != context.m_connection_id && context.m_remote_address.get_zone() == epee::net_utils::zone::public_)
+      if (context.session_established() && exclude_context.m_connection_id != context.m_connection_id)
       {
         LOG_DEBUG_CC(context, "RELAYING BLOCK TO PEER");
-        connections.push_back({context.m_remote_address.get_zone(), context.m_connection_id});
+        if (const auto connector = epee::net_utils::connector_from_byte(context.m_connector))
+          connections.push_back({*connector, context.m_connection_id});
       }
       return true;
     });
@@ -2534,23 +2524,11 @@ skip:
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
-  bool t_cryptonote_protocol_handler<t_core>::relay_transactions(NOTIFY_NEW_TRANSACTIONS::request& arg, const boost::uuids::uuid& source, epee::net_utils::zone zone, relay_method tx_relay)
+  bool t_cryptonote_protocol_handler<t_core>::relay_transactions(NOTIFY_NEW_TRANSACTIONS::request& arg, const boost::uuids::uuid& source, relay_method tx_relay)
   {
-    /* Push all outgoing transactions to this function. The behavior needs to
-       identify how the transaction is going to be relayed, and then update the
-       local mempool before doing the relay. The code was already updating the
-       DB twice on received transactions - it is difficult to workaround this
-       due to the internal design.
-
-       The `once_at_origin_route` token is constructed here, the only
-       production caller of `send_txs`. Bypassing the helper is a compile
-       error: `zone_route` has no public constructor. */
-    return m_p2p->send_txs(
-      std::move(arg.txs),
-      zone,
-      source,
-      tx_relay,
-      once_at_origin_route(tx_relay, zone)) != epee::net_utils::zone::invalid;
+    /* Push all outgoing transactions to this function. The relay decides
+       the phase. Hop 0 is the construction bit inside the relay. */
+    return m_p2p->send_txs(std::move(arg.txs), source, tx_relay);
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
@@ -2597,7 +2575,7 @@ skip:
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
-  bool t_cryptonote_protocol_handler<t_core>::needs_new_sync_connections(epee::net_utils::zone zone) const
+  bool t_cryptonote_protocol_handler<t_core>::needs_new_sync_connections(epee::net_utils::connector_id zone) const
   {
     const uint64_t target = m_core.get_target_blockchain_height();
     const uint64_t height = m_core.get_current_blockchain_height();
@@ -2605,7 +2583,7 @@ skip:
       return false;
     size_t n_out_peers = 0;
     m_p2p->for_each_connection([&](cryptonote_connection_context& ctx, uint32_t support_flags)->bool{
-      if (!ctx.m_is_income && ctx.m_remote_address.get_zone() == zone)
+      if (!ctx.m_is_income && epee::net_utils::connector_from_byte(ctx.m_connector) == zone)
         ++n_out_peers;
       return true;
     });

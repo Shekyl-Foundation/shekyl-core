@@ -30,6 +30,7 @@ use shekyl_archival_retention::{
 use shekyl_archival_retention::{EmissionAuthRole, RewardCommit, EMISSION_KAT_SHAPE};
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSecretKey, SignatureScheme};
+use shekyl_types::BlockHeight;
 
 /// Claimed settlement epoch for the base fixture.
 const E: u64 = 5;
@@ -73,11 +74,15 @@ impl Fixture {
             shards: vec![
                 EpochCloseShard {
                     shard_id: shape.shard_a,
-                    close: ShardClose::ClosedAt(close - shape.shard_a_freeze_offset),
+                    close: ShardClose::ClosedAt(BlockHeight::from_raw(
+                        close - shape.shard_a_freeze_offset,
+                    )),
                 },
                 EpochCloseShard {
                     shard_id: shape.shard_b,
-                    close: ShardClose::ClosedAt(close - shape.shard_b_freeze_offset),
+                    close: ShardClose::ClosedAt(BlockHeight::from_raw(
+                        close - shape.shard_b_freeze_offset,
+                    )),
                 },
             ],
             pairs: shape

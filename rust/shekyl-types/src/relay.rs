@@ -6,14 +6,14 @@
 //! The relay vocabulary two crates need — DRS-E1 S-POOL (`DRS_E1_SPOOL.md`
 //! §3.4, `SPL-Q6` RULED 2026-09-24).
 //!
-//! [`RelayMethod`] and [`NetZone`] were born in `shekyl-relay::zone_route`
-//! as the FFI seam's words: an arrival class handed in, a routing plan
-//! handed out, each byte-pinned to the C++ enum it mirrors
-//! (`cryptonote::relay_method`, `epee::net_utils::zone`). The daemon's pool
-//! store needs the same words and cannot take `shekyl-relay` — a relay
-//! scheduler with an async driver — as a dependency, so they live here and
-//! `shekyl-relay` re-exports them (rule 18: a word two crates need lives
-//! below both; `SCU-Q2`, `SAR-Q2`).
+//! [`RelayMethod`] and [`NetZone`] were born beside the relay scheduler
+//! as the FFI seam's words. The daemon's pool store needs the same words
+//! and cannot take `shekyl-relay` — a relay scheduler with an async driver —
+//! as a dependency, so they live here (rule 18: a word two crates need lives
+//! below both; `SCU-Q2`, `SAR-Q2`). [`RelayMethod`] byte pins sit in
+//! `shekyl-relay`. [`NetZone`] pins sit on
+//! this type: the zone-parameterized embargo still speaks those bytes.
+//! Connector ids are a different vocabulary.
 //!
 //! # What these enums are, and are not
 //!
@@ -50,7 +50,7 @@
 /// **by value and test, not by include**: the C++ side `static_assert`s each
 /// variant's byte against this contract at the FFI seam, so a renumbering on
 /// either side is a compile error there rather than a silent remap here.
-/// `shekyl-relay::zone_route` carries the Rust-side `const` pins.
+/// `shekyl-relay::zone` carries the Rust-side `const` pins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum RelayMethod {
@@ -135,27 +135,29 @@ pub enum RelayCategory {
     All,
 }
 
-/// The network zone a transaction arrived on (or, for originated traffic, the
-/// zone the origination roll chose). Mirrors `epee::net_utils::zone` by value
-/// and `static_assert`, same contract discipline as [`RelayMethod`].
+/// The network class the zone-parameterized embargo still names. Not a
+/// connector id, and not a route: the one relay does not read this byte.
+/// The C++ `netzone_*` constants pin the same bytes.
 ///
-/// `Invalid == 0` is load-bearing on the C++ side: a pool record written
-/// before the zone field existed carries zero there and decodes to "origin
-/// unknown" with no migration (`blockchain_db.cpp`, `set_origin_zone`'s
-/// `static_assert`). The Rust pool record has no such history, but the pin
-/// is the seam's and stays.
+/// `Invalid == 0` is the seam pin with `cryptonote::netzone_invalid`.
+/// The pool record does not store an arrival zone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum NetZone {
-    /// No zone — for originated traffic this is the roll saying "take
-    /// anonymity", resolved by the caller's own zone map, fail-closed; for
-    /// an arrival, "origin unknown".
+    /// Unknown byte. The origination roll that used this value is retired.
+    /// The zone-parameterized embargo still draws its long window here.
     Invalid = 0,
     /// The clear internet.
     Public = 1,
     /// Tor. Discriminant 2 is unused so this value stays 3.
     Tor = 3,
 }
+
+const _: () = {
+    assert!(NetZone::Invalid as u8 == 0);
+    assert!(NetZone::Public as u8 == 1);
+    assert!(NetZone::Tor as u8 == 3);
+};
 
 impl NetZone {
     /// Byte-contract decode; `None` on an unknown byte. Exhaustive: a fifth

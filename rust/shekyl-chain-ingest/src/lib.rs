@@ -66,6 +66,14 @@
 
 #![deny(unsafe_code)]
 
+/// `ARW-Q15`'s consumer: the LMDB slash fixture rebuilt on the Rust stack
+/// under a levered schedule and compared through a role map.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_fixture_replica_tests;
+/// DRS-E4 §3.8 item 2: the archival oracle's sufficiency stamp — census
+/// and stub halves over the captured corpus.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_sufficiency_tests;
 #[cfg(test)]
 mod artifact_tests;
 /// E6 slice 7 commit 2 (a): the CEN-G2 measurement through the driver —
@@ -104,6 +112,7 @@ pub mod schedule;
 pub mod seed;
 #[cfg(feature = "pipeline")]
 pub mod sequencer;
+pub mod snapshot_json;
 pub mod source;
 pub mod substrate;
 #[cfg(test)]
@@ -114,8 +123,8 @@ mod vectors_tests;
 
 #[cfg(feature = "pipeline")]
 pub use connector::{
-    Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Rewind, Rewound, RunEnd,
-    RunFault, TemplateFacts,
+    Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Inject, Injected, Rewind,
+    Rewound, RunEnd, RunFault, TemplateFacts,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]
@@ -134,6 +143,8 @@ pub use schedule::{Chain, ChainRules, RegtestLever, RegtestLeverRefused};
 pub use seed::{SeedClaim, SeedLedger};
 #[cfg(feature = "pipeline")]
 pub use sequencer::{SequenceError, Sequencer};
-pub use source::{IngestEvent, SequenceNo, Sequenced, Source};
+pub use source::{
+    IngestEvent, Injection, InjectionParseError, SequenceNo, Sequenced, ServeCredit, Source,
+};
 pub use substrate::{ProductionSubstrate, SubstrateFault};
 pub use trace::{Facts, Trace, TraceFault, TraceWriter};

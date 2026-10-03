@@ -49,15 +49,17 @@ use std::collections::{BTreeMap, VecDeque};
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
     effective_median_at, quote_emission, tree_after, AtHeight, BlockOutputs, Candidate, ChainView,
-    LeafSource, RecordedBlock, RecordedWeights, RuleSet, Tip, TreeFrontier, ViewRead,
+    LeafSource, RecordedBlock, RecordedWeights, RuleSet, SettlementSchedule, Tip, TreeFrontier,
+    ViewRead,
 };
+use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
 use shekyl_chain_store::codec::SettlementEpochBlocks;
 use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
     ArchivalLength, AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight,
-    CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight, TxHash,
+    CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight, SettlementEpoch, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::tx_extra::{admitted_leaf_blob, parse, pqc_leaf_entries_per_output};
@@ -142,6 +144,11 @@ pub struct GrownTree {
     /// the push then adds that block's own burn. Genesis burns nothing,
     /// so the fold starts at zero.
     total_burned: AtomicUnits,
+    /// `accrual[h]` — block `h`'s staker inflow (CEN-G11, the
+    /// `PaidEmission::accrual` the reward chain priced), what the store's
+    /// E4 hook folds into the open epoch's `archival_budget_accruing` row.
+    /// [`archival_snapshot_after`](Self::archival_snapshot_after) sums it.
+    accrual: Vec<AtomicUnits>,
 }
 
 impl GrownTree {
@@ -208,6 +215,36 @@ impl GrownTree {
         self.blocks[at(height)].coins_generated
     }
 
+    /// The archival state after block `height` as the store writes it for
+    /// a synthetic chain — one that posts no bonds, so the only archival
+    /// row is the open epoch's accruing total: the sum of every block's
+    /// staker inflow from the epoch's open height through `height`
+    /// (`archival_write.rs` phase 9a, under the genesis schedule). The
+    /// §3.8.1 rows the trace's `0x04` record carries for such a chain.
+    ///
+    /// A chain that reaches a settlement close has a different shape (the
+    /// accruing row is removed and the budget row written); the fixtures
+    /// stay short of one, and this asserts it.
+    #[must_use]
+    pub fn archival_snapshot_after(&self, height: u64) -> ArchivalSnapshot {
+        let schedule = SettlementSchedule::GENESIS;
+        assert!(
+            schedule.close_due_at_height(height + 1).is_none(),
+            "the synthetic fixtures stay short of a settlement close"
+        );
+        let epoch = schedule.epoch_at_height(height);
+        let open = schedule.open_height(epoch);
+        let total = self.accrual[at(open)..=at(height)]
+            .iter()
+            .try_fold(AtomicUnits::ZERO, |sum, a| sum.checked_add(*a))
+            .expect("a fixture chain's accrual fold fits u64");
+        let mut snapshot = ArchivalSnapshot::empty();
+        snapshot
+            .set_budget_accruing(SettlementEpoch::from_raw(epoch), total)
+            .expect("the first accruing row");
+        snapshot
+    }
+
     /// Connect `block` at the next height: derive its drain over the tree
     /// as it stands, apply the growth, then register its outputs — and
     /// derive its weights under the medians the chain so far yields, the
@@ -247,6 +284,7 @@ impl GrownTree {
             .checked_add(emission.burned())
             .expect("a fixture chain's burned fold fits u64");
         let coins_generated = emission.coins_generated;
+        self.accrual.push(emission.accrual);
         let (listed_before, archival_before) =
             height
                 .to_raw()
@@ -810,19 +848,38 @@ pub fn spent_keys_of(chain: &[(Block, Vec<Transaction>)]) -> Vec<[u8; 32]> {
         .collect()
 }
 
+/// What a test trace's covered-tip checkpoint records. The checkpoint's two
+/// encodings travel together (`trace.rs`), so this names both at once.
+#[derive(Clone, Copy, Debug)]
+pub enum Pinned<'a> {
+    /// The grown tree's own state after the tip: its digest, and the
+    /// archival rows the store writes for a chain that posts no bonds
+    /// ([`GrownTree::archival_snapshot_after`]).
+    OfTree,
+    /// A state read from a reference store — the pair as the LMDB walker
+    /// would have taken it, for chains the tree cannot derive (bond posts,
+    /// an injected credit).
+    Read {
+        /// The reference digest.
+        digest: Digest,
+        /// The reference rows.
+        archival: &'a ArchivalSnapshot,
+    },
+}
+
 /// A trace for `chain`. Each row's `root_after` is [`GrownTree::root_after`]
 /// of this chain and its three weight values are the tree's derivation at
 /// that height ([`GrownTree::weights_of`], [`GrownTree::median_for`]);
 /// `economics` supplies the rest and is called once per height, from
-/// genesis, in order. `checkpoint` appends the digest of that same tree
-/// after the tip.
+/// genesis, in order. `pinned` appends the checkpoint — both encodings —
+/// after the tip, when given.
 ///
 /// Heights are the chain's indices. A chain whose first block is not
 /// genesis is not this constructor's input.
-pub fn trace_with(
+pub fn trace_pinned(
     chain: &[(Block, Vec<Transaction>)],
     mut economics: impl FnMut(u64) -> TraceEconomics,
-    checkpoint: bool,
+    pinned: Option<Pinned<'_>>,
 ) -> Trace {
     let mut w = TraceWriter::new(Vec::new()).expect("header");
     let tree = GrownTree::over(chain);
@@ -831,17 +888,54 @@ pub fn trace_with(
         let facts = economics(height).over(&tree, height);
         w.push_facts(h(height), &facts).expect("facts");
     }
-    if checkpoint && !chain.is_empty() {
-        let tip = u64::try_from(chain.len() - 1).expect("a non-empty chain has a tip");
-        w.push_checkpoint(&digest_of(chain, tree.root_after(tip).as_bytes()))
-            .expect("checkpoint");
+    if let Some(pinned) = pinned {
+        let (digest, archival) = match pinned {
+            Pinned::OfTree => {
+                let tip = chain
+                    .len()
+                    .checked_sub(1)
+                    .and_then(|t| u64::try_from(t).ok())
+                    .expect("a checkpoint of the tree needs a tip: the chain is empty");
+                (
+                    digest_of(chain, tree.root_after(tip).as_bytes()),
+                    tree.archival_snapshot_after(tip),
+                )
+            }
+            Pinned::Read { digest, archival } => (digest, archival.clone()),
+        };
+        w.push_checkpoint(&digest).expect("checkpoint");
+        w.push_archival_snapshot(&archival)
+            .expect("archival snapshot");
     }
     Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read")
+}
+
+/// [`trace_pinned`] with the tree's own checkpoint, or none.
+pub fn trace_with(
+    chain: &[(Block, Vec<Transaction>)],
+    economics: impl FnMut(u64) -> TraceEconomics,
+    checkpoint: bool,
+) -> Trace {
+    trace_pinned(chain, economics, checkpoint.then_some(Pinned::OfTree))
 }
 
 /// [`trace_with`] with the synthetic economics: distinct per height, zero burn.
 pub fn trace_of(chain: &[(Block, Vec<Transaction>)], checkpoint: bool) -> Trace {
     trace_with(chain, synthetic_economics, checkpoint)
+}
+
+/// [`trace_pinned`] with the synthetic economics and a checkpoint read
+/// from a reference store ([`Pinned::Read`]).
+pub fn trace_read(
+    chain: &[(Block, Vec<Transaction>)],
+    digest: Digest,
+    archival: &ArchivalSnapshot,
+) -> Trace {
+    trace_pinned(
+        chain,
+        synthetic_economics,
+        Some(Pinned::Read { digest, archival }),
+    )
 }
 
 /// The redb-shaped digest of `chain` given the root after its tip.
@@ -867,15 +961,22 @@ pub fn open_store(path: &std::path::Path) -> ChainStore {
 /// blocks — a chain mined on a levered regtest schedule opens its store
 /// the way the daemon did (`Horizons::under`), or `connect` refuses the
 /// first block for naming another epoch (`ARW-15`).
-pub fn open_store_under(path: &std::path::Path, in_force: &RuleSet) -> ChainStore {
+///
+/// The archival [`ApplyPolicy`] is the caller's: the replays pass
+/// [`ApplyPolicy::Full`]; the sufficiency stamp (DRS-E4 §3.8 item 2) opens
+/// a store with one family's writer stubbed and asks whether the comparator
+/// notices.
+///
+/// [`ApplyPolicy`]: shekyl_chain_store::apply_policy::ApplyPolicy
+/// [`ApplyPolicy::Full`]: shekyl_chain_store::apply_policy::ApplyPolicy::Full
+pub fn open_store_under(
+    path: &std::path::Path,
+    in_force: &RuleSet,
+    policy: shekyl_chain_store::apply_policy::ApplyPolicy,
+) -> ChainStore {
     let horizons = shekyl_chain_store::store::Horizons::under(in_force)
         .expect("a well-formed rule set's pair is a store schedule");
-    ChainStore::with_horizons(
-        path,
-        shekyl_chain_store::apply_policy::ApplyPolicy::default(),
-        horizons,
-    )
-    .expect("create")
+    ChainStore::with_horizons(path, policy, horizons).expect("create")
 }
 
 /// A connector whose task the test holds, so that stopping it can wait until

@@ -18,7 +18,7 @@ use super::test_fixtures::{
 use super::*;
 use crate::engine::emission_source::EpochSnapshot;
 use shekyl_archival_retention::ShardSet;
-use shekyl_types::ChainCount;
+use shekyl_types::{BlockHeight, ChainCount};
 
 use shekyl_archival_retention::{
     as_of_e_served_work, bond_wire::MAX_HOLDINGS_SHARDS, claimed_epochs_check_and_set,
@@ -422,15 +422,15 @@ fn assembles_canonical_rows_rewards_and_holdings() {
     snap.shards = vec![
         EpochCloseShard {
             shard_id: SHARD_B,
-            close: ShardClose::ClosedAt(close - 8_000),
+            close: ShardClose::ClosedAt(BlockHeight::from_raw(close - 8_000)),
         },
         EpochCloseShard {
             shard_id: SHARD_A,
-            close: ShardClose::ClosedAt(close - 5_000),
+            close: ShardClose::ClosedAt(BlockHeight::from_raw(close - 5_000)),
         },
         EpochCloseShard {
             shard_id: 11,
-            close: ShardClose::ClosedAt(close - 2_000),
+            close: ShardClose::ClosedAt(BlockHeight::from_raw(close - 2_000)),
         },
     ];
     snap.credit_pairs = vec![
@@ -519,7 +519,7 @@ fn scarcity_conversion_refuses_at_the_builder() {
     }];
     let shards = [EpochCloseShard {
         shard_id: SHARD_A,
-        close: ShardClose::ClosedAt(0),
+        close: ShardClose::ClosedAt(BlockHeight::from_raw(0)),
     }];
     let pairs = [CreditPair {
         bond_idx: 0,
@@ -693,11 +693,11 @@ fn shadowed_shard_row_is_source_invalid() {
     snap.shards = vec![
         EpochCloseShard {
             shard_id: SHARD_A,
-            close: ShardClose::ClosedAt(close - 1_000),
+            close: ShardClose::ClosedAt(BlockHeight::from_raw(close - 1_000)),
         },
         EpochCloseShard {
             shard_id: SHARD_A,
-            close: ShardClose::ClosedAt(close - 9_000),
+            close: ShardClose::ClosedAt(BlockHeight::from_raw(close - 9_000)),
         },
     ];
     snap.credit_pairs = vec![CreditPair {

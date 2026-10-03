@@ -84,6 +84,8 @@
 
 use core::ffi::CStr;
 
+use shekyl_types::BlockHeight;
+
 use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
 use crate::bond_wire::{HoldingsDescriptor, HoldingsKind};
 use crate::consensus_state::{shard_work_micro, ShardClose};
@@ -334,12 +336,15 @@ pub fn parent_state_shards_from_gather(
         });
     }
     let seb = effective_settlement_epoch_blocks();
+    // `parent_height` arrives as the FFI's bare `u64` (grandfathered,
+    // `check_inland_height_u64.py`); it decodes here, once.
+    let judged_at = BlockHeight::from_raw(parent_height);
     Ok(r_market
         .iter()
         .zip(closes.iter())
         .map(|(&r_market, &close)| AdmissionShard {
             r_market,
-            age_milli: close.age_milli(parent_height, seb),
+            age_milli: close.age_milli(judged_at, seb),
         })
         .collect())
 }
@@ -614,9 +619,13 @@ mod tests {
 
         let open = parent_state_shards_from_gather(&[7], &[ShardClose::Open], parent_height)
             .expect("gather");
-        let closed =
-            parent_state_shards_from_gather(&[7], &[ShardClose::ClosedAt(0)], parent_height)
-                .expect("gather");
+        let genesis_band = BlockHeight::from_raw(0);
+        let closed = parent_state_shards_from_gather(
+            &[7],
+            &[ShardClose::ClosedAt(genesis_band)],
+            parent_height,
+        )
+        .expect("gather");
 
         assert_eq!(
             open[0].age_milli, 0,
@@ -624,7 +633,11 @@ mod tests {
         );
         assert_eq!(
             closed[0].age_milli,
-            crate::consensus_state::shard_age_milli(parent_height, 0, SEB),
+            crate::consensus_state::shard_age_milli(
+                BlockHeight::from_raw(parent_height),
+                genesis_band,
+                SEB
+            ),
             "a closed shard must score the production age term unchanged"
         );
         assert!(
@@ -686,7 +699,7 @@ mod tests {
     #[test]
     fn parent_state_shards_from_gather_derives_age_and_rejects_parallel_mismatch() {
         let r = [0u64, 1];
-        let closes = [ShardClose::ClosedAt(0); 2];
+        let closes = [ShardClose::ClosedAt(BlockHeight::from_raw(0)); 2];
         let shards = parent_state_shards_from_gather(&r, &closes, 0).expect("parallel");
         assert_eq!(shards.len(), 2);
         assert_eq!(shards[0].age_milli, 0);

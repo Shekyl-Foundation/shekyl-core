@@ -79,12 +79,12 @@ namespace nodetool
     proxy()
       : max_connections(-1),
         address(),
-        zone(epee::net_utils::zone::invalid)
+        zone(epee::net_utils::connector_id::tor)
     {}
 
     std::int64_t max_connections;
     net::socks::endpoint address;
-    epee::net_utils::zone zone;
+    epee::net_utils::connector_id zone;
   };
 
   struct anonymous_inbound
@@ -106,9 +106,6 @@ namespace nodetool
 
   std::optional<std::vector<proxy>> get_proxies(const boost::program_options::variables_map& vm);
   std::optional<std::vector<anonymous_inbound>> get_anonymous_inbounds(const boost::program_options::variables_map& vm);
-
-  //! \return True if `commnd` is filtered (ignored/dropped) for `address`
-  bool is_filtered_command(epee::net_utils::network_address const& address, int command);
 
   /*! Combine the host this node OBSERVED on the socket with the port a peer
     ADVERTISED, or nothing if no endpoint can be derived.
@@ -221,17 +218,14 @@ namespace nodetool
       first failure costs minutes and only a persistent one earns the hour.
 
       \note NOT a latency. See `P2P_ANON_FAILED_ADDR_FORGET_SECONDS`. */
-    static time_t window(epee::net_utils::zone zone, uint32_t consecutive)
+    static time_t window(std::optional<epee::net_utils::connector_id> connector, uint32_t consecutive)
     {
-      // Tested by NAMING the anonymity zones, not by asking "is it not public".
-      // `epee::net_utils::zone` also has `invalid`, and a not-public test would
-      // hand the SHORT window to an address whose zone could not be determined
-      // -- a behaviour change with no evidence behind it, since the measured
-      // recovery this value comes from is a hidden-service property. Anything
-      // that is not demonstrably an anonymity address keeps the public hour,
-      // which is also the safe default for any zone added later.
-      const bool anonymity_zone = zone == epee::net_utils::zone::tor;
-      if (!anonymity_zone)
+      // Named, not "anything but clearnet". An address with no connector is
+      // not a hidden service, and the short window is a hidden-service
+      // property. Only Tor takes it. Clearnet, and an address whose connector
+      // could not be determined, keep the hour.
+      const bool tor = connector && *connector == epee::net_utils::connector_id::tor;
+      if (!tor)
         return P2P_FAILED_ADDR_FORGET_SECONDS;
 
       uint64_t w = P2P_ANON_FAILED_ADDR_FORGET_SECONDS;
@@ -268,7 +262,7 @@ namespace nodetool
         return false;
       // The zone comes from the address itself, so callers need no zone
       // argument and cannot pass the wrong one.
-      return now - it->second.when <= window(addr.get_zone(), it->second.consecutive);
+      return now - it->second.when <= window(addr.connector(), it->second.consecutive);
     }
 
   private:
@@ -289,8 +283,8 @@ namespace nodetool
         m_in_timedsync(false)
     {}
 
-    p2p_connection_context_t(boost::uuids::uuid connection_id, const epee::net_utils::network_address& remote_address, bool is_income)
-      : base_type(connection_id, remote_address, is_income),
+    p2p_connection_context_t(boost::uuids::uuid connection_id, const epee::net_utils::network_address& remote_address, bool is_income, std::uint8_t connector = 0xff)
+      : base_type(connection_id, remote_address, is_income, connector),
         support_flags(0),
         m_in_timedsync(false)
     {}
@@ -340,7 +334,6 @@ namespace nodetool
           m_bind_ipv6_address(),
           m_port(),
           m_port_ipv6(),
-          m_notifier(),
           m_our_address(),
           m_peerlist(),
           m_config{},
@@ -362,7 +355,6 @@ namespace nodetool
           m_bind_ipv6_address(),
           m_port(),
           m_port_ipv6(),
-          m_notifier(),
           m_our_address(),
           m_peerlist(),
           m_config{},
@@ -383,7 +375,6 @@ namespace nodetool
       std::string m_bind_ipv6_address;
       std::string m_port;
       std::string m_port_ipv6;
-      cryptonote::levin::notify m_notifier;
       epee::net_utils::network_address m_our_address; // in anonymity networks
       // Self-detection nonces for outbound handshakes in flight on THIS
       // zone (SHEKYL_P2P_PROTOCOL.md, PWD-T1's token carried interim):
@@ -456,7 +447,7 @@ namespace nodetool
     static void init_options(boost::program_options::options_description& desc);
 
     bool run();
-    network_zone& add_zone(epee::net_utils::zone zone);
+    network_zone& add_zone(epee::net_utils::connector_id zone);
     bool init(const boost::program_options::variables_map& vm, const std::string& proxy = {});
     bool deinit();
     bool send_stop_signal();
@@ -476,13 +467,13 @@ namespace nodetool
     void get_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white);
     bool sanitize_peerlist(std::vector<peerlist_entry>& local_peerlist);
 
-    uint32_t get_announced_port(epee::net_utils::zone zone) const;
+    uint32_t get_announced_port(epee::net_utils::connector_id zone) const;
     //! \return The address `get_local_node_data` would announce for `zone` —
     //! the derived advertisement's observable (there is no dedicated flag,
     //! and no identifier, so the announced value is the only witness). On an
     //! anonymity zone run dialer-only it is the zone's CONSTANT unknown
     //! sentinel: equal for every node, carrying no entropy, linking nothing.
-    epee::net_utils::network_address get_announced_address(epee::net_utils::zone zone) const;
+    epee::net_utils::network_address get_announced_address(epee::net_utils::connector_id zone) const;
     //! Advertise a managed-tor publish result. A failed publish or an
     //! unparseable service id leaves `zone.m_our_address` unchanged.
     void apply_managed_onion_publish(network_zone& zone, int publish_rc, const char* service_id, std::uint16_t virtual_port);
@@ -504,17 +495,17 @@ namespace nodetool
     //! single-fire/anti-replay and shortens residency. Pinned by
     //! `node_server.handshake_nonce_is_recorded_before_it_can_be_written`,
     //! which reds if the recording moves out of this function.
-    std::array<uint8_t, 32> mint_recorded_handshake_nonce(epee::net_utils::zone zone);
+    std::array<uint8_t, 32> mint_recorded_handshake_nonce(epee::net_utils::connector_id zone);
     //! Record / erase the self-detection nonce of an outbound handshake
     //! attempt on `zone` (PWD-T1's token, carried interim on the request).
-    void record_outbound_handshake_nonce(epee::net_utils::zone zone, const std::array<uint8_t, 32>& nonce);
-    void erase_outbound_handshake_nonce(epee::net_utils::zone zone, const std::array<uint8_t, 32>& nonce);
+    void record_outbound_handshake_nonce(epee::net_utils::connector_id zone, const std::array<uint8_t, 32>& nonce);
+    void erase_outbound_handshake_nonce(epee::net_utils::connector_id zone, const std::array<uint8_t, 32>& nonce);
     //! \return True exactly once per recorded nonce, and only on the zone it
     //! was recorded for: an arriving handshake carrying such a nonce IS this
     //! node. Erases on match, so a replayed nonce cannot fire twice; a
     //! cross-zone probe never matches — the drop would otherwise be a
     //! cross-zone correlation oracle.
-    bool detect_self_handshake(epee::net_utils::zone zone, const std::array<uint8_t, 32>& nonce);
+    bool detect_self_handshake(epee::net_utils::connector_id zone, const std::array<uint8_t, 32>& nonce);
     bool is_self_dial(const epee::net_utils::network_address& na) const;
     //! \return How many outbound-handshake nonces `zone` currently holds in
     //! flight. The set's BOUNDEDNESS rests on the attempt scope guard alone —
@@ -522,7 +513,7 @@ namespace nodetool
     //! erase-on-match only removes earlier — and is independent of the insert
     //! ordering; this is what lets a test observe a leak rather than infer
     //! one from detection behaviour alone.
-    size_t inflight_handshake_nonce_count(epee::net_utils::zone zone) const;
+    size_t inflight_handshake_nonce_count(epee::net_utils::connector_id zone) const;
 
     void change_max_out_public_peers(size_t count);
     uint32_t get_max_out_public_peers() const;
@@ -555,9 +546,13 @@ namespace nodetool
     CHAIN_LEVIN_NOTIFY_MAP2(p2p_connection_context); //move levin_commands_handler interface notify(...) callbacks into nothing
 
     BEGIN_INVOKE_MAP2(node_server)
-      if (is_filtered_command(context.m_remote_address, command))
-        return LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED;
-
+      // Which commands a session may carry is `DefinedCommand` in
+      // rust/shekyl-levin/src/ingress.rs — one table, every connector.
+      // The C++ allowlist that sat here kept only HANDSHAKE, TIMED_SYNC
+      // and NOTIFY_NEW_TRANSACTIONS on a non-clearnet address. D-5
+      // (2026-10-02): the receiver handshaked, learned height 87, and
+      // stayed at 1 because support-flags came back empty and the chain
+      // request never left.
       HANDLE_INVOKE_T2(COMMAND_HANDSHAKE, &node_server::handle_handshake)
       HANDLE_INVOKE_T2(COMMAND_TIMED_SYNC, &node_server::handle_timed_sync)
       HANDLE_INVOKE_T2(COMMAND_REQUEST_SUPPORT_FLAGS, &node_server::handle_get_support_flags)
@@ -580,8 +575,8 @@ namespace nodetool
     virtual void on_connection_close(p2p_connection_context& context);
     virtual void callback(p2p_connection_context& context);
     //----------------- i_p2p_endpoint -------------------------------------------------------------
-    virtual bool relay_notify_to_list(int command, epee::levin::message_writer message, std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> connections) final;
-    virtual epee::net_utils::zone send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, cryptonote::relay_method tx_relay, cryptonote::zone_route route);
+    virtual bool relay_notify_to_list(int command, epee::levin::message_writer message, std::vector<std::pair<epee::net_utils::connector_id, boost::uuids::uuid>> connections) final;
+    virtual bool send_txs(std::vector<cryptonote::blobdata> txs, const boost::uuids::uuid& source, cryptonote::relay_method tx_relay);
     virtual void record_tx_arrivals(std::vector<cryptonote::blobdata> txs, const boost::uuids::uuid& from);
     virtual bool invoke_notify_to_peer(int command, epee::levin::message_writer message, const epee::net_utils::connection_context_base& context) final;
     virtual bool drop_connection(const epee::net_utils::connection_context_base& context);
@@ -613,7 +608,7 @@ namespace nodetool
     bool check_ephemeral_tor_liveness();
     bool idle_worker();
     bool handle_remote_peerlist(const std::vector<peerlist_entry>& peerlist, const epee::net_utils::connection_context_base& context);
-    bool get_local_node_data(epee::net_utils::zone zone_type, basic_node_data& node_data, const network_zone& zone) const;
+    bool get_local_node_data(epee::net_utils::connector_id zone_type, basic_node_data& node_data, const network_zone& zone) const;
     //bool get_local_handshake_data(handshake_data& hshd);
 
     bool connections_maker();
@@ -642,8 +637,8 @@ namespace nodetool
     bool is_addr_recently_failed(const epee::net_utils::network_address& addr);
     bool is_priority_node(const epee::net_utils::network_address& na);
     std::set<std::string> get_ip_seed_nodes() const;
-    std::set<std::string> get_seed_nodes(epee::net_utils::zone);
-    bool connect_to_seed(epee::net_utils::zone);
+    std::set<std::string> get_seed_nodes(epee::net_utils::connector_id);
+    bool connect_to_seed(epee::net_utils::connector_id);
 
     template <class Container>
     bool connect_to_peerlist(const Container& peers);
@@ -711,6 +706,8 @@ namespace nodetool
     //critical_section m_connections_lock;
     //connections_indexed_container m_connections;
 
+    //! One relay. Connection registries stay on each connector.
+    cryptonote::levin::notify m_notifier;
     t_payload_net_handler& m_payload_handler;
     peerlist_storage m_peerlist_storage;
 
@@ -746,7 +743,7 @@ namespace nodetool
     since references can safely be stored on the stack. Do not insert/erase
     after configuration and before destruction, lock safety would need to be
     added. `std::map::operator[]` WILL insert! */
-    std::map<epee::net_utils::zone, network_zone> m_network_zones;
+    std::map<epee::net_utils::connector_id, network_zone> m_network_zones;
 
 
     failed_addr_cache m_conn_fails_cache;

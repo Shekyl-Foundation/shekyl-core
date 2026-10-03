@@ -827,7 +827,9 @@ is in the past and in the DB, which is what `PC-D4` could not do.
   **resolves because `h` is in the past and in the DB**, which is what
   `PC-D4` could not do. Two
   records answering different draws of the same pair may share `h_incl` and
-  both admit. Mirror in `serve_credit_decisions.rs` in lockstep.
+  both admit. (This once read "mirror in `serve_credit_decisions.rs` in
+  lockstep"; the mirror was deleted 2026-10-02, DRS-E4 commit 10d. The Rust
+  side of this rule is CEN-J8–J10's, built from the ruling.)
 - **Membership gate, consensus-visible:** admitted only if
   `(P, s) ∈ assignment(h)`. Without it a miner colluding with `P` includes
   pass records for `P`'s pair citing any `h` it likes — regardless of whether
@@ -2276,7 +2278,7 @@ gates do **not** all wait on the second:
    that wait here, with the writer call site. S-ARCH remains priority 7
    of 9 and gated on the P0b journal audit — **UPDATE 2026-09-23: that gate
    lifted 2026-09-05 (P0b RECONCILED) and was re-read by S-ARCH's Round-0
-   pre-flight ([`DRS_E1_SARCH.md`](DRS_E1_SARCH.md) §0, PR #840), which
+   pre-flight ([`DRS_E1_SARCH.md`](../completed/DRS_E1_SARCH.md) §0, PR #840), which
    splits the row: the *reads* are E1 increment 8, ruled and cuttable; the
    settlement *write path* this item waits on is E4's, whose first question
    the pre-flight names (SAR-7)** — that is **not** "waiting for

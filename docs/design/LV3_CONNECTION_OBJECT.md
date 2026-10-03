@@ -14,6 +14,13 @@ layer. Relay dispatch is the RD row after the timing engine. This is
 not the last work and it does not own sockets.** *Records-was: slice
 5 — the LAST slice (restructured 2026-09-21, §4.1 there).*
 
+**UPDATE 2026-10-01:** `tests/unit_tests/levin.cpp` is not ported. It is a
+C++ puppet for `levin_notify.cpp`, and it goes with that shim: when the
+connection is a Rust object, `send_txs` hands a plan to the seam, and the
+pool callback is an event, the puppet has nothing left to test. Relay
+behaviour already has counterparts in `shekyl-relay`. The `i_core_events`
+cases (`relayed_zone`, pool callbacks) become seam tests in that deletion.
+
 **SCOPE NARROWED 2026-09-21 (steering).** *Records-was: "P2P-3 slice 1", and the
 scope was the whole p2p surface.* **LV-3 is the `levin_notify` / `net_node`
 seam — the socket layer and relay dispatch — and nothing else.** The peerlist,

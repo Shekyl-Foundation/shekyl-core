@@ -61,17 +61,27 @@
 //! post's fields, the persona's standing, the block's own posts — is the
 //! production object over the production view.
 
+use std::sync::Arc;
+
+use kameo::error::SendError;
 use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
-use shekyl_chain_rules::{Accrual, CenRow, Locus, RecordWriteKind, RuleSet, TxSlot};
+use shekyl_chain_rules::{Accrual, Candidate, CenRow, Locus, RecordWriteKind, RuleSet, TxSlot};
+use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFamily};
+use shekyl_chain_store::store::{StoreCannot, StoreError};
 use shekyl_types::archival::{BadInterval, Holdings};
-use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
+use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{BondPostKind, Holdings as WireHoldings};
 use shekyl_wire::{Input, Transaction};
 
-use crate::scenario::{Scenario, StepOutcome};
+use crate::connector::{ArchivalState, CheckpointState, Inject, Injected, RunFault};
+use crate::metrics::Metrics;
+use crate::pipeline::{run, PipelineConfig, PipelineFault};
+use crate::scenario::{Clocked, FreeHash, Mined, Scenario, StepOutcome, RULES};
 use crate::scenario_archival::{complete_tree, shard_set, Persona};
 use crate::scenario_spend::Spender;
+use crate::source::{IngestEvent, Injection, ServeCredit};
+use crate::test_support::{cleanup, open_store, tmp, trace_of, trace_read, Scripted};
 
 /// The first height that can spend block 0's coinbase against a root that
 /// holds it (`scenario_tests`: unlock window + spendable age + 1).
@@ -485,4 +495,344 @@ async fn a_join_and_a_release_in_one_block_is_g10s_refusal_not_l7s() {
         },
     );
     scenario.close().await;
+}
+
+/// A chain with one bonded persona and a few blocks past the join, as the
+/// injector finds it: the blocks (for a replay) and the persona.
+async fn bonded_chain(name: &str) -> (Scenario<FreeHash>, Vec<Mined>, Persona) {
+    let connecting = first_spending_height();
+    let mut scenario = Scenario::open(name);
+    let mut mined = scenario.mine(connecting).await;
+    let spender = Spender::over(&mined);
+    let persona = Persona::at(1);
+    let join = persona.join(shard_set(vec![7]), ENDPOINT);
+    let joined = scenario
+        .mine_listing(vec![spender.spend_coinbase_posting(
+            scenario.wallet(),
+            0,
+            connecting,
+            FEE,
+            Some(&join),
+        )])
+        .await
+        .unwrap_or_else(|outcome| panic!("the join connects: {outcome}"));
+    mined.push(joined);
+    mined.extend(scenario.mine(2).await);
+    (scenario, mined, persona)
+}
+
+/// The regtest injector through the connector (DRS-E4 §3.8 item 3): the
+/// bit lands in its own transaction at the **tip** — the receipt's height
+/// is the connected tip, one below the producer's `connecting` count
+/// (ARW-26's two quantities, told apart here by the type each read
+/// returns) — and the archival snapshot afterwards differs from before by
+/// exactly that one `archival_serve_credit` row. A persona with no bond
+/// record is the store's refusal, and the writer stays up: the refusal is
+/// a `Cannot`, not a halt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_injected_serve_credit_lands_at_the_tip_and_is_one_snapshot_row() {
+    let (scenario, mined, persona) = bonded_chain("scenario-archival-inject").await;
+    let tip = mined.last().expect("mined").height;
+    let connector = scenario.connector();
+    let before = connector
+        .ask(ArchivalState)
+        .await
+        .expect("the snapshot reads");
+
+    let credit = ServeCredit {
+        persona: persona.id(),
+        shard: ShardId::from_raw(7),
+        epoch: epoch_at(tip.to_raw()),
+    };
+    let Injected { at } = connector
+        .ask(Inject(credit))
+        .await
+        .expect("a bonded persona's credit is injected");
+    assert_eq!(at, tip, "attributed to the connected tip");
+    let facts = scenario.facts().await.expect("facts");
+    assert_eq!(
+        at.checked_add(BlockCount::ONE),
+        Some(facts.connecting),
+        "the receipt is the tip; the producer's `connecting` is the count, one above (ARW-26)"
+    );
+
+    let after = connector
+        .ask(ArchivalState)
+        .await
+        .expect("the snapshot reads");
+    let mut expected_row = ArchivalSnapshot::empty();
+    expected_row
+        .push_serve_credit(&credit.persona, credit.shard, credit.epoch, at)
+        .expect("one row");
+    let diff = after.diff(&before);
+    let only_new: Vec<_> = diff.diverged().collect();
+    assert_eq!(only_new.len(), 1, "one family moved: {diff:?}");
+    assert_eq!(only_new[0].family, SnapshotFamily::ServeCredit);
+    assert_eq!(
+        only_new[0].only_ours,
+        expected_row
+            .rows(SnapshotFamily::ServeCredit)
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        "the one new row is the credit keyed at the attributed height"
+    );
+    assert!(only_new[0].unequal.is_empty() && only_new[0].only_theirs.is_empty());
+
+    // A stranger: refused by the store before the write, as a `Cannot`.
+    let stranger = ServeCredit {
+        persona: Persona::at(9).id(),
+        ..credit
+    };
+    let refused = connector
+        .ask(Inject(stranger))
+        .await
+        .expect_err("no record, no bit");
+    assert!(
+        matches!(
+            refused,
+            SendError::HandlerError(RunFault::Store(StoreError::Cannot(
+                StoreCannot::InjectionForUnbondedPersona { persona }
+            ))) if persona == stranger.persona
+        ),
+        "{refused:?}"
+    );
+    // Not a halt: the connector still answers, and the chain still extends.
+    let again = connector
+        .ask(ArchivalState)
+        .await
+        .expect("the writer is up");
+    assert_eq!(again, after);
+    scenario.close().await;
+}
+
+/// The same chain through the pipeline, as a replay meets it in a
+/// captured corpus: the `Inject` is a barrier applied at the committed tip
+/// and reported as the receipt the injector would have written; a later
+/// `Rewind` to the injection's height is allowed and one below it is
+/// [`PipelineFault::RewindBelowInjection`] — the bit is not block-owned,
+/// so the pop would strand it (§3.8 item 3's "a `Rewind` below an
+/// `Inject`'s height is a defect").
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replayed_inject_is_reported_as_its_receipt_and_a_rewind_below_it_is_refused() {
+    let (scenario, mined, persona) = bonded_chain("scenario-archival-inject-replay").await;
+    scenario.close().await;
+    let chain: Vec<(shekyl_wire::Block, Vec<Transaction>)> = mined
+        .iter()
+        .map(|m| (m.template.block.clone(), m.template.transactions.clone()))
+        .collect();
+    let extend = |m: &Mined| {
+        IngestEvent::Extend(Box::new(Candidate::new(
+            m.template.block.clone(),
+            m.template.transactions.clone(),
+        )))
+    };
+    let inject_after = mined.len() - 2;
+    let injected_at = mined[inject_after].height;
+    let credit = ServeCredit {
+        persona: persona.id(),
+        shard: ShardId::from_raw(7),
+        epoch: epoch_at(injected_at.to_raw()),
+    };
+    // The driver's clock, advanced past every block the scenario mined.
+    let clock = || {
+        let clock = Clocked::new(FreeHash);
+        for _ in &mined {
+            clock.tick();
+        }
+        Arc::new(clock)
+    };
+    let trace = Arc::new(trace_of(&chain, false));
+
+    // Inject, then two more blocks: the receipt is the tip at the barrier.
+    let path = tmp("pipeline-inject-report");
+    let mut events: Vec<IngestEvent> = mined[..=inject_after].iter().map(extend).collect();
+    events.push(IngestEvent::Inject(credit));
+    events.extend(mined[inject_after + 1..].iter().map(extend));
+    let mut source = Scripted::new(events);
+    let report = run(
+        &mut source,
+        clock(),
+        Arc::new(Metrics::new()),
+        RULES,
+        open_store(&path),
+        Arc::clone(&trace),
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("the injected chain replays");
+    assert_eq!(report.connected.len(), mined.len());
+    assert_eq!(
+        report.injected,
+        vec![Injection {
+            at: injected_at,
+            credit
+        }],
+        "one injection, reported as its receipt"
+    );
+    let reopened = open_store(&path);
+    let snapshot = reopened
+        .begin_read()
+        .expect("read")
+        .archival_snapshot()
+        .expect("snapshot");
+    let mut expected_row = ArchivalSnapshot::empty();
+    expected_row
+        .push_serve_credit(&credit.persona, credit.shard, credit.epoch, injected_at)
+        .expect("one row");
+    assert_eq!(
+        snapshot.rows(SnapshotFamily::ServeCredit),
+        expected_row.rows(SnapshotFamily::ServeCredit)
+    );
+    drop(reopened);
+    cleanup(&path);
+
+    // A rewind to the injection's height keeps the bit; one below strands
+    // it and is refused before the connector is asked.
+    let path = tmp("pipeline-inject-rewind");
+    let mut events: Vec<IngestEvent> = mined[..=inject_after].iter().map(extend).collect();
+    events.push(IngestEvent::Inject(credit));
+    events.extend(mined[inject_after + 1..].iter().map(extend));
+    events.push(IngestEvent::Rewind { to: injected_at });
+    let below = BlockHeight::from_raw(injected_at.to_raw() - 1);
+    events.push(IngestEvent::Rewind { to: below });
+    let mut source = Scripted::new(events);
+    let fault = run(
+        &mut source,
+        clock(),
+        Arc::new(Metrics::new()),
+        RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect_err("a rewind below the injection is a pipeline fault");
+    assert!(
+        matches!(
+            fault,
+            PipelineFault::RewindBelowInjection {
+                to,
+                injected_at: reported,
+                credit: stranded,
+            } if to == below && reported == injected_at && stranded == credit
+        ),
+        "{fault:?}"
+    );
+    cleanup(&path);
+}
+
+/// An `Inject` filed at the **covered tip** — where a capture files it: the
+/// injector writes at the daemon's tip and the walker reads after, so the
+/// corpus's last event is the credit and the trace's `0x04` record carries
+/// it. The checkpoint is compared after that barrier commits
+/// (`Drive::compare_checkpoint`), not when the tip connected; compared at
+/// the connect, the redb side had not yet written the row and a faithful
+/// replay read as divergent (PR #937 review, finding 1). The reference is
+/// the scenario's own store after the injection, read once through
+/// [`CheckpointState`] as the walker reads LMDB. The control — the same
+/// chain without the injection, against the same trace — diverges in
+/// exactly `ServeCredit`, so the comparison that passes is one that sees
+/// the row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_inject_at_the_covered_tip_commits_before_the_checkpoint_is_compared() {
+    let (scenario, mined, persona) = bonded_chain("scenario-archival-inject-at-tip").await;
+    let tip = mined.last().expect("mined").height;
+    let credit = ServeCredit {
+        persona: persona.id(),
+        shard: ShardId::from_raw(7),
+        epoch: epoch_at(tip.to_raw()),
+    };
+    let connector = scenario.connector();
+    let Injected { at } = connector
+        .ask(Inject(credit))
+        .await
+        .expect("a bonded persona's credit is injected");
+    assert_eq!(at, tip, "attributed to the covered tip");
+    let reference = connector
+        .ask(CheckpointState)
+        .await
+        .expect("one read of both encodings");
+    assert_eq!(reference.tip, Some(tip));
+    scenario.close().await;
+
+    let chain: Vec<(shekyl_wire::Block, Vec<Transaction>)> = mined
+        .iter()
+        .map(|m| (m.template.block.clone(), m.template.transactions.clone()))
+        .collect();
+    let trace = Arc::new(trace_read(&chain, reference.digest, &reference.archival));
+    let extend = |m: &Mined| {
+        IngestEvent::Extend(Box::new(Candidate::new(
+            m.template.block.clone(),
+            m.template.transactions.clone(),
+        )))
+    };
+    let clock = || {
+        let clock = Clocked::new(FreeHash);
+        for _ in &mined {
+            clock.tick();
+        }
+        Arc::new(clock)
+    };
+
+    // As captured: every block, then the credit at the tip, last.
+    let path = tmp("pipeline-inject-at-tip");
+    let mut events: Vec<IngestEvent> = mined.iter().map(extend).collect();
+    events.push(IngestEvent::Inject(credit));
+    let mut source = Scripted::new(events);
+    let report = run(
+        &mut source,
+        clock(),
+        Arc::new(Metrics::new()),
+        RULES,
+        open_store(&path),
+        Arc::clone(&trace),
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("the injected chain replays");
+    assert_eq!(report.injected, vec![Injection { at: tip, credit }]);
+    let checkpoint = report
+        .checkpoint
+        .expect("the committed tip is the covered tip: compared");
+    assert_eq!(checkpoint.at, tip);
+    assert!(checkpoint.identical(), "the digests agree");
+    let archival = report.archival.expect("compared with the digest");
+    assert_eq!(archival.at, tip);
+    assert!(
+        archival.identical(),
+        "the credit committed before the rows were read: {:?}",
+        archival.diff.diverged().collect::<Vec<_>>()
+    );
+    cleanup(&path);
+
+    // The control: no injection, the same trace. The digest still agrees
+    // (it carries no archival state, ARW-25); the rows differ by the one
+    // credit the trace holds and this replay never wrote.
+    let path = tmp("pipeline-inject-at-tip-control");
+    let mut source = Scripted::new(mined.iter().map(extend).collect());
+    let report = run(
+        &mut source,
+        clock(),
+        Arc::new(Metrics::new()),
+        RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("the uninjected chain replays");
+    assert!(report.injected.is_empty());
+    assert!(report.checkpoint.expect("compared").identical());
+    let archival = report.archival.expect("compared");
+    let diverged: Vec<_> = archival.diff.diverged().collect();
+    assert_eq!(diverged.len(), 1, "one family moved: {diverged:?}");
+    assert_eq!(diverged[0].family, SnapshotFamily::ServeCredit);
+    assert!(diverged[0].only_ours.is_empty() && diverged[0].unequal.is_empty());
+    assert_eq!(
+        diverged[0].only_theirs.len(),
+        1,
+        "the trace's one credit row, which this replay did not write"
+    );
+    cleanup(&path);
 }

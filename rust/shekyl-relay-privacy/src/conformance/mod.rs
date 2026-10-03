@@ -13,7 +13,7 @@
 //! - [`analysis`] — inversion precision, CV, residual masses
 //! - [`stem`] — stem walk + propagation / preemption / black-hole
 //! - [`flood`] — fluff-return first-passage + diffusion first-spy
-//! - [`transport`] — clearnet vs Tor supernode observation + passive leak
+//! - [`transport`] — fluff-reach supernode observation + passive leak
 //! - [`selection`] — two-slot occupancy, epoch layering, ε-greedy
 //! - [`reshape`] — origin exposure, δ increment, recovery latency
 //!
@@ -64,5 +64,5 @@ pub use stem::{
 };
 pub use transport::{
     simulate_passive_neighbor_leak, simulate_transport_observation, PassiveNeighborLeak,
-    SupernodeObservation, Transport,
+    SupernodeObservation,
 };

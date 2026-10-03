@@ -353,6 +353,26 @@ impl StemMap {
         }
     }
 
+    /// [`Self::stem_for`] restricted to `allowed`.
+    ///
+    /// The first pin's frozen set is the allowed peers that occupy a slot
+    /// now, not every live slot. A later call walks that set. A peer that
+    /// was never allowed is not a candidate, so hop 0 cannot land on a
+    /// clearnet slot or on an anonymity peer the map did not slot.
+    pub fn stem_for_among<R: RelayRng + ?Sized>(
+        &mut self,
+        source: SourceId,
+        allowed: &[ConnectionId],
+        rng: &mut R,
+    ) -> Option<ConnectionId> {
+        if self.inbound.contains_key(&source) {
+            let chosen = self.resolve_pin(source)?;
+            allowed.contains(&chosen).then_some(chosen)
+        } else {
+            self.first_pin_among(source, allowed, rng)
+        }
+    }
+
     /// Walk an existing [`Pin`]: advance past candidates that have left the
     /// map, re-sync usage against the slot the chosen peer currently occupies,
     /// and return that peer (or `None` if the frozen set is exhausted).
@@ -423,6 +443,71 @@ impl StemMap {
         );
         self.usage[index.get()] += 1;
         Some(primary)
+    }
+
+    /// [`Self::first_pin`] whose primary and alternates are `allowed` peers
+    /// that currently occupy a slot.
+    fn first_pin_among<R: RelayRng + ?Sized>(
+        &mut self,
+        source: SourceId,
+        allowed: &[ConnectionId],
+        rng: &mut R,
+    ) -> Option<ConnectionId> {
+        let index = self.select_slot_among(allowed, rng)?;
+        let primary = self.out[index.get()]?;
+        if !allowed.contains(&primary) {
+            return None;
+        }
+        let mut candidates = Vec::with_capacity(allowed.len());
+        candidates.push(primary);
+        candidates.extend(
+            self.out
+                .iter()
+                .flatten()
+                .copied()
+                .filter(|peer| *peer != primary && allowed.contains(peer)),
+        );
+        self.inbound.insert(
+            source,
+            Pin {
+                candidates,
+                cursor: 0,
+                counted: Some(index),
+            },
+        );
+        self.usage[index.get()] += 1;
+        Some(primary)
+    }
+
+    /// [`Self::select_slot`] over slots whose peer is in `allowed`.
+    fn select_slot_among<R: RelayRng + ?Sized>(
+        &self,
+        allowed: &[ConnectionId],
+        rng: &mut R,
+    ) -> Option<SlotIndex> {
+        let mut lowest = usize::MAX;
+        let mut choices: Vec<SlotIndex> = Vec::with_capacity(self.out.len());
+        for (i, slot) in self.out.iter().enumerate() {
+            let Some(peer) = *slot else {
+                continue;
+            };
+            if !allowed.contains(&peer) {
+                continue;
+            }
+            let used = self.usage[i];
+            if used < lowest {
+                lowest = used;
+                choices.clear();
+                choices.push(SlotIndex(i));
+            } else if used == lowest {
+                choices.push(SlotIndex(i));
+            }
+        }
+        match choices.len() {
+            0 => None,
+            1 => Some(choices[0]),
+            n => Some(choices[usize_from_u64(bounded_uniform(rng, (n - 1) as u64))]),
+        }
     }
 
     /// Pick the live slot with the fewest sources routed through it, breaking

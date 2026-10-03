@@ -116,7 +116,7 @@ use std::collections::BTreeMap;
 
 use shekyl_archival_retention::SettlementSchedule;
 use shekyl_types::archival::{BondRecord, Holdings, PassCount};
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::block::Candidate;
@@ -231,9 +231,14 @@ impl Transition {
     }
 
     /// The block count once this block connects — the C++ hooks' operand
-    /// (module docs, *The count operand*).
-    fn count(&self) -> u64 {
-        self.connecting.to_raw().saturating_add(1)
+    /// (module docs, *The count operand*), typed as the count it is
+    /// ([`ChainCount::with_tip`] of the connecting block, `ARW-Q16` (a)):
+    /// the schedule comparisons take it through `to_raw()` at their `u64`
+    /// edge (Phase 2g's), and nothing here can hand it to a reader that
+    /// wants the connecting height. `None` from the bridge is a connecting
+    /// height of `u64::MAX`, which no chain this crate judges reaches.
+    fn count(&self) -> ChainCount {
+        ChainCount::with_tip(self.connecting).expect("a connecting height below u64::MAX")
     }
 
     /// `persona`'s working copy, read from the view on first touch;

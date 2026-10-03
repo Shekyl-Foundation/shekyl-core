@@ -172,5 +172,9 @@ Genesis is frozen at launch: after the first block is mined on a network,
 its allocations cannot change. Before launch, any change to this table
 means regenerating the genesis transaction and re-pinning every derived
 artifact together — the procedure is
-`shekyl-dev/docs/GENESIS_WALKTHROUGH.md`. `NETWORK_ID` and `GENESIS_NONCE`
-are unchanged by allocation edits.
+`shekyl-dev/docs/GENESIS_WALKTHROUGH.md`. `GENESIS_NONCE` is unchanged by
+allocation edits. `NETWORK_ID` is not a constant beside the chain: it is
+the first 16 bytes of
+`cSHAKE256(S = "shekyl/p2p-network-id-v1", X = genesis_block_hash)`, so
+regenerating the genesis transaction rotates it. There is no id byte to
+leave untouched.

@@ -29,7 +29,8 @@
 # pin is not a resolvable object — an empty population is a missing subject.
 #
 # --selftest exercises: a citation that resolves; one past EOF; one landing on
-# a blank line; a doc with no pin (skipped); an unresolvable pin (refused).
+# a blank line; a doc with no pin (skipped); an unresolvable pin (refused);
+# one path fetched at two pins (the second pin is not the first pin's bytes).
 from __future__ import annotations
 
 import os
@@ -50,6 +51,19 @@ def blob(sha: str, path: str) -> list[str] | None:
     r = subprocess.run(["git", "-C", ROOT, "show", f"{sha}:{path}"],
                        capture_output=True, text=True)
     return None if r.returncode else r.stdout.splitlines()
+
+
+def cached_get(cache: dict, sha: str, path: str, fetch) -> list[str] | None:
+    """The file at `sha`, remembered by pin and path.
+
+    A path-only key answers a later pin with the first pin's bytes. A line
+    that moved then reads as blank, which is the failure this gate reports
+    for a citation that is fine at the pin it names.
+    """
+    key = (sha, path)
+    if key not in cache:
+        cache[key] = fetch(sha, path)
+    return cache[key]
 
 
 def check_text(text: str, label: str, resolver) -> list[str]:
@@ -107,13 +121,14 @@ def main() -> int:
             continue
         pinned += 1
         rel = os.path.relpath(d, ROOT)
-        cache: dict[str, list[str] | None] = {}
+        # Keyed by pin and path. A later section re-pins the same file after
+        # dev moved; a path-only cache would answer that pin with the first
+        # pin's bytes, and a shifted line would read as blank.
+        cache: dict[tuple[str, str], list[str] | None] = {}
 
         def resolver(sha, _cache=cache):
-            def get(path):
-                if path not in _cache:
-                    _cache[path] = blob(sha, path)
-                return _cache[path]
+            def get(path, _sha=sha):
+                return cached_get(_cache, _sha, path, blob)
             return get
         try:
             fails += check_text(text, rel, resolver)
@@ -160,7 +175,22 @@ def selftest() -> int:
         check_text(ok, "t", lambda _sha: (_ for _ in ()).throw(GateError("x")))
     except GateError:
         pass
-    print("selftest: 5 cases pass")
+    else:
+        print("SELFTEST FAIL: an unresolved pin did not refuse")
+        return 1
+    # The defect: one path, two pins, two trees. A path-only cache returns
+    # the first pin's bytes for the second and a live line reads as blank.
+    cache: dict = {}
+    fetched: list[str] = []
+
+    def fetch(sha, _path):
+        fetched.append(sha)
+        return ["old"] if sha == "aaa" else ["new"]
+
+    assert cached_get(cache, "aaa", "src/a.cpp", fetch) == ["old"]
+    assert cached_get(cache, "bbb", "src/a.cpp", fetch) == ["new"]
+    assert fetched == ["aaa", "bbb"], fetched
+    print("selftest: 6 cases pass")
     return 0
 
 

@@ -50,26 +50,41 @@ namespace nodetool
 {
   namespace
   {
-    struct by_zone
+    struct by_connector
     {
-      using zone = epee::net_utils::zone;
+      using key = std::optional<epee::net_utils::connector_id>;
 
-      template<typename T>
-      bool operator()(const T& left, const zone right) const
+      static int rank(const epee::net_utils::network_address& address)
       {
-        return left.adr.get_zone() < right;
+        const auto connector = address.connector();
+        if (!connector)
+          return -1;
+        return static_cast<int>(*connector);
+      }
+
+      static int rank_key(key connector)
+      {
+        if (!connector)
+          return -1;
+        return static_cast<int>(*connector);
       }
 
       template<typename T>
-      bool operator()(const zone left, const T& right) const
+      bool operator()(const T& left, key right) const
       {
-        return left < right.adr.get_zone();
+        return rank(left.adr) < rank_key(right);
+      }
+
+      template<typename T>
+      bool operator()(key left, const T& right) const
+      {
+        return rank_key(left) < rank(right.adr);
       }
 
       template<typename T, typename U>
       bool operator()(const T& left, const U& right) const
       {
-        return left.adr.get_zone() < right.adr.get_zone();
+        return rank(left.adr) < rank(right.adr);
       }
     };
 
@@ -120,10 +135,10 @@ namespace nodetool
     }
  
     template<typename T>
-    std::vector<T> do_take_zone(std::vector<T>& src, epee::net_utils::zone zone)
+    std::vector<T> do_take_connector(std::vector<T>& src, std::optional<epee::net_utils::connector_id> connector)
     {
-      const auto start = std::lower_bound(src.begin(), src.end(), zone, by_zone{});
-      const auto end = std::upper_bound(start, src.end(), zone, by_zone{});
+      const auto start = std::lower_bound(src.begin(), src.end(), connector, by_connector{});
+      const auto end = std::upper_bound(start, src.end(), connector, by_connector{});
 
       std::vector<T> out{};
       out.assign(std::make_move_iterator(start), std::make_move_iterator(end));
@@ -181,7 +196,7 @@ namespace nodetool
 
       if (src.good())
       {
-        std::sort(out.m_types.gray.begin(), out.m_types.gray.end(), by_zone{});
+        std::sort(out.m_types.gray.begin(), out.m_types.gray.end(), by_connector{});
         return {std::move(out)};
       }
     }
@@ -250,10 +265,10 @@ namespace nodetool
     return store(dest_file, other);
   }
 
-  peerlist_types peerlist_storage::take_zone(epee::net_utils::zone zone)
+  peerlist_types peerlist_storage::take_connector(std::optional<epee::net_utils::connector_id> connector)
   {
     peerlist_types out{};
-    out.gray = do_take_zone(m_types.gray, zone);
+    out.gray = do_take_connector(m_types.gray, connector);
     return out;
   }
 
