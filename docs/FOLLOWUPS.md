@@ -34,14 +34,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **Write the transactions-per-epoch bound the epoch length rests on.** Sharma–Gosain–Diaz §VII-A reconstruct 98.5 % of a static privacy subgraph from about 100 transactions relayed per honest node. Epoch rotation (`rebuild_stems`) is the answer only while transactions per node per epoch stays well under that, which is a claim about Shekyl's rate and the 10-minute epoch that is currently assumed, not derived. Derive it, state the rate at which the epoch must shorten as the reopen criterion. Blocked on nothing but the derivation. Falsify by the number and its reopen rate appearing in the owner document.
-  - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
-  - Target: pre-genesis
-
-- **A node that accepts no inbound refuses with the same cause as a full cap.** A derived ceiling of 0 and an explicit `--in-peers 1` at capacity both surface as `AdmissionRefused` on the seam, so a dialer's log cannot tell "try later" from "this node will never accept inbound" (rule 82). D12's set gains a distinct cause for the second. Blocker lifted: #909 merged 2026-10-01. Falsify by the dialer's `seam close` line naming the ceiling-0 case differently from the full-cap case.
-  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D12
-  - Target: pre-genesis
-
 - **Fakechain derives mainnet's handshake id.** The derivation is per genesis hash, and fakechain's pin is mainnet's genesis, so the two ids match. That is the collision the derivation exists to prevent, confined to a test network. Give fakechain its own genesis hash, or make it offline by construction so it never handshakes. Falsify by `shekyl_network_id` for fakechain differing from mainnet, or by fakechain refusing a handshake.
   - Owner: [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md)
   - Target: pre-genesis
@@ -54,7 +46,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D5
   - Target: pre-genesis
 
-- **A timed-out clearnet dial and a refused one do not share the hour-long forget.** `P2P_FAILED_ADDR_FORGET_SECONDS` (3600, `cryptonote_config.h`) marks an address the same way whether the dial timed out or the peer refused. A timeout on a far link is evidence about the link, not the peer (rule 82); one window for both is how a node on a long honest path forgets every peer it tries. The two causes take different windows, named in the owner doc. Not a #909 change. Falsify by the owner doc naming both windows and the dial path applying the timeout window only to a timeout.
+- **A timed-out clearnet dial and a refused one do not share the hour-long forget.** `P2P_FAILED_ADDR_FORGET_SECONDS` (3600, `cryptonote_config.h`) marks an address the same way whether the dial timed out or the peer refused. A timeout on a far link is evidence about the link, not the peer (rule 82); one window for both is how a node on a long honest path forgets every peer it tries. The two causes take different windows, named in the owner doc. The split is LV-3 (`LV3_CONNECTION_OBJECT.md`, 2026-10-03): `TransportTimeout` and `LocalClose` do not mark the address; `DialFailed`, `ProxyRefused`, and a Levin handshake rejection do. That decision sits in `zone_server::open` and `do_handshake_with_peer`, which the slice deletes. Not a C++ patch of those two. Falsify by the owner doc naming both windows and the dial path applying the timeout window only to a timeout.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
@@ -62,7 +54,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D9
   - Target: pre-genesis
 
-- **A stalled in-flight write after a local close holds the fd.** #909's `Hub::record` discards the queued tail on a caused close, so a banned or refused peer no longer holds our connection task through *queued* frames. It does not bound the frame the writer already popped: `write_all` on that frame blocks the task (and the fd) for as long as the peer refuses to read, and `overfull` trips only on queue growth, not on a stalled tail (`capped-stream/src/copy.rs`). The bound is the shape ruled out of #909 in favour of discard (this box, 2026-09-29): an `AfterChannel` stall deadline (the variant exists in `cause.rs`, nothing arms one) derived like the other transport deadlines. Those other deadlines are written by `transport_spans`. This stall arm is the next PR, not #909. Falsify by a test in which a peer stops reading after a local close and the connection task and its fd are released within a bound rather than held.
+- **A stalled in-flight write after a local close holds the fd.** #909's `Hub::record` discards the queued tail on a caused close, so a banned or refused peer no longer holds our connection task through *queued* frames. It does not bound the frame the writer already popped: `write_all` on that frame blocks the task (and the fd) for as long as the peer refuses to read, and `overfull` trips only on queue growth, not on a stalled tail (`capped-stream/src/copy.rs`). The bound is the shape ruled out of #909 in favour of discard (this box, 2026-09-29): an `AfterChannel` stall deadline (the variant exists in `cause.rs`, nothing arms one) derived like the other transport deadlines. Those other deadlines are written by `transport_spans`. The samples are LV-3 (`LV3_CONNECTION_OBJECT.md`, 2026-10-03): a span on the Rust writer loop, both connectors, no threshold. Not a C++ arm on the connection writer. Falsify by per-session write-stall samples on that loop, both connectors, with no threshold.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 

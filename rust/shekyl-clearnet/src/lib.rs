@@ -603,7 +603,7 @@ mod tests {
         while !seen
             .lock()
             .expect("causes")
-            .contains(&CloseKind::AdmissionRefused)
+            .contains(&CloseKind::InboundNotAccepted)
         {
             assert!(start.elapsed() < Duration::from_secs(2), "refused");
             std::thread::sleep(Duration::from_millis(5));
