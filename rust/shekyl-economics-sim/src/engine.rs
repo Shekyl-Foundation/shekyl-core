@@ -6,6 +6,9 @@ use shekyl_economics::{
     split_block_emission, ClosedShardCount, TxVolume,
 };
 
+use crate::burden::HonestOutputs;
+use crate::fee_model::{FeeModel, FeePoint};
+
 #[derive(Debug, Clone, Serialize)]
 pub struct YearSnapshot {
     pub year: u64,
@@ -105,7 +108,6 @@ pub struct ScenarioConfig {
     pub sim_years: u64,
     pub volume: VolumeSchedule,
     pub stake: StakeSchedule,
-    pub fee_per_tx: u64,
     pub initial_emitted_fraction: f64,
     pub genesis_height_offset: u64,
     /// Gate-7 derived-lock model. `None` (all legacy scenarios) leaves the
@@ -126,6 +128,9 @@ pub struct SimParams {
     pub staker_pool_share: u64,
     pub staker_emission_share: u64,
     pub staker_emission_decay: u64,
+    /// The run's fee arm: what every scenario charges an ordinary
+    /// transaction (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-1).
+    pub fee: FeeModel,
 }
 
 impl Default for SimParams {
@@ -146,11 +151,32 @@ impl Default for SimParams {
             staker_pool_share: EconomicParams::default().staker_pool_share,
             staker_emission_share: 150_000,
             staker_emission_decay: 900_000,
+            fee: FeeModel::PRODUCTION_DEFAULT,
+        }
+    }
+}
+
+impl SimParams {
+    /// The parameters of the control arm: the shipped economics with the
+    /// flat fee the §12.13–§12.14 tables were measured on. A declared
+    /// divergence from production, kept so those tables stay reproducible.
+    #[must_use]
+    pub fn section_12_14_control() -> Self {
+        Self {
+            fee: FeeModel::SECTION_12_14_CONTROL,
+            ..Self::default()
         }
     }
 }
 
 const COIN: f64 = 1_000_000_000.0;
+
+/// The height the staker emission share decays from. The validator's own
+/// (`shekyl_chain_rules::EMISSION_SPLIT_EPOCH`), read here so that every
+/// fold in this crate splits a block at the epoch the validator judges it
+/// at.
+pub(crate) const EMISSION_SPLIT_EPOCH_HEIGHT: u64 =
+    shekyl_chain_rules::EMISSION_SPLIT_EPOCH.to_raw();
 
 pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResult {
     let economic = EconomicParams {
@@ -180,6 +206,10 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
     let mut snapshots = Vec::new();
     let emission_curve_asymptote = params.emission_curve_asymptote as u128;
+    // Leaves the block's transactions are built against. The fee prices this
+    // count; the block's outputs accrue after it is charged. Burn-split `n`
+    // is a different counter and stays zero in this engine.
+    let mut outputs = HonestOutputs::default();
 
     for block in 0..total_blocks {
         let year = block / params.blocks_per_year;
@@ -223,7 +253,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
         let emission_share = calc_effective_emission_share(
             block + config.genesis_height_offset,
-            0,
+            EMISSION_SPLIT_EPOCH_HEIGHT,
             params.staker_emission_share,
             params.staker_emission_decay,
             params.blocks_per_year,
@@ -231,9 +261,6 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
         let (miner_emission, staker_emission) =
             split_block_emission(effective_reward, emission_share);
-
-        let total_fees_this_block = tx_volume as u128 * config.fee_per_tx as u128;
-        let total_fees = total_fees_this_block.min(u64::MAX as u128) as u64;
 
         let burn_pct = match (&config.archival_lock, staked_atomic) {
             // Gate-7 path: the engine-equivalent composition over the
@@ -254,6 +281,20 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
                 params.burn_cap,
             ),
         };
+
+        let charged = params.fee.charge(
+            tx_volume,
+            &FeePoint {
+                already_generated: ag,
+                volume: TxVolume::per_block(tx_volume),
+                sigma_scaled: emission_share,
+                burn_pct_scaled: burn_pct,
+                chain_leaves: outputs.leaves(),
+                params: &economic,
+            },
+        );
+        outputs.accrue(tx_volume);
+        let total_fees = charged.total_atomic;
 
         // Canonical escalated split. This engine has no leaf/corpus trajectory, so
         // n = 0; under the shipped genesis-neutral asymptote that is bit-identical
@@ -383,7 +424,6 @@ mod tests {
             stake: StakeSchedule {
                 get_stake_ratio: Box::new(|_b, _bpy, _c| 250_000),
             },
-            fee_per_tx: 100_000_000,
             initial_emitted_fraction: 0.0,
             genesis_height_offset: 0,
             archival_lock,

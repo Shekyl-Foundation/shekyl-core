@@ -22,10 +22,12 @@
 //!
 //! Hoisted from `shekyl-engine-core` (§12.3 D-1) so the wallet fee path **and**
 //! `shekyl-economics-sim`'s W9 stuffer arm share one single-sourced weight model
-//! rather than a replicated byte formula. The **fee-rate** layer
-//! (`FeeRate`/`FeeDirective`/fee convergence) stays in engine-core — this crate
-//! is weight only, so its dependency surface is just the wire layout + proof
-//! sizes ({`shekyl-wire`, `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-curve-io`}),
+//! rather than a replicated byte formula. The wallet's **masked** rate
+//! (`FeeRate` / the daemon quantization mask) stays in engine-core. The
+//! unrounded fixed point of `fee = rate × weight(fee)` is
+//! [`converge_weight_fee`]: the circularity is this function's fee varint, not
+//! the mask. The dependency surface stays the wire layout + proof sizes
+//! ({`shekyl-wire`, `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-curve-io`}),
 //! no RPC or wallet types. The FCMP proof-size KAT's *validation* against real
 //! synthetic-tree measurements stays in engine-core (where the measurement
 //! machinery lives) and calls the `pub` [`fcmp_proof_size`] here.
@@ -304,6 +306,62 @@ pub fn predict_weight(n_in: InputCount, n_out: OutputCount, tree_depth: u8, fee:
     .sum()
 }
 
+/// Bytes in the longest `u64` varint. [`varint_len`]`(u64::MAX)` is this;
+/// the test beside [`converge_weight_fee`] pins the equality, so a wider
+/// encoding has to move the iteration bound with it.
+const U64_VARINT_BYTES_MAX: usize = 10;
+
+/// Passes [`converge_weight_fee`] may take. A pass that is not yet the fixed
+/// point changes `varint_len(fee)`, and a `u64` has at most
+/// [`U64_VARINT_BYTES_MAX`] such lengths. One further pass is the agreement
+/// check, so the loop returns by equality rather than by exhaustion.
+const WEIGHT_FEE_FIXPOINT_PASSES: usize = U64_VARINT_BYTES_MAX + 1;
+
+/// Unrounded fee fixed point: `fee = rate_per_weight × weight(fee)`.
+///
+/// [`predict_weight`] takes the fee because the wire carries `varint(fee)`.
+/// Returning before the fixed point under-pays by one varint byte of rate
+/// when the fee has just crossed a `2^(7k)` boundary. Iteration from zero
+/// is monotone (weight and the product are both non-decreasing in the fee)
+/// and meets the bound above.
+///
+/// This is the product with **no quantization mask**. The wallet's masked
+/// sibling is `shekyl_engine_core`'s `converge_fee`, which rounds through
+/// `FeeRate` on each pass. A mask of 1 makes the two agree; any other mask
+/// is the wallet's contract and does not belong here.
+#[must_use]
+pub fn converge_weight_fee(
+    rate_per_weight: u64,
+    n_in: InputCount,
+    n_out: OutputCount,
+    tree_depth: u8,
+) -> u64 {
+    let mut fee = 0u64;
+    for _ in 0..WEIGHT_FEE_FIXPOINT_PASSES {
+        let next = weight_times_rate(
+            predict_weight(n_in, n_out, tree_depth, fee),
+            rate_per_weight,
+        );
+        if next == fee {
+            return fee;
+        }
+        fee = next;
+    }
+    // Unreachable: each non-fixed pass consumes one varint length, and the
+    // bound is one past the longest `u64` varint. The extra evaluation is
+    // the side that does not under-pay.
+    fee.max(weight_times_rate(
+        predict_weight(n_in, n_out, tree_depth, fee),
+        rate_per_weight,
+    ))
+}
+
+fn weight_times_rate(weight: usize, rate_per_weight: u64) -> u64 {
+    u64::try_from(weight)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(rate_per_weight)
+}
+
 /// The **archival length** of the tx the builder would produce from these
 /// counts: `|pqc_auths| + |prunable|` — the two segments a prune discards and
 /// the bytes that count toward a shard's `W`
@@ -421,6 +479,42 @@ mod tests {
         let w3 = predict_weight(InputCount::clamped(1), OutputCount::clamped(2), 1, 1_000);
         assert!(w2 > w1);
         assert!(w3 > w1);
+    }
+
+    /// The returned fee is `rate × weight(fee)`, and two passes from zero are
+    /// not that point when the second product crosses a varint boundary.
+    ///
+    /// `24_184` is the wallet's pinned rate. After the weight model moved
+    /// (PL-D3) that rate settles in two passes, so it witnesses agreement
+    /// with the wallet's mask-1 absolute and nothing about the bound. `23_840`
+    /// is the neighbour that still has one varint length left after two
+    /// passes: the shortfall is exactly one byte of rate.
+    #[test]
+    fn converge_weight_fee_is_the_varint_fixed_point() {
+        assert_eq!(varint_len(u64::MAX), U64_VARINT_BYTES_MAX);
+        let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
+
+        let fixed = |rate: u64| {
+            let fee = converge_weight_fee(rate, n_in, n_out, depth);
+            let weight = u64::try_from(predict_weight(n_in, n_out, depth, fee)).unwrap();
+            assert_eq!(fee, weight.saturating_mul(rate), "rate {rate}");
+            fee
+        };
+        // The wallet's masked sibling, at mask 1, pins this same absolute.
+        assert_eq!(fixed(24_184), 272_336_024);
+
+        let rate = 23_840u64;
+        let mut two_passes = 0u64;
+        for _ in 0..2 {
+            let weight = u64::try_from(predict_weight(n_in, n_out, depth, two_passes)).unwrap();
+            two_passes = weight.saturating_mul(rate);
+        }
+        let fee = fixed(rate);
+        assert_eq!(
+            fee - two_passes,
+            rate,
+            "two passes {two_passes} undershoot {fee} by one varint byte of rate"
+        );
     }
 
     #[test]
