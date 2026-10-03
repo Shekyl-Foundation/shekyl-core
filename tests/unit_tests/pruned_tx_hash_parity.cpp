@@ -20,7 +20,9 @@
 //     `prefix_size`, `pqc_auths_offset` and `unprunable_size` cut the blob
 //     where shekyl-wire's own parse puts those four regions (the Rust pin
 //     was authored from the parsed body, not from slices);
-//   - `calculate_transaction_prunable_hash` produces `prunable_hash_hex`;
+//   - `calculate_transaction_prunable_hash` produces `prunable_hash_hex` --
+//     the range after `unprunable_size`, hashed by Rust like the txid
+//     (every class is pinned in `prunable_digest_parity.cpp`);
 //   - `serialize_base` -- the framing `get_pruned_tx_blob` reassembles from
 //     `txs_pruned` + `txs_pqc_auths` and the daemon serves as
 //     `pruned_as_hex` -- produces `pruned_hex`, a prefix of `tx_hex`;

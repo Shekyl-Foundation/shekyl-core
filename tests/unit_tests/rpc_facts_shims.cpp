@@ -1498,6 +1498,34 @@ TEST(rpc_facts_shims, key_images_spent_maps_chain_pool_and_neither_to_their_slot
   EXPECT_EQ(2, status[2]) << "spent in the pool, and written back to ITS slot";
 }
 
+namespace {
+
+// One transaction in the pool: the shared v3 PQC spend, keyed by its REAL
+// hash — the pool parses the blob back out, so an invented txid would not
+// survive the lookup, and a v1 stand-in would not survive
+// `get_transaction_prunable_hash` (observed: the shim refuses it). v3 is also
+// the only shape a Shekyl pool can hold.
+struct PooledSpend
+{
+  crypto::hash txid;
+  cryptonote::blobdata blob;
+};
+
+PooledSpend pool_one_spend(cryptonote::BlockchainDB& db)
+{
+  const cryptonote::transaction ptx = shekyl_test_fixtures::make_pqc_spend();
+  PooledSpend pooled{cryptonote::get_transaction_hash(ptx), shekyl_test_fixtures::tx_blob(ptx)};
+  cryptonote::txpool_tx_meta_t meta{};
+  meta.weight = 1;
+  meta.fee = 1000;
+  meta.receive_time = 1;
+  meta.set_relay_method(cryptonote::relay_method::fluff);
+  db.add_txpool_tx(pooled.txid, {pooled.blob.data(), pooled.blob.size()}, meta);
+  return pooled;
+}
+
+} // namespace
+
 // ── transactions: a repeated pool txid consumes a repeated slot ────────────
 //
 // The pool remap walks `missed` with one forward cursor, on the strength of
@@ -1512,19 +1540,8 @@ TEST(rpc_facts_shims, a_repeated_pool_txid_answers_both_of_its_slots)
   BlockchainAndPool bap;
   auto* db = new KeyImageDB(CHAIN_HEIGHT);
 
-  // The shared v3 PQC spend, keyed by its REAL hash — the pool parses the
-  // blob back out, so an invented txid would not survive the lookup, and a
-  // v1 stand-in would not survive `get_transaction_prunable_hash` (observed:
-  // the shim refuses it). v3 is also the only shape a Shekyl pool can hold.
-  const cryptonote::transaction ptx = shekyl_test_fixtures::make_pqc_spend();
-  const cryptonote::blobdata pblob = shekyl_test_fixtures::tx_blob(ptx);
-  const crypto::hash ptxid = cryptonote::get_transaction_hash(ptx);
-  cryptonote::txpool_tx_meta_t meta{};
-  meta.weight = 1;
-  meta.fee = 1000;
-  meta.receive_time = 1;
-  meta.set_relay_method(cryptonote::relay_method::fluff);
-  db->add_txpool_tx(ptxid, {pblob.data(), pblob.size()}, meta);
+  const PooledSpend pooled = pool_one_spend(*db);
+  const crypto::hash& ptxid = pooled.txid;
 
   ASSERT_TRUE(init_blockchain(bap.bc, db));
   ASSERT_TRUE(bap.txpool.init());
@@ -1543,4 +1560,40 @@ TEST(rpc_facts_shims, a_repeated_pool_txid_answers_both_of_its_slots)
     << "second occurrence must consume its own slot, not read as missing";
   EXPECT_EQ(q.out[0].pruned_len, q.out[1].pruned_len)
     << "both slots carry the same transaction";
+}
+
+// A pool entry's `prunable_hash` is the digest of the prunable bytes the same
+// entry serves. A wallet that prunes the reply keeps the digest and drops the
+// bytes, then mixes the digest into the txid it checks the pruned half
+// against — so a digest of anything else would name another transaction. The
+// expected value is Rust's digest of the served range, not a second call of
+// the function the shim used.
+TEST(rpc_facts_shims, a_pool_entrys_prunable_hash_is_the_digest_of_the_prunable_bytes_it_serves)
+{
+  BlockchainAndPool bap;
+  auto* db = new KeyImageDB(CHAIN_HEIGHT);
+  const PooledSpend pooled = pool_one_spend(*db);
+
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+  ASSERT_TRUE(bap.txpool.init());
+
+  TxQuery q;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::transactions(bap.bc, bap.txpool,
+      reinterpret_cast<const uint8_t*>(pooled.txid.data), 1, 0,
+      &q.out, &q.out_len, &q.chain_height, &q.owner));
+  ASSERT_EQ(1u, q.out_len);
+  const shekyl_rpc_tx_entry& e = q.out[0];
+  ASSERT_EQ(2, e.where) << "answered from the pool";
+
+  // The two halves are the pool's blob, cut once.
+  ASSERT_GT(e.prunable_len, 0u) << "the fixture spend has a prunable region";
+  ASSERT_EQ(pooled.blob.size(), e.pruned_len + e.prunable_len);
+  EXPECT_EQ(0, std::memcmp(pooled.blob.data(), e.pruned, e.pruned_len));
+  EXPECT_EQ(0, std::memcmp(pooled.blob.data() + e.pruned_len, e.prunable, e.prunable_len));
+
+  uint8_t of_served_bytes[32];
+  ASSERT_TRUE(shekyl_tx_prunable_hash(e.prunable, e.prunable_len, of_served_bytes));
+  EXPECT_EQ(0, std::memcmp(of_served_bytes, e.prunable_hash, 32))
+    << "the digest served is not the digest of the prunable half served";
 }

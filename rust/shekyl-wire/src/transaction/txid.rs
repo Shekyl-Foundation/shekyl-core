@@ -93,7 +93,28 @@ pub struct TxidParts {
 /// value instead. Pinned by `the_empty_region_digest_is_the_coinbases_row`.
 #[must_use]
 pub fn empty_region_prunable_hash() -> PrunableHash {
-    PrunableHash::from_bytes(keccak256(&[]))
+    prunable_hash_of(&[])
+}
+
+/// The prunable digest of a transaction whose **prunable byte region** is
+/// `region`: `keccak256` of exactly those bytes.
+///
+/// The one definition. A parsed body's [`Transaction::prunable_hash`] and
+/// [`Transaction::txid_parts`] hash the region they serialize through this,
+/// [`TxidSegments::txid`] hashes the range it is handed through this, and the
+/// C++ daemon — which serializes a transaction and knows where its prunable
+/// region starts, but owns no hash of it — reaches this over FFI
+/// (`shekyl_tx_prunable_hash`). So the value the store records as
+/// `txs_prunable_hash`, the value the daemon RPC serves beside a pruned body,
+/// and the component a wallet mixes into the txid it checks that body against
+/// are one function of the same bytes.
+///
+/// An empty region gives [`empty_region_prunable_hash`], the row of a body
+/// that has none. It does **not** give the null hash; where the txid
+/// substitutes that is the mixer's business ([`TxidSegments::txid`]).
+#[must_use]
+pub fn prunable_hash_of(region: &[u8]) -> PrunableHash {
+    PrunableHash::from_bytes(keccak256(region))
 }
 
 /// Whether a transaction is in the **archival shard partition's domain** —
@@ -169,7 +190,7 @@ impl Transaction {
     pub fn txid_parts(&self) -> TxidParts {
         let (pqc_auths, prunable) = self.discardable_regions();
         let pqc_auth_hash = self.pqc_auth_component(&pqc_auths);
-        let prunable_hash = PrunableHash::from_bytes(keccak256(&prunable));
+        let prunable_hash = prunable_hash_of(&prunable);
         let archival_len = archival_len_of(&pqc_auths, &prunable);
         TxidParts {
             hash: self.hash_from_components(
@@ -198,11 +219,11 @@ impl Transaction {
         (pqc_auths, prunable)
     }
 
-    /// `keccak256` of the **prunable byte region** — exactly the bytes
-    /// [`Self::write_segments`] puts in `prunable`, which is what the C++
-    /// `calculate_transaction_prunable_hash` hashes
-    /// (`blob[unprunable_size..]`) and what the chain store records in
-    /// `txs_prunable_hash`.
+    /// `keccak256` of the **prunable byte region** ([`prunable_hash_of`]) —
+    /// exactly the bytes [`Self::write_segments`] puts in `prunable`. The
+    /// C++ `calculate_transaction_prunable_hash` hands the same range
+    /// (`blob[unprunable_size..]`) to the same function, and the chain store
+    /// records the result in `txs_prunable_hash`.
     ///
     /// This is **not** the txid's prunable component in every case: when the
     /// region is absent (a coinbase, or a storage-pruned spend) the txid
@@ -215,7 +236,7 @@ impl Transaction {
         self.ct
             .write_prunable(&mut prunable)
             .expect("Vec write is infallible");
-        PrunableHash::from_bytes(keccak256(&prunable))
+        prunable_hash_of(&prunable)
     }
 
     /// The txid's **third component** — `keccak256(varint(count) ‖ auths)`
@@ -536,7 +557,7 @@ impl TxidSegments<'_> {
                 prunable: if self.prunable.is_empty() {
                     NULL_COMPONENT
                 } else {
-                    keccak256(self.prunable)
+                    prunable_hash_of(self.prunable).to_bytes()
                 },
                 archival_len: archival_len_of(self.pqc_auths, self.prunable),
             }

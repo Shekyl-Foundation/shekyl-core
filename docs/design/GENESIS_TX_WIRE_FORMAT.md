@@ -867,7 +867,10 @@ over-cap block, must be rejected by both impls).
 
   `H(prefix)` = hash of the version varint and the prefix fields; `H(base)` = hash
   of the ct type byte through the committed base; `H(prunable)` = hash of the
-  prunable region (`null_hash` when a body in hand does not hold it).
+  prunable region (`null_hash` when a body in hand does not hold it). That digest
+  also travels alone — the `txs_prunable_hash` row, and `prunable_hash` beside a
+  pruned body — and has one definition, `shekyl-wire` `prunable_hash_of`, which
+  the C++ daemon reaches over `shekyl_tx_prunable_hash`.
   **`L` is the transaction's archival length** — the bytes of the tx-level
   `pqc_auths` segment as the body carries it (no count prefix) plus the bytes of
   the prunable region — as a `u64`, little-endian in the low 8 bytes of the word,
