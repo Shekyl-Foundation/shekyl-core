@@ -13,16 +13,17 @@
 //! per-channel deadlines). Noise **buffers** live in [`crate::NoiseQueues`]
 //! (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2). C++ is transport. The
 //! development opt-in can ask for cover; Rust refuses that ask unless a
-//! configured connector's encryption cell says the link is encrypted, and
-//! it sends cover only to a session on such a connector. A transaction body
-//! is still an opaque blob here. See `DAEMON_RELAY_PRIVACY.md` criterion 4.
+//! configured connector is an open link, and it sends cover only to a
+//! session on such a connector. Tor is volume cover and takes no envelope.
+//! A transaction body is still an opaque blob here. See
+//! `DAEMON_RELAY_PRIVACY.md` criterion 4 and `TOR_COVER_POSTURE.md`.
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
 use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
-use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
+use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
@@ -32,6 +33,11 @@ use shekyl_transport_layer::{declaration, Assessment, NativeEncryption, YesNo};
 use shekyl_types::relay::RelayMethod;
 
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
+
+mod cover;
+mod own_edge;
+
+pub use cover::{any_open_link, cover_class, measured_transit_ms, CoverClass};
 
 /// One opaque transaction blob shared across every peer that accepted a fluff
 /// batch.
@@ -56,9 +62,8 @@ const _: () = {
 pub fn longest_measured_transit() -> f64 {
     ConnectorId::ALL
         .iter()
-        .filter_map(|connector| {
-            shekyl_relay_privacy::transit_ms_for_connector_index(connector.index())
-        })
+        .copied()
+        .filter_map(measured_transit_ms)
         .max_by(f64::total_cmp)
         .expect("a connector with a measured transit")
 }
@@ -96,24 +101,14 @@ pub fn link_encrypted(connector: ConnectorId) -> bool {
     )
 }
 
-/// True when any configured connector's link is encrypted. Computed once,
-/// at construction, as the cover-traffic refusal.
+/// True when any configured connector's link is encrypted.
+///
+/// The encryption cell. Cover eligibility is [`cover_class`], which
+/// disagrees with this on Tor: the link is encrypted and still takes no
+/// envelope.
 #[must_use]
 pub fn any_link_encrypted(configured: &[ConnectorId]) -> bool {
     configured.iter().copied().any(link_encrypted)
-}
-
-/// A local origin keeps the pool record at [`RelayMethod::Local`] when hop 0
-/// cannot draw a clearnet edge.
-///
-/// Recording `Stem` or `Fluff` would let the pool's monotone upgrade leave
-/// `Local` permanently, and the next re-relay would publish the user's
-/// transaction on every edge. Relayed traffic is not this predicate. A
-/// clearnet-only relay (`hop0_restricted == false`) records the method the
-/// wire used.
-#[must_use]
-pub const fn origin_keeps_local_record(method: RelayMethod, hop0_restricted: bool) -> bool {
-    matches!(method, RelayMethod::Local) && hop0_restricted
 }
 
 // The seam's byte contract. C++ `static_assert`s the same literals; neither
@@ -192,6 +187,13 @@ pub enum NodeSync {
 ///   the node has not caught up. Nothing is sent and nothing is recorded, so
 ///   the pool retries after sync. A refresh cannot make it routable, and
 ///   falling through to fluff would publish it early.
+/// - [`RelayPlan::OwnEdge`] is the first hop of a local origin whose address
+///   a peer must not learn. One ordinary send. A failed write is terminal:
+///   no stem-map refresh, no second plan, no fluff. Success records
+///   `relay_method::local`.
+/// - [`RelayPlan::NoOwnEdge`] is that draw with an empty pool. Send nothing
+///   and record nothing. Refreshing the stem map cannot manufacture an
+///   edge that hides this node's address.
 ///
 /// The daemon also reports the routable outcomes differently: the inherited
 /// `dandelionpp_notify` emits `relay_method::stem` on *entering* the
@@ -217,6 +219,20 @@ pub enum RelayPlan {
     /// carrier so the match stays total, and the caller must not read it:
     /// there is no send.
     AwaitSync,
+    /// First hop of a local origin whose address a peer must not learn.
+    ///
+    /// Not a stem-map slot. The caller sends once, on the ordinary
+    /// connection, and records `relay_method::local`. A failed write returns
+    /// without a refresh and without a fluff. No cover on Tor by ruling; on
+    /// a cover-bearing link the own-edge is [`RelayPlan::Stem`], and that
+    /// slot is the channel.
+    OwnEdge(ConnectionId),
+    /// The hidden-address pool is empty.
+    ///
+    /// Send nothing and record nothing. Not a stem-map refresh, and not a
+    /// fluff: either would publish the origin on a link whose peer learns
+    /// this node's address.
+    NoOwnEdge,
 }
 
 /// Why [`Relay::new`] refused a configuration.
@@ -226,9 +242,13 @@ pub enum RelayPlan {
 /// to a null handle; a future in-process caller matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayNewError {
-    /// Noise conceals packet sizing. On a cleartext link the observer reads
-    /// the contents outright, so padding sizes conceals nothing.
-    NoiseOnCleartext,
+    /// The carrier was requested and no configured connector is an open link.
+    ///
+    /// Tor is volume cover: an envelope there buys nothing the network does
+    /// not already provide, and a Tor-only node has nowhere to put one.
+    /// Requesting the carrier is the NNhfs pipe on an open link, not padding
+    /// on a volume-cover connector.
+    NoiseWithoutOpenLink,
     /// `stems` doubles as the channel count. Noise is
     /// [`inherited::NOISE_CHANNELS`] wide; a mismatch sizes the schedule
     /// against a width the rest of the stack does not share.
@@ -254,8 +274,8 @@ pub enum RelayNewError {
 impl fmt::Display for RelayNewError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoiseOnCleartext => {
-                write!(f, "noise carrier requires an encrypted link")
+            Self::NoiseWithoutOpenLink => {
+                write!(f, "noise carrier requires an open link")
             }
             Self::NoiseChannelCount { got } => write!(
                 f,
@@ -380,11 +400,9 @@ pub struct Relay {
     /// When noise is enabled this is also the noise channel count (channel
     /// `i` ↔ slot `i`). Production pins it to [`inherited::NOISE_CHANNELS`].
     stems: usize,
-    /// First hop of a locally originated transaction.
-    /// Hop 0 of a local origin draws only from connectors whose declaration
-    /// says the peer does not learn this node's address. False means hop 0
-    /// draws from every outbound edge.
-    hop0_restricted: bool,
+    /// A configured connector hides this node's address, so a local origin
+    /// draws [`RelayPlan::OwnEdge`] rather than a stem slot.
+    origin_address_hidden: bool,
     /// This epoch's own-edge, once a non-empty hidden-address pool has been
     /// drawn. Not a stem-map slot. Kept while that peer is live; a dead peer
     /// is replaced on the next origination. Cleared by [`Relay::rebuild_stems`].
@@ -417,20 +435,19 @@ impl Relay {
     ///
     /// # Refusals
     ///
-    /// **Cover traffic requires a configured connector whose native
-    /// encryption cell is [`NativeEncryption::Classical`].** Noise conceals
-    /// packet sizing. On a cleartext link the observer reads the contents,
-    /// so padding the sizes conceals nothing. This is a refusal rather than
-    /// a silent downgrade: a node that asked for a protection it is not
-    /// getting is the failure worth being loud about.
+    /// **Cover traffic requires a configured connector whose [`CoverClass`]
+    /// is [`CoverClass::OpenLink`].** Tor is volume cover: no envelope, and
+    /// a Tor-only ask has nowhere to put one. Clearnet with the carrier
+    /// requested is the NNhfs pipe, which encrypts the open link and is the
+    /// envelope. This is a refusal rather than a silent downgrade: a node
+    /// that asked for a protection it is not getting is the failure worth
+    /// being loud about.
     ///
-    /// The predicate is [`any_link_encrypted`]. It is not hop 0.
-    /// [`address_hidden_from_peer`] says whether the peer learns this node's
-    /// address. This cell says whether a network observer can read the byte
-    /// stream. The two agree on the connectors that exist today, and a later
-    /// connector may set only one. Cover follows encryption. An added
-    /// transport layer is not this cell, and [`Assessment::NotAssessed`] is
-    /// not presumed encrypted.
+    /// The predicate is [`any_open_link`]. It is not [`link_encrypted`] and
+    /// it is not hop 0. [`address_hidden_from_peer`] says whether the peer
+    /// learns this node's address. [`link_encrypted`] says whether a network
+    /// observer can read the byte stream. Cover is the ruling on top of
+    /// both, and it disagrees with both on the connectors that exist today.
     ///
     /// **A noise carrier's channel count must equal
     /// [`inherited::NOISE_CHANNELS`].** `stems` is that width. This was a
@@ -443,9 +460,10 @@ impl Relay {
     /// [`carrier::MAX_FRAGMENTS`].
     ///
     /// The three refusals are distinct [`RelayNewError`] variants. The FFI
-    /// maps every one to null. C++ sets the noise flag only behind the
-    /// development opt-in, and only when some configured connector is
-    /// link-encrypted, so a shipped construction does not hit these.
+    /// maps every one to null. C++ passes the noise flag only behind the
+    /// development opt-in and does not pre-decide which connector can carry
+    /// it. The flag defaults off, so a shipped construction does not hit
+    /// these.
     pub fn new<R: RelayRng + ?Sized>(
         params: DandelionParams,
         stems: usize,
@@ -455,8 +473,8 @@ impl Relay {
         rng: &mut R,
     ) -> Result<Self, RelayNewError> {
         if noise_requested {
-            if !any_link_encrypted(configured) {
-                return Err(RelayNewError::NoiseOnCleartext);
+            if !any_open_link(configured) {
+                return Err(RelayNewError::NoiseWithoutOpenLink);
             }
             if stems != inherited::NOISE_CHANNELS {
                 return Err(RelayNewError::NoiseChannelCount { got: stems });
@@ -480,7 +498,7 @@ impl Relay {
         let embargo = ConnectorId::ALL
             .iter()
             .map(|connector| {
-                shekyl_relay_privacy::transit_ms_for_connector_index(connector.index())
+                measured_transit_ms(*connector)
                     .map(|ms| EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(ms)))
             })
             .collect();
@@ -498,7 +516,7 @@ impl Relay {
             epoch_ends_at: epoch.ends_at,
             params,
             stems,
-            hop0_restricted: any_hides_address_from_peer(configured),
+            origin_address_hidden: any_hides_address_from_peer(configured),
             hop0_edge: None,
             noise,
         })
@@ -527,16 +545,15 @@ impl Relay {
         self.noise.deadline_at(channel)
     }
 
-    /// Whether noise may be sent to `peer`.
+    /// Whether a substitution envelope may be sent to `peer`.
     ///
-    /// The carrier follows the destination connector's encryption cell.
-    /// A session whose connector is not link-encrypted stems on the ordinary
-    /// connection. Tor is link-encrypted and still takes no cover channel
-    /// for the own-edge: that ruling is [`Relay::volume_cover_own_edge`].
+    /// The destination's connector must be [`CoverClass::OpenLink`]. Tor is
+    /// volume cover: no envelope, including when the peer also occupies a
+    /// stem slot. A session that is gone is not a destination.
     pub(crate) fn noise_destination(&self, peer: ConnectionId) -> bool {
         self.contexts
             .get(&peer)
-            .is_some_and(|session| link_encrypted(session.connector))
+            .is_some_and(|session| matches!(cover_class(session.connector), CoverClass::OpenLink))
     }
 
     /// Whether this zone runs noise channels.
@@ -548,13 +565,6 @@ impl Relay {
     #[must_use]
     pub fn noise_enabled(&self) -> bool {
         self.noise.enabled()
-    }
-
-    /// Whether hop 0 of a local origin draws only from connectors that
-    /// declare the peer does not learn this node's address.
-    #[must_use]
-    pub fn hop0_restricted(&self) -> bool {
-        self.hop0_restricted
     }
 
     /// Configured stem width (slot count). When noise is on, also the channel
@@ -759,74 +769,10 @@ impl Relay {
         self.fluff.forget(*id);
     }
 
-    /// The own-edge for a local origin, when a configured connector hides
-    /// this node's address.
-    ///
-    /// Relayed stems draw uniformly over every outbound session. This draw
-    /// is the other one: uniform over the hidden-address outbound sessions,
-    /// and not a stem-map slot. A live edge is not re-pointed. A dead one is
-    /// replaced from the pool that is still up — the old path is gone, so
-    /// there is nothing left to intersect with. [`Relay::rebuild_stems`]
-    /// clears the edge so the next epoch draws again. A pool of one is the
-    /// same edge every epoch; that is reported, and the transaction still
-    /// leaves. Empty is [`RelayPlan::NoRoute`].
-    fn restricted_first_hop<R: RelayRng + ?Sized>(&mut self, rng: &mut R) -> RelayPlan {
-        if let Some(id) = self.hop0_edge {
-            if self.hop0_peer_live(id) {
-                return RelayPlan::Stem(id);
-            }
-        }
-        let pool = self.hidden_outbound_ids();
-        if pool.is_empty() {
-            self.hop0_edge = None;
-            return RelayPlan::NoRoute;
-        }
-        if pool.len() == 1 {
-            tracing::error!(
-                "hop-0 edge cannot rotate: one outbound connection hides this node's address, so every transaction this node originates uses that connection until another such peer connects"
-            );
-        }
-        let index = usize::try_from(bounded_uniform(rng, (pool.len() - 1) as u64))
-            .expect("the draw is bounded by the pool length");
-        let edge = pool[index];
-        self.hop0_edge = Some(edge);
-        RelayPlan::Stem(edge)
-    }
-
-    /// The own-edge on a link whose wire-observer defence is volume, not an
-    /// envelope. Tor is that link. A cover-bearing own-edge is not: it is a
-    /// stem slot, drawn by [`Relay::plan_relay`] when hop 0 is not restricted.
-    fn volume_cover_own_edge(&self, destination: ConnectionId) -> bool {
-        self.hop0_edge == Some(destination)
-            && self
-                .contexts
-                .get(&destination)
-                .is_some_and(|peer| address_hidden_from_peer(peer.connector))
-    }
-
-    fn hop0_peer_live(&self, id: ConnectionId) -> bool {
-        self.contexts.get(&id).is_some_and(|peer| {
-            Self::stem_candidate(peer) && address_hidden_from_peer(peer.connector)
-        })
-    }
-
-    /// Hidden-address outbound sessions, in connection-id order.
-    fn hidden_outbound_ids(&self) -> Vec<ConnectionId> {
-        self.contexts
-            .iter()
-            .filter(|(_, peer)| {
-                Self::stem_candidate(peer) && address_hidden_from_peer(peer.connector)
-            })
-            .map(|(id, _)| *id)
-            .collect()
-    }
-
     /// Outbound, and the connector has a measured transit. An unmeasured
     /// connector is not a stem candidate.
     fn stem_candidate(peer: &PeerFluff) -> bool {
-        peer.direction == PeerDirection::Outbound
-            && shekyl_relay_privacy::transit_ms_for_connector_index(peer.connector.index())
-                .is_some()
+        peer.direction == PeerDirection::Outbound && measured_transit_ms(peer.connector).is_some()
     }
 
     /// Established outbound sessions. Inbound peers are not stem candidates.
@@ -975,8 +921,8 @@ impl Relay {
         if local_origin && node_sync == NodeSync::Unsynchronised {
             return RelayPlan::AwaitSync;
         }
-        if local_origin && self.hop0_restricted {
-            return self.restricted_first_hop(rng);
+        if local_origin && self.origin_address_hidden {
+            return self.own_edge(rng);
         }
         // No hidden-address connector: the own-edge is this stem slot. On a
         // cover-bearing link that is the channel's cadence. Tor does not
@@ -1001,8 +947,10 @@ impl Relay {
     /// gtest oracle cannot see through the FFI (§18.4a).
     ///
     /// A settled [`RelayPlan::FluffEpoch`] does not refresh: retrying cannot
-    /// change an epoch decision. [`RelayPlan::AwaitSync`] does not either:
-    /// the map is not what is withholding the batch.
+    /// change an epoch decision. [`RelayPlan::AwaitSync`] does not either.
+    /// [`RelayPlan::NoOwnEdge`] and [`RelayPlan::OwnEdge`] do not: the stem
+    /// map is not the pool those plans draw from, and a second plan would
+    /// let an empty own-edge fall through to fluff.
     pub fn plan_relay_with_refresh<R: RelayRng + ?Sized>(
         &mut self,
         source: Option<ConnectionId>,
@@ -1011,7 +959,7 @@ impl Relay {
         rng: &mut R,
     ) -> RelayPlan {
         match self.plan_relay(source, local_origin, node_sync, rng) {
-            RelayPlan::NoRoute if !(local_origin && self.hop0_restricted) => {
+            RelayPlan::NoRoute => {
                 self.update_stems(rng);
                 self.plan_relay(source, local_origin, node_sync, rng)
             }
@@ -1197,50 +1145,47 @@ impl Relay {
     /// ordinary connection: fluff by §42.3's design, no-route because there is
     /// nothing to carry.
     ///
-    /// [`RelayPlan::AwaitSync`] names [`RelayCarrier::Ordinary`] so the match
-    /// is total. That carrier is unread: the plan is the refusal, and the
-    /// caller returns before any send.
+    /// [`RelayPlan::AwaitSync`] and [`RelayPlan::NoOwnEdge`] name
+    /// [`RelayCarrier::Ordinary`] so the match is total. That carrier is
+    /// unread: the plan is the refusal, and the caller returns before any
+    /// send.
     ///
-    /// No cover on Tor by ruling: a hidden-address own-edge leaves on the
-    /// ordinary connection, slotted or not. On a cover-bearing link the
-    /// own-edge is a stem slot, and the noise arm is that slot's channel.
-    /// A relayed stem with no slot is map corruption. In release that arm
-    /// still returns [`RelayCarrier::Ordinary`] — the stem goes out. That
-    /// is a **cover** degradation, not a routing one: §92.4's rule is that
-    /// carrier unavailability must never travel as a routing verdict.
+    /// No cover on Tor by ruling; on cover-bearing links the own-edge is
+    /// slot-aligned. [`RelayPlan::OwnEdge`] is the volume path and always
+    /// leaves immediately. [`RelayPlan::Stem`] on an open link, while noise
+    /// is on, is that slot's channel — including a clearnet local origin,
+    /// whose first hop is the slot. A relayed stem with no slot is map
+    /// corruption. In release that arm still returns
+    /// [`RelayCarrier::Ordinary`]: the stem goes out. That is a cover
+    /// degradation, not a routing one.
     fn carrier_for(&self, plan: RelayPlan) -> RelayCarrier {
         match plan {
-            RelayPlan::Stem(destination) if self.noise_enabled() => {
+            RelayPlan::Stem(destination) if self.noise.enabled() => {
                 match self.map.slot_of(destination) {
-                    // No cover on Tor by ruling: the own-edge leaves immediately
-                    // on the ordinary connection, slotted or not
-                    // (`TOR_COVER_POSTURE.md`). On a cover-bearing link the
-                    // own-edge is a stem slot, so this arm is that slot's
-                    // channel and the send is not off-cadence.
-                    Some(slot)
-                        if self.noise_destination(destination)
-                            && !self.volume_cover_own_edge(destination) =>
-                    {
+                    Some(slot) if self.noise_destination(destination) => {
                         RelayCarrier::Noise { channel: slot }
                     }
                     Some(_) => RelayCarrier::Ordinary,
-                    None if self.volume_cover_own_edge(destination) => RelayCarrier::Ordinary,
                     None => {
                         debug_assert!(
                             false,
                             "planned a relayed stem to a peer with no slot: the destination came \
-                             from this map in this call, so this is map corruption, not a posture"
+                         from this map in this call, so this is map corruption, not a posture"
                         );
                         RelayCarrier::Ordinary
                     }
                 }
             }
-            // The plan is the refusal. Ordinary keeps the match total; the
-            // caller returns before it reads the carrier.
-            RelayPlan::AwaitSync => RelayCarrier::Ordinary,
-            RelayPlan::Stem(_) | RelayPlan::NoRoute | RelayPlan::FluffEpoch => {
-                RelayCarrier::Ordinary
-            }
+            // No cover on Tor by ruling. OwnEdge leaves on the ordinary
+            // connection. On a cover-bearing link the own-edge is
+            // [`RelayPlan::Stem`] and the arm above is its channel. The
+            // other plans are a refusal or have nothing to carry.
+            RelayPlan::OwnEdge(_)
+            | RelayPlan::NoOwnEdge
+            | RelayPlan::AwaitSync
+            | RelayPlan::NoRoute
+            | RelayPlan::FluffEpoch
+            | RelayPlan::Stem(_) => RelayCarrier::Ordinary,
         }
     }
 

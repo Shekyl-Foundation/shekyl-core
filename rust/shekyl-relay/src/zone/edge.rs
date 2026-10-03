@@ -116,12 +116,12 @@ fn a_hidden_connector_origin_does_not_draw_a_clear_edge() {
     );
     assert_eq!(
         z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
-        RelayPlan::NoRoute,
+        RelayPlan::NoOwnEdge,
     );
     z.on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
     assert_eq!(
         z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
-        RelayPlan::Stem(id(2)),
+        RelayPlan::OwnEdge(id(2)),
     );
     // A forwarded stem draws from every outbound edge.
     let forwarded = z.plan_relay(Some(id(2)), false, NodeSync::Synchronised, &mut rng);
@@ -155,13 +155,13 @@ fn a_restricted_hop_0_is_constant_within_the_epoch() {
         &mut rng,
     );
     let first = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng);
-    let RelayPlan::Stem(dest) = first else {
+    let RelayPlan::OwnEdge(dest) = first else {
         panic!("hop 0 had a hidden-address pool and returned {first:?}");
     };
     assert!((2..=4).contains(&dest.as_bytes()[0]));
     assert_eq!(
         z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
-        RelayPlan::Stem(dest),
+        RelayPlan::OwnEdge(dest),
         "the own-edge is one peer for the epoch"
     );
 }
@@ -196,7 +196,7 @@ fn eight_clearnet_and_one_tor_originates_every_epoch() {
         }
         let first = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng);
         let second = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng);
-        assert_eq!(first, RelayPlan::Stem(tor));
+        assert_eq!(first, RelayPlan::OwnEdge(tor));
         assert_eq!(second, first);
     }
     assert!(
@@ -237,7 +237,7 @@ fn four_hidden_peers_share_the_own_edge() {
     for _ in 0..200 {
         z.rebuild_stems(&mut rng);
         let first = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng);
-        let RelayPlan::Stem(dest) = first else {
+        let RelayPlan::OwnEdge(dest) = first else {
             panic!("hop 0 returned {first:?}");
         };
         assert_eq!(
@@ -289,17 +289,18 @@ fn a_dead_own_edge_is_replaced_and_a_live_one_is_not() {
     .unwrap();
     z.on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
     z.on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
-    let RelayPlan::Stem(dest) = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng) else {
+    let RelayPlan::OwnEdge(dest) = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng)
+    else {
         panic!("hop 0 had two hidden peers");
     };
     z.on_session_established(id(3), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
     assert_eq!(
         z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
-        RelayPlan::Stem(dest),
+        RelayPlan::OwnEdge(dest),
         "a live own-edge is not re-pointed when another hidden peer connects"
     );
     z.on_connection_close(&dest);
-    let RelayPlan::Stem(replaced) = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng)
+    let RelayPlan::OwnEdge(replaced) = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng)
     else {
         panic!("a dead own-edge with peers still up returned no route");
     };
@@ -310,7 +311,7 @@ fn a_dead_own_edge_is_replaced_and_a_live_one_is_not() {
     );
     assert_eq!(
         z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
-        RelayPlan::Stem(replaced),
+        RelayPlan::OwnEdge(replaced),
         "the replacement stays while it is live"
     );
     z.on_connection_close(&replaced);
@@ -322,7 +323,7 @@ fn a_dead_own_edge_is_replaced_and_a_live_one_is_not() {
     }
     assert_eq!(
         z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
-        RelayPlan::NoRoute,
+        RelayPlan::NoOwnEdge,
         "an empty hidden-address pool has nothing to draw"
     );
 }
@@ -353,7 +354,7 @@ fn an_unslotted_own_edge_uses_the_ordinary_carrier() {
     );
     z.on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
     let dispatch = z.plan_dispatch(None, true, NodeSync::Synchronised, &mut rng);
-    assert_eq!(dispatch.plan, RelayPlan::Stem(id(2)));
+    assert_eq!(dispatch.plan, RelayPlan::OwnEdge(id(2)));
     assert!(
         !z.stem_slots().contains(&Some(id(2))),
         "the two clearnet peers already fill the stem map"
@@ -376,7 +377,7 @@ fn a_slotted_tor_own_edge_still_leaves_immediately() {
     z.on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
     z.on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
     let dispatch = z.plan_dispatch(None, true, NodeSync::Synchronised, &mut rng);
-    let RelayPlan::Stem(dest) = dispatch.plan else {
+    let RelayPlan::OwnEdge(dest) = dispatch.plan else {
         panic!("hop 0 returned {:?}", dispatch.plan);
     };
     assert!(
@@ -391,7 +392,7 @@ fn a_slotted_tor_own_edge_still_leaves_immediately() {
 }
 
 #[test]
-fn a_clearnet_slot_stems_on_the_ordinary_carrier() {
+fn a_clearnet_slot_rides_the_cover_channel() {
     let mut rng = SplitMix64::new(5);
     let mut z = None;
     for _ in 0..10_000 {
@@ -419,9 +420,116 @@ fn a_clearnet_slot_stems_on_the_ordinary_carrier() {
     let dispatch = z.plan_dispatch(Some(id(9)), false, NodeSync::Synchronised, &mut rng);
     assert_eq!(dispatch.plan, RelayPlan::Stem(id(1)));
     assert!(
-        matches!(dispatch.carrier, RelayCarrier::Ordinary),
-        "a clearnet slot must not carry noise, got {:?}",
+        matches!(dispatch.carrier, RelayCarrier::Noise { .. }),
+        "a clearnet slot rides the cover channel, got {:?}",
         dispatch.carrier
+    );
+}
+
+/// No hidden-address session: the plan is terminal, and the spare clearnet
+/// peer stays out of the dead slot. A refresh would have bound it.
+#[test]
+fn an_empty_hidden_pool_does_not_refresh_the_stem_map() {
+    let mut rng = SplitMix64::new(12);
+    let mut z = Relay::new(
+        DandelionParams::inherited(),
+        2,
+        false,
+        &[ConnectorId::Clearnet, ConnectorId::Tor],
+        0,
+        &mut rng,
+    )
+    .unwrap();
+    for byte in 1..=3 {
+        z.on_session_established(
+            id(byte),
+            PeerDirection::Outbound,
+            ConnectorId::Clearnet,
+            &mut rng,
+        );
+    }
+    let slotted: Vec<_> = z.stem_slots().iter().copied().flatten().collect();
+    assert_eq!(slotted.len(), 2, "width 2 with three outbound peers");
+    let spare = [id(1), id(2), id(3)]
+        .into_iter()
+        .find(|peer| !slotted.contains(peer))
+        .expect("one peer is unslotted");
+    z.on_connection_close(&slotted[0]);
+    let before = z.stem_slots().to_vec();
+    assert!(
+        !before.contains(&Some(spare)),
+        "the spare peer is the one a refresh would bind"
+    );
+    assert_eq!(
+        z.plan_relay_with_refresh(None, true, NodeSync::Synchronised, &mut rng),
+        RelayPlan::NoOwnEdge,
+    );
+    assert_eq!(
+        z.stem_slots(),
+        before.as_slice(),
+        "NoOwnEdge does not refresh the stem map"
+    );
+}
+
+/// A clearnet local origin has no hidden-address pool, so its first hop is
+/// the stem slot. With the carrier on, that slot is the channel: the send
+/// waits for cadence instead of leaving off-cadence.
+#[test]
+fn a_clearnet_origin_is_slot_aligned() {
+    let mut rng = SplitMix64::new(13);
+    let mut z = Relay::new(
+        DandelionParams::inherited(),
+        2,
+        true,
+        &[ConnectorId::Clearnet],
+        0,
+        &mut rng,
+    )
+    .unwrap();
+    z.on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    let dispatch = z.plan_dispatch(None, true, NodeSync::Synchronised, &mut rng);
+    assert_eq!(dispatch.plan, RelayPlan::Stem(id(1)));
+    assert!(
+        matches!(dispatch.carrier, RelayCarrier::Noise { .. }),
+        "on a cover-bearing link the own-edge is slot-aligned, got {:?}",
+        dispatch.carrier
+    );
+}
+
+/// A forwarded stem on Tor takes the ordinary connection even when the
+/// carrier is on. The envelope runs on the open link, not on volume cover.
+#[test]
+fn a_forwarded_tor_stem_takes_no_envelope() {
+    let mut rng = SplitMix64::new(14);
+    let mut built = None;
+    for _ in 0..10_000 {
+        let zone = Relay::new(
+            DandelionParams::inherited(),
+            2,
+            true,
+            &[ConnectorId::Clearnet, ConnectorId::Tor],
+            0,
+            &mut rng,
+        )
+        .unwrap();
+        if !zone.is_fluffing() {
+            built = Some(zone);
+            break;
+        }
+    }
+    let mut z = built.expect("a stem epoch");
+    z.on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    let dispatch = z.plan_dispatch(Some(id(9)), false, NodeSync::Synchronised, &mut rng);
+    assert_eq!(dispatch.plan, RelayPlan::Stem(id(1)));
+    assert_eq!(
+        dispatch.carrier,
+        RelayCarrier::Ordinary,
+        "no cover on Tor by ruling"
     );
 }
 
@@ -466,7 +574,7 @@ fn the_longest_measured_transit_is_the_max_of_the_measured_entries() {
     let longest = longest_measured_transit();
     let mut saw = false;
     for connector in ConnectorId::ALL {
-        if let Some(ms) = shekyl_relay_privacy::transit_ms_for_connector_index(connector.index()) {
+        if let Some(ms) = measured_transit_ms(*connector) {
             saw = true;
             assert!(
                 longest.total_cmp(&ms).is_ge(),

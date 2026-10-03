@@ -153,9 +153,10 @@ static CONNECTOR_EMBARGO: OnceLock<ConnectorEmbargo> = OnceLock::new();
 
 fn connector_embargo() -> &'static ConnectorEmbargo {
     CONNECTOR_EMBARGO.get_or_init(|| {
-        let by_index = (0..shekyl_relay::ConnectorId::COUNT)
-            .map(|index| {
-                shekyl_relay_privacy::transit_ms_for_connector_index(index)
+        let by_index = shekyl_relay::ConnectorId::ALL
+            .iter()
+            .map(|connector| {
+                shekyl_relay::measured_transit_ms(*connector)
                     .map(|ms| EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(ms)))
             })
             .collect();
@@ -419,8 +420,7 @@ mod tests {
         );
         assert_eq!(retry, longest);
         for connector in shekyl_relay::ConnectorId::ALL {
-            let Some(ms) = shekyl_relay_privacy::transit_ms_for_connector_index(connector.index())
-            else {
+            let Some(ms) = shekyl_relay::measured_transit_ms(*connector) else {
                 continue;
             };
             let secs = u64::from(

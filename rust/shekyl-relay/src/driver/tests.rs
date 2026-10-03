@@ -209,24 +209,36 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
             DandelionParams::inherited(),
             2,
             true,
-            &[ConnectorId::Tor],
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
         .unwrap(),
     );
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
 
     // The hole recipe the CV-2 witness established: close the slot's peer
     // AND re-offer only the survivor, so nothing backfills.
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
     let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
     d.zone_mut().on_connection_close(&slot0_peer);
-    d.zone_mut()
-        .on_session_established(keep, PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    d.zone_mut().on_session_established(
+        keep,
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
     assert_eq!(
         d.zone().stem_slots()[0],
         None,
@@ -298,21 +310,33 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
             DandelionParams::inherited(),
             2,
             true,
-            &[ConnectorId::Tor],
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
         .unwrap(),
     );
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
     let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
     d.zone_mut().on_connection_close(&slot0_peer);
-    d.zone_mut()
-        .on_session_established(id(3), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    d.zone_mut().on_session_established(
+        id(3),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
     assert_eq!(
         d.zone().stem_slots(),
         &[Some(id(3)), Some(keep)],
@@ -466,7 +490,7 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
             DandelionParams::inherited(),
             2,
             true,
-            &[ConnectorId::Tor],
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
@@ -474,10 +498,18 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
     );
     // Bind both slots: since the inversion, an unbound slot emits no send
     // (CV-2), and this test is about cadence, not binding.
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
 
     // Fixture requirement: distinct deadlines, or "one per advance" could
     // hold by coincidence rather than by independence.
@@ -549,16 +581,24 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
             DandelionParams::inherited(),
             2,
             true,
-            &[ConnectorId::Tor],
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
         .unwrap(),
     );
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
 
     // Ground truth from the owning structure, captured before driving.
     let truth: Vec<Option<ConnectionId>> = d.zone().stem_slots().to_vec();
@@ -620,16 +660,24 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
             DandelionParams::inherited(),
             2,
             true,
-            &[ConnectorId::Tor],
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
         .unwrap(),
     );
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
 
     // Make a hole at index 0 the way the RP-3a seal did: close slot 0's
     // peer AND re-offer only slot 1's, so there is nothing to backfill
@@ -640,8 +688,12 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
     let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
     let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
     d.zone_mut().on_connection_close(&slot0_peer);
-    d.zone_mut()
-        .on_session_established(keep, PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    d.zone_mut().on_session_established(
+        keep,
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
     let truth: Vec<Option<ConnectionId>> = d.zone().stem_slots().to_vec();
     assert_eq!(truth[0], None, "fixture: the hole is at index 0");
     let bound = truth[1].expect("fixture: index 1 still bound");
@@ -695,16 +747,24 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
             DandelionParams::inherited(),
             2,
             true,
-            &[ConnectorId::Tor],
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
         .unwrap(),
     );
-    d.zone_mut()
-        .on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
-    d.zone_mut()
-        .on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    d.zone_mut().on_session_established(
+        id(1),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    d.zone_mut().on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
 
     let a = d.zone().noise_deadline_at(0).expect("ch0 armed");
     let b = d.zone().noise_deadline_at(1).expect("ch1 armed");

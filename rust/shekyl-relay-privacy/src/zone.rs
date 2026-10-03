@@ -108,20 +108,14 @@ relay_zones! {
 }
 
 impl RelayZone {
-    /// Whether this zone's links are encrypted.
+    /// Whether a wire observer can read the bytes on this zone's links.
     ///
-    /// **This is what decides noise eligibility**, and it is deliberately not
-    /// the same question as anonymity. Anonymity is about who can be
-    /// *identified*; encryption is about what a wire observer can *read*.
-    /// Noise conceals packet sizing, and sizing is the only thing left to read
-    /// once the link is encrypted — on a cleartext link the observer reads the
-    /// contents outright, so padding the sizes conceals nothing and the
-    /// bandwidth is spent for no privacy.
-    ///
-    /// The two predicates coincide for the current zone set only because
-    /// ordinary internet traffic is not encrypted. Encrypting it would make
-    /// [`Self::Public`] eligible for noise **without** making it anonymous,
-    /// and this is the one place that would change.
+    /// Not cover eligibility. Cover is the relay's ruling (`CoverClass` in
+    /// `shekyl-relay`): Tor is encrypted and still takes no envelope, and
+    /// an open link takes a substitution envelope only when the carrier was
+    /// requested. Anonymity is a third question — who can be identified —
+    /// and it is [`Self::is_clearnet`]'s complement only for the zones that
+    /// exist today.
     ///
     /// [`Self::Invalid`] answers **false**, and the asymmetry with
     /// [`Self::from_ffi_u8`] is deliberate rather than an oversight. A corrupt
@@ -190,9 +184,9 @@ impl LinkSecrecy {
         }
     }
 
-    /// True when a wire observer cannot read contents — the noise-eligibility
-    /// predicate. Equal to [`RelayZone::is_encrypted`] on the zone this was
-    /// constructed from.
+    /// True when a wire observer cannot read the bytes. Not cover
+    /// eligibility. Equal to [`RelayZone::is_encrypted`] on the zone this
+    /// was constructed from.
     #[must_use]
     pub const fn is_encrypted(self) -> bool {
         self.encrypted

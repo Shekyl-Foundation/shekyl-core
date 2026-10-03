@@ -61,11 +61,11 @@ namespace cryptonote
      the deletion. */
 
   /* Relay-method bytes are the FFI contract with `shekyl-relay::zone`
-     (`origin_keeps_local_record` and the `RelayMethod` pins beside it).
-     NetZone bytes below are the contract with `shekyl_types::relay::NetZone`.
-     Neither compiler observes the other, so each side pins its own literals.
-     The runtime witness is the relay-zone FFI test that crosses
-     `shekyl_relay_zone_origin_keeps_local_record`. */
+     (the `RelayMethod` pins). NetZone bytes below are the contract with
+     `shekyl_types::relay::NetZone`. Neither compiler observes the other,
+     so each side pins its own literals. A hidden-address origin stays
+     `local` because the relay returns `SHEKYL_RELAY_PLAN_OWN_EDGE` and
+     the shim records that plan as `local`. */
   static_assert(unsigned(relay_method::none) == 0 && unsigned(relay_method::local) == 1
              && unsigned(relay_method::stem) == 2 && unsigned(relay_method::fluff) == 3
              && unsigned(relay_method::block) == 4,
@@ -87,24 +87,6 @@ namespace cryptonote
     case netzone_tor: return "tor";
     default: return "invalid";
     }
-  }
-
-  /*! A local origin keeps its pool record when hop 0 is restricted.
-
-      Hop 0 is the relay's construction bit: some configured connector hides
-      this node's address, so the first hop draws only from those edges.
-      `upgrade_relay_method` is monotone. One record of `stem` or `fluff`
-      moves the entry out of `local` permanently, and the next pool re-relay
-      puts the origin's own transaction on a clear edge.
-
-      Every other method records the method the relay used. An unknown method
-      byte is false: this does not invent a `local` claim. */
-  inline bool origin_keeps_local_record(
-    const relay_method tx_relay,
-    const bool hop0_restricted) noexcept
-  {
-    return shekyl_relay_zone_origin_keeps_local_record(
-      static_cast<std::uint8_t>(tx_relay), hop0_restricted);
   }
 
 }

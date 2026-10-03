@@ -79,9 +79,9 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 /// for `local`, `fluff` and `block`. §15.4 cleared it from the embargo's
 /// neighbourhood on the ground that it *"governs an already-fluffed
 /// transaction, a different state from the embargo"* — true when written, and
-/// **vacated** by `origin_keeps_local_record`, which keeps a local origin
-/// at `Local` when hop 0 cannot draw a clearnet edge, so that class is never
-/// fluffed and lives on that branch for its whole life.
+/// **vacated** by the own-edge plan, which keeps a hidden-address origin
+/// at `Local` for its whole life, so that class is never fluffed and lives
+/// on that branch until the stem is observed.
 ///
 /// At 300 s that origin re-emits **below the anonymity embargo's median**
 /// (346 s): more than half the embargoes along its own stem are still running,
@@ -526,9 +526,8 @@ impl DandelionParams {
 
     /// The adopted parameter set for one measured transit term.
     ///
-    /// The embargo draw uses this with the forwarded connector's entry in
-    /// [`crate::verify_cost::transit_ms_for_connector_index`]. Only
-    /// `time_between_hop_ms` changes.
+    /// The embargo draw uses this with the forwarded connector's measured
+    /// transit. Only `time_between_hop_ms` changes.
     #[must_use]
     pub fn adopted_for_transit_ms(transit_ms: f64) -> Self {
         let hop = crate::verify_cost::adopted_hop_ms_with_transit(

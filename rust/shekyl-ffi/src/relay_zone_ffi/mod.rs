@@ -94,24 +94,13 @@ pub extern "C" fn shekyl_connector_address_hidden_from_peer(connector: u8) -> bo
 }
 
 /// This connector's native encryption cell says a network observer cannot
-/// read the byte stream. Unknown bytes are false. Not the anonymity cell:
-/// [`shekyl_connector_address_hidden_from_peer`] is that one.
+/// read the byte stream. Unknown bytes are false. Not the anonymity cell,
+/// and not cover eligibility: [`shekyl_connector_address_hidden_from_peer`]
+/// is the anonymity cell, and the relay's [`shekyl_relay::CoverClass`] is
+/// the cover ruling.
 #[no_mangle]
 pub extern "C" fn shekyl_connector_link_encrypted(connector: u8) -> bool {
     connector_from_byte(connector).is_some_and(shekyl_relay::link_encrypted)
-}
-
-/// The construction bit: some configured connector declares the peer does
-/// not learn this node's address. Null is false.
-///
-/// # Safety
-/// `handle` must be live or null.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_relay_zone_hop0_restricted(handle: *const RelayZoneHandle) -> bool {
-    if handle.is_null() {
-        return false;
-    }
-    (*handle).driver.zone().hop0_restricted()
 }
 
 fn connector_from_byte(byte: u8) -> Option<ConnectorId> {
@@ -132,6 +121,11 @@ pub const SHEKYL_RELAY_PLAN_NO_ROUTE: i32 = 1;
 pub const SHEKYL_RELAY_PLAN_FLUFF_EPOCH: i32 = 2;
 /// Local origin while this node is unsynchronised. Send nothing, record nothing.
 pub const SHEKYL_RELAY_PLAN_AWAIT_SYNC: i32 = 3;
+/// Local origin on a hidden-address edge. One ordinary send; record `local`.
+/// A failed write is terminal.
+pub const SHEKYL_RELAY_PLAN_OWN_EDGE: i32 = 4;
+/// The hidden-address pool is empty. Send nothing, record nothing, do not fluff.
+pub const SHEKYL_RELAY_PLAN_NO_OWN_EDGE: i32 = 5;
 
 fn node_sync_from_ffi(node_synchronised: bool) -> NodeSync {
     if node_synchronised {
@@ -580,8 +574,8 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// `configured` is the relay's identity: one bit per connector index. A
 /// bit past the connector count refuses the handle. The epoch pair is the
 /// caller's. The stem embargo is drawn later, from the connector that
-/// forwarded the stem. Cover is refused unless some named connector's
-/// encryption cell says the link is encrypted.
+/// forwarded the stem. Cover is refused unless some named connector is an
+/// open link. Tor is volume cover and is not one.
 ///
 /// Returns null on input a relay cannot be built from: a `stems` that would
 /// overflow the slot arithmetic, or a zero epoch — which is not merely useless
@@ -589,9 +583,8 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// relay timer would spin. The caller treats null as a startup logic error.
 ///
 /// It also returns null on a configuration [`Relay::new`] refuses.
-/// `SHEKYL_RELAY_ZONE_NOISE_ENABLED` with no link-encrypted connector is
-/// noise on a cleartext link, where padding sizes conceals nothing an
-/// observer cannot already read. [`Relay::new`] also refuses a channel
+/// `SHEKYL_RELAY_ZONE_NOISE_ENABLED` with no open link is a carrier that
+/// has nowhere to run: Tor takes no envelope. [`Relay::new`] also refuses a channel
 /// count other than the inherited width, and a noise epoch too short to
 /// carry a full-size message. Every [`shekyl_relay::RelayNewError`] maps
 /// to null because that is the only channel a C ABI has.
@@ -1166,23 +1159,6 @@ pub extern "C" fn shekyl_hop0_outbound_target() -> u32 {
     shekyl_relay_privacy::params::HOP0_OUTBOUND_TARGET
 }
 
-/// A local origin keeps the pool record at `local` when hop 0 cannot draw
-/// a clearnet edge.
-///
-/// Recording `stem` or `fluff` would let the pool's monotone upgrade leave
-/// `local` permanently, and the next re-relay would publish the user's
-/// transaction on every edge. An unknown method byte returns false: this
-/// function does not invent a `local` claim for a class it cannot name.
-/// `hop0_restricted` is the relay's construction bit, not a zone byte.
-#[no_mangle]
-pub extern "C" fn shekyl_relay_zone_origin_keeps_local_record(
-    tx_relay: u8,
-    hop0_restricted: bool,
-) -> bool {
-    shekyl_types::relay::RelayMethod::from_byte(tx_relay)
-        .is_some_and(|method| shekyl_relay::origin_keeps_local_record(method, hop0_restricted))
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_next_wake(handle: *const RelayZoneHandle) -> u64 {
     if handle.is_null() {
@@ -1192,8 +1168,8 @@ pub unsafe extern "C" fn shekyl_relay_zone_next_wake(handle: *const RelayZoneHan
 }
 
 /// Decide what to do with a batch: `SHEKYL_RELAY_PLAN_STEM` (writing the
-/// successor into `out_dest`), `..._NO_ROUTE`, `..._FLUFF_EPOCH`, or
-/// `..._AWAIT_SYNC`.
+/// successor into `out_dest`), `..._NO_ROUTE`, `..._FLUFF_EPOCH`,
+/// `..._AWAIT_SYNC`, `..._OWN_EDGE`, or `..._NO_OWN_EDGE`.
 ///
 /// Not a bool, because the caller must distinguish a *transient* failure to
 /// route — refresh connections and re-plan — from an epoch decision no
@@ -1216,7 +1192,8 @@ pub unsafe extern "C" fn shekyl_relay_zone_next_wake(handle: *const RelayZoneHan
 /// Production notify prefers [`shekyl_relay_zone_plan_dispatch_with_refresh`].
 /// [`shekyl_relay_zone_plan_relay_with_refresh`] owns the one mid-call refresh
 /// on `NO_ROUTE`. This pure plan remains for callers that already refreshed
-/// (send-failure retry) and for tests. `AWAIT_SYNC` does not refresh.
+/// (send-failure retry) and for tests. `AWAIT_SYNC`, `OWN_EDGE`, and
+/// `NO_OWN_EDGE` do not refresh.
 ///
 /// # Safety
 /// `handle` must be live; `source` must point to 16 readable bytes or be null;
@@ -1249,7 +1226,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay(
 ///
 /// The refresh policy lives in Rust with the rest of zone scheduling. The
 /// candidates are the session registry. A settled fluff epoch does not
-/// refresh, and neither does `AWAIT_SYNC`. See
+/// refresh, and neither does `AWAIT_SYNC`, `OWN_EDGE`, or `NO_OWN_EDGE`. See
 /// [`shekyl_relay::Relay::plan_relay_with_refresh`]. No callback: commands
 /// return nothing, and a covert channel the refresh leaves unbound clears at
 /// its next due tick through [`shekyl_relay_zone_poll`]'s `on_unbind`.
@@ -1301,6 +1278,14 @@ unsafe fn write_plan(plan: RelayPlan, out_dest: *mut u8) -> i32 {
         RelayPlan::AwaitSync => {
             std::ptr::copy_nonoverlapping(NIL.as_ptr(), out_dest, 16);
             SHEKYL_RELAY_PLAN_AWAIT_SYNC
+        }
+        RelayPlan::OwnEdge(destination) => {
+            std::ptr::copy_nonoverlapping(destination.as_bytes().as_ptr(), out_dest, 16);
+            SHEKYL_RELAY_PLAN_OWN_EDGE
+        }
+        RelayPlan::NoOwnEdge => {
+            std::ptr::copy_nonoverlapping(NIL.as_ptr(), out_dest, 16);
+            SHEKYL_RELAY_PLAN_NO_OWN_EDGE
         }
     }
 }

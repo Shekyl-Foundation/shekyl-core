@@ -260,24 +260,12 @@ namespace levin
     {
       const relay_zone_params params = public_zone_params();
 
-      /* Noise stays the development opt-in. It is enabled only when a
-         configured connector's native encryption is classical. Hiding the
-         address is a different cell: a connector can be classical without
-         hiding the address, and that connector is eligible. The relay
-         refuses noise when no configured connector is link-encrypted. */
+      /* Noise stays the development opt-in. Rust refuses the ask when no
+         configured connector is an open link. Tor is volume cover and
+         takes no envelope. This side does not scan encryption cells. */
       std::uint32_t flags = 0;
       if (carrier_development_enabled())
-      {
-        for (std::uint8_t bit = 0; bit < std::numeric_limits<std::uint32_t>::digits; ++bit)
-        {
-          if ((configured & (std::uint32_t{1} << bit))
-              && shekyl_connector_link_encrypted(bit))
-          {
-            flags |= SHEKYL_RELAY_ZONE_NOISE_ENABLED;
-            break;
-          }
-        }
-      }
+        flags |= SHEKYL_RELAY_ZONE_NOISE_ENABLED;
 
       /* A DEVELOPMENT FLAG, and deliberately not an operator switch. The
          distinction is a ruling, not caution.
@@ -429,7 +417,6 @@ namespace levin
           strand(io_service),
           relay(make_relay(configured), &shekyl_relay_zone_free),
           pending_wakes(0),
-          hop0_restricted(relay && shekyl_relay_zone_hop0_restricted(relay.get())),
           pad_txs(pad_txs)
       {}
 
@@ -478,8 +465,6 @@ namespace levin
           forever — so only the last outstanding callback does work. The
           inherited `flush_callbacks` guarded the same hazard on `flush_txs`. */
       std::uint32_t pending_wakes;
-      //! Construction bit, read back from the relay.
-      const bool hop0_restricted;
       const bool pad_txs;                        //!< Pad txs to the next boundary for privacy
 
       /*! One transaction handed to the carrier, awaiting its verdict.
@@ -489,8 +474,8 @@ namespace levin
           which is opaque by design. `blob` because `on_transactions_relayed`
           takes blobs; `txid` because that is what the stem watch is keyed on;
           `source` because F-10's source mapping needs the peer this arrived
-          FROM; `requested` because `origin_keeps_local_record` takes the method
-          the caller asked for, not the one the wire used.
+          FROM; `requested` because a discard of a local origin must leave
+          the entry unrelayed, and a success records the stem the wire used.
 
           NOT the successor. The peer a stem was given to is not knowable when
           it is accepted — the channel binds at send time — so it arrives with
@@ -514,13 +499,12 @@ namespace levin
             originated and collapse every forwarded stem into the local bucket
             of `distinct_sources`. */
         boost::uuids::uuid source;
-        /*! The relay method the CALLER asked for, not the one the wire used.
+        /*! The relay method the caller asked for.
 
-            `origin_keeps_local_record` takes the requested method — a local
-            origin on a restricted hop 0 keeps `local` however it travelled.
-            Recording `stem` here would strip that pin off every
-            carrier-borne origin, which is the §92 carve-out the pool arm
-            exists to protect. */
+            A discard of a local origin leaves the entry unrelayed so the
+            short grid retries a send that never left. A success records
+            `stem`: a hidden-address origin is `SHEKYL_RELAY_PLAN_OWN_EDGE`
+            and never enters the carrier, so this path is not that record. */
         relay_method requested;
       };
 
@@ -1074,10 +1058,7 @@ namespace levin
           if (core)
           {
             core->on_transactions_relayed(
-              epee::to_span(one),
-              cryptonote::origin_keeps_local_record(pending.requested, z.hop0_restricted)
-                ? relay_method::local : relay_method::stem,
-              z.connector_of(v.peer));
+              epee::to_span(one), relay_method::stem, z.connector_of(v.peer));
           }
           /* A SECOND POOL CHECK, DOING A DIFFERENT JOB FROM THE FIRST.
 
@@ -1224,12 +1205,10 @@ namespace levin
         const bool local_origin = (tx_relay == relay_method::local);
         const bool node_synchronised = core_->is_synchronized();
 
-        /* What the wire does and what the txpool is told are the same thing
-           for a forwarded stem and deliberately not the same for a local
-           origin when hop 0 is restricted. The pool class is what keeps the
-           origin's record at `local`. The transaction still stems on the
-           wire below. */
-        /* Takes WHAT WAS SENT rather than closing over `txs_`, because after
+        /* The plan names the pool record. `OWN_EDGE` records `local`.
+           `STEM` records `stem`. `FLUFF_EPOCH` records `fluff`. The caller
+           passes that method; this does not re-derive it.
+           Takes WHAT WAS SENT rather than closing over `txs_`, because after
            the carrier the two differ. A batch can split — the carrier accepts
            some transactions and refuses others — and recording `txs_` would
            record the accepted ones as relayed AT SEND TIME, which is the
@@ -1240,11 +1219,7 @@ namespace levin
                                            const std::optional<std::uint8_t> stem_connector) {
           if (sent.empty())
             return;
-          core_->on_transactions_relayed(
-            epee::to_span(sent),
-            cryptonote::origin_keeps_local_record(tx_relay, zone_->hop0_restricted) ? relay_method::local : method,
-            stem_connector
-          );
+          core_->on_transactions_relayed(epee::to_span(sent), method, stem_connector);
         };
 
         /* `plan_dispatch`, not `plan_relay`: phase, carrier and slot in ONE
@@ -1264,6 +1239,32 @@ namespace levin
           // The zone withheld a local origin. Nothing was sent and nothing is
           // recorded, so the pool retries after this node synchronises.
           MDEBUG("unsynchronised node originates no stem");
+          return;
+        }
+        if (plan == SHEKYL_RELAY_PLAN_NO_OWN_EDGE)
+        {
+          // No outbound edge hides this node's address. Nothing is sent and
+          // nothing is recorded, so the pool retries on the short grid.
+          // Refreshing the stem map cannot manufacture that edge, and a fluff
+          // would publish the origin on a clear link.
+          MDEBUG("no outbound edge hides this node's address; originating nothing");
+          return;
+        }
+        if (plan == SHEKYL_RELAY_PLAN_OWN_EDGE)
+        {
+          // One ordinary send. Success records local — the plan is that
+          // record — and arms the stem observation. Failure returns. No
+          // refresh, no second plan, no fluff: a still-live own-edge that
+          // failed to write must not be published on a clear link.
+          connections* registry = zone_->registry_holding(destination);
+          if (registry && make_payload_send_txs(*registry, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
+          {
+            record_relayed(relay_method::local, txs_, zone_->connector_of(destination));
+            record_stem_observation(zone_->relay.get(), txs_, destination, source_);
+            MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " on the own-edge");
+            return;
+          }
+          MDEBUG("own-edge write failed; originating nothing");
           return;
         }
 
@@ -1469,16 +1470,6 @@ namespace levin
             return;
           }
 
-          /* A restricted hop 0 with no eligible edge originates nothing.
-             Falling through to fluff would put the batch on a connector
-             whose declaration says the peer learns this node's address.
-             The plan is NoRoute. */
-          if (local_origin && zone_->hop0_restricted && plan == SHEKYL_RELAY_PLAN_NO_ROUTE)
-          {
-            MDEBUG("no outbound edge hides this node's address; originating nothing");
-            return;
-          }
-
           MERROR("Unable to send transaction(s) via Dandelion++ stem");
         }
 
@@ -1504,8 +1495,8 @@ namespace levin
            sent changes what is recorded with it, and the record assertion
            therefore covers both.
 
-           Order is load-bearing: `record_relayed` reads `zone_->hop0_restricted`,
-           and `relay_fluff::run` moves `zone_`. */
+           Order is load-bearing: `relay_fluff::run` moves `zone_`, so the
+           record is taken before that move. */
         const auto fluff_and_record = [this, &record_relayed](const std::vector<blobdata>& batch) {
           record_relayed(relay_method::fluff, batch, std::nullopt);
           relay_fluff::run(std::move(zone_), epee::to_span(batch), source_, core_);
@@ -1886,8 +1877,8 @@ namespace levin
        Recording parity was checked before the deletion. `fluff` makes the
        `on_transactions_relayed` call below and carries no connector.
        `stem`/`local` are recorded inside `dandelionpp_notify`'s
-       `record_relayed`, with `origin_keeps_local_record` applied — the
-       method the caller asked for, not a blanket `local` downgrade.
+       `record_relayed` as the method the plan named. `OWN_EDGE` is
+       `local`. A stem, including one the carrier completed, is `stem`.
        `none`/`block` were being RELAYED by the deleted branch, which had
        no switch at all; the arm below refuses them, and `none` means do
        not relay. */

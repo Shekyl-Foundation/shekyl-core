@@ -147,21 +147,26 @@ this lane.
    - **Hop 0.** The relay is told at construction which connectors are
      configured. The bit is whether any of them declares
      `address_hidden_from_peer` as yes. A local origin on a node with
-     that bit draws hop 0 only from sessions whose own connector
-     declares the same, and returns no route when none do. After hop 0
-     the draw is uniform over every outbound edge. The clearnet route
-     byte is retired with the one relay.
+     that bit is `OwnEdge`, drawn only from sessions whose own connector
+     declares the same, or `NoOwnEdge` when that pool is empty.
+     `NoOwnEdge` does not refresh the stem map and does not fluff.
+     A local origin with no hidden-address connector uses the stem map,
+     so the first hop is a slot. After hop 0 the draw is uniform over
+     every outbound edge. The clearnet route byte is retired with the
+     one relay.
    - **Embargo.** The stem watch records the connector the stem was
-     forwarded on, and the observation window is drawn from that
-     connector's measured transit: index 0 is
-     `ADOPTED_TRANSIT_ASSUMPTION_MS` (50), index 1 is
-     `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (1 625). An index with no
+     forwarded on, and the observation window is that connector's
+     measured transit, matched on `ConnectorId`: clearnet is
+     `ADOPTED_TRANSIT_ASSUMPTION_MS` (50), Tor is
+     `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (1 625). A connector with no
      measurement is not a stem edge. Per transaction, not per relay.
-   - **Cover.** Noise stays an edge property. A session is eligible when
-     its connector declares native encryption classical (`link_encrypted`
-     in `shekyl-relay`). Hiding the address is a different cell and does
-     not make the session eligible. A noise frame means something only
-     on an encrypted channel.
+   - **Cover.** `CoverClass` is the ruling, not `link_encrypted` and not
+     `address_hidden_from_peer`. An open link (clearnet) may run the
+     substitution carrier when it is requested. Tor is volume cover: no
+     envelope, and a stem or an own-edge leaves immediately. On an open
+     link the unrestricted origin is a stem slot, so it is slot-aligned
+     with that channel. No cover on Tor by ruling; on cover-bearing
+     links the own-edge is slot-aligned.
 
    UPDATE 2026-10-02. Role, epoch, fluff, and ingress do not read the
    connector. Stem selection reads it twice: hop 0 reads the
@@ -173,9 +178,9 @@ this lane.
    floor is one note per connector, and the tally row carries that
    connector. D7, outbound-fluff-only on a non-public zone, is deleted.
    The carrier development flag stays, default off. `make_relay`
-   (`levin_notify.cpp:259`) sets the noise flag only when a configured
-   connector is link-encrypted, and `Relay::new` refuses the flag when
-   none is.
+   (`levin_notify.cpp:259`) sets the noise flag from that opt-in and
+   does not scan encryption cells. `Relay::new` refuses the flag when
+   no configured connector is an open link.
 
    `m_network_zones` is keyed by connector identity (clearnet 0, tor 1).
    The two handshake registrations pass the connector the seam observed
@@ -15801,37 +15806,33 @@ over noise networks"*, and then broadcast the result to **every** channel,
 which is the opposite of what a stem is. **Deleted, not repaired** (§2.9 step
 4): with the premise gone there was nothing left to fix.
 
-### 93.2 Noise runs only on an encrypted network
+### 93.2 Cover follows the open link — SUPERSEDED the encryption predicate, 2026-10-02
 
-What noise buys is concealment of **packet sizing**, and sizing is the only
-thing left for a network observer to read once the link is encrypted. On a
-cleartext link that observer reads the contents outright, so padding the sizes
-conceals nothing and the bandwidth is spent for no privacy.
+**Current.** `CoverClass` decides, not `RelayZone::is_encrypted` and not
+`link_encrypted`. An open link (clearnet) may run the substitution carrier
+when the development flag asks for it: requesting the carrier means the
+NNhfs pipe encrypts and covers that link. Tor is volume cover
+([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md)): no envelope, and a stem
+or an own-edge leaves immediately. `Relay::new` refuses the flag when no
+configured connector is an open link, rather than silently running
+carrier-off. The FFI maps that refusal to null. `is_encrypted` stays the
+wire-observer cell. It does not select the carrier.
 
-**The binding property is encryption, not anonymity, and not reach.** The three
-coincide for the current zone set only because ordinary internet traffic is not
-encrypted. **If we ever encrypt ordinary internet traffic it gets noise too** —
-that is a live expectation, not a hypothetical carve-out, and it is why the
-predicate is named for the property that actually decides.
+**Records-was (2026-08).** Noise was refused on a cleartext link because
+padding was argued to conceal nothing a cleartext observer could not
+already read, and `RelayZone::is_encrypted` was named the single site that
+would change when clearnet's answer changed. The refusal still lives in
+`Relay::new` rather than at the FFI edge, and the two errors stay
+distinct. What changed is the question: the open link, not the encryption
+cell.
 
-Enforced as a refusal at `Zone::new` rather than a silent downgrade to
-carrier-off: a node configured for a protection it is not receiving is the
-failure worth being loud about, and a silent downgrade is indistinguishable
-from working. It lives in `Zone::new` rather than at the FFI edge because the
-daemon Rust cutover makes Rust the in-process caller, and an edge check is one
-it would route straight around. `LinkSecrecy` is constructed only from a
-`RelayZone` (`LinkSecrecy::of`) — there is no `Encrypted` variant a caller
-can mint beside the wrong reach — and `Zone::new` returns `Result<_, ZoneNewError>`
-so the two refusals (noise on cleartext; wrong channel count) stay distinct.
-The FFI maps both to null. `RelayZone::is_encrypted` is the single site
-that changes when the clearnet answer changes.
-
-**One consequence landed immediately:** ten Rust fixtures had been building
-noise zones on `FluffReach::EveryPeer` — a configuration production cannot
-hold — and an FFI test asserted that outbound-only fluff plus noise on the
-*clearnet* zone builds. It does not, and §25.5 keeps outbound-only fluff on
-clearnet open as a real configuration in its own right. Reach had been standing
-in for encryption, which is the collapse in miniature.
+**Records-was (2026-08), one consequence of that predicate:** ten Rust
+fixtures had been building noise zones on `FluffReach::EveryPeer` — a
+configuration production cannot hold — and an FFI test asserted that
+outbound-only fluff plus noise on the clearnet zone builds. Under the
+encryption predicate it did not. That predicate is superseded above:
+clearnet is the open link, and noise requested there does build.
+`FluffReach` is deleted. Reach had been standing in for encryption.
 
 ### 93.3 On the vocabulary itself
 

@@ -3479,6 +3479,11 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 //! Local origin while this node is unsynchronised. Send nothing and record
 //! nothing; the pool retries after sync. Not a refresh, and not a fluff.
 #define SHEKYL_RELAY_PLAN_AWAIT_SYNC  3
+//! Local origin on a hidden-address edge. One ordinary send; record local.
+//! A failed write is terminal: no refresh, no second plan, no fluff.
+#define SHEKYL_RELAY_PLAN_OWN_EDGE    4
+//! The hidden-address pool is empty. Send nothing, record nothing, do not fluff.
+#define SHEKYL_RELAY_PLAN_NO_OWN_EDGE 5
 
 //! Carrier: the zone's ordinary connection.
 #define SHEKYL_RELAY_CARRIER_ORDINARY 0
@@ -3502,9 +3507,8 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 //! or zero. Bit 0 is ignored.
 //! Null when a relay cannot be built: SIZE_MAX stems, a zero epoch (would
 //! expire at every wake and spin the relay timer), noise requested with no
-//! link-encrypted connector (padding sizes conceals nothing an observer
-//! cannot already read), or a noise channel count other than
-//! `CRYPTONOTE_NOISE_CHANNELS`. Treat null as fatal.
+//! open link (Tor is volume cover and takes no envelope), or a noise
+//! channel count other than `CRYPTONOTE_NOISE_CHANNELS`. Treat null as fatal.
 RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms,
                                        std::size_t stems,
                                        std::uint32_t min_epoch_secs,
@@ -3516,10 +3520,8 @@ RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms,
 bool shekyl_connector_address_hidden_from_peer(std::uint8_t connector);
 //! The declaration cell for this connector: native encryption is classical,
 //! so a network observer cannot read the byte stream. Unknown bytes are false.
-//! Not the anonymity cell above.
+//! Not the anonymity cell above, and not cover eligibility.
 bool shekyl_connector_link_encrypted(std::uint8_t connector);
-//! The relay's construction bit. Null is false.
-bool shekyl_relay_zone_hop0_restricted(const RelayZoneHandle* handle);
 //! Whether this zone runs noise channels.
 //! The single owner of a fact this side used to re-derive at nine sites from
 //! `!zone::noise.empty()` — a byte payload doubling as its own enable flag.
@@ -3591,13 +3593,6 @@ static_assert(sizeof(shekyl_inbound_ceiling) == 24, "inbound ceiling is 24 bytes
 void shekyl_inbound_ceiling_resolve(std::uint64_t reserved,
                                     std::uint64_t inbound_held,
                                     shekyl_inbound_ceiling* out);
-
-//! A local origin keeps its pool record at `local` when hop 0 cannot draw
-//! a clearnet edge. Unknown method bytes return false: no `local` claim is
-//! invented for a class this build cannot name. `hop0_restricted` is the
-//! relay's construction bit.
-bool shekyl_relay_zone_origin_keeps_local_record(std::uint8_t tx_relay, bool hop0_restricted);
-
 
 //! Record `n` packed 32-byte CANONICAL tx hashes stemmed to `successor`
 //! (16-byte uuid); `source` is the arriving peer's uuid or null for local

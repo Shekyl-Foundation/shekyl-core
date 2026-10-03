@@ -128,10 +128,10 @@ namespace cryptonote
         `MIN_RELAY_TIME` is the answer to the question actually being asked,
         which is "did the nudge miss?".
 
-        SENT AND STILL HERE (`relayed == true`): `origin_keeps_local_record`
-        pins a hidden-address origin at `local` permanently, so this entry
-        lives on this branch for its whole life, and its retry IS the origin
-        asking whether its stem completed. That is the derived quantity.
+        SENT AND STILL HERE (`relayed == true`): an own-edge success records
+        `local`, so a hidden-address origin stays on this branch for its
+        whole life, and its retry IS the origin asking whether its stem
+        completed. That is the derived quantity.
 
         The arrival connector is not stored, so the retry does not name
         one. It waits the longest measured transit — the conservative wait
@@ -389,7 +389,7 @@ namespace cryptonote
            when the construction bit is set, while `fluff` re-broadcasts at
            MIN_RELAY_TIME's 300 s to every session. So the upgrade made the
            origin re-emit its OWN transaction sooner and on a clear edge —
-           precisely what `origin_keeps_local_record` exists to prevent.
+           precisely what recording the own-edge as `local` exists to prevent.
            One record of stem or fluff moves the entry out of local
            permanently.
 

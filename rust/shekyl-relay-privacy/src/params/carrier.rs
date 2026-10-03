@@ -25,8 +25,6 @@
 //! It was a number satisfying a constraint nobody had connected to its
 //! subject, so it was unattached rather than wrong.
 
-use crate::zone::RelayZone;
-
 /// Bytes in one noise emission — every send, real fragment and dummy alike.
 ///
 /// # A construction parameter, NOT a runtime reference
@@ -196,39 +194,23 @@ const _: () = assert!(
      COVER_TRAFFIC_RESTORATION.md sec 3.3 is stated against exactly 5 000 ms"
 );
 
-/// Encrypted networks one node may carry at once.
+/// Open links one node may put a substitution envelope on.
 ///
-/// Tor today, so the count is 1 and a per-network rate is the node rate.
+/// Clearnet today, so the count is 1 and a per-link rate is the node rate.
 /// `NOISE_CHANNELS` is documented as *"max outbound connections **per
 /// zone**"*; the node rate is this count times that. The multiplier stays
-/// because the next encrypted network is a ceiling change, not because a
-/// second one is live.
+/// because the next open link is a ceiling change, not because a second
+/// one is live.
 ///
-/// # Counted from the canonical zone set, not transcribed
+/// # Not [`crate::zone::RelayZone::is_encrypted`]
 ///
-/// A literal `1` here would be a hand-maintained copy of an answer that
-/// lives in [`RelayZone::is_encrypted`]. A transcribed count makes the
-/// ceiling's claim false: the new network would raise the real bandwidth
-/// while this constant, and therefore the peak, stayed put. So it is derived from
-/// [`RelayZone::ALL`] through the same predicate the carrier uses to decide
-/// noise eligibility.
-///
-/// What stops `ALL` itself from going stale is that the enum and `ALL` are
-/// **emitted from one variant list** by `relay_zones!`. An earlier draft of
-/// this paragraph credited a `position()` match instead, which was wrong twice
-/// over: that function no longer exists, and while it did it caught a new
-/// *variant* without catching an `ALL` left behind after the match was fixed.
-pub const CEILING_ZONES: u32 = {
-    let mut i = 0;
-    let mut n = 0;
-    while i < RelayZone::ALL.len() {
-        if RelayZone::ALL[i].is_encrypted() {
-            n += 1;
-        }
-        i += 1;
-    }
-    n
-};
+/// That predicate says a wire observer cannot read the bytes. Tor is
+/// encrypted and takes no envelope (`TOR_COVER_POSTURE.md`). This crate
+/// cannot import `ConnectorId`, so the number is stated here.
+/// `shekyl-relay` asserts it equals the open-link walk over that enum.
+/// Deriving it from [`crate::zone::RelayZone::is_encrypted`] would bill Tor
+/// and omit the link the envelope actually runs on.
+pub const CEILING_ZONES: u32 = 1;
 
 /// SUSTAINED cover-bandwidth ceiling, **per node**, in bytes per second.
 ///
@@ -237,10 +219,10 @@ pub const CEILING_ZONES: u32 = {
 /// `COVER_TRAFFIC_RESTORATION.md` §3.3 recorded the two halves of the old
 /// comparison sitting on different denominators — an 8 KiB/s ceiling checked
 /// against a per-*zone* figure — and left the ruling owed. It is per node.
-/// Tor is the encrypted network that exists. The signed cap remains
-/// 16 KiB/s, the figure ruled when two encrypted networks existed; today's
-/// emitter sits at half of it. A per-network ceiling would leave the
-/// per-node total unbounded in the number of networks.
+/// One open link exists today, so the node rate is the per-link rate. The
+/// signed cap remains 16 KiB/s, the figure ruled when two networks were
+/// counted; today's emitter sits at half of it. A per-link ceiling would
+/// leave the per-node total unbounded in the number of open links.
 ///
 /// # SUSTAINED, and the word is load-bearing
 ///

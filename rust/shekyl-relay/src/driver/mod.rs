@@ -232,9 +232,9 @@ impl Driver {
                 Some(peer) if self.zone.noise_destination(peer) => {
                     effects.push(Effect::NoiseSend { channel, peer });
                 }
-                // A peer whose connector is not link-encrypted is not a noise
-                // destination. The channel stays armed for a later encrypted
-                // occupant. An empty slot still unbinds.
+                // A volume-cover peer is not a noise destination. The channel
+                // stays armed for a later open-link occupant. An empty slot
+                // still unbinds.
                 Some(_) => {}
                 None => effects.push(Effect::NoiseUnbind { channel }),
             }

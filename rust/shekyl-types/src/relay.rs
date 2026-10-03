@@ -10,8 +10,8 @@
 //! as the FFI seam's words. The daemon's pool store needs the same words
 //! and cannot take `shekyl-relay` — a relay scheduler with an async driver —
 //! as a dependency, so they live here (rule 18: a word two crates need lives
-//! below both; `SCU-Q2`, `SAR-Q2`). [`RelayMethod`] byte pins sit beside
-//! `origin_keeps_local_record` in `shekyl-relay`. [`NetZone`] pins sit on
+//! below both; `SCU-Q2`, `SAR-Q2`). [`RelayMethod`] byte pins sit in
+//! `shekyl-relay`. [`NetZone`] pins sit on
 //! this type: the zone-parameterized embargo still speaks those bytes.
 //! Connector ids are a different vocabulary.
 //!
@@ -50,8 +50,7 @@
 /// **by value and test, not by include**: the C++ side `static_assert`s each
 /// variant's byte against this contract at the FFI seam, so a renumbering on
 /// either side is a compile error there rather than a silent remap here.
-/// `shekyl-relay::zone` carries the Rust-side `const` pins, beside
-/// `origin_keeps_local_record`.
+/// `shekyl-relay::zone` carries the Rust-side `const` pins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum RelayMethod {

@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
 use shekyl_relay_privacy::rng::SplitMix64;
-use shekyl_types::relay::RelayMethod;
 
 /// Frozen draws from seed `0xF1FF` for the wired fluff path. Not chosen —
 /// observed, then pinned. Note the shape is memoryless: a 0 ms draw sits
@@ -354,19 +353,14 @@ fn zone_with_role(fluffing: bool, rng: &mut SplitMix64) -> Relay {
     zone_with_role_cover(fluffing, false, rng)
 }
 
-/// Same as [`zone_with_role`], with cover requested. Noise configures Tor,
-/// the connector whose native encryption is classical. A clearnet-only
-/// mask refuses that request.
+/// Same as [`zone_with_role`], with cover requested. The carrier runs on
+/// clearnet, the open link. A Tor-only mask refuses that request.
 ///
 /// Noise tests that need a determined epoch must go through here — a lucky
 /// seed is determinism, not a determined epoch, and is the flake
 /// `noise_stem` exposed once noise consults the planner.
 fn zone_with_role_cover(fluffing: bool, noise: bool, rng: &mut SplitMix64) -> Relay {
-    let configured: &[ConnectorId] = if noise {
-        &[ConnectorId::Tor]
-    } else {
-        &[ConnectorId::Clearnet]
-    };
+    let configured: &[ConnectorId] = &[ConnectorId::Clearnet];
     for _ in 0..10_000 {
         let z = Relay::new(DandelionParams::inherited(), 2, noise, configured, 0, rng).unwrap();
         if z.is_fluffing() == fluffing {
@@ -612,8 +606,10 @@ fn a_noise_deadline_survives_wakes_it_did_not_cause() {
         DandelionParams::inherited(),
         2,
         true,
-        &[ConnectorId::Tor],
-        // noise on — otherwise there are no deadlines and this is vacuous
+        &[ConnectorId::Clearnet],
+        // noise on — otherwise there are no deadlines and this is vacuous.
+        // The open link is what lets the carrier exist. The deadlines
+        // under test do not depend on which peer later occupies a slot.
         0,
         &mut rng,
     )
@@ -678,7 +674,7 @@ fn noise_enabled_pins_stem_width_to_noise_channels() {
         DandelionParams::inherited(),
         inherited::NOISE_CHANNELS,
         true,
-        &[ConnectorId::Tor],
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     )
@@ -713,7 +709,7 @@ fn noise_enabled_pins_stem_width_to_noise_channels() {
 fn noise_carries_the_stem_and_only_the_stem() {
     let mut rng = SplitMix64::new(0xC0BE_0001);
     let mut stem_zone = zone_with_role_cover(false, true, &mut rng);
-    establish_outbound_on(&mut stem_zone, &[1, 2, 3, 4], ConnectorId::Tor, &mut rng);
+    establish_outbound(&mut stem_zone, &[1, 2, 3, 4], &mut rng);
     assert!(!stem_zone.is_fluffing(), "fixture must be in a stem epoch");
 
     let d = stem_zone.plan_dispatch(Some(id(9)), false, NodeSync::Synchronised, &mut rng);
@@ -732,7 +728,7 @@ fn noise_carries_the_stem_and_only_the_stem() {
     }
 
     let mut fluff_zone = zone_with_role_cover(true, true, &mut rng);
-    establish_outbound_on(&mut fluff_zone, &[1, 2, 3, 4], ConnectorId::Tor, &mut rng);
+    establish_outbound(&mut fluff_zone, &[1, 2, 3, 4], &mut rng);
     assert!(fluff_zone.is_fluffing(), "fixture must be in a fluff epoch");
     let fluff = fluff_zone.plan_dispatch(Some(id(9)), false, NodeSync::Synchronised, &mut rng);
     assert_eq!(fluff.plan, RelayPlan::FluffEpoch);
@@ -784,7 +780,7 @@ fn dispatch_does_not_re_decide_the_phase() {
                 DandelionParams::inherited(),
                 2,
                 true,
-                &[ConnectorId::Tor],
+                &[ConnectorId::Clearnet],
                 0,
                 &mut rng,
             )
@@ -805,7 +801,7 @@ fn dispatch_does_not_re_decide_the_phase() {
                     DandelionParams::inherited(),
                     2,
                     true,
-                    &[ConnectorId::Tor],
+                    &[ConnectorId::Clearnet],
                     0,
                     &mut rng,
                 )
@@ -847,13 +843,16 @@ fn dispatch_does_not_re_decide_the_phase() {
 /// how the C++ `noise_stem` test came to flake at ~40%.
 #[test]
 fn a_noise_carrier_does_not_change_the_phase() {
+    // Clearnet is configured so the noise arm can build. The sessions are
+    // Tor, so the local origin is the own-edge in both arms. Noise must
+    // not demote that plan to a fluff.
     let plan_with_noise = |noise: bool| {
         let mut rng = SplitMix64::new(0x0819);
         let mut z = Relay::new(
             DandelionParams::inherited(),
             shekyl_relay_privacy::params::inherited::NOISE_CHANNELS,
             noise,
-            &[ConnectorId::Tor],
+            &[ConnectorId::Clearnet, ConnectorId::Tor],
             0,
             &mut rng,
         )
@@ -862,32 +861,29 @@ fn a_noise_carrier_does_not_change_the_phase() {
         assert_eq!(z.noise_enabled(), noise, "fixture did not take");
         matches!(
             z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
-            RelayPlan::Stem(_)
+            RelayPlan::OwnEdge(_)
         )
     };
 
     assert!(
         plan_with_noise(false),
-        "control: a local origin stems when the configured link is encrypted"
+        "control: a hidden-address origin takes the own-edge"
     );
     assert!(
         plan_with_noise(true),
-        "the noise carrier must not demote the phase — this is the assertion \
+        "the noise carrier must not demote the own-edge — this is the assertion \
          the deleted C++ covert branch would have failed"
     );
 }
 
-/// Cover traffic runs only where a configured connector's encryption cell
-/// says the link is encrypted. Noise conceals packet sizing. On a cleartext
-/// link the observer reads the contents, so padding sizes conceals nothing.
+/// The carrier runs on an open link. Tor is volume cover and a Tor-only
+/// ask has nowhere to put an envelope. Clearnet with the carrier requested
+/// is the NNhfs pipe: it encrypts the link and it is the envelope.
 ///
 /// Refused rather than silently downgraded: a node that asked for a
 /// protection it is not getting is the failure worth being loud about.
-/// Anonymity is a different cell. A Tor connector is encrypted; a clearnet
-/// connector is not; an empty mask is not. The three refusals are distinct
-/// [`RelayNewError`] variants.
 #[test]
-fn a_noise_carrier_is_refused_where_it_buys_nothing() {
+fn a_noise_carrier_needs_an_open_link() {
     let build = |configured: &[ConnectorId], stems: usize, noise: bool| {
         let mut rng = SplitMix64::new(0x0819);
         Relay::new(
@@ -901,28 +897,37 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
     };
     const CHANNELS: usize = inherited::NOISE_CHANNELS;
 
-    assert_eq!(
-        build(&[ConnectorId::Clearnet], CHANNELS, true).err(),
-        Some(RelayNewError::NoiseOnCleartext),
-        "a cleartext connector earns no noise"
-    );
     assert!(
-        build(&[ConnectorId::Tor], CHANNELS, true).is_ok(),
-        "a connector whose encryption cell is classical builds with noise"
+        build(&[ConnectorId::Clearnet], CHANNELS, true).is_ok(),
+        "an open link is where the envelope runs"
+    );
+    assert_eq!(
+        build(&[ConnectorId::Tor], CHANNELS, true).err(),
+        Some(RelayNewError::NoiseWithoutOpenLink),
+        "Tor is volume cover; a Tor-only ask has nowhere to put an envelope"
     );
     assert_eq!(
         build(&[], CHANNELS, true).err(),
-        Some(RelayNewError::NoiseOnCleartext),
-        "an empty mask is not presumed encrypted"
+        Some(RelayNewError::NoiseWithoutOpenLink),
+        "an empty mask is not an open link"
+    );
+    assert!(
+        build(&[ConnectorId::Clearnet, ConnectorId::Tor], CHANNELS, true).is_ok(),
+        "a mixed node builds; cover still runs only on the open link"
     );
     assert!(
         build(&[ConnectorId::Clearnet], CHANNELS, false).is_ok(),
-        "a cleartext connector without noise is the ordinary case"
+        "an open link without the carrier is the ordinary case"
+    );
+    assert_eq!(
+        build(&[ConnectorId::Clearnet], CHANNELS + 1, true).err(),
+        Some(RelayNewError::NoiseChannelCount { got: CHANNELS + 1 }),
+        "a channel count the schedule is not sized for is refused"
     );
     assert_eq!(
         build(&[ConnectorId::Tor], CHANNELS + 1, true).err(),
-        Some(RelayNewError::NoiseChannelCount { got: CHANNELS + 1 }),
-        "a channel count the schedule is not sized for is refused"
+        Some(RelayNewError::NoiseWithoutOpenLink),
+        "no open link is refused before the channel count is read"
     );
 
     // Arithmetic is `carrier::noise_windows_in_epoch`. This pins that
@@ -934,7 +939,7 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
     // floored to whole seconds because the field is seconds. The assertion
     // below re-derives `affords` rather than trusting this arithmetic.
     short.min_epoch_secs = (carrier::MAX_FRAGMENTS * per_send_ms - 1) / 1_000;
-    match Relay::new(short, CHANNELS, true, &[ConnectorId::Tor], 0, &mut rng) {
+    match Relay::new(short, CHANNELS, true, &[ConnectorId::Clearnet], 0, &mut rng) {
         Err(RelayNewError::NoiseCannotCrossOneEpoch { needs, affords }) => {
             assert_eq!(needs, carrier::MAX_FRAGMENTS);
             assert_eq!(affords, carrier::MAX_FRAGMENTS - 1);
@@ -964,11 +969,12 @@ fn link_encryption_is_the_classical_cell_not_the_anonymity_cell() {
 }
 
 #[test]
-fn a_local_origin_keeps_its_record_only_when_hop_0_is_restricted() {
-    assert!(origin_keeps_local_record(RelayMethod::Local, true));
-    assert!(!origin_keeps_local_record(RelayMethod::Local, false));
-    assert!(!origin_keeps_local_record(RelayMethod::Stem, true));
-    assert!(!origin_keeps_local_record(RelayMethod::Fluff, true));
-    assert!(!origin_keeps_local_record(RelayMethod::None, true));
-    assert!(!origin_keeps_local_record(RelayMethod::Block, true));
+fn cover_class_disagrees_with_the_encryption_cell_on_both_connectors() {
+    assert_eq!(cover_class(ConnectorId::Clearnet), CoverClass::OpenLink);
+    assert_eq!(cover_class(ConnectorId::Tor), CoverClass::Volume);
+    assert!(link_encrypted(ConnectorId::Tor));
+    assert!(!link_encrypted(ConnectorId::Clearnet));
+    assert!(any_open_link(&[ConnectorId::Clearnet]));
+    assert!(!any_open_link(&[ConnectorId::Tor]));
+    assert!(!any_open_link(&[]));
 }

@@ -290,7 +290,7 @@ fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64,
         2,
         true,
         // noise ON, or there are no deadlines and this is vacuous
-        &[ConnectorId::Tor],
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     )
@@ -308,7 +308,7 @@ fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64,
         driver.zone_mut().on_session_established(
             *peer,
             PeerDirection::Outbound,
-            ConnectorId::Tor,
+            ConnectorId::Clearnet,
             &mut rng,
         );
     }

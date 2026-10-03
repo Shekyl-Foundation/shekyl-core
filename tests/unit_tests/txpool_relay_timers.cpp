@@ -276,11 +276,11 @@ TEST(txpool_relay_timers, stem_under_embargo_is_held_however_old_the_tx_is)
 // ─────────────────────────────────────────────────────────────────────────────
 // §92.5c item 3: an ORIGIN's re-broadcast is derived, not `MIN_RELAY_TIME`.
 //
-// `origin_keeps_local_record` pins a restricted-hop origin at `local`
-// permanently, so that entry lives on the re-broadcast branch for its whole
-// life. §15.4 cleared `MIN_RELAY_TIME` from the embargo's neighbourhood
-// because it "governs an already-fluffed transaction" — true when written, and
-// vacated by that predicate, which created a class that is never fluffed.
+// An own-edge success records `local`, so a hidden-address origin lives on
+// the re-broadcast branch for its whole life. §15.4 cleared `MIN_RELAY_TIME`
+// from the embargo's neighbourhood because it "governs an already-fluffed
+// transaction" — true when written, and vacated by that plan, which created
+// a class that is never fluffed.
 //
 // At 300 s the origin re-emitted BELOW its own zone's embargo median (346 s).
 // The base is now the 1-in-10 survival quantile — the confidence the network

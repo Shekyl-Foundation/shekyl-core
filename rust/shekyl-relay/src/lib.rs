@@ -79,7 +79,8 @@ pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend};
 pub use shekyl_relay_privacy::SlotIndex;
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
 pub use zone::{
-    address_hidden_from_peer, any_hides_address_from_peer, any_link_encrypted, link_encrypted,
-    longest_measured_transit, origin_keeps_local_record, ConnectorId, NodeSync, PeerFluff, Relay,
-    RelayCarrier, RelayDispatch, RelayNewError, RelayPlan, TxBlob,
+    address_hidden_from_peer, any_hides_address_from_peer, any_link_encrypted, any_open_link,
+    cover_class, link_encrypted, longest_measured_transit, measured_transit_ms, ConnectorId,
+    CoverClass, NodeSync, PeerFluff, Relay, RelayCarrier, RelayDispatch, RelayNewError, RelayPlan,
+    TxBlob,
 };

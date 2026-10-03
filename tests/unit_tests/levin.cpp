@@ -497,7 +497,9 @@ namespace
             nothing left to size. Enabling the carrier is not a per-notifier
             argument either — it is the process-wide runtime opt-in
             `set_carrier_development`, default off, which the cases that need
-            it drive explicitly. */
+            it drive explicitly. The carrier runs on the open link. A
+            Tor-only relay with the flag on does not construct: volume
+            cover takes no envelope, and Rust refuses the zone. */
         std::shared_ptr<cryptonote::levin::notify> make_notifier(bool is_public, bool pad_txs)
         {
             epee::net_utils::connector_id zone = is_public ? epee::net_utils::connector_id::clearnet : epee::net_utils::connector_id::tor;
@@ -1419,7 +1421,7 @@ TEST_F(levin_notify, hidden_connector_with_only_tcp_originates_nothing)
 {
     /* A node whose configured connectors include one that declares the
        peer does not learn this node's address, and whose only session is
-       TCP. Hop 0 originates nothing. The plan is NoRoute; nothing is sent. */
+       TCP. Hop 0 originates nothing. The plan is NoOwnEdge; nothing is sent. */
     auto notifier_ptr = make_hidden_and_clear_notifier();
 
     add_connection(false);
@@ -2936,7 +2938,7 @@ TEST_F(levin_notify, a_failed_stem_is_not_recorded_as_relayed)
     builds, so the code would be untestable by the repository's own gate. The
     default is unchanged — every `has_noise == false` fixture in this file
     still passes untouched — and this case is the one that flips it. */
-TEST_F(levin_notify, the_development_opt_in_enables_the_carrier_on_an_encrypted_zone)
+TEST_F(levin_notify, the_development_opt_in_enables_the_carrier_on_an_open_link)
 {
     for (unsigned count = 0; count < 10; ++count)
         add_connection(count % 2 == 0);
@@ -2951,23 +2953,20 @@ TEST_F(levin_notify, the_development_opt_in_enables_the_carrier_on_an_encrypted_
     } restore{prior};
 
     {
-        // ENCRYPTED zone: the carrier engages.
-        std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
-        ASSERT_LT(0u, io_service_.poll());
-        EXPECT_TRUE(notifier_ptr->get_status().has_noise)
-            << "the development opt-in must reach an encrypted zone, or the "
-               "carrier has no configuration a gate can exercise";
+        /* Tor-only is volume cover. The carrier is refused, and the
+           constructor cannot open the zone. The shim does not catch that:
+           Rust already decided, and a Tor node with the flag on must be
+           loud rather than silently carrier-off. */
+        EXPECT_THROW(make_notifier(false, true), std::logic_error);
     }
     {
-        // CLEARTEXT zone: still refused, and by Rust rather than by this flag.
-        // `Zone::new` rejects a noise carrier on a cleartext link (§93.2), so
-        // the opt-in cannot force one — the carrier hides by payload
-        // indistinguishability, which needs encryption at step one.
+        /* The open link is where the substitution carrier runs. Requesting
+           it means the NNhfs pipe encrypts and covers that link. */
         std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
         ASSERT_LT(0u, io_service_.poll());
-        EXPECT_FALSE(notifier_ptr->get_status().has_noise)
-            << "link secrecy is the carrier's precondition; the opt-in does "
-               "not get to override the Rust gate that enforces it";
+        EXPECT_TRUE(notifier_ptr->get_status().has_noise)
+            << "the development opt-in must reach an open link, or the "
+               "carrier has no configuration a gate can exercise";
     }
 }
 
@@ -3040,7 +3039,7 @@ TEST_F(levin_notify, the_carrier_emits_levin_frames_through_on_noise)
     for (unsigned count = 0; count < 4; ++count)
         add_connection(false);
 
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
@@ -3060,32 +3059,20 @@ TEST_F(levin_notify, the_noise_carrier_is_off_by_default)
     for (unsigned count = 0; count < 10; ++count)
         add_connection(count % 2 == 0);
 
-    // Both zone classes, because the flag is derived per zone: an encrypted
-    // zone is the one that WOULD be eligible, and it is still not enabled.
+    /* Both connectors. The default is off on each, and the two arms are the
+       same fact: nothing in an ordinary build sets the development flag.
+       With the flag on they diverge — the open link enables the carrier, and
+       Tor-only refuses to construct — and the sibling test holds that. */
     for (const bool is_public : {true, false})
     {
         std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(is_public, true);
         auto &notifier = *notifier_ptr;
         ASSERT_LT(0u, io_service_.poll());
 
-        /* Read what each arm actually demonstrates, because they are NOT the
-           same refusal and only one of them is this test's subject.
-
-           On Tor, `has_noise` is false because the development opt-in is off
-           — the property named above, and the one the sibling test flips. On
-           the PUBLIC zone there are two refusals stacked, and the second never
-           runs: even with the opt-in ON, `Zone::new` rejects a noise carrier
-           on a cleartext link (§93.2) before the flag is consulted. The
-           sibling test asserts exactly that, so the claim is now covered
-           rather than argued.
-
-           So the public arm is coverage of the Rust gate, not of this test's
-           claim, and a reader taking both arms as evidence for "the default is
-           off" would be over-reading it by one refusal. */
         const auto status = notifier.get_status();
         EXPECT_FALSE(status.has_noise)
             << "the carrier is off unless a development build turns it on "
-            << "(zone is " << (is_public ? "public" : "Tor") << ")";
+            << "(connector is " << (is_public ? "clearnet" : "Tor") << ")";
     }
 }
 
@@ -3128,7 +3115,7 @@ TEST_F(levin_notify, a_real_transaction_rides_the_carrier_and_records_on_arrival
     for (unsigned count = 0; count < 4; ++count)
         add_connection(false);
 
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
@@ -3250,43 +3237,22 @@ TEST_F(levin_notify, a_real_transaction_rides_the_carrier_and_records_on_arrival
            "otherwise, and more than one means it was sent twice";
 }
 
-/*! **A successfully carried ORIGIN is recorded `local`, not `stem`.**
+/*! **A clearnet origin the carrier takes is recorded `stem`.**
 
-    The class an origination keeps is not the class the wire used, and the two
-    diverge exactly here: `origin_keeps_local_record` decides what the pool is
-    told, while the carrier stems on the wire regardless. A restricted hop 0
-    keeps the origin's record at `local`.
-
-    Written because the SUCCESS arm of that branch had no coverage. Every other
-    carrier case sends `stem`, and the one `local` case forces a discard — so a
-    regression recording a carried origin as `stem` stayed green in all of
-    them. This arc has already produced that exact defect once, when
-    `origin_keeps_local_record` was handed the wire's method instead of the
-    caller's, which would have stripped the pin off every carrier-borne
-    origination.
+    No hidden-address connector is configured, so the first hop is a stem
+    slot. On the open link that slot is the cover channel: no cover on Tor
+    by ruling; on cover-bearing links the own-edge is slot-aligned. The
+    verdict records the wire method. The pool class `local` is the own-edge
+    plan, and that plan never takes this carrier — `private_local_*` holds
+    it, with the development flag off, on Tor.
 
     **The origination is driven with a NIL SOURCE**, which is what production
     does and what the verdict path branches on (`pending.source.is_nil()`
-    chooses the F-10 provenance). An earlier version of this case let the
-    fixture helper hand it a peer id, so it drove the FORWARDED arm under a
-    `local` label — a test asserting its conclusions against the wrong branch.
+    chooses the F-10 provenance).
 
-    **What this case does NOT assert, deliberately.** That the observation is
-    charged to the LOCAL source mapping rather than a peer one. A single
-    observation gives `distinct_sources == 1` either way; discriminating them
-    needs two observations charged to the SAME successor, one local and one
-    forwarded, and which successor a carrier message lands on is the slot
-    binding's call rather than a test's. The mapping semantics are covered
-    where they can be pinned exactly — `stem_watch.rs`'s
-    `distinct_sources_counts_mappings_not_observations`, which asserts a
-    `None` source is its own mapping. This case covers the half that one
-    cannot: that an origination reaches the verdict path with a nil source at
-    all, and is recorded `local`.
-
-    What edit reds this: pass `relay_method::stem` rather than
-    `pending.requested` to `origin_keeps_local_record` in
-    `apply_one_carrier_verdict`, or drop the conditional and record `stem`. */
-TEST_F(levin_notify, a_carried_origin_is_recorded_local_and_observed)
+    What edit reds this: record `relay_method::local` from the carrier
+    verdict, or route this origin through `SHEKYL_RELAY_PLAN_OWN_EDGE`. */
+TEST_F(levin_notify, a_carried_clearnet_origin_is_recorded_stem)
 {
     const bool prior = cryptonote::levin::set_carrier_development(true);
     struct restore_t {
@@ -3297,7 +3263,7 @@ TEST_F(levin_notify, a_carried_origin_is_recorded_local_and_observed)
     for (unsigned count = 0; count < 4; ++count)
         add_connection(false);
 
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
@@ -3308,8 +3274,9 @@ TEST_F(levin_notify, a_carried_origin_is_recorded_local_and_observed)
     std::vector<cryptonote::blobdata> txs(1);
     txs[0] = cryptonote::t_serializable_object_to_blob(tx);
 
-    /* An ORIGINATION, which RD-4 stems even in a fluff epoch, so it reaches
-       the carrier arm the same way a forwarded stem does. */
+    /* An ORIGINATION, which RD-4 stems even in a fluff epoch. With no
+       hidden-address connector the first hop is the slot, and the open
+       link's slot is the cover channel. */
     /* Sample before the accept. The carrier's verdict can land inside
        `carrier_accepts`'s own poll, and sampling after it then reads the
        observation as already present. */
@@ -3323,18 +3290,16 @@ TEST_F(levin_notify, a_carried_origin_is_recorded_local_and_observed)
 
     ASSERT_NE(0u, events_.relayed_method_size())
         << "the carrier never told the pool about the origination";
-    EXPECT_FALSE(events_.has_stem_txes())
-        << "a carried ORIGIN must be recorded `local`: the wire stems it, but "
-           "the pool class is what keeps the backstop in zone (§30.5), and "
-           "recording `stem` strips that pin off every carrier-borne "
-           "origination";
-    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local))
+    EXPECT_TRUE(events_.has_stem_txes())
+        << "a clearnet origin rides a stem slot. The carrier records that "
+           "wire method. `local` is the own-edge plan, and that plan does "
+           "not take this carrier";
+    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::stem))
         << "the pool was told about a different transaction";
 
     EXPECT_GT(notifier.stem_in_flight(), stem_before)
-        << "an origination still stems ON THE WIRE, so its successor is still "
-           "an F-10 subject — the `local` record is a pool class, not a "
-           "statement that nothing was sent";
+        << "the carrier completed and the pool was told, but no stem "
+           "observation was recorded";
 
     for (auto& ctx : contexts_)
         ctx.process_send_queue();
@@ -3370,7 +3335,7 @@ TEST_F(levin_notify, a_verdict_for_a_transaction_the_pool_dropped_records_nothin
     for (unsigned count = 0; count < 4; ++count)
         add_connection(false);
 
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
@@ -3441,7 +3406,7 @@ TEST_F(levin_notify, a_pool_drop_during_recording_arms_no_observation)
     for (unsigned count = 0; count < 4; ++count)
         add_connection(false);
 
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
@@ -3517,7 +3482,7 @@ TEST_F(levin_notify, a_thrown_verdict_leaves_no_immortal_pending_entry)
     for (unsigned count = 0; count < 4; ++count)
         add_connection(false);
 
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
@@ -3604,7 +3569,7 @@ TEST_F(levin_notify, a_throwing_verdict_does_not_stop_the_relay_strand)
     for (unsigned count = 0; count < 4; ++count)
         add_connection(false);
 
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
@@ -3676,7 +3641,7 @@ TEST_F(levin_notify, a_batch_the_carrier_partly_refuses_splits_without_double_co
     for (unsigned count = 0; count < 4; ++count)
         add_connection(false);
 
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
@@ -3839,7 +3804,7 @@ TEST_F(levin_notify, a_transaction_already_in_the_carrier_is_not_enqueued_twice)
     for (unsigned count = 0; count < 4; ++count)
         add_connection(false);
 
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
@@ -3955,7 +3920,7 @@ TEST_F(levin_notify, a_discarded_origin_is_left_unrelayed_for_the_short_grid)
     for (unsigned count = 0; count < 4; ++count)
         add_connection(false);
 
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise);
@@ -4043,7 +4008,7 @@ TEST_F(levin_notify, a_discarded_forwarded_stem_falls_back_to_fluff)
     for (unsigned count = 0; count < 4; ++count)
         add_connection(false);
 
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto& notifier = *notifier_ptr;
     ASSERT_LT(0u, io_service_.poll());
     ASSERT_TRUE(notifier.get_status().has_noise);
