@@ -22,6 +22,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
+- **Re-base `shekyl-staking-sim` on production code.** What remains is the reward path, the bond lifecycle and the unit system on production code, fed from the production purse, with L11–L19 re-derived. Separate validation surface from ESR- (rule 19). Falsifier: an abstract-purse control arm reproduces the existing L11 and L13 pins.
+  - Owner: [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6, Appendix B
+  - Target: pre-genesis
+
 - **Move `shekyl-p-transport` onto `shekyl-socks`.** The handshake there already requires `Isolation::Principal` or `Isolation::Persona`, offers a persona only username/password, and fails closed if the proxy selects anything else. What remains is ureq's `socks` 0.3.4 connector, which is that crate's HTTP client. Falsify by `shekyl-p-transport` dialing through `shekyl_socks::connect` with `Isolation::Persona` and no longer enabling ureq's `socks-proxy`.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis

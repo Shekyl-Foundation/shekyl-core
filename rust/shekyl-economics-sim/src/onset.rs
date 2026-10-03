@@ -66,18 +66,12 @@
 use std::fmt;
 
 use serde::Serialize;
-use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
-use shekyl_economics::{
-    burn::calc_burn_pct, calc_effective_emission_share, params::SCALE, TxVolume,
-};
+use shekyl_economics::{calc_effective_emission_share, params::SCALE};
 
-use crate::burden::{
-    normal_tx_archival_bytes, KryderRate, OPP_COST_RATE_BAND, REPLICAS_PER_SHARD,
-    SKL_FIAT_PRICE_BAND,
-};
+use crate::burden::{KryderRate, OPP_COST_RATE_BAND, REPLICAS_PER_SHARD, SKL_FIAT_PRICE_BAND};
 use crate::engine::{ScenarioConfig, SimParams};
-use crate::escalation::{family, flat_25, EscalationCurve, KNEE_BAND};
-use crate::scenarios::{all_scenarios, SCENARIO_9_TAIL_TX_PER_BLOCK};
+use crate::escalation::{family, flat_25, EscalationCurve};
+use crate::scenarios::all_scenarios;
 use crate::stage2::{
     a1_min_clearance_ratio, a1_shipped_budget_atomic, a1_sustained_years, a1_year_aggs,
     a1_year_clearance_ratio, year_share_atomic, A1YearAgg,
@@ -216,7 +210,7 @@ pub fn emission_leg_at_decay(a: &A1YearAgg, params: &SimParams, annual_decay: u6
     let mid_height = (a.year - 1) * params.blocks_per_year + params.blocks_per_year / 2;
     let share = calc_effective_emission_share(
         mid_height,
-        0,
+        crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT,
         params.staker_emission_share,
         annual_decay,
         params.blocks_per_year,
@@ -304,9 +298,18 @@ fn lever_set(best: EscalationCurve) -> Vec<Lever> {
 
 /// A scenario's config re-horizoned to [`ONSET_HORIZON_YEARS`]. The schedule
 /// is the scenario's own closure evaluated past its horizon.
-fn at_horizon(mut config: ScenarioConfig) -> ScenarioConfig {
+pub(crate) fn at_horizon(mut config: ScenarioConfig) -> ScenarioConfig {
     config.sim_years = ONSET_HORIZON_YEARS;
     config
+}
+
+/// Transactions in `year` (1-based) of a scenario's own schedule — the
+/// divisor that turns a year's fees into a mean fee per transaction.
+fn year_tx_count(config: &ScenarioConfig, blocks_per_year: u64, year: u64) -> u128 {
+    let start = (year - 1) * blocks_per_year;
+    (start..start + blocks_per_year)
+        .map(|block| u128::from((config.volume.get_volume)(block, blocks_per_year)))
+        .sum()
 }
 
 /// A1's selection rule, applied to one aggregate series: the band candidate
@@ -412,71 +415,6 @@ pub struct LeverResult {
     pub onset_binding: Onset,
 }
 
-/// The fee-era clearance horizon in traffic-years, closed form: for constant
-/// traffic `V`, fees `∝ V` and corpus `∝ V·t`, so
-///
-/// `ratio(t) ≈ fee · base · share · W / (bond · R · rate · bytes_per_tx · t)`
-///
-/// clears for `t ≤ H`. Returns `H` in years. `base` is the fraction of fees
-/// the share is taken of: `1` for a share of all fees, or the burn fraction
-/// for a share of the burn. The traffic `V` cancels **only through the
-/// factors written here**: `base` is where it does not cancel for the burn,
-/// because `calc_burn_pct` rises as `√V` until `burn_cap` binds — so a burn
-/// lever's `H` is a function of `V` ([`fee_era_burn_fraction`] evaluates it
-/// at a named volume) and an all-fees lever's is not.
-#[must_use]
-pub fn fee_horizon_years(
-    fee_per_tx_atomic: u64,
-    base_fraction: f64,
-    share_fraction: f64,
-    rate: f64,
-    bytes_per_tx: u64,
-    shard_bytes: u64,
-) -> f64 {
-    let fee_skl = fee_per_tx_atomic as f64 / COIN;
-    let bond_skl = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN;
-    fee_skl * base_fraction * share_fraction * shard_bytes as f64
-        / (bond_skl * REPLICAS_PER_SHARD as f64 * rate * bytes_per_tx as f64)
-}
-
-/// The fee-era burn fraction at a constant traffic of `tx_per_block`, with
-/// the supply emitted — the `base` of a burn lever's horizon, read from the
-/// production `calc_burn_pct` at that volume, not restated. `SCALE` units.
-fn fee_era_burn_pct(params: &SimParams, tx_per_block: u64) -> u64 {
-    calc_burn_pct(
-        TxVolume::per_block(tx_per_block),
-        params.tx_volume_baseline,
-        params.emission_curve_asymptote,
-        params.emission_curve_asymptote,
-        params.burn_base_rate,
-        params.burn_cap,
-    )
-}
-
-/// [`fee_era_burn_pct`] as a fraction.
-fn fee_era_burn_fraction(params: &SimParams, tx_per_block: u64) -> f64 {
-    fee_era_burn_pct(params, tx_per_block) as f64 / SCALE as f64
-}
-
-/// The lowest constant traffic (tx/block) at which the fee-era burn fraction
-/// reaches `burn_cap` — found by asking the production `calc_burn_pct`, never
-/// by inverting its formula here. Above it a burn lever's horizon stops rising
-/// with traffic. Walks up from the baseline one tx/block at a time; the cap is
-/// a few multiples of the baseline, so the walk is short.
-fn burn_cap_volume(params: &SimParams) -> u64 {
-    let baseline = params.tx_volume_baseline;
-    (baseline..=baseline.saturating_mul(10_000))
-        .find(|&v| fee_era_burn_pct(params, v) >= params.burn_cap)
-        .expect("burn_cap is reached within 10,000x the baseline volume")
-}
-
-/// Shards the whole perpetual tail funds at a rate, if every tail SKL went to
-/// archival bonds' opportunity cost.
-fn shards_funded_by_tail(tail_skl_per_year: f64, rate: f64) -> f64 {
-    let bond_skl = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN;
-    tail_skl_per_year / (bond_skl * REPLICAS_PER_SHARD as f64 * rate)
-}
-
 /// A1-T — the onset table. Prints to `out`, returns the data.
 pub fn onset_report(
     out: &mut impl fmt::Write,
@@ -489,10 +427,9 @@ pub fn onset_report(
          era emission carries). 'onset' = first sustained year budget/burden < 1 (shipped burn\n\
          x share; '*' = a later year clears again; 'never' = clears to {H} y). Schedules are\n\
          the scenarios' own closures past their horizons: constant, cyclic, or growing —\n\
-         sustained_growth's 20%/yr to 60 y is unphysical (block weight caps it, and by ~y38\n\
-         its fee burn has destroyed the circulating supply, so burn_pct -> 0 and the fee\n\
-         leg with it) and is read for shape only.",
+         {GROWTH}",
         H = ONSET_HORIZON_YEARS,
+        GROWTH = params.fee.growth_schedule_caveat(),
     )?;
     let rate_cols: Vec<String> = OPP_COST_RATE_BAND
         .iter()
@@ -512,8 +449,24 @@ pub fn onset_report(
     let mid_price = SKL_FIAT_PRICE_BAND[1];
     let binding = OPP_COST_RATE_BAND[BINDING];
     let mut results = Vec::new();
+    let mut fee_rows: Vec<(String, String)> = Vec::new();
     for config in all_scenarios(params).into_iter().map(at_horizon) {
         let aggs = a1_year_aggs(params, &config);
+        fee_rows.push((
+            config.name.clone(),
+            aggs.iter()
+                .filter(|a| DECADES.contains(&a.year))
+                .map(|a| {
+                    let txs = year_tx_count(&config, params.blocks_per_year, a.year);
+                    if txs == 0 {
+                        "-".to_string()
+                    } else {
+                        format!("{:.4}", a.whole_fees_atomic as f64 / txs as f64 / COIN)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        ));
         let flat = flat_25();
         let best = best_candidate(&aggs);
         let shipped = |c: EscalationCurve| move |a: &A1YearAgg| a1_shipped_budget_atomic(a, &c);
@@ -577,72 +530,15 @@ pub fn onset_report(
         });
     }
 
-    // The fee-era horizon, closed form from production constants.
-    let fee = all_scenarios(params)[0].fee_per_tx;
-    let bytes_per_tx =
-        normal_tx_archival_bytes(crate::burden::honest_leaves_at_closed_shards(KNEE_BAND[2]));
-    let w = shekyl_types::SHARD_LENGTH.to_raw();
-    let cap_volume = burn_cap_volume(params);
     writeln!(
         out,
-        "  -> FEE HORIZON (closed form, constant traffic V): the fee leg clears a corpus no\n\
-         deeper than H = fee x base x share x W / (bond x R x rate x bytes/tx) traffic-years.\n\
-         fee {fee:.3} SKL/tx, W {w} B, bond {bond:.2} SKL x R{R}, {bpt} archival B/tx (1in/2out,\n\
-         deep). V cancels between fees and corpus; for a share of ALL fees H is therefore\n\
-         traffic-independent. For a share of the BURN, base = burn_pct rises as sqrt(V)\n\
-         (calc_burn_pct, supply emitted) until burn_cap binds at V = {cap_v} tx/block, so H\n\
-         rises with traffic up to the cap ({cap_ratio:.1}x the baseline figure) and is flat above:",
-        fee = fee as f64 / COIN,
-        bond = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN,
-        R = REPLICAS_PER_SHARD,
-        bpt = bytes_per_tx,
-        cap_v = cap_volume,
-        cap_ratio = params.burn_cap as f64 / params.burn_base_rate as f64,
+        "  -> ORDINARY FEE per transaction, mean over the year (SKL), at y10/20/30/40/50/60.\n\
+         The run's fee arm made visible: a year's fees are its traffic times this."
     )?;
-    let volumes = [
-        ("scen. 9 tail", SCENARIO_9_TAIL_TX_PER_BLOCK),
-        ("baseline", params.tx_volume_baseline),
-        ("at burn_cap", cap_volume),
-    ];
-    let horizons = |base: f64, share: f64| -> String {
-        OPP_COST_RATE_BAND
-            .iter()
-            .map(|&r| {
-                format!(
-                    "{:.0}y @{:.0}%",
-                    fee_horizon_years(fee, base, share, r, bytes_per_tx, w),
-                    r * 100.0
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    for (label, share) in [("burn x flat 25%", 0.25), ("burn x 100%", 1.0)] {
-        for (vlabel, v) in volumes {
-            let base = fee_era_burn_fraction(params, v);
-            writeln!(
-                out,
-                "       {label:<16} {vlabel:<12} ({v:>4} tx/blk, burn_pct {base:.2})  H = {}",
-                horizons(base, share)
-            )?;
-        }
+    for (name, series) in &fee_rows {
+        writeln!(out, "       {:<20} {series}", trunc(name, 20))?;
     }
-    writeln!(
-        out,
-        "       {:<16} {:<12} ({:>4} tx/blk, base 1.00)  H = {}",
-        "ALL fees x 100%",
-        "any V",
-        "any",
-        horizons(1.0, 1.0)
-    )?;
-    writeln!(
-        out,
-        "     Corpus older than H is unfunded by fees, and past the cap no amount of traffic\n\
-         moves H; a busier chain crosses the same line later only because its corpus is\n\
-         younger. No FLOW — fee share, burn share, or the constant tail — funds a\n\
-         fixed-per-shard bond held forever on a corpus that grows forever; the operand to\n\
-         question is the bond (§12.14 Ruling: bond sizing vs per-shard reward)."
-    )?;
+    crate::fee_horizon::write_report(out, params)?;
     Ok(results)
 }
 
@@ -731,7 +627,7 @@ pub fn lever_report(
         .map(|&r| {
             format!(
                 "{:.2} M @{:.0}%",
-                shards_funded_by_tail(tail, r) / 1e6,
+                crate::fee_horizon::shards_funded_by_tail(tail, r) / 1e6,
                 r * 100.0
             )
         })
@@ -828,8 +724,9 @@ mod tests {
         // The reason `A1YearAgg`'s annual sums are u128: run to 60 y, the
         // growth schedule's yearly fees pass the chain's u64 — a u64 field
         // would have had to clip, silently. Pins that the case is real and
-        // that the aggregate carries it.
-        let params = SimParams::default();
+        // that the aggregate carries it. The case arises on the flat arm,
+        // where the fee does not fall as the traffic grows.
+        let params = SimParams::section_12_14_control();
         let config = at_horizon(all_scenarios(&params).remove(2));
         assert_eq!(config.name, "sustained_growth");
         let aggs = a1_year_aggs(&params, &config);
@@ -874,16 +771,20 @@ mod tests {
         // the closed form (its burn base read at the baseline's own volume)
         // against the fold on the baseline scenario late in its 60-y run
         // (emission at the tail), to within the tail's contribution and the
-        // storage add-on.
-        let params = SimParams::default();
+        // storage add-on. A closed form exists only on the flat arm.
+        let params = SimParams::section_12_14_control();
         let config = at_horizon(all_scenarios(&params).remove(0));
         let aggs = a1_year_aggs(&params, &config);
-        let fee = config.fee_per_tx;
-        let bytes =
-            normal_tx_archival_bytes(crate::burden::honest_leaves_at_closed_shards(KNEE_BAND[2]));
+        let fee = params
+            .fee
+            .flat_per_tx_atomic()
+            .expect("the control arm is flat");
+        let bytes = crate::burden::normal_tx_archival_bytes(
+            crate::burden::honest_leaves_at_closed_shards(crate::escalation::KNEE_BAND[2]),
+        );
         let w = shekyl_types::SHARD_LENGTH.to_raw();
-        let base = fee_era_burn_fraction(&params, params.tx_volume_baseline);
-        let h = fee_horizon_years(fee, base, 0.25, 0.10, bytes, w);
+        let base = crate::fee_horizon::fee_era_burn_fraction(&params, params.tx_volume_baseline);
+        let h = crate::fee_horizon::fee_horizon_years(fee, base, 0.25, 0.10, bytes, w);
         let a = aggs.last().expect("60 years");
         // Fee leg alone, so the comparison isolates the closed form.
         let flat = flat_25();
@@ -897,47 +798,5 @@ mod tests {
             "y{}: measured {measured:.3} vs closed form {predicted:.3} ({rel:.2} rel)",
             a.year
         );
-    }
-
-    #[test]
-    fn burn_horizon_rises_with_sqrt_traffic_until_the_cap() {
-        // A burn lever's H is NOT traffic-independent: its base is the
-        // production burn fraction, which rises as sqrt(V) until burn_cap. An
-        // all-fees lever's H is. Both read off the same closed form.
-        let params = SimParams::default();
-        let baseline = params.tx_volume_baseline;
-        let cap_v = burn_cap_volume(&params);
-        assert!(cap_v > baseline);
-        assert_eq!(fee_era_burn_pct(&params, cap_v), params.burn_cap);
-        assert!(fee_era_burn_pct(&params, cap_v - 1) < params.burn_cap);
-
-        let bytes =
-            normal_tx_archival_bytes(crate::burden::honest_leaves_at_closed_shards(KNEE_BAND[2]));
-        let w = shekyl_types::SHARD_LENGTH.to_raw();
-        let fee = all_scenarios(&params)[0].fee_per_tx;
-        let h_at = |v: u64| {
-            fee_horizon_years(fee, fee_era_burn_fraction(&params, v), 0.25, 0.10, bytes, w)
-        };
-        let h_tail = h_at(SCENARIO_9_TAIL_TX_PER_BLOCK);
-        let h_base = h_at(baseline);
-        let h_cap = h_at(cap_v);
-        assert!(
-            h_tail < h_base && h_base < h_cap,
-            "{h_tail} {h_base} {h_cap}"
-        );
-        // Below the cap, sqrt(V).
-        let mid = baseline * 9 / 4;
-        assert!(mid < cap_v, "the sqrt check must sit below the cap");
-        let ratio = h_at(mid) / h_base;
-        let expected = (mid as f64 / baseline as f64).sqrt();
-        assert!((ratio - expected).abs() < 0.01, "{ratio} vs {expected}");
-        // Above the cap, flat.
-        assert_eq!(h_at(cap_v * 10), h_cap);
-        // The cap/base ratio from the params is where it tops out.
-        let top = params.burn_cap as f64 / params.burn_base_rate as f64;
-        assert!(((h_cap / h_base) - top).abs() < 0.01);
-        // All fees: the same at every volume.
-        let all = |_v: u64| fee_horizon_years(fee, 1.0, 1.0, 0.10, bytes, w);
-        assert_eq!(all(SCENARIO_9_TAIL_TX_PER_BLOCK), all(cap_v * 10));
     }
 }

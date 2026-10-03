@@ -26,13 +26,13 @@
 //! family, `emission_speed_factor` / `tail_subsidy_per_block`, and
 //! `TX_VOLUME_WINDOW` are all imported; the block-policy zone is
 //! [`shekyl_economics::FULL_REWARD_ZONE`].
-//! Four deliberate exceptions, marked at their definitions: the ArticMine
+//! Two deliberate exceptions, marked at their definitions: the ArticMine
 //! ladder transliteration (the round's *subject* — porting it faithfully is
-//! the point of the comparison column), `REF_TX_WEIGHT` (a C++ constant
+//! the point of the comparison column) and `REF_TX_WEIGHT` (a C++ constant
 //! with no single Rust owner yet; `fee_policy.rs` carries the same pinned
-//! copy wallet-side) and `GENESIS_NG_HEIGHT` (the hardfork table has no
-//! Rust owner). [`HysteresisCq`] was the third; it now calls
-//! `shekyl-economics::hysteresis_step` and that exception is discharged.
+//! copy wallet-side). The emission-split epoch is the validator's
+//! ([`crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT`]), and [`HysteresisCq`]
+//! calls `shekyl-economics::hysteresis_step`.
 //!
 //! I/O convention: this module renders; the binary target performs the
 //! writes (`main.rs --fee-ladder`), per the crate's stage2 precedent.
@@ -73,17 +73,12 @@ const _: () = assert!(
     "TX_VOLUME_WINDOW does not fit this target's usize"
 );
 
-/// The NG-genesis height production feeds to `calc_effective_emission_share`:
-/// `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)` resolves to
-/// **1** on the mainnet hardfork table (`src/hardforks/hardforks.cpp`
-/// `{ 1, 1, 0, … }`; consumed at the `blockchain.cpp` emission-split and
-/// fee-estimate call sites). Declared exception like `REF_TX_WEIGHT`: no
-/// Rust owner exists for the hardfork table, so this pinned copy names its
-/// C++ authority — a retune of that table must update it. The instrument
-/// previously hard-coded 0 here, which at exact year-boundary heights put
-/// `σ` a whole decay step ahead of the validation path (PR #614 review):
+/// The height production feeds to `calc_effective_emission_share`: the
+/// validator's emission-split epoch, read through the crate's one accessor.
+/// An epoch of `0` here would put `σ` a whole decay step ahead of the
+/// validation path at exact year-boundary heights:
 /// `(k·BLOCKS_PER_YEAR − 0)/BPY = k` but `(k·BPY − 1)/BPY = k − 1`.
-const GENESIS_NG_HEIGHT: u64 = 1;
+const GENESIS_NG_HEIGHT: u64 = crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT;
 
 /// The minimum-dwell floor examined for FL-R18 (c) and **NOT ADOPTED**
 /// (round 14): the anonymity harm it was to prevent was refuted (§4.5b)

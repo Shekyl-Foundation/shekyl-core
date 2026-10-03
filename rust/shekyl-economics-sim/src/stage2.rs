@@ -29,17 +29,18 @@ use shekyl_economics::{
 };
 
 use crate::burden::{
-    bond_opp_cost_skl, burden_cost_fiat_per_year, closed_shards, normal_tx_archival_bytes,
-    KryderRate, BASE_STORAGE_FIAT_PER_BYTE_YEAR, OPP_COST_RATE_BAND, OUTPUTS_PER_TX_NORMAL,
-    REPLICAS_PER_SHARD, SHARD_BYTES, SKL_FIAT_PRICE_BAND,
+    bond_opp_cost_skl, burden_cost_fiat_per_year, normal_tx_archival_bytes, ordinary_tx_fee,
+    HonestFold, KryderRate, BASE_STORAGE_FIAT_PER_BYTE_YEAR, OPP_COST_RATE_BAND,
+    OUTPUTS_PER_TX_NORMAL, REPLICAS_PER_SHARD, SHARD_BYTES, SKL_FIAT_PRICE_BAND,
 };
 use crate::calibration::{
     rucknium_shards_equivalent, stuffer_campaign, stuffer_cost_per_shard_atomic, stuffer_shape,
     stuffer_txs_per_shard, sustained_stuffer_cost_per_shard_atomic, tree_depth_for_leaves,
-    RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB, RUCKNIUM_SPAM_FEES_XMR,
+    PerByteRate, RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB, RUCKNIUM_SPAM_FEES_XMR,
 };
 use crate::engine::{ScenarioConfig, SimParams};
 use crate::escalation::{family, flat_25, EscalationCurve, KNEE_ARCHIVAL_LEN_BYTES, KNEE_BAND};
+use crate::fee_model::FeePoint;
 use crate::population::{
     attacker_capped_work_milli, honest_sigma_work_milli, honest_sigma_work_milli_deleted, DQ2H_TAIL,
 };
@@ -106,34 +107,6 @@ pub struct BurdenTrajectory {
     pub years: Vec<BurdenYearRow>,
 }
 
-/// The honest fold, one block: `txs` normal-shape transactions add
-/// `txs · OUTPUTS_PER_TX_NORMAL` leaves and `txs · archival_len(depth)` bytes,
-/// where the depth is the curve tree's at the block's start. The two
-/// accumulators are what `shard_of` and `tree_depth_for_leaves` consume.
-#[derive(Debug, Clone, Copy, Default)]
-struct HonestFold {
-    /// f64 so a fractional outputs-per-tx never rounds per block; floored to
-    /// u64 only where a consumer needs an integer.
-    cumulative_outputs: f64,
-    cumulative_archival_bytes: u64,
-}
-
-impl HonestFold {
-    fn add_block(&mut self, txs: u64) {
-        let per_tx = normal_tx_archival_bytes(self.cumulative_outputs as u64);
-        self.cumulative_archival_bytes = self
-            .cumulative_archival_bytes
-            .saturating_add(txs.saturating_mul(per_tx));
-        self.cumulative_outputs += txs as f64 * OUTPUTS_PER_TX_NORMAL;
-    }
-
-    /// The D2 operand at this point of the fold — the partition, not a
-    /// re-derivation.
-    fn closed_shards(&self) -> u64 {
-        closed_shards(self.cumulative_archival_bytes)
-    }
-}
-
 /// Simulate a scenario's honest burden: fold outputs and archival bytes
 /// ([`HonestFold`]), sample `closed_shards` and the Kryder-band burden cost at
 /// each year boundary.
@@ -153,12 +126,12 @@ pub fn burden_trajectory(params: &SimParams, config: &ScenarioConfig) -> BurdenT
 
         if (block + 1) % params.blocks_per_year == 0 {
             let year = (block + 1) / params.blocks_per_year; // 1-indexed
-            let shards = fold.closed_shards();
+            let shards = fold.closed_shard_count();
             let year_f = year as f64;
             years.push(BurdenYearRow {
                 year,
-                cumulative_outputs: fold.cumulative_outputs as u64,
-                cumulative_archival_bytes: fold.cumulative_archival_bytes,
+                cumulative_outputs: fold.leaves(),
+                cumulative_archival_bytes: fold.archival_bytes(),
                 closed_shards: shards,
                 burden_fiat_stall: burden_cost_fiat_per_year(
                     shards,
@@ -205,8 +178,9 @@ pub struct A1YearAgg {
     pub year: u64,
     /// Closed shards at year end (the D2 operand `n`).
     pub n: u64,
-    /// Cumulative outputs (leaves) at year end — the curve-tree depth any
-    /// transaction priced in this year is proved at (A3's claim, A4's stuffer).
+    /// Cumulative outputs (leaves) at year end — the curve-tree depth a claim
+    /// priced at the year's close is proved at (A3). An ordinary fee inside
+    /// the year is priced at the leaf count its block was built against.
     pub cumulative_outputs: u64,
     /// Staker emission leg accrued over the year, **atomic units** (integer —
     /// the DQ-2G algorithm zone; SKL/f64 conversion is deferred to the reported
@@ -231,6 +205,49 @@ pub struct A1YearAgg {
     /// units** — the operand a non-decaying staker floor would be a share of
     /// (`onset.rs`). `emission_leg` is the shipped decaying split of this.
     pub total_emission_atomic: u128,
+    /// What admission costs per byte at the year's last block — the rate a
+    /// stuffer or a claim pays if it lands then. The year's last block is its
+    /// cheapest on the production arm (the floor falls with the reward), so
+    /// this is the attacker-favouring sample of the year.
+    pub admission_rate: PerByteRate,
+}
+
+/// The admission rate the honest chain serves when it has closed a given
+/// number of shards, read off the baseline scenario run to the onset
+/// horizon.
+///
+/// Several arms sample the chain by its shard count alone (the escalation
+/// preview, the stuffer cost curve, the swing), and a shard count has no
+/// height: the rate depends on how much has been emitted, the count on how
+/// much traffic there has been. This fixes the pairing as the baseline's —
+/// the same honest composition `burden::honest_leaves_at_closed_shards`
+/// assumes for the tree depth. **A modelling map** (§4 of the design
+/// document), not a consensus quantity. Past the baseline's last year it
+/// holds the last rate.
+pub(crate) struct AdmissionAtShards {
+    /// `(closed shards at year end, rate at year end)`, in year order.
+    points: Vec<(u64, PerByteRate)>,
+}
+
+impl AdmissionAtShards {
+    pub(crate) fn on_the_baseline(params: &SimParams) -> Self {
+        let config = crate::onset::at_horizon(all_scenarios(params).remove(0));
+        Self {
+            points: a1_year_aggs(params, &config)
+                .iter()
+                .map(|a| (a.n, a.admission_rate))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn at(&self, closed_shards: u64) -> PerByteRate {
+        self.points
+            .iter()
+            .find(|(n, _)| *n >= closed_shards)
+            .or(self.points.last())
+            .map(|&(_, rate)| rate)
+            .expect("the baseline scenario closes at least one year")
+    }
 }
 
 /// A fixed-point `SCALE` share of a **year aggregate**: `floor(pool × share /
@@ -280,14 +297,17 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         let abs_height = block + config.genesis_height_offset;
         let ag = already_generated.min(u128::from(u64::MAX)) as u64;
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
-        fold.add_block(tx_volume);
+        // The block is built against the tree as it stands. The fee prices
+        // that count; archival bytes inside `add_block` read it too, and the
+        // outputs accrue after both.
+        let leaves_priced = fold.leaves();
 
         let effective =
             effective_emission(ag, TxVolume::per_block(tx_volume), &economic).unwrap_or(0);
 
         let emission_share = calc_effective_emission_share(
             abs_height,
-            0,
+            crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT,
             params.staker_emission_share,
             params.staker_emission_decay,
             params.blocks_per_year,
@@ -303,8 +323,16 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
             params.burn_base_rate,
             params.burn_cap,
         );
-        let total_fees = (u128::from(tx_volume) * u128::from(config.fee_per_tx))
-            .min(u128::from(u64::MAX)) as u64;
+        let fee_point = FeePoint {
+            already_generated: ag,
+            volume: TxVolume::per_block(tx_volume),
+            sigma_scaled: emission_share,
+            burn_pct_scaled: burn_pct,
+            chain_leaves: leaves_priced,
+            params: &economic,
+        };
+        let total_fees = params.fee.charge(tx_volume, &fee_point).total_atomic;
+        fold.add_block(tx_volume);
         // share = SCALE → the whole burn (pre-split); the candidate re-splits it.
         let whole_burn = compute_burn_split(total_fees, burn_pct, ScaledShare::from_raw(SCALE))
             .staker_pool_amount;
@@ -326,12 +354,13 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
             let year = (block + 1) / params.blocks_per_year;
             aggs.push(A1YearAgg {
                 year,
-                n: fold.closed_shards(),
-                cumulative_outputs: fold.cumulative_outputs as u64,
+                n: fold.closed_shard_count(),
+                cumulative_outputs: fold.leaves(),
                 emission_leg_atomic: year_emission_atomic,
                 whole_burn_atomic: year_burn_atomic,
                 whole_fees_atomic: year_fees_atomic,
                 total_emission_atomic: year_total_emission_atomic,
+                admission_rate: params.fee.admission_rate(&fee_point),
             });
             year_emission_atomic = 0;
             year_burn_atomic = 0;
@@ -699,13 +728,17 @@ fn print_escalation_family(out: &mut impl fmt::Write) -> fmt::Result {
 /// one-shot +1.3 %, sustained −2.6 %, depth 1 → 6). The leaf era's "cheapest
 /// early" was a lever; here it is noise. The binding figure is the minimum
 /// over the sampled depths, which this table makes visible.
-fn print_stuffer_cost_curve(out: &mut impl fmt::Write) -> fmt::Result {
+fn print_stuffer_cost_curve(
+    out: &mut impl fmt::Write,
+    params: &SimParams,
+    admission: &AdmissionAtShards,
+) -> fmt::Result {
     let rep = rucknium_shards_equivalent();
-    let shape0 = stuffer_shape(tree_depth_for_leaves(1));
+    let shape0 = stuffer_shape(tree_depth_for_leaves(1), admission.at(1));
     writeln!(
         out,
         "\nA4 (W9) stuffer cost — max-archival-bytes-per-fee shape ({SHAPE}, searched over every\n\
-         builder-legal shape), min weight-fee @ {FPB} atomic/byte, W = {W:.1} MB/shard:\n\
+         builder-legal shape), min weight-fee @ {FPB}, W = {W:.1} MB/shard:\n\
          Monero-replication anchor (DQ-2C): the March-2024 spam bought ~{GB:.2} GB / {DAYS} days\n\
          for ~{XMR:.1} XMR — that byte volume is ~{REP} Shekyl shards' worth of archival good.\n\
          Shape is max-archival-per-fee geometry (inputs carry the PQC auth + FCMP share the\n\
@@ -713,7 +746,7 @@ fn print_stuffer_cost_curve(out: &mut impl fmt::Write) -> fmt::Result {
          (FCMP++ has no rings). 'sustained' prices the cheapest output-conserving\n\
          producer/consumer cycle — what a campaign that must mint its own inputs pays.",
         SHAPE = shape0.label(),
-        FPB = crate::calibration::FEE_PER_BYTE_ATOMIC,
+        FPB = params.fee.admission_rate_phrase(admission.at(1)),
         W = SHARD_BYTES / 1.0e6,
         GB = RUCKNIUM_SPAM_BYTES_GB,
         DAYS = RUCKNIUM_DURATION_DAYS,
@@ -722,39 +755,42 @@ fn print_stuffer_cost_curve(out: &mut impl fmt::Write) -> fmt::Result {
     )?;
     writeln!(
         out,
-        "{:<15} {:>5} {:>12} {:>14} {:>9} {:>18} {:>20}",
+        "{:<15} {:>5} {:>12} {:>14} {:>9} {:>18} {:>20}{}",
         "chain n(shards)",
         "depth",
         "shape",
         "fee/tx (SKL)",
         "tx/shard",
         "cost/shard (SKL)",
-        "sustained (SKL)"
+        "sustained (SKL)",
+        params.fee.admission_rate_column(),
     )?;
     for n_shards in ESCALATION_PREVIEW_N {
         // n=0 has no tree; sample the first shard so the depth/cost are defined.
         let n_shards = n_shards.max(1);
+        let rate = admission.at(n_shards);
         let chain_leaves = crate::burden::honest_leaves_at_closed_shards(n_shards);
         let depth = tree_depth_for_leaves(chain_leaves);
-        let shape = stuffer_shape(depth);
-        let fee_tx_skl = shape.tx_fee_atomic(depth) as f64 / COIN;
-        let txs = stuffer_txs_per_shard(depth);
-        let cost_shard_skl = stuffer_cost_per_shard_atomic(chain_leaves) as f64 / COIN;
-        let sustained_skl = sustained_stuffer_cost_per_shard_atomic(chain_leaves) as f64 / COIN;
+        let shape = stuffer_shape(depth, rate);
+        let fee_tx_skl = shape.tx_fee_atomic(depth, rate) as f64 / COIN;
+        let txs = stuffer_txs_per_shard(depth, rate);
+        let cost_shard_skl = stuffer_cost_per_shard_atomic(chain_leaves, rate) as f64 / COIN;
+        let sustained_skl =
+            sustained_stuffer_cost_per_shard_atomic(chain_leaves, rate) as f64 / COIN;
         writeln!(
             out,
-            "{n_shards:<15} {depth:>5} {:>12} {fee_tx_skl:>14.6} {txs:>9} {cost_shard_skl:>18.4} {sustained_skl:>20.4}",
+            "{n_shards:<15} {depth:>5} {:>12} {fee_tx_skl:>14.6} {txs:>9} {cost_shard_skl:>18.4} {sustained_skl:>20.4}{}",
             shape.label(),
+            params.fee.admission_rate_cell(rate),
         )?;
     }
     writeln!(
         out,
-        "  -> cost/shard is depth-FLAT to within a few percent (the FCMP proof grows with\n\
-         depth, but it is archival good the stuffer is buying, so only the archival/weight\n\
-         ratio moves): one-shot drifts UP ~1%, sustained DOWN ~3%. The leaf era's\n\
-         'cheapest early' is gone with its unit. The A4 ROI gate below weighs the one-shot\n\
-         (binding, attacker-favouring) cost against the escalation Delta-pool a stuffing\n\
-         staker captures: a survivor of A1 must ALSO price the stuffer out."
+        "  -> Depth moves the archival/weight ratio by only a few percent (the FCMP proof grows\n\
+         with depth, and it is archival good the stuffer is buying). {CLAUSE} The A4 ROI gate\n\
+         below weighs the one-shot (binding, attacker-favouring) cost against the escalation\n\
+         Delta-pool a stuffing staker captures: a survivor of A1 must ALSO price the stuffer out.",
+        CLAUSE = params.fee.stuffer_rate_clause(),
     )?;
 
     Ok(())
@@ -854,6 +890,7 @@ pub struct A4Decomp {
 fn a4_decompose(
     whole_burn_atomic: u128,
     n: u64,
+    admission_rate: PerByteRate,
     sigma_honest_milli: u64,
     candidate: &EscalationCurve,
     delta: u64,
@@ -898,8 +935,12 @@ fn a4_decompose(
     // campaign's own outputs can carry it across a layer boundary, and the
     // integrator prices the two sides at their own depths. One-shot cost —
     // the binding figure — with the transaction count rounded once.
-    let fee_skl = stuffer_campaign(crate::burden::honest_leaves_at_closed_shards(n), delta)
-        .cost_atomic as f64
+    let fee_skl = stuffer_campaign(
+        crate::burden::honest_leaves_at_closed_shards(n),
+        delta,
+        admission_rate,
+    )
+    .cost_atomic as f64
         / COIN;
     let bond_skl = (u128::from(ARCHIVAL_BOND_FLOOR_ATOMIC) * u128::from(delta)) as f64 / COIN
         * A4_OPP_RATE
@@ -950,6 +991,7 @@ fn a4_decompose(
 fn a4_stuffing_roi(
     whole_burn_atomic: u128,
     n: u64,
+    admission_rate: PerByteRate,
     sigma_honest_milli: u64,
     candidate: &EscalationCurve,
     delta: u64,
@@ -958,6 +1000,7 @@ fn a4_stuffing_roi(
     a4_decompose(
         whole_burn_atomic,
         n,
+        admission_rate,
         sigma_honest_milli,
         candidate,
         delta,
@@ -1041,7 +1084,15 @@ fn a4_candidate_result(
         for &delta in &A4_DELTA_SWEEP {
             for &h in &A4_HORIZON_BAND {
                 for k in 0..A4_HONEST_HOLDINGS_BAND.len() {
-                    let roi = a4_stuffing_roi(agg.whole_burn_atomic, n, sig[k], curve, delta, h);
+                    let roi = a4_stuffing_roi(
+                        agg.whole_burn_atomic,
+                        n,
+                        agg.admission_rate,
+                        sig[k],
+                        curve,
+                        delta,
+                        h,
+                    );
                     if roi > roi_by_hholdings[k] {
                         roi_by_hholdings[k] = roi;
                         // Track config + decomposition at the realistic (index-0)
@@ -1051,6 +1102,7 @@ fn a4_candidate_result(
                             worst_decomp = Some(a4_decompose(
                                 agg.whole_burn_atomic,
                                 n,
+                                agg.admission_rate,
                                 sig[k],
                                 curve,
                                 delta,
@@ -1260,29 +1312,37 @@ const A3_ARCHIVER_BAND: [u64; 3] = [2_000, 20_000, 60_000];
 /// claim ("D2 without D1 enlarges a pool that partly evaporates"): pre-D1 puts a
 /// bulk-holder cohort at structural zero past the co-holder cliff, and a share
 /// that is never claimed is *supply never created* (`ARCHIVAL_BUDGET_SCHEDULE.md`
-/// §4). The claim cost is one transaction at the fee floor, priced through the
-/// production weight predictor (`calibration`), not a guessed constant.
+/// §4). The claim cost is one ordinary transaction at the year's admission
+/// rate ([`ordinary_tx_fee`]), priced at that year's own leaf count.
 fn a3_stranding_report(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result {
-    // One claim tx (the normal 1-in/2-out shape) at the fee floor, priced at
-    // the curve-tree depth of the year it is claimed in (the proof grows with
-    // the chain, so the claim gets dearer late).
-    let claim_cost_atomic = |chain_leaves: u64| -> u64 {
-        let (n_in, n_out) = crate::burden::normal_tx_shape();
-        crate::calibration::Shape { n_in, n_out }.tx_fee_atomic(tree_depth_for_leaves(chain_leaves))
-    };
+    // Sweep the CORPUS TRAJECTORY, not one year: replication is
+    // `archivers · holdings / n`, so the pre-fix co-holder cliff is an EARLY-chain
+    // regime (few shards, many holders ⇒ r ≫ 1000) that the corpus grows out of.
+    // Showing early/mid/late is what makes the crossing legible. The header's
+    // cost range is this sweep's own endpoints: a knee-band depth the baseline
+    // never reaches would advertise a "late" fee the table does not contain.
+    let cfg = &all_scenarios(params)[0];
+    let aggs = a1_year_aggs(params, cfg);
+    let years: Vec<&A1YearAgg> = aggs.iter().filter(|a| a.n > 0).collect();
+    if years.is_empty() {
+        return Ok(());
+    }
+    let claim_skl =
+        |a: &A1YearAgg| ordinary_tx_fee(a.cumulative_outputs, a.admission_rate) as f64 / COIN;
+    let (first, last) = (years[0], years[years.len() - 1]);
     writeln!(
         out,
         "\nA3 — budget stranding (§12.2): fraction of budget(E) that NEVER MINTS.\n\
          budget is a minting ENTITLEMENT — unclaimed past MAX_CLAIM_AGE_W=26 is \"supply\n\
          never created\" (ARCHIVAL_BUDGET_SCHEDULE §4). A class claims iff its reward\n\
-         covers one claim tx ({CC0:.6}..{CC1:.6} SKL early..late @ the {FPB} atomic/byte\n\
+         covers one claim tx ({CC0:.6}..{CC1:.6} SKL early..late @ the {FLOOR}\n\
          floor, via the production predictor at each year's tree depth). PRE-D1 vs\n\
          POST-D1 scoring = the §1 Stage-0 coupling claim, measured: pre-D1 zeroes bulk\n\
          holders past the co-holder cliff (r_market > g_milli ≈ 1000), and a\n\
          structural-zero cohort's slice never mints.",
-        CC0 = claim_cost_atomic(1) as f64 / COIN,
-        CC1 = claim_cost_atomic(deep_chain_leaves()) as f64 / COIN,
-        FPB = crate::calibration::FEE_PER_BYTE_ATOMIC,
+        CC0 = claim_skl(first),
+        CC1 = claim_skl(last),
+        FLOOR = params.fee.admission_floor_label(first.admission_rate),
     )?;
     writeln!(
         out,
@@ -1296,24 +1356,13 @@ fn a3_stranding_report(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Re
         "post zero%",
         "post noclm%"
     )?;
-
-    // Sweep the CORPUS TRAJECTORY, not one year: replication is
-    // `archivers · holdings / n`, so the pre-fix co-holder cliff is an EARLY-chain
-    // regime (few shards, many holders ⇒ r ≫ 1000) that the corpus grows out of.
-    // Showing early/mid/late is what makes the crossing legible.
-    let cfg = &all_scenarios(params)[0];
-    let aggs = a1_year_aggs(params, cfg);
-    let years: Vec<&A1YearAgg> = aggs.iter().filter(|a| a.n > 0).collect();
-    if years.is_empty() {
-        return Ok(());
-    }
     let picks = [0usize, years.len() / 2, years.len() - 1];
     let epy = crate::proxy::epochs_per_year();
     for (label, &yi) in ["early", "mid", "late"].iter().zip(picks.iter()) {
         let a = years[yi];
         let budget_atomic = a1_shipped_budget_atomic(a, &flat_25());
         let budget_per_epoch = (budget_atomic as f64 / epy) as u64;
-        let claim_cost = claim_cost_atomic(a.cumulative_outputs);
+        let claim_cost = ordinary_tx_fee(a.cumulative_outputs, a.admission_rate);
         for &archivers in &A3_ARCHIVER_BAND {
             let pre = crate::stranding::measure(
                 budget_per_epoch,
@@ -1414,7 +1463,15 @@ fn oq4_deletion_recheck(out: &mut impl fmt::Write, params: &SimParams) -> fmt::R
             honest_sigma_work_milli_deleted(a.n, DQ2H_TAIL, 4),
         ),
     ] {
-        let d = a4_decompose(a.whole_burn_atomic, a.n, sigma, &curve, delta, horizon);
+        let d = a4_decompose(
+            a.whole_burn_atomic,
+            a.n,
+            a.admission_rate,
+            sigma,
+            &curve,
+            delta,
+            horizon,
+        );
         writeln!(
             out,
             "{:<26} {:>12.4} {:>14.1}",
@@ -1502,6 +1559,15 @@ fn oq2_corpus_samples(traj: &BurdenTrajectory) -> [u64; 3] {
 /// `--stage2` entry: the burden trajectory across the scenario set. JSON to
 /// stdout, a human-readable summary to stderr.
 pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result {
+    // The arm first: every fee-dependent figure below is a figure under it.
+    writeln!(out, "{}", params.fee.label())?;
+    if let Some(preamble) = params.fee.report_preamble() {
+        // The arms' prose was written when every run charged the flat fee,
+        // and some of it states results. A table is computed; a paragraph
+        // is not.
+        writeln!(out, "{preamble}")?;
+    }
+    writeln!(out)?;
     writeln!(
         out,
         "Stage-2 archival burden trajectory (§12.1 checkpoint 1)\n\
@@ -1557,7 +1623,8 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     )?;
 
     print_escalation_family(out)?;
-    print_stuffer_cost_curve(out)?;
+    let admission = AdmissionAtShards::on_the_baseline(params);
+    print_stuffer_cost_curve(out, params, &admission)?;
     let a1 = a1_clearance_report(out, params)?;
     // A1-T / A1-L (§12.14): A1's min hides when the failure arrives; the onset
     // table and the lever table fold the same per-year ratio.
@@ -1611,7 +1678,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
             ..EconomicParams::default()
         };
         let br = base_block_reward(params.emission_curve_asymptote / 2, &econ).unwrap_or(0);
-        crate::swing::a6_report(out, &ESCALATION_PREVIEW_N, br)?;
+        crate::swing::a6_report(out, &ESCALATION_PREVIEW_N, br, &admission)?;
     }
     let a4 = a4_stuffing_report(out, params)?;
 
@@ -1672,6 +1739,8 @@ pub struct Stage2Report {
 mod tests {
     use super::*;
     use shekyl_economics::params::mul_scale;
+
+    use crate::burden::closed_shards;
 
     #[test]
     fn trajectory_shards_are_monotone_and_final_is_max() {
@@ -1838,8 +1907,10 @@ mod tests {
             knee_shards: knee,
         };
         let sigma = honest_sigma_work_milli(a.n, DQ2H_TAIL, 64);
-        let roi_steep = a4_stuffing_roi(a.whole_burn_atomic, a.n, sigma, &steep, 10_000, 10);
-        let roi_shallow = a4_stuffing_roi(a.whole_burn_atomic, a.n, sigma, &shallow, 10_000, 10);
+        let rate = a.admission_rate;
+        let roi_steep = a4_stuffing_roi(a.whole_burn_atomic, a.n, rate, sigma, &steep, 10_000, 10);
+        let roi_shallow =
+            a4_stuffing_roi(a.whole_burn_atomic, a.n, rate, sigma, &shallow, 10_000, 10);
         assert!(
             roi_steep >= roi_shallow,
             "steeper share must not lower served-work ROI: {roi_steep} < {roi_shallow}"
@@ -1848,13 +1919,126 @@ mod tests {
         let sigma_capped = honest_sigma_work_milli(a.n, DQ2H_TAIL, 512);
         let sigma_spread = honest_sigma_work_milli(a.n, DQ2H_TAIL, 4);
         assert!(sigma_capped < sigma_spread, "capping must shrink Σwork");
-        let roi_capped =
-            a4_stuffing_roi(a.whole_burn_atomic, a.n, sigma_capped, &steep, 10_000, 10);
-        let roi_spread =
-            a4_stuffing_roi(a.whole_burn_atomic, a.n, sigma_spread, &steep, 10_000, 10);
+        let roi_capped = a4_stuffing_roi(
+            a.whole_burn_atomic,
+            a.n,
+            rate,
+            sigma_capped,
+            &steep,
+            10_000,
+            10,
+        );
+        let roi_spread = a4_stuffing_roi(
+            a.whole_burn_atomic,
+            a.n,
+            rate,
+            sigma_spread,
+            &steep,
+            10_000,
+            10,
+        );
         assert!(
             roi_capped >= roi_spread,
             "capped honest holdings must not lower attacker ROI: {roi_capped} < {roi_spread}"
         );
+    }
+
+    /// A fee arm of the `--stage2` report and the file that pins it.
+    struct PinnedArm {
+        params: fn() -> SimParams,
+        fixture: &'static str,
+    }
+
+    /// `--stage2`: the production fee arm, which is the default run.
+    const PRODUCTION_ARM: PinnedArm = PinnedArm {
+        params: SimParams::default,
+        fixture: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/stage2_narration.txt"
+        ),
+    };
+
+    /// `--stage2 --control-flat-fee`: the flat fee the §12.13–§12.14 tables
+    /// were measured on.
+    const FLAT_CONTROL_ARM: PinnedArm = PinnedArm {
+        params: SimParams::section_12_14_control,
+        fixture: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/stage2_narration_flat_control.txt"
+        ),
+    };
+
+    fn stage2_narration(arm: &PinnedArm) -> String {
+        let mut narration = String::new();
+        run_stage2(&mut narration, &(arm.params)()).expect("String sink is infallible");
+        narration
+    }
+
+    /// The whole `--stage2` report against the committed copy
+    /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §2). The re-base changes one
+    /// operand of the fold per commit; this is what says which lines of the
+    /// report that commit moved, and that it moved no others. A commit that
+    /// means to move a line regenerates the fixture and the diff is its
+    /// evidence — so the fixture is reviewed as output, never trusted as an
+    /// oracle for the line it was regenerated to match.
+    ///
+    /// Ignored by default: the report folds every scenario to 60 years
+    /// (100–150 s per arm in release, far longer in a debug test). Run with
+    /// `cargo test --release -p shekyl-economics-sim -- --ignored
+    /// matches_the_committed_fixture` (both arms).
+    #[test]
+    #[ignore = "full --stage2 report; ~150 s in release — run with --release --ignored"]
+    fn stage2_narration_matches_the_committed_fixture() {
+        assert_narration_matches(&PRODUCTION_ARM);
+    }
+
+    /// The control arm against its committed copy. This is the fixture that
+    /// ties the re-based sim to the published tables: it is the report as it
+    /// stood before the fee was rewired, plus the lines that name the arm
+    /// and print its fee, and it moves only when a fold operand shared by
+    /// both arms does.
+    #[test]
+    #[ignore = "full --stage2 report; ~100 s in release — run with --release --ignored"]
+    fn stage2_narration_flat_control_matches_the_committed_fixture() {
+        assert_narration_matches(&FLAT_CONTROL_ARM);
+    }
+
+    fn assert_narration_matches(arm: &PinnedArm) {
+        let committed = std::fs::read_to_string(arm.fixture).expect("read committed narration");
+        let current = stage2_narration(arm);
+        if committed != current {
+            let first = committed
+                .lines()
+                .zip(current.lines())
+                .position(|(a, b)| a != b)
+                .map_or_else(
+                    || committed.lines().count().min(current.lines().count()) + 1,
+                    |i| i + 1,
+                );
+            panic!(
+                "--stage2 narration drifted from {}; first differing line {first} ({} \
+                 committed lines, {} current). Regenerate with SHEKYL_REGEN_FIXTURES=1 and \
+                 read the diff.",
+                arm.fixture,
+                committed.lines().count(),
+                current.lines().count(),
+            );
+        }
+    }
+
+    /// Regenerate both committed narrations. Ignored by default; run with
+    /// `SHEKYL_REGEN_FIXTURES=1 cargo test --release -p shekyl-economics-sim
+    /// -- --ignored regen_stage2_narration_fixtures`.
+    #[test]
+    #[ignore = "regeneration helper; writes the committed fixtures"]
+    fn regen_stage2_narration_fixtures() {
+        assert_eq!(
+            std::env::var("SHEKYL_REGEN_FIXTURES").as_deref(),
+            Ok("1"),
+            "set SHEKYL_REGEN_FIXTURES=1 to regenerate"
+        );
+        for arm in [&PRODUCTION_ARM, &FLAT_CONTROL_ARM] {
+            std::fs::write(arm.fixture, stage2_narration(arm)).expect("write narration");
+        }
     }
 }

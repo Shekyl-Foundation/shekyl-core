@@ -73,11 +73,6 @@
 #define CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE          600
 // Display precision and atomic-unit constant are generated from config/economics_params.json.
 
-#define FEE_PER_KB_OLD                                  ((uint64_t)10000000) // pow(10, 7)
-#define FEE_PER_KB                                      ((uint64_t)2000000) // 2 * pow(10, 6)
-#define FEE_PER_BYTE                                    ((uint64_t)300)
-#define DYNAMIC_FEE_PER_KB_BASE_FEE                     ((uint64_t)2000000) // 2 * pow(10, 6)
-#define DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD            ((uint64_t)10000000000) // 10 * pow(10, 9)
 #define DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT         ((uint64_t)3000)
 
 // Four-component economics constants are generated from config/economics_params.json.
