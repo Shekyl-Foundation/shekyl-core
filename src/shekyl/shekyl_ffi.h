@@ -1400,9 +1400,10 @@ int32_t shekyl_tx_extra_shape_of(
 // consensus operand.
 //
 // The ranges are opaque here -- nothing is parsed -- so no content can make
-// the call fail. It returns false, writing nothing, only for a null pointer
-// where bytes were promised (out_txid, or a range with a non-zero length); a
-// null pointer is accepted for an empty range. out_txid receives 32 bytes.
+// the call fail. It returns false, writing nothing, only for a pointer that
+// cannot be the range it claims: a null out_txid, or a range with a non-zero
+// length that is null or longer than PTRDIFF_MAX bytes. A null pointer is
+// accepted for an empty range. out_txid receives 32 bytes.
 // ---------------------------------------------------------------------------
 bool shekyl_txid_from_segments(
     const uint8_t* prefix,
@@ -1416,6 +1417,23 @@ bool shekyl_txid_from_segments(
     const uint8_t* prunable,
     size_t prunable_len,
     uint8_t* out_txid);
+
+/// The prunable digest of a serialized transaction: keccak256 of its prunable
+/// range, by the function the txid mixer uses (shekyl-wire `prunable_hash_of`).
+/// It is the value stored as `txs_prunable_hash` and served beside a pruned
+/// body, which a wallet mixes into the txid it checks that body against -- so
+/// it is computed where the mixer is, and C++ holds no hash of its own for it.
+///
+/// One byte range, nothing parsed, and no archival length: that operand is
+/// the txid mixer's to measure. An empty range (a body with no prunable
+/// region) is valid and may be a null pointer. Returns false, writing
+/// nothing, only for a pointer that cannot be the range it claims: a null
+/// out_hash, or a prunable with a non-zero length that is null or longer
+/// than PTRDIFF_MAX bytes. out_hash receives 32 bytes.
+bool shekyl_tx_prunable_hash(
+    const uint8_t* prunable,
+    size_t prunable_len,
+    uint8_t* out_hash);
 
 /// Build the coinbase extra in the grammar's one layout: [PubKey(tx_pubkey
 /// [32]), Nonce(nonce[SHEKYL_COINBASE_NONCE_BYTES]), PqcKemCiphertext(kem),
