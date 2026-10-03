@@ -281,12 +281,12 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
     let engine_handle = engine.handle();
     let (clearnet_tx, clearnet_rx) = mpsc::unbounded_channel();
     let (tor_tx, tor_rx) = mpsc::unbounded_channel();
-    let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|cause| {
-        if cause.kind() == CloseKind::AdmissionRefused {
-            tracing::info!("seam accept refused cause AdmissionRefused");
-        } else {
-            tracing::debug!(kind = ?cause.kind(), "zone socket");
+    let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|cause| match cause.kind() {
+        CloseKind::AdmissionRefused | CloseKind::InboundNotAccepted => {
+            let kind = cause.kind();
+            tracing::info!("seam accept refused cause {kind:?}");
         }
+        _ => tracing::debug!(kind = ?cause.kind(), "zone socket"),
     });
     let host = Arc::new(Host {
         pool: Mutex::new(Some(pool)),

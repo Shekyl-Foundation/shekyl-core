@@ -147,6 +147,19 @@ fn a_zone_cap_of_zero_never_accepts_that_connector() {
 }
 
 #[test]
+fn a_zero_ceiling_wins_over_a_full_connector_cap() {
+    let sockets = Sockets::new();
+    sockets.set_zone_cap(ConnectorId::Clearnet, Some(1));
+    let _held = sockets
+        .accept_clearnet(ip([10, 0, 0, 1]), InboundCeiling::Bounded(4), now())
+        .expect("under the ceiling");
+    let error = sockets
+        .accept_clearnet(ip([10, 0, 0, 2]), InboundCeiling::Bounded(0), now())
+        .expect_err("ceiling is zero");
+    assert_eq!(refused(error), CloseKind::InboundNotAccepted);
+}
+
+#[test]
 fn a_zone_cap_does_not_raise_the_process_ceiling() {
     let sockets = Sockets::new();
     sockets.set_zone_cap(ConnectorId::Clearnet, Some(2));

@@ -264,17 +264,20 @@ fn refuse_over_process_ceiling(inner: &Inner, ceiling: InboundCeiling) -> Result
 /// can be under its own number while the sum still exhausts the descriptors.
 ///
 /// A ceiling of 0 and a connector cap of 0 are [`CloseKind::InboundNotAccepted`]:
-/// this node will not take the accept. A positive bound that is full is
-/// [`CloseKind::AdmissionRefused`]. A ban is that same refusal.
+/// this node will not take the accept. Either zero is decided before a
+/// positive cap that is already full, so a ceiling of 0 is not reported as
+/// a full cap. A positive bound that is full is [`CloseKind::AdmissionRefused`].
+/// A ban is that same refusal, and it is decided before this function.
 fn refuse_inbound(
     inner: &Inner,
     connector: ConnectorId,
     ceiling: InboundCeiling,
 ) -> Result<(), OpenError> {
-    if let Some(cap) = inner.zone_caps[connector.index()] {
-        if cap == 0 {
-            return Err(inbound_not_accepted());
-        }
+    let cap = inner.zone_caps[connector.index()];
+    if matches!(ceiling, InboundCeiling::Bounded(0)) || matches!(cap, Some(0)) {
+        return Err(inbound_not_accepted());
+    }
+    if let Some(cap) = cap {
         let held = inner.occupancy.get(connector, Direction::Inbound);
         if held >= u64::from(cap) {
             return Err(admission_refused());
