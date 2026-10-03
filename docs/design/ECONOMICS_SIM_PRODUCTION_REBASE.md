@@ -146,6 +146,13 @@ land in a second PR stacked on #935's branch, so the remaining fold
 changes — the volume window, the supply operand, the median and the
 miner stuffer — are reviewed apart from the fee arm they build on.
 
+**Landed.** ESR-4, 2026-10-02, in PR #936: `fc7d5a9b2` splits CEN-F20's
+window into a span readable without a store (`shekyl_chain_rules::tx_volume_span`),
+with `tx_volume_window` unchanged in behaviour; `896d95c33` has the
+engine, stage-2 and budget folds read it through `VolumeWindow`. Merged
+over the #935 review at `143ca633f`, where it moves the same cells by the
+same amounts as before the review. §5.5 has the result.
+
 ## 3. The median is a production change inside a sim PR
 
 `shekyl_chain_rules::rules::block_weight::effective_median_at` needs a
@@ -181,6 +188,8 @@ defect.
 | Control arm: admission at a flat 300 atomic/byte | The rate §12.13's stuffer and claim were priced at. Nothing in the chain charges it; the chain's admission rate is the relay floor | Part of the control arm; printed in its stuffer table |
 | The admission rate at a shard count (`AdmissionAtShards`) | Arms that sample the chain by shard count alone have no height, and the rate depends on emission, not on traffic. The pairing is fixed as the baseline scenario's: the rate at the year the baseline reaches that count, and its last year's rate beyond | Stated in the stuffer table's footer |
 | Admission rate sampled at the year's last block | A stuffer picks its moment, and on the production arm the floor falls through the year | Attacker-favouring; stated at the field |
+| The recorder's volume operand stays per-block | `record.rs` writes test vectors for the engine-core differential, which recomputes from a recorded per-block volume. That is the vectors' contract, not a model of the chain; the three model folds read the validator's window (ESR-4) | Stated at the recorder |
+| A scenario that starts mid-chain starts with an empty volume window | A fold's heights are its own; `genesis_height_offset` scenarios carry no history before their first block | Stated in `volume_window.rs` |
 | A claim is one ordinary transaction at the admission rate | The claim's own envelope and the wallet's claim hold floor (`EMISSION_CLAIM_FEE_FLOOR`) are not modelled. Carried from the pre-ESR report unchanged | Appendix A, class A, row A9 |
 | Median held at the penalty-free zone | Only until ESR-6 lands the median | Stated in the report header |
 | Fee paid unrounded | The product is the fixed point of `shekyl_tx_weight::converge_weight_fee` — the wallet's iteration without the mask. The wallet then rounds each fee up to the daemon's quantization mask (1 000 atomic). The mask has no Rust owner — it is a C++ static — and the fee-floor instrument in this crate already pays unrounded (FL-R22). At most 1 000 atomic per transaction, below print precision | Stated here; closes when the mask gains a Rust owner |
@@ -361,6 +370,31 @@ not about cells:
 4. **No onset year and no verdict changes.** If one does, the cell that
    moved was within about 0.3 % of 1.0 before the change; anything larger
    says the window is wired wrong.
+
+### 5.5 ESR-4 — what the run said (2026-10-02, at `896d95c33`, and again over the review at `143ca633f`)
+
+**All four registered points held.**
+
+1. **Shape.** Two tests pin it: the window equals the transactions of
+   the `min(h, 720)` blocks before `h`, against a prefix sum held in
+   full; and a step reaches the operand one block later and fully after
+   720 blocks.
+2. **Where it shows.** Control: 39 cells moved, the largest by 0.12 %.
+   Production: 76 cells; the largest real move is 0.38 %, every large
+   one in boom/bust, which steps every year. Larger relative figures in
+   the diff are two-decimal rounding (0.06 → 0.07).
+3. **Both arms, same direction.** Yes; the production arm moves more
+   because the window also reaches the fee through `C`.
+4. **Onsets.** One moved, on the production arm: boom/bust at 5 %, year
+   22 → year 24. That year's clearance was 0.99854 before and 1.00086
+   after (a probe, not committed), a cell 0.15 % below 1.0. That is the
+   exception the prediction named, not a wiring error. No verdict
+   changed.
+
+The 0.38 % is a little above the "about 0.3 %" registered, and it is the
+production fee itself that moves most: `C = (1 − σ)·M_r/(1 − b)` takes both
+the release multiplier and the burn fraction, so a step reaches the fee
+through two windowed operands at once. The control has no `C`.
 
 ## 6. The staking sim — a separate PR
 
