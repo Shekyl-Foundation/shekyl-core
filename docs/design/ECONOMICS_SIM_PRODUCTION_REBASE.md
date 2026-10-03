@@ -119,6 +119,17 @@ move") was wrong in the small — every sample shifts by one block of the
 within-year interpolation — and right in what it guarded: nothing a reader
 would quote changes.
 
+**What the control arm is, from here on.** Up to ESR-2 the control
+reproduced the §12.13–§12.14 report exactly, plus 13 added lines; its
+fixture at `354bc5d52` is the last one that does. ESR-3 moved 20 of its
+cells in the sixth significant digit, and every later fold change (ESR-4
+onward) moves it again, because the volume window, the supply operand and
+the median are shared by both arms. From ESR-3 the control's job is no
+longer to reproduce the old tables. It holds the fee flat while the folds
+change, so that a difference between the arms is the fee and nothing
+else. A control cell that moves at ESR-4 or later is the fold change
+showing on that arm, not a wiring error.
+
 **Added 2026-10-02: ESR-10**, the fee sensitivity the first two items
 left out. ESR-1 runs the Standard rung at `×1` only. The multiplier is in
 the type and nothing sweeps it, and the rung mix is not modelled at all.
@@ -204,8 +215,13 @@ step's delta alone before judging the prediction.
 
 ### 5.1 ESR-1 — what the run said (2026-10-02, at `9d8a52985`)
 
-The median is still held at the penalty-free zone here, so every
-production figure below is the fee at its **highest**; ESR-6 lowers it.
+**Quote the directions from this section, not the levels.** The median
+is still held at the penalty-free zone here, so every production figure
+below is the fee at its highest, and ESR-6 is predicted to lower it 4–5×
+(§5.2). What stands now: the production fee falls with the reward, it
+crosses the flat control between year 30 and year 40, and by year 60 it
+is 21× below it. The absolute fees, the clearance ratios and the onset
+years do not stand until ESR-6 has run.
 
 | Prediction | Outcome |
 | --- | --- |
@@ -240,10 +256,17 @@ Three things the control tables said that the production arm does not:
 - **The constant-fee horizon `H` does not exist.** It needs a fee that is
   constant in height; the report prints it for the control arm only.
 
-One thing nobody predicted: the early fee is high. The Standard rung at
-the zone median is about 1.7 SKL per ordinary transaction at year 10
-(3.3 in year 1). Whether anyone would pay that is outside the sim, and
-ESR-6's median is expected to lower it.
+**A finding for the reading pass, separate from the purse: what an
+ordinary user pays in the early years.** Nobody predicted it, because no
+run had charged the production fee before. The Standard rung at the zone
+median is about **3.3 SKL per ordinary transaction in year 1** and 1.7 at
+year 10 (year-1 fees over year-1 transactions, baseline scenario). If
+ESR-6 lowers it as §5.2 predicts, year 1 is still around 0.65–0.75 SKL.
+These are the years in which adoption is decided, so this is a usability
+number before it is an archival one. Its levers are not the archival
+purse's either: they are the ladder's own — the rung multiple, the
+reference weight `w_ref`, the median clamp. Whether anyone would pay it
+is outside the sim; that the chain asks it is not.
 
 **Why a 17× fee moves the year-10 ratio by only 20 %.** The fee leg is
 17.2× the control's at year 10 (1.97 M against 0.114 M SKL per year), but
@@ -301,6 +324,32 @@ What else moved on the production arm:
 
 The stuffer here pays the relay floor. A miner filling its own block does
 not (C2-R2 Q9, reopened); that adversary is ESR-7.
+
+### 5.4 ESR-4, predicted before it is built (2026-10-02)
+
+ESR-4 feeds the burn, the release multiplier and the fee correction `C`
+from the validator's 720-block window in place of each block's own
+transaction count. Every fold uses that operand, so cells move on both
+arms. The prediction is about a **shape**, per arm and per direction,
+not about cells:
+
+1. **The shape.** At a traffic step the burn fraction, the release
+   multiplier and (on the production arm) `C` move to their new values
+   over 720 blocks, not in one block. The window does not include the
+   block being priced, and at genesis it is empty.
+2. **Where it shows.** Every scenario's traffic steps at year boundaries,
+   except the stuffing attack's, which steps at block 21,600. A step
+   year's aggregates move by at most about 0.3 % (720 of 262,800 blocks)
+   of that step's effect, toward the previous year's traffic. A
+   constant-traffic year moves not at all, except year 1, through the
+   genesis block alone (an empty window reads as zero volume, which
+   clamps the release multiplier to 0.8 for one block).
+3. **Both arms, same direction.** The fee arm does not change what the
+   window does; on the production arm it also reaches the fee through
+   `C`, in the same direction.
+4. **No onset year and no verdict changes.** If one does, the cell that
+   moved was within about 0.3 % of 1.0 before the change; anything larger
+   says the window is wired wrong.
 
 ## 6. The staking sim — a separate PR
 
