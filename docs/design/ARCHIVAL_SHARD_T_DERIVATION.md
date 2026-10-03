@@ -34,8 +34,9 @@ is provisional only on `U1b`.** **Three rulings on that reading the same day (§
 PoW finding is "no measurable cost, sign unresolved"; and `L`'s fetch span is
 re-derived per byte on the worse day — `L = 4` holds, which closes `SHT-7`.**
 **Close-out the same day (§10.7): the sim credits one attempt per read, and `SF-D6`'s
-retry budget is 2 retries. §11 is the closing state: the only row `W` waits on is
-`U1b`.**
+retry budget is 2 retries. §11 is the closing state.** **`U1b` read 2026-10-03
+(§10.8): a Pi 4 serving the 1× object missed 1.95 % (95 % interval 1.12 – 3.37 %), so
+the floor device does not lower `W`'s ceiling, and `W` rests on no open measurement.**
 Identifier families **`SHT-`** (findings) and
 **`SHT-Q`** (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
@@ -900,7 +901,7 @@ that gate's bookkeeping:
 | **`SHT-3`** | `SF-D7` still states *"`N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`)"* ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):183). Item 5 retired the whole-shard materialise and refuted F32's reason 2 on that ground. Stale premise on a RULED row, and it is the text a future reader would use to derive a memory bound on `T`. | STALE TEXT on a RULED row — owner `SF-` |
 | **`SHT-4`** | `U1` is not bounded by `CHALLENGE_RESPONSE_BLOCKS` (500 blocks ⇒ a 10.8 GB budget against a 3.34 MB shard) and the memory leg is retired by item 5. **AMENDED on review:** the first pass then derived the real bound against the 180 KB/s *burst floor* and reported the row as slack, having missed W₂'s **measured** single-attempt figures on the same page (`:1091-1095`). On the measurement the heavy-end ceiling is ~[140, 490] and **`T = 200` is inside it** — `U1a` is unresolved at 200, not slack. The steering prediction that `U1` is the bound most likely to set `T` is **reinstated**; what was wrong in it was only the denominator. | CONFIRMED, then AMENDED — the amendment is the round's headline |
 | **`SHT-7`** | **`L`'s fetch-span component is justified by a byte count from the retired segment, and its own page already contradicts it.** `L = 4`'s span was sized on "~20 s for 3.33 MB" (`ARCHIVAL_SHARD_FETCH.md`:1074-1090, the 180 KB/s floor); W₂ at `:1091-1095` then measured **48.27 / 86.06 s** for the same object — 2.4–4.3× worse — and `L` stayed 4 on a *different* argument ("seven attempts of the cold p99 fit under six minutes"). So the span text is stale relative to the measurement one paragraph below it, and **deriving `T` from that span would be circular**: it would feed the retired 3.33 MB back into `T`'s own bound, which is exactly what this round was opened to remove. The independent half is `SF-D6`'s retry budget; that is the part to keep. Restate `L`'s span **per byte**, or re-pin `T` and `L` together — but do not call selecting inside the current span "the cheaper option", which the first pass did. | CONFIRMED — owner `SF-`, and it is why §4's rule selects from the lower edge. **CLOSED 2026-10-02 (§10.6 item 3):** the span is restated per byte on the worse measured day and `L = 4` holds |
-| **`SHT-5`** | `U1b` — an honest server's sustained egress on the rule-76 floor device — **has no authority anywhere in the tree**. The only transport figure (180 KB/s) is requester-side and a burst floor from a null result. This is the one bound that cannot be closed by reasoning. | OPEN — FOLLOWUPS row, measurement owed |
+| **`SHT-5`** | `U1b` — an honest server's sustained egress on the rule-76 floor device — **has no authority anywhere in the tree**. The only transport figure (180 KB/s) is requester-side and a burst floor from a null result. This is the one bound that cannot be closed by reasoning. | OPEN — FOLLOWUPS row, measurement owed. **CLOSED 2026-10-03 (§10.8):** measured on the floor device; at the 1× object 12 of 616 fetches missed (95 % interval 1.12 – 3.37 %), so `U1b` does not lower `W`'s ceiling |
 | **`SHT-6`** | `rust/shekyl-economics-sim/src/burden.rs:33-39`'s `SHARD_BYTES` comment derives 3.33 MB from `SEGMENT_LEAF_COUNT × ~128 B` — the retired **leaf-segment** estimate — while presenting it as the "§2 corpus figure". Corrected in this PR (the only code this round touches). | FIXED here |
 | **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner once the ramp is on, with no economics changed** (it ships flat, so the effect is latent — `SCC-Q2`), and every `T` re-pin thereafter moving when the staker share saturates. **It is a consensus operand, not an economics knob.** `n` reaches consensus through `Blockchain::parent_frozen_segment_count` → `validate_miner_transaction` (`src/cryptonote_core/blockchain.cpp:1494-1508`), derived from `get_curve_tree_leaf_count()` — the **retired leaf geometry** — and read at a pinned parent state with a throwing assert (*"escalation operand read-point violated"*). So the coinbase's fee split depends on it. **CORRECTED 2026-09-27 (`SCC-Q2`'s ruling):** the stronger claim this row first made — *"a wrong re-key changes which coinbases are valid"* — holds only **once the escalation is switched on**. It ships **flat**: `shekyl_escalation_asymptote_share` equals the floor `shekyl_staker_pool_share` (`config/economics_params.json:16-18`, *"the DELIBERATE pre-ceremony NEUTRAL value"*), so the split is 25 % whatever `n` is and a wrong re-key changes no coinbase's validity **today**. The requirement that the re-key be one atomic C++/Rust change is unchanged, and its reason is sharper: the operand is computed on both sides, and a mismatch that is harmless while flat becomes a chain split the moment the GF-7 ceremony raises the asymptote. Likewise the ~65× figure bites only after the ceremony. **Blast radius, otherwise bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so what it clocks is **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table. **Owners RULED 2026-10-01 (§10.4):** `n`'s re-key landed in the Rust validator on 2026-09-30; `g(age)`'s segment-keyed no-segment branch is re-keyed in the **shard-count cutover** ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md)), Rust-side — **LANDED 2026-10-01** (`ShardClose`, `shard_close`; falsifier run, §2's falsifier table); `escalation_knee_n`'s re-derivation is the **sim lane's**, per `SCC-Q2` — **LANDED 2026-10-01** (`2,250,000` closed shards, `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13) |
 | **`SHT-9`** | **A `shekyl-chain-rules` fixture carries a shape consensus refuses.** `harness::fixture::serve_credit_only` builds `prunable: None` with empty `pqc_auths` — the **pre-`RF-D1`** serve-credit form, identified by the *absence* of a prunable region. `RF-D1` inverted that: the region is now present and holds one non-empty pruned pass record per credit vin. Verified empirically rather than read off: `Transaction::validate_context_free_pruned` refuses it — *"serve_credit tx must be fee-only — no outputs, empty `pqc_auths`, no spend-proof material, and exactly one pruned pass record per serve-credit vin (§2.5, RF-D1)"*. It does **not** break `SHT-Q1`'s equivalence (a conforming serve-credit body carries good, and `tx_domain_tests` builds one), but a fixture that consensus would refuse is a false negative waiting for any test that assumes it is valid. | CONFIRMED — found while building the equivalence test; owner the `CHAIN_RULES_SLICE` lane, FOLLOWUPS |
@@ -2131,13 +2132,83 @@ Two things this does **not** claim:
 The rule is `shekyl_sp_t3_spike::ceiling::retry_budget`, and `pd-f2-ceiling` prints the
 table and the budget for any observations file (the command under §10.6).
 
+### 10.8 The `U1b` reading — 2026-10-03
+
+The run pre-registered in §9.3a, read by its amendment's two readings with the
+instrument committed before the reading (`pd-f2-u1b`, PR #941).
+
+**The run.** Both hosts started at 2026-10-02 20:40:19 UTC and ended 24 hours later
+(20:41:43 and 20:41:49), exit 0, from one harness commit built on each host. The floor
+device recorded 1,846 fetches and the control 1,904, a third at each of the three
+objects. No exchange was refused. **No void condition holds.** One needs recording:
+the two claim rows in the estate ledger were removed at 17:30 UTC on 2026-10-03 by an
+edit to the table's format, three hours before the end. Neither host had a login or a
+new process between then and the end of the run, so no other load landed.
+
+**Reading A — bears on `W`.** At the 1× object (3,326,976 B, which bounds the heaviest
+shard from above), the floor device missed **12 of 616 fetches: 1.95 %, 95 % interval
+1.12 – 3.37 %**, wholly under the 0.30 target. Three of the misses were circuit
+failures and nine transfer failures. **Verdict: the floor device does not lower `W`'s
+ceiling.** With the device carrying reader, server and both Tors, that holds a
+fortiori for the device as a server alone.
+
+**Reading B — does not bear on `W`.** With one read in flight the device completed
+0.0456 reads a second at the 1× object: 54,689 reads an epoch, a **maximum sustainable
+holding of 18,229 pairs** per floor device.
+
+| Pairs | Challenge reads an epoch | Share of capacity | Sustainable |
+|---:|---:|---:|---|
+| 1 | 3 | 0.0 % | yes |
+| 16 | 48 | 0.1 % | yes |
+| 128 | 384 | 0.7 % | yes |
+| 512 | 1,536 | 2.8 % | yes |
+| 1,024 | 3,072 | 5.6 % | yes |
+| 2,048 | 6,144 | 11.2 % | yes |
+| 4,096 (the list bound) | 12,288 | 22.5 % | yes |
+| 8,192 | 24,576 | 44.9 % | yes |
+| 16,384 | 49,152 | 89.9 % | yes |
+
+It is a floor on capacity, and it is the participation floor's input (gates 4 and 5),
+not this derivation's. Each row's headroom is what is left for organic and band-2
+reads, which have no rate in the tree.
+
+**Reported, not judged.**
+
+- *The device against the control*, by `pd-f2-diff` with §4.1a's margins. Completion
+  is immaterial at all three objects; the device missed 1.95 % at 1× and the control
+  2.36 %. One statistic is material: the device's p90 at the ¼× object is 7.3 s slower
+  (95 % interval +2.4 to +13.0 s). Of the other five latency statistics, the p50 at ½×
+  is immaterial and four are inconclusive.
+- *The device's fit*, by `pd-f2-ceiling`: `t₇₀ = 7.38 s + bytes / 254,684 B/s`, kept
+  (the middle point 0.1 % off the line). Its ceiling, 28.5 MB, is an extrapolation
+  well past the largest object served. At the heaviest shard a read takes 19.7 s at
+  `t₇₀` and 96.8 s at the p99 of completions.
+- *The control against W₂'s PoW-on window* (2026-10-01): the control's p50 is
+  materially slower at ½× (+2.4 s) and 1× (+4.5 s); completion is inconclusive at ½×
+  and 1× and immaterial at ¼×.
+  That is one more between-day difference of the kind §10.6 item 2 records, and these
+  windows also differ in persona count (one here, two PoW-on personas among four Tors
+  there).
+
+**What it closes.** `SHT-5`, and with it the last measurement `W` waited on:
+`W = 3,000,000 B` rests on no open measurement and goes to the Round-2 testnet gate
+as it stands, to be pinned there with `L = 4`.
+
+Reproduce, from `rust/`:
+
+```text
+cargo run --release -p shekyl-sp-t3-spike --bin pd-f2-u1b -- ../docs/benchmarks/u1b_floor_device_20261002.tsv
+cargo run --release -p shekyl-sp-t3-spike --bin pd-f2-diff -- ../docs/benchmarks/u1b_control_20261002.tsv ../docs/benchmarks/u1b_floor_device_20261002.tsv
+cargo run --release -p shekyl-sp-t3-spike --bin pd-f2-ceiling -- ../docs/benchmarks/u1b_floor_device_20261002.tsv
+```
+
 ---
 
 ## 11. Closing state — 2026-10-02
 
-**`W = 3,000,000 B`** (`archival_shard_length_bytes`), provisional on one thing: the
-server-egress measurement `U1b`. It is pinned, together with `L = 4`, at the Round-2
-testnet gate (§5, §9.5).
+**`W = 3,000,000 B`** (`archival_shard_length_bytes`). It rests on no open measurement
+since `U1b` was read on 2026-10-03 (§10.8): the floor device does not lower its
+ceiling. It is pinned, together with `L = 4`, at the Round-2 testnet gate (§5, §9.5).
 
 **Ruled.**
 
@@ -2185,9 +2256,8 @@ testnet gate (§5, §9.5).
 
 **Remaining, in this file's name.**
 
-- **`U1b`** (`SHT-5`): an honest server's sustained egress over Tor on the Pi 4 floor
-  device. It can only lower `W`'s ceiling, and it is the one row the constant waits
-  on. This lane runs it; the run is pre-registered in §9.3a.
+- *`U1b` (`SHT-5`) was here until 2026-10-03; it is read and closed (§10.8).* Nothing
+  the constant waits on remains.
 - One row of test coverage, not of the derivation: leg (f) of `SHT-Q1`'s equivalence
   covers a connected serve-credit transaction only at the row level (§2.1). It waits
   on `SHT-9`'s fixture.

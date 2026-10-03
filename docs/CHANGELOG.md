@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Archival shards — `U1b` is read: the floor device does not lower `W`'s ceiling
+
+- A Pi 4 serving the largest shard object for 24 hours, with PoW on and the
+  reader on the same device, missed 12 of 616 fetches: 1.95 %, 95 %
+  interval 1.12 – 3.37 %, against the 0.30 target
+  (`ARCHIVAL_SHARD_T_DERIVATION.md` §10.8). `W = 3,000,000 B` rests on no
+  open measurement and goes to the Round-2 gate with `L = 4`.
+- One read in flight, the device sustains challenge reads for up to 18,229
+  drawable pairs per epoch, an input to the participation floor.
+- The two observation files, the device and its same-window control, are in
+  `docs/benchmarks/`.
+
 ### Archival shards — `U1b`'s two readings are fixed before the data is read
 
 - The floor-device run pre-registered in `ARCHIVAL_SHARD_T_DERIVATION.md`
