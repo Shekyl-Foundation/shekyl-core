@@ -131,8 +131,8 @@ signature contains the shard's bounds.**
 | The witness's signature (Q8, Q9, Q12, Q13 RULED) | The producer of block `h`, from a non-output key derived from coinbase output 0's `combined_ss` | `cSHAKE256_32` over the carrier's length-framed records in vin order. **Bytes PROPOSED, not ruled** (§7.6.1) | `shekyl/archival-witness-key-v1` for the `0x0C` commitment; the set-commitment customization is PROPOSED | The witness pk's hash must equal `h`'s coinbase `0x0C` field; membership is `(P, s) ∈ assignment(h)`, derived from `block_hash(h − 1)` over `D` at `h_open(E)`; the deadline is `h_incl − W₂ ≤ h < h_incl`; `E = epoch(h)` (SO-D9 (i)); dedup is `(P, s, E, h)` |
 
 The record carries `(P, s, E, h)` on the kept side, along with the Ed25519
-leg. It carries `nonce` and `anchor_height` in the prunable entry (the RF
-post-close note, `ARCHIVAL_RESPONSE_FORMAT.md:6–35`). The verifier
+leg (SO-D8 §2.1 item 1). Where it carries `SF-D8`'s `nonce` and
+`anchor_height` is **not written for the R-B vin** (`SCV-3`). The verifier
 **derives** `anchor_hash`, `assignment(h)`, `epoch(h)`, and the expected
 witness commitment. It is **never told** any of them. That is the
 discipline `wire.rs:349–360` states, carried over intact.
@@ -157,8 +157,11 @@ it.
 **No byte layout for the R-B record is written in one place.** `SO-D8`
 §2.1 item 1 names the kept ceiling (`117 → 127`) and says "the RF round
 reopens". `ARCHIVAL_RESPONSE_FORMAT.md` carries no such reopen: it has no
-`SO-D8`, `R-B`, `PDM` or `SHT` text. This round does not invent the layout
-(`SCV-3`).
+`SO-D8`, `R-B`, `PDM` or `SHT` text. The RF post-close note puts `nonce` and
+`anchor_height` in "the prunable witness entry", but that is the
+attestation path's layout, and SO-D8's F3 says `attestation_wire`'s header
+is "the attestation path's, not the vin's". This round does not invent the
+layout (`SCV-3`).
 
 ### 2.3 The freeze-dependent clauses
 
@@ -183,18 +186,24 @@ reopens". `ARCHIVAL_RESPONSE_FORMAT.md` carries no such reopen: it has no
   literal port of this clause is **unbuildable**, not merely undesirable.
 - **J8's first clause ("`P` holds the shard at `H_fire`") leaves admission
   and moves to settlement.** Under R-B the fire path is deleted from
-  admission (SO-D8 §8, "Deleted"). The holding question is asked by the
-  settlement writer, per drawn pair, at the draw's height ("not held ⇒ write
-  no row", SO-D8 Q3 (3.3), `:1347`), and by slash eligibility
-  (`archival/slash.rs:202–235`, which already derives `H_fire` and calls
-  `holds_shard_at` in Rust).
+  admission (SO-D8 §8, "Deleted"). The settlement writer asks the holding
+  question per drawn pair ("not held at the fire height ⇒ write no row",
+  SO-D8 Q3 (3.3), `:1347`; §8's enumeration row).
+  - **Which height that is, is not written.** SO-D8 §8 asks `holds_shard_of`
+    "at the fire height" and, in the same section, deletes
+    `challenge_fire_height`, the only function that computes one. The draw
+    block `h` is the natural candidate. No document says so (`SCV-12`).
+  - Slash eligibility asks the same question today, through
+    `archival/slash.rs:202–235`, which calls `challenge_fire_height` and
+    `holds_shard_at` in Rust. Under Slice C's deletion list, that call is a
+    **re-key site**, not a surviving consumer.
   - This answers **`ARW-Q2`'s open half**
     (`DRS_E4_ARCHIVAL_WRITER.md` §3.3): an as-of-height holdings consumer
-    does survive, so the slash log stays history.
-  - It also changes **`SLK-Q1`'s premise** [PR-b]. That premise is "the
-    fold is asked at `h_fire ∈ (H_seal, H_close]`"; under R-B it becomes
-    the draw height. This round flags the change to that round and does
-    not rule it (`SCV-8`).
+    survives the re-key, so the slash log stays history.
+  - It leaves **`SLK-Q1`'s premise** [PR-b] open rather than re-keyed. That
+    premise is "the fold is asked at `h_fire ∈ (H_seal, H_close]`". Under
+    R-B its height term is `SCV-12`'s open question. This round flags it to
+    that round and does not rule it (`SCV-8`).
 
 ### 2.4 The signing side's scope
 
@@ -294,11 +303,34 @@ them.
     credit is the injector's row, not a vin, so E2's digest parity is
     unaffected.
 
-  **What it costs, priced.** Nine test call sites mine or build a
-  vin credit through `validate → connect`. Those are
-  `shekyl-chain-ingest/src/scenario_archival_tests.rs` ("the next block's
-  credit connects", which is the writer's credit-arm witness) and
-  `shekyl-chain-store` `connect_fixtures::credited` and its callers.
+  **What it costs, priced as far as this round read.** The grep surface
+  is `rg -n "serve_credit_vin\(|serve_credit_only\(|credited\(|\.serve_credit\(|serve_credit_body\(" rust`.
+  It returns 44 call lines (definitions and comments excluded) across 20
+  files. Two of those files, `shekyl-ffi` and `shekyl-wire`, do not run
+  `validate`. The rest are in `shekyl-chain-rules` (`body_tests`,
+  `tx_*_tests`, `tx_conformance_trips`, the harness), `shekyl-chain-ingest`
+  (`scenario_archival_tests`, `mutation_tests`) and `shekyl-chain-store`
+  (`connect_tests`, `archival_write_tests`, `amendments_tests`,
+  `tx_read_tests`, through `connect_fixtures::credited`).
+
+  **Where the row is ordered decides which of those change.** A row that
+  refuses every credit vin in the per-transaction pass runs **before** G7
+  (a `BlockRule` after the slot loop) and before L7 (the transition). G7's
+  `body_tests`, which build duplicate credit vins, and L7's
+  credit-against-a-recordless-persona arm would then observe the interim
+  row instead of their own. *Default: order the interim row last*, after
+  G7 and after L7's input arm.
+  - The order is sound: a row that refuses everything has a verdict that
+    does not depend on its position. Only *which* refusal a test observes
+    depends on it.
+  - Ordered last, every existing **negative** witness keeps its own row.
+    Only **positive** assertions flip, meaning tests where a credit-bearing
+    block admits or connects.
+  - Enumerating those positive assertions is commit 3's first task (§6).
+    This round did not count them.
+
+  The best-known positive case is `scenario_archival_tests`' "the next
+  block's credit connects", which is the writer's credit-arm witness.
   - Their subject is the **writer's** credit row, so rule 50 lets the
     fixture be constructed through a production path.
   - The production path that still writes a credit row is the injector
@@ -335,10 +367,11 @@ them.
 | **SCV-5** | SO-D9's sentence that "(i) on the R-A operand flips exactly one block per epoch" is not true at this pin. J7's window is `h_seal(E) < h ≤ last_block(E)`, with `h_seal = E·SEB + 1` (`constants.rs:78`) and `last_block = (E+1)·SEB − 1` (`settlement_schedule.rs:171`; the rename at `9ca950f4a` was value-preserving). Every admissible slot is therefore inside epoch `E`, and (i) evaluated at the connecting height is implied by J7 and cannot fail on its own. **Moot**, because (i) lands on R-B's operand `h`, where it is independent. This is recorded so that nobody writes a `CenRow` at the R-A operand whose negative fixture J7 refuses first. | FOLLOWUPS `:229`; SO-D8 `:2310` | Slice C (the SO-D9 row's fixture) |
 | **SCV-6** | The bond-admission closed-and-final shard predicate, which now carries J8's "the shard exists" job, is RULED and unbuilt. Its FOLLOWUPS row says it is "gated on the A4 length rows (S-CHAIN-W) and S-PRUNE deriving `b_*`". Both gates dissolved by ruling: `PDM-Q6` item 5 says "A4 is not owed" (2026-09-23), and `SHT-Q2` retired `b_*` for `shard_of(cumulative_archival_len)`, which `closed_shards_through` reads today. A fired condition read as pending. | FOLLOWUPS `:209`; PDM `:975` | slice 8 (a 4.J bond row) |
 | **SCV-7** | The brief's account of how the C++ gate depends on the freeze has three errors. (1) It cites `blockchain.cpp:1504`, which is CEN-F17's operand; the gate reads LMDB `archival_shard_segment` (`db_lmdb.cpp:5090`). (2) It says the verifier "supplies [the terms] from `LeafStore::frozen_segment`". That echoes `wire.rs:352`'s table, which is wrong about the live verifier: `LeafStore::frozen_segment` (`shekyl-curve-tree/src/store/redb_backend.rs:2189`) has no consensus caller, only a bench and a test. (3) It calls the C++ disposition unruled (§2.5). Recorded under rule 16's corollary: a grouping someone else drew is a claim about its members. | §1, §2.5 | this round (corrected here); `wire.rs:352` dies with the preimage at Slice C |
-| **SCV-8** | Under R-B, `SLK-Q1`'s premise that the fold is asked at `h_fire ∈ (H_seal, H_close]` changes to the draw height. The horizon arithmetic re-derives from that, not from `H_close`. | [PR-b] `DRS_E4_SLASH_LOG_ROUND.md` §2 | the `SLK-` round |
+| **SCV-8** | Under R-B, `SLK-Q1`'s premise that the fold is asked at `h_fire ∈ (H_seal, H_close]` loses its height term: `H_fire`'s function is deleted, and its successor is unwritten (`SCV-12`). The horizon arithmetic re-derives once `SCV-12` is answered, not before. | [PR-b] `DRS_E4_SLASH_LOG_ROUND.md` §2 | the `SLK-` round |
 | **SCV-9** | On `dev`, the deleted-on-PR-b mirror **had** a production caller. The Rust validator's G7 calls `serve_credit_decisions::serve_credit_block_unique` (`rules/body.rs:307`). The brief's "zero production callers" was true of D-SC-A/B (the gate mirror) and false of D-SC-C. Commit 10d handled it (G7 re-homed to `second_occurrence` [PR-b]), so this is not a defect in PR-b. It is a precision note on a claim that will otherwise be cited as precedent. | `body.rs:307`; `583214b5f` | record |
 | **SCV-10** | PR-b's FOLLOWUPS row has two problems. (a) It is **duplicated**: lines 17 and 18 are byte-identical. (b) It labels the rows "J8 (seal on chain), J9 (fire-height schedule) and J10 (the leaf-preimage signature)". The census defines seal-on-chain as **J7**, J8 as holding at `H_fire`, J9 as the derived leaf index, and J10 as the response verify (`CONSENSUS_RULE_CENSUS.md:490–493`). | [PR-b] `docs/FOLLOWUPS.md:17–18` | PR-b's lane (not edited here) |
 | **SCV-11** | Leaf-unit and `T`-era text is still stated as current in the docs Slice C reads first. The grep surface is `rg -n 'LeafStore::frozen_segment\|segment_subroot_rk\|\(b_k, b_\{k\+1\}\)\|k·T' docs/design`. Owners: RF (`:501–556`, `:579–585`), PER_CHALLENGE_RECORD (`:175–181`), CREDIT_WIRE (`:59–64`; its banner still says "Round opened … No wire byte-layout is pinned yet" against its own `:342` "RESOLVED"), CHALLENGE_MECHANISM (`:108–114`, `:163`), and PDM item 4 (`:850–856`, `T`). Separately, five documents attribute "the test IS a read" to `ARCHIVAL_CHALLENGE_MECHANISM.md` §9. It is `ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §9 (`:988`). | the grep | each owning doc; **not this PR** (rule 26: not a redesign) |
+| **SCV-12** | **"The fire height" has no referent under R-B.** SO-D8 §8's enumeration row asks `holds_shard_of` "at the fire height" (Q3 (3.3)). The same section's "Deleted" row removes the `challenge_fire_height` path. Nothing in SO-D8 names the replacement. The draw block `h` is the natural reading, but it is a reading. This is a term in the holding predicate's operand, the place the brief's §8 says the height/count family recurs. | SO-D8 §8 (enumeration and "Deleted" rows); `:1347` | Slice C's pre-flight; `SLK-Q1` |
 
 ---
 
@@ -351,7 +384,7 @@ C's; SO-D8 §8 is Slice C's plan.
 | --- | --- | --- | --- |
 | 1 | **This document** and the index rows (`SCV-`, `SCV-Q`, the §7 doc row). FOLLOWUPS is not touched here: the J8–J10 row lives on PR-b, and its re-key is commit 5 | S | — |
 | 2 | **Census dispositions** (`SCV-Q6`): J3, J7, J8, J9 and J10 marked superseded-by-ruling with a pointer to SO-D8 §8; `census.rs` statuses only if the ruling changes them (the enum may have no "superseded" arm, and adding one is a census-crate change) | S–M | `RowStatus` lacking an arm for a row retired by ruling |
-| 3 | **The interim row** (`SCV-Q1` (a)): one `CenRow` refusing every serve-credit vin, with its negative fixture on a driven chain; the nine credit-mining sites moved to a typed-refusal assertion plus the injector door; the pop-lifts-credit gap disclosed | M | a test whose real subject is the credit's *admission* rather than the writer's row, which would have no honest home until Slice C |
+| 3 | **The interim row** (`SCV-Q1` (a)): one `CenRow` refusing every serve-credit vin, ordered after G7 and L7, with its negative fixture on a driven chain. First task: enumerate the positive-admission assertions inside §4's grep surface. Each moves to a typed-refusal assertion, and the writer's row moves to the injector door. The pop-lifts-credit gap is disclosed | M | a test whose real subject is the credit's *admission* rather than the writer's row, which would have no honest home until Slice C |
 | 4 | **`DEL-008`'s conjunct** (`SCV-Q5`), on PR-b's tree or after it merges | S | — |
 | 5 | **Docs** (rule 91): line-local pointers in `PDM-Q6` item 4 rows 1, 3 and 4 (the `W` re-key and `SCV-Q2`'s ruling), SLK §2 (`SCV-8`), FOLLOWUPS `:209` (`SCV-6`'s fired blocker), FOLLOWUPS `:229` (`SCV-5`) | S | — |
 
@@ -379,7 +412,9 @@ Its surface spans four crates:
   census pin moving `30 → 31`;
 - `shekyl-block-template`: the `0x0C` writer and the seed ring.
 
-Add the carrier builder and the persisted `D` digest's schema snapshot. By
+Add the carrier builder, the persisted `D` digest's schema snapshot, and
+the re-key of `archival/slash.rs`'s `challenge_fire_height` read
+(`SCV-12`). By
 the slice-7 yardstick (fifteen estimated, eighteen landed), Slice C is
 **two to three increments**, not one PR. That figure is a reading of
 SO-D8's own tables, not a measurement.
@@ -472,4 +507,4 @@ pre-flight or rules this round's questions in place.
 
 | Date | Entry |
 | --- | --- |
-| 2026-10-02 | **Round 0 executed at `dev@d0bcc0c5e`.** Families `SCV-` / `SCV-Q` registered at birth. Eleven findings and six questions posed, none ruled. The brief's chain (PDM-Q6 item 4 → SHT-Q2 → slice 8) is replaced by its real one: SO-D8 R-B ← {Q9 bytes, the R-B record layout, the carrier, the bond shard predicate, an owner for the writer call site}. The brief's `dev` premises that resolve only on DRS-E4 PR-b are marked [PR-b] throughout. |
+| 2026-10-02 | **Round 0 executed at `dev@d0bcc0c5e`.** Families `SCV-` / `SCV-Q` registered at birth. Twelve findings and six questions posed, none ruled (`SCV-12` and the interim's ordering added on self-review the same day). The brief's chain (PDM-Q6 item 4 → SHT-Q2 → slice 8) is replaced by its real one: SO-D8 R-B ← {Q9 bytes, the R-B record layout, the carrier, the bond shard predicate, an owner for the writer call site}. The brief's `dev` premises that resolve only on DRS-E4 PR-b are marked [PR-b] throughout. |
