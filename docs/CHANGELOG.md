@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Archival shards — `U1b`'s two readings are fixed before the data is read
+
+- The floor-device run pre-registered in `ARCHIVAL_SHARD_T_DERIVATION.md`
+  §9.3a is read in two parts, separated by the design owner on 2026-10-03
+  while the run was collecting. Reading A asks whether a Pi 4 serves one
+  whole-shard read inside the deadline, and it is the only one that can
+  lower `W`'s ceiling. Reading B is the maximum sustainable holding per
+  floor device, an input to the participation floor, reported across a
+  table of holdings in which the list bound is one row.
+- `shekyl-sp-t3-spike` computes both (`ceiling::floor_device_read`,
+  `capacity`) and prints them with `pd-f2-u1b`. Each threshold is pinned by
+  a test before any of the run's data has been read.
+
 ### A Tor session carries the chain
 
 - Commands are no longer dropped because the peer is a Tor address.
