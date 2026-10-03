@@ -21,31 +21,17 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use shekyl_sp_t3_spike::ceiling::{
-    completion_line, decide, fit, longest_read, read_with_retries, retry_budget, Decision, Fit,
-    Line, NoLine, Rejection, SizeReading, DEADLINE, FETCH_SPAN, GOVERNING_PERCENTILE,
-    HEAVIEST_SHARD_BYTES, LINEARITY_TOLERANCE_PER_CENT, OVERSHOOT_BYTES, RETRY_CEILING,
-    TARGET_MISS_PER_CENT,
+    completion_line, decide, fit, longest_read, read_with_retries, retry_budget, soak_ladder,
+    Decision, Fit, Line, NoLine, Rejection, SizeReading, DEADLINE, FETCH_SPAN,
+    GOVERNING_PERCENTILE, HEAVIEST_SHARD_BYTES, LINEARITY_TOLERANCE_PER_CENT, OVERSHOOT_BYTES,
+    RETRY_CEILING, SOAK_ARM_PREFIX, TARGET_MISS_PER_CENT,
 };
-use shekyl_sp_t3_spike::measure::{parse_row, Observation, ROW_HEADER};
-
-/// The arm prefix the size ladder's soak writes: `soak@<object bytes>`.
-const SOAK_ARM_PREFIX: &str = "soak@";
+use shekyl_sp_t3_spike::measure::Observation;
 
 /// The soak arms of one observations file, by object size.
 fn load(path: &Path) -> Result<BTreeMap<u32, Vec<Observation>>, Box<dyn std::error::Error>> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut sizes: BTreeMap<u32, Vec<Observation>> = BTreeMap::new();
-    for line in text.lines().filter(|l| *l != ROW_HEADER && !l.is_empty()) {
-        let (arm, observation) = parse_row(line).map_err(|e| format!("{}: {e}", path.display()))?;
-        let Some(bytes) = arm.strip_prefix(SOAK_ARM_PREFIX) else {
-            continue;
-        };
-        let bytes: u32 = bytes
-            .parse()
-            .map_err(|_| format!("{}: arm {arm} names no object size", path.display()))?;
-        sizes.entry(bytes).or_default().push(observation);
-    }
-    Ok(sizes)
+    Ok(soak_ladder(&text).map_err(|e| format!("{}: {e}", path.display()))?)
 }
 
 fn per_cent(share: f64) -> f64 {
