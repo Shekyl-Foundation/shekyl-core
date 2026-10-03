@@ -154,6 +154,20 @@ exactly the content the verification existed to remove.
    corrupted instrument, in the artifact that outlives the run. One run,
    one log, and the figure in the message is the fresh clone's.
 
+   **A gate that lands between the commits a report covers is named once
+   in that report.** The sibling failure: a figure that travels without
+   its source. Observed 2026-10-02 (`wt-e4b`, the DRS-E4 PR-b branch): the
+   inland-height gate (`scripts/ci/check_inland_height_u64.py`) landed on
+   2026-10-01 as its own commit, and the three reports that followed cited
+   only its ceiling moving — `174 → 172 → 170`. A reader of those reports
+   sees three numbers and no instrument; the figures are meaningless to
+   anyone who does not know a ceiling exists, and nothing in them says
+   where to look. Same shape as the count above — the number outlives the
+   run, the instrument does not travel with it. Cheap habit: when a gate
+   lands within the span a report covers, name it (file and the commit
+   that landed it) the first time its figure is quoted, and from then on
+   the ceiling means something.
+
    **A merge commit that resolved a real conflict is the commit that needs
    this most, not least.** A conflict resolution is new code that neither
    parent contains, so neither parent's green says anything about it — and
