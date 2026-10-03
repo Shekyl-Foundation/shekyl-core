@@ -469,16 +469,6 @@ pub fn arm_settlement_epoch_override_for_regtest() -> Result<u64, SettlementEpoc
     Ok(latched.blocks)
 }
 
-/// True iff the effective schedule differs from the genesis default
-/// (i.e. an **armed** `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` or
-/// `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` override is active). Drives the
-/// daemon's loud fakechain warning.
-#[must_use]
-pub fn settlement_epoch_blocks_overridden() -> bool {
-    effective_settlement_epoch_blocks() != SETTLEMENT_EPOCH_BLOCKS
-        || effective_archival_reorg_depth_blocks() != ARCHIVAL_REORG_DEPTH_BLOCKS
-}
-
 /// True iff a regtest schedule lever is set but this process never armed —
 /// the override is being deliberately ignored. Unarmed consumers (the
 /// wallet's stake-engine spawn) surface this loudly once so the
@@ -584,7 +574,6 @@ mod tests {
             effective_archival_reorg_depth_blocks(),
             ARCHIVAL_REORG_DEPTH_BLOCKS
         );
-        assert!(!settlement_epoch_blocks_overridden());
         assert!(!settlement_epoch_override_ignored());
         assert_eq!(
             arm_settlement_epoch_override_for_regtest(),

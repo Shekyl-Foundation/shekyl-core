@@ -5,7 +5,7 @@
 
 use core::convert::Infallible;
 
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use super::*;
 
@@ -58,16 +58,93 @@ fn sequence_numbers_strictly_increase_and_a_rewind_takes_one_too() {
     assert_eq!(source.next().expect("scripted"), None, "exhausted");
 }
 
+fn credit(tag: u8) -> ServeCredit {
+    ServeCredit {
+        persona: PCanonicalId::from_bytes([tag; 32]),
+        shard: ShardId::from_raw(3),
+        epoch: SettlementEpoch::from_raw(2),
+    }
+}
+
 #[test]
-fn only_a_rewind_is_a_barrier() {
+fn a_rewind_and_an_inject_are_barriers() {
     assert!(IngestEvent::Rewind {
         to: BlockHeight::ZERO
     }
     .is_barrier());
+    assert!(IngestEvent::Inject(credit(0xA1)).is_barrier());
     // `Extend` is the other arm of the exhaustive match in `is_barrier`;
     // constructing a Candidate here would pin the complement at the cost of
     // a block fixture. The corpus round-trip asserts `!is_barrier` on every
     // Extend it yields.
+}
+
+/// One spelling for the three carriers (DRS-E4 §3.8 item 3): the flag the
+/// fetch takes, the report row, and the manifest's JSON string are the
+/// same bytes, and every field is required — a defaulted height is the
+/// ARW-26 class.
+#[test]
+fn an_injection_has_one_spelling_and_every_field_is_required() {
+    let injection = Injection {
+        at: BlockHeight::from_raw(41),
+        credit: credit(0xAB),
+    };
+    let spelled = injection.to_string();
+    assert_eq!(spelled, format!("{}:3:2@41", "ab".repeat(32)));
+    assert_eq!(
+        spelled.parse::<Injection>(),
+        Ok(injection),
+        "Display round-trips"
+    );
+    assert_eq!(
+        spelled.to_uppercase().parse::<Injection>(),
+        Ok(injection),
+        "hex case is not a second spelling"
+    );
+
+    let json = serde_json::to_string(&injection).expect("serialises");
+    assert_eq!(
+        json,
+        format!("\"{spelled}\""),
+        "JSON is the spelling as a string"
+    );
+    assert_eq!(
+        serde_json::from_str::<Injection>(&json).expect("deserialises"),
+        injection
+    );
+    assert!(
+        serde_json::from_str::<Injection>(r#"{"at":41}"#).is_err(),
+        "no field-wise encoding whose height could be filled from a different read"
+    );
+
+    let hex = "ab".repeat(32);
+    for (spelled, expected) in [
+        (format!("{hex}:3:2"), InjectionParseError::Shape),
+        (format!("{hex}:3@41"), InjectionParseError::Shape),
+        (format!("{hex}:3:2:9@41"), InjectionParseError::Shape),
+        (
+            format!("{}:3:2@41", "ab".repeat(31)),
+            InjectionParseError::Persona,
+        ),
+        (
+            format!("{}zz:3:2@41", "ab".repeat(31)),
+            InjectionParseError::Persona,
+        ),
+        (
+            format!("{hex}:x:2@41"),
+            InjectionParseError::Number { what: "shard" },
+        ),
+        (
+            format!("{hex}:3:-1@41"),
+            InjectionParseError::Number { what: "epoch" },
+        ),
+        (
+            format!("{hex}:3:2@"),
+            InjectionParseError::Number { what: "height" },
+        ),
+    ] {
+        assert_eq!(spelled.parse::<Injection>(), Err(expected), "{spelled}");
+    }
 }
 
 #[test]

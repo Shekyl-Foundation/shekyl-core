@@ -63,6 +63,7 @@ use shekyl_chain_rules::{
     Fault, InvalidBlock, PaidEmission, PerHeightRecord, Retry, Stale, StructurallyValid, Verdict,
     ViewRead, Weights,
 };
+use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
 use shekyl_types::archival::BondRecord;
 use shekyl_types::{
@@ -71,6 +72,7 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 
 use crate::schedule::ChainRules;
+use crate::source::ServeCredit;
 
 /// Why the writer is over: store-terminal faults only. `Copy` data, so it
 /// can be repeated on every later `Apply` / `Rewind`.
@@ -95,6 +97,7 @@ impl RunEnd {
             | RunFault::HeightClaim { .. }
             | RunFault::NoNextHeight { .. }
             | RunFault::RewindTarget { .. }
+            | RunFault::InjectOffRegtest { .. }
             | RunFault::Over(_) => None,
         }
     }
@@ -156,6 +159,18 @@ pub enum RunFault {
         to: BlockHeight,
         /// The tip at the time.
         tip: Option<BlockHeight>,
+    },
+    /// An [`Inject`] under rules other than regtest. The out-of-band write
+    /// has one producer — the regtest injector — and no chain but a
+    /// regtest chain can carry one (DRS-E4 §3.8 item 3); refused here,
+    /// before the store sees it, so a source that carries one into a
+    /// scheduled replay is a driver fault and not a store-terminal one.
+    #[error("inject for {persona} (shard {shard}, epoch {epoch}) under {rules:?}: the out-of-band serve credit is regtest-only", persona = credit.persona, shard = credit.shard, epoch = credit.epoch)]
+    InjectOffRegtest {
+        /// The credit refused.
+        credit: ServeCredit,
+        /// The rules the connector runs under.
+        rules: ChainRules,
     },
     /// The writer is over: a store-terminal fault was already replied.
     #[error("the writer is over: {0:?}")]
@@ -223,9 +238,57 @@ pub struct Rewind {
     pub to: BlockHeight,
 }
 
+/// Write the out-of-band serve credit at the tip, in its own store
+/// transaction, through the store's regtest door
+/// (`ChainStore::regtest_inject_serve_credit`, DRS-E4 §3.8 item 3). Not
+/// journaled: a later `Rewind` below the attributed height does not carry
+/// it away, which is why the pipeline refuses one.
+#[derive(Clone, Copy, Debug)]
+pub struct Inject(pub ServeCredit);
+
+/// What an [`Inject`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Injected {
+    /// The height the store attributed the bit to: the tip when it was
+    /// written.
+    pub at: BlockHeight,
+}
+
 /// The redb-side logical state now (commit 2), for the digest sink.
 #[derive(Clone, Copy, Debug)]
 pub struct Digest;
+
+/// The redb-side archival state now, as `DRS_E4_ARCHIVAL_WRITER.md`
+/// §3.8.1's rows (`ReadSnapshot::archival_snapshot`): the checkpoint's
+/// other encoding, diffed against the trace's `0x04` record rather than
+/// hashed (`ARW-25`). The scenario driver's read for holding the writer to
+/// its archival rows after one step; the pipeline's checkpoint takes both
+/// encodings together through [`CheckpointState`].
+#[derive(Clone, Copy, Debug)]
+pub struct ArchivalState;
+
+/// The redb side's covered-tip checkpoint, read in **one** snapshot: the
+/// recorded tip, the logical-state digest and the archival rows. The
+/// trace's two checkpoint records came from one LMDB snapshot the walker
+/// took after the daemon's last write; this is the redb side's one read
+/// after the replay's, so the two encodings describe the same state and
+/// the tip says which. A tip other than the trace's covered tip is the
+/// pipeline's signal not to compare.
+#[derive(Clone, Copy, Debug)]
+pub struct CheckpointState;
+
+/// [`CheckpointState`]'s reply: the state at the recorded tip, both
+/// encodings from the same read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TipEncodings {
+    /// The recorded tip the digest and rows describe; `None` on an empty
+    /// chain.
+    pub tip: Option<BlockHeight>,
+    /// The logical-state digest (commit 2).
+    pub digest: crate::trace::Digest,
+    /// §3.8.1's rows (`ARW-25`).
+    pub archival: ArchivalSnapshot,
+}
 
 /// The hash of the block recorded at a height, for the driver's seed claim
 /// when its ledger's window has moved past that height (`seed` module
@@ -345,10 +408,7 @@ impl Writer {
             return Err(RunFault::Over(end));
         }
         let result = self.store.write(f);
-        if let Some(end) = result.as_ref().err().and_then(RunEnd::of) {
-            self.over.get_or_insert(end);
-        }
-        result
+        self.latch(result)
     }
 
     /// One read through a write batch that **aborts**. The producer's
@@ -363,6 +423,32 @@ impl Writer {
             return Err(RunFault::Over(end));
         }
         let result = self.store.inspect(f);
+        self.latch(result)
+    }
+
+    /// The store's regtest door, in its own transaction, behind the same
+    /// latch: the one write that is not a batch. The store refuses it
+    /// under an anchored trust, on an empty chain and for a persona with
+    /// no record; each of those is the store's `Cannot`, terminal like any
+    /// other store fault — the replay cannot reach the daemon's archival
+    /// state without the bit, so the run is over.
+    fn inject(
+        &mut self,
+        trust: shekyl_chain_rules::Trust,
+        credit: ServeCredit,
+    ) -> Result<BlockHeight, RunFault> {
+        if let Some(end) = self.over {
+            return Err(RunFault::Over(end));
+        }
+        let result = self
+            .store
+            .regtest_inject_serve_credit(trust, credit.persona, credit.shard, credit.epoch)
+            .map_err(RunFault::Store);
+        self.latch(result)
+    }
+
+    /// Arm the latch on a terminal fault; the first stands.
+    fn latch<R>(&mut self, result: Result<R, RunFault>) -> Result<R, RunFault> {
         if let Some(end) = result.as_ref().err().and_then(RunEnd::of) {
             self.over.get_or_insert(end);
         }
@@ -513,11 +599,56 @@ impl Message<Rewind> for Connector {
     }
 }
 
+impl Message<Inject> for Connector {
+    type Reply = Result<Injected, RunFault>;
+
+    async fn handle(&mut self, msg: Inject, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        let Inject(credit) = msg;
+        if !matches!(self.rules, ChainRules::Regtest { .. }) {
+            return Err(RunFault::InjectOffRegtest {
+                credit,
+                rules: self.rules,
+            });
+        }
+        let at = self.writer.inject(self.rules.trust(), credit)?;
+        Ok(Injected { at })
+    }
+}
+
 impl Message<Digest> for Connector {
     type Reply = Result<crate::trace::Digest, RunFault>;
 
     async fn handle(&mut self, _: Digest, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         Ok(self.writer.read()?.logical_state_digest_v0()?)
+    }
+}
+
+impl Message<ArchivalState> for Connector {
+    type Reply = Result<ArchivalSnapshot, RunFault>;
+
+    async fn handle(
+        &mut self,
+        _: ArchivalState,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self.writer.read()?.archival_snapshot()?)
+    }
+}
+
+impl Message<CheckpointState> for Connector {
+    type Reply = Result<TipEncodings, RunFault>;
+
+    async fn handle(
+        &mut self,
+        _: CheckpointState,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let read = self.writer.read()?;
+        Ok(TipEncodings {
+            tip: read.tip()?.recorded.map(|t| t.height),
+            digest: read.logical_state_digest_v0()?,
+            archival: read.archival_snapshot()?,
+        })
     }
 }
 

@@ -231,6 +231,9 @@ const STAGENET_GENESIS: [u8; 32] =
 /// `geblock block-id`), not `GENESIS_TX`. Fakechain shares mainnet's genesis
 /// (`cryptonote_config.h`: `FAKECHAIN` takes mainnet's configuration). Reminting
 /// genesis updates `GENESIS_TX` / nonce and these pins in the same change.
+/// The handshake network id is `network_id_from_genesis` of this pin, so that
+/// change rotates the id; the KAT in `shekyl-ffi`'s `network_id_ffi` fails
+/// until it is re-recorded.
 #[must_use]
 pub const fn genesis_hash_for(network: DaemonNetwork) -> [u8; 32] {
     match network {

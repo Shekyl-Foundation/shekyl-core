@@ -267,6 +267,13 @@ shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 # normal dependencies of shekyl-chain-ingest (rule 17).
 shekyl-block-template = { path = "../shekyl-block-template" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+# DRS-E4 commit 7: the chain-vector capture (`regtest_e2e.rs`) writes the
+# regtest injector's receipt as the corpus's `Injection` — one type for the
+# `--inject` flag it passes `shekyl-chain-replay fetch`, the manifest row
+# it writes, and the replay's report — so the height cannot be spelled
+# differently at any of them. No default features: the type lives in the
+# unconditional `source` module; the pipeline and CLI are not compiled.
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false }
 # PR 7 C4 `EconomicsEngine` differential
 # (`engine::economics_differential`): deserialize the sim-recorded
 # `RecordedChainFixture` (`docs/test_vectors/economics/*.json`, §5.4) and

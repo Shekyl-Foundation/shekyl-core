@@ -58,9 +58,11 @@ use shekyl_relay_privacy::conformance::{
 };
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::DelayFamily;
+use shekyl_relay_privacy::MeasuredConnector;
 use shekyl_relay_privacy::SplitMix64;
 
-/// The topology the shipped constant names: OutboundOnly at usable degree 12.
+/// The graph the shipped 3250 ms was measured on: retired D7, degree 12.
+/// Production reach is `EveryPeer`; this directed graph is the longer one.
 const BINDING_PEERS: usize = 12;
 const NODES: usize = 512;
 const TRIALS: usize = 24;
@@ -159,9 +161,9 @@ fn every_sampled_transit_exceeds_the_shipped_fluff_return() {
 
     // Production's own transit for this reach, so the row that ships is in the
     // record beside the sweep.
-    let shipped_assumption = p90_at(transit_for(FloodReach::OutboundOnly));
+    let shipped_assumption = p90_at(transit_for(MeasuredConnector::Tor));
     println!(
-        "\n  at transit_for(OutboundOnly): p90 = {shipped_assumption} ms  ({:.1}x shipped)",
+        "\n  at Tor transit, OutboundOnly: p90 = {shipped_assumption} ms  ({:.1}x shipped)",
         ratio(shipped_assumption, shipped)
     );
     println!("  NOT a candidate value: it is the 1625 ms ASSUMPTION amplified through");

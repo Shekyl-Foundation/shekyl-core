@@ -619,8 +619,16 @@ namespace cryptonote
 
     struct response_t: public rpc_response_base
     {
+      // The receipt: the tip's block INDEX the row was attributed to,
+      // read under the blockchain lock with the write (PC-D4). Not a
+      // block count; a caller reading the chain height afterwards would
+      // hold the count, one above (ARW-26). The capture replays the
+      // injection as a corpus event at exactly this height.
+      uint64_t height;
+
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_response_base)
+        KV_SERIALIZE(height)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

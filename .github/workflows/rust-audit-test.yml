@@ -220,8 +220,6 @@ jobs:
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_verify.rs
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_key_blob.rs
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_sig_blob.rs
-            rust/shekyl-archival-retention/fuzz/fuzz_targets/fuzz_serve_credit_gate.rs
-            rust/shekyl-archival-retention/fuzz/fuzz_targets/fuzz_serve_credit_block_unique.rs
             rust/shekyl-wire/fuzz/fuzz_targets/fuzz_tx_extra_parse.rs
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message1.rs
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message2.rs

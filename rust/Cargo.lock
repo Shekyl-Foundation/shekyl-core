@@ -4190,6 +4190,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-block-template",
  "shekyl-bulletproofs",
+ "shekyl-chain-ingest",
  "shekyl-chain-rules",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
@@ -4396,6 +4397,7 @@ dependencies = [
  "shekyl-proofs",
  "shekyl-relay",
  "shekyl-relay-privacy",
+ "shekyl-rpc-types",
  "shekyl-runtime",
  "shekyl-seam",
  "shekyl-thread-ledger",
@@ -4442,7 +4444,9 @@ dependencies = [
  "proptest",
  "shekyl-archival-retention",
  "shekyl-net-address",
+ "shekyl-p2p-transport",
  "shekyl-portable-storage",
+ "shekyl-rpc-types",
  "thiserror",
  "zstd",
 ]
@@ -4637,7 +4641,9 @@ name = "shekyl-relay"
 version = "3.1.0"
 dependencies = [
  "shekyl-relay-privacy",
+ "shekyl-transport-layer",
  "shekyl-types",
+ "tracing",
 ]
 
 [[package]]

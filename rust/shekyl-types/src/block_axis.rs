@@ -12,8 +12,9 @@
 //! span. Mixing height and count does not compile.
 //!
 //! [`ChainCount`]'s named bridges to [`BlockHeight`] live here beside that
-//! algebra: [`ChainCount::tip`], [`ChainCount::next_height`],
-//! [`ChainCount::from_next_height`], and [`ChainCount::has_block`].
+//! algebra: [`ChainCount::tip`], [`ChainCount::with_tip`],
+//! [`ChainCount::next_height`], [`ChainCount::from_next_height`], and
+//! [`ChainCount::has_block`].
 //! `from_raw` / `to_raw` remain the decode/encode edge, not a quantity
 //! bridge.
 
@@ -236,6 +237,30 @@ impl ChainCount {
     #[must_use]
     pub const fn from_next_height(h: BlockHeight) -> ChainCount {
         ChainCount(h.0)
+    }
+
+    /// The count of a chain whose **newest existing** block is `tip`
+    /// (`tip + 1`) — the inverse of [`Self::tip`], and the quantity the
+    /// C++ connect hooks call `prev_height + 1`: the block count once the
+    /// block at `tip` has connected. `None` only if `tip` is `u64::MAX`,
+    /// where no count can name the chain.
+    ///
+    /// Distinct from [`Self::from_next_height`], whose argument is a block
+    /// that does **not** exist yet: `with_tip(h)` and `from_next_height(h)`
+    /// differ by one, and that one is `DRS_E4_ARCHIVAL_WRITER.md`
+    /// `ARW-26`'s pair. Build this from the block that connected, never
+    /// from the one about to.
+    ///
+    /// ```compile_fail
+    /// // HEIGHT_SEMANTICS.md C9: a tip is an ordinal, not a count.
+    /// let _ = shekyl_types::ChainCount::with_tip(shekyl_types::ChainCount::from_raw(1));
+    /// ```
+    #[must_use]
+    pub const fn with_tip(tip: BlockHeight) -> Option<ChainCount> {
+        match tip.0.checked_add(1) {
+            Some(v) => Some(ChainCount(v)),
+            None => None,
+        }
     }
 
     /// Whether `h` is a block this chain currently holds (`0 .. count`).

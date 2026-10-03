@@ -361,7 +361,7 @@ impl<'id> WriteBatch<'_, 'id> {
         self.record_burn(height, block.emission().burned(), block.archival())?;
 
         // ---- 9. accrual row, slash, epoch close (`archival_write.rs`) ---
-        self.record_archival_epoch(height, &valid)?;
+        self.record_archival_epoch(BlockHeight::from_raw(height), &valid)?;
 
         // ---- 10. journal -----------------------------------------------
         let journaled = recording.seal()?;

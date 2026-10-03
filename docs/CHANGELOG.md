@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### A Tor session carries the chain
+
+- Commands are no longer dropped because the peer is a Tor address.
+  Handshake, timed sync and new transactions were the only ones let
+  through; support-flags (command 1007) came back as an empty body and
+  the chain request never left, so a peer that had handshaked stayed at
+  height 1.
+- `--add-exclusive-node <onion>` no longer requires `--tx-proxy`. The
+  managed Tor supplies the SOCKS address after the command line.
+  `--tx-proxy` still names the SOCKS address dials use, and it no longer
+  turns off the per-boot onion. `--anonymous-inbound` and
+  `--no-ephemeral-tor` are what turn that publish off.
+- A transaction this node originates leaves on one connection that does
+  not reveal its address, chosen for the epoch from those connections
+  and replaced if that connection drops.
+  A relayed transaction still leaves on a draw over every outbound
+  connection. One such connection is reported (`hop-0 edge cannot
+  rotate`) rather than treated as a normal configuration. The managed
+  Tor zone dials 4 outbound peers for that pool. `--out-peers` does
+  not change that number.
+
+### Handshake network id derives from the genesis block
+
+- The 16-byte handshake `NETWORK_ID` is the first 16 bytes of
+  `cSHAKE256(S = "shekyl/p2p-network-id-v1", X = genesis_block_hash)`.
+  A regenesis rotates it. Fakechain still shares mainnet's genesis, so
+  it shares the id until it has a genesis of its own. The harness
+  goldens keep their synthetic id.
+
 ### Daemon — the prunable digest is computed in Rust
 
 - `calculate_transaction_prunable_hash` no longer hashes. It finds the
@@ -156,7 +185,6 @@
   size — against the per-shard reward it deters cheating on — is the open
   question, carried in `FOLLOWUPS.md`; under the fixed bond, the Foundation
   `CompleteTree` is the settled-chain posture by design.
-
 ### Wallet contract — one owner for the error codes
 
 - The wallet contract's error vocabulary moves out of the RPC server into
@@ -352,6 +380,223 @@
   `fcmps` logic change, so it is unchanged. Q6 re-vetted: an honest on-curve
   proof's content, length, and framing are unchanged
   (`GENESIS_TX_WIRE_FORMAT.md` Q6).
+
+### Replay driver — the checkpoint is read once, after the run's last committed event (DRS-E4 commit 11, PR #937 review)
+
+- **The hazard.** The pipeline compared the covered-tip checkpoint — the
+  digest and the archival rows — inside `apply_ready`, at the connect of
+  the checkpoint block. An `inject` is filed at the tip (`CorpusFault::
+  InjectNotAtTip`), so a corpus whose last event is an injection at the
+  covered tip would have had its rows read **before** the credit
+  committed: a faithful replay of a faithfully captured chain graded
+  `DIVERGE`, the credit row `only_theirs`. No committed corpus has that
+  shape (the six carry `out_of_band_writes: []` or an injection below the
+  tip), which is why the oracle has been green; the next capture with an
+  injection at its tip would have been red for the driver's reason, not
+  the writer's. Surfaced by the PR's Copilot review; the shape was
+  confirmed by running the new test under the old placement.
+- **The fix is the walker's shape, not a refresh.** One connector message,
+  `CheckpointState`, answers `TipEncodings { tip, digest, archival }` from
+  **one** redb read snapshot, asked **once** by `run_loop` after the event
+  loop drains — the moment the LMDB exporter reads the chain, after its
+  last committed write. `compare_checkpoint` records the digest and the
+  archival diff only when that read's `tip` is the checkpoint height;
+  otherwise both `RunReport::checkpoint` and `RunReport::archival` are
+  `None` (not compared), never identical by accident. `ArchivalState` and
+  `Digest` stay for their other callers (the scenario driver; rewind's
+  `Switch`).
+- **Pinned:** `an_inject_at_the_covered_tip_commits_before_the_checkpoint_is_compared`
+  — a bonded chain, the credit injected through the scenario connector,
+  the trace minted from that state (`test_support::trace_read`), the
+  pipeline driven with `Inject` as its last event → digest and rows
+  identical; its control, the same trace replayed without the inject →
+  digest identical (`ARW-25`), rows divergent in exactly `ServeCredit`,
+  one key `only_theirs`.
+
+### Archival — the serve-credit C++ mirror and its equivalence KAT are deleted; the tree now says there is no Rust serve-credit verifier (DRS-E4 commit 10d)
+
+- **Behaviour unchanged; what the tree *claims* changed.** Deleted:
+  `shekyl-archival-retention/src/serve_credit_decisions.rs` (the D-SC-A/B/C
+  mirror of the C++ serve-credit acceptance gate), its equivalence KAT
+  (Rust leg, C++ leg `archival_serve_credit_equivalence.cpp`, shared
+  fixture) and the two fuzz targets over it (the crate's `fuzz/` harness,
+  which held nothing else, goes with them; the fuzz-smoke gate's required
+  list loses two paths). Nothing called the mirror. It implemented the leaf
+  preimage `PDM-Q6` item 4 retired (2026-09-18), so it was a trap for
+  whoever builds the successor, and it read as a Rust verifier for a rule
+  the Rust validator does not have: `shekyl-chain-rules` runs no
+  serve-credit acceptance (CEN-J8–J10 pending) — a well-formed serve credit
+  from a bonded persona is accepted on shape (H20), block-level `(P, shard,
+  E)` uniqueness (G7) and persona existence (L7). That gap is now a
+  FOLLOWUPS row, *Serve-credit acceptance (CEN-J8–J10) has no Rust rule*,
+  which names what the successor is built from (`PDM-Q6` item 4, the
+  `SHT-Q2` key, `ARCHIVAL_CREDIT_WIRE.md`) so the next lane reaches for the
+  ruling and not for what used to be in the tree.
+- **The C++ gate still runs**, unchanged, and is the only serve-credit
+  acceptance that does: `blockchain.cpp` `check_archival_serve_credit_input`
+  through `shekyl_archival_challenge_leaf_index` / `_leaf_chunk_bounds` /
+  `_frozen_segment_count` into `segment_freeze.rs` and `challenge.rs`. Those
+  stay, for those callers, and retire together at the LMDB cutover
+  (`DAEMON_REDB_STORE.md` `DEL-008`, which now names the callers and drops
+  the "retires with the re-key" exclusion — a deferral whose blocker was
+  itself a deferral). G7's uniqueness body moves into `rules/body.rs` as
+  the module's own set-membership scan; its tests already lived there.
+  `inland_height_u64` grandfather list: 172 → 170.
+- Rule 22 gains two forms: *a deferral inherits whatever blocker is nearest
+  to hand* (the check: is the blocker itself a deferral?) and *a parity
+  artifact outlives its rule unless the retirement ruling names it*.
+
+### Docs — DRS-E4 closes as record; the LMDB cutover gets its one list (DRS-E4 commit 10)
+
+- Process only. `DRS_E4_ARCHIVAL_WRITER.md` and `DRS_E1_SARCH.md` archive to
+  `docs/completed/`; the S-ARCH row of `DAEMON_REDB_STORE.md` §5 reads
+  LANDED for both halves. The one open archival question (`ARW-Q19`, the
+  slash log's retention horizon and key) is re-homed to its own round,
+  `DRS_E4_SLASH_LOG_ROUND.md` (`SLK-Q1` / `SLK-Q2`, posed, not ruled, no
+  code). `DAEMON_REDB_STORE.md` §12.1 enumerates, in one place, every
+  C++-anchored gate, guard and marshal that goes red or stale on cutover
+  day and the rule for that day — retire the subject, never clear the
+  gate. Rule 91 gains the refuted-premise bullet (a finding that refutes a
+  premise edits the premise's own text in the same commit), applied here
+  to `journal_horizon`'s doc and `DRS_E1_SPRUNE.md` §3.
+
+### Archival FFI — one dead export removed; the rest of the deletion surface registered for the cutover (DRS-E4 commit 9)
+
+- **Removed:** `shekyl_archival_settlement_epoch_overridden` (declared in
+  `shekyl_ffi.h`, never called — the daemon's startup gate reads
+  `shekyl_archival_settlement_epoch_override_present` and arms) and its
+  only backing, `shekyl_archival_retention::settlement_epoch_blocks_overridden`.
+  Found by surveying all 60 `shekyl_archival_*` exports against their C++
+  callers.
+- **Not removed, by finding:** `release_pop` / `reinstate_pop`,
+  `segment_freeze.rs`, the freeze half of `challenge.rs` / `path.rs` and
+  their exports — scheduled by `DRS_E4_ARCHIVAL_WRITER.md` §3.9 to delete
+  "in this increment" on a premise that holds only after the cutover. They
+  are the live C++ pop path's and freeze pipeline's; the C++ daemon is
+  consensus until the cutover. Registered whole as `DEL-008`
+  (`DAEMON_REDB_STORE.md` §12) with the C++ half, trigger the cutover,
+  falsifier named. (`DRS_E4_ARCHIVAL_WRITER.md` §3.9, §6 row 9.)
+
+### Replay driver — the archival oracle holds, with its sufficiency stamp; the LMDB slash fixture replicated on the Rust stack (DRS-E4 commit 8)
+
+- Oracle: the replay harness's `hold()` now **asserts** the archival rows
+  identical at every captured chain's checkpoint (`RunReport::archival`
+  was reported, not held); green on all six.
+- Sufficiency stamp (`archival_sufficiency_tests`): a census of which
+  archival family each captured chain witnesses, asserted in both
+  directions against the committed `0x04` records, and a stub half that
+  replays each chain with one witnessed family stubbed and requires the
+  oracle to go red. Measured: no captured chain carries a slash row
+  (`ARW-13`); the `SlashLog` gate is noticed only through the
+  `last_slash_epoch` watermark; a stubbed `ServeCredit` is refused by the
+  store before the comparator sees it.
+- Fixture replica (`archival_fixture_replica_tests`): the LMDB unit
+  fixture's slash state (`ARW-Q15`) rebuilt through the production stack
+  under a levered `SEB 100` schedule and compared role-mapped; every
+  state field equal; the one disagreement is the slash-log **key** —
+  fixture at the fold count (`deadline + 1`), Rust at the connecting
+  height — pinned on both sides; posed as `ARW-Q17` and **ruled the same
+  day: the connecting height, `BlockHeight`**, from the one read the log
+  exists for (`holds_shard_at(h)` is *yes iff a logged slash strictly
+  above `h` removed it* — only the connecting-height key makes a shard
+  not-held at the block that removed it). The slash-bearing corpus
+  capture was posed as `ARW-Q18` and **ruled 2026-10-02: refused** — the
+  one thing a seventh chain would have added, the `0x04` record's slash
+  families serialized at non-empty, is pinned instead in the slash
+  witness (`slash_writes_land_at_the_m_epoch_deadline` now snapshots its
+  slashing tip and holds the slash sections to bytes spelled from the
+  facts, the whole body to a hash), from the production writer's state,
+  with no chain captured against the departing C++ walker.
+- **Known defect in the C++ archival path (`ARW-27`), not inherited.**
+  The C++ keys `archival_slash_log` by the post-connect count
+  (`prev_height + 1`) while its `archival_bond_holds_shard` reader scans
+  strictly above a block **height** (`h_fire`, both call sites) and
+  documents that semantics itself — so for a slash applied during block
+  `H` the C++ answers *held at `H`*. Epoch `e`'s slash connects at
+  exactly `H_close(e + 1)`, inside the next epoch's fire range, so the
+  wrong answer surfaces at `1 / modulus` per challenge on the slashed
+  pair, at both the serve-credit gate and the slash-eligibility scan.
+  Not fixed in C++ (rule 20; the C++ archival writer is a deletion
+  target); the Rust store's `SlashLogKey` is height-keyed and its reads
+  agree with the predicate.
+- **API (`shekyl-types`).** `ChainCount::with_tip(BlockHeight) ->
+  Option<ChainCount>` — the count of a chain whose tip is `h`
+  (`ARW-26`'s operand), with its `compile_fail`. Inside the archival
+  writer the same quantity is now typed end to end
+  (`Transition::count() -> ChainCount`; the write sites take
+  `connecting: BlockHeight`); the inland-height grandfather list burns
+  down `174 → 172`.
+  (`DRS_E4_ARCHIVAL_WRITER.md` §3.8 item 2, §6 row 8, `ARW-Q17`,
+  `ARW-Q18`, `ARW-27`.)
+
+### Replay driver — the regtest injection is an event; the corpus re-captured under the v1 trace (DRS-E4 commit 7)
+
+- Source model: `IngestEvent::Inject(ServeCredit)` — the regtest injector's
+  one un-replayable LMDB write as a first-class event, a pipeline barrier as
+  `Rewind` is, applied in its own store transaction at the committed tip
+  through `ChainStore::regtest_inject_serve_credit`, refused before the
+  store under any rule set but regtest (`RunFault::InjectOffRegtest`), not
+  journaled; a later `Rewind` below its height is
+  `PipelineFault::RewindBelowInjection`. Scope stated in the type: one row
+  kind, the injector its sole producer.
+- Corpus format v2 → **v3**: the `inject` record (tag `0x03`; `at` ‖
+  `persona` ‖ `shard` ‖ `epoch`), Fakechain-only, `at` the tip it was
+  injected at. `shekyl-chain-replay fetch --inject <receipt>` writes one;
+  `RunReport.injected` reports each applied injection as its receipt.
+- `Injection { at: BlockHeight, credit }` has one spelling —
+  `<persona-hex>:<shard>:<epoch>@<height>` — shared by the `--inject` flag,
+  the report and the manifest, so they cannot drift.
+- Trace format: the `0x00` reader arm is **deleted**; the reader accepts
+  `0x01` alone. All six captured chains re-captured under the corrected
+  regtest table and the v1 checkpoint (each trace now carries its `0x04`
+  archival snapshot; the archival oracle grades every chain). Manifests
+  `format_version` `3 → 4`: `out_of_band_writes` rows carry the injection's
+  `receipt`, written by the generator from the daemon's
+  `regtest_inject_archival_serve_credit` response, which now returns the
+  attributed height (C++ + RPC `height`).
+- **API.** `CORE_RPC_VERSION` 3.40 → 3.41 (minted 3.39 on the branch; 3.39
+  and 3.40 were taken on `dev` by the `archival_len` and `target_height`
+  changes while it was open, so the receipt takes the next minor at the
+  merge). `inject_archival_serve_credit` (regtest only) gains `height` in
+  its response — the tip's block index the row was keyed at, read under the
+  lock with the write. `get_version` gains nothing.
+  (`DRS_E4_ARCHIVAL_WRITER.md` §3.8 item 3, §6 row 7;
+  `DRS_E2_REPLAY_DRIVER.md` §3.9, RD-Q13.)
+
+### Replay driver — the checkpoint carries the archival state as rows, and the grader diffs them (DRS-E4 commit 6)
+
+- Trace format: `TRACE_VERSION` `0x00 → 0x01`. Every checkpoint (`0x02`)
+  is now paired with an **archival snapshot** record (`0x04`): the archival
+  state at the covered tip as canonical rows in ten positional families,
+  the C++ walker's reading over LMDB
+  (`src/blockchain_db/lmdb/archival_snapshot.cpp`, one read transaction, a
+  marshal — its one arithmetic the open epoch's checked accrual sum)
+  against `ReadSnapshot::archival_snapshot()` over redb. The writer refuses
+  a `0x01` trace holding one of the pair without the other; the reader
+  refuses a `0x04` under `0x00` and its absence under `0x01`. The six
+  committed `0x00` traces stayed readable until commit 7 re-captured them
+  (above), grading the snapshot as *not compared* in the interim. (`0x03`
+  stays RESERVED for Verdict.)
+- Grader: `shekyl_e2_grade_v2 → v3` — `Observations` gains the archival
+  snapshot oracle beside the root oracle; a divergence names the family and
+  the row key (`ArchivalDiverged`), and fails the run as a root divergence
+  does. `RunReport` gains `archival`.
+- FFI (`shekyl_e2_*`): a `ShekylE2ArchivalSnapshot` builder with a row
+  pusher per family, `shekyl_e2_trace_push_archival_snapshot`, and a JSON
+  dump; `SHEKYL_E2_TRACE_ERR_ROW` (−6) for a row the snapshot refuses.
+- Fixture (`ARW-Q15`): the LMDB unit fixture's slash-and-close state is
+  committed as data — `rust/shekyl-chain-ingest/fixtures/archival_fixture_slash_m_of_n.{inputs,rows}.json`
+  — the rows and, beside them, the inputs the Rust replayer must reproduce
+  (personas, seeded records, serve passes, schedule, waypoints), written by
+  `tests/unit_tests/archival_substrate_lmdb.cpp` under
+  `SHEKYL_E4_CAPTURE_DIR`. Its consistency test surfaced **`ARW-26`**: the
+  C++ keys `archival_slash_log` by the post-connect block count and the
+  Rust writer by the connecting height — recorded, not adjudicated; commit
+  8's.
+- The `DAEMON_REDB_STORE.md` §7.1.1 archival exclusion is discharged by
+  this instrument; digest v0's read set is unchanged.
+  (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, §6 row 6; `DRS_E2_REPLAY_DRIVER.md`
+  §3.9.)
 
 ### Chain store — the archival writer: `connect` records the verdict's archival transition (DRS-E4 commit 5)
 

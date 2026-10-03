@@ -84,6 +84,7 @@ pub use shekyl_types::archival::{PassCount, ServedShard};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
+use crate::archival_snapshot::{ArchivalSnapshot, SnapshotFamily, SnapshotFault};
 use crate::codec::{AttestationWitnessBytes, BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry};
 use crate::ids::{ServeCreditKey, SlashAppliedKey, SlashLogKey};
 use crate::schema::{
@@ -94,6 +95,7 @@ use crate::schema::{
 
 use super::chain_reads::{self, undecodable, ReadFault, ReadTables};
 use super::error::StoreInvariant;
+use super::invariant::AccrualFault;
 
 /// The `archival_bond` cell as faults name it.
 const BOND: &str = "archival_bond";
@@ -391,5 +393,158 @@ pub(super) fn budget_accruing<T: ReadTables>(
         ARCHIVAL_BUDGET_ACCRUING,
         epoch.to_raw(),
         BUDGET_ACCRUING,
+    )
+}
+
+/// The nine table-backed families of the archival snapshot
+/// (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1), walked whole and re-encoded
+/// through [`ArchivalSnapshot`]'s typed constructors — the same encoding the
+/// C++ walker's marshalled fields go through, so a stored row that decodes
+/// is compared as the value it decodes to, and a stored row that does not
+/// decode is SI-7 here rather than a byte-level mismatch at the grader.
+/// The tenth family, the slash watermark, is a `properties` cell and is
+/// added by the caller ([`ReadSnapshot::archival_snapshot`](super::ReadSnapshot::archival_snapshot)).
+///
+/// Two of the constructors' refusals are reachable from a store and are
+/// invariants, not snapshot faults: a second `archival_budget_accruing` row
+/// is SI-23 ([`StoreInvariant::AccruingNotSingular`]); an empty or over-cap
+/// witness row is SI-7, as in A10. The others (a duplicate key, a key of
+/// the wrong width, a slash-log epoch marker) cannot arise from typed
+/// tables with unique keys and a log the writer never marks; they are
+/// mapped to SI-7 against the family so a reader is never left without a
+/// name for what happened.
+pub(super) fn snapshot_rows<T: ReadTables>(txn: &T) -> Result<ArchivalSnapshot, ReadFault> {
+    let mut snapshot = ArchivalSnapshot::empty();
+
+    for row in txn.table(ARCHIVAL_BOND)?.iter()? {
+        let (key, value) = row?;
+        let record = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(BOND, cause))?;
+        snapshot
+            .push_bond(&PCanonicalId::from_bytes(key.value()), &record)
+            .map_err(|f| refused(&f))?;
+    }
+    for row in txn.table(ARCHIVAL_SERVE_CREDIT)?.iter()? {
+        let (key, _present) = row?;
+        let key = ServeCreditKey::from_key(key.value());
+        snapshot
+            .push_serve_credit(key.persona(), key.shard(), key.epoch(), key.height())
+            .map_err(|f| refused(&f))?;
+    }
+    for row in txn.table(ARCHIVAL_R_MARKET)?.iter()? {
+        let (key, value) = row?;
+        let (shard, epoch) = key.value();
+        let r = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(R_MARKET, cause))?;
+        // `push_r_market` drops a zero count (§3.6): the C++ close writes
+        // zeros the redb close does not, and the snapshot is the non-zero set.
+        snapshot
+            .push_r_market(
+                ShardId::from_raw(shard),
+                SettlementEpoch::from_raw(epoch),
+                r,
+            )
+            .map_err(|f| refused(&f))?;
+    }
+    for row in txn.table(ARCHIVAL_SIGMA_WORK)?.iter()? {
+        let (key, value) = row?;
+        let sigma = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(SIGMA_WORK, cause))?;
+        snapshot
+            .push_sigma_work(SettlementEpoch::from_raw(key.value()), sigma)
+            .map_err(|f| refused(&f))?;
+    }
+    for row in txn.table(ARCHIVAL_BUDGET)?.iter()? {
+        let (key, value) = row?;
+        let budget = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(BUDGET, cause))?;
+        snapshot
+            .push_budget(SettlementEpoch::from_raw(key.value()), budget)
+            .map_err(|f| refused(&f))?;
+    }
+    for row in txn.table(ARCHIVAL_ATTESTATION_WITNESS)?.iter()? {
+        let (key, value) = row?;
+        let bytes = value.value().bytes();
+        AttestationWitnessBytes::well_formed(bytes).map_err(|reason| {
+            undecodable(
+                WITNESS,
+                CodecError::Invalid {
+                    codec: AttestationWitnessBytes::NAME,
+                    reason,
+                },
+            )
+        })?;
+        snapshot
+            .push_attestation_witness(BlockHeight::from_raw(key.value()), bytes)
+            .map_err(|f| refused(&f))?;
+    }
+    for row in txn.table(ARCHIVAL_SLASH_LOG)?.iter()? {
+        let (key, value) = row?;
+        let key = SlashLogKey::from_key(key.value());
+        let entry = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(SLASH_LOG, cause))?;
+        snapshot
+            .push_slash_log(key.height(), key.seq(), &entry)
+            .map_err(|f| refused(&f))?;
+    }
+    for row in txn.table(ARCHIVAL_SLASH_APPLIED)?.iter()? {
+        let (key, _present) = row?;
+        let key = SlashAppliedKey::from_key(key.value());
+        snapshot
+            .push_slash_applied(key.persona(), key.shard(), key.epoch())
+            .map_err(|f| refused(&f))?;
+    }
+    for row in txn.table(ARCHIVAL_BUDGET_ACCRUING)?.iter()? {
+        let (key, value) = row?;
+        let epoch = SettlementEpoch::from_raw(key.value());
+        let total = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(BUDGET_ACCRUING, cause))?;
+        snapshot
+            .set_budget_accruing(epoch, total)
+            .map_err(|fault| match fault {
+                SnapshotFault::SecondSingletonRow { .. } => {
+                    ReadFault::Invariant(StoreInvariant::AccruingNotSingular {
+                        observed: AccrualFault::StaleRow { epoch },
+                    })
+                }
+                other => refused(&other),
+            })?;
+    }
+    Ok(snapshot)
+}
+
+/// A snapshot constructor's refusal of a row read from a typed table, as
+/// SI-7 against the family — see [`snapshot_rows`] for why these arms are
+/// not expected to fire.
+fn refused(fault: &SnapshotFault) -> ReadFault {
+    let family = match fault {
+        SnapshotFault::KeyWidth { family, .. }
+        | SnapshotFault::ValueWidth { family, .. }
+        | SnapshotFault::DuplicateKey { family, .. }
+        | SnapshotFault::SecondSingletonRow { family }
+        | SnapshotFault::RowTooLong { family, .. }
+        | SnapshotFault::RowTooShort { family, .. } => family.name(),
+        SnapshotFault::EpochMarkerSeq { .. } => SnapshotFamily::SlashLog.name(),
+        SnapshotFault::WitnessShape { .. } => SnapshotFamily::AttestationWitness.name(),
+        SnapshotFault::Truncated | SnapshotFault::Io(_) => "archival_snapshot",
+    };
+    undecodable(
+        family,
+        CodecError::Invalid {
+            codec: family,
+            reason: "the archival snapshot refused a stored row",
+        },
     )
 }

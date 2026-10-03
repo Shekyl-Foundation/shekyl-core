@@ -10,35 +10,21 @@
 )]
 // ^ Diagnostic-only float math; excluded from the default build.
 
+use super::flood::FloodReach;
 use crate::rng::{bounded_uniform, RelayRng};
 
-/// Which transport zone the origin relays over — the distinction
-/// [`levin_notify.cpp:448`] gates fluff visibility on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Transport {
-    /// Public zone: a node fluffs to **all** peers, inbound and outbound. An
-    /// inbound sybil edge receives the fluff.
-    Clearnet,
-    /// Tor zone: a node fluffs to **outbound connections only**. An inbound
-    /// sybil edge receives nothing, and a spy cannot force honest nodes to dial
-    /// it (Dandelion++ Prop. 2), so the supernode observer collapses.
-    Anonymity,
-}
-
-/// What a supernode observer learns from the diffusion phase, per transport —
-/// the *quantified* clearnet-vs-Tor security delta for this mechanism.
+/// What a supernode observer learns from the diffusion phase, for one
+/// [`FloodReach`].
 ///
-/// The adversary is a supernode: it opens cheap **inbound** edges to a fraction
-/// `dial_fraction` of honest nodes (the direction the paper says spies can
-/// create freely). It cannot make honest nodes dial *it* (Prop. 2), so it has
-/// no outbound presence. On clearnet those inbound edges receive fluff; on Tor
-/// they do not. This measures the difference the source fact
-/// ([`levin_notify.cpp:448`]) produces, so the Tor recommendation rests on a
-/// number rather than on "Tor is more private."
+/// The adversary opens cheap **inbound** edges to a fraction `dial_fraction`
+/// of honest nodes and is dialed by none. Under [`FloodReach::EveryPeer`]
+/// (production, on every connector) those edges receive the fluff. Under
+/// [`FloodReach::OutboundOnly`] (the retired D7 graph) they do not. The
+/// connector does not select the edge set.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SupernodeObservation {
-    /// Transport measured.
-    pub transport: Transport,
+    /// Reach measured.
+    pub reach: FloodReach,
     /// Fraction of transactions whose fluff the supernode observes at all.
     pub observed_fraction: f64,
     /// Among observed floods, P(the supernode's first-received predecessor is
@@ -53,13 +39,13 @@ pub struct SupernodeObservation {
     pub first_spy_precision: f64,
 }
 
-/// Measure [`SupernodeObservation`] under a transport.
+/// Measure [`SupernodeObservation`] under `flood.reach`.
 ///
 /// Honest topology: `flood.nodes` nodes, each dialing `flood.peers` random
-/// others (directed edges). Fluff from a source propagates over *all* edges on
-/// clearnet and over *outbound* edges only on Tor. The supernode dials
-/// `dial_fraction · nodes` honest nodes (its inbound edges to them) and is
-/// dialed by none.
+/// others (directed edges). Fluff from a source propagates over every edge
+/// under [`FloodReach::EveryPeer`] and over outbound edges only under
+/// [`FloodReach::OutboundOnly`]. The supernode dials `dial_fraction · nodes`
+/// honest nodes (its inbound edges to them) and is dialed by none.
 ///
 /// # Panics
 ///
@@ -71,7 +57,6 @@ pub fn simulate_transport_observation<R: RelayRng + ?Sized>(
     mean_quarter_secs: u32,
     family: crate::schedule::DelayFamily,
     dial_fraction: f64,
-    transport: Transport,
     trials: usize,
     rng: &mut R,
 ) -> SupernodeObservation {
@@ -96,8 +81,8 @@ pub fn simulate_transport_observation<R: RelayRng + ?Sized>(
     let mut correct = 0_usize;
 
     for _ in 0..trials {
-        // Honest directed edges u -> v. `out[u]` = nodes u dialed. For the
-        // clearnet flood we also need the reverse (who dialed u).
+        // Honest directed edges u -> v. `out[u]` = nodes u dialed. For an
+        // EveryPeer flood we also need the reverse (who dialed u).
         let mut out: Vec<Vec<usize>> = vec![Vec::with_capacity(peers); n];
         let mut inbound: Vec<Vec<usize>> = vec![Vec::new(); n];
         // Each node dials `peers` *distinct* non-self others (redraw on a
@@ -127,26 +112,18 @@ pub fn simulate_transport_observation<R: RelayRng + ?Sized>(
         best[source] = 0;
         heap.push(std::cmp::Reverse((0_u64, source)));
 
-        // The supernode observes node w's fluff when w relays and the adversary
-        // holds an edge that carries it: clearnet = any peer of w (so w's
-        // inbound-watched status); Tor = only if w dialed the adversary, which
-        // it never does. So on Tor the supernode observes nothing — modelled by
-        // gating the observation on the transport below.
+        // The supernode observes node w's fluff when w relays across an edge
+        // the adversary holds. Under EveryPeer that is the inbound edge the
+        // adversary dialed. Under OutboundOnly the node never fluffs inbound,
+        // and it never dialed the adversary, so the observation is empty.
+        let inbound_carries = matches!(flood.reach, FloodReach::EveryPeer);
         let mut first_obs: Option<usize> = None; // the honest node whose fluff the adversary first caught
 
         while let Some(std::cmp::Reverse((at, node))) = heap.pop() {
             if at > best[node] {
                 continue;
             }
-            // Does the adversary catch this node's fluff?
-            let caught = match transport {
-                // Clearnet: the adversary dialed `node` (its inbound edge to
-                // `node`), and `node` fluffs to inbound peers.
-                Transport::Clearnet => watched[node] && node != source,
-                // Tor: the adversary would need `node` to have dialed it. It
-                // never does (Prop. 2) — structurally zero.
-                Transport::Anonymity => false,
-            };
+            let caught = inbound_carries && watched[node] && node != source;
             if caught {
                 first_obs = Some(node);
                 break;
@@ -159,9 +136,9 @@ pub fn simulate_transport_observation<R: RelayRng + ?Sized>(
                     heap.push(std::cmp::Reverse((arrival, next)));
                 }
             }
-            // Clearnet fluff also traverses inbound edges (a node fluffs to
+            // EveryPeer fluff also traverses inbound edges (a node fluffs to
             // peers that dialed it). Model that reverse spread too.
-            if matches!(transport, Transport::Clearnet) {
+            if inbound_carries {
                 for &next in &inbound[node] {
                     let arrival = at.saturating_add(draw_ms(rng));
                     if arrival < best[next] {
@@ -190,7 +167,7 @@ pub fn simulate_transport_observation<R: RelayRng + ?Sized>(
         correct as f64 / observed as f64
     };
     SupernodeObservation {
-        transport,
+        reach: flood.reach,
         observed_fraction,
         first_spy_precision,
     }
@@ -199,7 +176,7 @@ pub fn simulate_transport_observation<R: RelayRng + ?Sized>(
 /// The clearnet passive inbound-neighbour channel.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PassiveNeighborLeak {
-    pub transport: Transport,
+    pub reach: FloodReach,
     pub leak_rate: f64,
     pub origin_share_of_leaks: f64,
 }
@@ -214,7 +191,7 @@ pub fn simulate_passive_neighbor_leak<R: RelayRng + ?Sized>(
     params: &crate::params::DandelionParams,
     embargo: &crate::schedule::EmbargoTimer,
     dial_fraction: f64,
-    transport: Transport,
+    reach: FloodReach,
     trials: usize,
     rng: &mut R,
 ) -> PassiveNeighborLeak {
@@ -223,7 +200,7 @@ pub fn simulate_passive_neighbor_leak<R: RelayRng + ?Sized>(
         dial_fraction > 0.0 && dial_fraction <= 1.0,
         "dial fraction must be in (0, 1]"
     );
-    let clearnet = matches!(transport, Transport::Clearnet);
+    let inbound_observes = matches!(reach, FloodReach::EveryPeer);
     // Scaled Bernoulli, compared with `<=` (not `<`) so `dial_fraction == 1.0`
     // (threshold == u32::MAX) marks *every* node, honouring the `(0, 1]` contract;
     // for other fractions the difference is one in 2^32.
@@ -235,7 +212,7 @@ pub fn simulate_passive_neighbor_leak<R: RelayRng + ?Sized>(
     for _ in 0..trials {
         let mut neighboured: Vec<bool> = Vec::new();
         let trace = super::stem::walk_stem_observing(params, embargo, rng, |_pos, _t, rng| {
-            let mark = clearnet && (rng.next_u64() as u32) <= dial_threshold;
+            let mark = inbound_observes && (rng.next_u64() as u32) <= dial_threshold;
             neighboured.push(mark);
         });
         neighboured.truncate(trace.deadlines.len());
@@ -261,7 +238,7 @@ pub fn simulate_passive_neighbor_leak<R: RelayRng + ?Sized>(
         origin_leaks as f64 / leaks as f64
     };
     PassiveNeighborLeak {
-        transport,
+        reach,
         leak_rate,
         origin_share_of_leaks,
     }

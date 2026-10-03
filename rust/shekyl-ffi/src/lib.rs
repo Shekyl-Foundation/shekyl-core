@@ -162,6 +162,9 @@ pub mod executor_ffi;
 // where clearnet and Tor meet it.
 pub mod zone_ffi;
 
+// Production network ids. C++ asks for the 16 bytes; it does not state them.
+pub mod network_id_ffi;
+
 // Peer-attribution drop rule FFI — PWD-B7 (`SHEKYL_P2P_PROTOCOL.md`). The
 // classification is recorded by C++ as an opaque byte on the verification
 // context; whether that byte severs a connection is decided only here.

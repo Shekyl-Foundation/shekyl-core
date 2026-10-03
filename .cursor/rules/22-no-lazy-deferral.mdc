@@ -108,6 +108,19 @@ issue whose merge lifts it, or a named person's decision. It may **not** be a
 restatement of the blocker: *"blocked until the builder exists"* is the claim
 itself, not a check on it.
 
+Nor may it be a **state** that something other than the owed work could reach.
+A *state-shaped* falsifier — "the six manifests at `format_version: 3`", "the
+schema at v12", "the flag flipped" — goes green when **anything** arrives at
+that state, and a version number is reached by any writer with a reason to
+bump it. A *field-shaped* falsifier — "every manifest carries the injection's
+`height` and `persona`" — can be satisfied only by the change it is about,
+because only that change produces the field. Observed (2026-10-01,
+`DRS_E4_ARCHIVAL_WRITER.md` §6.2 `ARW-16`): PR-b's falsifier was the version;
+an unrelated ruling moved the same files to that version by edit the day
+before PR-b began, and the check reported done for six generator runs that
+had not started. Name the fields the work produces, not the number the work
+would also happen to move.
+
 **If no falsifier can be written, that is the finding.** It means nobody knows
 what would unblock the item, which puts it closer to REJECTED-with-reasoning
 (`23-disposition-visibility.mdc`) than to DEFERRED — a permanent rejection wearing a
@@ -148,6 +161,45 @@ Every `21-reversion-clause-discipline.mdc` reopening criterion has this
 shape, which is why the check belongs in the rule rather than in one
 document: a reopen criterion that nobody re-evaluates is a permanent
 rejection wearing a conditional's clothes.
+
+## Two forms a deferral takes when nobody chose it
+
+Both observed 2026-10-02 on one row (`DAEMON_REDB_STORE.md` `DEL-008`, DRS-E4
+commit 9 → 10d), and both pass the checks above on their face: a blocker was
+named, a falsifier could be written. What they fail is the question of
+whether anyone *decided*.
+
+**A deferral inherits whatever blocker is nearest to hand.** The register
+row excluded a Rust mirror of a C++ gate from the cutover deletion as
+*"retires with `PDM-Q6` item 4's re-key"*. The re-key is ruled, not scheduled
+— it is itself a deferral. The mirror had no caller, so its deletion was
+blocked on nothing; the writer reached for the adjacent open item because a
+deferral needs a blocker and that one was lying there. The check that
+catches it is not "is a blocker named" but **is the thing blocking it a
+deferral too** — a blocker that is itself DEFERRED or merely RULED is a
+chain, and a chain's falsifier is the *first* link's, which usually does not
+exist. When the blocker is a deferral, ask what the item is blocked on *in
+code*. If the answer is nothing, the item is deletable now, and "defer" is
+the wrong disposition.
+
+**A parity artifact outlives its rule unless something retires it with the
+rule.** The mirror, its equivalence KAT, the shared fixture, the C++ leg and
+two fuzz targets all stayed green for a month after `PDM-Q6` (2026-09-18)
+retired the preimage they pin — because the retirement ruling named the
+*mechanism* it retired (`segment_freeze.rs`, the freeze half of
+`challenge.rs`) and not the *tests of agreement* about it. A KAT or
+cross-language mirror is a claim that two implementations agree; when the
+rule they implement is retired, the claim's protected quantity is zero, and
+a green gate on it is the rule-47 failure in another coat — a gate whose
+subject is gone and which cannot notice. Worse, the artifact *reads* as the
+rule: `census.rs` said CEN-J8–J10 were pending while a decision function
+with arms and refusal codes sat in the tree for anyone grepping to find. **A
+retirement ruling names the parity artifacts that die with it** — mirrors,
+KATs, fixtures, fuzz targets, equivalence tests — or they survive as green
+tests nobody can explain, and the next lane builds the successor from them.
+The deletion is the disclosure: once the code stops doing it badly, the
+FOLLOWUPS row is the only thing that says what is owed, and the tree says
+what is true.
 
 ## Interaction with existing rules
 

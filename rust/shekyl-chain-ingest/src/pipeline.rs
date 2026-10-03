@@ -37,9 +37,14 @@
 //! # Sinks
 //!
 //! The trace carries at most one checkpoint, at its covered tip (RD-F18).
-//! After that height connects, the loop asks the connector for the
-//! redb-side [`crate::trace::Digest`] and records it beside the trace's
-//! expectation. A refusal is a **recorded verdict**: the writer stays up;
+//! When the run is over and its committed tip is that height, the loop
+//! asks the connector once for the redb side's state — the
+//! [`crate::trace::Digest`] and the archival rows (DRS-E4 §3.8.1, version
+//! `0x01`), one read — and records the digest beside the trace's
+//! expectation and the rows' diff against the trace's `0x04` record. At the
+//! end, not at the connect: an `Inject` filed at the covered tip commits
+//! after the block it is attributed to, and the trace's rows already carry
+//! it. A refusal is a **recorded verdict**: the writer stays up;
 //! this driver ends the run (an honest chain that refuses is a
 //! disagreement; E3 and the mutation family keep the same actor and decide
 //! for themselves). A store halt is a fault.
@@ -53,6 +58,7 @@ use kameo::error::SendError;
 use shekyl_chain_rules::{
     form, FormAttempt, InvalidBlock, PaidEmission, StructurallyValid, Substrate, Verdict, Weights,
 };
+use shekyl_chain_store::archival_snapshot::SnapshotDiff;
 use shekyl_chain_store::store::{ChainStore, StoreError};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight,
@@ -61,13 +67,15 @@ use shekyl_units::AtomicUnits;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
-use crate::connector::{Apply, Connector, ConnectorArgs, Digest, HashAt, Rewind, RunFault};
+use crate::connector::{
+    Apply, CheckpointState, Connector, ConnectorArgs, Digest, HashAt, Inject, Rewind, RunFault,
+};
 use crate::grader::Observations;
 use crate::metrics::{Concurrency, Metrics, MetricsArtifact};
 use crate::schedule::ChainRules;
 use crate::seed::{SeedClaim, SeedLedger};
 use crate::sequencer::{SequenceError, Sequencer};
-use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
+use crate::source::{IngestEvent, Injection, SequenceNo, Sequenced, ServeCredit, Source};
 use crate::trace::Trace;
 
 /// Knobs with a rationale each (rule 75; module docs).
@@ -122,8 +130,15 @@ pub struct RunReport {
     /// The refusal that ended the run, if a verdict did.
     pub refused: Option<(BlockHeight, InvalidBlock)>,
     /// The redb-side digest at the trace's covered-tip checkpoint, beside
-    /// the trace's expectation, when that height connected.
+    /// the trace's expectation — read after the run's last committed event,
+    /// when the committed tip is that height. `None` when the run ended
+    /// elsewhere: **not compared**, never identical.
     pub checkpoint: Option<Checkpoint>,
+    /// The checkpoint's other encoding (DRS-E4 §3.8.1, `ARW-25`): the
+    /// redb-side archival rows at the covered tip diffed against the
+    /// trace's `0x04` record, family by family, from the same read as
+    /// `checkpoint` and `None` exactly when it is.
+    pub archival: Option<ArchivalCheckpoint>,
     /// The derived-vs-trace root comparison, per connected height the trace
     /// has facts for (DRS-E3 CTW-5, `DRS_E3_CURVE_WRITER.md` §3.8): how many
     /// heights were compared, and every one that disagreed. **Every**
@@ -163,6 +178,14 @@ pub struct RunReport {
     /// pop-symmetry check through the actor (the state at `to` must be the
     /// state the chain had when `to` was first the tip).
     pub switches: Vec<Switch>,
+    /// One entry per committed `Inject` (DRS-E4 §3.8 item 3): the credit
+    /// and the height the store attributed it to. The record a later
+    /// `Rewind` is checked against — a pop below an injection's height
+    /// would strand the bit, so it is refused
+    /// ([`PipelineFault::RewindBelowInjection`]) — and the trace half of
+    /// the capture's out-of-band contract: a vector's manifest names each
+    /// one, and the replay reports each one.
+    pub injected: Vec<Injection>,
 }
 
 /// The per-height root oracle's results (`RunReport::roots`), one per
@@ -397,6 +420,24 @@ impl Checkpoint {
     }
 }
 
+/// The covered-tip archival snapshot, compared row by row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArchivalCheckpoint {
+    /// The height after which both sides' rows were taken.
+    pub at: BlockHeight,
+    /// The redb rows against the trace's, per family: `ours` is the redb
+    /// side, `theirs` the trace's (the LMDB side).
+    pub diff: SnapshotDiff,
+}
+
+impl ArchivalCheckpoint {
+    /// Whether every family agreed.
+    #[must_use]
+    pub fn identical(&self) -> bool {
+        self.diff.is_identical()
+    }
+}
+
 /// A committed rewind and the state it left.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Switch {
@@ -423,6 +464,13 @@ pub enum Disagreement {
     },
     /// The redb digest differed from the trace's checkpoint.
     Diverged {
+        /// The checkpoint height.
+        at: BlockHeight,
+    },
+    /// The redb archival rows differed from the trace's `0x04` record at
+    /// the checkpoint (DRS-E4 §3.8.1); the report's
+    /// [`ArchivalCheckpoint`] names the family and the key.
+    ArchivalDiverged {
         /// The checkpoint height.
         at: BlockHeight,
     },
@@ -460,10 +508,12 @@ impl RunReport {
 
     /// What the grader reads (RD-Q9), derived from the report so the two
     /// cannot disagree: exercised rows, the refusal, the covered-tip digest,
-    /// and the per-height root oracle (CTW-5). The digest and the oracle
-    /// stay separate. The digest carries only the live root, so an interior
-    /// miss is invisible to it; `digest_identical` is `None` when no
-    /// checkpoint was compared.
+    /// the per-height root oracle (CTW-5), and the archival oracle at the
+    /// checkpoint (DRS-E4 §3.8.1). The digest and the oracles stay
+    /// separate. The digest carries only the live root, so an interior
+    /// miss is invisible to it, and it carries no archival state;
+    /// `digest_identical` is `None` and `archival.compared` is `false`
+    /// when no checkpoint was compared.
     #[must_use]
     pub fn observations(&self) -> Observations {
         Observations {
@@ -477,12 +527,17 @@ impl RunReport {
                 compared: self.roots.compared(),
                 diverged_at: self.roots.diverged().map(|d| d.at).collect(),
             },
+            archival: self
+                .archival
+                .as_ref()
+                .map(|a| crate::grader::ArchivalOracle::from_diff(a.at, &a.diff))
+                .unwrap_or_default(),
         }
     }
 
     /// Every way the run disagreed with the chain, in the order they can
-    /// occur: a root that diverged at a height, a checkpoint that diverged,
-    /// a refusal that ended the run.
+    /// occur: a root that diverged at a height, a checkpoint that diverged
+    /// (digest, then archival rows), a refusal that ended the run.
     pub fn disagreements(&self) -> impl Iterator<Item = Disagreement> + '_ {
         let roots = self
             .roots
@@ -501,6 +556,11 @@ impl RunReport {
             .as_ref()
             .filter(|c| !c.identical())
             .map(|c| Disagreement::Diverged { at: c.at });
+        let archival = self
+            .archival
+            .as_ref()
+            .filter(|a| !a.identical())
+            .map(|a| Disagreement::ArchivalDiverged { at: a.at });
         let refused = self
             .refused
             .as_ref()
@@ -512,6 +572,7 @@ impl RunReport {
             .chain(weights)
             .chain(emission)
             .chain(diverged)
+            .chain(archival)
             .chain(refused)
     }
 }
@@ -561,6 +622,33 @@ pub enum PipelineFault<SrcF, SubF> {
     /// mailbox full.
     #[error("connector unreachable")]
     Mailbox,
+    /// A `Rewind { to }` below the height an `Inject` was attributed to.
+    /// The bit is not block-owned and not journaled, so the pop would not
+    /// carry it away: the store would hold a credit at a height the chain
+    /// no longer has — the stranding the C++ warns of at its injector.
+    /// No source the capture produces does this (the injector writes
+    /// after the chain is final); one that does is defective.
+    #[error("rewind to {to} is below the serve credit injected at {injected_at} (persona {persona}, shard {shard}, epoch {epoch}); the bit is not block-owned and the pop would strand it", persona = credit.persona, shard = credit.shard, epoch = credit.epoch)]
+    RewindBelowInjection {
+        /// The rewind's target.
+        to: BlockHeight,
+        /// Where the bit was attributed.
+        injected_at: BlockHeight,
+        /// The bit.
+        credit: ServeCredit,
+    },
+}
+
+/// A barrier event waiting for the stage ahead of it to drain: no `Extend`
+/// is formed past it, and it commits once nothing is in flight.
+enum Barrier {
+    /// Pop to `to`.
+    Rewind {
+        /// The target.
+        to: BlockHeight,
+    },
+    /// Write the out-of-band serve credit at the tip.
+    Inject(ServeCredit),
 }
 
 /// What a `form` worker hands the sequencer: the formed height, or the
@@ -650,7 +738,7 @@ where
         pinned: None,
         hashers: Arc::new(Semaphore::new(cfg.hashers.get())),
         in_flight: JoinSet::new(),
-        pending_rewind: None,
+        pending_barrier: None,
         exhausted: false,
     };
     let outcome = drive.run_loop().await;
@@ -665,7 +753,7 @@ where
     outcome
 }
 
-/// The loop's state, named. Fill, collect, apply, rewind are the four
+/// The loop's state, named. Fill, collect, apply, barrier are the four
 /// steps; a `Drive` is what holds them together.
 struct Drive<'a, Src, S>
 where
@@ -694,7 +782,9 @@ where
     /// its `form`.
     hashers: Arc<Semaphore>,
     in_flight: JoinSet<Sequenced<Formed<S::Fault>>>,
-    pending_rewind: Option<Sequenced<BlockHeight>>,
+    /// The barrier read but not yet committed, if any; `fill` reads
+    /// nothing past it.
+    pending_barrier: Option<Sequenced<Barrier>>,
     exhausted: bool,
 }
 
@@ -712,8 +802,8 @@ where
             if self.report.refused.is_some() {
                 break;
             }
-            self.try_rewind().await?;
-            if self.exhausted && self.in_flight.is_empty() && self.pending_rewind.is_none() {
+            self.try_barrier().await?;
+            if self.exhausted && self.in_flight.is_empty() && self.pending_barrier.is_none() {
                 // Nothing left to read, form or pop. Every numbered event
                 // was formed or advanced over, so nothing can be waiting;
                 // if something is, it is a defect to surface, not a queue
@@ -728,15 +818,17 @@ where
                 break;
             }
         }
+        self.compare_checkpoint().await?;
         self.report.metrics = self.metrics.snapshot();
         Ok(std::mem::take(&mut self.report))
     }
 
     /// Read events and start forming them, while the window has room and a
-    /// hasher is free. Stops at a `Rewind` (the barrier) and at exhaustion.
+    /// hasher is free. Stops at a barrier (`Rewind`, `Inject`) and at
+    /// exhaustion.
     async fn fill(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
         while !self.exhausted
-            && self.pending_rewind.is_none()
+            && self.pending_barrier.is_none()
             && self.in_flight.len() + self.sequencer.pending() < self.cfg.window.get()
         {
             // The permit is taken before the event is read, so no event is
@@ -751,9 +843,15 @@ where
             self.take_sequence(event.seq)?;
             match event.event {
                 IngestEvent::Rewind { to } => {
-                    self.pending_rewind = Some(Sequenced {
+                    self.pending_barrier = Some(Sequenced {
                         seq: event.seq,
-                        event: to,
+                        event: Barrier::Rewind { to },
+                    });
+                }
+                IngestEvent::Inject(credit) => {
+                    self.pending_barrier = Some(Sequenced {
+                        seq: event.seq,
+                        event: Barrier::Inject(credit),
                     });
                 }
                 IngestEvent::Extend(candidate) => {
@@ -906,36 +1004,104 @@ where
                     .record(*at, *ours, RecordedEmissionFacts::from(facts.value()));
             }
         }
-        if let Some(at) = self.checkpoint_at {
-            if applied.connected.iter().any(|(h, _)| *h == at) {
-                let ours = self.connector.ask(Digest).await.map_err(collapse)?;
-                let theirs = *self
-                    .trace
-                    .expect(at)
-                    .expect("checkpoint_at comes from the trace")
-                    .value();
-                self.report.checkpoint = Some(Checkpoint { at, ours, theirs });
-            }
-        }
         if let Some(refused) = applied.refused {
             self.report.refused = Some(refused);
         }
         Ok(())
     }
 
-    /// Commit the pending rewind once nothing is in flight ahead of it: the
-    /// barrier. Records the digest after the pop and moves the ledger and
-    /// the next height to the post-rewind chain.
-    async fn try_rewind(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
-        let Some(rewind) = self.pending_rewind.take() else {
+    /// The covered-tip checkpoint (RD-F18; DRS-E4 §3.8.1), both encodings
+    /// in one read, taken **after the run's last committed event**. The
+    /// trace's walker read one LMDB snapshot after the daemon's last write
+    /// — blocks and the regtest injector's out-of-band row alike — and the
+    /// redb side is read the same way: once, at the end, through
+    /// [`CheckpointState`]. Not when the covered tip connects: an `Inject`
+    /// attributed to that tip is a barrier that commits *after* the block
+    /// it is attributed to, so a comparison at the connect would hold the
+    /// trace's rows (credit included) against a redb side that had not yet
+    /// written it, and a faithful replay would read as divergent.
+    ///
+    /// Compared only when the committed tip *is* the covered tip; a run
+    /// that ended elsewhere leaves both fields `None` — not compared, never
+    /// identical. A trace carries both encodings or neither
+    /// (`TraceFault::MissingSnapshot`), so a checkpoint height without a
+    /// snapshot is unreachable here.
+    async fn compare_checkpoint(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+        let Some(at) = self.checkpoint_at else {
+            return Ok(());
+        };
+        let ours = self
+            .connector
+            .ask(CheckpointState)
+            .await
+            .map_err(collapse)?;
+        if ours.tip != Some(at) {
+            return Ok(());
+        }
+        let theirs = *self
+            .trace
+            .expect(at)
+            .expect("checkpoint_at comes from the trace")
+            .value();
+        self.report.checkpoint = Some(Checkpoint {
+            at,
+            ours: ours.digest,
+            theirs,
+        });
+        let (_, theirs) = self
+            .trace
+            .archival_snapshot()
+            .expect("a trace with a checkpoint carries its archival snapshot");
+        self.report.archival = Some(ArchivalCheckpoint {
+            at,
+            diff: ours.archival.diff(theirs.value()),
+        });
+        Ok(())
+    }
+
+    /// Commit the pending barrier once nothing is in flight ahead of it.
+    /// A `Rewind` records the digest after the pop and moves the ledger and
+    /// the next height to the post-rewind chain; an `Inject` writes the
+    /// credit at the tip and records where the store attributed it.
+    async fn try_barrier(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+        let Some(barrier) = self.pending_barrier.take() else {
             return Ok(());
         };
         if !(self.in_flight.is_empty() && self.sequencer.pending() == 0) {
-            self.pending_rewind = Some(rewind);
+            self.pending_barrier = Some(barrier);
             return Ok(());
         }
-        self.sequencer.advance(rewind.seq)?;
-        let to = rewind.event;
+        self.sequencer.advance(barrier.seq)?;
+        match barrier.event {
+            Barrier::Rewind { to } => self.rewind(to).await,
+            Barrier::Inject(credit) => self.inject(credit).await,
+        }
+    }
+
+    /// Write the out-of-band credit at the committed tip (DRS-E4 §3.8
+    /// item 3). The store attributes it; the report records where.
+    async fn inject(
+        &mut self,
+        credit: ServeCredit,
+    ) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+        let injected = self.connector.ask(Inject(credit)).await.map_err(collapse)?;
+        self.report.injected.push(Injection {
+            at: injected.at,
+            credit,
+        });
+        Ok(())
+    }
+
+    /// Pop to `to`, unless a committed injection sits above it — the bit is
+    /// not block-owned, and the pop would strand it.
+    async fn rewind(&mut self, to: BlockHeight) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+        if let Some(stranded) = self.report.injected.iter().find(|i| i.at > to) {
+            return Err(PipelineFault::RewindBelowInjection {
+                to,
+                injected_at: stranded.at,
+                credit: stranded.credit,
+            });
+        }
         let rewound = self.connector.ask(Rewind { to }).await.map_err(collapse)?;
         let digest = self.connector.ask(Digest).await.map_err(collapse)?;
         self.report.switches.push(Switch {

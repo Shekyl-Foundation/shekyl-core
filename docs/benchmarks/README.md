@@ -16,8 +16,10 @@ docs/benchmarks/
                                         DRS-BENCH: consensus-store IBD artifacts
 ```
 
-(The tree above names the baseline set; ad-hoc Pi-4 captures and
-`reference-captures/` also live here.)
+(The tree above names the baseline set; ad-hoc Pi-4 captures,
+`reference-captures/`, and
+[`D5_TOR_STEM_RUNBOOK.md`](D5_TOR_STEM_RUNBOOK.md) also live here.
+The runbook is the command sequence; it is not a completed capture.)
 
 The **manifest** files are prose specifications: every operation a
 benchmark exercises, every I/O boundary, every validation check. They

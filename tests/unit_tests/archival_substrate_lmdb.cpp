@@ -8,6 +8,7 @@
 #include "pqc_spend_fixture.h"
 
 #include <boost/filesystem.hpp>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -17,6 +18,8 @@
 
 #include <rapidjson/document.h>
 #include <rapidjson/istreamwrapper.h>
+#include <rapidjson/prettywriter.h>
+#include <rapidjson/stringbuffer.h>
 
 #include "blockchain_db/lmdb/db_lmdb.h"
 #include "blockchain_db/shekyl_types.h"
@@ -2272,6 +2275,217 @@ shekyl::db::ArchivalBondValue window_kat_bond()
   return seed;
 }
 
+/// ARW-Q15 capture (DRS_E4_ARCHIVAL_WRITER.md §6 row 6): when
+/// `SHEKYL_E4_CAPTURE_DIR` names a directory, the KAT below writes two files
+/// there — `<fixture>.inputs.json`, the fixture's inputs in the form the Rust
+/// side must reproduce (personas, seeds, passes, schedule, deadlines), and
+/// `<fixture>.rows.json`, the walker's §3.8.1 rows over the fixture's final
+/// state. Both are committed under `rust/shekyl-chain-ingest/fixtures/` for
+/// commit 8's scenario driver; this hook is how they are regenerated. Unset,
+/// the KAT runs as before. Nothing here asserts: the capture is data, and the
+/// comparison is Rust's.
+struct CapturedPersona
+{
+  crypto::hash id;
+  const char* role;
+  shekyl::db::ArchivalBondValue seed;
+};
+
+struct CapturedPass
+{
+  crypto::hash persona;
+  uint64_t shard;
+  uint64_t epoch;
+  uint64_t height;
+};
+
+struct CapturedWaypoint
+{
+  uint64_t after_height; // the chain's tip when the assertion was made
+  const char* asserted;
+};
+
+struct E4FixtureCapture
+{
+  const char* fixture;
+  FailureWindowParams window;
+  uint64_t total_bonded_atomic_seeded;
+  std::vector<CapturedPersona> personas;
+  std::vector<CapturedPass> passes;
+  std::vector<CapturedWaypoint> waypoints;
+  crypto::hash slashed_persona;
+  uint64_t absorbed_epoch;
+  uint64_t slash_epoch;
+};
+
+void write_e4_fixture_capture(cryptonote::BlockchainLMDB& db, const E4FixtureCapture& c)
+{
+  const char* dir = std::getenv("SHEKYL_E4_CAPTURE_DIR");
+  if (dir == nullptr || *dir == '\0')
+    return;
+  const std::string base = (boost::filesystem::path(dir) / c.fixture).string();
+
+  rapidjson::StringBuffer buf;
+  rapidjson::PrettyWriter<rapidjson::StringBuffer> w(buf);
+  const auto hex = [](const crypto::hash& h) { return epee::string_tools::pod_to_hex(h); };
+  const auto hex_bytes = [](const uint8_t* p, size_t n) {
+    return epee::string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(p), n));
+  };
+  const auto str = [&](const std::string& s) { w.String(s.c_str(), static_cast<rapidjson::SizeType>(s.size())); };
+
+  w.StartObject();
+  w.Key("schema"); w.String("shekyl_e4_fixture_inputs_v1");
+  w.Key("fixture"); w.String(c.fixture);
+  w.Key("source"); w.String("tests/unit_tests/archival_substrate_lmdb.cpp");
+
+  // The schedule the fixture ran under: the unit test arms no lever, so this
+  // is the genesis pair, and every deadline below is a function of it.
+  w.Key("schedule");
+  w.StartObject();
+  w.Key("settlement_epoch_blocks"); w.Uint64(shekyl_archival_settlement_epoch_blocks());
+  w.Key("slash_deadline_height_by_epoch");
+  w.StartObject();
+  for (uint64_t e = 0; e <= c.slash_epoch; ++e)
+  {
+    str(std::to_string(e));
+    w.Uint64(shekyl_archival_epoch_slash_deadline_height(e));
+  }
+  w.EndObject();
+  // The operand the C++ folds key their rows by, stated rather than left
+  // for the reader to infer from the rows: the hooks take `prev_height + 1`
+  // (`blockchain_db.cpp`, the block COUNT once the block connects), epoch E
+  // folds at the first count above its deadline, and the slash log row for
+  // E therefore sits at `slash_deadline_height(E) + 1`.
+  w.Key("fold_height_operand");
+  str("block count after the connect (prev_height + 1); an epoch's slashes fold at the first count above its deadline, so the slash log row for epoch E is keyed slash_deadline_height(E) + 1");
+  w.Key("slash_log_height_by_epoch");
+  w.StartObject();
+  for (uint64_t e = 0; e <= c.slash_epoch; ++e)
+  {
+    str(std::to_string(e));
+    w.Uint64(shekyl_archival_epoch_slash_deadline_height(e) + 1);
+  }
+  w.EndObject();
+  w.EndObject();
+
+  w.Key("failure_window");
+  w.StartObject();
+  w.Key("m"); w.Uint(c.window.m);
+  w.Key("n"); w.Uint(c.window.n);
+  w.Key("serve_budget"); w.Uint(c.window.serve_budget);
+  w.EndObject();
+
+  w.Key("bond_floor_atomic"); w.Uint64(SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
+  w.Key("total_bonded_atomic_seeded"); w.Uint64(c.total_bonded_atomic_seeded);
+
+  // Seeded directly through put_archival_bond_value, not through a
+  // JoinMarket connect (ARW-Q15's reading): the identity fields are the
+  // fixture's, the state fields the appliers'.
+  w.Key("personas");
+  w.StartArray();
+  for (const CapturedPersona& p : c.personas)
+  {
+    w.StartObject();
+    w.Key("id"); str(hex(p.id));
+    w.Key("role"); w.String(p.role);
+    w.Key("seed");
+    w.StartObject();
+    w.Key("hybrid_pubkey"); str(hex_bytes(p.seed.hybrid_pubkey.data(), p.seed.hybrid_pubkey.size()));
+    w.Key("bond_spend_pk"); str(hex_bytes(p.seed.bond_spend_pk.data(), p.seed.bond_spend_pk.size()));
+    w.Key("endpoint"); str(hex_bytes(p.seed.endpoint.data(), p.seed.endpoint.size()));
+    w.Key("join_settlement_epoch"); w.Uint64(p.seed.join_settlement_epoch);
+    w.Key("bonded_total_atomic"); w.Uint64(p.seed.bonded_total_atomic);
+    w.Key("holdings_kind");
+    w.String(p.seed.is_complete_tree() ? "complete_tree" : "shard_set");
+    w.Key("holdings");
+    w.StartArray();
+    for (size_t i = 0; i < p.seed.held_shard_ids.size(); ++i)
+    {
+      w.StartObject();
+      w.Key("shard"); w.Uint64(p.seed.held_shard_ids[i]);
+      w.Key("add_epoch"); w.Uint64(p.seed.shard_add_epochs[i]);
+      w.EndObject();
+    }
+    w.EndArray();
+    w.EndObject();
+    w.EndObject();
+  }
+  w.EndArray();
+
+  w.Key("serve_passes");
+  w.StartArray();
+  for (const CapturedPass& p : c.passes)
+  {
+    w.StartObject();
+    w.Key("persona"); str(hex(p.persona));
+    w.Key("shard"); w.Uint64(p.shard);
+    w.Key("epoch"); w.Uint64(p.epoch);
+    w.Key("height"); w.Uint64(p.height);
+    w.EndObject();
+  }
+  w.EndArray();
+
+  w.Key("chain");
+  w.StartObject();
+  w.Key("blocks"); w.String("minimal miner-only blocks (append_minimal_blocks), no outputs, no transactions");
+  w.Key("accrual_per_block"); w.Uint64(0);
+  w.Key("block_count"); w.Uint64(db.height());
+  w.Key("tip_height"); w.Uint64(db.height() - 1);
+  w.Key("waypoints");
+  w.StartArray();
+  for (const CapturedWaypoint& p : c.waypoints)
+  {
+    w.StartObject();
+    w.Key("after_height"); w.Uint64(p.after_height);
+    w.Key("asserted"); w.String(p.asserted);
+    w.EndObject();
+  }
+  w.EndArray();
+  w.EndObject();
+
+  w.Key("expected");
+  w.StartObject();
+  w.Key("slashed_persona"); str(hex(c.slashed_persona));
+  w.Key("absorbed_epoch"); w.Uint64(c.absorbed_epoch);
+  w.Key("slash_epoch"); w.Uint64(c.slash_epoch);
+  // The getters are public on the interface; the LMDB class narrows them.
+  const cryptonote::BlockchainDB& iface = db;
+  w.Key("last_slash_epoch"); w.Uint64(iface.get_archival_last_slash_epoch());
+  w.Key("total_burned"); w.Uint64(iface.get_total_burned());
+  w.EndObject();
+
+  // What a red on the rows means (ARW-Q15): the bond rows' identity fields
+  // are fixture-seeded and unreproducible by an admitted transaction; a
+  // difference there is not a finding. Everything else is.
+  w.Key("bond_comparison");
+  w.StartObject();
+  w.Key("identity_fields");
+  w.StartArray();
+  w.String("hybrid_pubkey"); w.String("bond_spend_pk"); w.String("endpoint");
+  w.EndArray();
+  w.Key("state_fields");
+  w.StartArray();
+  w.String("join_settlement_epoch"); w.String("bonded_total"); w.String("holdings");
+  w.String("bad_intervals"); w.String("claimed_settlement_epochs"); w.String("first_paying_emission_height");
+  w.EndArray();
+  w.EndObject();
+  w.EndObject();
+
+  {
+    std::ofstream out(base + ".inputs.json", std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(out.good()) << "SHEKYL_E4_CAPTURE_DIR: cannot write " << base << ".inputs.json";
+    out.write(buf.GetString(), static_cast<std::streamsize>(buf.GetSize()));
+    out << '\n';
+  }
+
+  ShekylE2ArchivalSnapshot* rows = db.archival_snapshot_rows();
+  const std::string rows_path = base + ".rows.json";
+  const int32_t rc = shekyl_e2_archival_snapshot_write_json(rows,
+    reinterpret_cast<const uint8_t*>(rows_path.data()), rows_path.size());
+  shekyl_e2_archival_snapshot_free(rows);
+  ASSERT_EQ(rc, SHEKYL_E2_TRACE_OK) << "SHEKYL_E4_CAPTURE_DIR: the rows did not write to " << rows_path;
+}
+
 } // namespace
 
 // Sustained absence DOES slash — the other half of the pin's
@@ -2344,6 +2558,31 @@ TEST(archival_substrate_lmdb, slash_scheduler_slashes_sustained_absence_at_m_of_
   EXPECT_EQ(read.bonded_total_atomic, 2 * floor);
   EXPECT_TRUE(read.bad_intervals.empty());
   EXPECT_TRUE(db.archival_bond_good_through(p_served, slash_epoch + 1));
+
+  // ARW-Q15: the C++ reading of slash_log / slash_applied /
+  // last_slash_epoch / serve_credit and a slashed bond's bad interval exists
+  // nowhere but here. Captured as data with the inputs named above, under
+  // SHEKYL_E4_CAPTURE_DIR; a no-op otherwise.
+  E4FixtureCapture capture{};
+  capture.fixture = "slash_scheduler_slashes_sustained_absence_at_m_of_n";
+  capture.window = window;
+  capture.total_bonded_atomic_seeded = 4 * floor;
+  capture.personas = {
+    {p_miss, "answers no baseline: slashed at the m-th observed miss", window_kat_bond()},
+    {p_served, "answers every baseline through epoch m: untouched", window_kat_bond()},
+  };
+  for (uint64_t epoch = 1; epoch <= window.m; ++epoch)
+    capture.passes.push_back({p_served, 7, epoch, kServeCreditTestBlockHeight});
+  capture.waypoints = {
+    {shekyl_archival_epoch_slash_deadline_height(absorbed_epoch) + 1,
+     "m-1 observed misses absorbed: p_miss intact, nothing burned, last_slash_epoch = m-1"},
+    {shekyl_archival_epoch_slash_deadline_height(slash_epoch) + 1,
+     "the m-th miss slashes p_miss: shard 7 erased, one floor burned, one open bad interval from epoch m"},
+  };
+  capture.slashed_persona = p_miss;
+  capture.absorbed_epoch = absorbed_epoch;
+  capture.slash_epoch = slash_epoch;
+  write_e4_fixture_capture(fixture.db, capture);
 }
 
 // The shard's add-epoch is the window's floor, not the record's join epoch.

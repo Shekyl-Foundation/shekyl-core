@@ -38,9 +38,7 @@ use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::Millis;
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
-#[cfg(test)]
-use crate::zone::FluffReach;
-use crate::zone::{TxBlob, Zone};
+use crate::zone::{Relay, TxBlob};
 
 /// Work the driver produced that the caller must perform.
 ///
@@ -126,23 +124,23 @@ pub enum Effect {
 /// daemon's force-step hooks honest rather than a test-only shortcut.
 #[derive(Debug)]
 pub struct Driver {
-    zone: Zone,
+    zone: Relay,
 }
 
 impl Driver {
     /// Take ownership of a zone.
-    pub fn new(zone: Zone) -> Self {
+    pub fn new(zone: Relay) -> Self {
         Self { zone }
     }
 
     /// The zone, for commands that arrive from outside (connection events,
     /// transactions offered for relay).
-    pub fn zone_mut(&mut self) -> &mut Zone {
+    pub fn zone_mut(&mut self) -> &mut Relay {
         &mut self.zone
     }
 
     /// The zone, for reads.
-    pub fn zone(&self) -> &Zone {
+    pub fn zone(&self) -> &Relay {
         &self.zone
     }
 
@@ -165,7 +163,7 @@ impl Driver {
         // noise channel keeps its own deadline in the zone; this only asks
         // which is earliest. That distinction is the whole of CV-3: the shared
         // wake is what makes a resample-on-foreign-wake bug *reachable*, so the
-        // re-arm stays in `Zone::due_noise_channel`, which touches only the
+        // re-arm stays in `Relay::due_noise_channel`, which touches only the
         // single channel that actually fired. Stem observation is the same
         // shape: per-tx deadlines live in `StemWatch`; this only folds the min.
         let mut wake = self.zone.epoch_deadline();
@@ -231,7 +229,13 @@ impl Driver {
         // carries the clear instead — see [`Effect::NoiseUnbind`].
         if let Some(channel) = self.zone.due_noise_channel(now, rng) {
             match self.zone.stem_slots().get(channel).copied().flatten() {
-                Some(peer) => effects.push(Effect::NoiseSend { channel, peer }),
+                Some(peer) if self.zone.noise_destination(peer) => {
+                    effects.push(Effect::NoiseSend { channel, peer });
+                }
+                // A volume-cover peer is not a noise destination. The channel
+                // stays armed for a later open-link occupant. An empty slot
+                // still unbinds.
+                Some(_) => {}
                 None => effects.push(Effect::NoiseUnbind { channel }),
             }
         }

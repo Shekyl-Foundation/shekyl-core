@@ -116,7 +116,7 @@ TEST(tor_address, unblockable_types)
     EXPECT_FALSE(tor.is_local());
     EXPECT_FALSE(tor.is_loopback());
     EXPECT_EQ(epee::net_utils::address_type::tor, tor.get_type_id());
-    EXPECT_EQ(epee::net_utils::zone::tor, tor.get_zone());
+    EXPECT_EQ(epee::net_utils::connector_id::tor, tor.connector());
 
     tor = net::tor_address::unknown();
     ASSERT_NE(nullptr, tor.host_str());
@@ -127,7 +127,7 @@ TEST(tor_address, unblockable_types)
     EXPECT_FALSE(tor.is_local());
     EXPECT_FALSE(tor.is_loopback());
     EXPECT_EQ(epee::net_utils::address_type::tor, tor.get_type_id());
-    EXPECT_EQ(epee::net_utils::zone::tor, tor.get_zone());
+    EXPECT_EQ(epee::net_utils::connector_id::tor, tor.connector());
 
     EXPECT_EQ(net::tor_address{}, net::tor_address::unknown());
 }
@@ -220,9 +220,9 @@ TEST(tor_address, generic_network_address)
     EXPECT_EQ(epee::net_utils::address_type::tor, tor1.get_type_id());
     EXPECT_EQ(epee::net_utils::address_type::tor, tor2.get_type_id());
     EXPECT_EQ(epee::net_utils::address_type::ipv4, ip.get_type_id());
-    EXPECT_EQ(epee::net_utils::zone::tor, tor1.get_zone());
-    EXPECT_EQ(epee::net_utils::zone::tor, tor2.get_zone());
-    EXPECT_EQ(epee::net_utils::zone::public_, ip.get_zone());
+    EXPECT_EQ(epee::net_utils::connector_id::tor, tor1.connector());
+    EXPECT_EQ(epee::net_utils::connector_id::tor, tor2.connector());
+    EXPECT_EQ(epee::net_utils::connector_id::clearnet, ip.connector());
     EXPECT_TRUE(tor1.is_blockable());
     EXPECT_TRUE(tor2.is_blockable());
     EXPECT_TRUE(ip.is_blockable());

@@ -251,7 +251,7 @@ struct txpool_tx_meta_t
       `is_forwarding` until Q12-U2 deleted `relay_method::forward`, then sat
       reserved — never read, written only as an explicit zero. So every record
       ever persisted carries zero here by construction, the layout does not
-      move (`fcmp_verified` and `origin_zone` keep their positions), and the
+      move (`fcmp_verified` stays where it was), and the
       conservative reading is the one old records already give.
 
       Still zeroed by `set_relay_method`, and that stays CORRECT rather than
@@ -262,46 +262,13 @@ struct txpool_tx_meta_t
       arm and should not carry a disarm for it. */
   uint8_t observed_circulating: 1;
   uint8_t fcmp_verified: 1;  // set when fcmp_verification_hash is valid
-  //! Zone this transaction ARRIVED over. See set_origin_zone/get_origin_zone.
-  //
-  // Q12-U1. Exactly two bits. The named zones are `invalid`, `public_`, and `tor`.
-  // values -- the right width, not merely spare room. The record stays a fixed
-  // 192 bytes, so nothing about the format grows and there is no version to
-  // bump (rule 42 governs `rust/shekyl-engine-{state,file}/**`; this is
-  // daemon-side C++ LMDB, re-verified at pre-flight rather than inherited).
-  //
-  // LIVE PRODUCTION INPUT since 2026-08-25, and the rule-15 deletion clause
-  // below is therefore SPENT. `tx_pool.cpp`'s `local_relay_base` reads this
-  // field on every relay pass to pick the parameter class for an origin's
-  // re-broadcast interval (DAEMON_RELAY_PRIVACY.md §92.5c item 3): a value
-  // change here changes when a transaction is re-emitted. Deleting the field
-  // now silently reverts every origin to the clearnet wait.
-  //
-  // It reached that state having been telemetry with three scoped consumers,
-  // none delivered: U1 pool-loop routing — deleted with
-  // `relay_method::forward` (Q12-D3); U2 re-relay origin bucketing — retracted
-  // (`2cd0fb72`, not a leak fix); U3 zone-labelled `/get_stem_tallies` —
-  // collection zone, not this field. Fourth consumer, named 2026-08-13: the
-  // Q12-D6a isolation arm (`Q12_D6A_PEER_DISCOVERY_RUN.md` §6) — distinguish
-  // originated-on-anon from relayed-on-anon.
-  //
-  // The reading it acquired is narrow and worth stating so it is not widened
-  // by accident: the retry timer asks only "anonymity class or clearnet
-  // class?", and every entry that reaches it carries `invalid`, which resolves
-  // to the anonymity class. It is not a routing decision and does not select a
-  // peer.
-  //
-  // NO MIGRATION, and the reason is load-bearing: `zone::invalid == 0`, and a
-  // record written before this field existed has these bits zero, so it
-  // decodes to "origin unknown" -- already the correct sentinel.
-  //
-  // That is stronger than "the spare bits happen to be zero". The predecessor
-  // `bf_padding` (now `observed_circulating`) was never READ anywhere at the
-  // time, and its only writes were three
-  // explicit `= 0` assignments in tx_pool.cpp, now replaced by the setter. So
-  // every record ever persisted carries zero here by construction, and the
-  // fallback is a fact about the data rather than a hope about it.
-  uint8_t origin_zone: 2;
+  // The two bits that stored the arrival zone are unused. The pool's
+  // remaining record of how a transaction is relayed is the relay method.
+  // A surviving `local` origin's retry does not name a connector. The
+  // pool does not store one, so the wait is the longest measured transit
+  // (`local_relay_base`). The bits
+  // stay so this record stays 192 bytes and the hash below does not move.
+  uint8_t : 2;
 
   // FCMP++ verification cache: hash(proof || tree_root || key_images).
   // When fcmp_verified == 1, the proof was previously verified against
@@ -314,29 +281,6 @@ struct txpool_tx_meta_t
   void set_relay_method(relay_method method) noexcept;
   relay_method get_relay_method() const noexcept;
 
-  //! Record the zone this transaction ARRIVED over.
-  //
-  // Deliberately separate from `set_relay_method`. The relay method is a
-  // routing DECISION and the origin zone is a FACT about where the bytes came
-  // from; folding the fact into the decision is what made the zone
-  // unrecoverable in the first place -- `relay_method::forward` meant "arrived
-  // somewhere other than clearnet" and threw away which somewhere.
-  //
-  // The setter itself is last-write. First-arrival is `add_tx`'s rule: it
-  // calls this only on a fresh insert, so a stem→fluff upgrade does not
-  // revise the provenance.
-  void set_origin_zone(epee::net_utils::zone zone) noexcept;
-
-  //! The zone this transaction arrived over, or `zone::invalid` if unknown.
-  //
-  // `invalid` is returned for every record written before this field existed,
-  // and for locally originated transactions, which did not arrive over
-  // anything. Callers must treat it as "origin unknown" rather than as a
-  // fourth transport. Nothing production-routes on this value. Named
-  // consumer: Q12-D6a isolation arm (`Q12_D6A_PEER_DISCOVERY_RUN.md` §6).
-  // The HF re-validation read is preservation, not that consumer.
-  epee::net_utils::zone get_origin_zone() const noexcept;
-
   //! \return True if `get_relay_method()` now returns `method`.
   bool upgrade_relay_method(relay_method method) noexcept;
 
@@ -346,6 +290,7 @@ struct txpool_tx_meta_t
     return matches_category(get_relay_method(), category);
   }
 };
+static_assert(sizeof(txpool_tx_meta_t) == 192, "txpool meta is a fixed 192-byte record");
 
 
 #define DBF_SAFE       1

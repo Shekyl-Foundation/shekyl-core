@@ -35,7 +35,7 @@ exercised together"), §11.2 (`alt_blocks` and
 produce them, every digest excludes them) and the S-POOL row's inheritance
 for this surface (census by *table*, not by the `Blockchain::` corridor —
 [`DRS_E1_SPOOL.md`](DRS_E1_SPOOL.md) §2.2, SPL-15); from
-[`DRS_E1_SARCH.md`](DRS_E1_SARCH.md) `SAR-Q5` (RULED: the alt-attestation
+[`DRS_E1_SARCH.md`](../completed/DRS_E1_SARCH.md) `SAR-Q5` (RULED: the alt-attestation
 witness pair lands **here**, as an alt-block attribute, not as an archival
 read); from [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md)
 CEN-K3 ("belt survives the engine change only if re-specified" — this is the

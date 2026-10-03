@@ -9,7 +9,13 @@ height-semantics Phase 2d RULED 2026-09-21 (countersign clocks +
 difference constants); height-semantics Phase 2e RULED 2026-09-21
 (C4 `bond_post_offset_blocks` + wallet-ledger tip/reorg wrap);
 height-semantics Phase 2f RULED 2026-09-21 (ScanResult and the remaining
-inland ordinals are `BlockHeight`; reference spans are `BlockCount`).
+inland ordinals are `BlockHeight`; reference spans are `BlockCount`);
+height-semantics Phase 2g RULED-as-slice 2026-10-01, burn-down begun
+(the daemon-store and archival surface the census did not walk; its
+gate `check_inland_height_u64.py` landed first, grandfathered at 174;
+UPDATE 2026-10-02: list 174 → 167 through DRS-E4 commits 8, 10d and 12,
+the slice itself not yet opened; §3.5, `DRS_E4_ARCHIVAL_WRITER.md`
+`ARW-Q16`).
 Stamp-clock COUNT→ORDINAL conversion is optional-not-owed. The
 `get_version` `target_height` wire `0` was retired at `CORE_RPC_VERSION`
 3.40 (2026-10-01); `get_info` still uses the C++ convention. Numerics are frozen
@@ -36,7 +42,9 @@ C++ overloads "height" for the count (`m_db->height()`, `get_height`,
 `get_info.height` after `++res.height` at
 `src/rpc/core_rpc_server.cpp:206-207`). The Rust vocabulary already
 splits the types; the remaining tax is callers that wrap a count in
-`BlockHeight`.
+`BlockHeight` — and, found 2026-10-01, a whole surface the census did
+not walk that carries both quantities as bare `u64` (the daemon store
+and the archival schedule; §3.5 Phase 2g).
 
 Named conversions, on `ChainCount`
 (`rust/shekyl-types/src/block_axis.rs:150-182`):
@@ -390,6 +398,62 @@ quantity.
   `get_version` `target_height` stays a wire `u64`; its synchronized `0`
   was retired at `CORE_RPC_VERSION` 3.40. `get_info` still writes `0`
   when synchronized. No numeric change.
+- **Height-semantics Phase 2g — the daemon-store and archival surface —
+  RULED 2026-10-01 as a separate slice, gate landed, burn-down begun**
+  (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-Q16` (b), (c)). *UPDATE 2026-10-02:*
+  the list stands at 167 (174 → 172 `ARW-Q17`; → 170 the serve-credit
+  mirror deleted; → 167 `ShardClose::ClosedAt` and `shard_age_milli` on
+  `BlockHeight`, DRS-E4 commit 12 — surfaced by the merge with SHT-Q2's
+  close operand, the gate's first red on a merged tree). The slice's own
+  work is not opened. The census above (§2–§3.3) walked
+  the wallet side and the daemon-admission reads; the Rust daemon store
+  and the archival settlement schedule are in it nowhere, and Phase 2e's
+  *C2-complete* is true of the census and false of the tree. Read at the
+  tree 2026-10-01: `shekyl_archival_retention::SettlementSchedule` is
+  thirty-one bare-`u64` height parameters (`last_block`,
+  `slash_deadline_height`, `close_due_at_height(block_height: u64)`, …);
+  `shekyl_types::archival::storage_ids_through(listed: u64, height: u64)`;
+  `shekyl_chain_rules::archival::Transition::count() -> u64` (a
+  **count**, `connecting + 1`, named but untyped);
+  `shekyl_chain_store::store::archival_write::{record_archival_epoch,
+  write_slashes}(height: u64)` (C7 by name). Three one-apart defects were
+  found there by tests, not readers, in one lane in three days — the
+  close height (DRS-E4 commit 2), the coinbase term (commit 3), the
+  slash-log key (commit 6, `ARW-26`) — and commit 4 had defended the
+  class with a name (`count()`), which held in its crate and not across
+  the call into the store. *Scope if ruled:* those surfaces become
+  `BlockHeight` / `ChainCount` / `BlockCount` inland; the
+  `shekyl_archival_epoch_*` FFI free functions and the
+  `consensus_state::*` process-latched wrappers decode at the edge (C1,
+  C8); one new named bridge on `ChainCount` for *the count of a chain
+  whose tip is `h`* (`tip()`'s inverse — today only reachable as
+  `from_next_height(h) + ONE`), with its C9 `compile_fail`; **no numeric
+  change**. *The gate came first, and not as this slice's deliverable —
+  RULED 2026-10-01 (`ARW-Q16` (c) sharpened: a gate that cannot pass
+  cannot land, and its value is the forty-first instance, not the forty):*
+  `scripts/ci/check_inland_height_u64.py` landed in DRS-E4 the same day,
+  **grandfathered at 174 exact-hit records** over these five crates
+  (`inland_height_u64_grandfather.txt`; tests included), a
+  `GRANDFATHER_CEILING` that only lowers, `--selftest` on every hit shape
+  and failure class (rule 47), in `grep-gates.yml`. **C2 is therefore
+  mechanical on this surface, and only here** — the wallet side's census
+  and its `RK-`/C1 rulings are not the gate's subject; widening is this
+  slice's call, taken by adding a crate and its records. Stated
+  non-coverage: count-named operands (`Transition::count()`), heights
+  under other names (`h_open`, `tip`, `at`); and — UPDATE 2026-10-02 (PR
+  #937 review) — a grandfathered line **moved within its file** with its
+  text intact, since a record is `(path, text, count)` without a line
+  number: the touched-site law is review-borne for that case, by choice,
+  because a line-numbered record is invalidated by every unrelated edit
+  above it and a list re-recorded on every edit is one nobody reads.
+  *This slice's work is now
+  the burn-down:* each retyped site deletes its record and lowers the
+  ceiling; the slice is complete when the list is empty and the gate
+  keeps it so. *What E4 does regardless* (`ARW-Q16` (a)): its commit 8
+  lands the `ARW-26` ruling typed at the site it changes, and commits 7–9
+  run under the gate. *Falsifier:* a fourth one-apart instance before this
+  slice lands — now only reachable through a count-named or
+  otherwise-named operand, which is the gate's stated blind side.
 
 **Out of scope of the whole audit:** any stamp value change (none from
 Phase 1); the curve-tree FFI replica's internals beyond the

@@ -73,8 +73,7 @@ cbindgen \
 # `grep -c` exits 1 on zero matches; under pipefail that would abort before
 # the comparison message. `|| true` keeps the count as the signal.
 exports_in_rust="$(grep -cE 'pub (unsafe )?extern "C" fn shekyl_relay_zone_' rust/shekyl-ffi/src/relay_zone_ffi/mod.rs || true)"
-# The name class is [a-z0-9_]: export names legitimately carry digits
-# (shekyl_relay_zone_r1_coherence_keeps_origin — R-1 is a design term), and a
+# The name class is [a-z0-9_]: export names legitimately carry digits, and a
 # digit-excluding class made the gen/header counts skip such a name while the
 # prefix-only Rust count included it, failing the three-way match on a correct
 # surface. Caught on this gate's first digit-bearing export.

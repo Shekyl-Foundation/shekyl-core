@@ -961,14 +961,19 @@ namespace cryptonote
     // injector, under the blockchain lock — a snapshot taken here would be
     // pre-lock and can go stale against a concurrent mine/pop. On refusal
     // (wrong nettype, empty chain) the daemon log names the reason.
+    // The receipt: the tip index the row was keyed at, from inside the
+    // lock. The caller's only way to learn it (DRS-E4 §3.8 item 3 — the
+    // capture replays the injection as a corpus event at this height).
+    uint64_t attributed_height = 0;
     if (!m_core.get_blockchain_storage().regtest_inject_archival_serve_credit(
-      p_canonical_id, req.shard_id, req.settlement_epoch))
+      p_canonical_id, req.shard_id, req.settlement_epoch, attributed_height))
     {
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = "Serve-credit injection failed";
       return false;
     }
 
+    res.height = attributed_height;
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -1358,19 +1363,15 @@ namespace cryptonote
       cryptonote::blobdata txblob;
       if ((broadcasted = m_core.get_pool_transaction(txid, txblob, relay_category::broadcasted)) || m_core.get_pool_transaction(txid, txblob, relay_category::all))
       {
-        // Q12-D5a residual absorption. Always passes `invalid`. Anything not
-        // yet fluff/block (`local` AND `stem` — stem is outside
-        // `relay_category::broadcasted`) is remapped to `local`, so
-        // `once_at_origin_route` fail-closes onto the anonymity zone. A
-        // transaction that rolled clearnet and is still stemming is
-        // therefore re-decided onto anon: the zone chosen again after
-        // origination, which once-at-origin forbids. Closing it needs the
-        // pool meta at this RPC (TODO above). Until then this is a named
-        // residual, not a silent p_own=1. FOLLOWUPS.
+        // A pool entry that is not yet broadcast is relayed as local.
+        // Hop 0 inside the relay is the construction bit. This call does
+        // not choose a connector. Closing the residual that a still-stemming
+        // entry is re-sent as local needs the pool meta at this RPC (TODO
+        // above). FOLLOWUPS.
         NOTIFY_NEW_TRANSACTIONS::request r;
         r.txs.push_back(std::move(txblob));
         const auto tx_relay = broadcasted ? relay_method::fluff : relay_method::local;
-        m_core.get_protocol()->relay_transactions(r, boost::uuids::nil_uuid(), epee::net_utils::zone::invalid, tx_relay);
+        m_core.get_protocol()->relay_transactions(r, boost::uuids::nil_uuid(), tx_relay);
         //TODO: make sure that tx has reached other nodes here, probably wait to receive reflections from other nodes
       }
       else

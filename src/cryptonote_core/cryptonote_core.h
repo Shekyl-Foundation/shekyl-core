@@ -155,7 +155,7 @@ namespace cryptonote
       *
       * @return true if the transaction was accepted, false otherwise
       */
-     bool handle_incoming_tx(const blobdata& tx_blob, tx_verification_context& tvc, relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone);
+     bool handle_incoming_tx(const blobdata& tx_blob, tx_verification_context& tvc, relay_method tx_relay, bool relayed);
 
     /**
       * @brief handles a single incoming block
@@ -277,7 +277,7 @@ namespace cryptonote
       * @brief called when a transaction is relayed.
       * @note Should only be invoked from `levin_notify`.
       */
-     void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay, epee::net_utils::zone zone) final;
+     void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay, std::optional<std::uint8_t> stem_connector) final;
 
      //! Hand the stem watch's propagation verdicts to the pool (F-10, §49).
      void on_stem_propagated(epee::span<const crypto::hash> txids) final;
@@ -860,7 +860,7 @@ namespace cryptonote
       * @param relayed whether or not the transaction was relayed to us
       *
       */
-     bool add_new_tx(transaction& tx, const crypto::hash& tx_hash, const cryptonote::blobdata &blob, size_t tx_weight, tx_verification_context& tvc, relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone);
+     bool add_new_tx(transaction& tx, const crypto::hash& tx_hash, const cryptonote::blobdata &blob, size_t tx_weight, tx_verification_context& tvc, relay_method tx_relay, bool relayed);
 
      /**
       * @brief add a new transaction to the transaction pool
@@ -876,7 +876,7 @@ namespace cryptonote
       * is already in a block on the Blockchain, or is successfully added
       * to the transaction pool
       */
-     bool add_new_tx(transaction& tx, tx_verification_context& tvc, relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone);
+     bool add_new_tx(transaction& tx, tx_verification_context& tvc, relay_method tx_relay, bool relayed);
 
      /**
       * @copydoc Blockchain::add_new_block

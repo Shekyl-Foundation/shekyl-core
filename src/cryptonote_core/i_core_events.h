@@ -28,6 +28,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "cryptonote_basic/blobdatatype.h"
 #include "crypto/hash.h"
 #include "cryptonote_protocol/enums.h"
@@ -67,16 +69,14 @@ namespace cryptonote
         already answered exactly this question for compact-block
         reconstruction and carries the same reasoning. */
     virtual bool pool_has_tx(const crypto::hash &txid) const = 0;
-    /*! \param zone The relay zone the transactions went out on.
+    /*! \param stem_connector The connector a stem was forwarded on.
 
-        Carried alongside `tx_relay` rather than stored on the txpool entry.
-        The embargo is drawn per-zone (§89.2) at exactly one site,
-        `tx_memory_pool::set_relayed`, and every path to it is synchronous with
-        a relay event — so the zone needs to be *told*, not *remembered*. An
-        earlier draft reserved two bits on `txpool_tx_meta_t` for it; that
-        bought an LMDB record change and a pre-upgrade decode question for a
-        value nothing reads back. */
-    virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay, epee::net_utils::zone zone) = 0;
+        Present only for a stem record. Fluff passes `nullopt` and does not
+        draw an embargo. A stem with no connector draws the longest measured
+        transit. The value is not stored on the txpool entry: the embargo is
+        drawn at `tx_memory_pool::set_relayed`, and every path to it is
+        synchronous with a relay event. */
+    virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay, std::optional<std::uint8_t> stem_connector) = 0;
 
     /*! The stem watch resolved these transactions as PROPAGATED — each was
         seen arriving from somewhere other than the peer it was stemmed to
