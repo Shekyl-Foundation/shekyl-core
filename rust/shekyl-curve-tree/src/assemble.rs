@@ -43,9 +43,111 @@ use crate::client::{ClientError, CurveTreeClient};
 use crate::recon::{assemble_leaf_stream, drained_sorted};
 use crate::types::{AssembleInput, AssembledPath, ChunkLeaf, ReferenceBlock, TreeContext};
 use shekyl_fcmp::tree::{
-    build_layers, chunk_width, helios_point_to_selene_scalar, key_image_generator, layer_is_selene,
+    build_layers, chunk_width, hash_grow_helios, hash_grow_selene, helios_hash_init,
+    helios_point_to_selene_scalar, key_image_generator, layer_is_selene, selene_hash_init,
     selene_point_to_helios_scalar, SELENE_CHUNK_WIDTH,
 };
+
+/// Recompute the root from an assembled path's **own branches** and refuse if
+/// it disagrees with the root the path claims.
+///
+/// # Why this exists, and why it is not a second store read
+///
+/// `assemble_paths` runs two mechanisms that never meet: the integrity gate
+/// compares the **store-backed** [`CurveTreeClient::root_at`] against the
+/// reference, while the branches are rebuilt from replay-held `entries`, and
+/// [`TreeContext::tree_root`] is *copied from the gated reference*. So the
+/// emitted root is always the store's answer whatever the branches say —
+/// which `ct6_oracle::assembly_today_depends_on_every_foreign_leaf`
+/// demonstrates by reducing `entries` to one leaf and still getting a path
+/// that claims the real root.
+///
+/// Comparing [`CurveTreeClient::root_and_depth_at`] against `tree_root` would
+/// not close that: both answers come from the store tier, so it compares the
+/// store with itself and leaves the branches — the thing that can actually
+/// drift — unchecked. This verifies **the artifact**, so it catches every way
+/// the branches can diverge rather than the one case a test constructed.
+///
+/// # What it checks
+///
+/// The walk is the prover's own: hash the leaf chunk to a Selene point, then
+/// at each layer convert that point to the child scalar its parent holds,
+/// require that scalar to be **present in the branch** at that layer, and
+/// hash the branch to the next point. The membership step is what binds the
+/// path to *this* leaf: without it, a correct root over branches belonging to
+/// some other leaf would pass.
+///
+/// It reuses `shekyl-fcmp`'s hash primitives rather than restating the
+/// composition (`try_build_layers`' single-composition discipline): a second
+/// hashing implementation that disagreed with the first would be a worse
+/// defect than the one this closes.
+///
+/// `O(depth)` — a handful of hashes against the `O(n)` rebuild above it.
+///
+/// # Errors
+///
+/// [`ClientError::PathRootMismatch`] if the recomputed root differs, if a
+/// layer's child is absent from its branch, or if any conversion or hash
+/// fails on material the tree should never have admitted.
+pub(crate) fn verify_path_against_its_branches(path: &AssembledPath) -> Result<(), ClientError> {
+    const ZERO: [u8; 32] = [0u8; 32];
+
+    let refuse = |reason: &'static str| ClientError::PathRootMismatch {
+        claimed: path.tree.tree_root,
+        reason,
+    };
+
+    // Layer 0: the leaf chunk hashes to a Selene point.
+    let mut leaf_scalars: Vec<[u8; 32]> = Vec::with_capacity(path.leaf_chunk.len() * 4);
+    for leaf in &path.leaf_chunk {
+        leaf_scalars.extend_from_slice(&leaf.scalars().ok_or_else(|| {
+            refuse("a leaf in the chunk does not convert to scalars; it never passed admission")
+        })?);
+    }
+    let mut point = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &leaf_scalars)
+        .ok_or_else(|| refuse("the leaf chunk does not hash"))?;
+
+    // Layers 1..depth: the child must be IN its parent's branch, and the
+    // branch hashes to the parent.
+    let mut c1 = path.c1_layers.iter();
+    let mut c2 = path.c2_layers.iter();
+    for layer in 1..path.tree.tree_depth {
+        let selene = layer_is_selene(layer);
+        let branch = if selene { c1.next() } else { c2.next() }
+            .ok_or_else(|| refuse("the path has fewer branches than its stated depth"))?;
+
+        let child = if selene {
+            helios_point_to_selene_scalar(&point)
+        } else {
+            selene_point_to_helios_scalar(&point)
+        }
+        .ok_or_else(|| refuse("a path node does not convert to its parent's scalar"))?;
+
+        if !branch.contains(&child) {
+            return Err(refuse(
+                "a path node is absent from its parent's branch: the branches do not belong \
+                 to this leaf",
+            ));
+        }
+
+        point = if selene {
+            hash_grow_selene(&selene_hash_init(), 0, &ZERO, branch)
+        } else {
+            hash_grow_helios(&helios_hash_init(), 0, &ZERO, branch)
+        }
+        .ok_or_else(|| refuse("a branch does not hash"))?;
+    }
+
+    if c1.next().is_some() || c2.next().is_some() {
+        return Err(refuse("the path has more branches than its stated depth"));
+    }
+    if point != path.tree.tree_root.to_bytes() {
+        return Err(refuse(
+            "the branches do not hash to the root the path claims",
+        ));
+    }
+    Ok(())
+}
 
 impl CurveTreeClient {
     /// Assemble the FCMP++ membership path for one owned output at a
@@ -279,7 +381,7 @@ impl CurveTreeClient {
                 "assembled path depth must match the tree depth"
             );
 
-            paths.push(AssembledPath {
+            let assembled = AssembledPath {
                 leaf_chunk,
                 c1_layers,
                 c2_layers,
@@ -290,7 +392,14 @@ impl CurveTreeClient {
                     tree_root: reference.curve_tree_root,
                     tree_depth: depth,
                 },
-            });
+            };
+
+            // §11.6: the artifact check. The gate above approved a store
+            // root; this is the only step that looks at the branches the
+            // proof will actually be built from.
+            verify_path_against_its_branches(&assembled)?;
+
+            paths.push(assembled);
         }
 
         Ok(paths)

@@ -132,6 +132,8 @@ pub(crate) use redb_delegated_key;
 /// a height can never be swapped with a tree position, gindex, or leaf
 /// count at a store seam — and so this crate cannot mint a second
 /// `BlockHeight` that is not the vocabulary type (RTN-4).
+use shekyl_fcmp::tree::{ed25519_point_to_selene_scalar, SCALARS_PER_LEAF};
+
 pub use shekyl_types::{
     BlockHash, BlockHeight, CommitmentBytes, CurveTreeRoot, GlobalOutputIndex, OneTimePubkey,
 };
@@ -294,6 +296,33 @@ pub struct ChunkLeaf {
     /// output's PQC leaf commitment (`PL-D3`) — what the prover holds for
     /// every sibling in the chunk.
     pub cm_x: [u8; 32],
+}
+
+impl ChunkLeaf {
+    /// The leaf's four Selene scalars, in the order `construct_leaf` writes
+    /// them: `O.x`, `I.x`, `C.x`, `CM.x`.
+    ///
+    /// This is the one place the prover-facing [`ChunkLeaf`] view is mapped
+    /// back onto the hashed leaf. It cannot call
+    /// [`shekyl_fcmp::tree::construct_leaf`] directly, because that takes the
+    /// `CM` *point* and a `ChunkLeaf` carries only its x-coordinate — the
+    /// extraction has already happened. So the order and the conversions are
+    /// restated here, and `chunk_leaf_scalars_match_construct_leaf` pins them
+    /// against `construct_leaf`'s own output so the two cannot drift.
+    ///
+    /// Returns `None` if any of the three compressed points fails conversion.
+    /// Total for leaves the tree actually holds — `try_build_leaf` refused
+    /// anything else at ingest — so a `None` here means the path was built
+    /// from something that never passed admission.
+    #[must_use]
+    pub fn scalars(&self) -> Option<[[u8; 32]; SCALARS_PER_LEAF]> {
+        Some([
+            ed25519_point_to_selene_scalar(self.output_key.as_bytes())?,
+            ed25519_point_to_selene_scalar(&self.key_image_gen)?,
+            ed25519_point_to_selene_scalar(self.commitment.as_bytes())?,
+            self.cm_x,
+        ])
+    }
 }
 
 /// Curve-tree context for one transaction's membership proof, shared by

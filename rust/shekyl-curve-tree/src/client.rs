@@ -122,6 +122,24 @@ pub enum ClientError {
         /// Root the client reconstructed from its leaves.
         got: CurveTreeRoot,
     },
+    /// An assembled path does not hash to the root it claims (`CT-6` §11.6).
+    ///
+    /// Raised by the artifact check that runs after assembly: the path's own
+    /// branches are hashed back to a root and compared with
+    /// [`TreeContext::tree_root`]. The integrity gate above it compares two
+    /// **store** reads and cannot see this, because `tree_root` is copied
+    /// from the gated reference while the branches come from replay.
+    ///
+    /// This is a defect, not a user condition: the wallet's two views of one
+    /// tree disagree. Refusing is the point — an inconsistent path yields a
+    /// proof that fails after the prover has run, or a transaction the daemon
+    /// rejects, and neither says what went wrong.
+    PathRootMismatch {
+        /// The root the path claimed, copied from the gated reference.
+        claimed: CurveTreeRoot,
+        /// Which step of the walk refused, so the failure names itself.
+        reason: &'static str,
+    },
     /// The requested output is not a drained leaf at the reference height,
     /// so no membership path exists for it there (the §4.3 lookup miss).
     OutputNotDrained {
@@ -321,6 +339,7 @@ impl ClientError {
             | ClientError::Frontier { .. }
             | ClientError::SnapshotLeafCountMismatch { .. } => StoreOpenFault::Corrupt,
             ClientError::RootMismatch { .. }
+            | ClientError::PathRootMismatch { .. }
             | ClientError::OutputNotDrained { .. }
             | ClientError::IdentityMismatch { .. }
             | ClientError::TooManyInputs { .. }
