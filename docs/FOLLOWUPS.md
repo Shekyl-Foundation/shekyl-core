@@ -34,10 +34,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **Write the transactions-per-epoch bound the epoch length rests on.** Sharma–Gosain–Diaz §VII-A reconstruct 98.5 % of a static privacy subgraph from about 100 transactions relayed per honest node. Epoch rotation (`rebuild_stems`) is the answer only while transactions per node per epoch stays well under that, which is a claim about Shekyl's rate and the 10-minute epoch that is currently assumed, not derived. Derive it, state the rate at which the epoch must shorten as the reopen criterion. Blocked on nothing but the derivation. Falsify by the number and its reopen rate appearing in the owner document.
-  - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
-  - Target: pre-genesis
-
 - **Fakechain derives mainnet's handshake id.** The derivation is per genesis hash, and fakechain's pin is mainnet's genesis, so the two ids match. That is the collision the derivation exists to prevent, confined to a test network. Give fakechain its own genesis hash, or make it offline by construction so it never handshakes. Falsify by `shekyl_network_id` for fakechain differing from mainnet, or by fakechain refusing a handshake.
   - Owner: [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md)
   - Target: pre-genesis
