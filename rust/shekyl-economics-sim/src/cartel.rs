@@ -632,18 +632,26 @@ pub fn tj_inequalities_report(
     )?;
 
     // The ratio that makes the finding actionable: what a burned bond is WORTH,
-    // denominated in the reward it is supposed to secure.
+    // denominated in the reward it is supposed to secure. "Not a penalty" is
+    // the reading of a slash cheaper than one epoch; a dearer slash states
+    // its own size.
     if reward_median_per_epoch_skl > 0.0 {
+        let epochs = bond / reward_median_per_epoch_skl;
+        let reading = if epochs < 1.0 {
+            "A slash that costs a fraction of one epoch's earnings is not a penalty, \
+             which is TJ-4's BOND_FLOOR coupling made quantitative: the (m,n) re-pin \
+             cannot carry attestation-resistance while the collateral it forfeits is \
+             this cheap relative to the flow."
+        } else {
+            "That is more than one epoch of earnings, so a slash at this reward is a \
+             penalty of that size. The 'fraction of one epoch' reading does not apply \
+             on this arm; the comparison itself is TJ-4's BOND_FLOOR coupling."
+        };
         writeln!(
             out,
-            "  -> WHY it breaks even so low: the burned bond is worth {E:.2} EPOCHS of the\n\
+            "  -> WHY it breaks even so low: the burned bond is worth {epochs:.2} EPOCHS of the\n\
              per-shard reward it secures ({BF:.3} SKL vs {RM:.4} SKL/epoch at the median).\n\
-             A slash that costs a fraction of one epoch's earnings is not a penalty,\n\
-             which is TJ-4's BOND_FLOOR coupling made quantitative: the (m,n) re-pin\n\
-             cannot carry attestation-resistance while the collateral it forfeits is\n\
-             this cheap relative to the flow. Raising m/lowering n does not fix a\n\
-             floor problem.",
-            E = bond / reward_median_per_epoch_skl,
+             {reading} Raising m/lowering n does not fix a floor problem.",
             BF = bond,
             RM = reward_median_per_epoch_skl,
         )?;

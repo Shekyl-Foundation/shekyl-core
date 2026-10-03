@@ -13,27 +13,26 @@
 //!
 //! The production arm prices nothing itself. The per-byte rate is
 //! [`shekyl_economics::corrected_fee_ladder`] at the block's own reward and
-//! correction; the weight it multiplies is
-//! [`shekyl_tx_weight::predict_weight`] for the ordinary shape at the chain's
-//! depth. What this module adds is the order of the calls and the three
-//! places the run still departs from the chain, each named in the type or
-//! below so that none is silent:
+//! correction; the weight it multiplies is the ordinary shape at the chain's
+//! depth, and the fee is the unrounded fixed point of that product
+//! ([`shekyl_tx_weight::converge_weight_fee`]). What this module adds is the
+//! order of the calls and the three places the run still departs from the
+//! chain, each named in the type or below so that none is silent:
 //!
 //! - the block-weight median is [`MedianModel`], not the validator's fold;
-//! - the fee is paid **unrounded** — the wallet rounds up to the daemon's
-//!   quantization mask (1 000 atomic), which has no Rust owner, and the
-//!   fee-floor instrument in this crate already pays exactly (FL-R22);
+//! - the fee is paid **unrounded** — the product above carries no quantization
+//!   mask. The wallet rounds up to the daemon's mask (1 000 atomic), which
+//!   has no Rust owner, and the fee-floor instrument in this crate already
+//!   pays exactly (FL-R22);
 //! - the volume, split and burn operands are the fold's own, so they carry
 //!   whatever that fold carries (the design document's ESR-3 and ESR-4).
 
-use serde::Serialize;
 use shekyl_economics::{
     base_block_reward, corrected_fee_ladder, fee_correction, EconomicParams, FeeLadder, TxVolume,
 };
-use shekyl_tx_weight::predict_weight;
 
-use crate::burden::normal_tx_shape;
-use crate::calibration::tree_depth_for_leaves;
+use crate::burden::ordinary_tx_fee;
+use crate::calibration::PerByteRate;
 use crate::fee_ladder::REF_TX_WEIGHT;
 
 /// The block-weight median the ladder divides by.
@@ -86,25 +85,6 @@ pub const SECTION_12_14_FLAT_FEE_ATOMIC: u64 = 100_000_000;
 /// the relay floor. Kept as the control arm's value and nowhere else.
 pub const SECTION_12_13_ADMISSION_RATE: PerByteRate = PerByteRate::from_atomic(300);
 
-/// A fee rate: atomic units per byte of transaction weight. A type of its
-/// own so that a rate cannot be passed where a leaf count, a depth or a
-/// shard count is expected — the functions that take one take several
-/// other integers beside it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub struct PerByteRate(u64);
-
-impl PerByteRate {
-    #[must_use]
-    pub const fn from_atomic(atomic_per_byte: u64) -> Self {
-        Self(atomic_per_byte)
-    }
-
-    #[must_use]
-    pub const fn atomic(self) -> u64 {
-        self.0
-    }
-}
-
 /// Thousandths in one: the multiplier that leaves a rung unchanged.
 const MILLI: u64 = 1_000;
 
@@ -125,6 +105,28 @@ pub struct FeePoint<'a> {
     /// ordinary transaction's weight.
     pub chain_leaves: u64,
     pub params: &'a EconomicParams,
+}
+
+/// What one block of identical ordinary transactions pays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChargedBlock {
+    /// Atomic units one of those transactions pays.
+    pub per_tx_atomic: u64,
+    /// Atomic units the block pays. Saturated at `u64::MAX`: a block's fees
+    /// are a `u64` everywhere they are burned.
+    pub total_atomic: u64,
+}
+
+impl ChargedBlock {
+    /// `tx_count` transactions at one fee.
+    #[must_use]
+    pub fn of_uniform(per_tx_atomic: u64, tx_count: u64) -> Self {
+        let total = u128::from(per_tx_atomic).saturating_mul(u128::from(tx_count));
+        Self {
+            per_tx_atomic,
+            total_atomic: u64::try_from(total).unwrap_or(u64::MAX),
+        }
+    }
 }
 
 impl FeeModel {
@@ -159,11 +161,19 @@ impl FeeModel {
                 multiplier_milli,
                 median,
             } => {
-                let fee = ordinary_tx_fee_atomic(ladder_at(median, at).standard, at.chain_leaves);
-                u64::try_from(u128::from(fee) * u128::from(multiplier_milli) / u128::from(MILLI))
-                    .unwrap_or(u64::MAX)
+                // The multiplier scales the rate. The fee is the fixed point
+                // of that rate: scaling an already converged fee would price
+                // a varint the payer does not write.
+                let rate = scaled_rate(ladder_at(median, at).standard, multiplier_milli);
+                ordinary_tx_fee(at.chain_leaves, rate)
             }
         }
+    }
+
+    /// What `tx_count` ordinary transactions pay at `at`.
+    #[must_use]
+    pub fn charge(self, tx_count: u64, at: &FeePoint<'_>) -> ChargedBlock {
+        ChargedBlock::of_uniform(self.per_tx_atomic(at), tx_count)
     }
 
     /// What admission costs per byte at `at`: the Economy rung, which is the
@@ -194,7 +204,8 @@ impl FeeModel {
                 median,
             } => format!(
                 "FEE ARM: production ladder — Standard rung x{:.3} (corrected_fee_ladder at each \
-                 block's R and C), ordinary 1in/2out weight at chain depth, paid unrounded; {}.",
+                 block's R and C), ordinary 1in/2out weight at chain depth, the unrounded fixed \
+                 point of rate x weight; {}.",
                 multiplier_milli as f64 / MILLI as f64,
                 match median {
                     MedianModel::PenaltyFreeZone =>
@@ -203,6 +214,102 @@ impl FeeModel {
             ),
         }
     }
+
+    /// How a stuffer-cost header names the rate this arm charges.
+    #[must_use]
+    pub fn admission_rate_phrase(self, rate: PerByteRate) -> String {
+        match self {
+            Self::FlatControl { .. } => format!("{} atomic/byte", rate.atomic()),
+            Self::ProductionStandard { .. } => {
+                "the production relay floor at each row's point of the baseline chain".to_string()
+            }
+        }
+    }
+
+    /// The stuffer table's rate column. Empty on the control arm, which has
+    /// one rate and has already named it.
+    #[must_use]
+    pub fn admission_rate_column(self) -> &'static str {
+        match self {
+            Self::FlatControl { .. } => "",
+            Self::ProductionStandard { .. } => "  floor (atomic/B)",
+        }
+    }
+
+    /// One cell of [`admission_rate_column`](Self::admission_rate_column).
+    #[must_use]
+    pub fn admission_rate_cell(self, rate: PerByteRate) -> String {
+        match self {
+            Self::FlatControl { .. } => String::new(),
+            Self::ProductionStandard { .. } => format!("  {:>16}", rate.atomic()),
+        }
+    }
+
+    /// What the rate does to a stuffer's cost, once depth's few percent are
+    /// set aside. One sentence, so the report has one footer.
+    #[must_use]
+    pub fn stuffer_rate_clause(self) -> &'static str {
+        match self {
+            Self::FlatControl { .. } => {
+                "The rate is constant on this arm, so that ratio is the whole of the movement: \
+                 one-shot drifts up about 1%, sustained down about 3%. The leaf era's \
+                 'cheapest early' is gone with its unit."
+            }
+            Self::ProductionStandard { .. } => {
+                "The rate is the relay floor at each row, and it follows the block reward, so a \
+                 shard is dear to stuff early and cheap late. Rows are the baseline chain at the \
+                 year it reaches that shard count, and past its last year they hold that year's \
+                 rate."
+            }
+        }
+    }
+
+    /// The name A3 gives the floor in its header.
+    #[must_use]
+    pub fn admission_floor_label(self, rate: PerByteRate) -> String {
+        match self {
+            Self::FlatControl { .. } => format!("{} atomic/byte", rate.atomic()),
+            Self::ProductionStandard { .. } => "production relay".to_string(),
+        }
+    }
+
+    /// Why the growth schedule's late columns are read for shape. The burn-out
+    /// clause was measured on the flat fee and is asserted on no other arm.
+    #[must_use]
+    pub fn growth_schedule_caveat(self) -> &'static str {
+        match self {
+            Self::FlatControl { .. } => {
+                "sustained_growth's 20%/yr to 60 y is unphysical (block weight caps it, and by ~y38\n\
+                 its fee burn has destroyed the circulating supply, so burn_pct -> 0 and the fee\n\
+                 leg with it) and is read for shape only."
+            }
+            Self::ProductionStandard { .. } => {
+                "sustained_growth's 20%/yr to 60 y is unphysical (block weight caps it) and is read\n\
+                 for shape only."
+            }
+        }
+    }
+
+    /// A note printed under the arm line when the paragraphs below were
+    /// written against the other arm. The control arm's paragraphs are its own.
+    #[must_use]
+    pub fn report_preamble(self) -> Option<&'static str> {
+        match self {
+            Self::FlatControl { .. } => None,
+            Self::ProductionStandard { .. } => Some(
+                "The paragraphs below were written against the flat control fee. Where one states a\n\
+                 result, the table beside it governs.",
+            ),
+        }
+    }
+}
+
+/// The per-byte rate after the run's multiplier. At [`MILLI`] the rate is
+/// unchanged.
+fn scaled_rate(rate_per_byte: u64, multiplier_milli: u64) -> PerByteRate {
+    let scaled =
+        u128::from(rate_per_byte).saturating_mul(u128::from(multiplier_milli)) / u128::from(MILLI);
+    PerByteRate::from_atomic(u64::try_from(scaled).unwrap_or(u64::MAX))
 }
 
 /// The production ladder at `at`: every rung comes from this one call, so
@@ -221,25 +328,14 @@ fn ladder_at(median: MedianModel, at: &FeePoint<'_>) -> FeeLadder {
     corrected_fee_ladder(base_reward, median, REF_TX_WEIGHT, correction, at.params)
 }
 
-/// Fee of one ordinary-shape transaction at `rate_per_byte` when the curve
-/// tree holds `chain_leaves` outputs. The fee's own varint is in the weight,
-/// so the two are solved together — the two-pass fixpoint the build path
-/// runs (`calibration::Shape::tx_weight` is the stuffer's copy of it).
-fn ordinary_tx_fee_atomic(rate_per_byte: u64, chain_leaves: u64) -> u64 {
-    let (n_in, n_out) = normal_tx_shape();
-    let depth = tree_depth_for_leaves(chain_leaves);
-    let mut fee = 0u64;
-    for _ in 0..2 {
-        let weight = predict_weight(n_in, n_out, depth, fee) as u64;
-        fee = weight.saturating_mul(rate_per_byte);
-    }
-    fee
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use shekyl_economics::{calc_effective_emission_share, relay_fee_floor, FeeCorrection};
+    use shekyl_tx_weight::predict_weight;
+
+    use crate::burden::normal_tx_shape;
+    use crate::calibration::tree_depth_for_leaves;
 
     fn point(already_generated: u64, params: &EconomicParams) -> FeePoint<'_> {
         FeePoint {
@@ -275,19 +371,34 @@ mod tests {
         assert_eq!(paid, weight * 4 * floor, "standard = 4 x floor x weight");
     }
 
-    /// The multiplier scales the fee and nothing else: the fact a report's
-    /// "x2" column rests on.
+    /// The multiplier scales the per-byte rate, and the fee is the fixed point
+    /// of that rate. At one the product is exact. At any other factor the
+    /// fee's own varint is inside the weight, so the paid fee is that rate's
+    /// fixed point rather than an integer multiple of the unscaled fee.
     #[test]
-    fn the_multiplier_scales_the_fee() {
+    fn the_multiplier_scales_the_rate_before_the_fixed_point() {
         let params = EconomicParams::default();
         let at = point(0, &params);
         let arm = |multiplier_milli| FeeModel::ProductionStandard {
             multiplier_milli,
             median: MedianModel::PenaltyFreeZone,
         };
-        let standard = arm(MILLI).per_tx_atomic(&at);
-        assert_eq!(arm(2 * MILLI).per_tx_atomic(&at), 2 * standard);
-        assert_eq!(arm(MILLI / 2).per_tx_atomic(&at), standard / 2);
+        let base = base_block_reward(0, &params).expect("genesis reward");
+        let floor = relay_fee_floor(
+            base,
+            params.full_reward_zone,
+            REF_TX_WEIGHT,
+            FeeCorrection::UNITY,
+            &params,
+        );
+        let (n_in, n_out) = normal_tx_shape();
+        let depth = tree_depth_for_leaves(at.chain_leaves);
+        for multiplier_milli in [MILLI / 2, MILLI, 2 * MILLI] {
+            let paid = arm(multiplier_milli).per_tx_atomic(&at);
+            let weight = u128::from(predict_weight(n_in, n_out, depth, paid) as u64);
+            let rate = u128::from(4 * floor) * u128::from(multiplier_milli) / u128::from(MILLI);
+            assert_eq!(u128::from(paid), weight * rate, "milli {multiplier_milli}");
+        }
     }
 
     /// The property the whole re-base exists for: the production fee follows
