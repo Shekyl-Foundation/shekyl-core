@@ -413,6 +413,33 @@ with the layout half's fixture landed under it and the blocker named:
 KAT equal to the C++ verifier over the pinned corpus.* The corpus is
 decoupled from TXE's schedule by §1.2 item 3 as amended.
 
+**Conformance correction, 2026-10-03 (`SHT-9`, PR #942; design owner).**
+H20 as commit 4 landed it judged the prunable region's spend material only
+when a region was present, so a serve-credit body with `prunable: None`
+passed, and no later row caught it. Rust was less strict than live consensus:
+the C++ refuses any pass-record count other than the serve-credit vin count
+(`blockchain.cpp`, the serve-credit arm of `check_tx_inputs`), and a body with
+no region fails its parse. Rust's parser yields `prunable: None` for a body
+whose bytes end after the base, so a peer could produce it, and the chain
+store cannot hold it: the drain's reconstruction at `tx_spendable_age` names
+another transaction and the store halts on SI-7. H20 now requires the region,
+no spend material in it, and one pass record per serve-credit vin (`RF-D1`).
+
+- **Shape and count only.** What a record holds is CEN-J10's. The census row
+  for H20 is unchanged; the count is the live serve-credit arm's, carried here
+  because H20 is the row that sees the region.
+- **Not a consensus change.** The live path is untouched, so no rule-07 cutover
+  applies. It had to land before the engine swap, when this crate becomes the
+  only validator; it lands now.
+- **Why the conformance test missed it.** §3.1.1's table keys the twin's
+  serve-credit shape check to one trip (a `pqc_auth`), so the check's other
+  clauses were held to nothing. `the_h20_sites_other_clauses_are_h20_too` holds
+  the two this concerns.
+- **Fixtures:** `harness::fixture::serve_credit_only` and the ingest scenario's
+  credit carry the region (`fixture::PRUNED_PASS_RECORD`, a marker).
+- **Cross-reference:** PR #939's serve-credit verifier round (CEN-J8–J10) cites
+  H20's sites. It is not blocked on this, nor this on it.
+
 ---
 
 ## 5.1 The slice-6 cascade, scoped now (2026-09-23)
