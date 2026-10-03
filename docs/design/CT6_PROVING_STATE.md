@@ -308,7 +308,7 @@ have re-imported the dependency this round exists outside of.
 | **2** | **The C1 oracle, height-keyed.** At every fixture height `h`, root, depth, and drained-leaf count equal `assemble_leaf_stream` + `root_from_scalars` over the leaves drained through `h - 1`. That cutoff is written in the test, not read from `drained_through`. Depth is graded at the two leaf counts where `layer_count_for_leaves` steps (`0`, and `SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH`). **Q2 examiner armed here, graded at increment 4:** `examine_tier_readings` compares a `TierReading` (root and depth) per tier. `TierCoverage::OutsideSpan` is the only non-answer; a tier error has no variant to hide in. Agreeing overlap is success, a root or depth mismatch is `Disagree`, and a height in neither `HeightSpan` is `Uncovered`. The 2026-09-23 decision-log row records why the examiner is armed before its tiers exist | §6.3.4 row 4; Q2 | Q2 (**ruled**); Q1's *shape* only — its constants are not inputs to the oracle |
 | **3** | **Per-transaction reconstruction reuse.** `drained`/`layers` once per tx, `gindex → drain-position` index | **Closeout (a)** — F3b | 2 |
 | **4** | **The snapshot ring + advance — BUILT (§10).** One dense ring over the reorg horizon, total by construction (`Q1` RULED 2026-09-28, §9) — no tiers, no spacing, no eviction. `shekyl_curve_tree::frontier::Frontier` advances inside `ingest_block`; the ring is the `frontier_snapshots` table of the wallet's own `LeafStore`, written and evicted in the block's own transaction; `root_and_depth_at` reads it for in-horizon heights and falls through to `root_at_count` elsewhere. `per_block_advance_worst_case_s` is **re-derived from the built advance** (Q4). The increment-2 examiner grades the real segment tier against the real snapshot tier, **unmodified** | **Closeout (b)** — F3a | 2, 3; Q2, Q3 (**ruled**); **`Q1` RULED by derivation (§9); `Q4` pre-registered with its re-point as a landing condition** — the gate is open |
-| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture not started** — it has no code anywhere, and §6.3.3 still describes *"two private capture sides"*, which `Q5`'s dissolution contradicts, so that sentence is reconciled before anything is built against it | §6.3.3; C7 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
+| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture is in build** — its *instrument* landed first (the structural red-bite, the O(chain) before-figure, and §11.6's gate spec, PRs #927/#931), and **§11.6's integrity gate is BUILT**: `verify_path_against_its_branches` recomputes the root from an assembled path's own branches and refuses with `PathRootMismatch`, so the artifact is checked rather than the store compared with itself. The capture *mechanism* is still unbuilt. The §6.3.3 precondition this row used to carry is **discharged** — that sentence was reconciled on `dev` (`WALLET_SIDE_STORE.md` §6.3.3 now reads *"There is one capture side, not two"*), so nothing waits on it | §6.3.3; C7; §11.6 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
 | **6** | **Re-grade rows 2 and 3** on the amortized form, same harness, same rig — **and it is also `Q4`'s only seat.** Increment 4 re-derived the advance field and measured it off-rig; a fraction of cadence computed anywhere but the pinned Pi 4 is a property of the machine that computed it (rule 76). The blocker is the board, not the code | §6.3.4; Q4 | 4 |
 | **7** | **`.curvetree` retirement** | `WSS-18` | **P-store lane** (Q6) |
 
@@ -992,22 +992,33 @@ widen the bound or derive from `chunk_width`. Named blocker.
   assert is its own subject (rule 47): the client drained exactly the
   population fed, and reports the depth that count implies.
 
-### 11.6 The gate does not cover the path material
+### 11.6 The gate did not cover the path material — and now does
 
-Building §11.5's red-bite turned up a gap worth its own record. With `entries`
-reduced to the owned leaf alone, `assemble_paths` **does not refuse**. It
-returns a path whose `tree_root` is the real consensus root while every branch
-below it comes from a one-leaf tree — a leaf chunk of 1 under a root that
-commits to 44. The test's claim is that one comparison of the two paths.
-The chunk-length assertions under it are witnesses of today's failure mode.
-Equal paths have equal chunk lengths, so those witnesses are deleted when
-capture turns the comparison into equality. The `tree_root` equality stays:
-a correct path still commits to the oracle root.
+**Current state:** `assemble_paths` refuses a path that does not commit to
+the root it claims, with `ClientError::PathRootMismatch`. The refusing step
+is `PathRootFault`: `ChildAbsent` when the leaf's scalar is missing from its
+parent branch, `RootDisagrees` when the folded root is not the claimed root.
+The check runs for every assembled path.
 
-The cause is that the two mechanisms never meet. The gate compares the
-**store-backed** `root_at` against `reference.curve_tree_root`; the branches are
-rebuilt from replay-held `entries`; `tree_root` is then *copied from the gated
-reference*, so it is always the store's answer whatever the branches say. The
+**What it closed, in the past tense it belongs in.** Building §11.5's red-bite
+turned up the gap. With `entries` reduced to the owned leaf alone,
+`assemble_paths` *did not refuse*: it returned a path whose `tree_root` was
+the real consensus root while every branch below it came from a one-leaf tree
+— a leaf chunk of 1 under a root committing to 44.
+
+The red-bite therefore has **three states**, and the gate moved it to the
+second. It asserted a wrong path. It now asserts `PathRootFault::RootDisagrees`.
+Capture makes it assert the path equals the full-tree path. The chunk-length
+witnesses of the pre-gate failure were removed with the gate: the call no
+longer returns a path to measure. State 3's edit is that equality, not a
+second deletion.
+
+The cause was that the two mechanisms never met, and they still do not —
+what changed is that nothing downstream has to trust them to. The gate
+compares the **store-backed** `root_at` against `reference.curve_tree_root`;
+the branches are rebuilt from replay-held `entries`; `tree_root` is then
+*copied from the gated reference*, so it is always the store's answer whatever
+the branches say. The
 docstring used to assert the paths came from "the same `layers` that gate
 approved" — withdrawn 2026-10-01, because they do not.
 
@@ -1019,7 +1030,20 @@ branches unchecked — which is the thing that can actually drift. The sound for
 and refuses on disagreement. That verifies the artifact, so it catches every way
 the branches can diverge rather than the one case a test happened to construct.
 
-**It belongs to the capture build, not here.** Today the gap is *latent*:
+**Built as the capture build's first production commit.**
+`verify_path_against_its_branches` runs after each path is assembled. It
+hashes the leaf chunk to a Selene point, then at each layer requires that
+point's converted scalar to be **present in the branch** before hashing the
+branch to the next point, and finally compares against `TreeContext::tree_root`.
+The membership step is what binds the path to *this* leaf — without it, a
+correct root over another leaf's branches would pass. Those two refusals are
+`PathRootFault::ChildAbsent` and `PathRootFault::RootDisagrees`. Each node is
+hashed with `shekyl-fcmp`'s `hash_grow_*` at offset 0 from the layer's init
+point, the same call `try_build_layers` makes per node. The fold is
+path-shaped, so it is not a call to `try_build_layers`, and it is the only
+such fold: the assembly KAT does not carry a second copy. Cost is `O(depth)`.
+
+The gap it closes was *latent*:
 `entries` is append-only and a pruned-store resume is refused (`F5`), so
 production never assembles from a truncated set. It becomes *live* when capture
 introduces a second branch source — captured chunks plus a frontier snapshot —
