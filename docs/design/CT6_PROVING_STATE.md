@@ -994,9 +994,11 @@ widen the bound or derive from `chunk_width`. Named blocker.
 
 ### 11.6 The gate did not cover the path material — and now does
 
-**Current state:** `assemble_paths` refuses a path that does not hash to the
-root it claims, with [`ClientError::PathRootMismatch`]. The check runs for
-every assembled path.
+**Current state:** `assemble_paths` refuses a path that does not commit to
+the root it claims, with `ClientError::PathRootMismatch`. The refusing step
+is `PathRootFault`: `ChildAbsent` when the leaf's scalar is missing from its
+parent branch, `RootDisagrees` when the folded root is not the claimed root.
+The check runs for every assembled path.
 
 **What it closed, in the past tense it belongs in.** Building §11.5's red-bite
 turned up the gap. With `entries` reduced to the owned leaf alone,
@@ -1005,12 +1007,11 @@ the real consensus root while every branch below it came from a one-leaf tree
 — a leaf chunk of 1 under a root committing to 44.
 
 The red-bite therefore has **three states**, and the gate moved it to the
-second: it asserted a wrong path, it now asserts the refusal, and capture
-makes it assert the right path. Its claim is one comparison of the two paths;
-the chunk-length assertions under that comparison are witnesses of the
-*pre-gate* failure mode and are deleted when capture turns the comparison
-into equality, since equal paths have equal chunk lengths. The `tree_root`
-equality stays — a correct path still commits to the oracle root.
+second. It asserted a wrong path. It now asserts `PathRootFault::RootDisagrees`.
+Capture makes it assert the path equals the full-tree path. The chunk-length
+witnesses of the pre-gate failure were removed with the gate: the call no
+longer returns a path to measure. State 3's edit is that equality, not a
+second deletion.
 
 The cause was that the two mechanisms never met, and they still do not —
 what changed is that nothing downstream has to trust them to. The gate
@@ -1030,13 +1031,17 @@ and refuses on disagreement. That verifies the artifact, so it catches every way
 the branches can diverge rather than the one case a test happened to construct.
 
 **Built as the capture build's first production commit.**
-`verify_path_against_its_branches` runs after each path is assembled: it hashes
-the leaf chunk to a Selene point, then at each layer requires that point's
-converted scalar to be **present in the branch** before hashing the branch to
-the next point, and finally compares against `TreeContext::tree_root`. The
-membership step is what binds the path to *this* leaf — without it, a correct
-root over another leaf's branches would pass. It reuses `shekyl-fcmp`'s hash
-primitives rather than restating the composition, and costs `O(depth)`.
+`verify_path_against_its_branches` runs after each path is assembled. It
+hashes the leaf chunk to a Selene point, then at each layer requires that
+point's converted scalar to be **present in the branch** before hashing the
+branch to the next point, and finally compares against `TreeContext::tree_root`.
+The membership step is what binds the path to *this* leaf — without it, a
+correct root over another leaf's branches would pass. Those two refusals are
+`PathRootFault::ChildAbsent` and `PathRootFault::RootDisagrees`. Each node is
+hashed with `shekyl-fcmp`'s `hash_grow_*` at offset 0 from the layer's init
+point, the same call `try_build_layers` makes per node. The fold is
+path-shaped, so it is not a call to `try_build_layers`, and it is the only
+such fold: the assembly KAT does not carry a second copy. Cost is `O(depth)`.
 
 The gap it closes was *latent*:
 `entries` is append-only and a pruned-store resume is refused (`F5`), so

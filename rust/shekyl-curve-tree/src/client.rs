@@ -122,13 +122,15 @@ pub enum ClientError {
         /// Root the client reconstructed from its leaves.
         got: CurveTreeRoot,
     },
-    /// An assembled path does not hash to the root it claims (`CT-6` §11.6).
+    /// An assembled path does not commit to the root it claims (`CT-6` §11.6).
     ///
-    /// Raised by the artifact check that runs after assembly: the path's own
-    /// branches are hashed back to a root and compared with
-    /// [`TreeContext::tree_root`]. The integrity gate above it compares two
-    /// **store** reads and cannot see this, because `tree_root` is copied
-    /// from the gated reference while the branches come from replay.
+    /// Raised after assembly, from `verify_path_against_its_branches`.
+    /// The store gate above it compares two store reads and cannot see this:
+    /// [`crate::types::TreeContext::tree_root`] is copied from the gated reference while the
+    /// branches come from replay. [`crate::assemble::PathRootFault`] names
+    /// which step refused. [`crate::assemble::PathRootFault::ChildAbsent`] is
+    /// the membership link. [`crate::assemble::PathRootFault::RootDisagrees`]
+    /// is the final comparison.
     ///
     /// This is a defect, not a user condition: the wallet's two views of one
     /// tree disagree. Refusing is the point — an inconsistent path yields a
@@ -137,8 +139,8 @@ pub enum ClientError {
     PathRootMismatch {
         /// The root the path claimed, copied from the gated reference.
         claimed: CurveTreeRoot,
-        /// Which step of the walk refused, so the failure names itself.
-        reason: &'static str,
+        /// Which step of the fold refused.
+        fault: crate::assemble::PathRootFault,
     },
     /// The requested output is not a drained leaf at the reference height,
     /// so no membership path exists for it there (the §4.3 lookup miss).

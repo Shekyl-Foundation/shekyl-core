@@ -279,6 +279,23 @@ pub struct LeafEntry {
     pub identity: OutputIdentity,
 }
 
+impl LeafEntry {
+    /// `CM.x`, the last scalar of [`Self::leaf`].
+    ///
+    /// [`shekyl_fcmp::tree::construct_leaf`] writes the leaf as
+    /// `O.x ‖ I.x ‖ C.x ‖ CM.x`. Path assembly carries the fourth scalar as
+    /// stored, because a [`ChunkLeaf`] does not hold the `CM` point.
+    #[must_use]
+    pub(crate) fn cm_x(&self) -> [u8; 32] {
+        const SCALAR_LEN: usize = 32;
+        const START: usize = (SCALARS_PER_LEAF - 1) * SCALAR_LEN;
+        const _: () = assert!(START + SCALAR_LEN == 128);
+        let mut scalar = [0u8; SCALAR_LEN];
+        scalar.copy_from_slice(&self.leaf[START..START + SCALAR_LEN]);
+        scalar
+    }
+}
+
 /// One output in a path's Selene leaf chunk — the public per-output tuple
 /// the FCMP++ prover's `Path.leaves` consumes. Mirrors the field names of
 /// `shekyl_tx_builder::types::LeafEntry` so the engine adapter that builds
@@ -299,26 +316,17 @@ pub struct ChunkLeaf {
 }
 
 impl ChunkLeaf {
-    /// The leaf's four Selene scalars, in the order the leaf is hashed in:
-    /// `O.x`, `I.x`, `C.x`, `CM.x`.
+    /// The leaf's four Selene scalars, in hash order: `O.x`, `I.x`, `C.x`,
+    /// `CM.x`.
     ///
-    /// **Delegates to [`shekyl_fcmp::tree::leaf_from_chunk_entry`]**, which
-    /// already owns this exact conversion — three compressed points plus the
-    /// fourth scalar as the chunk carries it. An earlier revision restated
-    /// the layout here, with a test pinning it against `construct_leaf`; that
-    /// was a second copy of one layout kept honest by a test rather than no
-    /// second copy at all, which is the weaker of the two dispositions. Only
-    /// the split into scalar slots is this function's own work.
+    /// [`shekyl_fcmp::tree::leaf_from_chunk_entry`] owns the conversion.
+    /// [`shekyl_fcmp::tree::construct_leaf`] does not apply: it takes the
+    /// `CM` point, and a chunk carries `CM.x`. This function splits the
+    /// 128-byte leaf into scalar slots.
     ///
-    /// [`shekyl_fcmp::tree::construct_leaf`] is the wrong primitive here and
-    /// `leaf_from_chunk_entry` exists because of it: `construct_leaf` takes
-    /// the `CM` *point*, and a [`ChunkLeaf`] carries only its x-coordinate —
-    /// the extraction has already happened.
-    ///
-    /// Returns `None` if any of the three compressed points fails conversion.
-    /// Total for leaves the tree actually holds — `try_build_leaf` refused
-    /// anything else at ingest — so a `None` here means the path was built
-    /// from something that never passed admission.
+    /// `None` when one of the three compressed points does not convert.
+    /// Leaves the tree holds converted at ingest, so `None` means the path
+    /// was built from bytes that never passed admission.
     #[must_use]
     pub fn scalars(&self) -> Option<[[u8; 32]; SCALARS_PER_LEAF]> {
         let leaf = leaf_from_chunk_entry(
