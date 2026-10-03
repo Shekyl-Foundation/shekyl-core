@@ -59,8 +59,9 @@ use shekyl_fcmp::tree::{
 /// [`TreeContext::tree_root`] is *copied from the gated reference*. So the
 /// emitted root is always the store's answer whatever the branches say —
 /// which `ct6_oracle::assembly_today_depends_on_every_foreign_leaf`
-/// demonstrates by reducing `entries` to one leaf and still getting a path
-/// that claims the real root.
+/// produced by reducing `entries` to one leaf — which, before this check,
+/// returned a path claiming the real root. That test now observes this
+/// verifier reject the one-leaf artifact instead.
 ///
 /// Comparing [`CurveTreeClient::root_and_depth_at`] against `tree_root` would
 /// not close that: both answers come from the store tier, so it compares the
@@ -202,9 +203,11 @@ impl CurveTreeClient {
     /// Hoisting fixed the `k` factor. Capture removes the `n`, by reading an
     /// owned output's stored path material. The structural pin is
     /// `ct6_oracle::assembly_today_depends_on_every_foreign_leaf`: one
-    /// comparison, `assert_ne!` while capture is unbuilt. The witness block
-    /// under that comparison describes today's failure mode and is deleted
-    /// when the comparison flips.
+    /// comparison, `assert_ne!` while capture is unbuilt. Since the artifact
+    /// check below landed, that test reaches the comparison only through a
+    /// refusal — it asserts `PathRootMismatch` today, and the comparison
+    /// returns at state 3. The witness block under it describes the pre-gate
+    /// failure mode and is deleted when the comparison flips.
     ///
     /// # Integrity gate
     ///
@@ -221,10 +224,15 @@ impl CurveTreeClient {
     /// whose root is the consensus root over branches from a different tree.
     /// [`Self::root_and_depth_at`] is not consulted.
     ///
-    /// The gap is latent while `entries` is append-only. The check that closes
-    /// it recomputes the root from the path's own branches and belongs to the
-    /// capture build (`CT6_PROVING_STATE.md` §11.6). Comparing two store reads
-    /// would leave the branches unchecked.
+    /// **That gap is now closed, and the check runs for every assembled
+    /// path.** [`verify_path_against_its_branches`] recomputes the root from
+    /// the path's own branches and refuses with
+    /// [`ClientError::PathRootMismatch`], so a wrong `entries` set no longer
+    /// yields a path at all (`CT6_PROVING_STATE.md` §11.6). It verifies the
+    /// artifact rather than comparing two store reads, which would have left
+    /// the branches — the thing that can drift — unchecked. The paragraph
+    /// above describes the gate alone, which still does not approve the
+    /// stack; what changed is that nothing downstream has to trust it to.
     ///
     /// # Duplicate inputs are not refused here
     ///

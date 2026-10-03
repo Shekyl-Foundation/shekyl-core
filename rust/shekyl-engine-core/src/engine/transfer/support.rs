@@ -7,7 +7,7 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use shekyl_curve_tree::{AssembleInput, CommitmentBytes, OneTimePubkey};
+use shekyl_curve_tree::{AssembleInput, ClientError, CommitmentBytes, OneTimePubkey};
 use shekyl_engine_state::TransferDetails;
 
 use super::super::curve_tree_actor::CurveTreeHandleError;
@@ -103,6 +103,18 @@ pub(super) fn map_curve_tree_handle_error_for_send(err: &CurveTreeHandleError) -
 /// map to the two re-anchor failure modes.
 pub(super) fn map_handle_err_to_reanchor(err: &CurveTreeHandleError) -> ReanchorError {
     match err {
+        // The wallet's two views of one tree disagree (`CT-6` §11.6): the
+        // assembled path did not hash to the root it claimed. Reselection is
+        // the *wrong* remedy and saying it would be actively misleading —
+        // the selected inputs are fine, and rebuilding with different ones
+        // reproduces the same inconsistency, because the fault is in the
+        // tree rather than in what was picked from it. Terminal, like the
+        // other hard curve-tree failures, and the reservation stays intact
+        // so the user does not lose a selection to an internal defect
+        // (rule 82: name the remedy, and do not name a false one).
+        CurveTreeHandleError::Client(ClientError::PathRootMismatch { .. }) => {
+            ReanchorError::Failed(map_curve_tree_handle_error_for_send(err))
+        }
         // The client returned an error *inside* the handler: the selected input
         // is not resolvable at the fresh reference — almost always a
         // reorg-orphaned output. Content-preserving reprove is impossible;
@@ -186,5 +198,47 @@ pub(super) fn map_signer_error(err: &SignerError) -> SendError {
     match err {
         SignerError::Unavailable => SendError::SignerUnavailable,
         SignerError::RemoteFailure { reason } => SendError::SignerFailed { reason },
+    }
+}
+
+#[cfg(test)]
+mod reanchor_classification_tests {
+    use super::{map_handle_err_to_reanchor, CurveTreeHandleError, ReanchorError};
+    use shekyl_curve_tree::{ClientError, CurveTreeRoot, Gindex, OneTimePubkey};
+
+    /// A tree inconsistency must not be reported as "reselect your inputs".
+    ///
+    /// `PathRootMismatch` means the assembled path did not hash to the root
+    /// it claimed — the wallet's two views of one tree disagree. The selected
+    /// inputs are not implicated, and a rebuild with different ones
+    /// reproduces it, so `ReselectionRequired` would send the user to do work
+    /// that cannot help and would lose their selection on the way. Rule 82:
+    /// a named remedy that is wrong is worse than a generic failure.
+    #[test]
+    fn a_path_root_mismatch_is_not_a_reselection() {
+        let err = CurveTreeHandleError::Client(ClientError::PathRootMismatch {
+            claimed: CurveTreeRoot::EMPTY,
+            reason: "the branches do not hash to the root the path claims",
+        });
+        match map_handle_err_to_reanchor(&err) {
+            ReanchorError::Failed(_) => {}
+            other => panic!(
+                "a tree inconsistency must be terminal, not a reselection request; got {other:?}"
+            ),
+        }
+    }
+
+    /// The arm above is specific, not a widening: an unresolvable input still
+    /// asks for reselection, which is the case that remedy exists for.
+    #[test]
+    fn an_unresolvable_input_still_asks_for_reselection() {
+        let err = CurveTreeHandleError::Client(ClientError::OutputNotDrained {
+            gindex: Gindex::from_raw(7),
+            output_key: OneTimePubkey::from_bytes([0u8; 32]),
+        });
+        match map_handle_err_to_reanchor(&err) {
+            ReanchorError::ReselectionRequired { .. } => {}
+            other => panic!("an orphaned input is the reselection case; got {other:?}"),
+        }
     }
 }

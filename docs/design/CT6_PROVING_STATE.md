@@ -992,22 +992,32 @@ widen the bound or derive from `chunk_width`. Named blocker.
   assert is its own subject (rule 47): the client drained exactly the
   population fed, and reports the depth that count implies.
 
-### 11.6 The gate does not cover the path material
+### 11.6 The gate did not cover the path material — and now does
 
-Building §11.5's red-bite turned up a gap worth its own record. With `entries`
-reduced to the owned leaf alone, `assemble_paths` **does not refuse**. It
-returns a path whose `tree_root` is the real consensus root while every branch
-below it comes from a one-leaf tree — a leaf chunk of 1 under a root that
-commits to 44. The test's claim is that one comparison of the two paths.
-The chunk-length assertions under it are witnesses of today's failure mode.
-Equal paths have equal chunk lengths, so those witnesses are deleted when
-capture turns the comparison into equality. The `tree_root` equality stays:
-a correct path still commits to the oracle root.
+**Current state:** `assemble_paths` refuses a path that does not hash to the
+root it claims, with [`ClientError::PathRootMismatch`]. The check runs for
+every assembled path.
 
-The cause is that the two mechanisms never meet. The gate compares the
-**store-backed** `root_at` against `reference.curve_tree_root`; the branches are
-rebuilt from replay-held `entries`; `tree_root` is then *copied from the gated
-reference*, so it is always the store's answer whatever the branches say. The
+**What it closed, in the past tense it belongs in.** Building §11.5's red-bite
+turned up the gap. With `entries` reduced to the owned leaf alone,
+`assemble_paths` *did not refuse*: it returned a path whose `tree_root` was
+the real consensus root while every branch below it came from a one-leaf tree
+— a leaf chunk of 1 under a root committing to 44.
+
+The red-bite therefore has **three states**, and the gate moved it to the
+second: it asserted a wrong path, it now asserts the refusal, and capture
+makes it assert the right path. Its claim is one comparison of the two paths;
+the chunk-length assertions under that comparison are witnesses of the
+*pre-gate* failure mode and are deleted when capture turns the comparison
+into equality, since equal paths have equal chunk lengths. The `tree_root`
+equality stays — a correct path still commits to the oracle root.
+
+The cause was that the two mechanisms never met, and they still do not —
+what changed is that nothing downstream has to trust them to. The gate
+compares the **store-backed** `root_at` against `reference.curve_tree_root`;
+the branches are rebuilt from replay-held `entries`; `tree_root` is then
+*copied from the gated reference*, so it is always the store's answer whatever
+the branches say. The
 docstring used to assert the paths came from "the same `layers` that gate
 approved" — withdrawn 2026-10-01, because they do not.
 
@@ -1019,7 +1029,7 @@ branches unchecked — which is the thing that can actually drift. The sound for
 and refuses on disagreement. That verifies the artifact, so it catches every way
 the branches can diverge rather than the one case a test happened to construct.
 
-**BUILT as the capture build's first production commit** (as planned below).
+**Built as the capture build's first production commit.**
 `verify_path_against_its_branches` runs after each path is assembled: it hashes
 the leaf chunk to a Selene point, then at each layer requires that point's
 converted scalar to be **present in the branch** before hashing the branch to

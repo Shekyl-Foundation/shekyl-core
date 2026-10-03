@@ -839,13 +839,14 @@ fn assembly_today_depends_on_every_foreign_leaf() {
 
 /// [`ChunkLeaf::scalars`] reproduces the leaf bytes `construct_leaf` wrote.
 ///
-/// `ChunkLeaf` is the prover-facing view and carries `CM.x` rather than the
-/// `CM` point, so `scalars()` cannot call `construct_leaf` and restates its
-/// order and conversions instead. That is a second derivation of one layout,
-/// which is the trap this crate fights everywhere else — so it is pinned
-/// here against the **stored leaf bytes**, which `construct_leaf` produced at
-/// ingest. A reordering or a changed conversion fails here rather than in a
-/// proof that will not verify.
+/// `ChunkLeaf::scalars` delegates to `leaf_from_chunk_entry`, the chunk-entry
+/// inverse, because `construct_leaf` takes the `CM` point and a chunk carries
+/// only its x-coordinate. So this compares **two production functions**
+/// rather than a local restatement against one: the leaf bytes
+/// `construct_leaf` wrote at ingest must be exactly what
+/// `leaf_from_chunk_entry` rebuilds from the prover-facing view. They are
+/// written for opposite directions and only agree if both are right, which a
+/// test over a single derivation could not establish.
 #[test]
 fn chunk_leaf_scalars_match_construct_leaf() {
     let tip = varying_tip();
