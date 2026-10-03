@@ -18,6 +18,10 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # (`EMISSION_SPLIT_EPOCH`), read rather than restated
 # (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-3).
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+# The producer's fill rule (`Fill`): how many transactions a block takes at
+# the effective median, the comparison `fill_block_template` makes, called
+# rather than restated (ECONOMICS_SIM_PRODUCTION_REBASE.md ESR-6).
+shekyl-block-template = { path = "../shekyl-block-template" }
 # A4 W9 stuffer: price real transaction weights through the SAME single-sourced
 # predictor the wallet fee path uses (DQ-2G dep-don't-mirror, D-1 hoist).
 shekyl-tx-weight = { path = "../shekyl-tx-weight" }

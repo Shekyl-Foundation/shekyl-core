@@ -26,6 +26,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6, Appendix B
   - Target: pre-genesis
 
+- **Re-derive the escalation knee band, then the shipped knee.** ESR-6 moved the band's low anchor (the baseline's closed shards at 10 y) from 523,841 to 229,864: under the production fill rule the baseline carries 22 of its 50 transactions a block for eleven years. The knee is not re-pinned to that, since the all-Standard demand it rests on moves again at ESR-10 (rung mix) and in the reading pass. Until then `stage2::shipped_knee_lies_within_the_band_its_definitions_give` holds `shekyl_escalation_knee_n` inside the band its definitions give and prints the current middle. Waits on ESR-10 and the reading pass. Falsifier: the shipped knee equals the band's middle under the fee arm the reading pass settles on.
+  - Owner: the GF-7 ceremony ([`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md) §11.4) pins it; the re-derivation is the sim lane's (`SCC-Q2`)
+  - Target: pre-genesis
+
 - **Move `shekyl-p-transport` onto `shekyl-socks`.** The handshake there already requires `Isolation::Principal` or `Isolation::Persona`, offers a persona only username/password, and fails closed if the proxy selects anything else. What remains is ureq's `socks` 0.3.4 connector, which is that crate's HTTP client. Falsify by `shekyl-p-transport` dialing through `shekyl_socks::connect` with `Isolation::Persona` and no longer enabling ureq's `socks-proxy`.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis

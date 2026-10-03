@@ -1,13 +1,14 @@
 use serde::Serialize;
 use shekyl_economics::{
     burn::{calc_burn_pct_from_activity, compute_burn_split_at},
-    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier, effective_emission,
+    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier,
     params::{calc_stake_ratio, EconomicParams, SCALE},
     split_block_emission, ClosedShardCount,
 };
 
 use crate::burden::HonestOutputs;
-use crate::fee_model::{FeeModel, FeePoint};
+use crate::fee_model::{ChargedBlock, FeeModel, FeePoint};
+use crate::median_window::BlockSpace;
 use crate::volume_window::VolumeWindow;
 
 #[derive(Debug, Clone, Serialize)]
@@ -213,6 +214,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
     let mut outputs = HonestOutputs::default();
 
     let mut window = VolumeWindow::default();
+    let mut space = BlockSpace::default();
     for block in 0..total_blocks {
         let year = block / params.blocks_per_year;
         let block_in_year = block % params.blocks_per_year;
@@ -225,10 +227,12 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
         let ag = already_generated.min(u64::MAX as u128) as u64;
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
-        // The validator's operand: CEN-F20's window over the blocks before
-        // this one (ESR-4). Read before this block joins it.
+        // The validator's operands: CEN-F20's window and CEN-G6's medians
+        // over the blocks before this one (ESR-4, ESR-6). Read before this
+        // block joins them; `tx_volume` is the block's demand, and what it
+        // takes is the fill rule's.
         let volume = window.operand();
-        window.push(tx_volume);
+        let medians = space.medians();
         let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
         // Consensus burn-site circulating: prev-block `already_generated`
         // alone, matching `validate_miner_transaction` / the C4 recorder
@@ -254,9 +258,6 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             params.release_max,
         );
 
-        let effective_reward = effective_emission(ag, volume, &economic)
-            .expect("sim paid emission stays within the arithmetic domain");
-
         let emission_share = calc_effective_emission_share(
             block + config.genesis_height_offset,
             EMISSION_SPLIT_EPOCH_HEIGHT,
@@ -264,9 +265,6 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             params.staker_emission_decay,
             params.blocks_per_year,
         );
-
-        let (miner_emission, staker_emission) =
-            split_block_emission(effective_reward, emission_share);
 
         let burn_pct = match (&config.archival_lock, staked_atomic) {
             // Gate-7 path: the engine-equivalent composition over the
@@ -288,19 +286,23 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             ),
         };
 
-        let charged = params.fee.charge(
-            tx_volume,
-            &FeePoint {
-                already_generated: ag,
-                volume,
-                sigma_scaled: emission_share,
-                burn_pct_scaled: burn_pct,
-                chain_leaves: outputs.leaves(),
-                params: &economic,
-            },
-        );
-        outputs.accrue(tx_volume);
-        let total_fees = charged.total_atomic;
+        let fee_point = FeePoint {
+            already_generated: ag,
+            volume,
+            long_term_median: medians.long_term_effective_median.to_raw(),
+            sigma_scaled: emission_share,
+            burn_pct_scaled: burn_pct,
+            chain_leaves: outputs.leaves(),
+            params: &economic,
+        };
+        let tx = params.fee.ordinary_tx(&fee_point);
+        let filled = space.fill(block, medians, tx_volume, tx, &fee_point);
+        window.push(filled.included);
+        outputs.accrue(filled.included);
+        let total_fees = ChargedBlock::of_uniform(tx.fee_atomic, filled.included).total_atomic;
+        let effective_reward = filled.paid_reward;
+        let (miner_emission, staker_emission) =
+            split_block_emission(effective_reward, emission_share);
 
         // Canonical escalated split. This engine has no leaf/corpus trajectory, so
         // n = 0; under the shipped genesis-neutral asymptote that is bit-identical

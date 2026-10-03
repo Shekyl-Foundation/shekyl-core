@@ -12,6 +12,7 @@ mod fee_floor;
 mod fee_horizon;
 mod fee_ladder;
 mod fee_model;
+mod median_window;
 mod mn_feasibility;
 mod onset;
 mod population;
