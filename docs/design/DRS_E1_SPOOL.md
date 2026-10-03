@@ -102,7 +102,7 @@ as every other C++ consumer of every other E1 surface has.
 | `header::seal` / `header::verify` — a sealed file refuses to open without its shaped tables (SI-7, SCR-17) | landed — the pattern the pool file's own header repeats |
 | `txpool_meta`, `txpool_blob` in the redb schema | landed, **`Unshaped`, in the consensus file** (`schema.rs:350`, `:353`; `tables.snap` #13, #14) — §5.1's falsifier, firing (SPL-1) |
 | `accumulator/class.rs` grades both `Excluded` (`:160–161`); `digest_v0` excludes txpool (`digest_v0.rs:24`); §11.2 "not chain state" | landed — this increment moves no digest family (SPL-12) |
-| `RelayMethod` (five variants, byte-pinned to `cryptonote::relay_method`) and `NetZone` (four, pinned to `epee::net_utils::zone`) | exist in `shekyl-relay` (`zone_route.rs:67`, `:104`), FFI-mirrored by value and `const` assert — not in `shekyl-types`, and the daemon store cannot depend on `shekyl-relay` (SPL-6, `SPL-Q6`) |
+| `RelayMethod` (five variants, byte-pinned to `cryptonote::relay_method`) and `NetZone` (four, pinned to the pool origin bytes) | **At `a1159f1a2`:** lived in `shekyl-relay` (then `zone_route.rs`), FFI-mirrored by value and `const` assert — not in `shekyl-types`. **Now:** both live in `shekyl-types` (`rust/shekyl-types/src/relay.rs:57`); `RelayMethod`'s pins are `shekyl-relay/src/zone/mod.rs:122–128`. The store still cannot depend on `shekyl-relay` (SPL-6, `SPL-Q6`) |
 | `check_redb_schema_bijection.py` — every X-macro table has exactly one `TableDefinition` in `schema.rs`; `RUST_ONLY_TABLES` is the one exception direction | landed — has **no** "mirrored in another file" direction (SPL-2) |
 | `check_redb_schema_key_types.py` — 49 definitions / 27 constraints, `txpool_meta hash key` among them (`:327`) | landed — the constraint follows the table when it moves (SPL-2) |
 | §5.1 pick: separate pool file | **RULED 2026-09-12** (`ba4b3c73a`), unbuilt; this is its increment |
@@ -304,7 +304,7 @@ commit's `Result` (SPL-11).
 |---|---|---|---|
 | `RelayMethod` | `{ None, Local, Stem, Fluff, Block }`, `repr(u8)` byte-pinned to `cryptonote::relay_method`; **decoder exhaustive over the five bytes, no default arm, unknown ⇒ error** (RULED, `SPL-Q6`). **AMENDED 2026-09-24 (SPL-18):** the **FFI seam's word** — an arrival class handed in, a routing plan handed out — **not a field of `PoolRecord`**; the record persists `Origin` + `RelayPhase` and the seam converts `(origin, phase) → RelayMethod` where C++ still asks in that vocabulary | **moves to `shekyl-types`** from `shekyl-relay` (`SPL-Q6`); `shekyl-relay` re-exports; `matches(RelayCategory)` is defined on `(Origin, RelayPhase)` and the byte enum gets the derived form | Rule 18 (`SCU-Q2`, `SAR-Q2`): a word two crates need lives below both. The store cannot depend on `shekyl-relay`; a second `RelayClass` enum in the store is a conversion layer between two spellings of one fact. The decoder's shape is SPL-14's fix: `Fluff` is reached only by its own discriminant, never by fall-through; `None` is a legal, unreachable, non-relayable state and is **not** specially refused — a guard on it protects nothing. |
 | `RelayCategory` | `{ Broadcasted, Relayable, All }` | with `RelayMethod` | The classifier's other operand; `RelayMethod::matches` is the C++ `matches_category` table, exhaustive on both sides. |
-| `NetZone` | `{ Invalid, Public, I2p, Tor }`, `repr(u8)` pinned to `epee::net_utils::zone` | **moves to `shekyl-types`** (`SPL-Q6`) | Same ground; the record's `origin_zone`. |
+| `NetZone` | `{ Invalid, Public, I2p, Tor }`, `repr(u8)` pinned to the pool origin bytes | **moves to `shekyl-types`** (`SPL-Q6`) | Same ground; the record's `origin_zone`. |
 | `PoolRecord` | `weight: u64`, `fee: AtomicUnits`, `receive_time: UnixSeconds`, **`relay_state: RelayState`** (the §92 decomposition as built: provenance chooses the phase enum and responsibility sits on the originated arm — §11 review. Ruled first as `origin` / `phase` / `responsibility`, `SPL-Q9` — *as first written:* `relay: RelayClock`, `method: RelayMethod`, `observed_circulating: bool`, `origin_zone: NetZone`, superseded by SPL-18), `relayed: bool`, `double_spend_seen: bool`, `readiness: Readiness { max_used: Option<(BlockHeight, BlockHash)>, last_failed: Option<(BlockHeight, BlockHash)> }`, `fcmp_cache: Option<FcmpVerificationHash>` | `shekyl-chain-store::pool::record` (`Canonical`, `NAME = "pool_record"`) | The 192-byte packed `txpool_tx_meta_t` (`blockchain_db.h:218–348`, `LMDB_SCHEMA.md:1054–1078`) re-specified: **same semantics, not byte-compatible** (`SPL-Q3`, the `SAR-Q3` ruling's form). The five relay bits become the enum; two sentinels and an overload become `RelayClock`; the `fcmp_verified` bit and its hash become one `Option`; `pruned`, `do_not_relay` and `padding[44]` are not carried (SPL-6). The store's only reader is the store, so the record is the store's (the `BondRecord` as-built precedent, `DRS_E1_SARCH.md` §3.4). |
 | `Origin` | `enum { Originated, Arrived { zone: NetZone } }` — **permanent**: written by P1, and P2 refuses a record whose origin differs from the stored one (`RelayRefusal::OriginChanged`, carried as `PoolCannot::Relay`) | with `PoolRecord` (`SPL-Q9`) | §92.4's first clause, *provenance is permanent*, as a field that cannot be upgraded past because nothing upgrades it. Subsumes `is_local` and `origin_zone` (the C++ already writes `zone::invalid` for an originated entry; `Arrived { Invalid }` is the "origin unknown" arm for a pre-field record and stays representable). |
 | `RelayPhase` | **Split by provenance on review (§11): `OriginatedPhase { Held, Block }` and `ArrivedPhase { Stem, Fluff, Block }`, inside `RelayState`.** The ruling's one enum was `Held { last_attempt: Option<UnixSeconds> }, Stem { next_attempt: UnixSeconds }, Fluff { last_relayed: Option<UnixSeconds> }, Block { last_relayed: Option<UnixSeconds> }` — each phase carries the clock word that phase means; `upgrade(origin, next)` is the ratchet **and the pin**: `Arrived` walks `Stem → Fluff → Block`; `Originated` walks `Held → Block` only (yields to proof of work, refuses a peer's `Stem`/`Fluff`) | with `PoolRecord` (`SPL-Q9`) | The ratchet's domain, with §92.4's pin as a transition rule that names its reason (`origin`) instead of a `relay_method::local` special case in `add_tx :456–458`. **Subsumes `RelayClock`** (SPL-5): `u64::MAX` is `Held { None }` / the absence of a clock, a stem deadline is `Stem { next_attempt }`, a past relay is `Fluff`/`Block { last_relayed }`, and the attested-local admission is `Held { Some(receive_time) }` — the overload dissolves because no single field means three things. `matches(Broadcasted) ⇔ Fluff \| Block`; `Relayable` is every phase (there is no `None`); `All`. The decoder has no default arm (SPL-14). |
@@ -333,9 +333,10 @@ commit's `Result` (SPL-11).
   runs to the cutover and is then gone with its file. The re-specification
   is free to choose its encoding and drops the dead fields.
 - **`relay_method`'s byte values** — **inherited as the wire contract they
-  already are** (`cryptonote_protocol/enums.h:39`, `zone_route.rs:46–50`'s
-  `const` pins): the enum keeps `None = 0 … Block = 4` because the FFI seam
-  is pinned to them. What the *store* does with `None` is `SPL-Q6`.
+  already are** (`src/cryptonote_protocol/enums.h:39`,
+  `shekyl-relay/src/zone/mod.rs:122–128`): the enum keeps `None = 0 …
+  Block = 4` because the FFI seam is pinned to them. What the *store*
+  does with `None` is `SPL-Q6`.
 - **Persistence across restart** — **inherited as the default, its policy
   named as a question** (`SPL-Q7`): the C++ pool reloads every entry at
   `init` and resumes each relay clock where it stopped, including a stem
@@ -455,10 +456,11 @@ codec refuses what they would observe, SI-14's shape.
   pruned blob, and the one path that produced pruned blobs for the pool,
   `--sync-pruned-blocks`, was deleted 2026-09-21 under `PDM-Q5`
   (`DRS_E1_SPRUNE.md` §13); `padding[44]` is the C struct's. Not carried
-  (rule 60 / rule 15). `RelayMethod` and `NetZone` exist in `shekyl-relay`
-  with FFI byte pins (`zone_route.rs:46–56`) — the store needs the same
-  words and cannot take `shekyl-relay` (a relay scheduler with an async
-  driver) as a dependency; rule 18 says they move down (`SPL-Q6`).
+  (rule 60 / rule 15). `RelayMethod` and `NetZone` **moved** to
+  `shekyl-types` (`rust/shekyl-types/src/relay.rs:57`; `SPL-Q6` RULED). The
+  `RelayMethod` pins are `shekyl-relay/src/zone/mod.rs:122–128`. The store
+  does not take `shekyl-relay` (a relay scheduler with an async driver)
+  as a dependency.
 - **SPL-7 — a separate file loses an atomicity the C++ has, and §5.1 already
   paid for it.** *(Which `LockedTXN` property this row is about, stated
   because the other one is the known bug — SPL-16,

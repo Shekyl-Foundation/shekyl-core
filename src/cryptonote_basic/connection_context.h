@@ -54,8 +54,9 @@ namespace cryptonote
     // SSL is refused. The base is handed a constant false; the seam has
     // no SSL state to pass.
     cryptonote_connection_context(boost::uuids::uuid connection_id,
-        const epee::net_utils::network_address& remote_address, bool is_income)
-      : epee::net_utils::connection_context_base(connection_id, remote_address, is_income, false),
+        const epee::net_utils::network_address& remote_address, bool is_income,
+        std::uint8_t connector = 0xff)
+      : epee::net_utils::connection_context_base(connection_id, remote_address, is_income, false, 0, 0, 0, 0, connector),
         m_state(state_before_handshake), m_remote_blockchain_height(0),
         m_remote_height_source(remote_height_source::none), m_last_response_height(0),
         m_expected_heights_start(0), m_last_request_time(boost::date_time::not_a_date_time), m_callback_request_count(0),

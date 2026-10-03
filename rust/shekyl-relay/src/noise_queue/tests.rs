@@ -4,11 +4,10 @@
 // BSD-3-Clause
 
 use super::*;
-use crate::{Driver, Effect, FluffReach, LinkSecrecy, Zone};
+use crate::{ConnectorId, Driver, Effect, Relay};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::schedule::PeerDirection;
-use shekyl_relay_privacy::RelayZone;
 
 const W: usize = 64; // the window, via the dummy's length
 /// Windows one channel may hold. Generous for the tests that do not care, and
@@ -286,12 +285,12 @@ fn unbind_drops_everything_the_channel_held() {
 /// the decorative fixture this test exists to refuse.
 fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64, usize, bool)> {
     let mut rng = SplitMix64::new(seed);
-    let zone = Zone::new(
+    let zone = Relay::new(
         DandelionParams::inherited(),
         2,
-        FluffReach::OutboundOnly,
-        LinkSecrecy::of(RelayZone::Tor),
-        true, // noise ON, or there are no deadlines and this is vacuous
+        true,
+        // noise ON, or there are no deadlines and this is vacuous
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     )
@@ -306,9 +305,12 @@ fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64,
     let mut driver = Driver::new(zone);
     let peers = vec![id(1), id(2), id(3), id(4)];
     for peer in &peers {
-        driver
-            .zone_mut()
-            .on_session_established(*peer, PeerDirection::Outbound, &mut rng);
+        driver.zone_mut().on_session_established(
+            *peer,
+            PeerDirection::Outbound,
+            ConnectorId::Clearnet,
+            &mut rng,
+        );
     }
 
     let mut out = Vec::new();
@@ -396,7 +398,7 @@ fn cv4_the_comparison_can_distinguish_cadences() {
 
 /// `enqueue` refuses a message over [`carrier::MAX_FRAGMENTS`] windows.
 ///
-/// The cap is CV-1's, and before this it was checked only at `Zone::new` — a
+/// The cap is CV-1's, and before this it was checked only at `Relay::new` — a
 /// configuration was validated for `MAX_FRAGMENTS` worst-case sends while
 /// `enqueue` accepted any whole multiple of the window. A longer message
 /// entered a zone validated for a shorter one and could never finish: it does

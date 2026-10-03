@@ -4,31 +4,20 @@
 // BSD-3-Clause
 //
 //! F-7's magnitude, kept as a comparative instrument: the pre-F-7
-//! `fluff_return_ms` (2250 ms) was measured under `EveryPeer` — the rule the
-//! instrument used to model *by construction* — and fed to the embargo
-//! derivation for every transport, while anonymity-zone fluff is
-//! outbound-only (§26.2). This reports both reaches side by side so the gap
-//! stays a number rather than an argument. The shipped input is now the
-//! directed measurement itself (`fluff_return_ms = 3250`, `OutboundOnly` at
-//! degree 12, §40.1); what this test guards is the *direction* of the gap —
-//! directed strictly slower — not the shipped value, whose pin lives with
-//! `DandelionParams` and the derivation tests.
+//! `fluff_return_ms` (2250 ms) was measured under `EveryPeer`, and the
+//! shipped 3250 ms was measured under `OutboundOnly` at degree 12. Production
+//! fluff is now `EveryPeer` on every connector (D7 deleted 2026-10-02); 3250
+//! ms stays the constant because that directed graph is the longer direction
+//! and has not been remeasured. This test guards the *direction* of the gap
+//! — directed strictly slower — not the shipped value.
 //!
 //! # Both arms run at ONE transit, and that is F-7's own lesson
 //!
-//! `transit_for(reach)` pairs the transit assumption to the link class, which
-//! is right for an instrument simulating production and wrong for this one.
-//! Using it here put `EveryPeer` at 50 ms against `OutboundOnly` at 1625 ms,
-//! so the reported gap charged the reach rule for a 32× difference in link
-//! latency — a rule change and a network change moving together, which is
-//! **F-7's defect reproduced inside the file named for it**. The gap read
-//! `+434 %` that way against `+46 %` at matched transit.
-//!
-//! Both arms therefore run at [`ANON_ZONE_TRANSIT_ASSUMPTION_MS`] via
-//! `transit_for(OutboundOnly)`: the question is *"same network, different
-//! fluff rule"*, and the anonymity zone is the network the rule applies to.
-//! The comparison stays non-vacuous — at matched transit the directed arm is
-//! still 1.3–1.5× slower at 1625 ms, and 2.3–3.0× at zero transit — so
+//! Pairing transit to reach put `EveryPeer` at 50 ms against `OutboundOnly`
+//! at 1625 ms, so the reported gap charged the reach rule for a 32×
+//! difference in link latency. Both arms therefore run at Tor's transit: the
+//! question is *"same connector, different fluff rule"*. The comparison stays
+//! non-vacuous — at matched transit the directed arm is still slower — so
 //! `dir > sym` is carried by the reach mechanism, not by the latency.
 
 #![allow(clippy::cast_precision_loss)]
@@ -54,11 +43,10 @@ fn f7_directed_first_passage_exceeds_the_undirected_measurement() {
                     peers,
                     nodes: 512,
                     reach,
-                    // NOT `transit_for(reach)` — see the module note: pairing
-                    // transit to reach makes this comparison measure two
-                    // things at once. One link class, both arms.
+                    // One connector, both reaches. Pairing transit to reach
+                    // would measure the rule and the link at once.
                     transit_ms: shekyl_relay_privacy::conformance::transit_for(
-                        FloodReach::OutboundOnly,
+                        shekyl_relay_privacy::MeasuredConnector::Tor,
                     ),
                 },
                 20,

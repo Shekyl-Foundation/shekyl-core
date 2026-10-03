@@ -40,6 +40,7 @@
 #include <condition_variable>
 #include <set>
 #include "shekyl/shekyl_ffi.h"
+#include <cstdlib>
 
 #define MAKE_IPV4_ADDRESS(a,b,c,d) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),0}
 #define MAKE_IPV4_ADDRESS_PORT(a,b,c,d,e) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),e}
@@ -72,7 +73,7 @@ public:
   unsigned handle_incoming_tx_calls = 0;
   bool handle_incoming_tx_result = true;
   uint8_t handle_incoming_tx_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
-  bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone)
+  bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed)
   {
     ++handle_incoming_tx_calls;
     if (handle_incoming_tx_result)
@@ -109,7 +110,7 @@ public:
   bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return check_incoming_block_size_result; }
   uint64_t get_target_blockchain_height() const { return 1; }
   size_t get_block_sync_size(uint64_t height) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
-  virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, epee::net_utils::zone) {}
+  virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, std::optional<std::uint8_t>) {}
   virtual void on_stem_propagated(epee::span<const crypto::hash>) {}
   cryptonote::network_type get_nettype() const { return cryptonote::MAINNET; }
   bool get_pool_transaction(const crypto::hash& id, cryptonote::blobdata& tx_blob, cryptonote::relay_category tx_category) const { return false; }
@@ -389,16 +390,16 @@ TEST(node_server, managed_onion_is_advertised_only_after_publish)
   Server server(cprotocol);
   cprotocol.set_p2p_endpoint(&server);
 
-  auto& zone = server.add_zone(epee::net_utils::zone::tor);
+  auto& zone = server.add_zone(epee::net_utils::connector_id::tor);
   zone.m_config.m_net_config.max_in_connection_count = 8;
   const char* service = "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd";
   server.apply_managed_onion_publish(zone, 1, service, 18080);
-  ASSERT_EQ(server.get_announced_address(epee::net_utils::zone::tor).host_str(),
+  ASSERT_EQ(server.get_announced_address(epee::net_utils::connector_id::tor).host_str(),
     net::tor_address::unknown().host_str());
 
   server.apply_managed_onion_publish(zone, SHEKYL_DAEMON_TOR_OK, service, 18080);
   const auto expected = MONERO_UNWRAP(net::tor_address::make(std::string(service) + ".onion:18080"));
-  ASSERT_EQ(server.get_announced_address(epee::net_utils::zone::tor).host_str(), expected.host_str());
+  ASSERT_EQ(server.get_announced_address(epee::net_utils::connector_id::tor).host_str(), expected.host_str());
 }
 
 namespace
@@ -549,9 +550,63 @@ TEST(node_server, operator_onion_is_advertised)
     "--tx-proxy", "tor,127.0.0.1:9050",
     "--anonymous-inbound", onion + ":18080,127.0.0.1:38123,8",
   })));
-  const auto announced = server.get_announced_address(epee::net_utils::zone::tor);
+  const auto announced = server.get_announced_address(epee::net_utils::connector_id::tor);
   ASSERT_EQ(announced.host_str(), onion);
   ASSERT_EQ(announced.as<net::tor_address>().port(), 18080);
+}
+
+TEST(node_server, exclusive_onion_does_not_require_tx_proxy)
+{
+  // The managed Tor supplies SOCKS after the command line. Refusing here was
+  // the default posture being unable to dial a named onion. A missing pin
+  // degrades inbound; it must not be what rejects the option.
+  const char *saved = std::getenv("SHEKYL_TOR_BINARY");
+  const std::string saved_copy = saved ? saved : std::string{};
+  ASSERT_EQ(::setenv("SHEKYL_TOR_BINARY", "/no/such/shekyl-tor", 1), 0);
+  auto restore = epee::misc_utils::create_scope_leave_handler([&]() {
+    if (saved)
+      ::setenv("SHEKYL_TOR_BINARY", saved_copy.c_str(), 1);
+    else
+      ::unsetenv("SHEKYL_TOR_BINARY");
+  });
+
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  Server server(cprotocol);
+
+  const auto node_dir = create_node_dir();
+  ASSERT_TRUE(!node_dir.empty());
+  auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir]() {
+    boost::filesystem::remove_all(node_dir);
+  });
+
+  const std::string onion =
+    "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion:12021";
+  std::vector<std::string> args{
+    "--data-dir", node_dir.string(),
+    "--p2p-bind-ip", "127.0.0.1",
+    "--p2p-bind-port", "48119",
+    "--no-igd",
+    "--add-exclusive-node", onion,
+  };
+  boost::program_options::options_description options_description{};
+  cryptonote::core::init_options(options_description);
+  Server::init_options(options_description);
+  boost::program_options::variables_map vm;
+  boost::program_options::store(
+    boost::program_options::command_line_parser(args).options(options_description).run(), vm);
+  boost::program_options::notify(vm);
+  ASSERT_TRUE(server.init(vm));
+
+  test_core offline_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> offline_protocol(offline_core, NULL);
+  Server offline(offline_protocol);
+  const auto offline_dir = create_node_dir();
+  ASSERT_TRUE(!offline_dir.empty());
+  auto auto_remove_offline = epee::misc_utils::create_scope_leave_handler([&offline_dir]() {
+    boost::filesystem::remove_all(offline_dir);
+  });
+  ASSERT_FALSE(offline.init(offline_node_vm(offline_dir, {"--add-exclusive-node", onion})));
 }
 
 TEST(ban, ignores_port)
@@ -876,11 +931,11 @@ TEST(node_server, handshake_nonce_is_recorded_before_it_can_be_written)
 
   // The value a caller would put on the wire...
   const std::array<uint8_t, 32> nonce =
-    data.server->mint_recorded_handshake_nonce(epee::net_utils::zone::public_);
+    data.server->mint_recorded_handshake_nonce(epee::net_utils::connector_id::clearnet);
   // ...is already recognisable the moment it exists. If the recording moved
   // after the request write, this handshake — an inbound arriving before the
   // insert — would not be detected as self.
-  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::zone::public_, nonce))
+  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, nonce))
     << "the minted nonce was not in its zone's in-flight set on return: the "
        "insert now follows the value's availability to the writer, so a "
        "self-connection arriving in that window goes undetected";
@@ -932,17 +987,17 @@ TEST(node_server, handshake_nonce_fires_once_and_only_within_its_zone)
   ASSERT_TRUE(data.server->init(vm));
 
   const std::array<uint8_t, 32> nonce{{0x5a}};
-  data.server->record_outbound_handshake_nonce(epee::net_utils::zone::public_, nonce);
+  data.server->record_outbound_handshake_nonce(epee::net_utils::connector_id::clearnet, nonce);
 
   // Within-zone only: the tor probe must NOT match — and must not consume.
-  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::zone::tor, nonce))
+  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::connector_id::tor, nonce))
     << "a nonce recorded on public_ matched on tor: the drop is a cross-zone "
        "correlation oracle";
 
   // Fires exactly once on its own zone...
-  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::zone::public_, nonce));
+  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, nonce));
   // ...and a replay cannot fire it again.
-  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::zone::public_, nonce))
+  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, nonce))
     << "erase-on-match failed: a peer that learned the nonce by being dialed "
        "could replay it";
 
@@ -966,23 +1021,23 @@ TEST(node_server, handshake_nonce_fires_once_and_only_within_its_zone)
   //
   // Exit 1 — attempt termination (what do_handshake_with_peer's scope guard
   // calls on every path: success, failure, timeout). This is the size bound.
-  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::zone::public_))
+  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::connector_id::clearnet))
     << "the match above must have removed it";
-  data.server->record_outbound_handshake_nonce(epee::net_utils::zone::public_, nonce);
-  EXPECT_EQ(1u, data.server->inflight_handshake_nonce_count(epee::net_utils::zone::public_));
-  data.server->erase_outbound_handshake_nonce(epee::net_utils::zone::public_, nonce);
-  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::zone::public_))
+  data.server->record_outbound_handshake_nonce(epee::net_utils::connector_id::clearnet, nonce);
+  EXPECT_EQ(1u, data.server->inflight_handshake_nonce_count(epee::net_utils::connector_id::clearnet));
+  data.server->erase_outbound_handshake_nonce(epee::net_utils::connector_id::clearnet, nonce);
+  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::connector_id::clearnet))
     << "an attempt that terminated left its nonce in the set: the set grows "
        "without bound across attempts";
-  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::zone::public_, nonce));
+  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, nonce));
 
   // Exit 2 — match. Erase-on-match is the other removal path; the count is
   // the observable a missing erase cannot satisfy. What this pins is
   // single-fire and prompt removal, NOT a second size bound.
   const std::array<uint8_t, 32> second{{0x7c}};
-  data.server->record_outbound_handshake_nonce(epee::net_utils::zone::public_, second);
-  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::zone::public_, second));
-  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::zone::public_))
+  data.server->record_outbound_handshake_nonce(epee::net_utils::connector_id::clearnet, second);
+  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, second));
+  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::connector_id::clearnet))
     << "a matched nonce stayed in the set: it would linger until the attempt "
        "terminates and could fire a second time in that window";
 
@@ -1049,7 +1104,7 @@ TEST(node_server, anonymity_zone_announces_the_constant_unknown_address)
   ASSERT_TRUE(data.server->init(vm));
 
   EXPECT_EQ(epee::net_utils::network_address{net::tor_address::unknown()},
-            data.server->get_announced_address(epee::net_utils::zone::tor))
+            data.server->get_announced_address(epee::net_utils::connector_id::tor))
     << "a dialer-only anonymity zone must announce the constant unknown "
        "sentinel: any per-node value correlates the hidden service with the "
        "node's other identities";
@@ -1058,11 +1113,11 @@ TEST(node_server, anonymity_zone_announces_the_constant_unknown_address)
   // the public zone announces ipv4 with the HOST HALF ZEROED — only the
   // port is the claim — so the two zones' announcements must differ and the
   // public one must carry no host.
-  const auto pub = data.server->get_announced_address(epee::net_utils::zone::public_);
+  const auto pub = data.server->get_announced_address(epee::net_utils::connector_id::clearnet);
   ASSERT_EQ(epee::net_utils::ipv4_network_address::get_type_id(), pub.get_type_id());
   EXPECT_EQ(0u, pub.as<epee::net_utils::ipv4_network_address>().ip())
     << "the public advert is port-only; the host half must stay zeroed";
-  EXPECT_EQ(data.server->get_announced_port(epee::net_utils::zone::public_), pub.port());
+  EXPECT_EQ(data.server->get_announced_port(epee::net_utils::connector_id::clearnet), pub.port());
 
   data.server->deinit();
 }
@@ -1235,7 +1290,7 @@ namespace
   // however the daemon behaves.
   time_t anon_window_after(uint32_t consecutive)
   {
-    return nodetool::failed_addr_cache::window(epee::net_utils::zone::tor, consecutive);
+    return nodetool::failed_addr_cache::window(epee::net_utils::connector_id::tor, consecutive);
   }
 
   epee::net_utils::network_address tor_addr(const char* host)
@@ -1346,12 +1401,12 @@ TEST(node_server, unknown_zone_keeps_the_public_window)
   // comes from hidden-service republication, a property invalid addresses do
   // not have. This pins the safe default so a later refactor to `!= public_`
   // reds a test instead of silently shortening suppression.
-  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::invalid, 1),
+  EXPECT_EQ(nodetool::failed_addr_cache::window(std::nullopt, 1),
             P2P_FAILED_ADDR_FORGET_SECONDS);
-  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::public_, 1),
+  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::connector_id::clearnet, 1),
             P2P_FAILED_ADDR_FORGET_SECONDS);
   // The anonymity zone gets the short window.
-  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::tor, 1),
+  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::connector_id::tor, 1),
             P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
 }
 
@@ -2001,7 +2056,7 @@ TEST(node_server, announced_port_is_derived_from_listener_and_zone)
     boost::program_options::notify(vm);
     if (!data.server->init(vm))
       return uint32_t(0xffffffff);   // distinguishable from a real 0
-    return data.server->get_announced_port(epee::net_utils::zone::public_);
+    return data.server->get_announced_port(epee::net_utils::connector_id::clearnet);
   };
 
   // Accepting inbound on a pingback-capable zone: announce the listening port.

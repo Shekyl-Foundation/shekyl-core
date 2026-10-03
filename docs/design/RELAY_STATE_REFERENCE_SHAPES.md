@@ -185,7 +185,7 @@ that says *fluff*.
   reaches `Fluff` but its own.*
 - `None` stays a legal, unreachable, non-relayable member with a one-line
   reason at the variant — it survives because the enum is byte-pinned at the
-  FFI seam (`shekyl-relay/src/zone_route.rs:46–50`), not because it guards
+  FFI seam (`shekyl-relay/src/zone/mod.rs:122–128`), not because it guards
   anything, and a mechanical cleanup that deleted it would shift every
   discriminant under that pin. It is not a field of the pool record (§3).
 

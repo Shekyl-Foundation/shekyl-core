@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### A Tor session carries the chain
+
+- Commands are no longer dropped because the peer is a Tor address.
+  Handshake, timed sync and new transactions were the only ones let
+  through; support-flags (command 1007) came back as an empty body and
+  the chain request never left, so a peer that had handshaked stayed at
+  height 1.
+- `--add-exclusive-node <onion>` no longer requires `--tx-proxy`. The
+  managed Tor supplies the SOCKS address after the command line.
+  `--tx-proxy` still names the SOCKS address dials use, and it no longer
+  turns off the per-boot onion. `--anonymous-inbound` and
+  `--no-ephemeral-tor` are what turn that publish off.
+- A transaction this node originates leaves on one connection that does
+  not reveal its address, chosen for the epoch from those connections
+  and replaced if that connection drops.
+  A relayed transaction still leaves on a draw over every outbound
+  connection. One such connection is reported (`hop-0 edge cannot
+  rotate`) rather than treated as a normal configuration. The managed
+  Tor zone dials 4 outbound peers for that pool. `--out-peers` does
+  not change that number.
+
+### Handshake network id derives from the genesis block
+
+- The 16-byte handshake `NETWORK_ID` is the first 16 bytes of
+  `cSHAKE256(S = "shekyl/p2p-network-id-v1", X = genesis_block_hash)`.
+  A regenesis rotates it. Fakechain still shares mainnet's genesis, so
+  it shares the id until it has a genesis of its own. The harness
+  goldens keep their synthetic id.
+
 ### Daemon — the prunable digest is computed in Rust
 
 - `calculate_transaction_prunable_hash` no longer hashes. It finds the
@@ -156,7 +185,6 @@
   size — against the per-shard reward it deters cheating on — is the open
   question, carried in `FOLLOWUPS.md`; under the fixed bond, the Foundation
   `CompleteTree` is the settled-chain posture by design.
-
 ### Wallet contract — one owner for the error codes
 
 - The wallet contract's error vocabulary moves out of the RPC server into

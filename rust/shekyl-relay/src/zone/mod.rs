@@ -3,19 +3,20 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The zone: one Dandelion++ relay domain's state and its scheduled steps.
+//! One Dandelion++ relay: every established session, and the steps that
+//! schedule them.
 //!
-//! A zone is the unit the inherited C++ calls `detail::zone` — public,
-//! or Tor. This type owns the state §18.5's inventory assigned to Rust:
-//! peer fluff queues, the stem map, the epoch role, and the noise **schedule**
-//! (enable bit, cadence, per-channel deadlines). Noise **buffers** live in
-//! [`crate::NoiseQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2).
-//! C++ is transport, and since the 2026-08-27 development opt-in it CAN
-//! enable the carrier — `make_relay_zone` sets the noise bit when
-//! `set_carrier_development(true)`. It remains transport only: Rust decides
-//! whether and when channels fire. A transaction body is still an opaque blob
-//! here. See
-//! `DAEMON_RELAY_PRIVACY.md` §20.2 / §20.4 for the post-RP-3b inventory.
+//! The network is a property of a session's connector, read at hop 0, at the
+//! stem embargo, and at cover. It is not a property of this type. The type
+//! owns the state §18.5 assigned to Rust: peer fluff queues, the stem map,
+//! the epoch role, and the noise **schedule** (enable bit, cadence,
+//! per-channel deadlines). Noise **buffers** live in [`crate::NoiseQueues`]
+//! (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2). C++ is transport. The
+//! development opt-in can ask for cover; Rust refuses that ask unless a
+//! configured connector is an open link, and it sends cover only to a
+//! session on such a connector. Tor is volume cover and takes no envelope.
+//! A transaction body is still an opaque blob here. See
+//! `DAEMON_RELAY_PRIVACY.md` criterion 4 and `TOR_COVER_POSTURE.md`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -27,9 +28,16 @@ use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
 use shekyl_relay_privacy::stem_map::{ConnectionId, SlotIndex, StemMap};
-use shekyl_relay_privacy::LinkSecrecy;
+pub use shekyl_transport_layer::ConnectorId;
+use shekyl_transport_layer::{declaration, Assessment, NativeEncryption, YesNo};
+use shekyl_types::relay::RelayMethod;
 
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
+
+mod cover;
+mod own_edge;
+
+pub use cover::{any_open_link, cover_class, measured_transit_ms, CoverClass};
 
 /// One opaque transaction blob shared across every peer that accepted a fluff
 /// batch.
@@ -38,6 +46,81 @@ use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 /// into one of these once; per-peer queues hold cheap handles. Sorting and
 /// de-duplication on flush compare by content (`Arc<[u8]>: Ord`).
 pub type TxBlob = Arc<[u8]>;
+
+const _: () = {
+    assert!(ConnectorId::Clearnet.index() == 0);
+    assert!(ConnectorId::Tor.index() == 1);
+};
+
+/// The longest measured connector transit, in milliseconds.
+///
+/// The origin retry does not know which connector carried the stem — the
+/// pool does not store one — so it waits this long rather than naming a
+/// connector. An unmeasured connector is not in the max. A later connector
+/// with a longer measurement raises the wait without a new call site.
+#[must_use]
+pub fn longest_measured_transit() -> f64 {
+    ConnectorId::ALL
+        .iter()
+        .copied()
+        .filter_map(measured_transit_ms)
+        .max_by(f64::total_cmp)
+        .expect("a connector with a measured transit")
+}
+
+/// This connector's declaration says the peer does not learn this node's address.
+///
+/// The cell is the connector's description. A connector that has not assessed
+/// the cell is not eligible.
+#[must_use]
+pub fn address_hidden_from_peer(connector: ConnectorId) -> bool {
+    declaration(connector.column()).address_hidden_from_peer() == Assessment::Assessed(YesNo::Yes)
+}
+
+/// True when any configured connector declares that the peer does not learn
+/// this node's address. Computed once, at construction.
+#[must_use]
+pub fn any_hides_address_from_peer(configured: &[ConnectorId]) -> bool {
+    configured.iter().copied().any(address_hidden_from_peer)
+}
+
+/// This connector's native encryption cell says a network observer cannot
+/// read the byte stream.
+///
+/// [`NativeEncryption::Classical`] is encrypted.
+/// [`NativeEncryption::NoneNative`] is not: an added layer is a transport
+/// plan, not this cell. [`Assessment::NotAssessed`] is not presumed encrypted.
+///
+/// Anonymity is [`address_hidden_from_peer`]. The two cells agree on the
+/// connectors that exist today, and a later connector may set only one.
+#[must_use]
+pub fn link_encrypted(connector: ConnectorId) -> bool {
+    matches!(
+        declaration(connector.column()).encryption(),
+        Assessment::Assessed(NativeEncryption::Classical)
+    )
+}
+
+/// True when any configured connector's link is encrypted.
+///
+/// The encryption cell. Cover eligibility is [`cover_class`], which
+/// disagrees with this on Tor: the link is encrypted and still takes no
+/// envelope.
+#[must_use]
+pub fn any_link_encrypted(configured: &[ConnectorId]) -> bool {
+    configured.iter().copied().any(link_encrypted)
+}
+
+// The seam's byte contract. C++ `static_assert`s the same literals; neither
+// compiler sees the other, so both pins are what make a renumbering fail
+// on the side that renumbered. `NetZone` pins live with that type.
+const _: () = {
+    assert!(RelayMethod::None as u8 == 0);
+    assert!(RelayMethod::Local as u8 == 1);
+    assert!(RelayMethod::Stem as u8 == 2);
+    assert!(RelayMethod::Fluff as u8 == 3);
+    assert!(RelayMethod::Block as u8 == 4);
+};
 
 /// What the zone knows about one connected peer's pending fluff batch.
 ///
@@ -49,7 +132,7 @@ pub type TxBlob = Arc<[u8]>;
 pub struct PeerFluff {
     /// Blobs waiting for this peer's flush deadline.
     ///
-    /// Shared handles ([`TxBlob`]) so a public zone with N peers does not make
+    /// Shared handles ([`TxBlob`]) so a fluff to N peers does not make
     /// N full payload copies of every accepted batch. The deadline itself is
     /// **not** here — `FluffScheduler` owns pending deadlines, and a copy in
     /// this struct would be a second owner of the same fact (§18.5).
@@ -58,13 +141,16 @@ pub struct PeerFluff {
     /// inbound fluff delay, and [`shekyl_relay_privacy::schedule::FluffScheduler`]
     /// keeps that asymmetry.
     pub direction: PeerDirection,
+    /// The connector that carried this session.
+    pub connector: ConnectorId,
 }
 
 impl PeerFluff {
-    fn new(direction: PeerDirection) -> Self {
+    fn new(direction: PeerDirection, connector: ConnectorId) -> Self {
         Self {
             queued: Vec::new(),
             direction,
+            connector,
         }
     }
 }
@@ -101,6 +187,13 @@ pub enum NodeSync {
 ///   the node has not caught up. Nothing is sent and nothing is recorded, so
 ///   the pool retries after sync. A refresh cannot make it routable, and
 ///   falling through to fluff would publish it early.
+/// - [`RelayPlan::OwnEdge`] is the first hop of a local origin whose address
+///   a peer must not learn. One ordinary send. A failed write is terminal:
+///   no stem-map refresh, no second plan, no fluff. Success records
+///   `relay_method::local`.
+/// - [`RelayPlan::NoOwnEdge`] is that draw with an empty pool. Send nothing
+///   and record nothing. Refreshing the stem map cannot manufacture an
+///   edge that hides this node's address.
 ///
 /// The daemon also reports the routable outcomes differently: the inherited
 /// `dandelionpp_notify` emits `relay_method::stem` on *entering* the
@@ -122,22 +215,40 @@ pub enum RelayPlan {
     /// Locally originated while this node is unsynchronised. Send nothing
     /// and record nothing.
     ///
-    /// The plan is the refusal. [`Zone::carrier_for`] still names an ordinary
+    /// The plan is the refusal. [`Relay::carrier_for`] still names an ordinary
     /// carrier so the match stays total, and the caller must not read it:
     /// there is no send.
     AwaitSync,
+    /// First hop of a local origin whose address a peer must not learn.
+    ///
+    /// Not a stem-map slot. The caller sends once, on the ordinary
+    /// connection, and records `relay_method::local`. A failed write returns
+    /// without a refresh and without a fluff. No cover on Tor by ruling; on
+    /// a cover-bearing link the own-edge is [`RelayPlan::Stem`], and that
+    /// slot is the channel.
+    OwnEdge(ConnectionId),
+    /// The hidden-address pool is empty.
+    ///
+    /// Send nothing and record nothing. Not a stem-map refresh, and not a
+    /// fluff: either would publish the origin on a link whose peer learns
+    /// this node's address.
+    NoOwnEdge,
 }
 
-/// Why [`Zone::new`] refused a configuration.
+/// Why [`Relay::new`] refused a configuration.
 ///
 /// Three refusals, three variants — collapsing them to `None` would be the
 /// same axis-merge this type exists to prevent. The FFI maps every variant
 /// to a null handle; a future in-process caller matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ZoneNewError {
-    /// Noise conceals packet sizing. On a cleartext link the observer reads
-    /// the contents outright, so padding sizes conceals nothing.
-    NoiseOnCleartext,
+pub enum RelayNewError {
+    /// The carrier was requested and no configured connector is an open link.
+    ///
+    /// Tor is volume cover: an envelope there buys nothing the network does
+    /// not already provide, and a Tor-only node has nowhere to put one.
+    /// Requesting the carrier is the NNhfs pipe on an open link, not padding
+    /// on a volume-cover connector.
+    NoiseWithoutOpenLink,
     /// `stems` doubles as the channel count. Noise is
     /// [`inherited::NOISE_CHANNELS`] wide; a mismatch sizes the schedule
     /// against a width the rest of the stack does not share.
@@ -160,11 +271,11 @@ pub enum ZoneNewError {
     },
 }
 
-impl fmt::Display for ZoneNewError {
+impl fmt::Display for RelayNewError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoiseOnCleartext => {
-                write!(f, "noise carrier requires an encrypted link")
+            Self::NoiseWithoutOpenLink => {
+                write!(f, "noise carrier requires an open link")
             }
             Self::NoiseChannelCount { got } => write!(
                 f,
@@ -178,67 +289,6 @@ impl fmt::Display for ZoneNewError {
             ),
         }
     }
-}
-
-/// Which peers a fluff batch may reach in this zone.
-///
-/// A zone-lifetime policy, not a per-batch choice, which is why it is set at
-/// construction and never passed to [`Zone::queue_fluff`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FluffReach {
-    /// Every connected peer except the source. Public ipv4/ipv6 zones.
-    EveryPeer,
-    /// Outbound connections only — **Tor**.
-    ///
-    /// The mechanism is inherited — one line in `fluff_notify` under *"When
-    /// Tor, only fluff to outbound connections"* — but **its Shekyl
-    /// justification is not, and the inherited one was wrong.**
-    ///
-    /// > **Retracted rationale (2026-08-17).** This doc previously read *"it is
-    /// > why noise-mode networks can substitute for Dandelion++'s sybil
-    /// > resistance at all"*. That is the sybil-substitution fallacy §64
-    /// > already named, and it conflates two different observers: **noise**
-    /// > masks the node↔proxy wire against an *external* observer, while
-    /// > **Dandelion++** defends against an *internal* adversarial peer.
-    /// > Neither substitutes for the other, and minting onion addresses is
-    /// > free, so the anonymity network never supplied sybil resistance —
-    /// > this rule did.
-    ///
-    /// Two justifications, both standing on their own:
-    ///
-    /// 1. **A node relays only to peers it chose.** An inbound connection on a
-    ///    hidden service is an unauthenticated stranger who dialled *us*, so
-    ///    relaying to it hands a transaction to a peer we did not select. That
-    ///    is a genuine partial sybil mitigation and it needs no cover traffic
-    ///    to be true.
-    /// 2. **It is the leg that makes anonymity-zone emit attribution
-    ///    impossible** (§91.4). To receive a fluff from node `Y`, an adversary
-    ///    must be `Y`'s *outbound* — i.e. `Y` dialled it — which is exactly the
-    ///    direction where the adversary holds `tor_address::unknown()` and
-    ///    **no node identifier at all**. On the reverse link, where the
-    ///    adversary does know `Y`'s onion because it chose it, this rule skips
-    ///    the send. **There is no direction carrying both the emit and the
-    ///    name**, and §91 (Design A) now depends on that.
-    ///
-    /// Point 2 makes this rule load-bearing rather than merely inherited:
-    /// widening the reach to inbound peers would hand an active marker the
-    /// attribution it currently cannot obtain. Do not relax it without
-    /// reopening §91.4.
-    ///
-    /// **The identifier is gone from the wire (PWD-I1, landed), so this
-    /// clause cites its absence rather than a constant.** It used to name
-    /// `ANON_ZONE_SENTINEL_PEER_ID`, which pinned the announced value to `1`
-    /// and supplied one half of "no distinguishing identifier on the emit
-    /// direction"; `tor_address::unknown()` on inbound supplied the other.
-    /// `basic_node_data` now carries no identifier of any kind and
-    /// `peerlist_entry` none either, so the half that needed a pinned
-    /// constant needs nothing — the argument got shorter, not wider.
-    ///
-    /// **Removing the field does not extend Point 2 to clearnet**: a clearnet
-    /// counterparty still holds the connection's IP address, and this spec
-    /// concedes that clearnet gives confidentiality and integrity, not
-    /// anonymity (PW-3a). The leg was never unsatisfied in between.
-    OutboundOnly,
 }
 
 /// Noise-channel schedule for a zone — or its deliberate absence.
@@ -325,7 +375,7 @@ impl NoiseSchedule {
 /// reactor. There is no interior mutability and no `Sync` shared state here —
 /// the boundary publishes what C++ needs to read rather than sharing it.
 #[derive(Debug)]
-pub struct Zone {
+pub struct Relay {
     /// Per-peer pending fluff batches, keyed by connection.
     contexts: BTreeMap<ConnectionId, PeerFluff>,
     /// Stem routing for this epoch. Already Rust-backed since RP-2a; RP-3a
@@ -350,8 +400,13 @@ pub struct Zone {
     /// When noise is enabled this is also the noise channel count (channel
     /// `i` ↔ slot `i`). Production pins it to [`inherited::NOISE_CHANNELS`].
     stems: usize,
-    /// Which peers a fluff batch may reach. See [`FluffReach`].
-    reach: FluffReach,
+    /// A configured connector hides this node's address, so a local origin
+    /// draws [`RelayPlan::OwnEdge`] rather than a stem slot.
+    origin_address_hidden: bool,
+    /// This epoch's own-edge, once a non-empty hidden-address pool has been
+    /// drawn. Not a stem-map slot. Kept while that peer is live; a dead peer
+    /// is replaced on the next origination. Cleared by [`Relay::rebuild_stems`].
+    hop0_edge: Option<ConnectionId>,
     /// Noise schedule (enable + cadence + per-channel deadlines), or off.
     ///
     /// **Single owner of the enable fact** (§20.4). Before RP-3b it lived only
@@ -363,19 +418,16 @@ pub struct Zone {
     /// Per-successor stem outcomes — §12.11's signal, **derived here rather
     /// than imported from `tx_pool`** (§38.1). Records; never judges.
     stem_watch: StemWatch,
-    /// Observation window for stem outcomes. Built once from this zone's
-    /// [`DandelionParams`] at construction — the adopted embargo draw, because
-    /// both questions ask the same peer the same thing (*did you propagate
-    /// this?*). Cached here rather than rebuilt on every stem: the timer is a
-    /// pure function of params and never changes for the life of the zone.
-    ///
-    /// If §12.11's decision window ever diverges from the embargo, this is the
-    /// one field that changes — not an FFI export and not a C++ call site.
-    observation_timer: EmbargoTimer,
+    /// One observation window per connector index, drawn when a stem is
+    /// forwarded on that connector. `None` is a connector with no measured
+    /// transit; its sessions are not stem candidates. Each timer is a pure
+    /// function of that connector's transit term and does not change for the
+    /// life of the relay.
+    embargo: Vec<Option<EmbargoTimer>>,
 }
 
-impl Zone {
-    /// Open a zone at `now` with no connections yet, or [`Err`] when the
+impl Relay {
+    /// Open a relay at `now` with no sessions yet, or [`Err`] when the
     /// requested configuration is one the design forbids.
     ///
     /// The first epoch is drawn immediately, matching the inherited
@@ -383,99 +435,76 @@ impl Zone {
     ///
     /// # Refusals
     ///
-    /// **A noise carrier requires an encrypted zone** (ruling of 2026-08-19).
-    /// Noise conceals *packet sizing*, and sizing is the only thing left for a
-    /// network observer to read once the link is encrypted. On a cleartext
-    /// link that observer reads the contents, so padding the sizes conceals
-    /// nothing and the bandwidth buys nothing. This is a refusal rather than a
-    /// silent downgrade to carrier-off, because a node configured
-    /// for a protection it is not getting is the failure mode worth being loud
-    /// about.
+    /// **Cover traffic requires a configured connector whose [`CoverClass`]
+    /// is [`CoverClass::OpenLink`].** Tor is volume cover: no envelope, and
+    /// a Tor-only ask has nowhere to put one. Clearnet with the carrier
+    /// requested is the NNhfs pipe, which encrypts the open link and is the
+    /// envelope. This is a refusal rather than a silent downgrade: a node
+    /// that asked for a protection it is not getting is the failure worth
+    /// being loud about.
     ///
-    /// The predicate is [`LinkSecrecy`] and nothing else. It is **not** reach,
-    /// and it is **not** anonymity: reach says who receives a fluff, anonymity
-    /// says who can be identified, and neither is the question. Encrypting
-    /// ordinary internet traffic would make a clearnet zone eligible for noise
-    /// without making it anonymous, and `RelayZone::is_encrypted` is the one
-    /// place that would change. [`LinkSecrecy`] can only be constructed from a
-    /// [`shekyl_relay_privacy::RelayZone`], so a caller cannot mint "encrypted"
-    /// beside a cleartext identity. This constructor still takes secrecy as a
-    /// **parameter**, not a [`shekyl_relay_privacy::RelayZone`]: Design A is
-    /// that transport is a parameter, not a topology, and handing the
-    /// scheduler the overlay identity would recouple the axes this type exists
-    /// to keep apart. The FFI derives params, reach, and secrecy from one
-    /// discriminant at the adapter; the carrier caller does the same — it
-    /// exists as of 2026-08-29, and hits `Self::new`'s refusal notes because
-    /// it forms the pair in Rust.
+    /// The predicate is [`any_open_link`]. It is not [`link_encrypted`] and
+    /// it is not hop 0. [`address_hidden_from_peer`] says whether the peer
+    /// learns this node's address. [`link_encrypted`] says whether a network
+    /// observer can read the byte stream. Cover is the ruling on top of
+    /// both, and it disagrees with both on the connectors that exist today.
     ///
     /// **A noise carrier's channel count must equal
-    /// [`inherited::NOISE_CHANNELS`]** — `stems` doubles as the channel count
-    /// and the schedule is that wide. This was a `debug_assert!`, which
-    /// compiles out in release and therefore let the mismatched zone be
-    /// built in exactly the configuration that ships.
+    /// [`inherited::NOISE_CHANNELS`].** `stems` is that width. This was a
+    /// `debug_assert!`, which compiles out in release.
     ///
-    /// **A noise epoch must carry a full-size message** — otherwise it cannot
-    /// finish inside one epoch, and any roll that rebinds its slot restarts it
-    /// from the first fragment (CV-1), so it may never arrive. The budget is
+    /// **A noise epoch must carry a full-size message.** Otherwise it cannot
+    /// finish inside one epoch, and a roll that rebinds its slot restarts it
+    /// from the first fragment (CV-1). The budget is
     /// [`carrier::noise_windows_in_epoch`] against
-    /// [`carrier::MAX_FRAGMENTS`]; the epoch is a runtime argument, so
-    /// this is a refusal rather than a `const` assertion.
+    /// [`carrier::MAX_FRAGMENTS`].
     ///
-    /// The three refusals are distinct [`ZoneNewError`] variants. The FFI
-    /// maps every one to null because that is the only channel a C ABI has;
-    /// an in-process caller after the daemon cutover matches.
-    ///
-    /// # Who can reach the refusals
-    ///
-    /// C++ sets the noise flag only behind the development opt-in, which
-    /// defaults off, so no SHIPPED construction hits these. Tests and
-    /// development builds do.
-    ///
-    /// The carrier is complete as of 2026-08-29 — executor, join, boundary,
-    /// enqueue crossing and its producer — so a development-flag zone carries
-    /// real transactions rather than dummies alone. The producer hits these
-    /// refusals, because it forms the pair in Rust and does not route it
-    /// through `make_relay_zone` — which is why the checks are here and not at
-    /// FFI edge. Building it is not the daemon cutover's to provide
-    /// (`COVER_TRAFFIC_RESTORATION.md` §3's status table, the row headed
-    /// "§2.9 step 2 — covert executor", corrected 2026-08-25); C++ keeps
-    /// performing transport.
+    /// The three refusals are distinct [`RelayNewError`] variants. The FFI
+    /// maps every one to null. C++ passes the noise flag only behind the
+    /// development opt-in and does not pre-decide which connector can carry
+    /// it. The flag defaults off, so a shipped construction does not hit
+    /// these.
     pub fn new<R: RelayRng + ?Sized>(
         params: DandelionParams,
         stems: usize,
-        reach: FluffReach,
-        secrecy: LinkSecrecy,
-        noise_enabled: bool,
+        noise_requested: bool,
+        configured: &[ConnectorId],
         now: Millis,
         rng: &mut R,
-    ) -> Result<Self, ZoneNewError> {
-        if noise_enabled {
-            if !secrecy.is_encrypted() {
-                return Err(ZoneNewError::NoiseOnCleartext);
+    ) -> Result<Self, RelayNewError> {
+        if noise_requested {
+            if !any_open_link(configured) {
+                return Err(RelayNewError::NoiseWithoutOpenLink);
             }
             if stems != inherited::NOISE_CHANNELS {
-                return Err(ZoneNewError::NoiseChannelCount { got: stems });
+                return Err(RelayNewError::NoiseChannelCount { got: stems });
             }
             let affords = carrier::noise_windows_in_epoch(params.min_epoch_secs);
             if affords < carrier::MAX_FRAGMENTS {
-                return Err(ZoneNewError::NoiseCannotCrossOneEpoch {
+                return Err(RelayNewError::NoiseCannotCrossOneEpoch {
                     needs: carrier::MAX_FRAGMENTS,
                     affords,
                 });
             }
         }
         let epoch = EpochScheduler::new(params).start(now, rng);
-        let noise = if noise_enabled {
+        let noise = if noise_requested {
             NoiseSchedule::on(stems, now, rng)
         } else {
             NoiseSchedule::Off
         };
-        // Observation window shares the zone's params, not a second
-        // `DandelionParams::inherited()` rebuild at the FFI edge.
-        let observation_timer = EmbargoTimer::adopted(&params);
+        // One embargo timer per measured connector. The draw at stem time
+        // reads the successor's connector, not the relay-wide parameter set.
+        let embargo = ConnectorId::ALL
+            .iter()
+            .map(|connector| {
+                measured_transit_ms(*connector)
+                    .map(|ms| EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(ms)))
+            })
+            .collect();
         Ok(Self {
             stem_watch: StemWatch::default(),
-            observation_timer,
+            embargo,
             contexts: BTreeMap::new(),
             // Built at full width with no peers rather than `StemMap::empty()`,
             // so `update_stems` can grow into it. An empty map has no slots to
@@ -487,7 +516,8 @@ impl Zone {
             epoch_ends_at: epoch.ends_at,
             params,
             stems,
-            reach,
+            origin_address_hidden: any_hides_address_from_peer(configured),
+            hop0_edge: None,
             noise,
         })
     }
@@ -513,6 +543,17 @@ impl Zone {
     #[cfg(test)]
     pub(crate) fn noise_deadline_at(&self, channel: usize) -> Option<Millis> {
         self.noise.deadline_at(channel)
+    }
+
+    /// Whether a substitution envelope may be sent to `peer`.
+    ///
+    /// The destination's connector must be [`CoverClass::OpenLink`]. Tor is
+    /// volume cover: no envelope, including when the peer also occupies a
+    /// stem slot. A session that is gone is not a destination.
+    pub(crate) fn noise_destination(&self, peer: ConnectionId) -> bool {
+        self.contexts
+            .get(&peer)
+            .is_some_and(|session| matches!(cover_class(session.connector), CoverClass::OpenLink))
     }
 
     /// Whether this zone runs noise channels.
@@ -545,16 +586,17 @@ impl Zone {
     /// as inbound must not consume `rng`.
     ///
     /// A close does not merge. A dead slot stays until the next outbound
-    /// handshake or an explicit [`Zone::update_stems`].
+    /// handshake or an explicit [`Relay::update_stems`].
     pub fn on_session_established<R: RelayRng + ?Sized>(
         &mut self,
         id: ConnectionId,
         direction: PeerDirection,
+        connector: ConnectorId,
         rng: &mut R,
     ) {
         self.contexts
             .entry(id)
-            .or_insert_with(|| PeerFluff::new(direction));
+            .or_insert_with(|| PeerFluff::new(direction, connector));
         if direction == PeerDirection::Outbound {
             self.update_stems(rng);
         }
@@ -563,10 +605,11 @@ impl Zone {
     /// Record that `txs` were stemmed to `successor`, keyed under `source`
     /// (`None` = locally originated, matching `in_mapping_[nil]`).
     ///
-    /// The observation window is drawn here from the zone's cached adopted
-    /// embargo timer at `now` — the same question the pool's embargo asks of
-    /// the same peer (*did you propagate this?*). Domain ownership stays in
-    /// this crate (rule 20): the FFI only marshals bytes and a clock.
+    /// The observation window is drawn from the successor's connector at
+    /// `now`. A connector with no measured transit records nothing. The
+    /// question is the one the pool's embargo asks of the same peer (*did
+    /// you propagate this?*). Domain ownership stays in this crate (rule 20):
+    /// the FFI only marshals bytes and a clock.
     pub fn record_stem<R: RelayRng + ?Sized>(
         &mut self,
         txs: &[TxId],
@@ -575,16 +618,50 @@ impl Zone {
         now: Millis,
         rng: &mut R,
     ) {
-        let deadline = self.observation_timer.deadline(now, rng);
+        let Some(connector) = self.contexts.get(&successor).map(|peer| peer.connector) else {
+            return;
+        };
+        let Some(deadline) = self.embargo_deadline(connector, now, rng) else {
+            return;
+        };
         for tx in txs {
-            self.stem_watch.stemmed(*tx, successor, source, deadline);
+            self.stem_watch
+                .stemmed(*tx, successor, source, connector, deadline);
         }
+    }
+
+    fn embargo_deadline<R: RelayRng + ?Sized>(
+        &self,
+        connector: ConnectorId,
+        now: Millis,
+        rng: &mut R,
+    ) -> Option<Millis> {
+        self.embargo
+            .get(connector.index())
+            .and_then(|timer| timer.as_ref())
+            .map(|timer| timer.deadline(now, rng))
+    }
+
+    /// Mean of the embargo drawn for `connector`, when that connector has a
+    /// measured transit.
+    #[cfg(test)]
+    pub fn embargo_mean_secs(&self, connector: ConnectorId) -> Option<u32> {
+        self.embargo
+            .get(connector.index())
+            .and_then(|timer| timer.as_ref())
+            .map(EmbargoTimer::mean_secs)
+    }
+
+    /// The connector recorded for a still-pending stem.
+    #[cfg(test)]
+    pub fn stem_connector(&self, tx: TxId) -> Option<ConnectorId> {
+        self.stem_watch.pending_connector(tx)
     }
 
     /// Record stems with an explicit observation deadline.
     ///
     /// **Test / deterministic-drive only.** Production always goes through
-    /// [`Zone::record_stem`], which draws from the cached embargo timer. Fixed
+    /// [`Relay::record_stem`], which draws from the cached embargo timer. Fixed
     /// deadlines let the poll-clock and next-wake witnesses assert without
     /// sampling the geometric table.
     #[cfg(test)]
@@ -595,8 +672,12 @@ impl Zone {
         source: Option<ConnectionId>,
         deadline: Millis,
     ) {
+        let Some(connector) = self.contexts.get(&successor).map(|peer| peer.connector) else {
+            return;
+        };
         for tx in txs {
-            self.stem_watch.stemmed(*tx, successor, source, deadline);
+            self.stem_watch
+                .stemmed(*tx, successor, source, connector, deadline);
         }
     }
 
@@ -688,15 +769,22 @@ impl Zone {
         self.fluff.forget(*id);
     }
 
+    /// Outbound, and the connector has a measured transit. An unmeasured
+    /// connector is not a stem candidate.
+    fn stem_candidate(peer: &PeerFluff) -> bool {
+        peer.direction == PeerDirection::Outbound && measured_transit_ms(peer.connector).is_some()
+    }
+
     /// Established outbound sessions. Inbound peers are not stem candidates.
     ///
     /// The set is this zone's session registry. A handshake-complete peer
     /// that is still synchronizing is included: recorded height is not a
-    /// filter, and neither is `state_normal`.
+    /// filter, and neither is `state_normal`. A connector with no measured
+    /// transit is not included.
     fn outbound_ids(&self) -> Vec<ConnectionId> {
         self.contexts
             .iter()
-            .filter(|(_, peer)| peer.direction == PeerDirection::Outbound)
+            .filter(|(_, peer)| Self::stem_candidate(peer))
             .map(|(id, _)| *id)
             .collect()
     }
@@ -724,7 +812,7 @@ impl Zone {
     /// unbound clears at its next due tick — both read from the map itself
     /// via [`Driver::poll`].
     ///
-    /// **Not what an epoch boundary does.** See [`Zone::rebuild_stems`]; the two
+    /// **Not what an epoch boundary does.** See [`Relay::rebuild_stems`]; the two
     /// are separate methods because collapsing them freezes the stem graph, and
     /// nothing about the merged result looks wrong when it happens. A close
     /// does not call this. The dead slot stays until the next merge.
@@ -749,13 +837,17 @@ impl Zone {
     /// channel picks up its new peer at the next send, and a channel the redraw
     /// leaves unbound clears at its next due tick, both read from the map itself.
     pub fn rebuild_stems<R: RelayRng + ?Sized>(&mut self, rng: &mut R) {
+        // Class-blind. A hidden-address peer is one outbound candidate among
+        // the rest, not a reserved slot. The own-edge is drawn separately,
+        // on the next local origin, from the hidden-address pool.
         self.map = StemMap::new(self.outbound_ids(), self.stems, rng);
+        self.hop0_edge = None;
     }
 
     /// Begin a new epoch at `now`: re-draw the fluff/stem role and the end time.
     ///
     /// This is what `notify::run_epoch()` forces in tests and what the driver
-    /// calls when [`Zone::epoch_deadline`] elapses. Both paths run the same
+    /// calls when [`Relay::epoch_deadline`] elapses. Both paths run the same
     /// code, which is why forcing it in a test is not a special case.
     pub fn start_epoch<R: RelayRng + ?Sized>(&mut self, now: Millis, rng: &mut R) {
         let epoch = EpochScheduler::new(self.params).start(now, rng);
@@ -774,7 +866,7 @@ impl Zone {
     }
 
     /// The raw stem decision for `source`, bypassing the epoch role — a
-    /// **test-only** window on the pinning mechanics that [`Zone::plan_relay`]
+    /// **test-only** window on the pinning mechanics that [`Relay::plan_relay`]
     /// wraps.
     ///
     /// Production never calls this: it routes through `plan_relay`, which applies
@@ -783,7 +875,7 @@ impl Zone {
     /// directly, without a redraw loop to force a stem epoch. It is `#[cfg(test)]`
     /// — compiled out of production — so a maintainer reading the type cannot
     /// mistake it for a second live routing entry point (unlike the deliberately
-    /// `pub` observation witnesses such as [`Zone::pinned_sources`], which only
+    /// `pub` observation witnesses such as [`Relay::pinned_sources`], which only
     /// read state and never decide a route).
     #[cfg(test)]
     fn stem_for<R: RelayRng + ?Sized>(
@@ -829,6 +921,12 @@ impl Zone {
         if local_origin && node_sync == NodeSync::Unsynchronised {
             return RelayPlan::AwaitSync;
         }
+        if local_origin && self.origin_address_hidden {
+            return self.own_edge(rng);
+        }
+        // No hidden-address connector: the own-edge is this stem slot. On a
+        // cover-bearing link that is the channel's cadence. Tor does not
+        // take this path.
         // The inherited predicate, transcribed rather than restated:
         // `if (!zone_->fluffing || tx_relay == relay_method::local)`.
         if !self.fluffing || local_origin {
@@ -849,8 +947,10 @@ impl Zone {
     /// gtest oracle cannot see through the FFI (§18.4a).
     ///
     /// A settled [`RelayPlan::FluffEpoch`] does not refresh: retrying cannot
-    /// change an epoch decision. [`RelayPlan::AwaitSync`] does not either:
-    /// the map is not what is withholding the batch.
+    /// change an epoch decision. [`RelayPlan::AwaitSync`] does not either.
+    /// [`RelayPlan::NoOwnEdge`] and [`RelayPlan::OwnEdge`] do not: the stem
+    /// map is not the pool those plans draw from, and a second plan would
+    /// let an empty own-edge fall through to fluff.
     pub fn plan_relay_with_refresh<R: RelayRng + ?Sized>(
         &mut self,
         source: Option<ConnectionId>,
@@ -876,7 +976,7 @@ impl Zone {
     /// Returns **how many peers accepted the batch**, so a caller can report
     /// the inherited "no available connections" warning. Deliberately not the
     /// resulting deadline: the scheduler owns that, and returning it invites a
-    /// caller to store what it should be asking [`Zone::fluff_deadline`] for —
+    /// caller to store what it should be asking [`Relay::fluff_deadline`] for —
     /// the mistake `PeerFluff::flush_at` already made once.
     ///
     /// Each blob is mapped to a shared [`TxBlob`] once; peer queues clone the
@@ -896,15 +996,8 @@ impl Zone {
         // O(1); cloning `Vec<u8>` was O(payload × peers).
         let shared: Vec<TxBlob> = txs.iter().map(|t| TxBlob::from(t.as_ref())).collect();
         let mut accepted = 0;
-        let outbound_only = self.reach == FluffReach::OutboundOnly;
         for (id, peer) in &mut self.contexts {
             if Some(*id) == source {
-                continue;
-            }
-            // See `FluffReach::OutboundOnly`: on Tor an inbound peer is a
-            // stranger who dialled us, and relaying to it defeats the sybil
-            // resistance the hidden-service network is standing in for.
-            if outbound_only && peer.direction == PeerDirection::Inbound {
                 continue;
             }
             // `queue` draws only when the peer has no pending deadline, so a
@@ -961,7 +1054,7 @@ impl Zone {
     /// The distribution family the fluff delay is drawn from.
     ///
     /// Exposed so the correction can be *witnessed* rather than assumed — see
-    /// the acceptance note on [`Zone::fluff`].
+    /// the acceptance note on [`Relay::fluff`].
     pub fn fluff_family(&self) -> DelayFamily {
         self.fluff.family()
     }
@@ -1044,7 +1137,7 @@ pub struct RelayDispatch {
     pub carrier: RelayCarrier,
 }
 
-impl Zone {
+impl Relay {
     /// Attach a carrier to a plan, per §42.3.
     ///
     /// Noise carries a **stem** and only a stem, and only when noise is
@@ -1052,43 +1145,47 @@ impl Zone {
     /// ordinary connection: fluff by §42.3's design, no-route because there is
     /// nothing to carry.
     ///
-    /// [`RelayPlan::AwaitSync`] names [`RelayCarrier::Ordinary`] so the match
-    /// is total. That carrier is unread: the plan is the refusal, and the
-    /// caller returns before any send.
+    /// [`RelayPlan::AwaitSync`] and [`RelayPlan::NoOwnEdge`] name
+    /// [`RelayCarrier::Ordinary`] so the match is total. That carrier is
+    /// unread: the plan is the refusal, and the caller returns before any
+    /// send.
     ///
-    /// The slot lookup is consistent by construction — the destination came
-    /// from this same map in this same call, so `slot_of` cannot miss it, and
-    /// the `None` arm is unreachable rather than a fallback.
-    ///
-    /// **What it does when reached, stated exactly.** It `debug_assert!`s, and
-    /// in release it returns [`RelayCarrier::Ordinary`] — so the stem still
-    /// goes out, over the ordinary connection. That is a **cover** degradation,
-    /// not a routing one, and it is deliberate: §92.4's rule is that carrier
-    /// unavailability must never travel as a routing verdict. Dropping the send
-    /// would convert a map inconsistency into a routing failure, which is the
-    /// inversion the inherited covert branch made in the other direction —
-    /// keeping the carrier and degrading the phase (§42.5a).
+    /// No cover on Tor by ruling; on cover-bearing links the own-edge is
+    /// slot-aligned. [`RelayPlan::OwnEdge`] is the volume path and always
+    /// leaves immediately. [`RelayPlan::Stem`] on an open link, while noise
+    /// is on, is that slot's channel — including a clearnet local origin,
+    /// whose first hop is the slot. A relayed stem with no slot is map
+    /// corruption. In release that arm still returns
+    /// [`RelayCarrier::Ordinary`]: the stem goes out. That is a cover
+    /// degradation, not a routing one.
     fn carrier_for(&self, plan: RelayPlan) -> RelayCarrier {
         match plan {
-            RelayPlan::Stem(destination) if self.noise_enabled() => {
+            RelayPlan::Stem(destination) if self.noise.enabled() => {
                 match self.map.slot_of(destination) {
-                    Some(slot) => RelayCarrier::Noise { channel: slot },
+                    Some(slot) if self.noise_destination(destination) => {
+                        RelayCarrier::Noise { channel: slot }
+                    }
+                    Some(_) => RelayCarrier::Ordinary,
                     None => {
                         debug_assert!(
                             false,
-                            "planned a stem to a peer with no slot: the destination came from \
-                             this map in this call, so this is map corruption, not a posture"
+                            "planned a relayed stem to a peer with no slot: the destination came \
+                         from this map in this call, so this is map corruption, not a posture"
                         );
                         RelayCarrier::Ordinary
                     }
                 }
             }
-            // The plan is the refusal. Ordinary keeps the match total; the
-            // caller returns before it reads the carrier.
-            RelayPlan::AwaitSync => RelayCarrier::Ordinary,
-            RelayPlan::Stem(_) | RelayPlan::NoRoute | RelayPlan::FluffEpoch => {
-                RelayCarrier::Ordinary
-            }
+            // No cover on Tor by ruling. OwnEdge leaves on the ordinary
+            // connection. On a cover-bearing link the own-edge is
+            // [`RelayPlan::Stem`] and the arm above is its channel. The
+            // other plans are a refusal or have nothing to carry.
+            RelayPlan::OwnEdge(_)
+            | RelayPlan::NoOwnEdge
+            | RelayPlan::AwaitSync
+            | RelayPlan::NoRoute
+            | RelayPlan::FluffEpoch
+            | RelayPlan::Stem(_) => RelayCarrier::Ordinary,
         }
     }
 
@@ -1126,6 +1223,8 @@ impl Zone {
     }
 }
 
+#[cfg(test)]
+mod edge;
 #[cfg(test)]
 mod stem_draw;
 #[cfg(test)]
