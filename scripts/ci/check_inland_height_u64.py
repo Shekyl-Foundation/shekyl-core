@@ -72,6 +72,13 @@ vacuous pass.
     u64`), a return type on the line after its parameter list, a tuple or
     generic position (`(u64, BlockInfo)`), or a `u64` that *is* a height
     only in the C++ it mirrors.
+  * A grandfathered line **moved within its file** with its text intact
+    (re-ordered fields, a helper relocated) — a record is `(path, text,
+    count)` and carries no line number, so the move is invisible here and
+    the touched-site law above is review-borne for it. Deliberate: a
+    line-numbered record would be invalidated by every unrelated edit
+    above it, and a list re-recorded on every edit is one nobody reads;
+    text identity is what lets the list only burn down.
   * Anything outside `SCOPE`. The wallet side carries the campaign's own
     `RK-` and C1 raw rulings and is not this gate's subject; widening is
     Phase 2g's call, taken by adding a crate and its records.

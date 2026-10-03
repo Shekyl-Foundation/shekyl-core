@@ -440,7 +440,13 @@ quantity.
   and its `RK-`/C1 rulings are not the gate's subject; widening is this
   slice's call, taken by adding a crate and its records. Stated
   non-coverage: count-named operands (`Transition::count()`), heights
-  under other names (`h_open`, `tip`, `at`). *This slice's work is now
+  under other names (`h_open`, `tip`, `at`); and — UPDATE 2026-10-02 (PR
+  #937 review) — a grandfathered line **moved within its file** with its
+  text intact, since a record is `(path, text, count)` without a line
+  number: the touched-site law is review-borne for that case, by choice,
+  because a line-numbered record is invalidated by every unrelated edit
+  above it and a list re-recorded on every edit is one nobody reads.
+  *This slice's work is now
   the burn-down:* each retyped site deletes its record and lowers the
   ceiling; the slice is complete when the list is empty and the gate
   keeps it so. *What E4 does regardless* (`ARW-Q16` (a)): its commit 8
