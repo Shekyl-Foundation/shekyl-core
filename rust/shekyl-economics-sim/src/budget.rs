@@ -54,12 +54,13 @@ use shekyl_economics::{
     burn::compute_burn_split_at,
     calc_burn_pct, calc_effective_emission_share, calc_release_multiplier, effective_emission,
     params::{EconomicParams, SCALE},
-    split_block_emission, ClosedShardCount, TxVolume,
+    split_block_emission, ClosedShardCount,
 };
 
 use crate::engine::SimParams;
 use crate::fee_model::{FeeModel, FeePoint};
 use crate::stage2::HonestFold;
+use crate::volume_window::VolumeWindow;
 
 const COIN: f64 = 1_000_000_000.0;
 
@@ -178,6 +179,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
     // transaction's weight, and so its fee.
     let mut honest = HonestFold::default();
 
+    let mut window = VolumeWindow::default();
     for block in 0..total_blocks {
         let abs_height = block + scenario.genesis_height_offset;
         let epoch = abs_height / SETTLEMENT_EPOCH_BLOCKS;
@@ -212,16 +214,20 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
             .expect("sim neutral trajectory stays within the arithmetic domain");
 
         let tx_volume = (scenario.get_volume)(block, params.blocks_per_year);
+        // The validator's operand: CEN-F20's window over the blocks before
+        // this one (ESR-4). Read before this block joins it.
+        let volume = window.operand();
+        window.push(tx_volume);
 
         let multiplier = calc_release_multiplier(
-            TxVolume::per_block(tx_volume),
+            volume,
             params.tx_volume_baseline,
             params.release_min,
             params.release_max,
         );
 
         // Real ledger advance uses the paid emission (both arms share it).
-        let effective_reward = effective_emission(ag, TxVolume::per_block(tx_volume), &economic)
+        let effective_reward = effective_emission(ag, volume, &economic)
             .expect("sim paid emission stays within the arithmetic domain");
 
         let emission_share = calc_effective_emission_share(
@@ -240,7 +246,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         // Fee leg — identical under both dispositions.
         let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
         let burn_pct = calc_burn_pct(
-            TxVolume::per_block(tx_volume),
+            volume,
             params.tx_volume_baseline,
             circulating,
             params.emission_curve_asymptote,
@@ -250,7 +256,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         honest.add_block(tx_volume);
         let fee_per_tx = scenario.fee.per_tx_atomic(&FeePoint {
             already_generated: ag,
-            volume: TxVolume::per_block(tx_volume),
+            volume,
             sigma_scaled: emission_share,
             burn_pct_scaled: burn_pct,
             chain_leaves: honest.leaves(),

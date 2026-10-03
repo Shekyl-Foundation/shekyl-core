@@ -3,11 +3,12 @@ use shekyl_economics::{
     burn::{calc_burn_pct_from_activity, compute_burn_split_at},
     calc_burn_pct, calc_effective_emission_share, calc_release_multiplier, effective_emission,
     params::{calc_stake_ratio, EconomicParams, SCALE},
-    split_block_emission, ClosedShardCount, TxVolume,
+    split_block_emission, ClosedShardCount,
 };
 
 use crate::fee_model::{FeeModel, FeePoint};
 use crate::stage2::HonestFold;
+use crate::volume_window::VolumeWindow;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct YearSnapshot {
@@ -213,6 +214,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
     // transaction's weight, and so its fee.
     let mut honest = HonestFold::default();
 
+    let mut window = VolumeWindow::default();
     for block in 0..total_blocks {
         let year = block / params.blocks_per_year;
         let block_in_year = block % params.blocks_per_year;
@@ -225,6 +227,10 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
         let ag = already_generated.min(u64::MAX as u128) as u64;
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
+        // The validator's operand: CEN-F20's window over the blocks before
+        // this one (ESR-4). Read before this block joins it.
+        let volume = window.operand();
+        window.push(tx_volume);
         let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
         // Consensus burn-site circulating: prev-block `already_generated`
         // alone, matching `validate_miner_transaction` / the C4 recorder
@@ -244,13 +250,13 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         };
 
         let multiplier = calc_release_multiplier(
-            TxVolume::per_block(tx_volume),
+            volume,
             params.tx_volume_baseline,
             params.release_min,
             params.release_max,
         );
 
-        let effective_reward = effective_emission(ag, TxVolume::per_block(tx_volume), &economic)
+        let effective_reward = effective_emission(ag, volume, &economic)
             .expect("sim paid emission stays within the arithmetic domain");
 
         let emission_share = calc_effective_emission_share(
@@ -268,14 +274,14 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             // Gate-7 path: the engine-equivalent composition over the
             // consensus circulating quantity (follows the recorder).
             (Some(_), Some(_locked)) => calc_burn_pct_from_activity(
-                TxVolume::per_block(tx_volume),
+                volume,
                 params.tx_volume_baseline,
                 circ_consensus,
                 &economic,
             ),
             // Legacy path: byte-identical to the pre-gate-7 modeling loop.
             _ => calc_burn_pct(
-                TxVolume::per_block(tx_volume),
+                volume,
                 params.tx_volume_baseline,
                 circulating,
                 params.emission_curve_asymptote,
@@ -287,7 +293,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         honest.add_block(tx_volume);
         let fee_per_tx = config.fee.per_tx_atomic(&FeePoint {
             already_generated: ag,
-            volume: TxVolume::per_block(tx_volume),
+            volume,
             sigma_scaled: emission_share,
             burn_pct_scaled: burn_pct,
             chain_leaves: honest.leaves(),

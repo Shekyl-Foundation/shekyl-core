@@ -25,7 +25,7 @@ use shekyl_economics::{
     burn::{calc_burn_pct, compute_burn_split},
     calc_effective_emission_share, effective_emission,
     params::{EconomicParams, SCALE},
-    split_block_emission, ScaledShare, TxVolume,
+    split_block_emission, ScaledShare,
 };
 
 use crate::burden::{
@@ -45,6 +45,7 @@ use crate::population::{
     attacker_capped_work_milli, honest_sigma_work_milli, honest_sigma_work_milli_deleted, DQ2H_TAIL,
 };
 use crate::scenarios::all_scenarios;
+use crate::volume_window::VolumeWindow;
 use shekyl_archival_retention::{
     reward_share_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_HOLDINGS_SHARDS,
 };
@@ -325,15 +326,19 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
     let mut year_fees_atomic: u128 = 0;
     let mut year_total_emission_atomic: u128 = 0;
     let mut aggs = Vec::with_capacity(config.sim_years as usize);
+    let mut window = VolumeWindow::default();
 
     for block in 0..total_blocks {
         let abs_height = block + config.genesis_height_offset;
         let ag = already_generated.min(u128::from(u64::MAX)) as u64;
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
+        // The validator's operand: CEN-F20's window over the blocks before
+        // this one (ESR-4). Read before this block joins it.
+        let volume = window.operand();
+        window.push(tx_volume);
         fold.add_block(tx_volume);
 
-        let effective =
-            effective_emission(ag, TxVolume::per_block(tx_volume), &economic).unwrap_or(0);
+        let effective = effective_emission(ag, volume, &economic).unwrap_or(0);
 
         let emission_share = calc_effective_emission_share(
             abs_height,
@@ -346,7 +351,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
 
         let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
         let burn_pct = calc_burn_pct(
-            TxVolume::per_block(tx_volume),
+            volume,
             params.tx_volume_baseline,
             circulating,
             params.emission_curve_asymptote,
@@ -355,7 +360,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         );
         let fee_point = FeePoint {
             already_generated: ag,
-            volume: TxVolume::per_block(tx_volume),
+            volume,
             sigma_scaled: emission_share,
             burn_pct_scaled: burn_pct,
             chain_leaves: fold.leaves(),
