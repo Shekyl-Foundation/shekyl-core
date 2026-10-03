@@ -396,6 +396,71 @@ production fee itself that moves most: `C = (1 − σ)·M_r/(1 − b)` takes bot
 the release multiplier and the burn fraction, so a step reaches the fee
 through two windowed operands at once. The control has no `C`.
 
+### 5.6 ESR-6, predicted again before it runs (2026-10-02)
+
+§5.2 assumed the median settles at the block weight, which assumes blocks
+carry their demand. What a block carries is the producer's choice, and
+production makes it with one comparison (`fill_block_template`, lifted to
+`shekyl_block_template::Fill` for this item): a body is listed when it
+does not lower the gross coinbase. Past the median a body of weight `w`
+costs `paid · w · (2(c − m) + w) / m²` of reward, and a Standard-rung
+transaction pays `4F·w` with `F = R·C·w_ref/M²`. A median that sits at a
+whole number of transactions therefore grows only when one more
+transaction's fee covers its penalty:
+
+> **`w ≤ 4ρ · w_ref · (m/M)²`**, with `ρ = (1 − σ)/(1 − b)`
+
+— independent of the reward level, because the fee and the penalty both
+scale with it. Here `m` is the effective median, `M` the long-term one the
+fee divides by, `w_ref = 3 000`. Production values on the neutral
+baseline trajectory, from the production functions at the zone (not from
+a run):
+
+| Year | σ | b | ρ | `w`, bytes | `4ρ·w_ref` |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 0.150 | 0.000 | 0.85 | 12 595 | 10 200 |
+| 1 | 0.135 | 0.059 | 0.92 | 14 643 | 11 030 |
+| 5 | 0.089 | 0.233 | 1.19 | 14 643 | 14 256 |
+| 10 | 0.052 | 0.357 | 1.47 | 14 643 | 17 692 |
+| 20 | 0.018 | 0.459 | 1.82 | 15 283 | 21 785 |
+
+The ladder's reference weight is a quarter of a post-quantum ordinary
+transaction's, and the penalty grows with `w²` while the fee grows with
+`w`. On an all-Standard chain the median cannot grow until `ρ` reaches
+about 1.22. Registered:
+
+1. **The production arm's blocks do not carry their demand at first.**
+   On the baseline (50 per block) they carry 21–24 transactions, the
+   median stays within one transaction of the zone, and the rest wait and
+   expire after `CRYPTONOTE_MEMPOOL_TX_LIVETIME` (2 160 blocks): roughly
+   26–29 transactions a block, about 7 M a year, turned away.
+2. **That delays its own end.** The volume window counts carried
+   transactions, so the burn fraction is lower than in the table above
+   (the `√V` damper, at about 22/50), `ρ` is lower, and growth starts
+   later than the year 5–6 the table implies: **between year 8 and
+   year 12**. The release multiplier also sits below 1 over the same
+   years, so emission is paid more slowly.
+3. **Once it starts, it finishes in weeks.** The median climbs about one
+   transaction for each half short window (≈ 50 blocks) until the waiting
+   transactions are served, then settles at the demand: 50 × 14.6–15.3 KB
+   ≈ 730–765 KB. From there the floor is **5.9–6.5×** below its zone
+   value. §5.2's 4.3–5.1× used 12.5–13.5 KB weights; the fold's ordinary
+   transaction weighs 14.6–15.3 KB at the depths it reaches.
+4. **The control arm is held at the zone far longer.** A flat 0.1 SKL
+   covers one more transaction's penalty only when the reward is below
+   about `0.1 / (w/m)²` ≈ 42 SKL, around **year 28–32**. Until then it
+   too carries 21–24 transactions a block.
+5. **What A1 does with it.** Early clearance barely moves: emission is
+   99.6 % of the year-1 budget, and the release multiplier trims it by at
+   most a fifth. After the production arm's growth starts, its fee leg
+   falls about sixfold. **Onsets move earlier on the production arm.**
+
+Every ordinary transaction here pays the Standard rung, and users who
+choose Priority (`max(2RC/M, 4F)` per byte, enough to buy deep into the
+penalty zone) are what grows blocks on a real chain. This prediction is
+about the default, not about a chain under congestion with a rung mix;
+that is ESR-10's.
+
 ## 6. The staking sim — a separate PR
 
 Appendix B is the work list. It is a re-base, not a wiring change: the
