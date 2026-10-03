@@ -540,6 +540,17 @@ impl H19 {
 /// into `shekyl_verify_ct_balance` with empty masks and zero fee computes,
 /// so the row is complete without a curve operation. Applies to the
 /// serve-credit-only class; recorded vacuous on every other class.
+///
+/// **The prunable region is required, with one pruned pass record per
+/// serve-credit vin (`RF-D1`).** The live C++ refuses any other count
+/// (`blockchain.cpp`, the serve-credit arm of `check_tx_inputs`:
+/// *"pruned records for … vins"*), and a body with no region at all fails
+/// its parse. This row first admitted `prunable: None`, which no later row
+/// catches and the chain store cannot hold (`SHT-9`): a conformance
+/// correction, recorded in `CHAIN_RULES_SLICE_5.md` §5.
+///
+/// **Shape and count only.** What each record holds — its structure, `P`'s
+/// countersignature, the retention-proof legs — is CEN-J10's, not this row's.
 pub(crate) struct H20;
 
 impl Rule for H20 {
@@ -550,14 +561,14 @@ impl TxRule for H20 {
     const SCOPE: TxScope = TxScope::NonCoinbase;
 
     fn check(cx: &TxContext<'_>) -> Verdict<()> {
-        if !matches!(cx.class, TxClass::ServeCreditOnly { .. }) {
+        let TxClass::ServeCreditOnly { credits } = cx.class else {
             return Ok(());
-        }
+        };
         let refuse = || Err(InvalidBlock::new(Self::ROW, cx.locus()));
         let Ct::Fcmp {
             fee,
             pqc_auths,
-            prunable,
+            prunable: Some(p),
             base,
             ..
         } = &cx.tx.ct
@@ -568,13 +579,12 @@ impl TxRule for H20 {
             || !pqc_auths.is_empty()
             || !cx.tx.prefix.outputs.is_empty()
             || !base.commitments.is_empty()
+            || !p.bulletproofs.is_empty()
+            || !p.fcmp_proof.is_empty()
+            || !p.pseudo_outs.is_empty()
+            || p.serve_credit_pruned.len() != credits
         {
             return refuse();
-        }
-        if let Some(p) = prunable {
-            if !p.bulletproofs.is_empty() || !p.fcmp_proof.is_empty() || !p.pseudo_outs.is_empty() {
-                return refuse();
-            }
         }
         Ok(())
     }

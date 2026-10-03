@@ -32,6 +32,7 @@ use shekyl_types::{ArchivalLength, SigningPayloadHash};
 mod archival;
 pub use archival::{
     claimant, emission_vin, join_market, serve_credit_only, serve_credit_vin, BOND_FLOOR,
+    PRUNED_PASS_RECORD,
 };
 
 /// The well-formed **transaction** shapes this module builds, as a
