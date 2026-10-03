@@ -617,20 +617,24 @@ constant moves only if the region EXCLUDES it).
 Inputs: lambda_target=3.000 reads/pair/epoch; OPERATIVE evaluation at
 DELIVERED lambda=1.500 (projection 40000 pairs; k_cap binds past
 20000 pairs, so target and delivered coincide only below that knee);
-p_attempt=0.300 (STAND-IN: measured 2026-07-30 with NO PoW and NO
-flood -- does not transfer to the SP-T3 operating point; the rig re-run
-gates the real value), r=1, fabrication_intensity=1.00 (1.00 =
-every gap epoch poisoned).
+p_attempt=0.300 (RETAINED 2026-10-02, measured-supported: the W2 size
+ladder's worst observed day missed 0.20, 95% upper bound 0.238, and its
+PoW-on window 0.041; reopens if a measured window's upper bound exceeds
+it), attempts=1 (ONE credited, deliberately: bad-day misses were mostly
+circuit failures, correlated within a window, so a retry is not an
+independent draw and is margin, not calibration),
+fabrication_intensity=1.00 (1.00 = every gap epoch poisoned).
   OBSERVATION UNIT (correction the miss-fact ruling forces): an epoch's
 reads collapse to ONE observation (any pass dominates), so observations
 arrive at 1.0000/epoch -- NOT lambda_eff/epoch. A 13-observation window
 spans ~13.0 epochs, so detection latency does NOT collapse and the
 within-epoch independence worry does not arise (draws stay one per epoch,
 weeks apart). What lambda_eff buys instead: pass-dominance COMPOUNDS the
-transport term across an epoch's reads -- (p^r)^j for j reads, not p^r --
-so coverage and retry depth are SUBSTITUTES on that term, and coverage's
-version has better independence (j miners, j circuits vs r retries on one).
-  TERMS: gap (poisonable) = e^-lambda = 0.2231; read-failure p^r = 0.3000;
+transport term across an epoch's reads -- (p^a)^j for j reads, not p^a --
+so coverage and attempts per read are SUBSTITUTES on that term, and only
+coverage's version is independent (j miners, j circuits vs a attempts on
+one client in one window).
+  TERMS: gap (poisonable) = e^-lambda = 0.2231; read-failure p^a = 0.3000;
 per-epoch missed = 0.349938; per-OBSERVATION miss q = 0.349938.
 Bond life 131 epochs; union-bound ceiling = 131 observations
 (<= 1 obs/epoch; E[obs] = bond_life * rate = 131.0).
@@ -658,16 +662,16 @@ block, so phi = 1-(1-f)^SEB saturates at ~1 by f = 1e-3. The ambient
 floor must be read against the targeted one. Rows are evaluated at the
 operative delivered coverage; r stays unpinned pending the PoW-enabled
 rig re-run.
-r              f    phi_tgt    phi_amb        q/obs   P(any) @4096    verdict
-1          1.000     1.0000     0.9502      0.34994         1.00e0    EXCEEDS
-1          0.100     1.0000     0.2592      0.34994         1.00e0    EXCEEDS
-1          0.001     1.0000     0.0030      0.34993         1.00e0    EXCEEDS
-2          1.000     1.0000     0.9502      0.25538        9.99e-1    EXCEEDS
-2          0.100     1.0000     0.2592      0.25538        9.99e-1    EXCEEDS
-2          0.001     1.0000     0.0030      0.25537        9.99e-1    EXCEEDS
-3          1.000     1.0000     0.9502      0.23235        9.19e-1    EXCEEDS
-3          0.100     1.0000     0.2592      0.23235        9.19e-1    EXCEEDS
-3          0.001     1.0000     0.0030      0.23234        9.19e-1    EXCEEDS
+attempts         f    phi_tgt    phi_amb        q/obs   P(any) @4096    verdict
+1            1.000     1.0000     0.9502      0.34994         1.00e0    EXCEEDS
+1            0.100     1.0000     0.2592      0.34994         1.00e0    EXCEEDS
+1            0.001     1.0000     0.0030      0.34993         1.00e0    EXCEEDS
+2            1.000     1.0000     0.9502      0.25538        9.99e-1    EXCEEDS
+2            0.100     1.0000     0.2592      0.25538        9.99e-1    EXCEEDS
+2            0.001     1.0000     0.0030      0.25537        9.99e-1    EXCEEDS
+3            1.000     1.0000     0.9502      0.23235        9.19e-1    EXCEEDS
+3            0.100     1.0000     0.2592      0.23235        9.19e-1    EXCEEDS
+3            0.001     1.0000     0.0030      0.23234        9.19e-1    EXCEEDS
   CAP-DELIVERED COVERAGE (k_cap = 6, SEB = 10000): the fabrication
 term must be read at DELIVERED lambda at projected pair counts, since
 k = lambda_target*pairs/SEB is capped. Each row carries the SHIPPED
@@ -680,7 +684,7 @@ pairs          k wanted   lambda_eff   gap (poison)        q/obs   P(any) @4096 
 40000             12.00        1.500         0.2231      0.34994         1.00e0    EXCEEDS  <- operative
 100000            30.00        0.600         0.5488      0.65705         1.00e0    EXCEEDS
   FEASIBLE REGION at the operative point (delivered lambda 1.500,
-projection 40000 pairs, r=1, targeted phi=1.00):
+projection 40000 pairs, attempts=1, targeted phi=1.00):
 n        m_min    m_max       fs@m_min free-ride@m_max
 2            -        2     infeasible              -
 3            -        3     infeasible              -
@@ -712,7 +716,8 @@ per-pair alone understates it by up to 4096x). m_max is ceiling-set (W16
 free-ride). A cell is feasible iff m_min <= m <= m_max. The W16 bound is
 an INPUT here: its value comes from the crisis-price degrade economics,
 not from this arm. The operative verdicts are GATED on two labelled
-inputs: the stand-in p (rig re-run) and the pair projection -- move
-either and the same tables re-answer without re-deriving the arm.
+inputs: the retained p (reopened by a measured window above it) and
+the pair projection -- move either and the same tables re-answer
+without re-deriving the arm.
 
 Stage-2 (burden trajectory + escalation family + A1 clearance + A4 W9 ROI) complete.
