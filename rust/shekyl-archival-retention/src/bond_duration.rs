@@ -6,6 +6,17 @@
 //! Per-shard retention-commitment horizon `bond_duration(age)` (gate-4 §4.4;
 //! `ARCHIVAL_TIMING_CONSTANTS.md` §1; `PHASE_2B_FSM_RETOOL.md` P2B-7 Pin 3 / P2B-8 Q3).
 //!
+//! **Status (2026-10-04): no production consumer.** The predicate this module
+//! realizes gated the voluntary per-shard drop, and `HoldingsUpdate` was
+//! REJECTED 2026-09-20 under the immutable-bond ruling
+//! (`PRINCIPAL_STAKE_LIFECYCLE.md` §5.3): a bond's shards leave only by
+//! whole-bond `Release` or by slash, neither of which consults a per-shard
+//! horizon. Only this file's tests call [`bond_duration`]. The disposition —
+//! delete, or keep as the frozen integer artifact of the sim's `bond_duration`
+//! — is enumerated at §5.3.2 row 8; the age-realization invariant below stays
+//! live regardless, because the reward path consumes the same
+//! `shard_age_milli`. What follows is the module as written for the drop gate.
+//!
 //! A held shard is **ineligible for voluntary `HoldingsUpdate`-drop** until its
 //! retention-commitment horizon elapses:
 //!

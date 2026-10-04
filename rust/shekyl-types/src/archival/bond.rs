@@ -30,10 +30,15 @@ use super::{
 /// allocate for.
 pub const MAX_BOND_KEY_BYTES: usize = 2048;
 
-/// One held shard with the settlement epoch it was acquired in — join-time
-/// shards carry `E_join`; a `HoldingsUpdate` add carries its `E_add`. The
-/// add-epoch powers the drop-eligibility gate (gate-4 §4.4) and per-shard
-/// `E_add + 1` serve-credit counting (P2B-7 Pin 5).
+/// One held shard with the settlement epoch it was acquired in. Since the
+/// immutable-bond ruling (2026-09-20, `PRINCIPAL_STAKE_LIFECYCLE.md` §5.3)
+/// a shard joins a bond at `JoinMarket` or never, so every shard's
+/// `add_epoch` equals its bond's join epoch; the field, its v6 column and
+/// the `held_at_height` bound that reads it are the add-epoch substrate
+/// enumerated at §5.3.2 row 7. *(As written: "a `HoldingsUpdate` add carries
+/// its `E_add`; the add-epoch powers the drop-eligibility gate (gate-4 §4.4)".
+/// That kind is REJECTED and the gate has no subject.)* Per-shard
+/// `E_add + 1` serve-credit counting (P2B-7 Pin 5) still reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeldShard {
     /// Which shard.
@@ -81,7 +86,8 @@ pub enum Holdings {
     /// An explicit, bounded, duplicate-free list — insertion order
     /// preserved, as the wire's [`ShardSet`] is.
     ShardSet(HeldShards),
-    /// Every shard; a foundation record. Cannot `HoldingsUpdate`.
+    /// Every shard; a foundation record. Like every record since the
+    /// immutable-bond ruling (2026-09-20), its holdings cannot change.
     CompleteTree,
 }
 
@@ -161,7 +167,8 @@ impl Holdings {
     }
 
     /// The add-epoch of `shard`, if held. `None` for a complete tree, which
-    /// has no per-shard epochs (it cannot `HoldingsUpdate`).
+    /// has no per-shard epochs. For a compact record this is the bond's
+    /// join epoch (immutable-bond ruling, 2026-09-20).
     #[must_use]
     pub fn add_epoch(&self, shard: ShardId) -> Option<SettlementEpoch> {
         match self {

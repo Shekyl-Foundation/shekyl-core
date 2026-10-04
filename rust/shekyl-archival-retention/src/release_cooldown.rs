@@ -3,8 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Release-cooldown gate for `Release` and `HoldingsUpdate`-drop (gate-4 §4.3/§4.4;
-//! `PHASE_2B_FSM_RETOOL.md` P2B-8 Q1/Q2).
+//! Release-cooldown gate for `Release` (gate-4 §4.3; `PHASE_2B_FSM_RETOOL.md`
+//! P2B-8 Q1/Q2). *(As written it also gated "`HoldingsUpdate`-drop (gate-4
+//! §4.4)"; that kind is REJECTED 2026-09-20 and `Release` is the only exit.)*
 //!
 //! The cooldown anchor is a persona's **last-served settlement epoch**, and it is
 //! *derived*, never stored (P2B-8 Q1/Q2 — "derive from the landed source of truth,
