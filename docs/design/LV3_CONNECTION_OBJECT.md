@@ -1573,7 +1573,12 @@ and `m_current_number_of_out_peers`.* The dial cap recounts through `get_outgoin
 (`try_to_connect_and_handshake_with_new_peer`). *Records-was: the cap
 read the stored atomic at `:1573`, which the deleted thread used to
 write, and an exclusive list returned before any recount.* That
-function still stores the recount (`:2170`). Slice 3 keeps the fill
+function still stores the recount (`:2170`). The recount is a
+`foreach_connection` at every dial, the opposite direction from this
+step. The board row already carries direction and established
+(`Session` in `registry.rs`). The next commit in this step reads the
+count of outbound established rows from the published board, once
+that count's FFI lands. The walk does not stay. Slice 3 keeps the fill
 loops. The in-count atomic is written by
 `get_incoming_connections_count` (`:2150`) and has no reader in
 `src/`. Deleting the thread removes the one-second `--in-peers`
@@ -1666,20 +1671,21 @@ connector, the direction, whether the handshake has finished, and the
 observed endpoint. It does not carry support flags or the pull
 relationship. Those arrive when their owner publishes them, through
 the step-b handle, not as blanks on the board. The `run` thread is
-gone. The rest of this subset is still the C++ walk. The twelve
+gone. The dial cap's recount is the walk this step converts to the
+board. The rest of this subset is still the C++ walk. The twelve
 reading snapshots greens at b.
 
 | Step c | Step b |
 | --- | --- |
 | `for_each_connection` `:158`, for the reads this row answers. A callback that reads support flags or the pull relationship waits. | `peer_sync_idle_maker` `:2332`. It reads the pull relationship and writes `m_in_timedsync`. |
-| `run` | deleted. *Records-was: `:1174`, inside the thread `run` started at `:1163`.* The out-count cache at `:1573` is not refreshed by it. |
+| `run` | deleted. *Records-was: `:1174`, inside the thread `run` started at `:1163`.* The stored out-count is not refreshed by it. |
 | `send_stop_signal` `:1248` | |
 | `has_outbound_connection_to_host` `:1492` | |
 | `is_peer_used` `:1513` | |
 | `is_addr_connected` `:1538` | |
 | `make_new_connection_from_peerlist` `:1770` | |
 | `get_incoming_connections_count` `:2141` | |
-| `get_outgoing_connections_count` `:2160`. The out-count cache at `:1573` stays. | |
+| The dial cap (`:1576`) recounts through `get_outgoing_connections_count` (`:2158`). That recount converts, in this step, to the count of outbound established rows on the published board. | |
 | `get_incoming_connections_count` `:2190` | |
 | `print_connections_container` `:2812`, the address, the id, and the direction | A sync-state line on the connection print. `:2812` does not print one today. |
 
