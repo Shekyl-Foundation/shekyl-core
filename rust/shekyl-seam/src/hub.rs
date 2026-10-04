@@ -28,6 +28,7 @@ use shekyl_transport_layer::{
 use crate::dial::Dial;
 use crate::endpoint::Endpoint;
 use crate::loopback::Loopback;
+use crate::registry::{Board, Session as Listed};
 
 /// What the strand is asked to run. The post returns before the strand does.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,6 +103,10 @@ struct Conn {
     /// The connector of the endpoint this row was adopted with. Every post
     /// for the row names it.
     connector: ConnectorId,
+    direction: Direction,
+    /// The Levin handshake has finished. Distinct from [`Phase`]: a row can
+    /// be open to frames before the handshake, and closed after it.
+    established: bool,
     /// Wakes this row's inbound drive, and only it. A hub-wide wake would
     /// wake every waiting driver on every strand answer, O(N) per delivery
     /// on the zone whose N is adversarial. `notify_one` stores a permit when
@@ -123,6 +128,8 @@ struct Inner {
     sockets: Sockets,
     conns: HashMap<SocketId, Conn>,
     ceiling: InboundCeiling,
+    /// The last board published. Readers clone this. They do not lock the table.
+    board: Board,
 }
 
 /// What one locked look at a row told [`Hub::deliver_async`].
@@ -169,6 +176,7 @@ impl Hub {
                 sockets,
                 conns: HashMap::new(),
                 ceiling,
+                board: Board::empty(),
             })),
             ready: Arc::new(Condvar::new()),
             post,
@@ -289,14 +297,37 @@ impl Hub {
                 cause: None,
                 phase: Phase::Arming,
                 connector: endpoint.connector(),
+                direction: endpoint.direction(),
+                established: false,
                 notify: Arc::new(tokio::sync::Notify::new()),
                 posted_deliveries: 0,
                 strand_closed: false,
                 gap,
             },
         );
+        Self::republish(&mut inner);
         poster(Post::Established { id, endpoint });
         Ok(Attached { id, session })
+    }
+
+    /// The sessions as of the last publish. The returned board does not
+    /// change when a later session arrives or closes.
+    #[must_use]
+    pub fn board(&self) -> Board {
+        self.lock().board.clone()
+    }
+
+    /// Rebuild the published board from rows that are still connected.
+    /// A closed row stays in the table until [`Self::reap`] and is not
+    /// on the board.
+    fn republish(inner: &mut Inner) {
+        let sessions = inner
+            .conns
+            .iter()
+            .filter(|(_, conn)| !matches!(conn.phase, Phase::Closed))
+            .map(|(&id, conn)| Listed::new(id, conn.connector, conn.direction, conn.established))
+            .collect();
+        inner.board = Board::from_sessions(sessions);
     }
 
     /// Block until the handler is armed, or until the id has closed.
@@ -561,7 +592,14 @@ impl Hub {
     pub fn session_established(&self, id: SocketId) {
         let sender = {
             let mut inner = self.lock();
-            inner.conns.get_mut(&id).and_then(|conn| conn.gap.take())
+            let sender = inner.conns.get_mut(&id).map(|conn| {
+                conn.established = true;
+                conn.gap.take()
+            });
+            if sender.is_some() {
+                Self::republish(&mut inner);
+            }
+            sender.flatten()
         };
         if let Some(sender) = sender {
             match sender.send(()) {
@@ -593,6 +631,7 @@ impl Hub {
             if let Some(conn) = inner.conns.remove(&id) {
                 Self::wake_row(&conn);
             }
+            Self::republish(&mut inner);
             self.wake();
         }
         if let Some(dial) = dial {
@@ -690,6 +729,7 @@ impl Hub {
             });
             Self::wake_row(conn);
             self.wake();
+            Self::republish(&mut inner);
             (open, send, gap)
         };
         // The sender is dropped off the table lock: the connector task it
