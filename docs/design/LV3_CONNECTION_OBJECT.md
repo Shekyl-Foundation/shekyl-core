@@ -1589,15 +1589,17 @@ the seam, by posting each read onto the strand and waiting, would block
 executor work on a strand. That is the deadlock the seam's floor and
 close-by-posting exist to keep off this path.
 
-Step c's first input is that race. The registry makes each connection's
-strand the only writer.
+Step c's first input is that race. The connection's strand is the
+only writer of the C++ context. The hub's lock is the writer of the
+row.
 
-- **Snapshots for reading.** A connection publishes an immutable
-  snapshot of what a walk needs: established, direction, connector,
-  support flags, sync state. The strand republishes it when those
-  fields change, by swapping in a fresh snapshot. Walkers only read
-  snapshots. *Records-was at `9bc062036`: "network key, peer id".
-  `peer_id` and `pruning_seed` are not fields.*
+- **Snapshots for reading.** The hub publishes an immutable snapshot
+  of what a walk needs: established, direction, connector, support
+  flags, sync state. It republishes under its own lock when a row is
+  admitted, the handshake finishes, or the row closes. Walkers only
+  read snapshots. *Records-was at `9bc062036`: "network key, peer id".
+  `peer_id` and `pruning_seed` are not fields. Records-was: "the
+  strand republishes it."*
 - **Messages for writing.** A walker that changes a connection posts
   that change to the connection's strand. It does not write the
   context itself.
@@ -1630,7 +1632,13 @@ at `:921`. The session's network is `m_connector`, a `ConnectorId`.
 
 **Two Rust session tables already exist. Step c does not add a
 third.** `shekyl_seam::Hub` (`hub.rs:136`) holds every admitted
-session, and the strand is its writer. `Relay::contexts`
+session. Its lock is the writer: `adopt` (`:268`) inserts from the
+connector, `finish` (`:555`) records a close from the transport, and
+`reap` (`:589`) drops the row when the executor drops the link. None
+of those three is a strand handler. The strand does not exist until
+the established post, and a close must not wait on it. The strand
+writes the C++ context, posts into the hub, and does not walk the
+table. `Relay::contexts`
 (`zone/mod.rs:380`) holds every established session, with direction
 and connector, filled by `on_session_established` (`:590`). Step c
 grows the Hub row until it publishes the snapshot above, and the count
@@ -1643,8 +1651,12 @@ mutable walks become posts to that connection's strand:
 and `peer_sync_idle_maker` (`:2366`) sets `m_in_timedsync`. The
 snapshot gains what each of those reads before it writes. The `run`
 thread at `:1163` is gone, and that deletion is recorded as removing
-the `--in-peers` measurement input named above. The out-count cache
-at `:1605` is a separate staleness and stays through this step. This
+the `--in-peers` measurement input named above. This is the deletion.
+D8 left the thread until slice 3; that sentence is records-was in
+[`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D8 and in the
+timing-engine inventory. The out-count cache at `:1605` is what the
+fill loops still read. It stops being refreshed when the thread goes,
+and that staleness stays through this step. This
 step does not wait behind steps a and b. Those follow it. It does not
 wait on slices 1–4, the timing-engine bridge, or relay dispatch.
 
@@ -1662,9 +1674,21 @@ get_context_ref` in `levin_protocol_handler_async.h` is:
 | `:907` | `foreach_connection` hands the walker the context |
 | `:921` | `for_connection` hands the caller the context |
 
-The six hits at `:234`–`:304` run on the connection's own timer
-handler. They are strand-side by construction, and the falsifier
-expects them to remain.
+`:276` is strand-side. `cancel` is called only from
+`release_protocol`, and `begin_closed` calls that from `on_strand`
+(`zone_server.h:481`). The falsifier keeps it.
+
+The other four are not. `:234` runs in the constructor, on the caller
+of `async_invoke` (`net_node.inl:1319`, `:1400`, `:2649`), which is
+not the connection strand. `:240` and `:242`, and `:302` and `:304`,
+are `async_wait` handlers on the zone `io_context`
+(`levin_protocol_handler_async.h:229`). `zone_server::run` drives
+that context on more than one worker (`zone_server.h:258`), and the
+wait is not posted to the connection strand. `reset_timer` is called
+from the receive path, which is the strand; the wait it arms is not.
+Those four post onto the strand before they touch the context, the
+same way `request_callback` already does (`seam_endpoint.h:209`).
+The falsifier does not keep them.
 
 `:921` is not only a walker. `node_server::for_connection`
 (`net_node.inl:169`) reaches it. So do `try_add_next_blocks`
@@ -1687,8 +1711,8 @@ This is the sort. It is not a struct.
 | Bin | Members | Rule |
 | --- | --- | --- |
 | Observed, we measured it | `m_connection_id`, `m_remote_address` as connected, `m_is_income` as direction, `m_connector`, `m_started` as established-at, `m_last_recv`, `m_last_send`, `m_recv_cnt`, `m_send_cnt`, `m_current_speed_down`, `m_current_speed_up`, `m_max_speed_down`, `m_max_speed_up` | Eviction, admission, the protection set, and the operator view read only this bin (§2.8.2). `m_recv_cnt` and `m_send_cnt` are byte counters this node kept from the socket. |
-| Claimed, the peer told us | `m_remote_blockchain_height`, `m_last_known_hash`, `support_flags`, the handshake's advertised port and address (§2.7.4; not one of these 33 members), `m_remote_height_source` | Sync may read a claim as a hypothesis to test (§2.11). Nothing that decides who stays connected may. `Claimed<T>` so a reader cannot forget. The advertised port and address are the sole claimed-to-observed promotion: a successful re-dial sets an `Observed` result, distinct from the `Claimed` that arrived in the handshake. |
-| Local state, ours about this session | `m_state`, `m_needed_objects`, `m_expected_heights`, `m_requested_objects`, `m_last_response_height`, `m_expected_heights_start`, `m_last_request_time`, `m_callback_request_count`, `m_expect_response`, `m_expect_height`, `m_num_requested`, `m_idle_peer_notification`, `m_score`, `m_in_timedsync`, `sent_addresses` | Owned by the component that drives that protocol. The sync fields, including the three lists this node built from a peer's chain response, go with the sync driver when it moves. `m_idle_peer_notification` is this node's timer flag. Until then they are plain fields the C++ handler reads through the handle. |
+| Claimed, the peer told us | `m_remote_blockchain_height`, `m_last_known_hash`, `support_flags`, the handshake's advertised port and address (§2.7.4; not one of these 33 members) | Sync may read a claim as a hypothesis to test (§2.11). Nothing that decides who stays connected may. `Claimed<T>` so a reader cannot forget. The advertised port and address are the sole claimed-to-observed promotion: a successful re-dial sets an `Observed` result, distinct from the `Claimed` that arrived in the handshake. |
+| Local state, ours about this session | `m_state`, `m_needed_objects`, `m_expected_heights`, `m_requested_objects`, `m_last_response_height`, `m_expected_heights_start`, `m_last_request_time`, `m_callback_request_count`, `m_expect_response`, `m_expect_height`, `m_num_requested`, `m_idle_peer_notification`, `m_score`, `m_in_timedsync`, `sent_addresses`, `m_remote_height_source` | Owned by the component that drives that protocol. The sync fields, including the three lists this node built from a peer's chain response, go with the sync driver when it moves. `m_idle_peer_notification` is this node's timer flag. `m_remote_height_source` names which message last wrote the claimed height (`connection_context.h:122`). `note_remote_height` (`:173`) stores that enum. The peer asserted the height, not the label. Until then they are plain fields the C++ handler reads through the handle. |
 
 `m_state` is this node's pull relationship with the session. `m_ssl`
 is not in a bin: p2p SSL was deleted in #909, the field is false by
