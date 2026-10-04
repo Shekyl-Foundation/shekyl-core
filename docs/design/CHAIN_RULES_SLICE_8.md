@@ -45,14 +45,18 @@ amendment's mechanism cannot exist in this crate — a vacuous row is *in*
 coverage, a gap is a row *absent* from it, and `ChainValid::mint` panics
 on the absence (`verdict.rs:84–95`); `Some(empty)` is unrepresentable
 (`AttestationWitness` is non-empty by construction). **Corrected
-disposition, posed for the maintainer's confirmation:** B4 judges the
-existing field, always; `None` is judged as the empty preimage against the
-header's `attestation_root` — passes on the empty root, refuses otherwise
-(fail closed); no new parameter, no new type; the store's B4 gap-widening
-retires at row 10. The ruling's intent is kept whole; §3.5 carries the
-refutation and §5 row 10 the consequence. Implementation opens with PR-a
-commit 1; still no code
-at this update.
+disposition — RULED 2026-10-04 (maintainer, verified at
+`dev@638f4999f7`):** B4 judges the existing field, always; `None` is
+judged as the empty preimage against the header's `attestation_root` —
+passes on the empty root, refuses otherwise (fail closed); no new
+parameter, no new type; the store's B4 gap-widening retires at row 10.
+The ruling's intent is kept whole and lands consensus-bound rather than
+transport-bound; §3.5 carries the refutation, the ruling and the
+consequence for §5 row 10. **This ruling is PR-a's opening commit** (branch
+`feat/chain-rules-slice-8-pr-a`, off `dev@638f4999f7`), so the ruling
+rides the code it governs rather than a documents-only PR; §5 row 1's
+census re-key follows it as the next commit. Still no code at this
+update.
 
 Branch commits are named by PR and subject, never by SHA (slice 6's rule at
 its head, inherited). A `dev` SHA is an era; every line number in this file
@@ -674,23 +678,45 @@ on #947; three findings, each checked):
    has not seen the block). The conflation the ruling refused is real in
    the *carrier* and dissolved by the *rule*.
 
-**Corrected disposition (posed to the maintainer as Q6's re-ruling; the
-ruling's intent — never conflate the two, never let an unjudged witness
-read as evidence — is kept whole; its mechanism is replaced):** B4 judges
+**Corrected disposition — RULED 2026-10-04 (maintainer, the mechanical
+facts verified at `dev@638f4999f7`; the amendment's intent — never
+conflate the two, never let an unjudged witness read as evidence — is
+kept whole; its mechanism is replaced):** B4 judges
 the one value, `Candidate::attestation_witness`, as E4 laid it; it is
 **always evaluated** and always in coverage; `None` is judged as the
 empty preimage against the header's `attestation_root`; `Some(w)` is the
 recompute and every record's P-countersignature. Nothing is added to
-`validate`'s signature and no type is minted. At row 10 the store's B4
-gap-widening and the `Candidate` field's *"carried through unjudged"*
-doc retire (`connect.rs:287–291`, `block.rs:110–116`,
-`archival/mod.rs:262–265`), because the condition they describe ends.
+`validate`'s signature and no type is minted. At row 10 every *"carried
+unjudged / B4's coverage gap"* claim retires because the condition it
+describes ends — seven sites, enumerated in §5 row 10 as a checklist
+rather than described (a sweep at `638f4999f7` found seven where this
+paragraph had first named three). The store's generic gap-widening
+(`connect.rs:238–246`) is **not** among them: it records every unlanded
+row, and after row 10 it simply stops containing B4.
 Consequences for §5 row 10: the empty-root arm **is** tested by the
 corpus (every corpus block is `None` with the empty root — a judged pass,
 not a vacuous one); the record arm and the *non-empty root, nothing
 supplied* refusal are the driver's; corpus parity on B4 is a parity of
 verdicts, and a file whose witnesses were judged is evidence again. The
 carrier question (`SCV-Q4`) is not this slice's.
+
+Why the corrected mechanism is the stronger one, in the ruling's words:
+the header's root is what distinguishes *none exist* from *not
+supplied*, and it is **consensus-bound rather than transport-bound** — a
+block claiming a non-empty root with no witness fails on a value the
+block commits to, not on a parameter's shape, which is exactly the case
+the dropped RPC sidecar was feared to smuggle through.
+
+**The mechanism of the error, recorded once** (maintainer, 2026-10-04):
+*"I read `validate`'s signature and not its argument's type, then
+proposed a door for a value that was already inside the room."* The
+amendment proposed a tri-state whose third state the type forbids in the
+doc comment immediately above the struct (`archival/mod.rs:257–259`),
+and combined two words — *vacuous*, *gap* — that `verdict.rs:87–95` with
+`rules/mod.rs:328` make mechanically exclusive. Same shape as calling for
+a `BlockHeight` newtype that `block_axis` had already built: a
+recommendation derived from a negative result nobody had checked, where
+the thing proposed existed and the comment beside it said so.
 
 ### 3.6 Two 4.I rows a week past their blocker, and the two 4.J rows that need them
 
@@ -756,7 +782,7 @@ changes (rows 1, 6, 7, 9, 10) rather than restated beneath the table.
 | 7 | **The driver's emission claim** (Q3, ruled with a condition): membership-only backing proof + dual auth over the Q1 message, as the engine handler does it; one claim `validate` admits, pinned; **and a test that the driver's assembly and the engine's emit identical bytes for one shape** — the I17 hazard is a driver whose claim differs from the engine's testing a transaction the wallet never produces. The trigger recorded in §6: a third re-made assembly makes extraction the answer | the pin; the byte-identity test |
 | 8 | **J19, J20, J22, J24** — the emission statics | corpus parity |
 | 9 | **J21, J23, J25, J26 + I13, I15** (Q2, ruled yes) — the reference context, the budget rows and the coarse verify, the backing and fee-input proofs; `shekyl-fcmp` into the crate; `vout_reward_sum` wired to its consumer | corpus parity; `4.I 18 + 2 = 20 / 20` |
-| 10 | **B4** over `Candidate::attestation_witness` (Q6 as corrected, §3.5): `None` judged as the empty preimage against the header's `attestation_root`, `Some(w)` the recompute and every record's P-countersignature; always in coverage. **Retires** the store's B4 gap-widening and the field's *"carried through unjudged"* doc (`connect.rs:287–291`, `block.rs:110–116`, `archival/mod.rs:262–265`). The corpus is the empty-root arm (every block `None`, empty root — a judged pass); the driver supplies the record arm and the *non-empty root, nothing supplied* refusal | corpus parity (B4 judged on every corpus block); the two driven fixtures |
+| 10 | **B4** over `Candidate::attestation_witness` (Q6 as corrected and RULED, §3.5): `None` judged as the empty preimage against the header's `attestation_root`, `Some(w)` the recompute and every record's P-countersignature; always in coverage. **Retires, by site** (the checklist, enumerated by `rg 'unjudged|B4' --type rust` at `638f4999f7`; a site that survives is the defect): (1) `connect.rs:288–290`, the comment *written unjudged until CEN-B4 lands … records B4 as a coverage gap* — the `record_attestation_witness` call under it stays, it is the persist; (2) `block.rs:112–115`, `Candidate::attestation_witness`'s *until B4 lands … unjudged … under B4's coverage gap*; (3) `block.rs:388–393`, `ValidatedBlock`'s field doc, same claim; (4) `block.rs:468–469`, the accessor's *unjudged (the field's docs)*; (5) `archival/mod.rs:262–265`, `AttestationWitness`'s *until that row lands in `validate` … recorded under a coverage gap, not judged*; (6) `archival_write_tests.rs:324–325`, the phase-5 test's *written unjudged (CEN-B4's gap)* — the test's subject (written at height, popped with the block) stays; (7) `rules/header.rs:8`, *B4 is deferred (E4 S-ARCH)*. **Not retired:** `connect.rs:238–246`, the generic `CoverageGaps::of(enforced ∖ coverage)` widening — it is every unlanded row's record (Slice C's, each 4.J row until it lands), not B4's; after this row it simply no longer contains B4. The corpus is the empty-root arm (every block `None`, empty root — a judged pass); the driver supplies the record arm and the *non-empty root, nothing supplied* refusal. **Ruled at PR-a commit 1, implemented here in PR-c** — both PR bodies carry that line | corpus parity (B4 judged on every corpus block); the two driven fixtures; `rg 'unjudged' --type rust` over the three crates returns nothing B4's |
 | 11 | **Docs** (rule 91): census 4.J and B4 re-pinned with `Rust (E6 slice 8 row n, date)` clauses; crate contract §4.6 (B4's reading of `None` — the empty preimage, arbitrated by the header root — and the Q3 extraction trigger, so both outlive this file); DRS-E6 row; index; FOLLOWUPS (`:205`, `:783`, `:787` removed); CHANGELOG (consensus-relevant: the validator now refuses what it admitted) | docs gates |
 
 Eleven rows is past the ten-commit ceiling before the overrun; the slice
@@ -768,6 +794,13 @@ half.** Each lands on `dev` before the next opens — a *sequence*, not a
 stack: no re-target, no base-branch diff, none of #877/#880's mechanics.
 Twelve commits in a second PR is how slice 6 became unreviewable. Each
 PR's record is stated in the row when it lands.
+
+**A ruling that spans the split is named in both bodies.** Q6's ruling
+lands at PR-a commit 1; its implementation is row 10, in PR-c. A reader
+of PR-a finds a ruling about B4's witness arm and no B4 code; a reader of
+PR-c finds the code with its ruling two PRs back. One line in each body —
+*Q6 ruled at PR-a commit 1, implemented at PR-c row 10* — closes the gap,
+the same reasoning as the body-matches-branch habit (2026-10-03).
 
 ### 5.1 The expectation, written at commit 1 (2026-10-03, before commit 2)
 
@@ -788,7 +821,7 @@ priced by the admission crate already.
 | 7 | the driver's emission claim | **2** | a membership-only prover call and a dual auth the driver has never made; the engine's half lives in a handler, not a crate. Q3's byte-identity test is inside this estimate, not added to it: it is the first thing the second commit runs, and a mismatch is the finding the second commit exists for |
 | 8 | J19, J20, J22, J24 | 1 | statics; J22's body located at commit |
 | 9 | J21, J23, J25, J26 (+ I13, I15) | **3** | the `shekyl-fcmp` edge, I15 in `judge_reference`, then the emission rows over it; J25 is the row that mints coins and gets the fixture set a minting row deserves |
-| 10 | B4 | **2** | the estimate stands with its reason replaced (Q6 as corrected, §3.5): no new parameter — the rule reads a field `validate` already receives — but retiring the store's B4 gap-widening touches the connect path and the field's doc in two crates, and the first commit is that retirement with the rule; the second is the driven fixtures, the record arm and the *non-empty root, nothing supplied* refusal, which no corpus block exercises |
+| 10 | B4 | **2** | the estimate stands with its reason replaced (Q6 as corrected, §3.5): no new parameter — the rule reads a field `validate` already receives — but the seven-site retirement in §5 row 10 touches three crates, and the first commit is that retirement with the rule; the second is the driven fixtures, the record arm and the *non-empty root, nothing supplied* refusal, which no corpus block exercises |
 | 11 | docs | 1 | — |
 
 **Expectation: eighteen commits**, across three PRs (the sixteen-commit
@@ -850,7 +883,8 @@ at close, as slice 7 did.
 | 0 | 2026-10-03 | pre-flight written at `01a4494f1a`; §1.3's blocker check run first; nine questions posed with defaults (§8); no code |
 | 0 (boundary) | 2026-10-04 | #946 read at `7003bd629`: Slice C authorized, its surface *"the successors of CEN-J1–J3 and J7–J10"* — J1 leaves this slice (one row, not four: J4–J6 are bond-state rows and stay); `SCV-Q1` withdrawn, Q9 struck; `SCV-Q5`'s genesis gate read into the plan; Slice C's input 4 (the shard predicate) and this slice's Q5 reconciled as build-here / consume-there, posed; figure re-derived from the row list (18 4.J rows; `118 / 151`); still no code |
 | 0 (ruled) | 2026-10-04 | eight rulings from the maintainer: six defaults (Q1, Q2, Q4, Q5, Q7, Q8), one amendment (Q6 — `Option<WitnessSet>`, `None` = not supplied, B4 vacuous and recorded as a gap), one condition (Q3 — the byte-identity test; the third-assembly trigger); Q5's owed sentence widened to height semantics; Q9's struck number kept. Written into §3.2–§3.5, §4, §5, §5.1, §6. Implementation opens with PR-a commit 1; still no code |
-| 0 (refuted) | 2026-10-04 | review on #947, verified at source: §3.5's premise *"nothing carries a witness"* false at the pin (`Candidate::attestation_witness`, E4 commit 5); Q6's amendment mechanically impossible — a vacuous row is in coverage, a gap is absent from it, `ChainValid::mint` panics on the absence (`verdict.rs:84–95`); `Some(empty)` unrepresentable (`AttestationWitness` non-empty by construction). Corrected disposition posed (§3.5): B4 over the existing field, always evaluated, `None` the empty preimage against the header root, fail closed on a non-empty root; the store's B4 gap retires at row 10. FOLLOWUPS `:186` re-pointed in this PR rather than commit 1 (§1.2). Ruling's intent kept; awaiting the maintainer's confirmation of the mechanism; still no code |
+| 0 (refuted) | 2026-10-04 | review on #947, verified at source: §3.5's premise *"nothing carries a witness"* false at the pin (`Candidate::attestation_witness`, E4 commit 5); Q6's amendment mechanically impossible — a vacuous row is in coverage, a gap is absent from it, `ChainValid::mint` panics on the absence (`verdict.rs:84–95`); `Some(empty)` unrepresentable (`AttestationWitness` non-empty by construction). Corrected disposition written (§3.5; ruled in the next row): B4 over the existing field, always evaluated, `None` the empty preimage against the header root, fail closed on a non-empty root; the store's B4 gap retires at row 10. FOLLOWUPS `:186` re-pointed in this PR rather than commit 1 (§1.2). Ruling's intent kept; still no code |
+| 0 (Q6 re-ruled) | 2026-10-04 | the maintainer verified both mechanical facts at `dev@638f4999f7` (`archival/mod.rs:257–259`; `verdict.rs:87–95` with `rules/mod.rs:328`) and **ruled the corrected mechanism** — stronger than the amendment because the header's root, consensus-bound, is what tells *none exist* from *not supplied*; the error's mechanism recorded once in §3.5. "Posed" struck everywhere; Q6 is RULED. **This commit opens PR-a** (`feat/chain-rules-slice-8-pr-a` off `dev@638f4999f7`) so the ruling rides the implemented code; §5 row 1's census re-key is the next commit; still no code in this one |
 
 ---
 
@@ -925,8 +959,9 @@ Each had a default; the ruling is on its question, the date once here.
   `validate` already receives the witness through
   `Candidate::attestation_witness` — and the amended value cannot be
   built: vacuous-and-a-gap is a contradiction `ChainValid::mint` turns
-  into a panic, and `Some(empty)` has no type to live in. **Corrected,
-  posed for confirmation:** B4 over the existing field, always evaluated;
+  into a panic, and `Some(empty)` has no type to live in. **CORRECTED
+  MECHANISM RULED 2026-10-04** (maintainer, verified at
+  `dev@638f4999f7`): B4 over the existing field, always evaluated;
   `None` is the empty preimage against the header root — the root, not a
   tri-state, tells *none exist* from *not supplied*, and the latter fails
   closed. §3.5 carries the refutation and the consequences for row 10.
