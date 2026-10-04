@@ -302,6 +302,17 @@ field documentation in `shekyl-economics`, and the 2026-06-11 pinned
 constraint in [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md). §5.8
 registered the prediction (`da1a6b082`) and §5.9 records it.
 
+**Landed.** ESR-7, 2026-10-03, in PR #936.
+
+- `4dcaacfcd` registers the design and the prediction (§5.10).
+- `d1021aa55` gives the run's `EconomicParams` one construction
+  (`SimParams::economic`), replacing five copies, verified byte-identical on
+  the staged tree.
+- `28b0006f4` prints the envelope in `--stage2` (`miner_stuffer.rs`).
+
+§5.11 records the run. ESR-7's falsifier holds: the report prints the
+unenforced miner's zero-fee row beside the relay stuffer's.
+
 ## 3. The median is a production change inside a sim PR
 
 `shekyl_chain_rules::rules::block_weight::effective_median_at` needs a
@@ -810,6 +821,48 @@ The last column is the envelope minimum.
 5. **Self-archiving.** It lowers the enforced miner by at most the pool
    share of the burn (25 % flat today): `b·(1 − p·q)·F` with `q` = 1, and
    barely at all at `q` = 1/100.
+
+### 5.11 ESR-7 — what the run said (2026-10-03, at `28b0006f4`)
+
+Production arm, SKL per shard. "Floors" are read against the relay
+stuffer's outranking rate, `4F + 1` atomic per byte, which is the Standard
+rate the honest bodies pay.
+
+| Row | Relay | Miner, unenforced | Miner, enforced | Self, all holders | Today | Fixed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Baseline y5 (constrained, `M` 322 KB) | 374.01 | 325.17, displacement | 337.39 | 334.34 | 325.17 | 337.39 |
+| Baseline y20 (carried, 764 KB) | 25.00 | 13.89, displacement | 16.67 | 15.97 | 13.89 | 16.67 |
+| Baseline y45 (tail, 764 KB) | 1.221 | 0.615, displacement | 0.766 | 0.728 | 0.615 | 0.766 |
+| Low activity y50 (300 KB, 71 KB free) | 0.882 at the floor | **0**, free room | 0.238 | 0.179 | **0** | 0.238 |
+
+| Prediction (§5.10) | Outcome |
+| --- | --- |
+| 1. Constrained: the relay stuffer pays about Standard; the miner is within 2× of him, at 3–5 floors per byte, and is the envelope minimum | **Held.** The relay stuffer outranks the honest bodies at 120 297 atomic per byte. The miner is at 325 against his 374, about 3.5 floors, through displacement. The penalty leg is not printed separately, so its "same order" half is not graded. |
+| 2. Carried: the relay stuffer pays the floor at the margin and is the envelope minimum; once the fix lands the minimum is the enforced miner | **Wrong in its first half, held in its last.** The fill rule refuses the floor rate here too: honest demand fills the median exactly, and a floor-rate body past it does not cover its penalty. The relay stuffer outranks at about 4 floors. The envelope minimum is the **unenforced miner at about 2.2 floors** (13.89 against 25.00), displacing honest fees it would have kept at `(1 − b)`. After the fix the minimum is the enforced miner (16.67), as registered, but at about 2.7 floors, not `b·F` alone: it still pays the displacement. This failure mode was suspected when building began and recorded then; the fill rule decided it. |
+| 3. Free room: the unenforced miner stuffs for zero; the enforced miner pays `b·F`; the fix does not close it | **Held.** Zero today. 0.238 SKL with the floor enforced, 0.27 of the relay stuffer's floor-rate 0.882, which is the burn fraction. The floor fix is right for the self-dealing reason and is not an archival-burden defence. |
+| 4. Hashrate and budget set a rate, not a price: about 250 blocks a shard, about 100 shards a year at 10 % | **Held in kind, wrong in size.** The miner's cheapest placement is displacement **in bulk**: clearing a block's honest bodies carries several stuffing transactions. A shard lands in 5–11 blocks, so a 10 % miner can stuff about 2 400–5 300 shards a year at the printed price, not 100. The ~250-block figure belongs to the penalty leg, one transaction a block, and appears where that leg wins: the control arm's tail, 239 blocks a shard. |
+| 5. Self-archiving lowers the enforced miner by at most the pool's share of the burn | **Held.** At year 20, 16.67 → 15.97 as the whole holder set (−4 %), and −0.04 % as one of 100. |
+
+**What the envelope says.** On the chain as it stands, the cheapest archival
+byte belongs to a miner in every era:
+
+- **free** wherever demand sits below the zone;
+- **two to three and a half floors** where blocks run full (3.5 at year 5,
+  2.2 at year 20, 2.0 at year 45), by forgoing honest fees rather than
+  paying any.
+
+The relay floor never prices the attack. A relay stuffer pays more than a
+miner in every row. Enforcing the floor on a block's own bodies raises the
+full-block cost by 4–25 % (+3.8 % at year 5, +20 % at year 20, +25 % at year
+45) and the free-room cost from zero to `b·F`.
+Neither moves the minimum out of the miner's hands. Hashrate is not a
+meaningful brake: displacement lands a shard in a handful of the miner's
+blocks.
+
+**The control arm** shows the same shape at its own prices. At its tail, a
+flat 0.1 SKL fee against a small reward makes the **penalty** leg the
+cheaper one: one stuffing transaction a block, 239 blocks a shard. That is
+the whole-transaction floor of the design, appearing where it should.
 
 ## 6. The staking sim — a separate PR
 
