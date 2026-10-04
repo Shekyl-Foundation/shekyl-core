@@ -770,9 +770,9 @@ schedule. How many to dial, and when, is discovery policy (P2P-3 slice
 3). Dials stay serial through cutover. The extra round trip is measured
 in step 7.
 
-The peers-monitor thread starts at `net_node.inl:1114` and walks
-`foreach_connection` once a second (`:1113-1138`). It is not removed
-by this round (D8). `is_host_limit` is `net_node.inl:231`. Both read
+The peers-monitor thread starts at `net_node.inl:1163` and walks
+`foreach_connection` once a second. It is not removed by this round
+(D8). LV-3 step c deletes it. `is_host_limit` is `net_node.inl:231`. Both read
 the Levin registry today. Connections that have no channel yet are
 invisible to that walk.
 
@@ -1487,10 +1487,12 @@ died mid-handshake. The reservation does not repeat that.
 - The transport layer exposes outbound socket counts per connector.
   Which count governs filling outbound slots is discovery policy,
   slice 3's decision.
-- The once-a-second monitor thread (`:1113-1138`) is not removed by
-  this round. Its remaining consumers are the out-peers check at
-  `:1556` and discovery's fill loops at `:2021-2069`, all slice 3's.
-  It goes when slice 3 lands.
+- The once-a-second monitor thread (`net_node.inl:1163`) is not
+  removed by this round. *Records-was (2026-09-25): it goes when
+  slice 3 lands, cited at `:1113-1138`.* LV-3 step c deletes it,
+  because the walk is the registry's. The out-count cache at
+  `:1605` is what the fill loops still read, and it stops being
+  refreshed when the thread goes.
 - RPC reports both counts, each under its own name. Sockets and
   sessions are not one number.
 

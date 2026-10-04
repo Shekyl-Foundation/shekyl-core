@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Docs: the economy's umbrella plan (`ECONOMY_UMBRELLA_PLAN.md`, `EUP-`); `DESIGN_CONCEPTS.md` records F-D, its design home's archival rationale, and its April tables' inputs.
+
 ### Consensus — the emission speed factor is per block, as designed
 
 - The emission curve emits `remaining >> 22` each block, the design's factor
