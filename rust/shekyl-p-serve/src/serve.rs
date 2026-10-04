@@ -35,9 +35,18 @@
 //! and so is an `anchor_height` outside the persona's pre-sign gate
 //! ([`anchor_within_gate`]). A servable request is answered with the
 //! persona's `HybridSignature` over `header ‖ shard_id_le[8]` — the
-//! canonical [`SIGNATURE_ENVELOPE_LEN`] bytes — written ahead of the
-//! `RF-D4` frame, both inside one `content-length`. The signer is the
-//! host's ([`PassSigner`]); this crate holds no key.
+//! canonical [`SIGNATURE_ENVELOPE_LEN`] bytes — written **after** the
+//! `RF-D4` frame, as the last bytes of the response, both inside one
+//! `content-length`. The signer is the host's ([`PassSigner`]); this crate
+//! holds no key.
+//!
+//! **The signature seals the delivery, which is why it is last.** The
+//! signed message names the request, not the bytes (a digest of the bytes
+//! is not something admission could rebuild), so what makes it a receipt
+//! for the read is *when it is released*: a requester holds it only once
+//! the whole frame has crossed this persona's link. A truncated transfer
+//! yields no signature at all. Written first, it would attest that a
+//! request arrived and nothing more.
 //!
 //! # No request logging, at any level
 //!
@@ -477,7 +486,7 @@ enum Lookup {
 /// The order is deliberate. The gate runs before the store is touched so
 /// an out-of-window anchor costs no I/O; the sign runs after the lookup so
 /// the persona never signs for a shard it does not hold. The transcript
-/// covers `shard_id`, so a signature is bound to the body it precedes.
+/// covers `shard_id`, so a signature is bound to the body it closes.
 async fn resolve_body(
     head: &[u8],
     provider: Arc<dyn ShardProvider>,
@@ -533,18 +542,25 @@ async fn resolve_body(
     }
 }
 
-/// Write the head, then the countersignature envelope, then the frame
-/// header, then stream the body chunk by chunk.
+/// Write the head, then the frame header, then stream the body chunk by
+/// chunk, then the countersignature envelope — last.
 ///
-/// `content-length` is [`SIGNATURE_ENVELOPE_LEN`] plus
-/// [`ServedFrameHeader::framed_len`], both exact before a single leaf is
-/// read — so the head is committed before the store is touched, and a
-/// store that fails mid-body can only truncate a response, never change
-/// which response was chosen.
+/// `content-length` is [`ServedFrameHeader::framed_len`] plus
+/// [`SIGNATURE_ENVELOPE_LEN`], both exact before a single leaf is read —
+/// so the head is committed before the store is touched, and a store that
+/// fails mid-body can only truncate a response, never change which
+/// response was chosen.
 ///
 /// The frame header ([`RF-D4`]) is taken from [`ShardBody::header`] — fixed
-/// when the body was opened — and written after the signature, ahead of
-/// the leaf stream.
+/// when the body was opened — and written with the head, ahead of the leaf
+/// stream.
+///
+/// The signature is made before the first byte goes out, so a signing
+/// failure is still the identical 404 and never a truncated 200. It is
+/// *released* only after the last body chunk is written: a body that fails
+/// or stalls mid-stream returns before the signature is sent, so no
+/// requester can hold a countersignature for a read that did not complete
+/// (module docs, *The signature seals the delivery*).
 ///
 /// [`RF-D4`]: shekyl_curve_tree::served_frame
 /// [`ServedFrameHeader::framed_len`]: shekyl_curve_tree::served_frame::ServedFrameHeader::framed_len
@@ -561,12 +577,12 @@ async fn write_response(
     else {
         return write_bounded(stream, render_not_found().as_bytes()).await;
     };
-    // One write, not three. The wire bytes are identical either way — this
-    // is a loopback socket into tor, whose own cell framing quantizes
-    // everything downstream, so packet boundaries here are not an
-    // observable and no privacy claim rests on this. What it buys is a
-    // single commitment point: the status line, the headers, the
-    // signature and the frame are decided together, before the store is
+    // One write for the head and the frame header, not two. The wire bytes
+    // are identical either way — this is a loopback socket into tor, whose
+    // own cell framing quantizes everything downstream, so packet
+    // boundaries here are not an observable and no privacy claim rests on
+    // this. What it buys is a single commitment point: the status line,
+    // the headers and the frame are decided together, before the store is
     // touched, leaving no seam between them for a later edit to slip
     // something into.
     let frame = body.header();
@@ -575,7 +591,6 @@ async fn write_response(
         .and_then(|sig| sig.checked_add(frame.framed_len()))
         .ok_or_else(|| io::Error::other("content-length overflow"))?;
     let mut head = render_ok(content_length).into_bytes();
-    head.extend_from_slice(&signature);
     head.extend_from_slice(&frame.to_bytes());
     write_bounded(stream, &head).await?;
     loop {
@@ -600,6 +615,8 @@ async fn write_response(
             }
         }
     }
+    // The seal: released only now, with every body byte already written.
+    write_bounded(stream, &signature).await?;
     served.fetch_add(1, Ordering::Relaxed);
     Ok(())
 }

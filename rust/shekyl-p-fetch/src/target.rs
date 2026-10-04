@@ -168,7 +168,7 @@ impl VerifiedShard {
         &self.signature
     }
 
-    /// The content bytes after the envelope, as the hole accepted them.
+    /// The content bytes ahead of the envelope, as the hole accepted them.
     #[must_use]
     pub fn body(&self) -> &[u8] {
         &self.body

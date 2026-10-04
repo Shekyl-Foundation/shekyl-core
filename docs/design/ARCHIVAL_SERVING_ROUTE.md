@@ -1,8 +1,10 @@
 # Archival serving route — request contract
 
 **Status: LIVING CONTRACT.** Ruled 2026-09-10 (`RF-R1`). Last verified
-2026-09-16 (client `shekyl_p_fetch::MAX_INFLIGHT = 8` W₂ pin; request
-header / envelope still the 2026-09-13 (a)+(b) landing; grammar homed in
+2026-10-04 (the countersignature envelope **closes** the body, after the
+frame, so it seals the delivery — `SF-D8`, corrected that day; request
+header still the 2026-09-13 (a)+(b) landing; client
+`shekyl_p_fetch::MAX_INFLIGHT = 8` W₂ pin; grammar homed in
 `shekyl_curve_tree::serving_route`).
 
 This is the request half that
@@ -23,11 +25,14 @@ not route grammar: `shekyl-onion-v3` is the one rend-spec transform,
 typed on the daemon as `ServingEndpoint` and on the wallet as
 `OnionIdentity` (`PWD-E9`).
 
-The body after `\r\n\r\n` is the **countersignature envelope** then the
-`RF-D4` frame: `HybridSignature` canonical bytes
-(`SIGNATURE_ENVELOPE_LEN = HybridSignature::CANONICAL_LEN`, 3385) ‖
-`shekyl_curve_tree::served_frame::ServedFrameHeader` ‖ payload
-(`SF-D8`). This document owns the envelope's *position and width*; the
+The body after `\r\n\r\n` is the `RF-D4` frame then the
+**countersignature envelope**:
+`shekyl_curve_tree::served_frame::ServedFrameHeader` ‖ payload ‖
+`HybridSignature` canonical bytes
+(`SIGNATURE_ENVELOPE_LEN = HybridSignature::CANONICAL_LEN`, 3385)
+(`SF-D8`). The envelope is the response's last bytes: `P` releases the
+signature only once the frame is delivered, so holding it means the whole
+read crossed `P`'s link. This document owns the envelope's *position and width*; the
 signature's transcript is `SF-D8`'s and the frame is `RF-D4`'s.
 
 ---
@@ -103,8 +108,9 @@ the tests are the spec.
   unknown shard, unfrozen shard, store failure, signer refusal —
   renders one identical 404 with the same two headers and
   `content-length: 0`.
-- On 200, `content-length` is `SIGNATURE_ENVELOPE_LEN + framed_len`;
-  the body leads with the countersignature, then the `RF-D4` frame.
+- On 200, `content-length` is `framed_len + SIGNATURE_ENVELOPE_LEN`;
+  the body is the `RF-D4` frame, then the countersignature as its last
+  bytes. A body that fails mid-stream ends without one.
 - **One response, then close.** `P` shuts its write half as soon as
   the last body byte is written (`close_gracefully`), so the client's
   EOF is behind the body, not behind a keep-alive. The client reads
@@ -227,8 +233,10 @@ auth (no per-fetch circuit isolation).
 `/x-provisional/v0/shard/` path is a miss); and the two ends agree on
 the header and the envelope —
 `request_header_parsing_is_http_lenient_and_value_strict` and
-`the_served_body_leads_with_the_countersignature_then_the_frame`
+`the_served_body_is_the_frame_then_the_countersignature` and
+`the_countersignature_is_released_only_after_the_whole_frame`
 (`shekyl-p-serve`) green beside
+`a_signature_sent_ahead_of_the_body_is_refused` (`shekyl-p-fetch`) and
 `a_signed_shard_comes_back_verified_and_the_proxy_got_the_onion_name`
 (`shekyl-p-fetch`), which pins the client's request bytes verbatim.
 

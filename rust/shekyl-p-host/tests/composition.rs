@@ -290,7 +290,7 @@ fn anchor_for(own_height: u64) -> BlockHeight {
 }
 
 /// Split a 200 response into its `SF-D8` envelope and the framed body that
-/// follows it, the way a fetcher does.
+/// precedes it, the way a fetcher does.
 fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
     let end = response
         .windows(4)
@@ -299,16 +299,16 @@ fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
     let body = &response[end + 4..];
     assert!(
         body.len() >= SIGNATURE_ENVELOPE_LEN,
-        "a served body leads with the countersignature envelope"
+        "a served body ends with the countersignature envelope"
     );
-    let (sig, rest) = body.split_at(SIGNATURE_ENVELOPE_LEN);
+    let (rest, sig) = body.split_at(body.len() - SIGNATURE_ENVELOPE_LEN);
     let sig = HybridSignature::from_canonical_bytes(sig).expect("canonical hybrid signature");
     (sig, rest)
 }
 
 /// Leaf bytes a 200 response actually carries, read through the served frame
-/// (`RF-D4`) the way a fetcher does: the envelope, the two leading lengths,
-/// then the segment. Asserting on the raw body length would now be asserting
+/// (`RF-D4`) the way a fetcher does: the two leading lengths, the segment,
+/// then the envelope that closes the response. Asserting on the raw body length would now be asserting
 /// on the header too, and would pass just as well if the frame were malformed.
 fn served_segment_len(response: &[u8]) -> u64 {
     let (_, mut body) = envelope_of(response);

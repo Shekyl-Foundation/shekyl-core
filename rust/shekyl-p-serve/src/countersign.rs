@@ -50,8 +50,9 @@ use shekyl_crypto_pq::signature::{
 use shekyl_crypto_pq::CryptoError;
 use shekyl_types::BlockHeight;
 
-/// Length of the countersignature envelope that precedes the frame on the
-/// wire: the canonical `HybridSignature` encoding, and nothing else.
+/// Length of the countersignature envelope that closes the response, after
+/// the frame: the canonical `HybridSignature` encoding, and nothing else.
+/// It is last so that holding it means the whole frame was delivered.
 pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
 
 /// Where the persona's attestation signing key lives.

@@ -188,7 +188,7 @@ inherited as "the client waits."
 | **Countersign with the bond record's hybrid identity key**, `BondPost.hybrid_public_key`, both Ed25519 and ML-DSA legs. This rules the key, not the message (the message is `SF-D8`'s). This is not the onion key and never the cold `bond_spend_pk`. `shekyl-p-serve` holds no key material: `PServeEndpoint` takes a signer callback; tests inject a test key; SH-2 wires the persona secret. The onion endpoint is authenticated by the Tor rendezvous and bound beside the identity key on P's authorized bond record; the response signature proves the live responder also controls P's identity key | `SF-D13` RULED 2026-09-13 |
 | **The signed message is the decoded header ‖ `shard_id_le[8]`: `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`** (80 bytes) — requester-random, the requester's chain anchor at `tip − 720`, then the `u64` `P` parsed from `/shard/{id}`, under `shekyl/archival-attestation-scheme-v2` (the v1 nonce-only domain is retired). The challenge tuple and `cb_out_key` are not in this message: the fetch proves `P` served, not which miner asked. `shard_id` stops a decoy-route signature being filed as a pass for a different shard. The pass record **carries** `nonce` and `anchor_height` (neither is recomputable); admission rebuilds the transcript with the connecting chain's hash at `anchor_height`, requires `anchor_height ∈ [h − 720 − L, h − 720]` with `h` the validated predecessor, and refuses every pass record while `h < 720 + L` (724). Domain string, fixture, and boundary KATs (723/724) LANDED 2026-09-13 by (a0) | `SF-D8` message half RULED 2026-09-13; AMENDED 2026-09-13 (×2); LANDED (a0) |
 | **Inner frame:** `ServedFrameHeader` (leaf_count ‖ padding_len ‖ segment ‖ padding); codec owned by `shekyl-curve-tree`; write-zero read-anything. `RF-D4` itself carries no countersignature and is unchanged | `RF-D4`, `RF-D7` |
-| **Response carrier:** the HTTP body is an outer binary envelope carrying the canonical `HybridSignature` (both legs, fixed length), followed by the unchanged `RF-D4` frame. HTTP response headers stay exactly `content-type` and `content-length`; `content-length` covers envelope plus frame. No signature leg is text-encoded into a header. Verification happens inside the fetch call; the client returns verified-or-refused, never raw bytes | `SF-D8` carrier RULED 2026-09-13 |
+| **Response carrier:** the HTTP body is the unchanged `RF-D4` frame, then an outer binary envelope carrying the canonical `HybridSignature` (both legs, fixed length) as the response's **last** bytes, so the signature seals the delivery (*corrected 2026-10-04: the envelope was landed ahead of the frame*). HTTP response headers stay exactly `content-type` and `content-length`; `content-length` covers envelope plus frame. No signature leg is text-encoded into a header. Verification happens inside the fetch call; the client returns verified-or-refused, never raw bytes | `SF-D8` carrier RULED 2026-09-13 |
 | Padding field reserved, no scheme; TJ-H mitigation at the Tor layer (vanguards on the **wallet** serve path) | TJ-H (ruled 2026-08-08) |
 | Server bind `127.0.0.1:0`; reachability is `ADD_ONION` | `RF-R1`, `shekyl-p-host` |
 | SP-T3's numbers measured persona→persona and must re-base daemon→wallet before promotion | `EU-D1` consequence 4 |
@@ -1251,20 +1251,39 @@ regenerated under the armed regenerator with the decision-log entry of
 the pre-(a) HTTP response carried no countersignature, so the signature
 needed a home that is neither the inner frame nor a header:
 
-- **Carrier:** the HTTP body is an outer binary response envelope
-  carrying the canonical `HybridSignature` (both legs, the fixed
-  canonical length from `shekyl-crypto-pq`), followed by the existing
-  `ServedFrameHeader` and segment bytes. The HTTP response headers stay
+- **Carrier:** the HTTP body is the existing `ServedFrameHeader` and
+  segment bytes, followed by an outer binary response envelope carrying
+  the canonical `HybridSignature` (both legs, the fixed canonical length
+  from `shekyl-crypto-pq`) as the response's **last** bytes.
+- **The signature seals the delivery — CORRECTED 2026-10-04
+  (maintainer).** The signed transcript names the request, not the
+  bytes: a digest of the bytes is not something admission could rebuild
+  (`ARCHIVAL_CREDIT_WIRE.md` §3), and one it could rebuild from the hash
+  rows proves nothing. So what makes the countersignature a receipt for
+  the read is its **position**. `P` releases it only after the last
+  frame byte, and a transfer that fails or stalls mid-body yields none.
+  A requester that holds it has had the whole response cross `P`'s link
+  (the topology `ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §9.4 (iii)
+  rests on). The (a)+(b) landing wrote the envelope **ahead of** the
+  frame, which handed out the receipt before the delivery: the signature
+  then proved only that a request arrived. That was an implementation
+  defect, fixed in `shekyl-p-serve` and `shekyl-p-fetch` with tests that
+  fail under the old order
+  (`the_countersignature_is_released_only_after_the_whole_frame`,
+  `a_signature_sent_ahead_of_the_body_is_refused`). `P` still signs
+  before the first byte goes out, so a signing failure remains the
+  identical 404. The HTTP response headers stay
   exactly `content-type` and `content-length`; no signature leg is
   text-encoded into a header — a 3,309-byte ML-DSA leg does not belong
   in one. The inner `RF-D4` frame is byte-for-byte unchanged, and
   `content-length` covers envelope plus frame (this is the
   `signature_envelope_len + framed_len()` equality `SF-D6` already
   checks). Because the signature length is fixed, the envelope adds no
-  length field and the frame offset is a constant. The client **reads
-  exactly `signature_envelope_len` bytes, then parses**. It does not
-  stream-parse `HybridSignature` by trusting the inner `u32` length
-  fields. The serve crate obtains the signature from the `SF-D13`
+  length field and its offset is `content-length −
+  signature_envelope_len`. The client **reads exactly `content-length`
+  bytes and takes the last `signature_envelope_len` as the envelope**.
+  It does not stream-parse `HybridSignature` by trusting the inner `u32`
+  length fields. The serve crate obtains the signature from the `SF-D13`
   callback; it does not load the secret.
 - **Verify placement:** inside the fetch call. The client returns only
   verified-or-refused, never raw bytes — a raw-bytes return invites a
@@ -1587,7 +1606,7 @@ message `header[72] ‖ shard_id_le[8]` under
 fetch; pass record carries the random and the anchor height; admission
 looks the anchor hash up on the connecting chain inside
 `[h − 720 − L, h − 720]`), the outer
-fixed-length signature envelope ahead of the unchanged `RF-D4` frame,
+fixed-length signature envelope after the unchanged `RF-D4` frame,
 and the verified-or-refused typed fetch result (`SF-D8` RULED), and
 one organic
 selection rule, on the scheduler not the fetch crate: uniform
@@ -1629,7 +1648,8 @@ change with HTTP framing. Four PRs, each green alone, in this order:
   absence/malformation/out-of-gate), the `P`-side anchor gate ±`L`
   against the host-supplied height, signing over the **decoded**
   bytes, the fixed-length
-  `HybridSignature` envelope ahead of the unchanged `RF-D4` frame, the
+  `HybridSignature` envelope after the unchanged `RF-D4` frame
+  (*corrected 2026-10-04; built ahead of it*), the
   `PServeEndpoint` signer callback with the armed test-key affordance
   (`SF-D13`), and the `RF-R1` living-contract update. Its loopback KAT
   verifies against the verifier (a0) already merged.

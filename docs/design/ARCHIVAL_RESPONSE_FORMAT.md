@@ -35,8 +35,10 @@ the prunable witness entry is `nonce[32] ‖ anchor_height_le[8] ‖
 HybridSignature`. The challenge
 tuple and `cb_out_key` are not in the fetch signature: the fetch proves
 `P` served, not which miner asked. `SF-D8` also ruled the carrier: the
-HTTP body is a fixed-length outer envelope holding the canonical
-`HybridSignature`, followed by the unchanged `RF-D4` frame; response
+HTTP body is the unchanged `RF-D4` frame followed by a fixed-length
+outer envelope holding the canonical `HybridSignature`, last so that it
+seals the delivery (*corrected 2026-10-04; landed ahead of the frame*);
+response
 headers stay exactly `content-type` and `content-length`, which covers
 envelope plus frame. The 2026-08-21 status above remains the record of
 what landed, not a claim that the v2 message or the envelope is
@@ -1271,7 +1273,8 @@ a raw `FrozenSegmentBody` — a flat concatenation of leaf bytes — with
 `content-length = (end − next) · LEAF_BYTES` (`redb_backend.rs:363-365`). No
 envelope, no fields. *(Records-was: the state this section set out to fix.
 Since 2026-09-13 `SF-D8` places a fixed-length `HybridSignature` envelope
-ahead of the frame this section defines; that envelope is ruled, not landed.)*
+after the frame this section defines, as the response's last bytes
+(corrected 2026-10-04; it was first built ahead of the frame).)*
 
 **`content-length` cannot be TJ-H's reserved header**, for three reasons:
 

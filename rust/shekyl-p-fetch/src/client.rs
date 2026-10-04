@@ -59,10 +59,12 @@ use crate::target::{ContentVerify, FetchTarget, ServingEndpoint, VerifiedShard};
 /// for a challenge fetch approaching `CHALLENGE_RESPONSE_BLOCKS`.
 pub const MAX_INFLIGHT: usize = 8;
 
-/// Width of the countersignature envelope that leads the body: the
+/// Width of the countersignature envelope that closes the body: the
 /// canonical `HybridSignature` encoding and nothing else (`SF-D8`). Both
 /// ends read `HybridSignature::CANONICAL_LEN`; this name is the
-/// fetch-side statement that the body's first bytes are a signature.
+/// fetch-side statement that the body's **last** bytes are a signature —
+/// `P` releases it only after the frame, so a countersignature in hand
+/// means the whole read was delivered.
 pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
 
 /// Ceiling on a response body, applied to `content-length` **before** a
@@ -282,8 +284,11 @@ impl PFetchClient {
             (target.verifying_key.clone(), target.shard_id, *header);
         tokio::task::spawn_blocking(move || {
             let _slot = slot;
-            let content = body.split_off(SIGNATURE_ENVELOPE_LEN);
-            let signature = HybridSignature::from_canonical_bytes(&body)
+            // The envelope is the body's tail. `declared >= envelope` was
+            // checked at the head and `read_body` read exactly `declared`.
+            let mut content = body;
+            let envelope = content.split_off(content.len() - SIGNATURE_ENVELOPE_LEN);
+            let signature = HybridSignature::from_canonical_bytes(&envelope)
                 .map_err(|_| FetchError::Malformed(Malformed::Envelope))?;
             verify_pass_transcript(
                 &verifying_key,

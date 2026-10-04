@@ -4,6 +4,22 @@
 
 - Docs: the economy's umbrella plan (`ECONOMY_UMBRELLA_PLAN.md`, `EUP-`); `DESIGN_CONCEPTS.md` records F-D, its design home's archival rationale, and its April tables' inputs.
 
+### Archival serving — `P`'s countersignature now seals the delivery
+
+- `shekyl-p-serve` wrote `P`'s countersignature at the front of the shard
+  response, ahead of the frame, so a requester held it before a single
+  shard byte arrived and it proved only that a request reached `P`. It is
+  now the response's last bytes: `P` releases it after the whole frame,
+  and a transfer that fails mid-body yields none. `shekyl-p-fetch` takes
+  it from the body's tail and refuses a response that leads with one.
+- **Wire change to the serving route** (`ARCHIVAL_SERVING_ROUTE.md`): the
+  body is `RF-D4` frame ‖ signature, not signature ‖ frame.
+  `content-length` is unchanged. A serving persona and a fetching daemon
+  must be on the same side of this change.
+- The signed message is unchanged, so the consensus verifier and every
+  pinned vector are untouched (`ARCHIVAL_SHARD_FETCH.md` `SF-D8`,
+  corrected 2026-10-04).
+
 ### Archival shards — `U1b` is read: the floor device does not lower `W`'s ceiling
 
 - A Pi 4 serving the largest shard object for 24 hours, with PoW on and the

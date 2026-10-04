@@ -88,14 +88,16 @@ async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
 }
 
 /// Split a 200 response after its head into (countersignature, framed body).
+/// The countersignature is the response's last bytes.
 fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
     let end = response
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .expect("response has a head");
-    let (sig, body) = response[end + 4..].split_at(SIGNATURE_ENVELOPE_LEN);
+    let after_head = &response[end + 4..];
+    let (body, sig) = after_head.split_at(after_head.len() - SIGNATURE_ENVELOPE_LEN);
     (
-        HybridSignature::from_canonical_bytes(sig).expect("served body leads with a signature"),
+        HybridSignature::from_canonical_bytes(sig).expect("served body ends with a signature"),
         body,
     )
 }
