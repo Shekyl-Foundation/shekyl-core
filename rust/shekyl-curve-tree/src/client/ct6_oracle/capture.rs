@@ -15,6 +15,8 @@
 use super::super::tests::ingest_outputs_at;
 use super::super::{
     BlockLeaves, OwnedRegistration, RawOutput, TxLeafInputs, CAPTURED_IDENTITY_BYTES,
+    CAPTURED_IDENTITY_CM_X_AT, CAPTURED_IDENTITY_COMMITMENT_AT, CAPTURED_IDENTITY_OUTPUT_KEY_AT,
+    CURVE_ELEMENT_BYTES,
 };
 use super::{lock_count, reference_at};
 use crate::store::CapturedChunk;
@@ -255,27 +257,31 @@ fn creation_block_of(position: u64) -> u64 {
     panic!("position {position} is past the fixture");
 }
 
-/// Decode a layer-0 capture body into the chunk leaves a path carries.
+/// Decode a closed layer-0 capture body into the chunk leaves a path carries.
 ///
 /// `I` is re-derived here, because it is not stored (§11.8). This is the
-/// consumer's side of [`super::super::push_captured_identity`], written out
-/// rather than shared with it: a decoder that called the encoder's inverse
-/// would agree with it by construction.
+/// consumer's side of [`super::super::capture::push_captured_identity`],
+/// written out rather than shared with it: a decoder that called the
+/// encoder's inverse would agree with it by construction. The offsets are
+/// the layout's names. A closed chunk is exactly one Selene width; a short
+/// body is not a chunk this oracle accepts.
 fn decode_identities(bytes: &[u8]) -> Vec<ChunkLeaf> {
     assert_eq!(
-        bytes.len() % CAPTURED_IDENTITY_BYTES,
-        0,
-        "a layer-0 body is whole identities"
+        bytes.len(),
+        SELENE_CHUNK_WIDTH * CAPTURED_IDENTITY_BYTES,
+        "a closed layer-0 chunk is one full width"
     );
     bytes
         .chunks_exact(CAPTURED_IDENTITY_BYTES)
         .map(|row| {
-            let mut o = [0u8; 32];
-            let mut c = [0u8; 32];
-            let mut cm_x = [0u8; 32];
-            o.copy_from_slice(&row[0..32]);
-            c.copy_from_slice(&row[32..64]);
-            cm_x.copy_from_slice(&row[64..96]);
+            let mut o = [0u8; CURVE_ELEMENT_BYTES];
+            let mut c = [0u8; CURVE_ELEMENT_BYTES];
+            let mut cm_x = [0u8; CURVE_ELEMENT_BYTES];
+            o.copy_from_slice(
+                &row[CAPTURED_IDENTITY_OUTPUT_KEY_AT..CAPTURED_IDENTITY_COMMITMENT_AT],
+            );
+            c.copy_from_slice(&row[CAPTURED_IDENTITY_COMMITMENT_AT..CAPTURED_IDENTITY_CM_X_AT]);
+            cm_x.copy_from_slice(&row[CAPTURED_IDENTITY_CM_X_AT..CAPTURED_IDENTITY_BYTES]);
             ChunkLeaf {
                 output_key: OneTimePubkey::from_bytes(o),
                 key_image_gen: key_image_generator(&o),
@@ -302,15 +308,15 @@ fn body_at(chunks: &[CapturedChunk], layer: u8) -> Vec<u8> {
         .clone()
 }
 
-/// What the fold captured is what assembly would have built.
+/// What the fold captured is what assembly builds from the whole tree.
 ///
 /// Two independent derivations of one value. The capture is written at
 /// ingest, leaf by leaf, from the store's rows and the block's own leaves.
-/// `assemble_paths` rebuilds the whole tree at the reference height and
-/// slices it. Equality is the claim capture rests on, and it is the only
-/// assertion that would notice an off-by-one in the chunk span, a wrong
-/// `base` split between the store read and the block, or identities written
-/// out of drain order.
+/// The path below comes from an unregistered twin, so `assemble_paths`
+/// rebuilds the tree at the reference height and slices it. Equality is the
+/// claim capture rests on, and it is the only assertion that would notice an
+/// off-by-one in the chunk span, a wrong `base` split between the store read
+/// and the block, or identities written out of drain order.
 #[test]
 fn a_captured_chunk_equals_what_assembly_builds() {
     let (client, tip) = drained_chunks(&[OWNED_POSITION]);

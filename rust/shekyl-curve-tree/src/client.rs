@@ -57,30 +57,25 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::frontier::{FoldedChunk, Frontier};
+use crate::frontier::Frontier;
 use crate::recon::{
-    assemble_leaf_stream, collect_block_leaves, drained_sorted, extract_leaf_commitments,
-    root_from_scalars, TxOutputs,
+    assemble_leaf_stream, collect_block_leaves, extract_leaf_commitments, root_from_scalars,
+    TxOutputs,
 };
-use crate::segment::outputs_per_node;
 use crate::store::{
-    CapturedChunk, LeafStore, PostureDeclaration, SegmentPin, ServingReader, StoreError,
-    StoreOpenFault,
+    LeafStore, PostureDeclaration, SegmentPin, ServingReader, StoreError, StoreOpenFault,
 };
 use crate::types::{
     BlockHeight, CommitmentBytes, CurveTreeRoot, Gindex, LeafEntry, OneTimePubkey, OutputIdentity,
-    ReferenceBlock, TargetKind, TreePosition,
-};
-use shekyl_fcmp::tree::{
-    build_layers, chunk_width, layer_count_for_leaves, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
+    ReferenceBlock, TargetKind,
 };
 
-/// Bytes a layer-0 capture stores per sibling: `O ‖ C ‖ CM.x`.
-///
-/// `I` is **not** stored — it is `key_image_generator(O)`, derived at
-/// assembly. A stored copy of a recomputable value is a second copy that can
-/// disagree (`CT6_PROVING_STATE.md` §11.8).
-pub(crate) const CAPTURED_IDENTITY_BYTES: usize = 96;
+mod capture;
+
+pub(crate) use capture::{
+    ChunkSpan, CAPTURED_IDENTITY_BYTES, CAPTURED_IDENTITY_CM_X_AT, CAPTURED_IDENTITY_COMMITMENT_AT,
+    CAPTURED_IDENTITY_OUTPUT_KEY_AT, CURVE_ELEMENT_BYTES, NODE_CHILD_BYTES,
+};
 
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
 /// **before** `h_pqc` resolution. The client resolves `h_pqc` from the
@@ -138,11 +133,15 @@ pub enum ClientError {
     ///
     /// Raised after assembly, from `verify_path_against_its_branches`.
     /// The store gate above it compares two store reads and cannot see this:
-    /// [`crate::types::TreeContext::tree_root`] is copied from the gated reference while the
-    /// branches come from replay. [`crate::assemble::PathRootFault`] names
-    /// which step refused. [`crate::assemble::PathRootFault::ChildAbsent`] is
-    /// the membership link. [`crate::assemble::PathRootFault::RootDisagrees`]
-    /// is the final comparison.
+    /// [`crate::types::TreeContext::tree_root`] is copied from the gated
+    /// reference, and the branches come from the route that assembled the
+    /// path — the capture table and the frontier snapshot, or the rebuild of
+    /// `entries`. [`crate::assemble::PathRootFault`] names which step refused.
+    /// [`crate::assemble::PathRootFault::ChildAbsent`] is the membership link.
+    /// [`crate::assemble::PathRootFault::RootDisagrees`] is the final
+    /// comparison. [`crate::assemble::PathRootFault::ShortPath`] and
+    /// [`crate::assemble::PathRootFault::LongPath`] are also how a rebuilt
+    /// layer count that disagrees with the gate's depth is reported.
     ///
     /// This is a defect, not a user condition: the wallet's two views of one
     /// tree disagree. Refusing is the point — an inconsistent path yields a
@@ -181,11 +180,13 @@ pub enum ClientError {
     ///
     /// The ring holds `[tip - horizon, tip]` with the horizon at
     /// `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` (720), and the daemon rejects a
-    /// reference older than `REFERENCE_BLOCK_MAX_AGE` (100) blocks — so a
-    /// reference the daemon would accept is always inside the ring, and this
-    /// fires only for one it would refuse anyway. Named here rather than
-    /// paid for: the alternative is to rebuild the tree from every drained
-    /// leaf to serve a reference that cannot be submitted.
+    /// reference older than `REFERENCE_BLOCK_MAX_AGE` (100) blocks. A
+    /// reference past that horizon is one the daemon would refuse, and
+    /// rebuilding the tree from every drained leaf to serve it is not worth
+    /// the read. A miss *inside* the horizon is a hole: the height was
+    /// ingested, and reading it again does not write the row. Re-anchor
+    /// treats both as terminal. The unregistered route never reaches this
+    /// error; it rebuilds before the snapshot is consulted.
     ReferenceOutsideSnapshotRing {
         /// The reference height asked for.
         height: BlockHeight,
@@ -243,7 +244,7 @@ pub enum ClientError {
     CaptureIdentitiesIncomplete {
         /// Leaf position at which the chunk closed — the capture row's key.
         end_leaf: u64,
-        /// Siblings the chunk has, which is [`SELENE_CHUNK_WIDTH`].
+        /// Siblings the chunk has, which is [`shekyl_fcmp::tree::SELENE_CHUNK_WIDTH`].
         want: usize,
         /// Siblings the leaf rows yielded.
         got: usize,
@@ -625,30 +626,6 @@ pub struct CaptureReconciliation {
     /// chunks actually missing (`outputs_per_node(layer)` each), never by
     /// the chain's length.
     pub leaves_rebuilt: u64,
-}
-
-/// Append one sibling's capture body: `O ‖ C ‖ CM.x`,
-/// [`CAPTURED_IDENTITY_BYTES`] in all.
-///
-/// `I` is omitted deliberately — it is `key_image_generator(O)`, which
-/// [`crate::assemble`] already derives when it builds a
-/// [`crate::types::ChunkLeaf`]. Storing it would be a second copy that can
-/// disagree with the derivation.
-fn push_captured_identity(bytes: &mut Vec<u8>, entry: &LeafEntry) {
-    bytes.extend_from_slice(entry.identity.output_key.as_bytes());
-    bytes.extend_from_slice(
-        entry
-            .identity
-            .commitment
-            // A drained leaf always has a commitment (`try_build_leaf`
-            // required `i < outPk.size()`), the same ground
-            // `assemble_paths` states when it builds the chunk from these
-            // fields. A short *row set* is a different modality — pruning
-            // can produce it — and that one is refused, not expected away.
-            .expect("a drained leaf carries a commitment")
-            .as_bytes(),
-    );
-    bytes.extend_from_slice(&entry.cm_x());
 }
 
 /// The authority to rebuild the single writer over an already-open store —
@@ -1204,432 +1181,6 @@ impl CurveTreeClient {
         Ok(())
     }
 
-    /// Capture this output's membership-path material as the fold closes the
-    /// chunks over it.
-    ///
-    /// The wallet calls this for each output it owns. Registration is
-    /// idempotent, and the return value says what the call *bought* — which
-    /// depends only on whether the leaf has drained, because capture rides
-    /// the fold and a leaf folds once ([`OwnedRegistration`]).
-    ///
-    /// A `gindex` this client has never seen is accepted as
-    /// [`OwnedRegistration::BeforeDrain`], not refused: the scanner may
-    /// identify an output from a block this client has not ingested yet, and
-    /// the registry is matched against each leaf at *its* drain, so a
-    /// registration that arrives first simply works. There is nothing to
-    /// refuse — an unknown gindex and a future one are the same state here.
-    ///
-    /// # Nothing calls this in production yet
-    ///
-    /// The engine's registration path — the curve-tree actor's protocol, and
-    /// the scan that learns a `global_output_index` — is unbuilt, so the
-    /// captures currently exist for an output nothing registers. Whether it
-    /// lands beside this or as its own slice is the round's call, not this
-    /// docstring's. The gate on it either way is
-    /// `assembly_today_depends_on_every_foreign_leaf`'s state 3, which no
-    /// commit has flipped.
-    ///
-    /// # Errors
-    ///
-    /// [`ClientError::Poisoned`] if a partially-applied rollback left memory
-    /// inconsistent with the store. The verdict is read from `entries`, so a
-    /// poisoned client could answer `BeforeDrain` for a leaf that has
-    /// drained — which is the one wrong answer that reports *nothing owed*
-    /// and so silently loses the captures.
-    #[must_use = "a registration after the drain owes captures to                   reconciliation; dropping the verdict hides that"]
-    pub fn register_owned(
-        &mut self,
-        gindex: Gindex,
-        output_key: OneTimePubkey,
-    ) -> Result<OwnedRegistration, ClientError> {
-        self.ensure_live()?;
-        // Checked before the insert, so a refused registration leaves the
-        // registry as it was.
-        if let Some(held) = Self::held_output(&self.entries, gindex) {
-            if held != output_key {
-                return Err(ClientError::RegistrationIdentityMismatch {
-                    gindex,
-                    expected: output_key,
-                    got: held,
-                });
-            }
-        }
-        // An insert REPLACES, which is how a rescan rebinds a gindex after a
-        // reorg without a separate retraction.
-        self.owned_outputs.insert(gindex, output_key);
-        let Some(tip) = self.ingested_tip_height else {
-            return Ok(OwnedRegistration::BeforeDrain);
-        };
-        let cutoff = Self::drained_through(tip);
-        // `entries` is strictly increasing in `gindex` — `rebuild_from_store`
-        // sorts and refuses duplicates, and ingest appends gindexes above
-        // every held one. `rebuild_from_store`'s `next_gindex` already reads
-        // `entries.last()` on that basis, so this is the invariant as it
-        // stands rather than a new one. Pinned by
-        // `entries_stay_sorted_by_gindex`.
-        let drained = self
-            .entries
-            .binary_search_by(|held| held.gindex.cmp(&gindex))
-            .is_ok_and(|i| self.entries[i].maturity <= cutoff);
-        Ok(if drained {
-            OwnedRegistration::AfterDrain
-        } else {
-            OwnedRegistration::BeforeDrain
-        })
-    }
-
-    /// Write every capture an owned output is **due** but the store lacks.
-    ///
-    /// This is the backfill and the reconciliation in one mechanism, because
-    /// they are one mechanism: a capture that is due and missing is a late
-    /// registration, whatever made it late.
-    ///
-    /// # What makes a capture late
-    ///
-    /// Two triggers, and the list is shorter than it first looks:
-    ///
-    /// 1. **Resume**, which is a *mass* late registration. The registry does
-    ///    not persist ([`Self::register_owned`]), so after every resume each
-    ///    held output comes back [`OwnedRegistration::AfterDrain`]. This is
-    ///    the dominant case by far.
-    /// 2. **Late discovery** — the scanner identifies an owned output after
-    ///    the chunks over it have closed, which includes a lagging scan.
-    ///
-    /// Two cases that were on this list and are **not** reachable, recorded
-    /// so they are not re-inherited. A **pre-capture store** cannot be
-    /// opened at all: [`crate::store::StoreError::SchemaVersionMismatch`] is
-    /// a strict equality check, and the disposition is delete-and-re-sync,
-    /// not migrate. And a **crash between a fold and its capture** cannot
-    /// happen: captures ride the block's own transaction beside the leaves
-    /// and the ring snapshot, so the two commit together or neither does.
-    ///
-    /// # Due, and the one coordinate
-    ///
-    /// A chunk over an owned position `p` at layer `L` ends at
-    /// `(p / outputs_per_node(L) + 1) * outputs_per_node(L) - 1`, and it is
-    /// due exactly when that end is **below the drained leaf count** — the
-    /// same `end_leaf < surviving_leaf_count` comparison a rollback applies
-    /// and the capture table is keyed on (`CT6_PROVING_STATE.md` §11.8). One
-    /// quantity, three readers.
-    ///
-    /// # It also checks the fold
-    ///
-    /// The owned positions are recomputed here from `drained_sorted` — the
-    /// order assembly resolves against — rather than trusted from
-    /// `owned_positions`, which the fold wrote. The recomputed set must
-    /// *contain* every held position; it is a superset, because it also
-    /// covers registrations the fold never saw. A held position it does not
-    /// produce is [`ClientError::OwnedPositionDrift`], not a silent
-    /// overwrite: two orders over one field with no comparison between them
-    /// is how a wrong coordinate survives.
-    ///
-    /// # Cost: lazy, and bounded by what is missing
-    ///
-    /// Due coordinates are **arithmetic**, so the call first asks the table
-    /// what it already has: one read per distinct `end_leaf`, no hashing. On
-    /// a normal resume every due chunk is present, and that is the entire
-    /// cost — `O(owned * depth)` reads, [`CaptureReconciliation::leaves_rebuilt`]
-    /// zero.
-    ///
-    /// Only a **missing** chunk is rebuilt, and only from the leaves under
-    /// it — 38 at layer 0, 684 at layer 1. The bound is the chunk's own
-    /// span, never the chain's length.
-    ///
-    /// This matters because **a resume is a call to this**: the registry
-    /// does not persist, so whatever this costs is charged on opening a
-    /// wallet, not only on spending. An earlier revision rebuilt the whole
-    /// tree before comparing anything, which put `CT6_PROVING_STATE.md`
-    /// §11.2's figures — ~65 min at `min_leaves_for_depth(6)` on the
-    /// staker-class host, ~2.5 h projected on the floor device — on every
-    /// wallet open. That is the cost capture exists to remove, and nothing
-    /// required paying it.
-    ///
-    /// What remains `O(n)` is `drained_sorted`, for the positions and the
-    /// drift check. It is a sort, not a hash, and it goes with `entries` at
-    /// increment 7.
-    ///
-    /// One pass serves every late registration, which is why
-    /// [`Self::register_owned`] does not resolve positions itself and why
-    /// the caller should register everything it holds and then reconcile
-    /// **once**.
-    ///
-    /// Every chunk is computed before the write opens, and the whole batch
-    /// commits in one transaction, so a failure part-way through leaves the
-    /// store untouched. Re-offering identical bytes is a no-op, so calling
-    /// this twice writes nothing the second time.
-    ///
-    /// # Errors
-    ///
-    /// [`ClientError::Poisoned`] on a poisoned client;
-    /// [`ClientError::OwnedPositionDrift`] if the fold's coordinates and the
-    /// canonical drain order disagree; [`ClientError::Store`] on a read or
-    /// write failure, including
-    /// [`crate::store::StoreError::ConflictingCapture`] if a recomputed
-    /// chunk disagrees with one already stored.
-    pub fn reconcile_captures(&mut self) -> Result<CaptureReconciliation, ClientError> {
-        self.ensure_live()?;
-        let Some(tip) = self.ingested_tip_height else {
-            return Ok(CaptureReconciliation::default());
-        };
-        let cutoff = Self::drained_through(tip);
-        let drained = drained_sorted(&self.entries, cutoff);
-        let drained_count = u64::try_from(drained.len()).expect("drained count fits u64");
-
-        // Recompute the owned positions from the canonical drain order, and
-        // check the fold's against them before using either.
-        let mut positions: BTreeMap<u64, Gindex> = BTreeMap::new();
-        for (position, entry) in drained.iter().enumerate() {
-            if self.owned_outputs.get(&entry.gindex) == Some(&entry.identity.output_key) {
-                positions.insert(
-                    u64::try_from(position).expect("a drain position fits u64"),
-                    entry.gindex,
-                );
-            }
-        }
-        if let Some(stale) = self
-            .owned_positions
-            .keys()
-            .find(|held| !positions.contains_key(held))
-        {
-            return Err(ClientError::OwnedPositionDrift { position: *stale });
-        }
-
-        // Which due coordinates are MISSING. Pure arithmetic plus one table
-        // read per distinct key — no hashing, and no rebuild. On a normal
-        // resume every due chunk is present and this is the whole cost.
-        let depth = layer_count_for_leaves(drained_count);
-        let mut held: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
-        let mut owed: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
-        for position in positions.keys() {
-            for layer in 0..depth {
-                let Some(end_leaf) = Self::due_chunk_end(*position, layer, drained_count) else {
-                    continue;
-                };
-                let present = match held.get(&end_leaf) {
-                    Some(layers) => layers.contains(&layer),
-                    None => {
-                        let rows = self
-                            .store
-                            .captured_chunks(TreePosition::from_raw(end_leaf))?;
-                        let layers: Vec<u8> = rows.iter().map(|c| c.layer).collect();
-                        let present = layers.contains(&layer);
-                        held.insert(end_leaf, layers);
-                        present
-                    }
-                };
-                let already = owed
-                    .get(&end_leaf)
-                    .is_some_and(|layers| layers.contains(&layer));
-                if !present && !already {
-                    owed.entry(end_leaf).or_default().push(layer);
-                }
-            }
-        }
-
-        // Rebuild only what is missing, each chunk from its OWN span.
-        let mut missing: Vec<(TreePosition, Vec<CapturedChunk>)> = Vec::new();
-        let mut leaves_rebuilt = 0u64;
-        let mut chunks_written = 0usize;
-        for (end_leaf, layers) in owed {
-            let mut chunks = Vec::with_capacity(layers.len());
-            for layer in layers {
-                let (chunk, read) = self.rebuild_chunk(end_leaf, layer)?;
-                leaves_rebuilt += read;
-                chunks.push(chunk);
-            }
-            chunks_written += chunks.len();
-            missing.push((TreePosition::from_raw(end_leaf), chunks));
-        }
-        self.store.merge_captured_chunk_rows(&missing)?;
-
-        // Committed. The resolved positions become the fold's, so the chunks
-        // over a late-registered leaf that have *not* closed yet are
-        // captured as they do — without this the backfill would be a
-        // one-shot and the leaf unprotected from here on.
-        let resolved = positions.len() - self.owned_positions.len();
-        self.owned_positions = positions;
-        Ok(CaptureReconciliation {
-            positions_resolved: resolved,
-            rows_written: missing.len(),
-            chunks_written,
-            leaves_rebuilt,
-        })
-    }
-
-    /// Inclusive leaf position at which the layer-`layer` chunk over
-    /// `position` closes, or `None` if it has not closed yet.
-    ///
-    /// Closed means `end_leaf < drained_count` — the one comparison (see
-    /// [`Self::reconcile_captures`]).
-    pub(crate) fn due_chunk_end(position: u64, layer: u8, drained_count: u64) -> Option<u64> {
-        let covered = u64::try_from(outputs_per_node(layer)).expect("node capacity fits u64");
-        let end_leaf = (position / covered + 1)
-            .checked_mul(covered)?
-            .checked_sub(1)?;
-        (end_leaf < drained_count).then_some(end_leaf)
-    }
-
-    /// Rebuild one missing chunk from the leaves **under it**, and report
-    /// how many leaves that cost.
-    ///
-    /// This is what keeps reconciliation off the chain's length. A layer-`L`
-    /// chunk is a function of exactly the `outputs_per_node(L)` leaves it
-    /// covers, so it is rebuilt from a ranged read of that span and nothing
-    /// wider — 38 leaves at layer 0, 684 at layer 1. The earlier revision
-    /// rebuilt the **whole tree** before comparing anything, which charged
-    /// every resume the full `O(chain)` hash even when nothing was owed:
-    /// the cost capture exists to remove, moved from spend to wallet open.
-    /// Nothing required it, and on a normal resume the captures are already
-    /// there.
-    ///
-    /// Above layer 0 the children are rebuilt rather than read, because the
-    /// store holds leaves and captures, not interior nodes. `build_layers`
-    /// over an aligned span reproduces the real tree's nodes within it:
-    /// `outputs_per_node(L)` is `outputs_per_node(L - 1) * chunk_width(L)`,
-    /// so the grouping is the same one the whole-tree build would make.
-    ///
-    /// # Errors
-    ///
-    /// [`ClientError::CaptureIdentitiesIncomplete`] if the span's leaf rows
-    /// are short — the pruned-store shape, as on the ingest path;
-    /// [`ClientError::Store`] on a read failure.
-    fn rebuild_chunk(&self, end_leaf: u64, layer: u8) -> Result<(CapturedChunk, u64), ClientError> {
-        let span = u64::try_from(outputs_per_node(layer)).expect("node capacity fits u64");
-        let start = end_leaf
-            .checked_add(1)
-            .and_then(|past| past.checked_sub(span))
-            .expect("a closed chunk's span starts at or above zero");
-        let entries = self.store.read_drained_range(
-            TreePosition::from_raw(start),
-            TreePosition::from_raw(end_leaf),
-        )?;
-        let want = usize::try_from(span).expect("a chunk span fits usize");
-        if entries.len() != want {
-            return Err(ClientError::CaptureIdentitiesIncomplete {
-                end_leaf,
-                want,
-                got: entries.len(),
-            });
-        }
-        let bytes = if layer == 0 {
-            let mut bytes = Vec::with_capacity(SELENE_CHUNK_WIDTH * CAPTURED_IDENTITY_BYTES);
-            for entry in &entries {
-                push_captured_identity(&mut bytes, entry);
-            }
-            bytes
-        } else {
-            let mut scalars = Vec::with_capacity(entries.len() * SCALARS_PER_LEAF);
-            for entry in &entries {
-                for scalar in entry.leaf.chunks_exact(32) {
-                    let mut word = [0u8; 32];
-                    word.copy_from_slice(scalar);
-                    scalars.push(word);
-                }
-            }
-            let sub = build_layers(&scalars);
-            let children = &sub[usize::from(layer) - 1];
-            debug_assert_eq!(
-                children.len(),
-                chunk_width(layer),
-                "an aligned span yields exactly one chunk's worth of children"
-            );
-            children.iter().flatten().copied().collect()
-        };
-        Ok((CapturedChunk { layer, bytes }, span))
-    }
-
-    /// The output key `entries` holds at `gindex`, if any.
-    ///
-    /// A binary search, on the strictly-increasing order
-    /// `entries_stay_sorted_by_gindex` pins. Not a map built per call: a
-    /// rollback is rare and the registry is small, so `O(owned · log n)`
-    /// beats `O(n)` memory for the event.
-    fn held_output(entries: &[LeafEntry], gindex: Gindex) -> Option<OneTimePubkey> {
-        entries
-            .binary_search_by(|held| held.gindex.cmp(&gindex))
-            .ok()
-            .map(|i| entries[i].identity.output_key)
-    }
-
-    /// Does this chunk's leaf span hold an owned position?
-    ///
-    /// A layer-`L` chunk covers [`outputs_per_node`] consecutive leaves and
-    /// closes only at capacity, so `end_leaf + 1` is a multiple of that
-    /// width and the span is exact. `resolved` holds the positions earlier
-    /// blocks assigned; `pending` holds those this block is assigning, which
-    /// are not in `resolved` yet because the store has not committed —
-    /// without them a chunk closing over a leaf that drains in the same
-    /// block would be missed.
-    fn chunk_holds_owned(
-        chunk: &FoldedChunk<'_>,
-        resolved: &BTreeMap<u64, Gindex>,
-        pending: &[(u64, Gindex)],
-    ) -> bool {
-        let covered = u64::try_from(outputs_per_node(chunk.layer)).expect("node capacity fits u64");
-        let start = chunk
-            .end_leaf
-            .checked_add(1)
-            .and_then(|past| past.checked_sub(covered))
-            .expect("a closed chunk's span starts at or above zero");
-        resolved.range(start..=chunk.end_leaf).next().is_some()
-            || pending
-                .iter()
-                .any(|(position, _)| *position >= start && *position <= chunk.end_leaf)
-    }
-
-    /// The layer-0 capture body for the chunk that closed at `end_leaf`:
-    /// `O ‖ C ‖ CM.x` per sibling, in drain order.
-    ///
-    /// Layer 0 cannot come from the fold — the frontier holds leaf
-    /// *scalars*, and `O.x` is a one-way projection of `O`
-    /// ([`FoldedChunk`]). The identities come from the leaf rows instead:
-    /// positions below `base` from [`LeafStore::read_drained_range`], which
-    /// is `O(SELENE_CHUNK_WIDTH)` rather than the whole-table read capture
-    /// exists to delete, and positions from `base` up from `drained`, this
-    /// block's own leaves, which the store has not committed yet (B5).
-    ///
-    /// # Errors
-    ///
-    /// [`ClientError::CaptureIdentitiesIncomplete`] if the rows are short of
-    /// the chunk's width; [`ClientError::Store`] on a read failure. Both are
-    /// ahead of the block's transaction.
-    fn captured_leaf_identities(
-        &self,
-        end_leaf: u64,
-        base: u64,
-        drained: &[LeafEntry],
-    ) -> Result<Vec<u8>, ClientError> {
-        let width = u64::try_from(SELENE_CHUNK_WIDTH).expect("leaf chunk width fits u64");
-        let start = end_leaf
-            .checked_add(1)
-            .and_then(|past| past.checked_sub(width))
-            .expect("a closed leaf chunk spans a full width");
-        let mut bytes = Vec::with_capacity(SELENE_CHUNK_WIDTH * CAPTURED_IDENTITY_BYTES);
-        if start < base {
-            let last = (base - 1).min(end_leaf);
-            let stored = self
-                .store
-                .read_drained_range(TreePosition::from_raw(start), TreePosition::from_raw(last))?;
-            for entry in &stored {
-                push_captured_identity(&mut bytes, entry);
-            }
-        }
-        for position in start.max(base)..=end_leaf {
-            let offset =
-                usize::try_from(position - base).expect("a block's drain index fits usize");
-            push_captured_identity(&mut bytes, &drained[offset]);
-        }
-        let got = bytes.len() / CAPTURED_IDENTITY_BYTES;
-        if got != SELENE_CHUNK_WIDTH {
-            return Err(ClientError::CaptureIdentitiesIncomplete {
-                end_leaf,
-                want: SELENE_CHUNK_WIDTH,
-                got,
-            });
-        }
-        Ok(bytes)
-    }
-
     /// Ingest one block, resolving each output's leaf commitment, threading the global
     /// output index, and accumulating drained-leaf entries. Blocks must be
     /// ingested in strictly consecutive height order from genesis (`0`, `1`,
@@ -1722,81 +1273,11 @@ impl CurveTreeClient {
         let drained = self.newly_drained_from_index(through);
         let removed: Vec<Gindex> = drained.iter().map(|entry| entry.gindex).collect();
 
-        // Ownership is resolved before the fold, because a chunk closing in
-        // this block may hold an owned leaf that drains in this same block.
-        // A leaf's position is its index in drain order, and `drained` is
-        // pushed in that order, so the `i`th leaf lands at `base + i`.
-        let base = self.frontier.leaf_count();
-        let pending_owned: Vec<(u64, Gindex)> = drained
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| {
-                self.owned_outputs.get(&entry.gindex) == Some(&entry.identity.output_key)
-            })
-            .map(|(i, entry)| {
-                (
-                    base + u64::try_from(i).expect("a block's drain count fits u64"),
-                    entry.gindex,
-                )
-            })
-            .collect();
-
-        // The frontier advances on a CLONE, before the transaction opens.
-        // A fold is fallible, and B5 puts every fallible step ahead of the
-        // commit: a leaf whose bytes will not hash refuses the block with
-        // both sides untouched, exactly as a bad published point does.
-        //
-        // The observer is where capture happens, and it is infallible by
-        // construction. A node chunk is copied as the frontier folded it. A
-        // layer-0 chunk is only *recorded as a coordinate*, because its
-        // children are scalars rather than the points a path needs; the read
-        // that assembles its identities can fail, so it stays outside the
-        // closure — and therefore still ahead of the transaction.
+        // The frontier advances on a clone, and capture is collected with
+        // it, before the transaction opens. A hash failure or a short
+        // layer-0 read refuses the block with both sides untouched.
         let mut advanced = self.frontier.clone();
-        let mut leaf_chunk_ends: Vec<u64> = Vec::new();
-        let mut node_captures: Vec<(u64, CapturedChunk)> = Vec::new();
-        for entry in &drained {
-            advanced
-                .push_leaf_observed(&entry.leaf, &mut |chunk| {
-                    if !Self::chunk_holds_owned(&chunk, &self.owned_positions, &pending_owned) {
-                        return;
-                    }
-                    if chunk.layer == 0 {
-                        leaf_chunk_ends.push(chunk.end_leaf);
-                    } else {
-                        node_captures.push((
-                            chunk.end_leaf,
-                            CapturedChunk {
-                                layer: chunk.layer,
-                                bytes: chunk.children.iter().flatten().copied().collect(),
-                            },
-                        ));
-                    }
-                })
-                .map_err(|source| ClientError::Frontier {
-                    height: block.height,
-                    source,
-                })?;
-        }
-
-        // One row per `end_leaf`: a fold cascade closes several layers on one
-        // leaf, and they share a key because they became final at one
-        // instant (`CT6_PROVING_STATE.md` §11.8).
-        let mut by_end: BTreeMap<u64, Vec<CapturedChunk>> = BTreeMap::new();
-        for end_leaf in leaf_chunk_ends {
-            let bytes = self.captured_leaf_identities(end_leaf, base, &drained)?;
-            by_end
-                .entry(end_leaf)
-                .or_default()
-                .push(CapturedChunk { layer: 0, bytes });
-        }
-        for (end_leaf, chunk) in node_captures {
-            by_end.entry(end_leaf).or_default().push(chunk);
-        }
-        let captures: Vec<(TreePosition, Vec<CapturedChunk>)> = by_end
-            .into_iter()
-            .map(|(end_leaf, chunks)| (TreePosition::from_raw(end_leaf), chunks))
-            .collect();
+        let captured = self.fold_block_captures(block.height, &drained, &mut advanced)?;
         // C3 in production, not only in a test: the snapshot this block
         // captures must carry exactly the drain index's count for the
         // cutoff, because root and depth are both read back off it.
@@ -1822,7 +1303,7 @@ impl CurveTreeClient {
             &removed,
             block.height,
             &snapshot,
-            &captures,
+            &captured.rows,
         )?;
 
         // Store committed — the in-memory commit below is infallible.
@@ -1837,7 +1318,7 @@ impl CurveTreeClient {
         self.next_gindex = next_gindex;
         self.ingested_tip_height = Some(block.height);
         self.frontier = advanced;
-        self.owned_positions.extend(pending_owned);
+        self.owned_positions.extend(captured.pending_owned);
         self.record_drained_count(through, canonical);
         Ok(())
     }
@@ -2008,11 +1489,11 @@ impl CurveTreeClient {
     ///
     /// The CT-5c send path needs both before assembling: the depth sizes the
     /// FCMP++ proof weight for fee estimation (which runs *before* path
-    /// assembly), and the root binds the [`ReferenceBlock`]. The depth equals
-    /// the assembler's `AssembledPath.tree.tree_depth` (which `assemble_path`
-    /// takes from `build_layers(..).len()`) by the `layer_count_for_leaves`
-    /// drift KAT, so the engine can assert their equality as a consistency
-    /// check that never fires benignly.
+    /// assembly), and the root binds the [`ReferenceBlock`]. Both assembly
+    /// routes stamp this depth onto `AssembledPath.tree.tree_depth`. The
+    /// rebuild compares it with `build_layers(..).len()` and refuses when
+    /// they disagree; the `layer_count_for_leaves` drift KAT is why that
+    /// comparison holds on a sound tree.
     pub fn root_and_depth_at(
         &self,
         reference_height: BlockHeight,
