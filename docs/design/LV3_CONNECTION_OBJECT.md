@@ -21,6 +21,24 @@ pool callback is an event, the puppet has nothing left to test. Relay
 behaviour already has counterparts in `shekyl-relay`. The `i_core_events`
 cases (`relayed_zone`, pool callbacks) become seam tests in that deletion.
 
+**UPDATE 2026-10-03:** Two residues land in this slice and are not a
+C++ patch. The forget-cause split — `TransportTimeout` and `LocalClose`
+do not mark the address, so it stays dialable; `DialFailed`,
+`ProxyRefused`, and a Levin handshake rejection take the existing
+forget window; there is no second window — runs through
+`zone_server::open` and `do_handshake_with_peer`. The write-stall
+samples sit on the connection's writer: per session, both connectors,
+no threshold (D9 forbids a millisecond without a distribution). The
+samples and the forget-cause split are this rewrite. The `AfterChannel`
+deadline those samples derive is not: the stalled write still holds
+the task and the fd until that deadline exists. The seam already
+carries the close cause, and the stall is a span on the Rust writer
+loop. Doing either residue in C++ is work this slice deletes.
+
+**UPDATE 2026-10-04:** The register's inventory is re-anchored at `dev`
+`684673611e` (§6.2.1). The design round stays closed. No connection
+type has been cut.
+
 **SCOPE NARROWED 2026-09-21 (steering).** *Records-was: "P2P-3 slice 1", and the
 scope was the whole p2p surface.* **LV-3 is the `levin_notify` / `net_node`
 seam — the socket layer and relay dispatch — and nothing else.** The peerlist,
@@ -1534,7 +1552,7 @@ wrong was calling them the round.*
 | Step | What | Note |
 | --- | --- | --- |
 | **c** | The connection registry, **including its own count**. **UPDATE 2026-09-28: first, immediately after the transport cutover.** The strand is the only writer. Walkers read snapshots. A change is a post. | the `foreach_connection` race, above |
-| **a** | The `Connection` type — the endpoint with Round 2's claimed/observed provenance, direction, zone, established-at. Follows step c. | `Claimed<T>` / `Observed<T>` distinct in the type, per §2.7.4 |
+| **a** | The `Connection` type — the endpoint with Round 2's claimed/observed provenance, direction, connector, established-at. Follows step c. *Records-was: zone.* | `Claimed<T>` / `Observed<T>` distinct in the type, per §2.7.4 |
 | **b** | Ownership transfer — the Rust object becomes authoritative; `p2p_connection_context` becomes a handle. Follows step c. | |
 | **d** | Relay dispatch — moved out 2026-09-25 to the RD row, after the timing engine | not this slice; see §6.3 item 3 |
 
@@ -1546,14 +1564,21 @@ handshake phases are in Rust before this slice's connection object.
 the sockets moved here.*
 
 **And one concrete inheritance worth naming**, because it is invisible from
-`levin_notify`: admission's ceiling is compared against an atomic that a
-**once-per-second `foreach_connection` recount** maintains
-([`net_node.inl:1112`](../../src/p2p/net_node.inl#L1112)). **A Rust connection
-registry should own its own count** rather than inherit a sleeping recount
-thread, so step **c** is where `:1112` dies. *(The one-second staleness is
-separately a rule-76 measurement input for `--in-peers` —
-[`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §7.4 item 2 —
-not a design question for this slice.)*
+`levin_notify`. **UPDATE 2026-10-04:** admission does not read the
+recount. `apply_inbound_ceiling` (`net_node.inl:3009`) charges
+`shekyl_seam_inbound_held()`. The once-per-second thread is still
+`node_server::run` (`:1163`), and its walk is `:1174`: it sleeps one
+second and writes `m_current_number_of_in_peers` and
+`m_current_number_of_out_peers`. The out-count is what
+`try_to_connect_and_handshake_with_new_peer` reads (`:1605`), with the
+comment that the update time is one second. The in-count atomic is
+written by that thread and by `get_incoming_connections_count`
+(`:2182`) and has no reader in `src/`. Step **c** owns the count, and
+that thread goes with it. Deleting it removes the one-second
+`--in-peers` measurement input (rule 76;
+[`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §7.4
+item 2). *Records-was: the ceiling was compared against the atomic the
+recount at `net_node.inl:1112` maintained.*
 
 **UPDATE 2026-09-28. Step c is first, and it follows the transport
 cutover.** The seam leaves `foreach_connection` as it is. That walk is
@@ -1564,25 +1589,158 @@ the seam, by posting each read onto the strand and waiting, would block
 executor work on a strand. That is the deadlock the seam's floor and
 close-by-posting exist to keep off this path.
 
-Step c's first input is that race. The registry makes each connection's
-strand the only writer.
+Step c's first input is that race. The connection's strand is the
+only writer of the C++ context. The hub's lock is the writer of the
+row.
 
-- **Snapshots for reading.** A connection publishes an immutable
-  snapshot of what a walk needs: session established, direction,
-  network key, peer id, support flags, sync state. The strand
-  republishes it when those fields change, by swapping in a fresh
-  snapshot. Walkers only read snapshots.
+- **Snapshots for reading.** The hub publishes an immutable snapshot
+  of what a walk needs: established, direction, connector, support
+  flags, sync state. It republishes under its own lock when a row is
+  admitted, the handshake finishes, or the row closes. Walkers only
+  read snapshots. *Records-was at `9bc062036`: "network key, peer id".
+  `peer_id` and `pruning_seed` are not fields. Records-was: "the
+  strand republishes it."*
 - **Messages for writing.** A walker that changes a connection posts
   that change to the connection's strand. It does not write the
   context itself.
 
-The inventory at `dev` `9bc062036` is 15 calls in `net_node.inl` and
-2 calls in `levin_notify.cpp` (`:190`, `:232`). `levin_notify.cpp:472`
-names the walk in a comment and is not a call. This step does not wait
-behind steps a and b. Those follow it. It does not wait on slices 1–4,
-the timing-engine bridge, or relay dispatch. It is undefined behaviour
-in the shipping daemon, so it is the first LV-3 work after the
-transport cutover.
+**UPDATE 2026-10-04. Inventory at `dev` `684673611e`.** `git grep -c
+foreach_connection` is the number: 12 in `src/p2p/net_node.inl`, 1 in
+`src/cryptonote_protocol/levin_notify.cpp`. The twelve are calls. The
+one is a comment at `:406`, not a call. *Records-was at `9bc062036`:
+15 calls in `net_node.inl` and 2 calls in `levin_notify.cpp` (`:190`,
+`:232`), plus a comment at `:472`.*
+
+| Call | Site |
+| --- | --- |
+| `for_each_connection` | `:158`, mutable context |
+| `run` (the one-second thread) | `:1174` |
+| `send_stop_signal` | `:1280` |
+| `has_outbound_connection_to_host` | `:1524` |
+| `is_peer_used` | `:1545` |
+| `is_addr_connected` | `:1570` |
+| `make_new_connection_from_peerlist` | `:1802` |
+| `get_incoming_connections_count` (one zone) | `:2173`, also writes the in-count cache |
+| `get_outgoing_connections_count` (one zone) | `:2192`, also writes the out-count cache |
+| `get_incoming_connections_count` (every zone) | `:2224` |
+| `peer_sync_idle_maker` | `:2366`, mutable; sets `m_in_timedsync` |
+| `print_connections_container` | `:2846` |
+
+`foreach_connection` hands the callback `get_context_ref()`
+(`levin_protocol_handler_async.h:907`). `for_connection` does the same
+at `:921`. The session's network is `m_connector`, a `ConnectorId`.
+
+**Two Rust session tables already exist. Step c does not add a
+third.** `shekyl_seam::Hub` (`hub.rs:136`) holds every admitted
+session. Its lock is the writer: `adopt` (`:268`) inserts from the
+connector, `finish` (`:555`) records a close from the transport, and
+`reap` (`:589`) drops the row when the executor drops the link. None
+of those three is a strand handler. The strand does not exist until
+the established post, and a close must not wait on it. The strand
+writes the C++ context, posts into the hub, and does not walk the
+table. `Relay::contexts`
+(`zone/mod.rs:380`) holds every established session, with direction
+and connector, filled by `on_session_established` (`:590`). Step c
+grows the Hub row until it publishes the snapshot above, and the count
+is owned there. `Relay::contexts` becomes a reader of that registry,
+or a view over it.
+
+**What greens step c.** The twelve callbacks read snapshots. The two
+mutable walks become posts to that connection's strand:
+`for_each_connection` (`:158`) hands its callback a mutable context,
+and `peer_sync_idle_maker` (`:2366`) sets `m_in_timedsync`. The
+snapshot gains what each of those reads before it writes. The `run`
+thread at `:1163` is gone, and that deletion is recorded as removing
+the `--in-peers` measurement input named above. This is the deletion.
+D8 left the thread until slice 3; that sentence is records-was in
+[`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D8 and in the
+timing-engine inventory. The out-count cache at `:1605` is what the
+fill loops still read. It stops being refreshed when the thread goes,
+and that staleness stays through this step. This
+step does not wait behind steps a and b. Those follow it. It does not
+wait on slices 1–4, the timing-engine bridge, or relay dispatch.
+
+`get_context_ref` is what lets a caller who is not the strand hold a
+mutable context across a strand write. At `684673611e`, `rg
+get_context_ref` in `levin_protocol_handler_async.h` is:
+
+| Line | What holds the reference |
+| --- | --- |
+| `:790` | the definition |
+| `:234` | `anvoke_handler`'s constructor, a log |
+| `:240`, `:242` | the invoke-timeout timer: a log, then the callback |
+| `:276` | `anvoke_handler::cancel`, the callback |
+| `:302`, `:304` | `reset_timer`'s wait: a log, then the callback |
+| `:907` | `foreach_connection` hands the walker the context |
+| `:921` | `for_connection` hands the caller the context |
+
+`:276` is strand-side. `cancel` is called only from
+`release_protocol`, and `begin_closed` calls that from `on_strand`
+(`zone_server.h:481`). The falsifier keeps it.
+
+The other four are not. `:234` runs in the constructor, on the caller
+of `async_invoke` (`net_node.inl:1319`, `:1400`, `:2649`), which is
+not the connection strand. `:240` and `:242`, and `:302` and `:304`,
+are `async_wait` handlers on the zone `io_context`
+(`levin_protocol_handler_async.h:229`). `zone_server::run` drives
+that context on more than one worker (`zone_server.h:258`), and the
+wait is not posted to the connection strand. `reset_timer` is called
+from the receive path, which is the strand; the wait it arms is not.
+Those four post onto the strand before they touch the context, the
+same way `request_callback` already does (`seam_endpoint.h:209`).
+The falsifier does not keep them.
+
+`:921` is not only a walker. `node_server::for_connection`
+(`net_node.inl:169`) reaches it. So do `try_add_next_blocks`
+(`cryptonote_protocol_handler.inl:1437`, `:1477`, `:1512`, `:1538`),
+`update_sync_search` (`:1757`), `should_download_next_span`
+(`:1849`), `drop_connection` by id (`:2624`, and the comment there
+says the call can be outside the strand), `drop_connections` by host
+(`:2665`), and `levin_notify.cpp:374` and `:430`. Step c is green when
+`rg get_context_ref` returns only strand-side callers, and the commit
+that claims it lists them. A caller that cannot move onto the strand
+is a finding, not a carve-out.
+
+**Step a, a starting table (2026-10-04).** The members that cross are
+the 14 on `connection_context_base` (`net_utils_base.h`) and the 16
+on `cryptonote_connection_context` (`connection_context.h`), plus
+`support_flags`, `m_in_timedsync`, and `sent_addresses` on
+`p2p_connection_context_t`. The test for each is who asserted it.
+This is the sort. It is not a struct.
+
+| Bin | Members | Rule |
+| --- | --- | --- |
+| Observed, we measured it | `m_connection_id`, `m_remote_address` as connected, `m_is_income` as direction, `m_connector`, `m_started` as established-at, `m_last_recv`, `m_last_send`, `m_recv_cnt`, `m_send_cnt`, `m_current_speed_down`, `m_current_speed_up`, `m_max_speed_down`, `m_max_speed_up` | Eviction, admission, the protection set, and the operator view read only this bin (§2.8.2). `m_recv_cnt` and `m_send_cnt` are byte counters this node kept from the socket. |
+| Claimed, the peer told us | `m_remote_blockchain_height`, `m_last_known_hash`, `support_flags`, the handshake's advertised port and address (§2.7.4; not one of these 33 members) | Sync may read a claim as a hypothesis to test (§2.11). Nothing that decides who stays connected may. `Claimed<T>` so a reader cannot forget. The advertised port and address are the sole claimed-to-observed promotion: a successful re-dial sets an `Observed` result, distinct from the `Claimed` that arrived in the handshake. |
+| Local state, ours about this session | `m_state`, `m_needed_objects`, `m_expected_heights`, `m_requested_objects`, `m_last_response_height`, `m_expected_heights_start`, `m_last_request_time`, `m_callback_request_count`, `m_expect_response`, `m_expect_height`, `m_num_requested`, `m_idle_peer_notification`, `m_score`, `m_in_timedsync`, `sent_addresses`, `m_remote_height_source` | Owned by the component that drives that protocol. The sync fields, including the three lists this node built from a peer's chain response, go with the sync driver when it moves. `m_idle_peer_notification` is this node's timer flag. `m_remote_height_source` names which message last wrote the claimed height (`connection_context.h:122`). `note_remote_height` (`:173`) stores that enum. The peer asserted the height, not the label. Until then they are plain fields the C++ handler reads through the handle. |
+
+`m_state` is this node's pull relationship with the session. `m_ssl`
+is not in a bin: p2p SSL was deleted in #909, the field is false by
+construction, and it leaves the base struct. `m_score` is listed under
+local state and is not kept by that listing. A score that accumulates
+from claimed inputs is the self-selection trap §2.7.2 names, and that
+look happens before the struct. Constraint 2 covers the object:
+nothing in it is stable across reconnects except the observed
+endpoint, which is already public.
+
+**Step b is the ownership cut.** `p2p_connection_context` becomes a
+handle to the Rust object. Through b the C++ handler still runs
+`handle_recv` and the invoke timers, so it reads local state and
+claimed fields, and writes local state only, through FFI accessors on
+the handle. The observed bin is write-once at establishment, by the
+seam. C++ never writes an observed field. The forget-cause split and
+the per-session write-stall samples land here. `message_writer::finalize`
+stays C++ through b. Swapping the reader for `BucketReader`,
+`send_txs` handing a plan to the seam, and deleting `levin_notify.cpp`
+and `levin.cpp` are the RD row.
+
+**Shape.** Three PRs, one per step, each inside rule 06.
+`check-goldens` is unchanged at every step. `unit_tests` and the
+relay, seam, and transport crate tests are green. The clearnet
+cross-build is the gate at b. The D-5 rig is not a gate until RD.
+Each PR's text carries the re-anchored counts of `foreach_connection`,
+`get_context_ref`, and the mutable-context walks, so those numbers
+are seen going to zero.
 
 ### 6.3 This slice's falsifiers (rule 21)
 

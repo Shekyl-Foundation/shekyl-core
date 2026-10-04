@@ -222,11 +222,35 @@ this lane.
    the node can validate it.
 
 7. **The measurements are inputs.** The hop distribution (transit,
-   verify, and admission, split), the transactions-per-epoch bound
-   against graph learning, and `record_stem_observation` feed the
-   embargo and the epoch length. They are taken against the head that
-   contains the stem-registry draw, not against the C++ filter they
-   replace.
+   verify, and admission, split) and `record_stem_observation` feed
+   the embargo. They are taken against the head that contains the
+   stem-registry draw, not against the C++ filter they replace. The
+   transactions-per-epoch bound is derived below.
+
+   **Transactions per epoch (2026-10-03).** Sharma–Gosain–Diaz §VII-A
+   reconstruct about 98.5% of a static privacy subgraph from about 100
+   transactions relayed per honest node. That figure is cumulative over
+   a static subgraph, and one epoch is the window for this bound only
+   because the stem map is redrawn each epoch, so observations of the
+   previous map do not help learn the new one — the stem-map inference
+   §VII-A reconstructs — while which nodes exist, their degrees, and
+   the own-edge pool's membership survive the redraw and are outside
+   this bound. The count is stem arrivals at one honest node during
+   one epoch, not the network origination rate.
+
+   The epoch is `DandelionParams::inherited`: `min_epoch_secs` 600 plus
+   `epoch_jitter_secs` drawn uniformly from 0 to 30. Mean length 615 s.
+   100 arrivals in 615 s is a stem-arrival rate of 100/615 per second
+   at one honest node.
+
+   That count is the reopen. When a measured epoch shows 100 or more
+   stem arrivals at an honest node, the epoch is too long and must
+   shorten. Each transaction visits λ honest nodes in stem, and those
+   visits are spread over N honest nodes, so arrivals at one node per
+   second are R·λ/N. The network origination rate that produces 100
+   arrivals in a mean epoch is `R = 100·N / (λ·615)` transactions per
+   second. λ is the hop distribution and is not measured. Until it is,
+   the reopen is the count, not a guessed network rate.
 
 **Not consensus.** Every quantity in this document is node-local relay policy.
 Nodes running different delays do not fork, no rule reads these values, and

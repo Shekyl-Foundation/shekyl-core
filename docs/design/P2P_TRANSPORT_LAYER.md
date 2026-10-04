@@ -770,9 +770,9 @@ schedule. How many to dial, and when, is discovery policy (P2P-3 slice
 3). Dials stay serial through cutover. The extra round trip is measured
 in step 7.
 
-The peers-monitor thread starts at `net_node.inl:1114` and walks
-`foreach_connection` once a second (`:1113-1138`). It is not removed
-by this round (D8). `is_host_limit` is `net_node.inl:231`. Both read
+The peers-monitor thread starts at `net_node.inl:1163` and walks
+`foreach_connection` once a second. It is not removed by this round
+(D8). LV-3 step c deletes it. `is_host_limit` is `net_node.inl:231`. Both read
 the Levin registry today. Connections that have no channel yet are
 invisible to that walk.
 
@@ -1487,10 +1487,12 @@ died mid-handshake. The reservation does not repeat that.
 - The transport layer exposes outbound socket counts per connector.
   Which count governs filling outbound slots is discovery policy,
   slice 3's decision.
-- The once-a-second monitor thread (`:1113-1138`) is not removed by
-  this round. Its remaining consumers are the out-peers check at
-  `:1556` and discovery's fill loops at `:2021-2069`, all slice 3's.
-  It goes when slice 3 lands.
+- The once-a-second monitor thread (`net_node.inl:1163`) is not
+  removed by this round. *Records-was (2026-09-25): it goes when
+  slice 3 lands, cited at `:1113-1138`.* LV-3 step c deletes it,
+  because the walk is the registry's. The out-count cache at
+  `:1605` is what the fill loops still read, and it stops being
+  refreshed when the thread goes.
 - RPC reports both counts, each under its own name. Sockets and
   sessions are not one number.
 
@@ -1791,14 +1793,21 @@ hand-kept copy.
 
 | Phase | Causes |
 | --- | --- |
-| Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout`, `AdmissionRefused`, `DialFailed`, `ProxyRefused`, `LocalClose` |
+| Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout`, `AdmissionRefused`, `InboundNotAccepted`, `DialFailed`, `ProxyRefused`, `LocalClose` |
 | Channel exists, Levin handshake not done | `LevinHandshakeTimeout`, `LevinHandshakeRejected`, `LocalClose` |
 | Any time after the channel exists | `PeerClosed`, `RecordRejected`, `SessionRefused`, `IoError`, `SendQueueFull`, `LocalClose` |
 
 `SendQueueFull` is a send queue that cannot take another buffer. The
 connection closes. It is not a dropped write.
-`AdmissionRefused` is a ban-list or inbound-ceiling refusal at
-accept. `DialFailed` is an outbound TCP connect that did not complete.
+`AdmissionRefused` is a ban-list refusal, or an inbound ceiling or
+connector cap that is positive and full. `InboundNotAccepted` is a
+ceiling of 0 or a connector cap of 0: this node will not take the
+accept. A zero bound is named even when a positive cap is already
+full. The seam info line on this node names whichever of the two was
+returned. The accept closes the socket before any handshake byte.
+The dialer records its own before-channel cause for that close. It
+does not learn which refusal this node chose: this table is not on
+the pipe. `DialFailed` is an outbound TCP connect that did not complete.
 `ProxyRefused` is a SOCKS or overlay failure and carries the reply
 code (an unreachable onion is this cause, not a generic I/O error).
 `LocalClose` is this node closing, including a shutdown during the

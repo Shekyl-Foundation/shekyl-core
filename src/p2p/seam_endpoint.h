@@ -49,6 +49,7 @@ namespace shekyl
       case SHEKYL_CLOSE_TRANSPORT_HANDSHAKE_FAILED: return "TransportHandshakeFailed";
       case SHEKYL_CLOSE_TRANSPORT_TIMEOUT: return "TransportTimeout";
       case SHEKYL_CLOSE_ADMISSION_REFUSED: return "AdmissionRefused";
+      case SHEKYL_CLOSE_INBOUND_NOT_ACCEPTED: return "InboundNotAccepted";
       case SHEKYL_CLOSE_DIAL_FAILED: return "DialFailed";
       case SHEKYL_CLOSE_PROXY_REFUSED: return "ProxyRefused";
       case SHEKYL_CLOSE_LEVIN_HANDSHAKE_TIMEOUT: return "LevinHandshakeTimeout";

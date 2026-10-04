@@ -179,10 +179,13 @@ design-review material awaiting a ruling, and is marked so.
 ### 2.2 Non-goals — named, so they are not shed by omission
 
 - **The `SO-` round** (settlement writer / `SO-D8`). Daemon consensus; Slice
-  C's home is `shekyl-chain-rules` and `shekyl-archival-retention` at DRS-E4,
-  and Slice C is not authorized.
+  C's home is `shekyl-chain-rules` and `shekyl-archival-retention`. Slice C
+  is authorized and owns the writer's call site
+  ([`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
+  §8.0, 2026-10-04), and
   [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §12's
-  rule-22 hold on the writer's call site stands. Its one open item — Q9's
+  rule-22 hold is lifted. *Was: "at DRS-E4, and Slice C is not authorized
+  … the hold stands."* It remains a non-goal of this round. Its one open item — Q9's
   set-commitment bytes, §7.6.1 — is a maintainer ruling, not a round item here.
 - **The curve-tree math** — `ops.rs`, `recon.rs`, `assemble.rs`, `client.rs`'s
   tree arithmetic. The store KATs are the denominator, not the subject.
