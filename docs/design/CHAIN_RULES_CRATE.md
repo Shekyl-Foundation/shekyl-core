@@ -851,7 +851,8 @@ the rules (`MAX_TX_SIZE`, `max_tx_weight()` derived from
 pinned to `cryptonote_config.h` by parsing it and to `shekyl-wire`'s
 constants by equality — **tests, not comments** (Q5). Landed rows: H1, H3,
 H4, H5, H6, H7, H9, H10, H11, H14, H15, H16, H17, H18, H20, H21, H22
-(`implemented`); H2, H8, H12, H13, H23 (`by_construction`); H19 is a
+(`implemented`; and from 4.J, J2 — the serve credit's pass records against its
+vins, added 2026-10-03 for `SHT-9`); H2, H8, H12, H13, H23 (`by_construction`); H19 is a
 `TxRule` whose **layout** half runs through `run_tx_unrecorded` (scope
 applies, a pass is not coverage) until slice 6 lands the BP+ verification
 and switches the call to `run_tx`; H24 is bucket 3 — no registry row. Its
