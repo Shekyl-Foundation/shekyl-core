@@ -317,8 +317,11 @@ registered the prediction (`da1a6b082`) and §5.9 records it.
   (`SimParams::economic`), replacing five copies, verified byte-identical on
   the staged tree.
 - `28b0006f4` prints the envelope in `--stage2` (`miner_stuffer.rs`).
+- The miner columns are one integer packing of the block, and the cost is
+  the fall in the miner's payout. §5.12 records that correction. §5.10 and
+  §5.11 stay the prediction and the first run.
 
-§5.11 records the run. ESR-7's falsifier holds: the report prints the
+§5.11 records the first run. ESR-7's falsifier holds: the report prints the
 unenforced miner's zero-fee row beside the relay stuffer's.
 
 ## 3. The median is a production change inside a sim PR
@@ -884,6 +887,72 @@ blocks.
 flat 0.1 SKL fee against a small reward makes the **penalty** leg the
 cheaper one: one stuffing transaction a block, 239 blocks a shard. That is
 the whole-transaction floor of the design, appearing where it should.
+
+The cells above are that run. §5.12 prices the same rows again, on the
+miner's payout and one integer packing. It does not revise these cells.
+
+### 5.12 ESR-7 — the miner's payout, on one packing (2026-10-04)
+
+Two corrections to the envelope in §5.11, both read off the chain rather
+than off a second formula.
+
+**The outlay is the miner's.** `Fill::reward` is the gross block reward.
+The miner is paid his leg of `split_block_emission`, plus
+`miner_fee_income` from the block's one burn split, less the fees on his
+own bodies, plus the share of the staker pool those fees funded. The
+staker's leg of a penalty is an externality. Charging it to the attacker
+priced a loss he does not pay.
+
+**One packing, not three legs.** He may drop whole honest transactions and
+list his own, and the final weight has to sit inside the block bound. The
+cost of a packing is the fall in that payout. Where the reward is still the
+full emission, only the fullest packing of that region is a candidate.
+Past it, every count is priced. The placement is what the cheapest packing
+did: free room, penalty, displacement, or both a drop and a lower reward
+(mixed). The relay stuffer is unchanged: the pool's fee-per-byte path.
+
+A miner column is those terms — whether the relay floor binds, and what
+pool share he recovers — on that one search. The production arm and the
+flat control both call it, so a comparison is another column, not another
+formula. The narration moved only in this section. The A1, A3, and A4
+blocks are the fold they were.
+
+Production arm, SKL per shard. Relay figures are the §5.11 ones.
+
+| Row | Relay | Miner, unenforced | Miner, enforced | Self, all holders | Today | Fixed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Baseline y5 (constrained, `M` 322 KB) | 374.01 | 289.30, mixed | 302.05 | 298.88 | 289.30 | 298.88 |
+| Baseline y20 (carried, 764 KB) | 25.00 | 12.21, mixed | 15.06 | 14.35 | 12.21 | 14.35 |
+| Baseline y45 (tail, 764 KB) | 1.221 | 0.541, mixed | 0.695 | 0.657 | 0.541 | 0.657 |
+| Low activity y50 (300 KB, 71 KB free) | 0.882 at the floor | **0**, free room | 0.238 | 0.179 | **0** | 0.179 |
+
+**What changed.** On a full block the cheapest packing is mixed: it drops
+honest bodies and it lets the reward fall. The §5.11 displacement cleared
+the block (5–11 blocks a shard). Piling that many bodies in pays the
+quadratic penalty, and the search will not. A shard of the winning packing
+takes 155 blocks at year 5 and 156 at years 20 and 45. A 10 % miner
+therefore stuffs about 170 shards a year at the printed price, not the
+2 400–5 300 of the bulk clear. The per-shard cost falls with that thinner
+packing (325 → 289 at year 5, 13.89 → 12.21 at year 20, 0.615 → 0.541 at
+year 45).
+
+The shape of the envelope holds. Today the minimum is the unenforced miner
+in every row, free wherever demand sits below the zone. After the floor
+binds a block's own bodies, the minimum is the whole-set self-archiver.
+One holder in a hundred barely moves the enforced miner (302.05 → 302.02
+at year 5). The whole set moves it by the pool share of his own fees
+(302.05 → 298.88). The relay stuffer is still the dearest column. The
+floor fix still does not close free room: zero today, 0.238 SKL once the
+floor is enforced.
+
+**The control arm** keeps the §5.11 shape at lower levels. Years 5 and 20
+stay displacement, now at 155 blocks a shard rather than 11, and the
+per-shard cost falls (18.59 → 13.57, 15.42 → 11.26). The tail stays the
+penalty, one transaction a block, 239 blocks a shard. That row's cost
+moves in the fourth decimal (1.466 → 1.464): it was already a single body,
+and the correction is the miner's leg of a small penalty. The
+whole-transaction floor still appears where the flat fee makes the penalty
+the cheaper packing.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 

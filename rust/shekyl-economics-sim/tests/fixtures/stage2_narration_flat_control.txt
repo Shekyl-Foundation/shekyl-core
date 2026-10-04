@@ -66,21 +66,21 @@ Delta-pool a stuffing staker captures: a survivor of A1 must ALSO price the stuf
 ESR-7 — THE CHEAPEST ARCHIVAL BYTE: SKL to add one shard at a block the honest fold built.
 relay = through the pool at the rate that gets listed (floor, or one atomic/B above the
 honest rate); miner U = own bodies at no fee (today: the relay floor does not apply to them),
-cheapest of free room / penalty / displaced fees; miner E = the same paying the floor
+the cheapest integer packing of the block; miner E = the same paying the floor
 (C2-R2 Q9's fix, a declared divergence); self = E recovering the staker pool's part as one of
 100 holders, and as the whole holder set. 'today' / 'fixed' = the minimum over the
 attackers on each chain.
 scenario       y era          M (KB)   room       relay      miner U   (placement)     miner E  self 1/100    self all       today       fixed
-baseline_ste   5 constrained     300      7     21.2347      18.5855  Displacement     18.7027     18.7024     18.6736     18.5855     18.6736
-baseline_ste  20 carried         300      7     21.2347      15.4244  Displacement     15.6803     15.6796     15.6165     15.4244     15.6165
-baseline_ste  45 tail            764      0     20.5415       1.4661       Penalty      1.9615      1.9602      1.8378      1.4661      1.8378
+baseline_ste   5 constrained     300      7     21.2347      13.5678  Displacement     13.6887     13.6884     13.6585     13.5678     13.6585
+baseline_ste  20 carried         300      7     21.2347      11.2601  Displacement     11.5253     11.5246     11.4590     11.2601     11.4590
+baseline_ste  45 tail            764      0     20.5415       1.4642       Penalty      1.9596      1.9583      1.8359      1.4642      1.8359
 high_history  50 below zone      300     71      0.9417       0.0000      FreeRoom      0.2559      0.2553      0.1920      0.0000      0.1920
   -> Shards a miner stuffs at the U price within a budget: share x budget / blocks per shard.
 Hashrate and time set a rate, not a price; a larger campaign raises the overshoot and the price.
-       baseline_ste y5      11 blocks/shard; relay at 6830 atomic/B (outranking honest): 10%/epoch 90, 10%/year 2389, 10%/decade 23890, 33%/epoch 300, 33%/year 7884, 33%/decade 78840
-       baseline_ste y20     11 blocks/shard; relay at 6830 atomic/B (outranking honest): 10%/epoch 90, 10%/year 2389, 10%/decade 23890, 33%/epoch 300, 33%/year 7884, 33%/decade 78840
+       baseline_ste y5     155 blocks/shard; relay at 6830 atomic/B (outranking honest): 10%/epoch 6, 10%/year 169, 10%/decade 1695, 33%/epoch 21, 33%/year 559, 33%/decade 5595
+       baseline_ste y20    155 blocks/shard; relay at 6830 atomic/B (outranking honest): 10%/epoch 6, 10%/year 169, 10%/decade 1695, 33%/epoch 21, 33%/year 559, 33%/decade 5595
        baseline_ste y45    239 blocks/shard; relay at 6544 atomic/B (outranking honest): 10%/epoch 4, 10%/year 109, 10%/decade 1099, 33%/epoch 13, 33%/year 362, 33%/decade 3628
-       high_history y50     48 blocks/shard; relay at 300 atomic/B (the floor): 10%/epoch 20, 10%/year 547, 10%/decade 5475, 33%/epoch 68, 33%/year 1806, 33%/decade 18067
+       high_history y50     47 blocks/shard; relay at 300 atomic/B (the floor): 10%/epoch 21, 10%/year 559, 10%/decade 5591, 33%/epoch 70, 33%/year 1845, 33%/decade 18451
 
 A1 — burden clearance (§12.2, F-G): min budget / (bond-opp-cost + storage) ratio.
 budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor 0.75 x R6 x n x rate.
