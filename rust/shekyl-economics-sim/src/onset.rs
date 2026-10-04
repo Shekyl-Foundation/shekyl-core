@@ -45,9 +45,10 @@
 //! traffic up to the cap and is flat above it. This module measures all of
 //! that rather than taking it from the hand model.
 //!
-//! **A1-T** runs every Stage-2 scenario to [`ONSET_HORIZON_YEARS`] (the
-//! schedules' own closures evaluated past their horizons — mechanical, and
-//! flagged where unphysical) and reports, per scenario: the year the staker
+//! **A1-T** runs every Stage-2 scenario at least to [`ONSET_HORIZON_YEARS`]
+//! (a longer scenario keeps its length; the schedules' own closures evaluated
+//! past their horizons — mechanical, and flagged where unphysical) and
+//! reports, per scenario: the year the staker
 //! emission leg first falls below the bond opportunity cost, the first year
 //! the shipped budget fails to clear, and the flat-25 ratio per decade.
 //!
@@ -71,14 +72,13 @@ use shekyl_economics::{calc_effective_emission_share, params::SCALE};
 use crate::burden::{KryderRate, OPP_COST_RATE_BAND, REPLICAS_PER_SHARD, SKL_FIAT_PRICE_BAND};
 use crate::engine::{ScenarioConfig, SimParams};
 use crate::escalation::{family, flat_25, EscalationCurve};
-use crate::scenarios::all_scenarios;
 use crate::stage2::{
-    a1_min_clearance_ratio, a1_shipped_budget_atomic, a1_sustained_years, a1_year_aggs,
-    a1_year_clearance_ratio, year_share_atomic, A1YearAgg,
+    a1_min_clearance_ratio, a1_shipped_budget_atomic, a1_sustained_years, a1_year_clearance_ratio,
+    year_share_atomic, A1YearAgg, FoldedScenario,
 };
 
-/// Atomic units per SKL (mirrors `engine.rs`).
-const COIN: f64 = 1_000_000_000.0;
+/// Atomic units per SKL ([`crate::burden::COIN`]).
+const COIN: f64 = crate::burden::COIN as f64;
 
 /// The horizon every scenario is run to for the onset table. Long enough that
 /// the emission curve (12.5 %/yr of the remainder at ESF 22 on 2-minute
@@ -207,7 +207,7 @@ impl Lever {
 /// (pinned below).
 #[must_use]
 pub fn emission_leg_at_decay(a: &A1YearAgg, params: &SimParams, annual_decay: u64) -> u128 {
-    let mid_height = (a.year - 1) * params.blocks_per_year + params.blocks_per_year / 2;
+    let mid_height = a.start_height + params.blocks_per_year / 2;
     let share = calc_effective_emission_share(
         mid_height,
         crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT,
@@ -296,21 +296,18 @@ fn lever_set(best: EscalationCurve) -> Vec<Lever> {
     ]
 }
 
-/// A scenario's config re-horizoned to [`ONSET_HORIZON_YEARS`]. The schedule
-/// is the scenario's own closure evaluated past its horizon.
+/// Extend `config` to at least [`ONSET_HORIZON_YEARS`]. A longer scenario
+/// keeps its length. The schedule is the scenario's own closure evaluated
+/// past its horizon.
 pub(crate) fn at_horizon(mut config: ScenarioConfig) -> ScenarioConfig {
-    config.sim_years = ONSET_HORIZON_YEARS;
+    config.sim_years = config.sim_years.max(ONSET_HORIZON_YEARS);
     config
 }
 
-/// Transactions in `year` (1-based) of a scenario's own schedule — the
-/// divisor that turns a year's fees into a mean fee per transaction.
-fn year_tx_count(config: &ScenarioConfig, blocks_per_year: u64, year: u64) -> u128 {
-    let start = (year - 1) * blocks_per_year;
-    (start..start + blocks_per_year)
-        .map(|block| u128::from((config.volume.get_volume)(block, blocks_per_year)))
-        .sum()
-}
+/// The years the block-space table samples: dense early, where the
+/// production arm's median is held at the zone (§5.6 of the design
+/// document), then by decade.
+const BLOCK_SPACE_YEARS: [u64; 10] = [1, 4, 8, 10, 12, 15, 20, 30, 40, 60];
 
 /// A1's selection rule, applied to one aggregate series: the band candidate
 /// with the greatest min clearance at the binding rate.
@@ -419,6 +416,7 @@ pub struct LeverResult {
 pub fn onset_report(
     out: &mut impl fmt::Write,
     params: &SimParams,
+    folded: &[FoldedScenario],
 ) -> Result<Vec<OnsetScenarioResult>, fmt::Error> {
     writeln!(
         out,
@@ -450,28 +448,48 @@ pub fn onset_report(
     let binding = OPP_COST_RATE_BAND[BINDING];
     let mut results = Vec::new();
     let mut fee_rows: Vec<(String, String)> = Vec::new();
-    for config in all_scenarios(params).into_iter().map(at_horizon) {
-        let aggs = a1_year_aggs(params, &config);
+    let mut space_rows: Vec<(String, String)> = Vec::new();
+    for scenario in folded {
+        let aggs = &scenario.aggs;
         fee_rows.push((
-            config.name.clone(),
+            scenario.name.clone(),
             aggs.iter()
                 .filter(|a| DECADES.contains(&a.year))
                 .map(|a| {
-                    let txs = year_tx_count(&config, params.blocks_per_year, a.year);
-                    if txs == 0 {
+                    if a.carried_txs == 0 {
                         "-".to_string()
                     } else {
-                        format!("{:.4}", a.whole_fees_atomic as f64 / txs as f64 / COIN)
+                        format!(
+                            "{:.4}",
+                            a.whole_fees_atomic as f64 / a.carried_txs as f64 / COIN
+                        )
                     }
                 })
                 .collect::<Vec<_>>()
                 .join(" "),
         ));
+        let per_block = |txs: u128| txs as f64 / params.blocks_per_year as f64;
+        space_rows.push((
+            scenario.name.clone(),
+            aggs.iter()
+                .filter(|a| BLOCK_SPACE_YEARS.contains(&a.year))
+                .map(|a| {
+                    format!(
+                        "{:>5.1}/{:<5.1} {:>4.0}K {:>4.1}",
+                        per_block(a.carried_txs),
+                        per_block(a.demand_txs),
+                        a.long_term_median as f64 / 1_000.0,
+                        per_block(a.expired_txs),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" |"),
+        ));
         let flat = flat_25();
-        let best = best_candidate(&aggs);
+        let best = best_candidate(aggs);
         let shipped = |c: EscalationCurve| move |a: &A1YearAgg| a1_shipped_budget_atomic(a, &c);
 
-        let emission_crossover_year = a1_sustained_years(&aggs)
+        let emission_crossover_year = a1_sustained_years(aggs)
             .find(|a| {
                 a1_year_clearance_ratio(
                     a,
@@ -485,12 +503,12 @@ pub fn onset_report(
         let onset_by_rate = |c: EscalationCurve| -> Vec<Onset> {
             OPP_COST_RATE_BAND
                 .iter()
-                .map(|&rate| onset_of(year_ratios(&aggs, rate, shipped(c))))
+                .map(|&rate| onset_of(year_ratios(aggs, rate, shipped(c))))
                 .collect()
         };
         let onset_flat_by_rate = onset_by_rate(flat);
         let onset_best_by_rate = onset_by_rate(best);
-        let flat_binding_by_decade: Vec<(u64, f64)> = year_ratios(&aggs, binding, shipped(flat))
+        let flat_binding_by_decade: Vec<(u64, f64)> = year_ratios(aggs, binding, shipped(flat))
             .filter(|(y, _)| DECADES.contains(y))
             .collect();
         let series = flat_binding_by_decade
@@ -512,15 +530,15 @@ pub fn onset_report(
         writeln!(
             out,
             "{:<20} {:>10} {:>6}   {}   {}",
-            trunc(&config.name, 20),
+            trunc(&scenario.name, 20),
             aggs.last().map_or(0, |a| a.n),
             emission_crossover_year.map_or("never".to_string(), |y| format!("y{y}")),
             onset_cols.join("   "),
             series,
         )?;
         results.push(OnsetScenarioResult {
-            scenario: config.name.clone(),
-            horizon_years: ONSET_HORIZON_YEARS,
+            scenario: scenario.name.clone(),
+            horizon_years: aggs.last().map_or(0, |a| a.year),
             final_n: aggs.last().map_or(0, |a| a.n),
             emission_crossover_year,
             onset_flat_by_rate,
@@ -538,6 +556,16 @@ pub fn onset_report(
     for (name, series) in &fee_rows {
         writeln!(out, "       {:<20} {series}", trunc(name, 20))?;
     }
+    writeln!(
+        out,
+        "  -> BLOCK SPACE (ESR-6) at y{}: carried/demanded transactions per block, the long-term\n\
+         median at year end (KB), and transactions per block dropped unserved after the pool\n\
+         livetime. Blocks take what the producer's fill rule admits at the effective median.",
+        BLOCK_SPACE_YEARS.map(|y| y.to_string()).join("/"),
+    )?;
+    for (name, series) in &space_rows {
+        writeln!(out, "       {:<20} {series}", trunc(name, 20))?;
+    }
     crate::fee_horizon::write_report(out, params)?;
     Ok(results)
 }
@@ -547,6 +575,7 @@ pub fn onset_report(
 pub fn lever_report(
     out: &mut impl fmt::Write,
     params: &SimParams,
+    folded: &[FoldedScenario],
 ) -> Result<Vec<LeverResult>, fmt::Error> {
     writeln!(
         out,
@@ -561,24 +590,18 @@ pub fn lever_report(
     )?;
     let binding = OPP_COST_RATE_BAND[BINDING];
     let mut results = Vec::new();
-    let scenarios = all_scenarios(params);
     let picks = [
-        scenarios.len() - 1, // scenario 9: the settled-chain tail
-        0,                   // baseline steady state: the busy comparator
+        folded.len() - 1, // scenario 9: the settled-chain tail
+        0,                // baseline steady state: the busy comparator
     ];
     for idx in picks {
-        let config = at_horizon(
-            all_scenarios(params)
-                .into_iter()
-                .nth(idx)
-                .expect("scenario index in range"),
-        );
-        let aggs = a1_year_aggs(params, &config);
-        let best = best_candidate(&aggs);
+        let scenario = &folded[idx];
+        let aggs = &scenario.aggs;
+        let best = best_candidate(aggs);
         writeln!(
             out,
             "\n  {} (n = {} at {} y; best band cand. {}%/{})",
-            config.name,
+            scenario.name,
             aggs.last().map_or(0, |a| a.n),
             ONSET_HORIZON_YEARS,
             best.asymptote / (SCALE / 100),
@@ -593,12 +616,12 @@ pub fn lever_report(
             let min_ratio_by_rate: Vec<f64> = OPP_COST_RATE_BAND
                 .iter()
                 .map(|&rate| {
-                    year_ratios(&aggs, rate, |a| lever.budget_atomic(a, params))
+                    year_ratios(aggs, rate, |a| lever.budget_atomic(a, params))
                         .map(|(_, r)| r)
                         .fold(f64::INFINITY, f64::min)
                 })
                 .collect();
-            let onset_binding = onset_of(year_ratios(&aggs, binding, |a| {
+            let onset_binding = onset_of(year_ratios(aggs, binding, |a| {
                 lever.budget_atomic(a, params)
             }));
             let replicas_sustained_binding = min_ratio_by_rate[BINDING] * REPLICAS_PER_SHARD as f64;
@@ -613,7 +636,7 @@ pub fn lever_report(
                 fmt_onset(onset_binding),
             )?;
             results.push(LeverResult {
-                scenario: config.name.clone(),
+                scenario: scenario.name.clone(),
                 lever,
                 min_ratio_by_rate,
                 replicas_sustained_binding,
@@ -637,18 +660,20 @@ pub fn lever_report(
         "  -> The WHOLE perpetual tail ({tail:.0} SKL/yr) funds the bond opp cost of {} shards,\n\
          and it is a CONSTANT flow against a corpus that keeps growing — the fee share's\n\
          shape with a longer fuse, not a structural answer. The lever is the bond itself\n\
-         (0.75 SKL locked per {W} B forever, R = {R}): what it is FOR decides its size.",
+         ({BOND:.2} SKL locked per {W} B forever, R = {R}): what it is FOR decides its size.",
         funded.join(", "),
+        BOND = shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN,
         W = shekyl_types::SHARD_LENGTH.to_raw(),
         R = REPLICAS_PER_SHARD,
     )?;
     Ok(results)
 }
 
-/// The perpetual tail per year in SKL: `final_subsidy_per_minute × 2 min ×
-/// blocks_per_year`, from the params (mirrors `tail_subsidy_per_block`).
+/// The perpetual tail per year in SKL: the owner's tail per block
+/// (`tail_subsidy_per_block`) times the run's `blocks_per_year`.
 fn tail_skl_per_year(params: &SimParams) -> f64 {
-    let per_block = params.final_subsidy_per_minute * 2;
+    let per_block = shekyl_economics::tail_subsidy_per_block(&params.economic())
+        .expect("the run's tail subsidy is priced");
     (per_block as f64 / COIN) * params.blocks_per_year as f64
 }
 
@@ -663,6 +688,8 @@ fn trunc(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenarios::all_scenarios;
+    use crate::stage2::a1_year_aggs;
 
     #[test]
     fn shipped_lever_reproduces_a1() {
@@ -772,6 +799,12 @@ mod tests {
         // against the fold on the baseline scenario late in its 60-y run
         // (emission at the tail), to within the tail's contribution and the
         // storage add-on. A closed form exists only on the flat arm.
+        //
+        // `H` and `t` are in traffic-years — years of the baseline's `V`
+        // carried — not calendar years. The two agree only while every block
+        // carries its demand; under the fill rule (ESR-6) the control's
+        // blocks carry about 20 of 50 for decades, so `t` is the corpus's
+        // age in carried traffic.
         let params = SimParams::section_12_14_control();
         let config = at_horizon(all_scenarios(&params).remove(0));
         let aggs = a1_year_aggs(&params, &config);
@@ -784,18 +817,23 @@ mod tests {
         );
         let w = shekyl_types::SHARD_LENGTH.to_raw();
         let base = crate::fee_horizon::fee_era_burn_fraction(&params, params.tx_volume_baseline);
-        let h = crate::fee_horizon::fee_horizon_years(fee, base, 0.25, 0.10, bytes, w);
+        let share = crate::escalation::floor_share() as f64 / SCALE as f64;
+        let h = crate::fee_horizon::fee_horizon_years(fee, base, share, 0.10, bytes, w);
         let a = aggs.last().expect("60 years");
         // Fee leg alone, so the comparison isolates the closed form.
         let flat = flat_25();
         let fee_only = year_share_atomic(a.whole_burn_atomic, flat.share(a.n));
         let measured =
             a1_year_clearance_ratio(a, fee_only, 0.10, SKL_FIAT_PRICE_BAND[1], KryderRate::Stall);
-        let predicted = h / a.year as f64;
+        let carried: u128 = aggs.iter().map(|y| y.carried_txs).sum();
+        let traffic_years =
+            carried as f64 / (params.tx_volume_baseline as f64 * params.blocks_per_year as f64);
+        let predicted = h / traffic_years;
         let rel = (measured - predicted).abs() / predicted;
         assert!(
             rel < 0.25,
-            "y{}: measured {measured:.3} vs closed form {predicted:.3} ({rel:.2} rel)",
+            "y{} ({traffic_years:.1} traffic-years): measured {measured:.3} vs closed form \
+             {predicted:.3} ({rel:.2} rel)",
             a.year
         );
     }

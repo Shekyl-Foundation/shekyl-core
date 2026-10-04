@@ -17,34 +17,23 @@
 //! depth, and the fee is the unrounded fixed point of that product
 //! ([`shekyl_tx_weight::converge_weight_fee`]). What this module adds is the
 //! order of the calls and the three places the run still departs from the
-//! chain, each named in the type or below so that none is silent:
+//! chain, each named below so that none is silent:
 //!
-//! - the block-weight median is [`MedianModel`], not the validator's fold;
 //! - the fee is paid **unrounded** — the product above carries no quantization
 //!   mask. The wallet rounds up to the daemon's mask (1 000 atomic), which
 //!   has no Rust owner, and the fee-floor instrument in this crate already
 //!   pays exactly (FL-R22);
-//! - the volume, split and burn operands are the fold's own, so they carry
-//!   whatever that fold carries (the design document's ESR-3 and ESR-4).
+//! - the volume, split, burn and median operands are the fold's own, so they
+//!   carry whatever that fold carries (the design document's ESR-3, ESR-4
+//!   and ESR-6).
 
 use shekyl_economics::{
     base_block_reward, corrected_fee_ladder, fee_correction, EconomicParams, FeeLadder, TxVolume,
 };
 
-use crate::burden::ordinary_tx_fee;
+use crate::burden::{ordinary_tx_fee, ordinary_tx_weight};
 use crate::calibration::PerByteRate;
 use crate::fee_ladder::REF_TX_WEIGHT;
-
-/// The block-weight median the ladder divides by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MedianModel {
-    /// **A declared divergence** (§4 of the design document): the median is
-    /// held at the penalty-free zone, the highest the floor can be. The
-    /// validator's median rises when traffic exceeds the zone, and the floor
-    /// falls as `1/M²` with it; this run does not model that. ESR-6 replaces
-    /// this variant with the validator's fold.
-    PenaltyFreeZone,
-}
 
 /// How a run prices an ordinary transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,7 +62,6 @@ pub enum FeeModel {
         /// declared divergence standing in for what users pay above the
         /// default, which is not knowable before launch.
         multiplier_milli: u64,
-        median: MedianModel,
     },
 }
 
@@ -97,6 +85,10 @@ pub struct FeePoint<'a> {
     pub already_generated: u64,
     /// The volume operand the fold feeds the burn and the release multiplier.
     pub volume: TxVolume,
+    /// The long-term effective median (CEN-G6) the block is judged under —
+    /// the `M` every rung divides by, as the daemon's floor ring and fee
+    /// estimate read it.
+    pub long_term_median: u64,
     /// The staker emission share at this height, `SCALE` units.
     pub sigma_scaled: u64,
     /// The burn fraction at this block, `SCALE` units.
@@ -107,26 +99,12 @@ pub struct FeePoint<'a> {
     pub params: &'a EconomicParams,
 }
 
-/// What one block of identical ordinary transactions pays.
+/// One ordinary transaction at a block's state: what it pays and what it
+/// weighs, the weight at that fee (the fee's varint is in the weight).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChargedBlock {
-    /// Atomic units one of those transactions pays.
-    pub per_tx_atomic: u64,
-    /// Atomic units the block pays. Saturated at `u64::MAX`: a block's fees
-    /// are a `u64` everywhere they are burned.
-    pub total_atomic: u64,
-}
-
-impl ChargedBlock {
-    /// `tx_count` transactions at one fee.
-    #[must_use]
-    pub fn of_uniform(per_tx_atomic: u64, tx_count: u64) -> Self {
-        let total = u128::from(per_tx_atomic).saturating_mul(u128::from(tx_count));
-        Self {
-            per_tx_atomic,
-            total_atomic: u64::try_from(total).unwrap_or(u64::MAX),
-        }
-    }
+pub struct OrdinaryTx {
+    pub fee_atomic: u64,
+    pub weight: u64,
 }
 
 impl FeeModel {
@@ -139,7 +117,6 @@ impl FeeModel {
     /// What the chain's wallets pay by default: the Standard rung, unscaled.
     pub const PRODUCTION_DEFAULT: Self = Self::ProductionStandard {
         multiplier_milli: MILLI,
-        median: MedianModel::PenaltyFreeZone,
     };
 
     /// The flat fee, if this arm charges one. `None` for an arm whose fee
@@ -157,23 +134,24 @@ impl FeeModel {
     pub fn per_tx_atomic(self, at: &FeePoint<'_>) -> u64 {
         match self {
             Self::FlatControl { per_tx_atomic, .. } => per_tx_atomic,
-            Self::ProductionStandard {
-                multiplier_milli,
-                median,
-            } => {
+            Self::ProductionStandard { multiplier_milli } => {
                 // The multiplier scales the rate. The fee is the fixed point
                 // of that rate: scaling an already converged fee would price
                 // a varint the payer does not write.
-                let rate = scaled_rate(ladder_at(median, at).standard, multiplier_milli);
+                let rate = scaled_rate(ladder_at(at).standard, multiplier_milli);
                 ordinary_tx_fee(at.chain_leaves, rate)
             }
         }
     }
 
-    /// What `tx_count` ordinary transactions pay at `at`.
+    /// The ordinary transaction at `at`: its fee, and its weight at that fee.
     #[must_use]
-    pub fn charge(self, tx_count: u64, at: &FeePoint<'_>) -> ChargedBlock {
-        ChargedBlock::of_uniform(self.per_tx_atomic(at), tx_count)
+    pub fn ordinary_tx(self, at: &FeePoint<'_>) -> OrdinaryTx {
+        let fee_atomic = self.per_tx_atomic(at);
+        OrdinaryTx {
+            fee_atomic,
+            weight: ordinary_tx_weight(at.chain_leaves, fee_atomic),
+        }
     }
 
     /// What admission costs per byte at `at`: the Economy rung, which is the
@@ -184,9 +162,7 @@ impl FeeModel {
     pub fn admission_rate(self, at: &FeePoint<'_>) -> PerByteRate {
         match self {
             Self::FlatControl { admission_rate, .. } => admission_rate,
-            Self::ProductionStandard { median, .. } => {
-                PerByteRate::from_atomic(ladder_at(median, at).economy)
-            }
+            Self::ProductionStandard { .. } => PerByteRate::from_atomic(ladder_at(at).economy),
         }
     }
 
@@ -197,20 +173,13 @@ impl FeeModel {
             Self::FlatControl { per_tx_atomic, .. } => format!(
                 "FEE ARM: CONTROL — flat {:.3} SKL per transaction at every height. A declared \
                  divergence: the chain charges no flat fee (ECONOMICS_SIM_PRODUCTION_REBASE.md §4).",
-                per_tx_atomic as f64 / 1.0e9
+                per_tx_atomic as f64 / crate::burden::COIN as f64
             ),
-            Self::ProductionStandard {
-                multiplier_milli,
-                median,
-            } => format!(
+            Self::ProductionStandard { multiplier_milli } => format!(
                 "FEE ARM: production ladder — Standard rung x{:.3} (corrected_fee_ladder at each \
-                 block's R and C), ordinary 1in/2out weight at chain depth, the unrounded fixed \
-                 point of rate x weight; {}.",
+                 block's R, C and long-term median), ordinary 1in/2out weight at chain depth, the \
+                 unrounded fixed point of rate x weight.",
                 multiplier_milli as f64 / MILLI as f64,
-                match median {
-                    MedianModel::PenaltyFreeZone =>
-                        "median HELD at the penalty-free zone (declared divergence, ESR-6)",
-                }
             ),
         }
     }
@@ -315,17 +284,20 @@ fn scaled_rate(rate_per_byte: u64, multiplier_milli: u64) -> PerByteRate {
 /// The production ladder at `at`: every rung comes from this one call, so
 /// the ordinary fee and the admission rate are priced at the same state by
 /// construction.
-fn ladder_at(median: MedianModel, at: &FeePoint<'_>) -> FeeLadder {
+fn ladder_at(at: &FeePoint<'_>) -> FeeLadder {
     // The ladder prices against the reward with the release multiplier taken
     // out (`fee_floor.rs` reads the same operand); the multiplier re-enters
     // through `C`.
     let base_reward = base_block_reward(at.already_generated, at.params)
         .expect("sim neutral trajectory stays within the arithmetic domain");
     let correction = fee_correction(at.volume, at.sigma_scaled, at.burn_pct_scaled, at.params);
-    let median = match median {
-        MedianModel::PenaltyFreeZone => at.params.full_reward_zone,
-    };
-    corrected_fee_ladder(base_reward, median, REF_TX_WEIGHT, correction, at.params)
+    corrected_fee_ladder(
+        base_reward,
+        at.long_term_median,
+        REF_TX_WEIGHT,
+        correction,
+        at.params,
+    )
 }
 
 #[cfg(test)]
@@ -341,6 +313,7 @@ mod tests {
         FeePoint {
             already_generated,
             volume: TxVolume::per_block(params.tx_volume_baseline),
+            long_term_median: params.full_reward_zone,
             sigma_scaled: 0,
             burn_pct_scaled: 0,
             chain_leaves: 1,
@@ -379,10 +352,7 @@ mod tests {
     fn the_multiplier_scales_the_rate_before_the_fixed_point() {
         let params = EconomicParams::default();
         let at = point(0, &params);
-        let arm = |multiplier_milli| FeeModel::ProductionStandard {
-            multiplier_milli,
-            median: MedianModel::PenaltyFreeZone,
-        };
+        let arm = |multiplier_milli| FeeModel::ProductionStandard { multiplier_milli };
         let base = base_block_reward(0, &params).expect("genesis reward");
         let floor = relay_fee_floor(
             base,

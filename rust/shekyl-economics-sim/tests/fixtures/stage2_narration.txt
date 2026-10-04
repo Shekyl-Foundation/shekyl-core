@@ -1,9 +1,10 @@
-FEE ARM: production ladder — Standard rung x1.000 (corrected_fee_ladder at each block's R and C), ordinary 1in/2out weight at chain depth, the unrounded fixed point of rate x weight; median HELD at the penalty-free zone (declared divergence, ESR-6).
+FEE ARM: production ladder — Standard rung x1.000 (corrected_fee_ladder at each block's R, C and long-term median), ordinary 1in/2out weight at chain depth, the unrounded fixed point of rate x weight.
 The paragraphs below were written against the flat control fee. Where one states a
 result, the table beside it governs.
 
 Stage-2 archival burden trajectory (§12.1 checkpoint 1)
-outputs = tx_volume x 2 (1in/2out normal traffic, drives tree depth); archival bytes = Σ tx_volume x archival_len(1in/2out @ depth) (9939..12627 B/tx shallow..deep);
+outputs = carried txs x 2 (1in/2out normal traffic, drives tree depth); archival bytes = Σ carried txs x archival_len(1in/2out @ depth) (9939..12627 B/tx shallow..deep);
+carried = what the producer's fill rule admits at the effective median (ESR-6), not the schedule's demand;
 n = shard_of(cumulative archival bytes), W = 3.0 MB/shard (SHT-Q2)
 burden = n x W x storage($/B/yr, Kryder); base = 1e-11 $/B/yr; funding + clearance (A1) land next
 
@@ -13,15 +14,15 @@ Kryder band swept (DQ-2B):
   - 25%/yr (long-run historical $/GB decline)
 
 scenario                years  final_outputs       final_GB    final_n final_burden$/yr@0%
-baseline_steady_state      10      262800000        1571.52     523841            15.72
-boom_bust_cycle            10      433620000        2631.69     877228            26.32
-sustained_growth           20     4901220000       30837.88   10279293           308.38
-stuffing_attack             2       61200000         363.23     121077             3.63
-stake_concentration        10      262800000        1571.52     523841            15.72
-mass_unstaking              5      131400000         783.98     261325             7.84
-chain_bootstrap             5       86724000         516.21     172070             5.16
+baseline_steady_state      10      115652372         689.59     229864             6.90
+boom_bust_cycle            10       95611892         569.48     189827             5.69
+sustained_growth           20     4152325534       26109.73    8703244           261.10
+stuffing_attack             2       23146772         135.16      45053             1.35
+stake_concentration        10      115652372         689.59     229864             6.90
+mass_unstaking              5       57836372         343.07     114357             3.43
+chain_bootstrap             5       40996800         242.15      80715             2.42
 late_chain_tail             5      604440000        3710.16    1236719            37.10
-high_history_low_activity     60     2338920000       14660.80    4886932           146.61
+high_history_low_activity     60     1274626030        7941.38    2647126            79.41
 
 Reading: `final_n` is the D2 operand at horizon; `final_burden` is the
 whole-corpus annual storage cost under the BINDING 0%/yr Kryder case.
@@ -54,15 +55,34 @@ operand counts; outputs carry unprunable prefix it does not), NOT decoy poisonin
 (FCMP++ has no rings). 'sustained' prices the cheapest output-conserving
 producer/consumer cycle — what a campaign that must mint its own inputs pays.
 chain n(shards) depth        shape   fee/tx (SKL)  tx/shard   cost/shard (SKL)      sustained (SKL)  floor (atomic/B)
-1                   1   8-in/1-out       3.008108        57           171.4622             189.3490             55348
-100000              5   8-in/1-out       3.137189        52           163.1338             175.7116             52471
-500000              5   8-in/1-out       1.703807        52            88.5980              95.4290             28497
-2250000             6   8-in/1-out       0.041289        52             2.1470               2.2782               684
-10000000            6   8-in/1-out       0.004346        52             0.2260               0.2398                72
+1                   1   8-in/1-out       2.193471        57           125.0279             138.0707             40359
+100000              5   8-in/1-out       1.798094        52            93.5009             100.7099             30074
+500000              5   8-in/1-out       0.199632        52            10.3809              11.1806              3339
+2250000             6   8-in/1-out       0.003984        52             0.2072               0.2198                66
+10000000            6   8-in/1-out       0.000845        52             0.0439               0.0466                14
   -> Depth moves the archival/weight ratio by only a few percent (the FCMP proof grows
 with depth, and it is archival good the stuffer is buying). The rate is the relay floor at each row, and it follows the block reward, so a shard is dear to stuff early and cheap late. Rows are the baseline chain at the year it reaches that shard count, and past its last year they hold that year's rate. The A4 ROI gate
 below weighs the one-shot (binding, attacker-favouring) cost against the escalation
 Delta-pool a stuffing staker captures: a survivor of A1 must ALSO price the stuffer out.
+
+ESR-7 — THE CHEAPEST ARCHIVAL BYTE: SKL to add one shard at a block the honest fold built.
+relay = through the pool at the rate that gets listed (floor, or one atomic/B above the
+honest rate); miner U = own bodies at no fee (today: the relay floor does not apply to them),
+the cheapest integer packing of the block; miner E = the same paying the floor
+(C2-R2 Q9's fix, a declared divergence); self = E recovering the staker pool's part as one of
+100 holders, and as the whole holder set. 'today' / 'fixed' = the minimum over the
+attackers on each chain.
+scenario       y era          M (KB)   room       relay      miner U   (placement)     miner E  self 1/100    self all       today       fixed
+baseline_ste   5 constrained     322      0    374.0067     289.2984         Mixed    302.0474    302.0157    298.8769    289.2984    298.8769
+baseline_ste  20 carried         764      0     25.0020      12.2079         Mixed     15.0599     15.0527     14.3473     12.2079     14.3473
+baseline_ste  45 tail            764      0      1.2210       0.5406         Mixed      0.6954      0.6950      0.6567      0.5406      0.6567
+high_history  50 below zone      300     71      0.8820       0.0000      FreeRoom      0.2384      0.2378      0.1788      0.0000      0.1788
+  -> Shards a miner stuffs at the U price within a budget: share x budget / blocks per shard.
+Hashrate and time set a rate, not a price; a larger campaign raises the overshoot and the price.
+       baseline_ste y5     155 blocks/shard; relay at 120297 atomic/B (outranking honest): 10%/epoch 6, 10%/year 169, 10%/decade 1695, 33%/epoch 21, 33%/year 559, 33%/decade 5595
+       baseline_ste y20    156 blocks/shard; relay at 7965 atomic/B (outranking honest): 10%/epoch 6, 10%/year 168, 10%/decade 1684, 33%/epoch 21, 33%/year 555, 33%/decade 5559
+       baseline_ste y45    156 blocks/shard; relay at 389 atomic/B (outranking honest): 10%/epoch 6, 10%/year 168, 10%/decade 1684, 33%/epoch 21, 33%/year 555, 33%/decade 5559
+       high_history y50     47 blocks/shard; relay at 281 atomic/B (the floor): 10%/epoch 21, 10%/year 559, 10%/decade 5591, 33%/epoch 70, 33%/year 1845, 33%/decade 18451
 
 A1 — burden clearance (§12.2, F-G): min budget / (bond-opp-cost + storage) ratio.
 budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor 0.75 x R6 x n x rate.
@@ -71,15 +91,15 @@ Storage is a minor add-on (F-G: ~100x smaller); the binding term is PRICE-INDEPE
 Knee band [500000, 2250000, 10000000] closed shards; the shipped middle is 6.75 TB of archival at W = 3000000 B/shard.
 scenario                best-cand        flat-25 ratio @rate      best-cand ratio @rate    R sustained @10%
                                                                                               flat     best
-baseline_steady_stat   90%/500000    229.10   92.73   46.55    335.43  135.77   68.15     279.31   408.93
-boom_bust_cycle        90%/500000     85.81   34.73   17.44     92.17   37.31   18.73     104.61   112.37
-sustained_growth     90%/10000000     60.86   24.63   12.37    217.46   88.02   44.19      74.20   265.12
+baseline_steady_stat   90%/500000    452.82  183.29   92.01    485.38  196.46   98.62     552.05   591.74
+boom_bust_cycle        90%/500000    540.38  218.72  109.80    562.34  227.61  114.26     658.79   685.56
+sustained_growth      90%/2250000      1.48    0.60    0.30      1.69    0.69    0.34       1.80     2.07
 stuffing_attack      90%/10000000       inf     inf     inf       inf     inf     inf        inf      inf
-stake_concentration    90%/500000    229.10   92.73   46.55    335.43  135.77   68.15     279.31   408.93
-mass_unstaking         90%/500000   1272.22  514.95  258.50   1423.92  576.35  289.32    1550.99  1735.93
-chain_bootstrap        90%/500000   2780.97 1125.63  565.06   3216.02 1301.72  653.45    3390.35  3920.72
-late_chain_tail        90%/500000    149.48   60.50   30.37    536.61  217.20  109.03     182.24   654.19
-high_history_low_act  90%/2250000      0.00    0.00    0.00      0.00    0.00    0.00       0.00     0.01
+stake_concentration    90%/500000    452.82  183.29   92.01    485.38  196.46   98.62     552.05   591.74
+mass_unstaking         90%/500000   2475.60 1002.03  503.01   2511.38 1016.51  510.28    3018.06  3061.68
+chain_bootstrap        90%/500000   3508.30 1420.03  712.84   3544.82 1434.81  720.26    4277.06  4321.58
+late_chain_tail        90%/500000      1.66    0.67    0.34      4.44    1.80    0.90       2.02     5.42
+high_history_low_act  90%/2250000      0.01    0.00    0.00      0.03    0.01    0.01       0.01     0.03
   -> rate cols each = [0.02, 0.05, 0.1] (10% binding, last). The D2 case is where the
 best candidate clears (>=1.0) at 10% while flat-25 does NOT — escalation
 earning its keep. A4/A5 then drop any winner that fails W9/W10.
@@ -89,7 +109,7 @@ The 10%/yr binding rate is EXOGENOUS: SKL bonded for decades in a settled
 chain at ~15 tx/block is where that assumption is strongest and least
 grounded; the band is kept, the choice of binding member is the owner's.
   -> VERDICT @10%: D2 case (best clears, flat does not): none; cleared by NO
-candidate in the band: high_history_low_activity. Byte-keyed, n counts ~10 KB of archival per
+candidate in the band: sustained_growth, late_chain_tail, high_history_low_activity. Byte-keyed, n counts ~10 KB of archival per
 transaction, not one 128-B leaf per output, so the §6.2 coupled bond per unit
 of traffic is ~40x the leaf-era figure — a scenario the leaf-era sweep cleared
 can fail here on the bond term alone, with no change to the escalation.
@@ -109,26 +129,38 @@ the scenarios' own closures past their horizons: constant, cyclic, or growing �
 sustained_growth's 20%/yr to 60 y is unphysical (block weight caps it) and is read
 for shape only.
 scenario                final_n  xover    flat@2  best@2    flat@5  best@5   flat@10 best@10   flat-25 ratio @10% at y10/20/30/40/50/60
-baseline_steady_stat    3283051    y23       y36     y44       y31     y38       y27     y33   46.55 3.81 0.54 0.10 0.02 0.01
-boom_bust_cycle         5439995    y20      y26*    y28*      y22*    y24*      y20*    y22*   17.44 0.86 0.06 0.01 0.00 0.00
-sustained_growth     15638301142    y16       y34     y37       y31     y35       y29     y33   110.35 12.37 0.57 0.01 0.00 0.00
-stuffing_attack         3301234    y23       y36     y44       y31     y38       y27     y33   44.94 3.73 0.53 0.10 0.02 0.01
-stake_concentration     3283051    y23       y36     y44       y31     y38       y27     y33   46.55 3.81 0.54 0.10 0.02 0.01
-mass_unstaking          3283051    y23       y36     y44       y31     y38       y27     y33   46.55 3.81 0.54 0.10 0.02 0.01
-chain_bootstrap         4709952    y21       y34     y40       y30     y36       y26     y32   59.91 3.83 0.42 0.06 0.01 0.01
-late_chain_tail        14620834     y3       y26     y32       y22     y27       y19     y24   6.78 0.65 0.08 0.04 0.03 0.03
-high_history_low_act    4886932    y16       y21     y21       y21     y21       y21     y21   46.67 1.27 0.03 0.00 0.00 0.00
+baseline_steady_stat    2946325    y25       y32     y36       y28     y31       y26     y27   92.01 4.13 0.31 0.04 0.01 0.00
+boom_bust_cycle         4471338    y24      y28*    y30*      y26*    y26*      y24*    y24*   109.80 1.96 0.11 0.01 0.00 0.00
+sustained_growth     15636717095    y18       y21     y22       y19     y20       y18     y18   92.01 0.30 0.00 0.00 0.00 0.00
+stuffing_attack         2946325    y25       y32     y36       y28     y31       y26     y27   92.01 4.13 0.31 0.04 0.01 0.00
+stake_concentration     2946325    y25       y32     y36       y28     y31       y26     y27   92.01 4.13 0.31 0.04 0.01 0.00
+mass_unstaking          2946325    y25       y32     y36       y28     y31       y26     y27   92.01 4.13 0.31 0.04 0.01 0.00
+chain_bootstrap         4242107    y23       y30     y32       y26     y28       y24     y25   110.82 3.19 0.15 0.01 0.00 0.00
+late_chain_tail        14620834     y3        y7      y9        y5      y5        y4      y4   0.07 0.01 0.00 0.00 0.00 0.00
+high_history_low_act    2647126    y21       y28     y31       y23     y25       y21     y21   92.01 1.49 0.12 0.02 0.01 0.00
   -> ORDINARY FEE per transaction, mean over the year (SKL), at y10/20/30/40/50/60.
 The run's fee arm made visible: a year's fees are its traffic times this.
-       baseline_steady_stat 1.7480 0.6421 0.1960 0.0571 0.0164 0.0047
-       boom_bust_cycle      1.0900 0.3199 0.0880 0.0238 0.0064 0.0017
-       sustained_growth     4.7568 0.7754 0.0697 0.0093 0.0018 0.0015
-       stuffing_attack      1.7438 0.6402 0.1954 0.0569 0.0163 0.0047
-       stake_concentration  1.7480 0.6421 0.1960 0.0571 0.0164 0.0047
-       mass_unstaking       1.7480 0.6421 0.1960 0.0571 0.0164 0.0047
-       chain_bootstrap      2.3237 0.6234 0.1302 0.0259 0.0051 0.0037
-       late_chain_tail      0.5764 0.1110 0.0211 0.0149 0.0148 0.0146
-       high_history_low_act 3.3847 0.4588 0.0607 0.0224 0.0082 0.0030
+       baseline_steady_stat 1.2691 0.1287 0.0401 0.0117 0.0034 0.0009
+       boom_bust_cycle      1.3883 0.1568 0.0443 0.0122 0.0033 0.0009
+       sustained_growth     1.2691 0.0007 0.0001 0.0001 0.0001 0.0001
+       stuffing_attack      1.2691 0.1287 0.0401 0.0117 0.0034 0.0009
+       stake_concentration  1.2691 0.1287 0.0401 0.0117 0.0034 0.0009
+       mass_unstaking       1.2691 0.1287 0.0401 0.0117 0.0034 0.0009
+       chain_bootstrap      1.3848 0.0695 0.0152 0.0030 0.0006 0.0002
+       late_chain_tail      0.0046 0.0009 0.0001 0.0001 0.0001 0.0001
+       high_history_low_act 1.2691 0.0397 0.1323 0.0491 0.0181 0.0066
+  -> BLOCK SPACE (ESR-6) at y1/4/8/10/12/15/20/30/40/60: carried/demanded transactions per block, the long-term
+median at year end (KB), and transactions per block dropped unserved after the pool
+livetime. Blocks take what the producer's fill rule admits at the effective median.
+       baseline_steady_stat  22.0/50.0   314K 27.6 | 22.0/50.0   322K 28.0 | 22.0/50.0   322K 28.0 | 22.0/50.0   322K 28.0 | 50.0/50.0   732K  0.0 | 50.0/50.0   732K  0.0 | 50.0/50.0   764K  0.0 | 50.0/50.0   764K  0.0 | 50.0/50.0   764K  0.0 | 50.0/50.0   764K  0.0
+       boom_bust_cycle       22.0/150.0  314K 126.7 | 15.2/15.0   300K  1.1 | 15.2/15.0   300K  1.1 | 15.2/15.0   300K  1.1 | 15.0/15.0   300K  0.0 |140.6/150.0 2196K  9.4 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0
+       sustained_growth      22.0/50.0   314K 27.6 | 22.0/86.0   322K 63.9 | 22.0/179.0  322K 156.8 | 22.0/257.0  322K 234.6 |298.5/371.0 4574K 75.0 |641.0/641.0 9796K  0.0 |1597.0/1597.0 24404K  0.0 |9890.0/9890.0 145432K  0.0 |61240.0/61240.0 900534K  0.0 |2347813.0/2347813.0 36027190K  0.0
+       stuffing_attack       22.0/66.4   314K 44.0 | 22.0/50.0   322K 28.0 | 22.0/50.0   322K 28.0 | 22.0/50.0   322K 28.0 | 50.0/50.0   732K  0.0 | 50.0/50.0   732K  0.0 | 50.0/50.0   764K  0.0 | 50.0/50.0   764K  0.0 | 50.0/50.0   764K  0.0 | 50.0/50.0   764K  0.0
+       stake_concentration   22.0/50.0   314K 27.6 | 22.0/50.0   322K 28.0 | 22.0/50.0   322K 28.0 | 22.0/50.0   322K 28.0 | 50.0/50.0   732K  0.0 | 50.0/50.0   732K  0.0 | 50.0/50.0   764K  0.0 | 50.0/50.0   764K  0.0 | 50.0/50.0   764K  0.0 | 50.0/50.0   764K  0.0
+       mass_unstaking        22.0/50.0   314K 27.6 | 22.0/50.0   322K 28.0 | 22.0/50.0   322K 28.0 | 22.0/50.0   322K 28.0 | 50.0/50.0   732K  0.0 | 50.0/50.0   732K  0.0 | 50.0/50.0   764K  0.0 | 50.0/50.0   764K  0.0 | 50.0/50.0   764K  0.0 | 50.0/50.0   764K  0.0
+       chain_bootstrap        5.0/5.0    300K  0.0 | 21.0/50.0   308K 28.8 | 21.0/75.0   308K 54.0 | 21.0/75.0   308K 54.0 | 63.0/75.0  1098K 12.6 | 75.0/75.0  1098K  0.0 | 75.0/75.0  1146K  0.0 | 75.0/75.0  1146K  0.0 | 75.0/75.0  1146K  0.0 | 75.0/75.0  1146K  0.0
+       late_chain_tail      200.0/200.0 2928K  0.0 |300.0/300.0 4585K  0.0 |220.0/220.0 3362K  0.0 |220.0/220.0 3362K  0.0 |220.0/220.0 3362K  0.0 |220.0/220.0 3362K  0.0 |220.0/220.0 3362K  0.0 |220.0/220.0 3362K  0.0 |220.0/220.0 3362K  0.0 |220.0/220.0 3362K  0.0
+       high_history_low_act  22.0/150.0  314K 126.7 | 22.0/150.0  322K 128.0 | 22.0/250.0  322K 228.0 | 22.0/250.0  322K 228.0 |224.5/250.0 3660K 27.6 |250.0/250.0 3820K  0.0 |120.0/120.0 1834K  0.0 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0
   -> FEE HORIZON: no closed form on this fee arm. H = fee x base x share x W /
 (bond x R x rate x bytes/tx) needs a fee that is constant in height; the
 production fee follows the block reward. The control arm prints it.
@@ -140,31 +172,31 @@ the fee-era PoW security budget; that trade needs its own wargame, not a paramet
 'tail floor p%' = staker leg floored at p% of ALL block emission, non-decaying (at the
 tail: p% of 157680 SKL/yr). 'decay' re-pins shekyl_staker_emission_decay.
 
-  high_history_low_activity (n = 4886932 at 60 y; best band cand. 90%/2250000)
+  high_history_low_activity (n = 2647126 at 60 y; best band cand. 90%/2250000)
   lever                          @2%     @5%    @10%       R@10%   onset
-  shipped: burn x flat 25%      0.00    0.00    0.00        0.00     y21
-  burn x best band cand.        0.00    0.00    0.00        0.01     y21
-  burn x 100%                   0.01    0.00    0.00        0.01     y21
-  ALL fees x 25%                0.01    0.00    0.00        0.01     y21
-  ALL fees x 100% (PoW)         0.03    0.01    0.01        0.03     y21
-  flat + tail floor 15%         0.11    0.04    0.02        0.13     y24
-  flat + tail floor 50%         0.35    0.14    0.07        0.43     y35
-  flat + WHOLE tail (100%)      0.71    0.29    0.14        0.86     y42
-  flat + decay 0.95/yr          0.01    0.00    0.00        0.01     y21
-  flat + NO decay               0.11    0.04    0.02        0.13     y24
+  shipped: burn x flat 25%      0.01    0.00    0.00        0.01     y21
+  burn x best band cand.        0.03    0.01    0.01        0.03     y21
+  burn x 100%                   0.03    0.01    0.01        0.04     y21
+  ALL fees x 25%                0.03    0.01    0.01        0.03     y21
+  ALL fees x 100% (PoW)         0.11    0.04    0.02        0.13     y27
+  flat + tail floor 15%         0.39    0.16    0.08        0.48     y37
+  flat + tail floor 50%         1.29    0.52    0.26        1.58     y48
+  flat + WHOLE tail (100%)      2.58    1.04    0.52        3.15     y54
+  flat + decay 0.95/yr          0.03    0.01    0.01        0.03     y26
+  flat + NO decay               0.39    0.16    0.08        0.48     y37
 
-  baseline_steady_state (n = 3283051 at 60 y; best band cand. 90%/2250000)
+  baseline_steady_state (n = 2946325 at 60 y; best band cand. 90%/2250000)
   lever                          @2%     @5%    @10%       R@10%   onset
-  shipped: burn x flat 25%      0.03    0.01    0.01        0.03     y27
-  burn x best band cand.        0.09    0.04    0.02        0.11     y33
-  burn x 100%                   0.10    0.04    0.02        0.12     y34
-  ALL fees x 25%                0.05    0.02    0.01        0.06     y30
-  ALL fees x 100% (PoW)         0.20    0.08    0.04        0.25     y39
-  flat + tail floor 15%         0.18    0.07    0.04        0.22     y38
-  flat + tail floor 50%         0.54    0.22    0.11        0.66     y45
-  flat + WHOLE tail (100%)      1.06    0.43    0.21        1.29     y50
-  flat + decay 0.95/yr          0.03    0.01    0.01        0.04     y31
-  flat + NO decay               0.18    0.07    0.04        0.22     y38
+  shipped: burn x flat 25%      0.01    0.00    0.00        0.01     y26
+  burn x best band cand.        0.02    0.01    0.00        0.03     y27
+  burn x 100%                   0.02    0.01    0.00        0.03     y28
+  ALL fees x 25%                0.01    0.00    0.00        0.01     y27
+  ALL fees x 100% (PoW)         0.05    0.02    0.01        0.06     y31
+  flat + tail floor 15%         0.23    0.09    0.05        0.28     y40
+  flat + tail floor 50%         0.76    0.31    0.15        0.93     y48
+  flat + WHOLE tail (100%)      1.52    0.61    0.31        1.85     y52
+  flat + decay 0.95/yr          0.02    0.01    0.00        0.02     y31
+  flat + NO decay               0.23    0.09    0.05        0.28     y40
   -> The WHOLE perpetual tail (157680 SKL/yr) funds the bond opp cost of 1.75 M @2%, 0.70 M @5%, 0.35 M @10% shards,
 and it is a CONSTANT flow against a corpus that keeps growing — the fee share's
 shape with a longer fuse, not a structural answer. The lever is the bond itself
@@ -173,21 +205,21 @@ shape with a longer fuse, not a structural answer. The lever is the bond itself
 A3 — budget stranding (§12.2): fraction of budget(E) that NEVER MINTS.
 budget is a minting ENTITLEMENT — unclaimed past MAX_CLAIM_AGE_W=26 is "supply
 never created" (ARCHIVAL_BUDGET_SCHEDULE §4). A class claims iff its reward
-covers one claim tx (0.810461..0.417282 SKL early..late @ the production relay
+covers one claim tx (0.575479..0.305028 SKL early..late @ the production relay
 floor, via the production predictor at each year's tree depth). PRE-D1 vs
 POST-D1 scoring = the §1 Stage-0 coupling claim, measured: pre-D1 zeroes bulk
 holders past the co-holder cliff (r_market > g_milli ≈ 1000), and a
 structural-zero cohort's slice never mints.
 archivers    mean_r        n  pre strand pre zero%  post strand post zero% post noclm%
-2000             10    51313       0.00%      0.0%        0.00%      0.0%       0.0%  early
-20000           109    51313       0.00%      0.0%        0.00%      0.0%       0.0%  early
-60000           327    51313       0.00%      0.0%        0.00%      0.0%       0.0%  early
-2000              1   313828       0.00%      0.0%        0.00%      0.0%       0.0%  mid
-20000            17   313828       0.00%      0.0%        0.00%      0.0%       0.0%  mid
-60000            53   313828       0.00%      0.0%        0.00%      0.0%       0.0%  mid
-2000              1   523841       0.00%      0.0%        0.00%      0.0%       0.0%  late
-20000            10   523841       0.00%      0.0%        0.00%      0.0%       0.0%  late
-60000            32   523841       0.00%      0.0%        0.00%      0.0%       0.0%  late
+2000             25    22349       0.00%      0.0%        0.00%      0.0%       0.0%  early
+20000           250    22349       0.00%      0.0%        0.00%      0.0%       0.0%  early
+60000           751    22349       0.00%      0.0%        0.00%      0.0%       0.0%  early
+2000              4   137459       0.00%      0.0%        0.00%      0.0%       0.0%  mid
+20000            40   137459       0.00%      0.0%        0.00%      0.0%       0.0%  mid
+60000           122   137459       0.00%      0.0%        0.00%      0.0%       0.0%  mid
+2000              2   229864       0.00%      0.0%        0.00%      0.0%       0.0%  late
+20000            24   229864       0.00%      0.0%        0.00%      0.0%       0.0%  late
+60000            73   229864       0.00%      0.0%        0.00%      0.0%       0.0%  late
   -> Read: the §1 Stage-0 claim is CONFIRMED, and stronger than stated — where
 mean_r crosses the co-holder cliff (~1000) pre-D1 strands 100% of budget,
 not 'partly': EVERY class floors to zero, so the whole epoch's entitlement is
@@ -241,15 +273,15 @@ r > ~1000 x shards_held cliff. Purpose: make guaranteed-zero bonds
 UNREPRESENTABLE rather than merely unprofitable (they lock capital into a
 position the frozen scale cannot pay). Safety multiple = 2x.
 archivers          n    mean_r   min_viable_h split-loss@4096
-2000           51313        10              1              0
-20000          51313       109              1            712
-60000          51313       327              1            237
-2000          261325         2              1              0
-20000         261325        21              1           2535
-60000         261325        64              1           2560
-2000          523841         1              1              0
-20000         523841        10              1              0
-60000         523841        32              1           1024
+2000           22349        25              1              0
+20000          22349       250              1              0
+60000          22349       751              1           1355
+2000          114357         4              1              0
+20000         114357        48              1           3411
+60000         114357       146              1           3477
+2000          229864         2              1              0
+20000         229864        24              1           2727
+60000         229864        73              1           2859
   -> RECOMMENDED provisional min_holding = 2 shards (2x the worst swept
 boundary). Composes with the wire cap: true (must sit strictly below
 MAX_HOLDINGS_SHARDS = 4096). Genesis-provisional NUMBER under a frozen SHAPE
@@ -263,13 +295,13 @@ floors independently, so splitting discards sub-milli remainders (the
 split-loss column). Consolidation is weakly preferred; nobody is pushed to sit
 at exactly the floor.
 
-OQ-4 (D3 round §12.8) — A4 gate under PLATEAU DELETION (scenario baseline_steady_stat, n=523841,
+OQ-4 (D3 round §12.8) — A4 gate under PLATEAU DELETION (scenario baseline_steady_stat, n=229864,
 steepest candidate, Δn=10000, H=10y). Prediction: the capped column vanishes and
 the realistic-end numbers become the only numbers.
 honest regime                       ROI     fee x -> 1
-kept, small bonds (h=4)          0.0022            0.0
-kept, capped (h=512)             0.0159            0.0
-DELETED (h irrelevant)           0.0022            0.0
+kept, small bonds (h=4)          0.0013            0.0
+kept, capped (h=512)             0.0080            0.0
+DELETED (h irrelevant)           0.0013            0.0
   -> Read: deletion reproduces the small-bond row exactly — under R2 there is no
 cap to dodge, so the honest-holdings axis stops mattering and A4 has ONE number
 per regime instead of a naive/rational spread. fee_mult_to_close is unchanged
@@ -284,20 +316,20 @@ DQ-2H size classes x holding-scarcity bands [(100, 2), (600, 6), (200, 50), (100
 band sits PAST the co-holder cliff — a structural zero pre-D1, paid post-D1,
 which is the whole mechanism. Regime = PLATEAU DELETED (D3/R2), the sole live
 regime: no curve, so credited work IS work and there is no naive/rational axis.
-Margin = reward - (bond opp cost @ 10% + storage), SKL/epoch, at baseline_steady_st n=523841.
+Margin = reward - (bond opp cost @ 10% + storage), SKL/epoch, at baseline_steady_st n=229864.
  shards        r  work_mil    share PRE   share POST    reward SKL      cost SKL    margin
-     16        2      8000      0.01302      0.01298      4.077237      0.045845        ok
-     16        6      2666      0.02594      0.02596      1.358739      0.045845        ok
-     16       50       320      0.00104      0.00104      0.163089      0.045845        ok
-     16     3000         5      0.00000      0.00001      0.002548      0.045845     UNDER
-    256        2    128000      0.07441      0.07420     65.235798      0.733516        ok
-    256        6     42666      0.14822      0.14839     21.744926      0.733516        ok
-    256       50      5120      0.00595      0.00594      2.609432      0.733516        ok
-    256     3000        85      0.00000      0.00005      0.043321      0.733516     UNDER
-   4096        2   2048000      0.23810      0.23743   1043.772760     11.736256        ok
-   4096        6    682663      0.47429      0.47486    347.922385     11.736256        ok
-   4096       50     81920      0.01905      0.01899     41.750910     11.736256        ok
-   4096     3000      1363      0.00000      0.00016      0.694659     11.736256     UNDER
+     16        2      8000      0.01302      0.01298      3.387907      0.045845        ok
+     16        6      2666      0.02594      0.02596      1.129020      0.045845        ok
+     16       50       320      0.00104      0.00104      0.135516      0.045845        ok
+     16     3000         5      0.00000      0.00001      0.002117      0.045845     UNDER
+    256        2    128000      0.07441      0.07420     54.206515      0.733516        ok
+    256        6     42666      0.14822      0.14839     18.068556      0.733516        ok
+    256       50      5120      0.00595      0.00594      2.168261      0.733516        ok
+    256     3000        85      0.00000      0.00005      0.035997      0.733516     UNDER
+   4096        2   2048000      0.23810      0.23743    867.304248     11.736256        ok
+   4096        6    682663      0.47429      0.47486    289.099863     11.736256        ok
+   4096       50     81920      0.01905      0.01899     34.692170     11.736256        ok
+   4096     3000      1363      0.00000      0.00016      0.577215     11.736256     UNDER
   -> Scarce-holder (r<=50) aggregate share: PRE-D1 1.0000 -> POST-D1 0.9998
 (dilution 0.02% of their former share — the W6 quantum, DESCRIPTIVE).
 Cells under water post-D1: 3 of 12 (0 of them scarce-holders).
@@ -335,7 +367,7 @@ the ceiling a flood can force at maximum effort. A rate, not a cliff,
 and it is bounded, monotone and one-directional — but it is NOT invisible,
 which is the honest correction to a purely structural reading of §6.0.
 It is also PRICED, and the legal-limit price is dominated by a term that is
-NOT the fees: ~1254813 SKL/epoch in stuffing fees at the A4 rate, PLUS
+NOT the fees: ~719202 SKL/epoch in stuffing fees at the A4 rate, PLUS
 ~10240000 SKL/epoch of miner-reward penalty compensation — at B = 2M the
 production penalty formula (get_block_reward) pays the miner EXACTLY ZERO,
 so the flooder must fund the whole block reward, every block, or no rational
@@ -354,16 +386,16 @@ honest-holdings ends: hHold=4 (rational small bonds — the gate) and hHold=512
 Flat-25 has no share lever ⇒ 0. Attacker-favouring: min opp-rate 0.02, storage
 omitted, age-0. PASS iff realistic-end (hHold=4) ROI < 1 everywhere.
 scenario                flat-25    best@hHold4  best@hHold512     worst (n/Δn/H)
-baseline_steady_stat     0.0000         0.1684         0.3631     156319/100000/10
-boom_bust_cycle          0.0000         0.2833         0.8709     329579/100000/10
-sustained_growth         0.0000         0.2458         0.8333     388383/100000/10
+baseline_steady_stat     0.0000         0.1006         0.1976      91256/100000/10
+boom_bust_cycle          0.0000         0.1069         0.2077      97928/100000/10
+sustained_growth         0.0000         4.2385        16.9043     575465/100000/10
 stuffing_attack          0.0000         0.0000         0.0000          0/    0/ 0
-stake_concentration      0.0000         0.1684         0.3631     156319/100000/10
-mass_unstaking           0.0000         0.1684         0.3631     156319/100000/10
-chain_bootstrap          0.0000         0.3989         0.8986     172070/100000/10
-late_chain_tail          0.0000         0.4031         2.0062     993372/100000/10
-high_history_low_act     0.0000         0.2050         0.7862     471338/100000/10
-  -> W9 gate (realistic hHold=4 end): PASS. Flat-25 = 0 (no share lever): the
+stake_concentration      0.0000         0.1006         0.1976      91256/100000/10
+mass_unstaking           0.0000         0.1006         0.1976      91256/100000/10
+chain_bootstrap          0.0000         0.1414         0.2606      58664/100000/10
+late_chain_tail          0.0000         0.3755         1.8688     993372/100000/10
+high_history_low_act     0.0000         6.1614        23.0180     497681/100000/10
+  -> W9 gate (realistic hHold=4 end): FAIL — rule-21 per-output fee-floor reopen (§11.3), NOT a D2 redesign (§8). Flat-25 = 0 (no share lever): the
 premium is purely the escalation's. A steeper share (higher asymptote /
 tighter knee) lets the marginal stuffed shard's Δpool slice out-earn its
 coupled bond — so the gate, not just A1, bounds escalation aggressiveness.
@@ -377,20 +409,20 @@ proportional (first-mover premium); 'fee×→1' = the per-output fee multiplier 
 would drive ROI to 1 in THIS regime; 'ROI(resp)' = ROI once honest replicas answer
 (r:1→6 after 2y lag; first-order, NOT gating).
 scenario              Δpool/yr SKL   capt%  prem     revenue      fees    bond   fee×→1 ROI(resp)
-baseline_steady_stat      658625.1  39.04%   1.0   2571080.4 15252271.6 15000.00      0.2      0.06
-boom_bust_cycle          2737215.1  23.30%   1.0   6376623.7 22494741.3 15000.00      0.3      0.09
-sustained_growth         2227293.9  20.49%   1.0   4564085.5 18550751.9 15000.00      0.2      0.08
-stake_concentration       658625.1  39.04%   1.0   2571080.4 15252271.6 15000.00      0.2      0.06
-mass_unstaking            658625.1  39.04%   1.0   2571080.4 15252271.6 15000.00      0.2      0.06
-chain_bootstrap          2057954.4  36.78%   1.0   7568727.4 18959399.5 15000.00      0.4      0.13
-late_chain_tail          3133594.9   9.15%   1.0   2868532.4 7100859.2 15000.00      0.4      0.13
-high_history_low_act     2580323.7  17.52%   1.0   4519917.2 22030887.7 15000.00      0.2      0.07
+baseline_steady_stat      190783.8  52.31%   1.0    997994.7 9902226.0 15000.00      0.1      0.03
+boom_bust_cycle           214927.0  50.55%   1.0   1086408.2 10145255.7 15000.00      0.1      0.04
+sustained_growth          947192.5  14.82%   1.0   1403447.7  316118.4 15000.00      4.4      1.41
+stake_concentration       190783.8  52.31%   1.0    997994.7 9902226.0 15000.00      0.1      0.03
+mass_unstaking            190783.8  52.31%   1.0    997994.7 9902226.0 15000.00      0.1      0.03
+chain_bootstrap           243312.9  63.05%   1.0   1534062.4 10837643.6 15000.00      0.1      0.05
+late_chain_tail            18548.1   9.15%   1.0     16979.2   30215.9 15000.00      0.1      0.13
+high_history_low_act      951693.6  16.74%   1.0   1593603.8  243642.4 15000.00      6.5      2.05
   -> Read: prem≈1.0 at the realistic end ⇒ NO concentration premium — the attack is
 pure fee-flow-volume leverage (cheap stuffing unlocks a large Δpool; the attacker
 takes only their proportional slice, but the pool dwarfs the stuffing cost). The
-fee-RATE cancels in fee×→1, so its 0.2→0.4x spread is volume/share-slope
+fee-RATE cancels in fee×→1, so its 0.1→6.5x spread is volume/share-slope
 variation: one fee-floor sized for the worst regime over-charges benign traffic
-~2x in the mildest — the remedy's real cost. Denominate it in WEIGHT (a
+~99x in the mildest — the remedy's real cost. Denominate it in WEIGHT (a
 virtual-weight surcharge rides the fee market over time; an atomic constant rots)
 — but weight alone can't erase the cross-regime spread. The D3 dodge is load-bearing
 at the CAPPED-honest end (prem>1, ROI several x higher); its undodgeable-cap fix
@@ -457,7 +489,7 @@ OPERAND DIRECTION (labelled at the number): A5 uses the scenario-family MAX
 per-shard pool because there a larger forfeit is a STRONGER deterrent, so
 max is conservative. For TJ-4/TJ-7 it runs the OTHER WAY -- a larger reward
 makes the slash/Reinstate cycle and the dilution MORE profitable -- so max is
-the ALARM-RAISING end. Tables below run the MEDIAN (1.0421 SKL/shard/epoch);
+the ALARM-RAISING end. Tables below run the MEDIAN (1.3278 SKL/shard/epoch);
 the max (442.0898) is reported as the bound beneath each.
   TJ-4 CORRECTION (reward path, verified): a ZERO-service P earns NOTHING
 (shard_work_micro returns 0 without serve credit; reward pays on credited
@@ -490,12 +522,12 @@ making every break-even below a LOWER BOUND. Table and break-evens run
 downtime = 2.
 f               E[epochs]     earnings SKL   friction SKL    cycle net SKL
 0.000               11.00           0.0000         0.0000          -0.7500
-0.020               11.23           0.2341         0.0417          -0.5576
-0.050               11.66           0.6074         0.1042          -0.2468
-0.100               12.80           1.3338         0.2084           0.3754
-0.150               14.79           2.3118         0.3126           1.2492
-0.200               18.11           3.7743         0.4168           2.6075
-  -> TJ-4 break-even f = 0.0715 (downtime at the structural floor of
+0.020               11.23           0.2982         0.0531          -0.5049
+0.050               11.66           0.7740         0.1328          -0.1088
+0.100               12.80           1.6995         0.2656           0.6839
+0.150               14.79           2.9457         0.3983           1.7974
+0.200               18.11           4.8092         0.5311           3.5281
+  -> TJ-4 break-even f = 0.0577 (downtime at the structural floor of
 2 epochs; a cooldown only raises it — curve below). Below it the
 burned bond is not covered and the window is NOT a subscription fee;
 above it the cycle pays and attestation-resistance is what must carry
@@ -507,8 +539,8 @@ draw the cartel cannot place them, so absorption still occurs above it
      bound at the MAX operand (442.0898 SKL/shard/epoch): break-even f = 0.0002.
 Both ends of the family are reported so the verdict is a RANGE, not a
 point chosen by which operand happened to be at hand.
-  -> WHY it breaks even so low: the burned bond is worth 0.72 EPOCHS of the
-per-shard reward it secures (0.750 SKL vs 1.0421 SKL/epoch at the median).
+  -> WHY it breaks even so low: the burned bond is worth 0.56 EPOCHS of the
+per-shard reward it secures (0.750 SKL vs 1.3278 SKL/epoch at the median).
 A slash that costs a fraction of one epoch's earnings is not a penalty, which is TJ-4's BOND_FLOOR coupling made quantitative: the (m,n) re-pin cannot carry attestation-resistance while the collateral it forfeits is this cheap relative to the flow. Raising m/lowering n does not fix a floor problem.
 
   REMEDY CURVE — break-even f vs a hypothetical POST-SLASH COOLDOWN c
@@ -518,14 +550,14 @@ hashrate share — so each row reads 'the cycle pays only above this
 fraction of network hashrate'. 'none' = the cycle never pays anywhere
 absorption is measurable within the horizon.
 cooldown     ~weeks   break-even f (med)   break-even f (max)
-0               0.0               0.0715               0.0002
-1               2.0               0.0781               0.0002
-2               4.0               0.0857               0.0003
-4               7.9               0.1040               0.0003
-8              15.8               0.1501               0.0017
-16             31.7               0.2306               0.1988
-32             63.3               0.3131               0.3045
-64            126.6               0.3833               0.3806
+0               0.0               0.0577               0.0002
+1               2.0               0.0635               0.0002
+2               4.0               0.0703               0.0003
+4               7.9               0.0876               0.0003
+8              15.8               0.1364               0.0017
+16             31.7               0.2251               0.1988
+32             63.3               0.3114               0.3045
+64            126.6               0.3827               0.3806
   -> READING THE CURVE (the false dichotomy dissolved): BOND_FLOOR is
 f-INDEPENDENT, so it bounds the low-f attacker; the downtime term d*f*R
 SCALES with f, so it does its work at high f. 'Floor problem vs cooldown
@@ -564,15 +596,15 @@ multiplication. Tables report MARGINAL gain over one bond
 Cost is linear in N. Break-even = the ANNUAL return on locked capital
 below which it pays. Same operand-direction rule as TJ-4: median first,
 max as the alarm-raising bound.
-  TJ-7 at MEDIAN pool g = 1.0421 SKL/epoch (sole credited holder; pool is
+  TJ-7 at MEDIAN pool g = 1.3278 SKL/epoch (sole credited holder; pool is
 CONSERVED — N sybils vs h honest take N/(N+h)*g, NOT N*g):
 N               h   gain SKL/epoch     break-even rate/yr
-2               1          0.17368                 608.6%
-5               1          0.34737                 304.3%
-5               5          0.34737                 304.3%
-20              5          0.65999                 121.7%
-100             5          0.81879                  29.0%
-100            50          0.67430                  23.9%
+2               1          0.22130                 775.4%
+5               1          0.44261                 387.7%
+5               5          0.44261                 387.7%
+20              5          0.84096                 155.1%
+100             5          1.04329                  36.9%
+100            50          0.85918                  30.4%
   TJ-7 at MAX pool g = 442.0898 SKL/epoch (sole credited holder; pool is
 CONSERVED — N sybils vs h honest take N/(N+h)*g, NOT N*g):
 N               h   gain SKL/epoch     break-even rate/yr

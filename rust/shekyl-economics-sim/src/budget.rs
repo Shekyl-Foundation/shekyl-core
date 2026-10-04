@@ -41,27 +41,26 @@
 //! regimes actually land, and how the emission-share decay (0.90/yr) shrinks the
 //! (a)-vs-(b) gap toward zero as the chain enters the fee era.
 //!
-//! **Scope note — weight penalty.** The macro sim models the release-multiplier
-//! channel only; it does not model per-block weight (all blocks sit at baseline
-//! weight, penalty = 1.0). This is faithful to the low-volume-starvation
-//! question: the weight penalty only bites on *oversized* blocks (high volume),
-//! the opposite regime from the one that could starve archival funding.
+//! **The weight penalty.** Both arms advance `already_generated` by the fill
+//! rule's penalised reward ([`crate::chain_cursor::ChainCursor`]). Disposition
+//! (b)'s emission leg stays the unpenalised base reward: the fill admits a
+//! body past the median only when its fee covers the reward it costs, so the
+//! penalty in (a) is bounded by those fees, and (b) does not model it
+//! (declared in §4 of the design document). The penalty bites on oversized
+//! blocks, the opposite regime from the one that could starve archival funding.
 
 use serde::Serialize;
 use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 use shekyl_economics::{
-    base_block_reward,
-    burn::compute_burn_split_at,
-    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier, effective_emission,
-    params::{EconomicParams, SCALE},
-    split_block_emission, ClosedShardCount, TxVolume,
+    base_block_reward, burn::compute_burn_split_at, calc_effective_emission_share,
+    calc_release_multiplier, params::SCALE, split_block_emission, ClosedShardCount,
 };
 
 use crate::burden::HonestOutputs;
+use crate::chain_cursor::{ChainCursor, ChainStep};
 use crate::engine::SimParams;
-use crate::fee_model::FeePoint;
 
-const COIN: f64 = 1_000_000_000.0;
+const COIN: f64 = crate::burden::COIN as f64;
 
 /// A tx-volume regime to probe. `get_volume(block, blocks_per_year)` returns the
 /// per-block tx count, exactly the `VolumeSchedule` shape the legacy engine uses.
@@ -138,21 +137,7 @@ pub struct BudgetScenarioResult {
 /// year-snapshot engine does not carry.
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> BudgetScenarioResult {
-    let economic = EconomicParams {
-        release_min: params.release_min,
-        release_max: params.release_max,
-        tx_volume_baseline: params.tx_volume_baseline,
-        burn_base_rate: params.burn_base_rate,
-        burn_cap: params.burn_cap,
-        staker_pool_share: params.staker_pool_share,
-        emission_curve_asymptote: params.emission_curve_asymptote,
-        emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
-        final_subsidy_per_minute: params.final_subsidy_per_minute,
-        daa_target_seconds: EconomicParams::default().daa_target_seconds,
-        // Escalation numerics come from the shipped config: the sim must never
-        // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
-        ..EconomicParams::default()
-    };
+    let economic = params.economic();
 
     let mut already_generated: u128 =
         (params.emission_curve_asymptote as f64 * scenario.initial_emitted_fraction) as u128;
@@ -176,6 +161,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
     // count; the block's outputs accrue after it is charged.
     let mut outputs = HonestOutputs::default();
 
+    let mut chain = ChainCursor::default();
     for block in 0..total_blocks {
         let abs_height = block + scenario.genesis_height_offset;
         let epoch = abs_height / SETTLEMENT_EPOCH_BLOCKS;
@@ -205,59 +191,44 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         }
         current_epoch = epoch;
 
-        let ag = already_generated.min(u64::MAX as u128) as u64;
-        let base_reward = base_block_reward(ag, &economic)
+        let priced = chain.price(
+            ChainStep {
+                fold_height: block,
+                chain_height: abs_height,
+                demand: (scenario.get_volume)(block, params.blocks_per_year),
+                leaves: outputs.leaves(),
+                already_generated,
+                total_burned,
+            },
+            params,
+            &economic,
+        );
+        let base_reward = base_block_reward(priced.fee_point.already_generated, &economic)
             .expect("sim neutral trajectory stays within the arithmetic domain");
-
-        let tx_volume = (scenario.get_volume)(block, params.blocks_per_year);
-
         let multiplier = calc_release_multiplier(
-            TxVolume::per_block(tx_volume),
+            priced.volume,
             params.tx_volume_baseline,
             params.release_min,
             params.release_max,
         );
+        let emission_share = priced.emission_share;
+
+        // Fee leg — identical under both dispositions. The burn read the net
+        // supply inside the cursor.
+        outputs.accrue(priced.filled.included);
+        let total_fees = priced.filled.fees;
+        let burn_pct = priced.burn_pct;
 
         // Real ledger advance uses the paid emission (both arms share it).
-        let effective_reward = effective_emission(ag, TxVolume::per_block(tx_volume), &economic)
-            .expect("sim paid emission stays within the arithmetic domain");
-
-        let emission_share = calc_effective_emission_share(
-            abs_height,
-            crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT,
-            params.staker_emission_share,
-            params.staker_emission_decay,
-            params.blocks_per_year,
-        );
-
-        // (a): staker emission leg from the MODULATED reward (shipped).
+        let effective_reward = priced.filled.paid_reward;
+        // (a): staker emission leg from the MODULATED, penalised reward (shipped).
         let (_miner_a, staker_emission_a) = split_block_emission(effective_reward, emission_share);
-        // (b): staker emission leg from the UNMODULATED subsidy (counterfactual).
+        // (b): staker emission leg from the UNMODULATED subsidy
+        // (counterfactual). Unpenalised: the fill rule admits a body past
+        // the median only when its fee covers the reward it costs, so the
+        // penalty in (a) is bounded by the fees of the bodies that crossed —
+        // declared in §4 of the design document, not modelled in (b).
         let (_miner_b, staker_emission_b) = split_block_emission(base_reward, emission_share);
-
-        // Fee leg — identical under both dispositions.
-        let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
-        let burn_pct = calc_burn_pct(
-            TxVolume::per_block(tx_volume),
-            params.tx_volume_baseline,
-            circulating,
-            params.emission_curve_asymptote,
-            params.burn_base_rate,
-            params.burn_cap,
-        );
-        let charged = params.fee.charge(
-            tx_volume,
-            &FeePoint {
-                already_generated: ag,
-                volume: TxVolume::per_block(tx_volume),
-                sigma_scaled: emission_share,
-                burn_pct_scaled: burn_pct,
-                chain_leaves: outputs.leaves(),
-                params: &economic,
-            },
-        );
-        outputs.accrue(tx_volume);
-        let total_fees = charged.total_atomic;
         // Canonical escalated entry; n = 0 (no corpus trajectory in this arm —
         // see engine.rs). Genesis-neutral asymptote ⇒ bit-identical to flat.
         let fee_split =
@@ -267,7 +238,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         emission_a_acc += staker_emission_a as u128;
         emission_b_acc += staker_emission_b as u128;
         fee_acc += fee_split.staker_pool_amount as u128;
-        vol_sum += tx_volume as u128;
+        vol_sum += priced.filled.included as u128;
         mult_sum += multiplier as u128;
         mult_min = mult_min.min(multiplier);
         blocks_in_epoch += 1;

@@ -513,6 +513,14 @@ reason). The gate-7 wiring must follow the recorder, not the modeling loop: the 
 re-priced burn trajectory diverges from what consensus will compute and the close
 criteria read a sim artifact instead of the chain's arithmetic.
 
+**Superseded (2026-10-03).** The constraint above records what the burn site read
+on 2026-06-11. Consensus has since moved to the net quantity: circulating supply is
+`coins_generated − total_burned` at parent state (FL-R16c; CEN-F17), derived by
+`shekyl_economics::CirculatingSupply::derive` in both validators. Its reason, *follow
+what consensus computes*, therefore now points the other way. ESR-5 moved the gate-7
+path and the recorder to the net quantity
+([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md) §5.9).
+
 **Inputs — all already pinned (which is why this is buildable now):** `bond_rate* = 0.75`
 (iteration-2 fine sweep); `ARCHIVAL_BOND_FLOOR` (gate-4 §8.1); `W = 26`, `SEB = 10_000`
 (timing cluster — claim cadence bounds in-flight unclaimed value, a second-order term the

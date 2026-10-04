@@ -621,6 +621,14 @@ shekyl-fcmp-proofs = { opt-level = 3 }
 # of every debug `cargo test` run, here and in CI.
 fips205 = { opt-level = 3 }
 sha2 = { opt-level = 3 }
+# Each economics-sim scenario is folded once. These four crates are that
+# fold's per-block path (the reward, the fill rule, the weight predictor).
+# An unoptimised copy of them sets the length of every debug `cargo test`
+# run, here and in CI. The override is the per-block path of the one fold.
+shekyl-economics-sim = { opt-level = 3 }
+shekyl-economics = { opt-level = 3 }
+shekyl-block-template = { opt-level = 3 }
+shekyl-tx-weight = { opt-level = 3 }
 
 [profile.dev]
 panic = "abort"
