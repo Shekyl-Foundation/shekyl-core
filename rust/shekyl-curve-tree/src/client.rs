@@ -53,7 +53,7 @@
 //! See `docs/design/CURVE_TREE_CLIENT.md` §3 and
 //! `docs/design/CT2_DRAIN_ORDER.md` §7 (data flow).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -80,7 +80,7 @@ use shekyl_fcmp::tree::{
 /// `I` is **not** stored — it is `key_image_generator(O)`, derived at
 /// assembly. A stored copy of a recomputable value is a second copy that can
 /// disagree (`CT6_PROVING_STATE.md` §11.8).
-const CAPTURED_IDENTITY_BYTES: usize = 96;
+pub(crate) const CAPTURED_IDENTITY_BYTES: usize = 96;
 
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
 /// **before** `h_pqc` resolution. The client resolves `h_pqc` from the
@@ -175,6 +175,36 @@ pub enum ClientError {
         expected: OneTimePubkey,
         /// The output key this client holds at that `gindex`.
         got: OneTimePubkey,
+    },
+    /// The reference height has no frontier snapshot, so the open chunks of
+    /// a captured path cannot be read at it.
+    ///
+    /// The ring holds `[tip - horizon, tip]` with the horizon at
+    /// `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` (720), and the daemon rejects a
+    /// reference older than `REFERENCE_BLOCK_MAX_AGE` (100) blocks — so a
+    /// reference the daemon would accept is always inside the ring, and this
+    /// fires only for one it would refuse anyway. Named here rather than
+    /// paid for: the alternative is to rebuild the tree from every drained
+    /// leaf to serve a reference that cannot be submitted.
+    ReferenceOutsideSnapshotRing {
+        /// The reference height asked for.
+        height: BlockHeight,
+    },
+    /// A chunk a captured path needs has closed, and the capture table does
+    /// not hold it.
+    ///
+    /// The owned position was resolved, so every chunk over it should have
+    /// been written — by the fold as it closed, or by reconciliation for the
+    /// ones that closed before registration. One missing means that did not
+    /// happen, and the remedy is [`CurveTreeClient::reconcile_captures`],
+    /// which writes exactly what is due and absent. Not a fallback to the
+    /// rebuild: that would serve the spend while hiding that the mechanism
+    /// it relies on has a hole.
+    CaptureMissing {
+        /// Leaf position the chunk closed at — the capture row's key.
+        end_leaf: u64,
+        /// The layer the row lacks.
+        layer: u8,
     },
     /// A held owned position is not one the canonical drain order produces.
     ///
@@ -433,6 +463,8 @@ impl ClientError {
             // disagreement, not an open-time outcome.
             ClientError::RegistrationIdentityMismatch { .. }
             | ClientError::OwnedPositionDrift { .. }
+            | ClientError::ReferenceOutsideSnapshotRing { .. }
+            | ClientError::CaptureMissing { .. }
             | ClientError::RootMismatch { .. }
             | ClientError::PathRootMismatch { .. }
             | ClientError::OutputNotDrained { .. }
@@ -465,7 +497,8 @@ pub struct CurveTreeClient {
     /// inside a [`WriterRecovery`] — so a fail-stop recovery does not open
     /// a second database beside a serving host that is still holding the
     /// first, and the read-only wrapper stays unable to mint a writer.
-    store: Arc<LeafStore>,
+    // `pub(crate)` for the sibling `assemble` module's capture reads.
+    pub(crate) store: Arc<LeafStore>,
     // `pub(crate)` so the sibling `assemble` module and unit tests read leaf
     // candidates. Drained leaves are mirrored into `store` on each ingest.
     pub(crate) entries: Vec<LeafEntry>,
@@ -532,9 +565,15 @@ pub struct CurveTreeClient {
     /// it pushes. Recording it there is the one instrument; resolving it
     /// again from the maturity index would be a second.
     ///
+    /// Keyed by **position**, because the fold's intersection test is a
+    /// range over positions; the value is the gindex it resolved, which is
+    /// what assembly reverses to find an input's position. That reverse
+    /// lookup is a scan — the registry is the wallet's own output count and
+    /// a batch holds at most `MAX_INPUTS`.
+    ///
     /// A rollback **retains** the positions below the surviving leaf count
     /// and drops the rest — see [`Self::rollback_to_fork`].
-    owned_positions: BTreeSet<u64>,
+    pub(crate) owned_positions: BTreeMap<u64, Gindex>,
 }
 
 /// What registering an owned output means for the captures it needs
@@ -718,7 +757,7 @@ impl CurveTreeClient {
             poisoned: false,
             frontier: Frontier::new(),
             owned_outputs: BTreeMap::new(),
-            owned_positions: BTreeSet::new(),
+            owned_positions: BTreeMap::new(),
         })
     }
 
@@ -913,7 +952,7 @@ impl CurveTreeClient {
             // list is the wallet's, and re-registering is what tells this
             // client what to capture. See `owned_outputs`.
             owned_outputs: BTreeMap::new(),
-            owned_positions: BTreeSet::new(),
+            owned_positions: BTreeMap::new(),
         })
     }
 
@@ -1106,7 +1145,7 @@ impl CurveTreeClient {
         // is compared against.
         let surviving = rebuilt.frontier.leaf_count();
         self.owned_positions
-            .retain(|position| *position < surviving);
+            .retain(|position, _| *position < surviving);
 
         // **Registrations**, in `(gindex, O)`. This is now *cleanup*, not
         // the correctness rule: ownership is tested by identity at the fold
@@ -1338,13 +1377,20 @@ impl CurveTreeClient {
 
         // Recompute the owned positions from the canonical drain order, and
         // check the fold's against them before using either.
-        let mut positions = BTreeSet::new();
+        let mut positions: BTreeMap<u64, Gindex> = BTreeMap::new();
         for (position, entry) in drained.iter().enumerate() {
             if self.owned_outputs.get(&entry.gindex) == Some(&entry.identity.output_key) {
-                positions.insert(u64::try_from(position).expect("a drain position fits u64"));
+                positions.insert(
+                    u64::try_from(position).expect("a drain position fits u64"),
+                    entry.gindex,
+                );
             }
         }
-        if let Some(stale) = self.owned_positions.difference(&positions).next() {
+        if let Some(stale) = self
+            .owned_positions
+            .keys()
+            .find(|held| !positions.contains_key(held))
+        {
             return Err(ClientError::OwnedPositionDrift { position: *stale });
         }
 
@@ -1354,7 +1400,7 @@ impl CurveTreeClient {
         let depth = layer_count_for_leaves(drained_count);
         let mut held: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
         let mut owed: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
-        for position in &positions {
+        for position in positions.keys() {
             for layer in 0..depth {
                 let Some(end_leaf) = Self::due_chunk_end(*position, layer, drained_count) else {
                     continue;
@@ -1415,7 +1461,7 @@ impl CurveTreeClient {
     ///
     /// Closed means `end_leaf < drained_count` — the one comparison (see
     /// [`Self::reconcile_captures`]).
-    fn due_chunk_end(position: u64, layer: u8, drained_count: u64) -> Option<u64> {
+    pub(crate) fn due_chunk_end(position: u64, layer: u8, drained_count: u64) -> Option<u64> {
         let covered = u64::try_from(outputs_per_node(layer)).expect("node capacity fits u64");
         let end_leaf = (position / covered + 1)
             .checked_mul(covered)?
@@ -1516,8 +1562,8 @@ impl CurveTreeClient {
     /// block would be missed.
     fn chunk_holds_owned(
         chunk: &FoldedChunk<'_>,
-        resolved: &BTreeSet<u64>,
-        pending: &[u64],
+        resolved: &BTreeMap<u64, Gindex>,
+        pending: &[(u64, Gindex)],
     ) -> bool {
         let covered = u64::try_from(outputs_per_node(chunk.layer)).expect("node capacity fits u64");
         let start = chunk
@@ -1528,7 +1574,7 @@ impl CurveTreeClient {
         resolved.range(start..=chunk.end_leaf).next().is_some()
             || pending
                 .iter()
-                .any(|position| *position >= start && *position <= chunk.end_leaf)
+                .any(|(position, _)| *position >= start && *position <= chunk.end_leaf)
     }
 
     /// The layer-0 capture body for the chunk that closed at `end_leaf`:
@@ -1681,13 +1727,18 @@ impl CurveTreeClient {
         // A leaf's position is its index in drain order, and `drained` is
         // pushed in that order, so the `i`th leaf lands at `base + i`.
         let base = self.frontier.leaf_count();
-        let pending_owned: Vec<u64> = drained
+        let pending_owned: Vec<(u64, Gindex)> = drained
             .iter()
             .enumerate()
             .filter(|(_, entry)| {
                 self.owned_outputs.get(&entry.gindex) == Some(&entry.identity.output_key)
             })
-            .map(|(i, _)| base + u64::try_from(i).expect("a block's drain count fits u64"))
+            .map(|(i, entry)| {
+                (
+                    base + u64::try_from(i).expect("a block's drain count fits u64"),
+                    entry.gindex,
+                )
+            })
             .collect();
 
         // The frontier advances on a CLONE, before the transaction opens.
@@ -1859,7 +1910,7 @@ impl CurveTreeClient {
         canonical
     }
 
-    fn drained_leaf_count_at(&self, through: BlockHeight) -> u64 {
+    pub(crate) fn drained_leaf_count_at(&self, through: BlockHeight) -> u64 {
         if let Ok(i) = self
             .drained_through_counts
             .binary_search_by_key(&through, |(t, _)| *t)
@@ -2058,7 +2109,7 @@ impl CurveTreeClient {
     }
 
     /// Decode the ring's row at `height`, if it has one.
-    fn snapshot_at(&self, height: BlockHeight) -> Result<Option<Frontier>, ClientError> {
+    pub(crate) fn snapshot_at(&self, height: BlockHeight) -> Result<Option<Frontier>, ClientError> {
         Self::snapshot_at_in(&self.store, height)
     }
 

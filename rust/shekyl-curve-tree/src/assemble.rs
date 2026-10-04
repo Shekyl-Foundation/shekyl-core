@@ -42,9 +42,13 @@ use std::collections::HashMap;
 
 use crate::types::Gindex;
 
-use crate::client::{ClientError, CurveTreeClient};
+use crate::client::{ClientError, CurveTreeClient, CAPTURED_IDENTITY_BYTES};
 use crate::recon::{assemble_leaf_stream, drained_sorted};
-use crate::types::{AssembleInput, AssembledPath, ChunkLeaf, ReferenceBlock, TreeContext};
+use crate::store::StoreError;
+use crate::types::{
+    AssembleInput, AssembledPath, ChunkLeaf, CommitmentBytes, LeafEntry, OneTimePubkey,
+    ReferenceBlock, TreeContext, TreePosition,
+};
 use shekyl_fcmp::tree::{
     build_layers, chunk_width, hash_grow_helios, hash_grow_selene, helios_hash_init,
     helios_point_to_selene_scalar, key_image_generator, layer_is_selene, selene_hash_init,
@@ -158,6 +162,87 @@ pub(crate) fn verify_path_against_its_branches(path: &AssembledPath) -> Result<(
     Ok(())
 }
 
+/// One drained leaf as a path carries it.
+///
+/// The one construction, used by the capture path's open-tail read and by
+/// the rebuild alike, so the two cannot build the tuple differently.
+fn chunk_leaf(entry: &LeafEntry) -> ChunkLeaf {
+    ChunkLeaf {
+        output_key: entry.identity.output_key,
+        key_image_gen: key_image_generator(entry.identity.output_key.as_bytes()),
+        // A drained leaf always has a commitment (try_build_leaf required
+        // `i < outPk.size()`), so this never fires.
+        commitment: entry
+            .identity
+            .commitment
+            .expect("drained leaf has a commitment"),
+        // `CM.x` as the leaf holds it, not the published point.
+        cm_x: entry.cm_x(),
+    }
+}
+
+/// Decode a layer-0 capture body — `O ‖ C ‖ CM.x` per sibling — into the
+/// chunk leaves a path carries, deriving `I` as `Hp(O)`.
+///
+/// The consumer's side of the encoder in `client.rs`; written out rather
+/// than shared with it, so the two can disagree and a pass can notice.
+fn decode_captured_leaf_chunk(body: &[u8]) -> Result<Vec<ChunkLeaf>, ClientError> {
+    if body.is_empty()
+        || !body.len().is_multiple_of(CAPTURED_IDENTITY_BYTES)
+        || body.len() > SELENE_CHUNK_WIDTH * CAPTURED_IDENTITY_BYTES
+    {
+        return Err(StoreError::CorruptMeta("captured leaf chunk is not whole identities").into());
+    }
+    Ok(body
+        .chunks_exact(CAPTURED_IDENTITY_BYTES)
+        .map(|row| {
+            let mut o = [0u8; 32];
+            let mut c = [0u8; 32];
+            let mut cm_x = [0u8; 32];
+            o.copy_from_slice(&row[0..32]);
+            c.copy_from_slice(&row[32..64]);
+            cm_x.copy_from_slice(&row[64..96]);
+            ChunkLeaf {
+                output_key: OneTimePubkey::from_bytes(o),
+                key_image_gen: key_image_generator(&o),
+                commitment: CommitmentBytes::from_bytes(c),
+                cm_x,
+            }
+        })
+        .collect())
+}
+
+/// Convert one layer's children to the scalars its parent's curve takes and
+/// push them on the branch list for that curve.
+///
+/// Even layers are Selene nodes whose children are Helios points → Selene
+/// scalars (C1); odd layers are Helios nodes whose children are Selene
+/// points → Helios scalars (C2). The conversions are total for valid
+/// consensus nodes (`node_conversions_are_total` in shekyl-fcmp), and a path
+/// is only assembled after the root gate has passed.
+fn push_branch(
+    layer: u8,
+    children: &[[u8; 32]],
+    c1_layers: &mut Vec<Vec<[u8; 32]>>,
+    c2_layers: &mut Vec<Vec<[u8; 32]>>,
+) {
+    if layer_is_selene(layer) {
+        c1_layers.push(
+            children
+                .iter()
+                .map(|p| helios_point_to_selene_scalar(p).expect("helios->selene"))
+                .collect(),
+        );
+    } else {
+        c2_layers.push(
+            children
+                .iter()
+                .map(|p| selene_point_to_helios_scalar(p).expect("selene->helios"))
+                .collect(),
+        );
+    }
+}
+
 impl CurveTreeClient {
     /// Assemble the FCMP++ membership path for one owned output at a
     /// reference block.
@@ -256,13 +341,11 @@ impl CurveTreeClient {
         inputs: &[AssembleInput],
         reference: &ReferenceBlock,
     ) -> Result<Vec<AssembledPath>, ClientError> {
-        let cutoff = Self::drained_through(reference.height);
-
-        // Two mechanisms by design: (1) integrity gate — store-backed `root_at`
-        // (CT-1), no replay-oracle fallback; (2) path branches — replay
-        // `entries` + `build_layers(assemble_leaf_stream(...))` (CT-4), because
-        // `prune_frozen` may drop non-owned leaf bytes from frozen segments.
-        let got = self.root_at(reference.height)?;
+        // The integrity gate and the depth from ONE dispatcher: the ring
+        // snapshot where it covers the height, the count-keyed store path
+        // otherwise. Reading depth beside it from a second derivation would
+        // let the two describe different tree states.
+        let (got, depth) = self.root_and_depth_at(reference.height)?;
         if got != reference.curve_tree_root {
             return Err(ClientError::RootMismatch {
                 height: reference.height,
@@ -271,6 +354,235 @@ impl CurveTreeClient {
             });
         }
 
+        // State 3: a batch whose every input has a resolved owned position
+        // is assembled from its captures and the frontier snapshot, and
+        // never reads `entries`. The rebuild below is the fallback for a
+        // batch that does not — which, until the engine registers what it
+        // holds, is every production batch. **Retired by the registrant
+        // PR**: once every owned output is registered on open, no input
+        // reaches it, and it is deleted rather than kept; the passes that
+        // exercise it today (`batched_assembly_keeps_each_input_its_own_path`,
+        // `a_root_mismatch_refuses_the_whole_batch`,
+        // `a_mutated_leaf_chunk_is_absent_from_its_branch`) move to
+        // registered fixtures then.
+        if let Some(paths) = self.assemble_from_captures(inputs, reference, depth)? {
+            return Ok(paths);
+        }
+        self.assemble_by_rebuild(inputs, reference)
+    }
+
+    /// Assemble a batch from the **captured** chunks over each input and the
+    /// frontier snapshot at the reference height — reading no drained leaf
+    /// beyond the open leaf chunk's own tail.
+    ///
+    /// Returns `None` when an input has no resolved owned position; the
+    /// caller falls back to the rebuild. Every other shortfall is a named
+    /// refusal, because a silent fallback from here would serve the spend
+    /// while hiding a hole in the mechanism it relies on.
+    ///
+    /// # Each layer, from one of two places
+    ///
+    /// A layer-`L` chunk over position `p` is **closed** at the reference
+    /// height iff its end is strictly below the drained count — the one
+    /// comparison the capture key, the rollback and the backfill share — and
+    /// then its contents are fixed and come from the table. Otherwise it is
+    /// the rightmost chunk at its layer, still open, and its children are the
+    /// snapshot's [`Frontier::open_branches`] entry for that layer. Layer 0
+    /// is the exception in the open case: the frontier holds leaf *scalars*
+    /// and a path needs sibling *points*, so the open leaf chunk's identities
+    /// come from a ranged read of its own positions — at most
+    /// `SELENE_CHUNK_WIDTH - 1` rows, the bounded identity tail increment 7
+    /// retires with `entries`.
+    ///
+    /// Positions are permanent once assigned, so `position < drained count`
+    /// is both "drained at this height" and "every closed chunk over it has
+    /// a key below the count".
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::OutputNotDrained`] if a resolved position is at or
+    /// above the drained count at the reference height;
+    /// [`ClientError::ReferenceOutsideSnapshotRing`] if the ring has no row
+    /// there; [`ClientError::SnapshotLeafCountMismatch`] if the row's count
+    /// is not the height's (C3); [`ClientError::CaptureMissing`] if a closed
+    /// chunk's row lacks the layer; [`ClientError::IdentityMismatch`] if the
+    /// leaf at the position does not carry the input's `(O, C)`;
+    /// [`ClientError::PathRootMismatch`] from the artifact check;
+    /// [`ClientError::Store`] on a read failure.
+    fn assemble_from_captures(
+        &self,
+        inputs: &[AssembleInput],
+        reference: &ReferenceBlock,
+        depth: u8,
+    ) -> Result<Option<Vec<AssembledPath>>, ClientError> {
+        let mut positions = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            match self
+                .owned_positions
+                .iter()
+                .find(|(_, gindex)| **gindex == input.gindex)
+            {
+                Some((position, _)) => positions.push(*position),
+                None => return Ok(None),
+            }
+        }
+
+        let cutoff = Self::drained_through(reference.height);
+        let drained_count = self.drained_leaf_count_at(cutoff);
+        for (input, position) in inputs.iter().zip(&positions) {
+            if *position >= drained_count {
+                return Err(ClientError::OutputNotDrained {
+                    gindex: input.gindex,
+                    output_key: input.output_key,
+                });
+            }
+        }
+
+        let snapshot = self.snapshot_at(reference.height)?.ok_or(
+            ClientError::ReferenceOutsideSnapshotRing {
+                height: reference.height,
+            },
+        )?;
+        if snapshot.leaf_count() != drained_count {
+            return Err(ClientError::SnapshotLeafCountMismatch {
+                height: reference.height,
+                snapshot: snapshot.leaf_count(),
+                expected: drained_count,
+            });
+        }
+        let open = snapshot
+            .open_branches()
+            .map_err(|source| ClientError::Frontier {
+                height: reference.height,
+                source,
+            })?;
+
+        let mut paths = Vec::with_capacity(inputs.len());
+        for (input, position) in inputs.iter().zip(positions) {
+            let leaf_chunk = self.leaf_chunk_at(position, drained_count)?;
+            let chunk_start = position / SELENE_CHUNK_WIDTH as u64 * SELENE_CHUNK_WIDTH as u64;
+            let offset = usize::try_from(position - chunk_start).expect("an offset fits usize");
+            let resolved = leaf_chunk.get(offset).ok_or(ClientError::CaptureMissing {
+                end_leaf: chunk_start + SELENE_CHUNK_WIDTH as u64 - 1,
+                layer: 0,
+            })?;
+            // The same X3 guard the rebuild applies, on the leaf the capture
+            // holds at the position the fold resolved.
+            if resolved.output_key != input.output_key || resolved.commitment != input.commitment {
+                return Err(ClientError::IdentityMismatch {
+                    gindex: input.gindex,
+                    expected_output_key: input.output_key,
+                    got_output_key: resolved.output_key,
+                    commitment_matched: resolved.commitment == input.commitment,
+                });
+            }
+
+            let mut c1_layers: Vec<Vec<[u8; 32]>> = Vec::new();
+            let mut c2_layers: Vec<Vec<[u8; 32]>> = Vec::new();
+            for layer in 1..depth {
+                let children = match Self::due_chunk_end(position, layer, drained_count) {
+                    Some(end_leaf) => self.captured_children(end_leaf, layer)?,
+                    None => open
+                        .get(usize::from(layer) - 1)
+                        .filter(|branch| !branch.is_empty())
+                        .cloned()
+                        // The depth says this layer's chunk over the position
+                        // is open, and the frontier has nothing open there: a
+                        // state the advance cannot produce.
+                        .ok_or(ClientError::Frontier {
+                            height: reference.height,
+                            source: crate::frontier::FrontierError::EmptyWithLeaves,
+                        })?,
+                };
+                push_branch(layer, &children, &mut c1_layers, &mut c2_layers);
+            }
+
+            let assembled = AssembledPath {
+                leaf_chunk,
+                c1_layers,
+                c2_layers,
+                tree: TreeContext {
+                    reference_block: reference.block_hash,
+                    tree_root: reference.curve_tree_root,
+                    tree_depth: depth,
+                },
+            };
+            verify_path_against_its_branches(&assembled).map_err(|fault| {
+                ClientError::PathRootMismatch {
+                    claimed: assembled.tree.tree_root,
+                    fault,
+                }
+            })?;
+            paths.push(assembled);
+        }
+        Ok(Some(paths))
+    }
+
+    /// The leaf chunk over `position` at a height with `drained_count`
+    /// leaves: from the capture if it has closed, from the leaf rows' tail if
+    /// it is still open.
+    fn leaf_chunk_at(
+        &self,
+        position: u64,
+        drained_count: u64,
+    ) -> Result<Vec<ChunkLeaf>, ClientError> {
+        let width = SELENE_CHUNK_WIDTH as u64;
+        let chunk_start = position / width * width;
+        match Self::due_chunk_end(position, 0, drained_count) {
+            Some(end_leaf) => {
+                let body = self.captured_body(end_leaf, 0)?;
+                decode_captured_leaf_chunk(&body)
+            }
+            None => {
+                let entries = self.store.read_drained_range(
+                    TreePosition::from_raw(chunk_start),
+                    TreePosition::from_raw(drained_count - 1),
+                )?;
+                Ok(entries.iter().map(chunk_leaf).collect())
+            }
+        }
+    }
+
+    /// The children of the closed layer-`layer` chunk that ended at
+    /// `end_leaf`, from the capture table.
+    fn captured_children(&self, end_leaf: u64, layer: u8) -> Result<Vec<[u8; 32]>, ClientError> {
+        let body = self.captured_body(end_leaf, layer)?;
+        let width = chunk_width(layer);
+        if body.len() != width * 32 {
+            return Err(
+                StoreError::CorruptMeta("captured node chunk is not one full width").into(),
+            );
+        }
+        Ok(body
+            .chunks_exact(32)
+            .map(|node| {
+                let mut word = [0u8; 32];
+                word.copy_from_slice(node);
+                word
+            })
+            .collect())
+    }
+
+    /// The captured body at `(end_leaf, layer)`, or [`ClientError::CaptureMissing`].
+    fn captured_body(&self, end_leaf: u64, layer: u8) -> Result<Vec<u8>, ClientError> {
+        self.store
+            .captured_chunks(TreePosition::from_raw(end_leaf))?
+            .into_iter()
+            .find(|chunk| chunk.layer == layer)
+            .map(|chunk| chunk.bytes)
+            .ok_or(ClientError::CaptureMissing { end_leaf, layer })
+    }
+
+    /// Assemble a batch by rebuilding the layer stack from every drained
+    /// leaf in `entries` — the pre-capture path, kept as the fallback for a
+    /// batch with an unregistered input. See [`Self::assemble_paths`] for
+    /// its retirement.
+    fn assemble_by_rebuild(
+        &self,
+        inputs: &[AssembleInput],
+        reference: &ReferenceBlock,
+    ) -> Result<Vec<AssembledPath>, ClientError> {
+        let cutoff = Self::drained_through(reference.height);
         let stream = assemble_leaf_stream(&self.entries, cutoff);
         let layers = build_layers(&stream);
 
@@ -330,18 +642,7 @@ impl CurveTreeClient {
             let leaf_end = (leaf_start + SELENE_CHUNK_WIDTH).min(drained.len());
             let leaf_chunk: Vec<ChunkLeaf> = drained[leaf_start..leaf_end]
                 .iter()
-                .map(|e| ChunkLeaf {
-                    output_key: e.identity.output_key,
-                    key_image_gen: key_image_generator(e.identity.output_key.as_bytes()),
-                    // A drained leaf always has a commitment (try_build_leaf
-                    // required `i < outPk.size()`), so this never fires.
-                    commitment: e
-                        .identity
-                        .commitment
-                        .expect("drained leaf has a commitment"),
-                    // `CM.x` as the leaf holds it, not the published point.
-                    cm_x: e.cm_x(),
-                })
+                .map(|e| chunk_leaf(e))
                 .collect();
 
             // Branch for each path node at layers 1..=depth-1 (the topmost is the
@@ -357,23 +658,7 @@ impl CurveTreeClient {
                 let prev = &layers[usize::from(layer) - 1];
                 let start = node_idx * width;
                 let end = (start + width).min(prev.len());
-                if layer_is_selene(layer) {
-                    // Even layer (Selene node): children are x-coords of the
-                    // Helios points below → Selene scalars (C1).
-                    let scalars = prev[start..end]
-                        .iter()
-                        .map(|p| helios_point_to_selene_scalar(p).expect("helios->selene"))
-                        .collect();
-                    c1_layers.push(scalars);
-                } else {
-                    // Odd layer (Helios node): children are x-coords of the
-                    // Selene points below → Helios scalars (C2).
-                    let scalars = prev[start..end]
-                        .iter()
-                        .map(|p| selene_point_to_helios_scalar(p).expect("selene->helios"))
-                        .collect();
-                    c2_layers.push(scalars);
-                }
+                push_branch(layer, &prev[start..end], &mut c1_layers, &mut c2_layers);
                 child_node_idx = node_idx;
             }
 

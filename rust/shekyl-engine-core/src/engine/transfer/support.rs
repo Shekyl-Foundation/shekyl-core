@@ -140,7 +140,15 @@ fn client_reanchor_class(err: &ClientError) -> ClientReanchorClass {
         // A registration disagreeing with the client's chain view is the
         // reselection family: the wallet's rescan re-registers against the
         // chain it now sees, which is the same remedy a stale input gets.
+        // A reference outside the snapshot ring is older than the daemon
+        // accepts, so re-anchoring at a fresh reference is the remedy — the
+        // reselection family's. A missing capture is also not terminal: the
+        // store is sound, and the remedy is reconciliation, which the
+        // registrant runs on open; until then a rebuilt path is what the
+        // consumer gets by discarding this one.
         ClientError::RegistrationIdentityMismatch { .. }
+        | ClientError::ReferenceOutsideSnapshotRing { .. }
+        | ClientError::CaptureMissing { .. }
         | ClientError::RootMismatch { .. }
         | ClientError::OutputNotDrained { .. }
         | ClientError::IdentityMismatch { .. }
@@ -297,6 +305,32 @@ mod reanchor_classification_tests {
                 "a store missing leaf bytes must be terminal, not a reselection \
                  request; got {other:?}"
             ),
+        }
+    }
+
+    /// The two capture-path refusals that are NOT terminal.
+    ///
+    /// A reference outside the ring is one the daemon would reject as too
+    /// old, so a fresh anchor is the remedy. A missing capture leaves the
+    /// store sound and is repaired by reconciliation. Neither is a store
+    /// missing leaf bytes, which is what the terminal arm is for, and a test
+    /// pinning that keeps a later edit from sweeping them into it.
+    #[test]
+    fn a_stale_reference_and_a_missing_capture_ask_for_reselection() {
+        for err in [
+            ClientError::ReferenceOutsideSnapshotRing {
+                height: shekyl_curve_tree::BlockHeight::from_raw(5),
+            },
+            ClientError::CaptureMissing {
+                end_leaf: 683,
+                layer: 1,
+            },
+        ] {
+            let err = CurveTreeHandleError::Client(err);
+            match map_handle_err_to_reanchor(&err) {
+                ReanchorError::ReselectionRequired { .. } => {}
+                other => panic!("expected the reselection family; got {other:?}"),
+            }
         }
     }
 

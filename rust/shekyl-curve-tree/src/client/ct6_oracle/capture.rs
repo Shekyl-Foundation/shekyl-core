@@ -314,12 +314,16 @@ fn body_at(chunks: &[CapturedChunk], layer: u8) -> Vec<u8> {
 #[test]
 fn a_captured_chunk_equals_what_assembly_builds() {
     let (client, tip) = drained_chunks(&[OWNED_POSITION]);
-    let reference = reference_at(&client, tip);
+    // The path comes from an UNREGISTERED twin over the same seeds, so it is
+    // rebuilt from every drained leaf. On `client` itself assembly would now
+    // read the capture this pass is grading, and compare it with itself.
+    let (twin, _) = drained_chunks(&[]);
+    let reference = reference_at(&twin, tip);
 
     let cutoff = tip - BlockCount::ONE;
-    let drained = crate::recon::drained_sorted(&client.entries, cutoff);
+    let drained = crate::recon::drained_sorted(&twin.entries, cutoff);
     let owned = &drained[usize::try_from(OWNED_POSITION).expect("position fits usize")];
-    let path = client
+    let path = twin
         .assemble_path(
             &AssembleInput {
                 gindex: owned.gindex,
@@ -495,7 +499,7 @@ fn a_rollback_keeps_the_registry_and_drops_cut_positions() {
          rollback is a statement about the chain, and cannot retract it"
     );
     assert!(
-        !client.owned_positions.contains(&OWNED_POSITION),
+        !client.owned_positions.contains_key(&OWNED_POSITION),
         "position {OWNED_POSITION} is at or above the surviving leaf count, so \
          it no longer names the owned leaf"
     );
@@ -566,7 +570,7 @@ fn a_missing_leaf_row_refuses_rather_than_capturing_short() {
     );
     client
         .store
-        .drop_leaf_rows_for_test(TreePosition::from_raw(start))
+        .drop_leaf_rows_for_test(TreePosition::from_raw(start), TreePosition::from_raw(start))
         .expect("the rows drop");
 
     let closing = maturity + BlockCount::ONE;
@@ -892,7 +896,9 @@ fn reconciliation_resolves_the_position_so_the_fold_continues() {
 fn a_drifted_owned_position_is_refused() {
     let (mut client, _) = drained_chunks(&[OWNED_POSITION]);
     // A position no registration can account for.
-    client.owned_positions.insert(OWNED_POSITION - 1);
+    client
+        .owned_positions
+        .insert(OWNED_POSITION - 1, Gindex::from_raw(OWNED_POSITION - 1));
     match client.reconcile_captures() {
         Err(crate::ClientError::OwnedPositionDrift { position }) => {
             assert_eq!(
@@ -1200,17 +1206,29 @@ fn a_reorg_past_creation_retires_the_registration_and_rebinds_it() {
     );
     client.reconcile_captures().expect("reconciliation runs");
 
-    let tip = client
+    // The oracle path is rebuilt on an unregistered twin that walked the
+    // same fork, so it does not read the capture it is compared against.
+    let mut twin = CurveTreeClient::new();
+    ingest_fixture(&mut twin, fork, &counts);
+    ingest_range_seeded(
+        &mut twin,
+        fork + BlockCount::ONE,
+        tip_for(&counts),
+        &counts,
+        1_000_000,
+    );
+    let tip = twin
         .ingested_tip_height
-        .expect("the client has ingested the new chain");
-    let reference = reference_at(&client, tip);
-    let drained = crate::recon::drained_sorted(&client.entries, tip - BlockCount::ONE);
+        .expect("the twin has ingested the new chain");
+    assert_eq!(tip, client.ingested_tip_height.expect("ingested"));
+    let reference = reference_at(&twin, tip);
+    let drained = crate::recon::drained_sorted(&twin.entries, tip - BlockCount::ONE);
     let position = drained
         .iter()
         .position(|e| e.gindex.to_raw() == REMOVED)
         .expect("the re-registered output drained");
     let owned = drained[position];
-    let path = client
+    let path = twin
         .assemble_path(
             &AssembleInput {
                 gindex: owned.gindex,
@@ -1321,4 +1339,266 @@ fn an_early_registration_does_not_claim_a_strangers_output() {
         "no owned position exists; the registered key matches no drained leaf"
     );
     assert_eq!(report.chunks_written, 0, "so nothing is owed");
+}
+
+// ---------------------------------------------------------------------------
+// State 3: a capture is load-bearing
+// ---------------------------------------------------------------------------
+
+/// The input for the leaf at `position` on `client`, read from its entries.
+fn input_at(client: &CurveTreeClient, tip: BlockHeight, position: u64) -> AssembleInput {
+    let drained = crate::recon::drained_sorted(&client.entries, tip - BlockCount::ONE);
+    let e = drained[usize::try_from(position).expect("position fits usize")];
+    AssembleInput {
+        gindex: e.gindex,
+        output_key: e.identity.output_key,
+        commitment: e
+            .identity
+            .commitment
+            .expect("a drained leaf carries a commitment"),
+    }
+}
+
+/// Remove every entry but the one at `gindex`, leaving the store untouched.
+fn keep_only(client: &mut CurveTreeClient, gindex: Gindex) {
+    let before = client.entries.len();
+    client.entries.retain(|entry| entry.gindex == gindex);
+    assert_eq!(client.entries.len(), 1, "exactly the owned leaf remains");
+    assert!(
+        before > 1,
+        "the fixture must hold foreign leaves for their absence to mean anything"
+    );
+}
+
+/// With every foreign leaf removed, assembly succeeds and the path equals
+/// the one rebuilt from the whole tree.
+///
+/// # Three states
+///
+/// Capture's claim is one comparison: a path assembled with every foreign
+/// leaf absent equals the path assembled with the whole tree present.
+///
+/// | | with foreign leaves absent |
+/// | --- | --- |
+/// | before the §11.6 gate | succeeded, returning a wrong path under the real root |
+/// | with the gate, before capture | refused with `PathRootFault::RootDisagrees` |
+/// | **now** | succeeds, and the path equals `full` |
+///
+/// This pass replaced the state-2 one in the parent module, which asserted
+/// the refusal. It is not a timing test: a cost curve only estimates the
+/// property, while a slower implementation cannot pass this comparison —
+/// and neither can one that keeps the rebuild as a fallback, because with
+/// the foreign leaves gone the fallback has nothing to rebuild from and
+/// refuses.
+///
+/// # Why `full` comes from a different client
+///
+/// On a client whose input is registered, assembly takes the capture path;
+/// comparing that with itself proves nothing. `full` is rebuilt on an
+/// **unregistered** twin over the same seeds, which is the pre-capture
+/// derivation. Both registration orders are then graded against it: late
+/// (register after ingest, reconcile) and early (register before ingest, the
+/// fold writes), because they fill the table by different mechanisms.
+#[test]
+fn a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone() {
+    let (twin, tip) = drained_chunks(&[]);
+    let reference = reference_at(&twin, tip);
+    let input = input_at(&twin, tip, OWNED_POSITION);
+    assert_eq!(
+        twin.root_at(tip).expect("store root reads"),
+        reference.curve_tree_root,
+        "the anchor is the store tier's root over the whole tree"
+    );
+    let full = twin
+        .assemble_path(&input, &reference)
+        .expect("the rebuild assembles with the whole tree present");
+    assert!(
+        full.leaf_chunk.len() > 1,
+        "the owned leaf's real chunk holds its siblings; a one-leaf chunk here would \
+         mean the fixture, not the mechanism, is doing the work"
+    );
+
+    // Late registration: the table is filled by reconciliation.
+    let (mut late, _) = drained_chunks(&[]);
+    late.register_owned(input.gindex, input.output_key)
+        .expect("a live client registers");
+    late.reconcile_captures().expect("reconciliation runs");
+    keep_only(&mut late, input.gindex);
+    let sparse = late
+        .assemble_path(&input, &reference)
+        .expect("state 3: assembly succeeds with every foreign leaf gone");
+    assert_eq!(
+        sparse, full,
+        "late registration: the captured path is the rebuilt path"
+    );
+
+    // Early registration: the table is filled by the fold.
+    let (mut early, _) = drained_chunks(&[OWNED_POSITION]);
+    keep_only(&mut early, input.gindex);
+    let sparse = early
+        .assemble_path(&input, &reference)
+        .expect("state 3: assembly succeeds with every foreign leaf gone");
+    assert_eq!(
+        sparse, full,
+        "early registration: the captured path is the rebuilt path"
+    );
+}
+
+/// The closed chunks come from the capture table, not from the leaf rows.
+///
+/// The leaves table holds every closed chunk's identities too, so an
+/// assembly that read it for a closed layer-0 chunk would pass the pass
+/// above without touching a capture. Here every foreign leaf row in a
+/// closed chunk is also dropped from the store, leaving only the owned
+/// leaf's row; the root gate still answers from the ring, and the path must
+/// still equal `full`. At this fixture's size every leaf chunk is closed, so
+/// no row at all is read.
+#[test]
+fn captures_are_the_read_site_not_the_leaf_table() {
+    let (twin, tip) = drained_chunks(&[]);
+    let reference = reference_at(&twin, tip);
+    let input = input_at(&twin, tip, OWNED_POSITION);
+    let full = twin
+        .assemble_path(&input, &reference)
+        .expect("the rebuild assembles");
+
+    let (mut client, _) = drained_chunks(&[OWNED_POSITION]);
+    keep_only(&mut client, input.gindex);
+    let last = client.frontier.leaf_count() - 1;
+    assert_eq!(
+        (last + 1) % SELENE_CHUNK_WIDTH as u64,
+        0,
+        "every leaf chunk must be closed, or the tail read would legitimately touch rows"
+    );
+    if OWNED_POSITION > 0 {
+        client
+            .store
+            .drop_leaf_rows_for_test(
+                TreePosition::from_raw(0),
+                TreePosition::from_raw(OWNED_POSITION - 1),
+            )
+            .expect("rows drop");
+    }
+    client
+        .store
+        .drop_leaf_rows_for_test(
+            TreePosition::from_raw(OWNED_POSITION + 1),
+            TreePosition::from_raw(last),
+        )
+        .expect("rows drop");
+
+    let sparse = client
+        .assemble_path(&input, &reference)
+        .expect("assembly must not need a foreign leaf row for a closed chunk");
+    assert_eq!(sparse, full, "the captured path is the rebuilt path");
+}
+
+/// An owned leaf in the **open** leaf chunk assembles from the tail rows and
+/// the snapshot's open branches, and equals the rebuilt path.
+///
+/// The one place assembly still reads leaf rows: the rightmost leaf chunk
+/// has not closed, the frontier holds its scalars and a path needs points,
+/// so its identities come from a ranged read of at most
+/// `SELENE_CHUNK_WIDTH - 1` rows. Above it every chunk is open too, so both
+/// parities of [`Frontier::open_branches`] are consulted — layer 1 (Helios)
+/// and layer 2 (Selene) — from the snapshot rather than from a capture.
+/// Together with the pass above, which takes layer 1 from a capture, the
+/// two sources are each graded at a layer ≥ 1.
+#[test]
+fn an_owned_leaf_in_the_open_leaf_chunk_assembles_from_the_tail() {
+    let into_tail = 5usize;
+    let counts = counts_totalling(CHUNKS * SELENE_CHUNK_WIDTH + into_tail);
+    let tip = tip_for(&counts);
+    let position = (CHUNKS * SELENE_CHUNK_WIDTH) as u64 + 2;
+
+    let mut twin = CurveTreeClient::new();
+    ingest_fixture(&mut twin, tip, &counts);
+    assert_eq!(
+        twin.frontier.leaf_count() % SELENE_CHUNK_WIDTH as u64,
+        into_tail as u64,
+        "the fixture must leave an open leaf chunk"
+    );
+    let reference = reference_at(&twin, tip);
+    let input = input_at(&twin, tip, position);
+    let full = twin
+        .assemble_path(&input, &reference)
+        .expect("the rebuild assembles");
+    assert_eq!(
+        full.leaf_chunk.len(),
+        into_tail,
+        "the open chunk is the tail"
+    );
+
+    let mut client = CurveTreeClient::new();
+    client
+        .register_owned(input.gindex, input.output_key)
+        .expect("a live client registers");
+    ingest_fixture(&mut client, tip, &counts);
+    let report = client.reconcile_captures().expect("reconciliation runs");
+    assert_eq!(
+        report.chunks_written, 0,
+        "nothing over this leaf has closed"
+    );
+    keep_only(&mut client, input.gindex);
+    let sparse = client
+        .assemble_path(&input, &reference)
+        .expect("the open chunk assembles from the tail and the snapshot");
+    assert_eq!(sparse, full, "the open-tail path is the rebuilt path");
+}
+
+/// A reference height the ring no longer holds is refused by name.
+///
+/// Reachable only for a reference the daemon would reject as too old — the
+/// ring keeps 720 blocks and the daemon accepts 100 — so the refusal is not
+/// a limitation a spend can meet. The alternative was to rebuild the tree
+/// from every drained leaf to serve a reference that cannot be submitted.
+#[test]
+fn a_reference_outside_the_ring_is_refused() {
+    let (mut client, tip) = drained_chunks(&[OWNED_POSITION]);
+    let input = input_at(&client, tip, OWNED_POSITION);
+    let reference = reference_at(&client, tip);
+    client
+        .assemble_path(&input, &reference)
+        .expect("inside the ring the capture path assembles");
+
+    // Push the tip past the horizon with empty blocks, so `tip` falls out.
+    let horizon = crate::segment::SEGMENT_FREEZE_REORG_MARGIN_BLOCKS;
+    let far = tip + BlockCount::from_raw(horizon + 1);
+    ingest_range(&mut client, tip + BlockCount::ONE, far, &[]);
+    assert!(
+        client.snapshot_at(tip).expect("ring reads").is_none(),
+        "the fixture must have evicted the reference height's row"
+    );
+
+    match client.assemble_path(&input, &reference) {
+        Err(crate::ClientError::ReferenceOutsideSnapshotRing { height }) => {
+            assert_eq!(height, tip, "the refusal names the height");
+        }
+        other => panic!("expected ReferenceOutsideSnapshotRing, got {other:?}"),
+    }
+}
+
+/// A closed chunk whose capture is absent refuses by name — it does not
+/// quietly rebuild.
+///
+/// A resolved position means every chunk over it should be in the table. If
+/// one is not, the remedy is reconciliation, and a silent fallback would
+/// serve the spend while hiding that the mechanism it relies on has a hole.
+#[test]
+fn a_missing_capture_is_refused_not_rebuilt() {
+    let (client, tip) = drained_chunks(&[OWNED_POSITION]);
+    let input = input_at(&client, tip, OWNED_POSITION);
+    let reference = reference_at(&client, tip);
+    client
+        .store
+        .drop_capture_row_for_test(TreePosition::from_raw(OWNED_POSITION))
+        .expect("row drops");
+
+    match client.assemble_path(&input, &reference) {
+        Err(crate::ClientError::CaptureMissing { end_leaf, layer }) => {
+            assert_eq!(end_leaf, OWNED_POSITION, "the refusal names the key");
+            assert_eq!(layer, 0, "the leaf chunk is read first");
+        }
+        other => panic!("expected CaptureMissing, got {other:?}"),
+    }
 }

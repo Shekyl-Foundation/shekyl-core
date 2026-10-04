@@ -2328,14 +2328,40 @@ impl LeafStore {
     /// caller, and a refusal shown only by mutating the code it guards is
     /// not covered.
     #[cfg(test)]
-    pub(crate) fn drop_leaf_rows_for_test(&self, position: TreePosition) -> Result<(), StoreError> {
+    pub(crate) fn drop_leaf_rows_for_test(
+        &self,
+        start: TreePosition,
+        end: TreePosition,
+    ) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         {
-            let key = TreePositionKey::from(position);
             let mut leaves = txn.open_table(LEAVES_TABLE)?;
             let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
-            leaves.remove(key)?;
-            drop(leaf_meta.remove(key)?);
+            for raw in start.to_raw()..=end.to_raw() {
+                let key = TreePositionKey::from_raw(raw);
+                leaves.remove(key)?;
+                drop(leaf_meta.remove(key)?);
+            }
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Delete the capture row at `end_leaf`.
+    ///
+    /// Test-only: the one way to produce a closed chunk whose capture is
+    /// absent on a client that resolved the position, which is the state
+    /// `ClientError::CaptureMissing` names. Nothing in production removes a
+    /// row except a truncation, and that also drops the position.
+    #[cfg(test)]
+    pub(crate) fn drop_capture_row_for_test(
+        &self,
+        end_leaf: TreePosition,
+    ) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+            drop(table.remove(TreePositionKey::from(end_leaf))?);
         }
         txn.commit()?;
         Ok(())

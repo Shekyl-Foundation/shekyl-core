@@ -339,6 +339,58 @@ impl Frontier {
             // `build_layers(&[])` (`CT2_DRAIN_ORDER.md` §5).
             return Ok(selene_hash_init());
         }
+        let branches = self.open_branches()?;
+        let top = branches.len() - 1;
+        let combined = branches
+            .into_iter()
+            .last()
+            .ok_or(FrontierError::EmptyWithLeaves)?;
+        if combined.is_empty() {
+            return Err(FrontierError::EmptyWithLeaves);
+        }
+        // At the topmost non-empty layer `combined` IS that whole layer, so
+        // the batch composition's own stop condition decides the root rather
+        // than a second copy of it.
+        let layers = try_build_upper_layers(
+            combined,
+            u8::try_from(top).expect("frontier layer index fits u8"),
+        )
+        .ok_or(FrontierError::InvalidNodeScalars)?;
+        layers
+            .last()
+            .and_then(|layer| layer.first().copied())
+            .ok_or(FrontierError::EmptyWithLeaves)
+    }
+
+    /// The children of the rightmost — still **open** — node at every layer
+    /// above the leaves, bottom-up: entry `k` is the child set of the
+    /// layer-`k + 1` node currently being built.
+    ///
+    /// This is what a membership path needs wherever its chunk has *not*
+    /// closed: a closed chunk's children are fixed and captured, an open
+    /// chunk's are exactly these. Each entry is `partial[k]` — the closed
+    /// layer-`k` nodes carried so far — followed by the node of the open
+    /// chunk below it, hashed as it stands, because that node is a child of
+    /// this one too even though it is not final. [`Self::root`] is this
+    /// vector's last entry composed upward; the two share one computation so
+    /// a path's open branch and the root it must hash to cannot be read from
+    /// different states.
+    ///
+    /// Layer 0 is **not** here. The open leaf chunk holds scalars, and a path
+    /// needs its siblings as points; those come from the leaf rows.
+    ///
+    /// The last entry is never empty on a non-empty frontier; lower entries
+    /// can be — a layer whose open node has no children yet, because the
+    /// chunk below it is also just starting. A reader that consults an empty
+    /// entry is asking about a chunk that has closed, and should have read
+    /// the capture.
+    ///
+    /// # Errors
+    ///
+    /// [`FrontierError::InvalidNodeScalars`] on a hash failure;
+    /// [`FrontierError::EmptyWithLeaves`] on bytes the advance cannot
+    /// produce.
+    pub fn open_branches(&self) -> Result<Vec<Vec<[u8; 32]>>, FrontierError> {
         let mut carry: Option<[u8; 32]> = if self.leaf_chunk.is_empty() {
             None
         } else {
@@ -349,31 +401,19 @@ impl Frontier {
             .iter()
             .rposition(|layer| !layer.is_empty())
             .unwrap_or(0);
+        let mut branches = Vec::with_capacity(top + 1);
         for k in 0..=top {
             let mut combined = self.partial.get(k).cloned().unwrap_or_default();
             combined.extend(carry.take());
-            if k == top {
-                if combined.is_empty() {
-                    return Err(FrontierError::EmptyWithLeaves);
-                }
-                // At the topmost non-empty layer `combined` IS that whole
-                // layer, so the batch composition's own stop condition
-                // decides the root rather than a second copy of it.
-                let layers = try_build_upper_layers(
-                    combined,
-                    u8::try_from(k).expect("frontier layer index fits u8"),
-                )
-                .ok_or(FrontierError::InvalidNodeScalars)?;
-                return layers
-                    .last()
-                    .and_then(|layer| layer.first().copied())
-                    .ok_or(FrontierError::EmptyWithLeaves);
+            if k < top && !combined.is_empty() {
+                carry = Some(promote_one(combined.clone(), k)?);
             }
-            if !combined.is_empty() {
-                carry = Some(promote_one(combined, k)?);
-            }
+            branches.push(combined);
         }
-        Err(FrontierError::EmptyWithLeaves)
+        if self.leaf_count > 0 && branches.last().is_none_or(Vec::is_empty) {
+            return Err(FrontierError::EmptyWithLeaves);
+        }
+        Ok(branches)
     }
 
     /// Serialize for the snapshot ring.
@@ -747,6 +787,80 @@ mod tests {
     /// the whole leaf set, so agreement is a real cross-check rather than a
     /// restatement — the same relationship `curve_tree_freeze` pins for roots,
     /// applied to the chunks beneath them.
+    /// `open_branches()[L - 1]` is the canonical tree's rightmost layer-`L`
+    /// node's child set — and is empty exactly when that chunk has closed.
+    ///
+    /// [`Frontier::root`] pins the *hash* this vector composes to, at every
+    /// height; it does not pin the mapping a path reader depends on, which
+    /// is that entry `k` is the open layer-`k + 1` node's children. That is
+    /// checked here directly against `build_layers`, both ways: when the
+    /// rightmost chunk at a layer is open, the entry is the tail slice of the
+    /// layer below; when it has closed, the entry is empty, because a reader
+    /// that consults it then is asking for a captured chunk.
+    ///
+    /// Sampled around both layer steps rather than at every height, because
+    /// `build_layers` per height is `O(n)` and the interesting heights are
+    /// the ones beside a fold.
+    #[test]
+    fn open_branches_equal_the_canonical_tree_tail() {
+        let width0 = u64::try_from(SELENE_CHUNK_WIDTH).expect("fits");
+        let fold1 = width0 * u64::try_from(HELIOS_CHUNK_WIDTH).expect("fits");
+        let heights: Vec<u64> = (1..=width0 + 2)
+            .chain(fold1 - 2..=fold1 + width0 + 1)
+            .collect();
+        let last = *heights.last().expect("heights");
+
+        let mut scalars: Vec<[u8; 32]> = Vec::new();
+        let mut f = Frontier::new();
+        let mut checked_open = 0usize;
+        let mut checked_closed = 0usize;
+        for i in 0..last {
+            let l = leaf(i);
+            for c in l.chunks_exact(32) {
+                let mut sc = [0u8; 32];
+                sc.copy_from_slice(c);
+                scalars.push(sc);
+            }
+            f.push_leaf(&l).expect("advance");
+            let n = i + 1;
+            if !heights.contains(&n) {
+                continue;
+            }
+
+            let layers = shekyl_fcmp::tree::build_layers(&scalars);
+            let depth = layers.len();
+            let open = f.open_branches().expect("branches");
+            for layer in 1..depth {
+                let below = &layers[layer - 1];
+                let width = chunk_width(u8::try_from(layer).expect("fits"));
+                let covered = u64::try_from(outputs_per_node(u8::try_from(layer).expect("fits")))
+                    .expect("fits");
+                let idx = (below.len() - 1) / width;
+                let end_leaf = (u64::try_from(idx).expect("fits") + 1) * covered - 1;
+                let entry = open.get(layer - 1).map(Vec::as_slice).unwrap_or(&[]);
+                if end_leaf < n {
+                    assert!(
+                        entry.is_empty(),
+                        "n={n}: layer-{layer} chunk {idx} closed at {end_leaf}, so the open \
+                         branch must be empty; a reader must take the capture"
+                    );
+                    checked_closed += 1;
+                } else {
+                    assert_eq!(
+                        entry,
+                        &below[idx * width..],
+                        "n={n}: layer-{layer} open branch is not the canonical tail"
+                    );
+                    checked_open += 1;
+                }
+            }
+        }
+        assert!(
+            checked_open > 0 && checked_closed > 0,
+            "both arms must have run"
+        );
+    }
+
     #[test]
     fn folded_chunks_equal_the_canonical_tree_slice() {
         // Past the first layer-1 fold (684 leaves) so both layers are covered.

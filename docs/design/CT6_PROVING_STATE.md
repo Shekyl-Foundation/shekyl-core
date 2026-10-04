@@ -308,7 +308,7 @@ have re-imported the dependency this round exists outside of.
 | **2** | **The C1 oracle, height-keyed.** At every fixture height `h`, root, depth, and drained-leaf count equal `assemble_leaf_stream` + `root_from_scalars` over the leaves drained through `h - 1`. That cutoff is written in the test, not read from `drained_through`. Depth is graded at the two leaf counts where `layer_count_for_leaves` steps (`0`, and `SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH`). **Q2 examiner armed here, graded at increment 4:** `examine_tier_readings` compares a `TierReading` (root and depth) per tier. `TierCoverage::OutsideSpan` is the only non-answer; a tier error has no variant to hide in. Agreeing overlap is success, a root or depth mismatch is `Disagree`, and a height in neither `HeightSpan` is `Uncovered`. The 2026-09-23 decision-log row records why the examiner is armed before its tiers exist | §6.3.4 row 4; Q2 | Q2 (**ruled**); Q1's *shape* only — its constants are not inputs to the oracle |
 | **3** | **Per-transaction reconstruction reuse.** `drained`/`layers` once per tx, `gindex → drain-position` index | **Closeout (a)** — F3b | 2 |
 | **4** | **The snapshot ring + advance — BUILT (§10).** One dense ring over the reorg horizon, total by construction (`Q1` RULED 2026-09-28, §9) — no tiers, no spacing, no eviction. `shekyl_curve_tree::frontier::Frontier` advances inside `ingest_block`; the ring is the `frontier_snapshots` table of the wallet's own `LeafStore`, written and evicted in the block's own transaction; `root_and_depth_at` reads it for in-horizon heights and falls through to `root_at_count` elsewhere. `per_block_advance_worst_case_s` is **re-derived from the built advance** (Q4). The increment-2 examiner grades the real segment tier against the real snapshot tier, **unmodified** | **Closeout (b)** — F3a | 2, 3; Q2, Q3 (**ruled**); **`Q1` RULED by derivation (§9); `Q4` pre-registered with its re-point as a landing condition** — the gate is open |
-| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture is in build** — its *instrument* landed first (the structural red-bite, the O(chain) before-figure, and §11.6's gate spec, PRs #927/#931), and **§11.6's integrity gate is BUILT**: `verify_path_against_its_branches` recomputes the root from an assembled path's own branches and refuses with `PathRootMismatch`, so the artifact is checked rather than the store compared with itself. The capture *mechanism* is still unbuilt. The §6.3.3 precondition this row used to carry is **discharged** — that sentence was reconciled on `dev` (`WALLET_SIDE_STORE.md` §6.3.3 now reads *"There is one capture side, not two"*), so nothing waits on it | §6.3.3; C7; §11.6 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
+| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture is in build** — its *instrument* landed first (the structural red-bite, the O(chain) before-figure, and §11.6's gate spec, PRs #927/#931), and **§11.6's integrity gate is BUILT**: `verify_path_against_its_branches` recomputes the root from an assembled path's own branches and refuses with `PathRootMismatch`, so the artifact is checked rather than the store compared with itself. **The capture mechanism is BUILT** (PR #945): the fold captures every chunk that closes over a registered output, reconciliation backfills what a late registration is owed, and assembly reads captures and the frontier snapshot without touching `entries` — `assembly_today_depends_on_every_foreign_leaf` is at **state 3 of 3** as `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`. The engine's registrant is the next slice, as its own PR (rule 19: it lands in the refresh driver, a different validation surface); until it does, no production batch is registered and assembly takes the rebuild it keeps as a named fallback. The §6.3.3 precondition this row used to carry is **discharged** — that sentence was reconciled on `dev` (`WALLET_SIDE_STORE.md` §6.3.3 now reads *"There is one capture side, not two"*), so nothing waits on it | §6.3.3; C7; §11.6 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
 | **6** | **Re-grade rows 2 and 3** on the amortized form, same harness, same rig — **and it is also `Q4`'s only seat.** Increment 4 re-derived the advance field and measured it off-rig; a fraction of cadence computed anywhere but the pinned Pi 4 is a property of the machine that computed it (rule 76). The blocker is the board, not the code | §6.3.4; Q4 | 4 |
 | **7** | **`.curvetree` retirement** | `WSS-18` | **P-store lane** (Q6) |
 
@@ -1261,6 +1261,20 @@ invariant `IdentityMismatch` guards at assembly, raised at registration rather
 than at the spend that needed the capture — and a re-registration *replaces*,
 so a rescan rebinds a gindex with no separate retraction.
 
+**For the registrant to inherit, not rediscover.** `RegistrationIdentityMismatch`
+is raised in **normal operation**, not only on a bug. A P-scan that lags across
+a reorg will offer the pre-reorg key for a gindex that now names a different
+output, and the client will correctly refuse it — which is exactly what
+happened to the first draft of the reorg red-bite below. The registrant must
+therefore classify it as *the caller's view is stale*: retry once the scan has
+caught up past the fork, never internal, never fatal, nothing poisoned. Its
+durability classification and rule-82 copy should say so, and it owes a
+red-bite of its own: a lagging scan re-offering the old key after a reorg must
+recover once its rescan reaches the new chain. The exhaustive re-anchor match
+in `shekyl-engine-core` places the variant in the reselection family for now
+because that match cannot be left open; the registrant's classification is the
+real one.
+
 The rollback trim stays, but it is now **cleanup, not correctness**: it keeps
 the registry from accumulating dead rows, and it is the candidate-3 difference
 widened to the pair, so it catches rebinding too. Correctness is the identity
@@ -1431,10 +1445,9 @@ Two things the oracle cannot reach yet, named so the next commit does not
 inherit them silently. The fixture's depth puts only layer 1 under a closed
 chunk, so **one parity** is compared; capture is a byte copy, so that is
 sufficient *here*, but the state-3 consumer applies a per-parity conversion
-and a layer-2 chunk needs 25 992 leaves. And `IMPLEMENTATION_INDEX.md`'s `CT`
-row still reads *"path capture's MECHANISM is not built"*, which stays true
-until the three above land — amending it now would be a status claim ahead of
-the status.
+and a layer-2 chunk needs 25 992 leaves — so the state-3 passes grade a
+captured branch at layer 1 and open branches at layers 1 and 2, which covers
+both parities and both sources but not a *captured* Selene layer.
 
 **A fixture-wide blind spot, found by the mutation sweep and wider than
 capture.** `coinbase_raw()` gives every output the Ed25519 basepoint as *both*
