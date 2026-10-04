@@ -3055,14 +3055,16 @@ mod tests {
     ///
     /// What remains true, and is all this asserts: the four-rung ArticMine
     /// transliteration, rounded the way the pre-FL-R20 daemon rounded it,
-    /// puts genesis `Fh` at 14,000,000.
+    /// puts genesis `Fh` at 6,900,000: `2·R₀/Zm` = 6,826,666 at the design's
+    /// `R₀` = 1 024 SKL, rounded up to two significant digits. (14,000,000
+    /// at the per-minute convention's 2 048 SKL, until 2026-10-04.)
     #[test]
     fn genesis_fh_of_the_legacy_transliteration() {
         let params = EconomicParams::default();
         let base = base_block_reward(0, &params).expect("genesis base");
         let fees = rounded(articmine_ladder_raw(base, 300_000, 300_000));
         // `fees[2]` is priority.
-        assert_eq!(fees[2], 14_000_000);
+        assert_eq!(fees[2], 6_900_000);
     }
 
     /// Pin the relay-floor transliteration against
