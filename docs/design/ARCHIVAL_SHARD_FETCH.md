@@ -7,7 +7,9 @@ amendment); (c) LANDED 2026-09-16 — `N = 8` pinned (PR #746).**
 Round 1 opened 2026-09-12, grounded `dev@ba4b3c73a`. Every `SF-D`
 question is disposed: `SF-D2`, `SF-D3`, `SF-D4`, `SF-D6`, `SF-D7`,
 `SF-D10`, `SF-D13` RULED; `SF-D5` RULED and amended with the request
-carrier; `SF-D8` RULED (signed message and response carrier); `SF-D9`
+carrier; `SF-D8` RULED (signed message and response carrier; AMENDED
+2026-10-04 — the message ends in a nonce-salted digest of the delivered
+response, under the v3 scheme domain); `SF-D9`
 done; `SF-D11` WITHDRAWN; `SF-D12` a corollary of `SF-D10`. **The
 rule-26 halt is lifted:** implementation may begin, in the landing
 sequence §9.1 fixes (2026-09-13): (a0) the v2 pass-countersignature
@@ -1295,8 +1297,8 @@ needed a home that is neither the inner frame nor a header:
   byte goes out, so a signing failure remains the identical 404. A
   response that fails or stalls mid-body yields no signature. The
   client refuses a response whose recomputed `D` does not verify
-  (`BadCountersignature`), which covers a signature placed anywhere but
-  last. Tests:
+  (`BadCountersignature`); a signature placed anywhere but last is
+  refused as that or as a malformed envelope. Tests:
   `the_countersignature_is_released_only_after_the_whole_frame`,
   `a_body_that_changes_between_the_signed_read_and_the_sent_one_gets_no_signature`,
   `a_shard_that_vanishes_between_the_two_reads_is_the_identical_404`
