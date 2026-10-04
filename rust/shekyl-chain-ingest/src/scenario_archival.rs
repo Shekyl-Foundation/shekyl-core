@@ -37,8 +37,8 @@
 
 use shekyl_archival_bond_builder::{bond_post_input, build_join_market_vin, build_release_vin};
 use shekyl_archival_retention::{
-    p_canonical_id_from_hybrid_pubkey, ArchivalServeCreditResponse, HoldingsDescriptor,
-    HoldingsKind,
+    p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, ArchivalServeCreditResponse,
+    HoldingsDescriptor, HoldingsKind,
 };
 use shekyl_chain_rules::harness::fixture::PRUNED_PASS_RECORD;
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
@@ -47,6 +47,7 @@ use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridSecretKey, SignatureScheme as _, SCHEME_DOMAIN_PQC_AUTH_TX,
 };
 use shekyl_tx_builder::{InputTerm, OutputTerm};
+use shekyl_types::archival::{BondRecord, Holdings};
 use shekyl_types::{PCanonicalId, SigningPayloadHash};
 use shekyl_wire::transaction::{BondPost, TxPrefix};
 use shekyl_wire::{Ct, CtBase, Input, Prunable, Transaction};
@@ -161,12 +162,70 @@ impl Persona {
         }
     }
 
-    /// A post shaped by hand — for the refusals no constructor emits (a
-    /// Reinstate, which has no wallet producer yet; an unknown kind; a
-    /// compact join holding nothing or a shard twice). The identity key
-    /// signs the slot; the terms are the post's own `bond_credit` /
-    /// `bond_debit`, so CEN-H21 balances and the refusal that fires is the
-    /// arm under test, not the balance.
+    /// The Reinstate vin for `record` — the shape
+    /// [`verify_reinstate_bond_post`](shekyl_archival_retention::verify_reinstate_bond_post)
+    /// reads: zero money (no credit, no debit, the record's total
+    /// unchanged) over exactly the holdings the record holds, under the
+    /// 2026-09-20 immutable-bond ruling. No wallet constructor exists for
+    /// a Reinstate (`build_reinstate_vin` is not in the builder crate;
+    /// `PRINCIPAL_STAKE_LIFECYCLE.md` §5 item 2), so the driver assembles
+    /// the vin through the retention crate's own constructor; when the
+    /// producer lands this is the site that calls it instead. Split from
+    /// [`Self::reinstate`] so a test can hand the same vin to the
+    /// wallet-side verify and the fold.
+    pub fn reinstate_vin(&self, record: &BondRecord) -> ArchivalBondPostVin {
+        let holdings = match &record.holdings {
+            Holdings::CompleteTree => complete_tree(),
+            Holdings::ShardSet(held) => {
+                shard_set(held.as_slice().iter().map(|h| h.shard.to_raw()).collect())
+            }
+        };
+        ArchivalBondPostVin::reinstate(
+            self.identity(),
+            self.id().to_bytes(),
+            holdings,
+            record.bonded_total.to_raw(),
+            0,
+            0,
+        )
+    }
+
+    /// A Reinstate of `record` ([`Self::reinstate_vin`]) riding a spend:
+    /// no term on either side, the identity key in the slot — a credit
+    /// arm's key (gate-4 §9.11), as the C++ `apply_archival_reinstate`'s
+    /// authorizer.
+    pub fn reinstate(&self, record: &BondRecord) -> PostedBond<'_> {
+        PostedBond {
+            input: bond_post_input(&self.reinstate_vin(record)),
+            debit: None,
+            credit: None,
+            slot_pk: self.identity(),
+            slot_sk: &self.keys.hybrid_sign_sk,
+        }
+    }
+
+    /// A Release `BondPost` with the production constructor's fields, for
+    /// [`Self::post_by_hand`] to mutate — what [`Self::release`] carries,
+    /// before the caller changes one thing. Through `post_by_hand` the
+    /// **identity** key signs the slot where `release` signs with
+    /// `bond_spend_sk`: a Release under the wrong key, which is the J13
+    /// fixture (`CHAIN_RULES_SLICE_8.md` §5 row 4).
+    pub fn release_post(&self, record_bonded_total: u64) -> BondPost {
+        let built = build_release_vin(self.keys.bond_post_keys(), record_bonded_total)
+            .expect("the production constructor builds the release");
+        let Input::BondPost(post) = bond_post_input(built.vin()) else {
+            unreachable!("a vin maps to a bond post");
+        };
+        *post
+    }
+
+    /// A post shaped by hand — for the posts no constructor emits (an
+    /// unknown kind; a compact join holding nothing or a shard twice; a
+    /// post whose `p_canonical_id` hint names another persona; a Release
+    /// under the identity key). The identity key signs the slot; the
+    /// terms are the post's own `bond_credit` / `bond_debit`, so CEN-H21
+    /// balances and the refusal that fires — or the connect that should
+    /// not — is the arm under test, not the balance.
     pub fn post_by_hand(&self, post: BondPost) -> PostedBond<'_> {
         let credit = (post.bond_credit != 0)
             .then(|| OutputTerm::new(shekyl_units::AtomicUnits::from_raw(post.bond_credit)));
