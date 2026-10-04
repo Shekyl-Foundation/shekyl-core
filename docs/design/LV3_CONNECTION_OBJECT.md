@@ -1629,8 +1629,8 @@ in `levin_notify.cpp` (`:190`, `:232`), plus a comment at `:472`.*
 | `print_connections_container` | `:2812` |
 
 `foreach_connection` hands the callback `get_context_ref()`
-(`levin_protocol_handler_async.h:932`). `for_connection` does the same
-at `:946`. *Records-was: `:907` and `:921`.* The session's network is
+(`levin_protocol_handler_async.h:925`). `for_connection` does the same
+at `:939`. *Records-was: `:932` and `:946`, and before that `:907` and `:921`.* The session's network is
 `m_connector`, a `ConnectorId`.
 
 **Two Rust session tables already exist. Step c does not add a
@@ -1693,30 +1693,33 @@ mutable context across a strand write. `rg get_context_ref` in
 
 | Line | What holds the reference |
 | --- | --- |
-| `:815` | the definition. *Records-was: `:790`.* |
-| `:319`, `:321` | the invoke-timeout completion, inside the post at `:314`. It runs only when `m_cancel_timer_called` is clear. *Records-was: `:302` and `:304`, inside `:301`.* |
+| `:808` | the definition. *Records-was: `:815`, and before that `:790`.* |
+| `:313`, `:315` | the invoke-timeout completion, inside the post at `:303`. It delivers when `m_timer_cancelled` is clear. *Records-was: `:319` and `:321`, inside `:314`, gated on `m_cancel_timer_called`.* |
 | `:271` | `anvoke_handler::cancel`, the callback |
-| `:932` | `foreach_connection` hands the walker the context. *Records-was: `:907`.* |
-| `:946` | `for_connection` hands the caller the context. *Records-was: `:921`.* |
+| `:925` | `foreach_connection` hands the walker the context. *Records-was: `:932`, and before that `:907`.* |
+| `:939` | `for_connection` hands the caller the context. *Records-was: `:946`, and before that `:921`.* |
 
 `:271` is strand-side. `cancel` is called only from
 `release_protocol`, and `begin_closed` calls that from `on_strand`
 (`zone_server.h:481`). *Records-was: `:276`.* The falsifier keeps it.
 
 The constructor's debug post is deleted. *Records-was: `:236` posted
-the caller's log, and the read was `:237`.* `:314` posts each
-invoke-timeout completion and holds the endpoint close count from
-before that post until after the completion returns, so
-`begin_closed` does not post destruction while it is queued. The
-reads are `:319` and `:321`. They run on the strand, and only when
-`m_cancel_timer_called` is still clear. The timer stays on the zone
+the caller's log, and the read was `:237`.* `:303` posts each
+invoke-timeout completion. The outer-call ref is what keeps
+`begin_closed` from posting destruction while it is queued; releasing
+that ref at the end of the closure posts destruction behind it. The
+reads are `:313` and `:315`. They run on the strand, and only when
+`m_timer_cancelled` is still clear: `TIMEDOUT`, or `DESTROYED` when
+close already lost the timer. *Records-was, same day: an extra
+`add_ref` around the post at `:314`, and a `m_cancel_timer_called`
+check at `:319` and `:321`.* The timer stays on the zone
 `io_context` (`levin_protocol_handler_async.h:229`), which
 `zone_server::run` drives on more than one worker
 (`zone_server.h:258`). *Records-was: `:240` and `:242`, and the old
 `:302` and `:304`, ran on whichever worker took the timer, and `:234`
 ran on `async_invoke`'s caller.*
 
-`:946` is not only a walker. *Records-was: `:921`.* `node_server::for_connection`
+`:939` is not only a walker. *Records-was: `:946`, and before that `:921`.* `node_server::for_connection`
 (`net_node.inl:169`) reaches it. So do `try_add_next_blocks`
 (`cryptonote_protocol_handler.inl:1437`, `:1477`, `:1512`, `:1538`),
 `update_sync_search` (`:1757`), `should_download_next_span`

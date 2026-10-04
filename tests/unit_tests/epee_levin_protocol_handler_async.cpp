@@ -28,10 +28,19 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+#include <boost/asio/executor_work_guard.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/io_context_strand.hpp>
+#include <boost/asio/post.hpp>
 #include <boost/thread/mutex.hpp>
 #include <boost/thread/thread.hpp>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <future>
+#include <memory>
 #include <optional>
+#include <thread>
 
 #include "gtest/gtest.h"
 
@@ -648,4 +657,204 @@ TEST_F(test_levin_protocol_handler__hanle_recv_with_invalid_data, handles_short_
   prepare_buf();
 
   ASSERT_FALSE(m_conn->m_protocol_handler.handle_recv(m_buf.data(), m_buf.size()));
+}
+
+namespace
+{
+  // seam_link's close count (seam_endpoint.h): add_ref fails on the closing
+  // bit; begin_closed posts destruction only when the count it observed was
+  // zero; release posts it when the count reaches zero with the bit set.
+  struct close_count_context : public epee::net_utils::connection_context_base
+  {
+    static constexpr int handshake_command() noexcept { return 1001; }
+    static constexpr bool session_established() noexcept { return true; }
+    std::optional<std::size_t> get_max_bytes(std::uint32_t, std::uint32_t, std::int32_t* = nullptr) const
+    {
+      return LEVIN_DEFAULT_MAX_PACKET_SIZE;
+    }
+  };
+
+  struct close_count_endpoint : public epee::net_utils::i_service_endpoint
+  {
+    static constexpr std::uint32_t kClosing = 0x80000000u;
+    static constexpr std::uint32_t kCount = 0x7fffffffu;
+
+    using handler_t = epee::levin::async_protocol_handler<close_count_context>;
+    using config_t = epee::levin::async_protocol_handler_config<close_count_context>;
+
+    boost::asio::io_context& io;
+    boost::asio::io_context::strand& strand;
+    config_t& config;
+    std::unique_ptr<handler_t> handler;
+    std::atomic<std::uint32_t> word{0};
+    std::atomic<bool> destroy_posted{false};
+    std::atomic<bool> destroyed{false};
+    std::atomic<int> posts{0};
+    bool delivering = false;
+
+    close_count_endpoint(boost::asio::io_context& io_in, boost::asio::io_context::strand& strand_in, config_t& config_in)
+      : io(io_in), strand(strand_in), config(config_in)
+    {
+      close_count_context ctx;
+      handler = std::make_unique<handler_t>(this, config, ctx);
+    }
+
+    bool do_send(epee::byte_slice) override { return true; }
+    bool close() override
+    {
+      begin_closed();
+      return true;
+    }
+    bool send_done() override { return true; }
+    bool call_run_once_service_io() override { return false; }
+    bool request_callback() override { return false; }
+    boost::asio::io_context& get_io_context() override { return io; }
+    void post(std::function<void()> fn) override
+    {
+      posts.fetch_add(1, std::memory_order_release);
+      boost::asio::post(strand, std::move(fn));
+    }
+    bool add_ref() override
+    {
+      std::uint32_t cur = word.load(std::memory_order_acquire);
+      for (;;)
+      {
+        if ((cur & kClosing) != 0 || (cur & kCount) == kCount)
+          return false;
+        if (word.compare_exchange_weak(cur, cur + 1, std::memory_order_acq_rel, std::memory_order_acquire))
+          return true;
+      }
+    }
+    bool release() override
+    {
+      std::uint32_t cur = word.load(std::memory_order_acquire);
+      for (;;)
+      {
+        const std::uint32_t count = cur & kCount;
+        if (count == 0)
+          return false;
+        const std::uint32_t next = (cur & kClosing) | (count - 1);
+        if (word.compare_exchange_weak(cur, next, std::memory_order_acq_rel, std::memory_order_acquire))
+        {
+          if ((next & kClosing) != 0 && (next & kCount) == 0)
+            post_destroy();
+          return true;
+        }
+      }
+    }
+    void begin_closed()
+    {
+      const std::uint32_t prev = mark_closing();
+      if ((prev & kClosing) != 0)
+        return;
+      delivering = true;
+      if (handler)
+        handler->release_protocol();
+      delivering = false;
+      if ((prev & kCount) == 0)
+        post_destroy();
+    }
+
+  private:
+    std::uint32_t mark_closing()
+    {
+      std::uint32_t cur = word.load(std::memory_order_acquire);
+      for (;;)
+      {
+        if ((cur & kClosing) != 0)
+          return cur;
+        if (word.compare_exchange_weak(cur, cur | kClosing, std::memory_order_acq_rel, std::memory_order_acquire))
+          return cur;
+      }
+    }
+    void post_destroy()
+    {
+      if (destroy_posted.exchange(true, std::memory_order_acq_rel))
+        return;
+      boost::asio::post(strand, [this] {
+        handler.reset();
+        destroyed.store(true, std::memory_order_release);
+      });
+    }
+  };
+}
+
+TEST(epee_levin_protocol_handler_async, timer_fired_then_close_delivers_destroyed_before_the_handler_dies)
+{
+  boost::asio::io_context io;
+  boost::asio::io_context::strand strand(io);
+  close_count_endpoint::config_t config;
+  close_count_endpoint endpoint(io, strand, config);
+
+  std::atomic<int> calls{0};
+  std::atomic<int> code{-1};
+  std::atomic<bool> alive_in_callback{false};
+  std::atomic<bool> delivered_during_close{false};
+
+  std::promise<void> held;
+  std::promise<void> release_hold;
+  boost::asio::post(strand, [&] {
+    held.set_value();
+    release_hold.get_future().wait();
+    endpoint.begin_closed();
+  });
+
+  boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work(io.get_executor());
+  std::thread runner_a([&io] { io.run(); });
+  std::thread runner_b([&io] { io.run(); });
+  struct stop_io
+  {
+    boost::asio::io_context& io;
+    std::thread& a;
+    std::thread& b;
+    std::promise<void>& release;
+    boost::asio::executor_work_guard<boost::asio::io_context::executor_type>& work;
+    bool released = false;
+    void unblock()
+    {
+      if (released)
+        return;
+      released = true;
+      try { release.set_value(); } catch (const std::future_error&) {}
+    }
+    ~stop_io()
+    {
+      unblock();
+      work.reset();
+      io.stop();
+      if (a.joinable())
+        a.join();
+      if (b.joinable())
+        b.join();
+    }
+  } guard{io, runner_a, runner_b, release_hold, work};
+
+  held.get_future().wait();
+  ASSERT_TRUE(endpoint.handler->start_outer_call());
+  ASSERT_TRUE(endpoint.handler->async_invoke(1, epee::levin::message_writer{},
+      [&](int result, const epee::span<const uint8_t>, close_count_context&) {
+        calls.fetch_add(1, std::memory_order_relaxed);
+        code.store(result, std::memory_order_relaxed);
+        alive_in_callback.store(endpoint.handler != nullptr, std::memory_order_relaxed);
+        delivered_during_close.store(endpoint.delivering, std::memory_order_relaxed);
+      },
+      std::chrono::milliseconds(50)));
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (endpoint.posts.load(std::memory_order_acquire) == 0 && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  ASSERT_EQ(endpoint.posts.load(std::memory_order_acquire), 1);
+  // The timer completion is queued on the strand the hold still occupies.
+  // begin_closed runs there before that completion.
+  guard.unblock();
+
+  const auto destroyed_by = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!endpoint.destroyed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < destroyed_by)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+  EXPECT_TRUE(endpoint.destroyed.load(std::memory_order_acquire));
+  EXPECT_EQ(calls.load(std::memory_order_relaxed), 1);
+  EXPECT_EQ(code.load(std::memory_order_relaxed), LEVIN_ERROR_CONNECTION_DESTROYED);
+  EXPECT_TRUE(alive_in_callback.load(std::memory_order_relaxed));
+  EXPECT_FALSE(delivered_during_close.load(std::memory_order_relaxed));
 }

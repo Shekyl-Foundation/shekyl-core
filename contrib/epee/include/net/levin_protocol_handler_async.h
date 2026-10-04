@@ -296,33 +296,26 @@ public:
       {
         if(ec == boost::asio::error::operation_aborted)
           return;
-        // The wait completed on a zone worker. begin_closed's cancel
-        // sees m_timer.cancel() == 0 and leaves this completion to
-        // finish. Hold the endpoint count across the post, as
-        // request_callback does, so begin_closed does not post
-        // destruction while the completion is queued. The
-        // shared_ptr keeps this handler alive until that post runs;
-        // start_outer_call's ref is released on the strand, after
-        // the completion, by finish_outer_call_once.
+        // start_outer_call's ref is still held, so begin_closed cannot
+        // post destruction yet. Releasing it at the end of the closure
+        // posts destruction behind this completion when it is the last.
         auto self = this->shared_from_this();
-        auto* endpoint = self->m_con.m_pservice_endpoint;
-        if(!endpoint->add_ref())
-        {
-          self->finish_outer_call_once();
-          return;
-        }
-        endpoint->post([self, endpoint, command, cb, timeout] {
-          // The post cannot be recalled. cancel() may have claimed
-          // the timer on the strand after it fired.
-          if(!self->m_cancel_timer_called)
+        self->m_con.m_pservice_endpoint->post([self, command, cb, timeout] {
+          // m_timer_cancelled is who delivers. m_cancel_timer_called is
+          // only that cancel_timer ran; a close that lost the timer
+          // still leaves delivery to this closure.
+          if(!self->m_timer_cancelled)
           {
-            MINFO(self->m_con.get_context_ref() << "Timeout on invoke operation happened, command: " << command << " timeout: " << timeout.count());
+            const int code = self->m_cancel_timer_called
+                ? LEVIN_ERROR_CONNECTION_DESTROYED
+                : LEVIN_ERROR_CONNECTION_TIMEDOUT;
+            if(code == LEVIN_ERROR_CONNECTION_TIMEDOUT)
+              MINFO(self->m_con.get_context_ref() << "Timeout on invoke operation happened, command: " << command << " timeout: " << timeout.count());
             epee::span<const uint8_t> fake;
-            cb(LEVIN_ERROR_CONNECTION_TIMEDOUT, fake, self->m_con.get_context_ref());
+            cb(code, fake, self->m_con.get_context_ref());
             self->m_con.close();
           }
           self->finish_outer_call_once();
-          endpoint->release();
         });
       });
     }
