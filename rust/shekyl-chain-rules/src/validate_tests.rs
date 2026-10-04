@@ -141,6 +141,7 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::I18,
                 CenRow::I19,
                 CenRow::I20,
+                CenRow::J2,
                 CenRow::L1,
                 // DRS-E4 commit 4: the archival transition, which passes
                 // with nothing archival to fold and records the row.
@@ -268,7 +269,8 @@ fn tx_entry_points_record_the_landed_rows() {
             CenRow::I14,
             CenRow::I16,
             CenRow::I19,
-            CenRow::I20
+            CenRow::I20,
+            CenRow::J2
         ]
     );
     // `tx_against` at the miner slot: the class derivation records H5/H6

@@ -540,6 +540,16 @@ impl H19 {
 /// into `shekyl_verify_ct_balance` with empty masks and zero fee computes,
 /// so the row is complete without a curve operation. Applies to the
 /// serve-credit-only class; recorded vacuous on every other class.
+///
+/// **The prunable region is required (`RF-D1`).** A serve-credit body with
+/// no region fails the live C++'s parse; this row first admitted
+/// `prunable: None`, which the chain store cannot hold (`SHT-9`): a
+/// conformance correction, recorded in `CHAIN_RULES_SLICE_5.md` §5.
+///
+/// **The shape only.** How many records the region holds and how long each
+/// is is CEN-J2's ([`crate::rules::tx_inputs::J2`]); what each record holds —
+/// its structure, `P`'s countersignature, the retention-proof legs — is
+/// CEN-J10's.
 pub(crate) struct H20;
 
 impl Rule for H20 {
@@ -557,7 +567,7 @@ impl TxRule for H20 {
         let Ct::Fcmp {
             fee,
             pqc_auths,
-            prunable,
+            prunable: Some(p),
             base,
             ..
         } = &cx.tx.ct
@@ -568,13 +578,11 @@ impl TxRule for H20 {
             || !pqc_auths.is_empty()
             || !cx.tx.prefix.outputs.is_empty()
             || !base.commitments.is_empty()
+            || !p.bulletproofs.is_empty()
+            || !p.fcmp_proof.is_empty()
+            || !p.pseudo_outs.is_empty()
         {
             return refuse();
-        }
-        if let Some(p) = prunable {
-            if !p.bulletproofs.is_empty() || !p.fcmp_proof.is_empty() || !p.pseudo_outs.is_empty() {
-                return refuse();
-            }
         }
         Ok(())
     }

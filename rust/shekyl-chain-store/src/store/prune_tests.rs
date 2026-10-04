@@ -27,7 +27,8 @@ use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, SHARD_LEN
 use shekyl_wire::{Ct, Transaction};
 
 use super::connect_fixtures::{
-    anchor, batch_root_going_into, candidate, candidate_over, judge_under, root_going_into, spend,
+    anchor, batch_root_going_into, candidate, candidate_over, credited, judge_under,
+    root_going_into, spend,
 };
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
@@ -1562,6 +1563,100 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
              in the domain after a prune"
         );
     }
+
+    cleanup(&path);
+}
+
+/// **`SHT-Q1` leg (f) for the serve-credit form, end to end.** The test
+/// above connects spends and coinbases, and states in its last assertion
+/// that a 3-part transaction with a region stays in the domain on its
+/// `txs_prunable_hash` row alone. This connects one: a credit behind its
+/// join, in shard 0, carried through the boundary that discards shard 0.
+///
+/// It is also `SHT-9`'s falsifier. A credit with no prunable region — the
+/// shape CEN-H20 admitted until it required `RF-D1`'s — connected and then
+/// halted the store on SI-7 at `tx_spendable_age`, ten heights later. This
+/// one is connected two hundred heights before the chain ends.
+#[test]
+fn a_connected_serve_credit_stays_in_the_domain_across_a_prune() {
+    let path = tmp("prune-domain-serve-credit");
+    let store =
+        ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("create");
+    let mut b = Builder::new();
+    // Shard 0 is the credited pair at height 5, then thirty 100,000-byte
+    // spends at 6–35: past `W` with the pair's bytes added, so the shard
+    // closes inside that run and the epoch-2 boundary discards it.
+    let spec = |h: u64| match h {
+        6..=35 => vec![100_000],
+        _ => Vec::new(),
+    };
+    b.connect_sized(&store, 0, 4, 0, spec);
+    let pair = credited(14, [0x7c; 32]);
+    b.connect(&store, 5, 5, |_| pair.to_vec());
+    b.connect_sized(&store, 6, 199, 0, spec);
+
+    let credit_hash = b.listed[5][1].hash();
+    let id_of = |hash: &shekyl_types::TxHash| {
+        store
+            .begin_read()
+            .expect("read")
+            .tx_record(hash)
+            .expect("read")
+            .expect("recorded")
+            .location
+            .id
+            .to_raw()
+    };
+    let credit = id_of(&credit_hash);
+    assert!(
+        matches!(
+            b.listed[5][1].ct,
+            Ct::Fcmp {
+                prunable: Some(_),
+                ..
+            }
+        ),
+        "the credit carries its RF-D1 region"
+    );
+    assert_eq!(
+        good_state(&store, credit),
+        Some(true),
+        "a connected serve credit carries archival good"
+    );
+    assert_eq!(prunable_state(&store, credit), Some(true), "not yet pruned");
+
+    // The boundary that discards shard 0.
+    let at_200 = b.connect_sized(&store, 200, 200, 0, spec).remove(0);
+    assert_eq!(
+        at_200.pruned.expect("a boundary").shards(),
+        0..1,
+        "D(2) is shard 0"
+    );
+    assert_eq!(
+        prunable_state(&store, credit),
+        Some(false),
+        "the credit's region must actually be discarded, or this test proves nothing"
+    );
+    assert_eq!(
+        good_state(&store, credit),
+        Some(true),
+        "a DISCARDED serve credit is still in the domain: its row outlives its region"
+    );
+    let record = store
+        .begin_read()
+        .expect("read")
+        .tx_record(&credit_hash)
+        .expect("read")
+        .expect("recorded");
+    assert_eq!(
+        record.pqc_auth_hash, None,
+        "a serve credit has no pqc_auths"
+    );
+    assert_ne!(
+        record.prunable_hash,
+        shekyl_wire::empty_region_prunable_hash(),
+        "its prunable hash row records the region it had"
+    );
 
     cleanup(&path);
 }
