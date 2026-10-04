@@ -770,11 +770,11 @@ schedule. How many to dial, and when, is discovery policy (P2P-3 slice
 3). Dials stay serial through cutover. The extra round trip is measured
 in step 7.
 
-The peers-monitor thread starts at `net_node.inl:1114` and walks
-`foreach_connection` once a second (`:1113-1138`). It is not removed
-by this round (D8). `is_host_limit` is `net_node.inl:231`. Both read
-the Levin registry today. Connections that have no channel yet are
-invisible to that walk.
+The peers-monitor thread is deleted. *Records-was: it started at
+`net_node.inl:1114` and walked `foreach_connection` once a second.*
+It was not removed by this round (D8). LV-3 step c deleted it.
+`is_host_limit` is `net_node.inl:231` and reads the Levin registry.
+Connections that have no channel yet are invisible to that read.
 
 Two private tokio runtimes already exist:
 `rust/shekyl-daemon-rpc/src/ffi_exports.rs:162` and
@@ -1457,7 +1457,8 @@ per network key and direction. Until LV-3 that count is the Levin
 registry's. It is what the outbound-fill logic is really about.
 
 Session counts still walk the Levin registry
-(`get_outgoing_connections_count`, the once-a-second monitor).
+(`get_outgoing_connections_count`). The once-a-second monitor is
+deleted.
 Socket admission does not. The ceiling's `inbound_held` is
 `Sockets::inbound_held`, and `census_inbound` is gone.
 
@@ -1487,10 +1488,11 @@ died mid-handshake. The reservation does not repeat that.
 - The transport layer exposes outbound socket counts per connector.
   Which count governs filling outbound slots is discovery policy,
   slice 3's decision.
-- The once-a-second monitor thread (`:1113-1138`) is not removed by
-  this round. Its remaining consumers are the out-peers check at
-  `:1556` and discovery's fill loops at `:2021-2069`, all slice 3's.
-  It goes when slice 3 lands.
+- The once-a-second monitor thread is deleted. *Records-was
+  (2026-09-25): it goes when slice 3 lands, cited at `:1113-1138`.*
+  LV-3 step c deleted it. The out-count cache at `net_node.inl:1573`
+  is not refreshed by it. *Records-was: `:1605`.* Slice 3 keeps the
+  fill loops that read the cache.
 - RPC reports both counts, each under its own name. Sockets and
   sessions are not one number.
 

@@ -1159,38 +1159,6 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::run()
   {
-    // creating thread to log number of connections
-    mPeersLoggerThread.reset(new boost::thread([&]()
-    {
-      _note("Thread monitor number of peers - start");
-      const network_zone& public_zone = m_network_zones.at(epee::net_utils::connector_id::clearnet);
-      while (!is_closing && !public_zone.m_net_server.is_stop_signal_sent())
-      { // main loop of thread
-        //number_of_peers = m_net_server.get_config_object().get_connections_count();
-        for (auto& zone : m_network_zones)
-        {
-          unsigned int number_of_in_peers = 0;
-          unsigned int number_of_out_peers = 0;
-          zone.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-          {
-            if (cntxt.m_is_income)
-            {
-              ++number_of_in_peers;
-            }
-            else
-            {
-              ++number_of_out_peers;
-            }
-            return true;
-          }); // lambda
-          zone.second.m_current_number_of_in_peers = number_of_in_peers;
-          zone.second.m_current_number_of_out_peers = number_of_out_peers;
-        }
-        boost::this_thread::sleep_for(boost::chrono::seconds(1));
-      } // main loop of thread
-      _note("Thread monitor number of peers - done");
-    })); // lambda
-
     network_zone& public_zone = m_network_zones.at(epee::net_utils::connector_id::clearnet);
     public_zone.m_net_server.add_idle_handler(boost::bind(&node_server<t_payload_net_handler>::idle_worker, this), std::chrono::seconds{1});
     public_zone.m_net_server.add_idle_handler(boost::bind(&t_payload_net_handler::on_idle, &m_payload_handler), std::chrono::seconds{1});
@@ -1609,7 +1577,7 @@ namespace nodetool
     else if (zone.m_current_number_of_out_peers > zone.m_config.m_net_config.max_out_connection_count)
     {
       zone.m_net_server.get_config_object().del_out_connections(1);
-      --(zone.m_current_number_of_out_peers); // atomic variable, update time = 1s
+      --(zone.m_current_number_of_out_peers); // stored out-count; the one-second thread no longer writes it
       return false;
     }
 
@@ -2176,9 +2144,9 @@ namespace nodetool
         ++count;
       return true;
     });
-    // Same reason as `get_outgoing_connections_count`: the once-a-second
-    // thread is not what admission reads. Keep the cache coherent for readers
-    // that still look at it.
+    // Admission does not read this cache. Store the recount for a reader
+    // that still looks at the atomic. The one-second thread no longer
+    // writes it.
     zone.m_current_number_of_in_peers = count > std::numeric_limits<unsigned int>::max()
       ? std::numeric_limits<unsigned int>::max()
       : static_cast<unsigned int>(count);
@@ -2196,11 +2164,9 @@ namespace nodetool
       return true;
     });
 
-    // Refresh the counter in the zone. The thread that the 'run' method sets up for the
-    // job to update the counters runs only once every second. If we only rely on that,
-    // 'try_to_connect_and_handshake_with_new_peer' called in 'make_new_connection_from_peerlist'
-    // will often fail right away because it thinks there are still enough connections, with
-    // perfectly good new peer candidates totally wasted, and a bad success rate choosing peers
+    // Store this recount. The one-second thread that used to refresh the
+    // cache is gone. `try_to_connect_and_handshake_with_new_peer` reads the
+    // stored value and does not call this function.
     zone.m_current_number_of_out_peers = count;
 
     return count;

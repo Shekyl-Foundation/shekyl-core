@@ -216,6 +216,13 @@ namespace shekyl
 
     boost::asio::io_context& get_io_context() override { return m_io; }
 
+    /// The connection strand. Invoke completions and the caller's log
+    /// post here before they read the context.
+    void post(std::function<void()> fn) override
+    {
+      boost::asio::post(m_strand, std::move(fn));
+    }
+
     bool add_ref() override
     {
       std::uint32_t cur = m_word.load(std::memory_order_acquire);

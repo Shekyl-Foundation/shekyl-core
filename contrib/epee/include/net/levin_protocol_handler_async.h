@@ -30,6 +30,7 @@
 #include <boost/asio/steady_timer.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/unordered_map.hpp>
+#include <boost/smart_ptr/enable_shared_from_this.hpp>
 #include <boost/smart_ptr/make_shared.hpp>
 
 #include <atomic>
@@ -223,7 +224,8 @@ public:
     virtual void reset_timer()=0;
   };
   template <class callback_t>
-  struct anvoke_handler: invoke_response_handler_base
+  struct anvoke_handler: invoke_response_handler_base,
+                        public boost::enable_shared_from_this<anvoke_handler<callback_t>>
   {
     anvoke_handler(const callback_t& cb, const std::chrono::milliseconds timeout,  async_protocol_handler& con, int command)
       :m_cb(cb), m_timeout(timeout), m_con(con), m_timer(con.m_pservice_endpoint->get_io_context()), m_timer_started(false),
@@ -231,18 +233,11 @@ public:
     {
       if(m_con.start_outer_call())
       {
-        MDEBUG(con.get_context_ref() << "anvoke_handler, timeout: " << timeout.count());
-        m_timer.expires_after(timeout);
-        m_timer.async_wait([&con, command, cb, timeout](const boost::system::error_code& ec)
-        {
-          if(ec == boost::asio::error::operation_aborted)
-            return;
-          MINFO(con.get_context_ref() << "Timeout on invoke operation happened, command: " << command << " timeout: " << timeout.count());
-          epee::span<const uint8_t> fake;
-          cb(LEVIN_ERROR_CONNECTION_TIMEDOUT, fake, con.get_context_ref());
-          con.close();
-          con.finish_outer_call();
+        con.m_pservice_endpoint->post([&con, timeout] {
+          MDEBUG(con.get_context_ref() << "anvoke_handler, timeout: " << timeout.count());
         });
+        m_timer.expires_after(timeout);
+        arm_timeout(command, cb, timeout);
         m_timer_started = true;
       }
     }
@@ -290,22 +285,27 @@ public:
     {
       if (!m_cancel_timer_called && m_timer.cancel() > 0)
       {
-        callback_t& cb = m_cb;
-        const auto timeout = m_timeout;
-        async_protocol_handler& con = m_con;
-        int command = m_command;
         m_timer.expires_after(m_timeout);
-        m_timer.async_wait([&con, cb, command, timeout](const boost::system::error_code& ec)
-        {
-          if(ec == boost::asio::error::operation_aborted)
-            return;
-          MINFO(con.get_context_ref() << "Timeout on invoke operation happened, command: " << command << " timeout: " << timeout.count());
-          epee::span<const uint8_t> fake;
-          cb(LEVIN_ERROR_CONNECTION_TIMEDOUT, fake, con.get_context_ref());
-          con.close();
-          con.finish_outer_call();
-        });
+        arm_timeout(m_command, m_cb, m_timeout);
       }
+    }
+
+    void arm_timeout(int command, callback_t cb, const std::chrono::milliseconds timeout)
+    {
+      m_timer.async_wait([this, command, cb, timeout](const boost::system::error_code& ec)
+      {
+        if(ec == boost::asio::error::operation_aborted)
+          return;
+        // The list may drop its `shared_ptr` before this post runs. Hold one.
+        auto self = shared_from_this();
+        self->m_con.m_pservice_endpoint->post([self, command, cb, timeout] {
+          MINFO(self->m_con.get_context_ref() << "Timeout on invoke operation happened, command: " << command << " timeout: " << timeout.count());
+          epee::span<const uint8_t> fake;
+          cb(LEVIN_ERROR_CONNECTION_TIMEDOUT, fake, self->m_con.get_context_ref());
+          self->m_con.close();
+          self->m_con.finish_outer_call();
+        });
+      });
     }
   };
   critical_section m_invoke_response_handlers_lock;

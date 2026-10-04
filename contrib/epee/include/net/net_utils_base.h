@@ -32,6 +32,7 @@
 #include <boost/uuid/uuid.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/address_v6.hpp>
+#include <functional>
 #include <stdexcept>
 #include <typeinfo>
 #include <type_traits>
@@ -463,6 +464,9 @@ namespace net_utils
     virtual bool call_run_once_service_io()=0;
     virtual bool request_callback()=0;
     virtual boost::asio::io_context& get_io_context()=0;
+    /// Run `fn` on this connection's strand. A context read belongs in
+    /// `fn`, not on the caller that armed the wait.
+    virtual void post(std::function<void()> fn)=0;
     //protect from deletion connection object(with protocol instance) during external call "invoke"
     virtual bool add_ref()=0;
     virtual bool release()=0;

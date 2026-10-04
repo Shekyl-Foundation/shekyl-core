@@ -158,6 +158,7 @@ namespace
     virtual bool call_run_once_service_io()           { std::cout << "test_connection::call_run_once_service_io()" << std::endl; return true; }
     virtual bool request_callback()                   { std::cout << "test_connection::request_callback()" << std::endl; return true; }
     virtual boost::asio::io_context& get_io_context() { std::cout << "test_connection::get_io_context()" << std::endl; return m_io_service; }
+    virtual void post(std::function<void()> fn) { fn(); }
     virtual bool add_ref()                            { std::cout << "test_connection::add_ref()" << std::endl; return true; }
     virtual bool release()                            { std::cout << "test_connection::release()" << std::endl; return true; }
 

@@ -438,7 +438,6 @@ namespace nodetool
         m_allow_local_ip(false),
         m_igd(no_igd),
         m_offline(false),
-        is_closing(false),
         m_network_id(),
         m_started_at(std::chrono::steady_clock::now())
     {}
@@ -670,10 +669,6 @@ namespace nodetool
 
     void kill() { ///< will be called e.g. from deinit()
       _info("Killing the net_node");
-      is_closing = true;
-      if(mPeersLoggerThread != nullptr)
-        mPeersLoggerThread->join(); // make sure the thread finishes
-      _info("Joined extra background net_node threads");
     }
 
     //debug functions
@@ -701,8 +696,6 @@ namespace nodetool
     bool m_offline;
     bool m_use_ipv6;
     bool m_require_ipv4;
-    std::atomic<bool> is_closing;
-    std::unique_ptr<boost::thread> mPeersLoggerThread;
     //critical_section m_connections_lock;
     //connections_indexed_container m_connections;
 

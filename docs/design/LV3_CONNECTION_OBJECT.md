@@ -1551,7 +1551,7 @@ wrong was calling them the round.*
 
 | Step | What | Note |
 | --- | --- | --- |
-| **c** | The connection registry, **including its own count**. **UPDATE 2026-09-28: first, immediately after the transport cutover.** The strand is the only writer. Walkers read snapshots. A change is a post. | the `foreach_connection` race, above |
+| **c** | The connection registry, **including its own count**. **UPDATE 2026-10-04: the hub lock writes the row. The strand writes the C++ context.** Walkers read snapshots. A change is a post. *Records-was: "the strand is the only writer."* | the `foreach_connection` race, above |
 | **a** | The `Connection` type — the endpoint with Round 2's claimed/observed provenance, direction, connector, established-at. Follows step c. *Records-was: zone.* | `Claimed<T>` / `Observed<T>` distinct in the type, per §2.7.4 |
 | **b** | Ownership transfer — the Rust object becomes authoritative; `p2p_connection_context` becomes a handle. Follows step c. | |
 | **d** | Relay dispatch — moved out 2026-09-25 to the RD row, after the timing engine | not this slice; see §6.3 item 3 |
@@ -1566,16 +1566,18 @@ the sockets moved here.*
 **And one concrete inheritance worth naming**, because it is invisible from
 `levin_notify`. **UPDATE 2026-10-04:** admission does not read the
 recount. `apply_inbound_ceiling` (`net_node.inl:3009`) charges
-`shekyl_seam_inbound_held()`. The once-per-second thread is still
-`node_server::run` (`:1163`), and its walk is `:1174`: it sleeps one
-second and writes `m_current_number_of_in_peers` and
-`m_current_number_of_out_peers`. The out-count is what
-`try_to_connect_and_handshake_with_new_peer` reads (`:1605`), with the
-comment that the update time is one second. The in-count atomic is
-written by that thread and by `get_incoming_connections_count`
-(`:2182`) and has no reader in `src/`. Step **c** owns the count, and
-that thread goes with it. Deleting it removes the one-second
-`--in-peers` measurement input (rule 76;
+`shekyl_seam_inbound_held()` (`net_node.inl:2975`). The once-per-second
+peers-monitor thread is deleted. *Records-was: `node_server::run`
+(`:1163`) slept one second and wrote `m_current_number_of_in_peers`
+and `m_current_number_of_out_peers`.* The out-count cache is
+`try_to_connect_and_handshake_with_new_peer` (`:1573`). *Records-was:
+`:1605`.* It is not refreshed by that thread. Slice 3 keeps the fill
+loops that read it. `get_outgoing_connections_count` still stores the
+recount it just made (`:2170`), and the fill path does not call that
+function. The in-count atomic is written by
+`get_incoming_connections_count` (`:2150`) and has no reader in
+`src/`. Deleting the thread removes the one-second `--in-peers`
+measurement input (rule 76;
 [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §7.4
 item 2). *Records-was: the ceiling was compared against the atomic the
 recount at `net_node.inl:1112` maintained.*
@@ -1604,27 +1606,27 @@ row.
   that change to the connection's strand. It does not write the
   context itself.
 
-**UPDATE 2026-10-04. Inventory at `dev` `684673611e`.** `git grep -c
-foreach_connection` is the number: 12 in `src/p2p/net_node.inl`, 1 in
-`src/cryptonote_protocol/levin_notify.cpp`. The twelve are calls. The
-one is a comment at `:406`, not a call. *Records-was at `9bc062036`:
-15 calls in `net_node.inl` and 2 calls in `levin_notify.cpp` (`:190`,
-`:232`), plus a comment at `:472`.*
+**UPDATE 2026-10-04. Inventory at `dev` `684673611e`, then the
+peers-monitor thread deleted.** `git grep -c foreach_connection` at
+that pin was 12 calls in `src/p2p/net_node.inl` and 1 comment in
+`src/cryptonote_protocol/levin_notify.cpp` (`:406`, not a call). The
+thread's walk is gone, so the calls in `net_node.inl` are 11.
+*Records-was at `9bc062036`: 15 calls in `net_node.inl` and 2 calls
+in `levin_notify.cpp` (`:190`, `:232`), plus a comment at `:472`.*
 
 | Call | Site |
 | --- | --- |
 | `for_each_connection` | `:158`, mutable context |
-| `run` (the one-second thread) | `:1174` |
-| `send_stop_signal` | `:1280` |
-| `has_outbound_connection_to_host` | `:1524` |
-| `is_peer_used` | `:1545` |
-| `is_addr_connected` | `:1570` |
-| `make_new_connection_from_peerlist` | `:1802` |
-| `get_incoming_connections_count` (one zone) | `:2173`, also writes the in-count cache |
-| `get_outgoing_connections_count` (one zone) | `:2192`, also writes the out-count cache |
-| `get_incoming_connections_count` (every zone) | `:2224` |
-| `peer_sync_idle_maker` | `:2366`, mutable; sets `m_in_timedsync` |
-| `print_connections_container` | `:2846` |
+| `send_stop_signal` | `:1248` |
+| `has_outbound_connection_to_host` | `:1492` |
+| `is_peer_used` | `:1513` |
+| `is_addr_connected` | `:1538` |
+| `make_new_connection_from_peerlist` | `:1770` |
+| `get_incoming_connections_count` (one zone) | `:2141`, also writes the in-count cache |
+| `get_outgoing_connections_count` (one zone) | `:2160`, also writes the out-count cache |
+| `get_incoming_connections_count` (every zone) | `:2190` |
+| `peer_sync_idle_maker` | `:2332`, mutable; sets `m_in_timedsync` |
+| `print_connections_container` | `:2812` |
 
 `foreach_connection` hands the callback `get_context_ref()`
 (`levin_protocol_handler_async.h:907`). `for_connection` does the same
@@ -1645,74 +1647,70 @@ grows the Hub row until it publishes the snapshot above, and the count
 is owned there. `Relay::contexts` becomes a reader of that registry,
 or a view over it.
 
-**What greens step c.** The twelve callbacks read snapshots. The two
+**What greens step c.** The walks that remain read snapshots. The two
 mutable walks become posts to that connection's strand:
 `for_each_connection` (`:158`) hands its callback a mutable context,
-and `peer_sync_idle_maker` (`:2366`) sets `m_in_timedsync`. The
+and `peer_sync_idle_maker` (`:2332`) sets `m_in_timedsync`. The
 snapshot gains what each of those reads before it writes. The `run`
-thread at `:1163` is gone, and that deletion is recorded as removing
-the `--in-peers` measurement input named above. This is the deletion.
-D8 left the thread until slice 3; that sentence is records-was in
+thread is deleted, and that deletion removes the `--in-peers`
+measurement input named above. D8 had left the thread until slice 3;
+that sentence is records-was in
 [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D8 and in the
-timing-engine inventory. The out-count cache at `:1605` is what the
-fill loops still read. It stops being refreshed when the thread goes,
-and that staleness stays through this step.
+timing-engine inventory. The out-count cache at `:1573` is not
+refreshed by the thread. *Records-was: `:1605`.* Slice 3 keeps the
+fill loops that read it.
 
 **Which of the twelve move in step c.** The board carries the id, the
 connector, the direction, whether the handshake has finished, and the
 observed endpoint. It does not carry support flags or the pull
 relationship. Those arrive when their owner publishes them, through
-the step-b handle, not as blanks on the board. Step c's falsifier is
-this subset, plus the `run` thread being gone. The twelve reading
-snapshots greens at b.
+the step-b handle, not as blanks on the board. The `run` thread is
+gone. The rest of this subset is still the C++ walk. The twelve
+reading snapshots greens at b.
 
 | Step c | Step b |
 | --- | --- |
-| `for_each_connection` `:158`, for the reads this row answers. A callback that reads support flags or the pull relationship waits. | `peer_sync_idle_maker` `:2366`. It reads the pull relationship and writes `m_in_timedsync`. |
-| `run` `:1174`, and then the thread is deleted | A sync-state line on the connection print. `:2846` does not print one today. |
-| `send_stop_signal` `:1280` | |
-| `has_outbound_connection_to_host` `:1524` | |
-| `is_peer_used` `:1545` | |
-| `is_addr_connected` `:1570` | |
-| `make_new_connection_from_peerlist` `:1802` | |
-| `get_incoming_connections_count` `:2173` | |
-| `get_outgoing_connections_count` `:2192`. The out-count cache at `:1605` stays. | |
-| `get_incoming_connections_count` `:2224` | |
-| `print_connections_container` `:2846`, the address, the id, and the direction | |
+| `for_each_connection` `:158`, for the reads this row answers. A callback that reads support flags or the pull relationship waits. | `peer_sync_idle_maker` `:2332`. It reads the pull relationship and writes `m_in_timedsync`. |
+| `run` | deleted. *Records-was: `:1174`, inside the thread `run` started at `:1163`.* The out-count cache at `:1573` is not refreshed by it. |
+| `send_stop_signal` `:1248` | |
+| `has_outbound_connection_to_host` `:1492` | |
+| `is_peer_used` `:1513` | |
+| `is_addr_connected` `:1538` | |
+| `make_new_connection_from_peerlist` `:1770` | |
+| `get_incoming_connections_count` `:2141` | |
+| `get_outgoing_connections_count` `:2160`. The out-count cache at `:1573` stays. | |
+| `get_incoming_connections_count` `:2190` | |
+| `print_connections_container` `:2812`, the address, the id, and the direction | A sync-state line on the connection print. `:2812` does not print one today. |
 
 This step does not wait behind steps a and b. Those follow it. It
 does not wait on slices 1–4, the timing-engine bridge, or relay
 dispatch.
 
 `get_context_ref` is what lets a caller who is not the strand hold a
-mutable context across a strand write. At `684673611e`, `rg
-get_context_ref` in `levin_protocol_handler_async.h` is:
+mutable context across a strand write. `rg get_context_ref` in
+`levin_protocol_handler_async.h` is:
 
 | Line | What holds the reference |
 | --- | --- |
 | `:790` | the definition |
-| `:234` | `anvoke_handler`'s constructor, a log |
-| `:240`, `:242` | the invoke-timeout timer: a log, then the callback |
-| `:276` | `anvoke_handler::cancel`, the callback |
-| `:302`, `:304` | `reset_timer`'s wait: a log, then the callback |
+| `:237` | the constructor's log, inside the post at `:236` |
+| `:302`, `:304` | the invoke-timeout completion, inside the post at `:301`. Both waits use it |
+| `:271` | `anvoke_handler::cancel`, the callback |
 | `:907` | `foreach_connection` hands the walker the context |
 | `:921` | `for_connection` hands the caller the context |
 
-`:276` is strand-side. `cancel` is called only from
+`:271` is strand-side. `cancel` is called only from
 `release_protocol`, and `begin_closed` calls that from `on_strand`
-(`zone_server.h:481`). The falsifier keeps it.
+(`zone_server.h:481`). *Records-was: `:276`.* The falsifier keeps it.
 
-The other four are not. `:234` runs in the constructor, on the caller
-of `async_invoke` (`net_node.inl:1319`, `:1400`, `:2649`), which is
-not the connection strand. `:240` and `:242`, and `:302` and `:304`,
-are `async_wait` handlers on the zone `io_context`
-(`levin_protocol_handler_async.h:229`). `zone_server::run` drives
-that context on more than one worker (`zone_server.h:258`), and the
-wait is not posted to the connection strand. `reset_timer` is called
-from the receive path, which is the strand; the wait it arms is not.
-Those four post onto the strand before they touch the context, the
-same way `request_callback` already does (`seam_endpoint.h:209`).
-The falsifier does not keep them.
+`:236` posts the caller's log. The read is `:237`, and it runs on the
+strand. `:301` posts each invoke-timeout completion. The reads are
+`:302` and `:304`, and they run on the strand. The timer stays on the
+zone `io_context` (`levin_protocol_handler_async.h:229`), which
+`zone_server::run` drives on more than one worker
+(`zone_server.h:258`). *Records-was: `:240` and `:242`, and the old
+`:302` and `:304`, ran on whichever worker took the timer, and `:234`
+ran on `async_invoke`'s caller.*
 
 `:921` is not only a walker. `node_server::for_connection`
 (`net_node.inl:169`) reaches it. So do `try_add_next_blocks`
@@ -1725,7 +1723,7 @@ says the call can be outside the strand), `drop_connections` by host
 that claims it lists them. A caller that cannot move onto the strand
 is a finding, not a carve-out.
 
-**Step a, a starting table (2026-10-04).** The members that cross are
+**Step a, a starting table (2026-10-04).** The hub lock is the only writer of the row, and the connection's strand is the only writer of the C++ context. `adopt`, `finish`, and `reap` come from the connector, the transport, and the executor. The strand does not exist until the established post, so a close never waits on a strand that may not be there. The members that cross are
 the 14 on `connection_context_base` (`net_utils_base.h`) and the 16
 on `cryptonote_connection_context` (`connection_context.h`), plus
 `support_flags`, `m_in_timedsync`, and `sent_addresses` on
