@@ -27,7 +27,7 @@ that are *footguns the protocol will not stop you from pulling*, and why.
 
 1. [Who this is for](#who-this-is-for)
 2. [The three things to know before you bond](#the-three-things-to-know-before-you-bond)
-3. [Footgun 1: the drop-to-reallocate capital strand](#footgun-1-the-drop-to-reallocate-capital-strand)
+3. [Footgun 1: the release-to-reallocate capital strand](#footgun-1-the-release-to-reallocate-capital-strand)
 4. [Footgun 2: the shared-anchor funding tell](#footgun-2-the-shared-anchor-funding-tell)
 5. [Operational security (opsec)](#operational-security-opsec)
 6. [Cold-start: the earliest operators carry the thinnest cover](#cold-start-the-earliest-operators-carry-the-thinnest-cover)
@@ -51,14 +51,17 @@ is the safest operating regime; almost every way to hurt yourself below requires
 
 ## The three things to know before you bond
 
-1. **Collateral is locked, and freeing it is slow.** Each shard you hold is
-   backed by a flat `ARCHIVAL_BOND_FLOOR` of collateral. When you voluntarily
-   release collateral (a full `Release`, or a partial-release via
-   `HoldingsUpdate` that drops a shard), the freed collateral enters a
+1. **Collateral is locked, a bond's shard set is fixed for its life, and
+   freeing collateral is slow.** Each shard you hold is backed by a flat
+   `ARCHIVAL_BOND_FLOOR` of collateral, and **a bond never changes which
+   shards it holds** — there is no add, no drop, no partial release. To hold
+   a different set you post a **new** bond under a new persona and `Release`
+   the old one. When you `Release`, the whole bond's collateral enters a
    **release cooldown of `RELEASE_COOLDOWN_EPOCHS = 2` epochs (20,000 blocks)**
    before it is spendable again. This is deliberate: it is the anti-dodge
    property that stops an operator from shedding an obligation and immediately
-   refunding elsewhere. Plan around it (see [Footgun 1](#footgun-1-the-drop-to-reallocate-capital-strand)).
+   refunding elsewhere, and it prices rebalancing on purpose. Plan around it
+   (see [Footgun 1](#footgun-1-the-release-to-reallocate-capital-strand)).
 
 2. **Your bond-post timing is a privacy surface, and the wallet handles it for
    you.** When you join, the wallet draws a randomized delay before your bond
@@ -75,21 +78,25 @@ is the safest operating regime; almost every way to hurt yourself below requires
 
 ---
 
-## Footgun 1: the drop-to-reallocate capital strand
+## Footgun 1: the release-to-reallocate capital strand
 
-**The mistake:** you drop a shard you are holding (a `HoldingsUpdate`
-partial-release) intending to immediately use the freed collateral to fund a
-*different* shard.
+**The mistake:** you `Release` the bond you are holding intending to use its
+collateral, as soon as it comes back, to post a *different* bond — a new shard
+set, or the same set plus one.
 
-**Why it hurts you:** the freed collateral is **frozen for the release cooldown
-(2 epochs / 20,000 blocks)**. It is not available to back the new shard during
-that window. So the new shard is left under-collateralized -- you cannot post it
-until the cooldown expires -- and the coverage you were trying to move is
-*stranded*, present in neither the old position (you dropped it) nor the new one
-(you cannot fund it yet). In the normal "lean" operating regime, other operators
-are too pinned by their own locked collateral to quickly backfill the gap you
-just created, so the network briefly loses the coverage and **you** carry the
-self-inflicted hole.
+**Why it hurts you:** a bond's shard set cannot be edited, so the only way to
+change what you hold is a new bond under a new persona — and the released
+bond's collateral is **frozen for the release cooldown (2 epochs / 20,000
+blocks)**. It cannot back the new bond during that window. So the new bond
+cannot be posted until the cooldown expires, and the coverage you were trying
+to move is *stranded*: present in neither the old position (you released it)
+nor the new one (you cannot fund it yet). In the normal "lean" operating
+regime, other operators are too pinned by their own locked collateral to
+quickly backfill the gap you just created, so the network briefly loses the
+coverage and **you** carry the self-inflicted hole. The same applies to a
+pure shrink: releasing to hold *less* still waits out the whole cooldown
+before any of the collateral is yours again. That is intended — it prices
+deliberate sizing.
 
 This is the single most common way an attentive operator can hurt themselves and
 the network at once, and it is entirely self-inflicted: a set-and-forget operator
@@ -97,20 +104,28 @@ never does it.
 
 **What to do instead:**
 
-- **Do not drop a shard to fund another shard within the cooldown.** If you want
-  to take on a new shard, post it from **fresh capital**, not from collateral
-  you are simultaneously freeing.
-- **If you must rebalance** (drop one, take another), accept that the freed
-  collateral is unavailable for ~2 epochs and **wait out the cooldown** before
-  treating it as funding for the new position.
+- **Post the new bond first, from fresh capital, then release the old one.**
+  The two personas may be bonded at once; what you must not do is fund the
+  new one with collateral that is simultaneously entering a cooldown.
+- **If you cannot fund an overlap**, accept that the released collateral is
+  unavailable for ~2 epochs and **wait out the cooldown** before treating it
+  as funding for the new position — and know the shards go uncovered by you
+  for that long.
 - **Prefer not to rebalance at all.** A `P` is long-lived; churning your shard
-  set chases marginal optimization at the cost of exactly this stranding risk.
-  The shards you hold are already covered; leaving them alone is the dependable
-  choice.
+  set chases marginal optimization at the cost of exactly this stranding risk
+  and a full cooldown each time. The shards you hold are already covered;
+  leaving them alone is the dependable choice.
 
-> **[operator-enforced until V3.1]** A future wallet release will **warn or
-> refuse** a `HoldingsUpdate` drop whose freed collateral you are visibly trying
-> to redeploy within the cooldown. Until then, this is on you.
+> **[operator-enforced until V3.1]** A future wallet release will **warn**
+> before a `Release` whose collateral you are visibly trying to redeploy
+> within the cooldown. Until then, this is on you.
+
+*(Re-derived 2026-10-04. This section was written for a per-shard
+`HoldingsUpdate` drop; that post kind was **REJECTED 2026-09-20** — a bond's
+holdings are immutable for its life, and holdings change by persona rotation
+([`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md) §5.3).
+The footgun survives the ruling with its subject widened from one shard to the
+whole bond.)*
 
 ---
 
