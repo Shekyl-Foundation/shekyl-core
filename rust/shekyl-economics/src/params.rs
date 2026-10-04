@@ -242,7 +242,7 @@ pub struct EconomicParams {
     /// Authority: `config/consensus_constants.json`
     /// `block_weight_full_reward_zone_bytes`, also read by the C++ header
     /// generator and by `shekyl-wire`'s `MIN_BLOCK_WEIGHT`. Declared last so
-    /// the params digest appends it (format `0x03`); the preimage order is
+    /// the params digest appends it (since format `0x03`); the preimage order is
     /// this declaration order.
     pub full_reward_zone: u64,
 }

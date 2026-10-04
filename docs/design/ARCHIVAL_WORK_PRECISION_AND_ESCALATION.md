@@ -2453,7 +2453,9 @@ to y42 and leaves it at 0.93 replicas at 10 %), and the corpus keeps growing
 (≈ 16.6 k shards/yr at 15 tx/block, +7.5 k SKL/yr of burden at 10 %) while the
 tail does not. The table's whole-tail row reads 0.76 at 2 % because at year 60
 the curve still mints ≈ 274 k SKL/yr above the tail; from ≈ year 64 the tail
-alone is the leg, and against scenario 9's year-60 burden (2.2 M SKL/yr at
+alone is the leg (the ESF-21 curve's figures, as in the note above: at 22
+per block the year-60 curve mints ≈ 6 M SKL/yr above the tail, which
+binds from ≈ year 119; re-run under `EUP-4`), and against scenario 9's year-60 burden (2.2 M SKL/yr at
 10 %, 440 k at 2 %) it clears only at 2 % and only at `R ≤ 2`. A constant flow
 against an unbounded stock: the fee share's shape with a longer fuse.
 (iv) **Re-pinning the decay** is worth little: `0.95` moves nothing visible, and

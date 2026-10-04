@@ -82,8 +82,10 @@
 //! | 97     | 8     | `full_reward_zone`                 | u64 LE              |
 //!
 //! The field order is the [`EconomicParams`] declaration order.
-//! `full_reward_zone` is the struct's last field, so format `0x03` appends
-//! it and every earlier offset is unchanged.
+//! `full_reward_zone` is the struct's last field: format `0x03` appended
+//! it and left every earlier offset unchanged. The current format, `0x04`,
+//! keeps that layout and redefines offset 57 from a per-minute to a
+//! per-block factor.
 //! **Adding, removing, or reordering a field is a breaking layout
 //! change** and must bump [`DIGEST_FORMAT_VERSION`] (so a stale fixture
 //! produced under the old layout fails the staleness guard rather than

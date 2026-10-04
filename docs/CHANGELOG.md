@@ -30,6 +30,10 @@
   half-emission milestone reads it (2 907 270).
 - A captured replay chain's `built_at_dev_sha` is the SHA the daemon reports,
   and the capture refuses unless it is the checkout's clean `HEAD`.
+- `ECONOMY_EXPLAINED.md` Loop 1 states the design curve: `remaining >> 22`,
+  1 024 coins at genesis, the emission table recomputed from the owner, the
+  tail near year 119. The live census row `CEN-F13` and slice 4's `F13` name
+  `>> 22`.
 - The realigned economics sim (#936) on the design curve: its 60-year horizon
   no longer reaches the tail (≈ year 119 neutral, ≈ year 132 in the fold). The
   two tail-era sim tests start in the tail era and assert it; the escalation

@@ -503,6 +503,12 @@ lives. Correct statement:
   2²¹` blocks exactly. (Tail entry ≈ block 17 061 260, ~year 65; the
   ±1 against any independently quoted height is a fencepost convention,
   not a disagreement.)
+- *These three bullets are the per-minute convention's curve, as the code
+  ran it when the finding was written (corrected 2026-10-04).* At the
+  design's 22 per block `base_block_reward` is `(remaining_supply >> 22)`
+  floored at 0.6/block, the identity reads `2²²` blocks, and tail entry on
+  the neutral trajectory is block 31 215 255, ~year 119. The supply cap
+  and its cliff went with FL-R12′.
 - The cited precedent does not transfer: Monero's tail is perpetual
   because Monero's supply cap is unreachable
   (`DESIGN_CONCEPTS.md:544`).

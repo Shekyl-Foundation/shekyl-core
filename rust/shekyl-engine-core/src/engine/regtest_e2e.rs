@@ -4733,15 +4733,14 @@ fn capture_build_identity(daemon_version: &str) -> String {
     let dirty = git(&[
         "status",
         "--porcelain",
-        "--untracked-files=no",
         "--",
         ":(top)",
         ":(top,exclude)rust/shekyl-chain-ingest/tests/vectors",
     ]);
     assert!(
         dirty.is_empty(),
-        "the checkout has uncommitted changes, so HEAD does not describe what was built; \
-         commit them and rebuild the daemon before capturing:\n{dirty}"
+        "the checkout has uncommitted or untracked files, so HEAD does not describe what \
+         was built; commit or remove them and rebuild the daemon before capturing:\n{dirty}"
     );
     head
 }

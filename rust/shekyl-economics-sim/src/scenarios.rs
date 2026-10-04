@@ -230,16 +230,21 @@ pub const SCENARIO_9_TAIL_TX_PER_BLOCK: u64 = 15;
 /// at 60 y), then a long low-activity tail (years 20–60,
 /// [`SCENARIO_9_TAIL_TX_PER_BLOCK`] tx/block). Run to **60 years** so the
 /// **staker** emission leg has decayed to ≈ 0.002 of its initial share
-/// (`0.9^60`) on a curve within 0.1 % of its asymptote — not exhausted: the
-/// curve still mints ≈ 1 SKL/block at year 60, and the 0.6 SKL/block tail
-/// floor binds from ≈ year 64 — the only regime where the fee leg is the primary
-/// budget and escalation is decisive (A1's binding case; F-G). None of
-/// scenarios 1–8 reach it (`scenario_8` is high-history but *busy* and only 5
-/// years long).
+/// (`0.9^60`), the regime where the fee leg is the stakers' primary budget
+/// and escalation is decisive (A1's binding case; F-G). None of scenarios
+/// 1–8 reach it (`scenario_8` is high-history but *busy* and only 5 years
+/// long).
+///
+/// The curve itself is not near its tail in this run: at 22 per block it has
+/// emitted ≈ 97.7 % by year 60, still mints ≈ 24 SKL/block, and reaches the
+/// 0.6 SKL/block floor near year 119. The scenario was sized when the code
+/// ran 21 per block (≈ 1 SKL/block at year 60, the floor from ≈ year 64);
+/// whether its horizon follows the tail out is the assessment's question
+/// (`ECONOMY_UMBRELLA_PLAN.md` §4.1).
 pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConfig {
     ScenarioConfig {
         name: "high_history_low_activity".into(),
-        description: "post-boom settled chain: a large shard corpus accreted in an early boom, then a low-activity fee-era tail over 60 years (emission near the tail: ~1 SKL/block at year 60, the 0.6 SKL/block floor binds from ~year 64) — the §11.2 quadrant where escalation is decisive".into(),
+        description: "post-boom settled chain: a large shard corpus accreted in an early boom, then a low-activity tail over 60 years (the staker emission leg decayed to ~0.002 of its share; the curve still mints ~24 SKL/block at year 60) — the §11.2 quadrant where escalation is decisive".into(),
         sim_years: 60,
         volume: VolumeSchedule {
             get_volume: Box::new(|block, blocks_per_year| {

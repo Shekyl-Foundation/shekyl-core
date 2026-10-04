@@ -303,16 +303,23 @@ pub fn projected_already_generated(
 ///
 /// One walk, where bisecting the projection replays it from genesis on
 /// every probe. Past tail entry the answer is closed-form, as the
-/// projection's is. `Overflow` when no `u64` height reaches `target`,
-/// including a zero tail that leaves the trajectory short of it forever.
+/// projection's is. `Overflow` when no height's projection both fits `u64`
+/// and reaches `target`: a zero tail leaves the trajectory short of it
+/// forever, and a tail step can pass `u64::MAX` without landing on it.
 pub fn neutral_height_reaching(target: u64, params: &EconomicParams) -> Result<u64, EmissionError> {
     match walk_neutral(params, |_, ag| ag >= target)? {
         NeutralWalk::Stopped { height, .. } => Ok(height),
         NeutralWalk::Tail { tail: 0, .. } => Err(EmissionError::Overflow),
-        // The walk stopped short of `target`, so `ag < target`.
-        NeutralWalk::Tail { height, ag, tail } => height
-            .checked_add((target - ag).div_ceil(tail))
-            .ok_or(EmissionError::Overflow),
+        // The walk stopped short of `target`, so `ag < target`. The height
+        // is an answer only if the projection there exists.
+        NeutralWalk::Tail { height, ag, tail } => {
+            let blocks = (target - ag).div_ceil(tail);
+            blocks
+                .checked_mul(tail)
+                .and_then(|added| ag.checked_add(added))
+                .ok_or(EmissionError::Overflow)?;
+            height.checked_add(blocks).ok_or(EmissionError::Overflow)
+        }
     }
 }
 
@@ -493,7 +500,7 @@ mod tests {
     /// approximation that happens to be close.
     #[test]
     fn the_fast_forward_agrees_with_the_naive_walk_across_tail_entry() {
-        // Canonical parameters put tail entry ~65 years out, where a naive
+        // Canonical parameters put tail entry ~119 years out, where a naive
         // comparison is not runnable, so shrink the emission-speed factor
         // and the supply until the curve crosses within a few dozen
         // blocks. Only the crossing's POSITION moves; the recurrence and
@@ -591,6 +598,32 @@ mod tests {
                 "inverse and naive search must agree at target {target} (crossing at {crossing})"
             );
         }
+    }
+
+    /// A height is returned only where the projection exists. A tail whose
+    /// third step passes `u64::MAX` reaches twice itself at height 2 and
+    /// reaches nothing above that: the projection at height 3 overflows.
+    #[test]
+    fn the_inverse_never_names_a_height_the_projection_cannot_represent() {
+        let p = EconomicParams {
+            emission_curve_asymptote: 0,
+            final_subsidy_per_minute: u64::MAX / 4,
+            ..EconomicParams::default()
+        };
+        let tail = tail_subsidy_per_block(&p).expect("tail");
+        assert!(tail.checked_mul(3).is_none() && tail.checked_mul(2).is_some());
+        assert_eq!(neutral_height_reaching(2 * tail, &p), Ok(2));
+        assert_eq!(projected_already_generated(2, &p), Ok(2 * tail));
+        for target in [2 * tail + 1, u64::MAX] {
+            assert!(matches!(
+                neutral_height_reaching(target, &p),
+                Err(EmissionError::Overflow)
+            ));
+        }
+        assert!(matches!(
+            projected_already_generated(3, &p),
+            Err(EmissionError::Overflow)
+        ));
     }
 
     /// A target the trajectory never reaches is an error, not a hang or a

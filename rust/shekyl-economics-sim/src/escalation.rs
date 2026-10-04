@@ -76,8 +76,7 @@ pub const ASYMPTOTE_BAND: [u64; 3] = [500_000, 750_000, 900_000];
 /// where the shipped knee stands against it, holds the shipped knee at
 /// the swept middle (`KNEE_BAND[1]`), and lets that knee stand outside the
 /// live band only while the escalation is flat; re-deriving the band and
-/// the knee is
-/// GF-7's, after ESR-10 (`docs/FOLLOWUPS.md`).
+/// the knee is GF-7's, after ESR-10 (`docs/FOLLOWUPS.md`).
 ///
 /// **A knee in shards is an archival length in disguise.** `knee · W` is the
 /// quantity the sweep actually chose (how much archive is held when the share
