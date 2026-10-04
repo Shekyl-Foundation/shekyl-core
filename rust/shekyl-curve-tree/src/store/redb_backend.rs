@@ -2348,6 +2348,31 @@ impl LeafStore {
         Ok(())
     }
 
+    /// Overwrite the capture row at `end_leaf` with `chunks`, verbatim.
+    ///
+    /// Test-only: the merge refuses conflicting bytes and sorts what it
+    /// writes, so a row carrying bytes the reader must refuse — a node that
+    /// is not a curve point, a repeated layer — cannot be produced through
+    /// the production writer. The decoders are graded against rows this
+    /// writes.
+    #[cfg(test)]
+    pub(crate) fn replace_capture_row_for_test(
+        &self,
+        end_leaf: TreePosition,
+        chunks: &[CapturedChunk],
+    ) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+            table.insert(
+                TreePositionKey::from(end_leaf),
+                encode_captured_chunks(chunks).as_slice(),
+            )?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
     /// Delete the capture row at `end_leaf`.
     ///
     /// Test-only: the one way to produce a closed chunk whose capture is
@@ -2669,7 +2694,7 @@ fn encode_captured_chunks(chunks: &[CapturedChunk]) -> Vec<u8> {
 /// Inverse of [`encode_captured_chunks`], refusing anything it did not write.
 fn decode_captured_chunks(mut raw: &[u8]) -> Result<Vec<CapturedChunk>, StoreError> {
     const HEADER: usize = 1 + 4;
-    let mut out = Vec::new();
+    let mut out: Vec<CapturedChunk> = Vec::new();
     while !raw.is_empty() {
         if raw.len() < HEADER {
             return Err(StoreError::CorruptMeta(
@@ -2686,6 +2711,16 @@ fn decode_captured_chunks(mut raw: &[u8]) -> Result<Vec<CapturedChunk>, StoreErr
             .ok_or(StoreError::CorruptMeta("captured chunk length overflows"))?;
         if raw.len() < end {
             return Err(StoreError::CorruptMeta("captured chunk body is truncated"));
+        }
+        // One chunk per `(end_leaf, layer)`, written in ascending layer order
+        // — every writer sorts after merging. A row that repeats a layer or
+        // runs backwards was not written by this code, and a reader that took
+        // the first of two layer-`L` bodies would be choosing between two
+        // conflicting persisted values silently.
+        if out.last().is_some_and(|prev| prev.layer >= layer) {
+            return Err(StoreError::CorruptMeta(
+                "captured chunk layers are not strictly increasing",
+            ));
         }
         out.push(CapturedChunk {
             layer,
@@ -4846,6 +4881,37 @@ mod tests {
     }
 
     /// A truncated row is refused rather than read as a short chunk.
+    /// A row that repeats a layer, or runs backwards, is refused.
+    ///
+    /// Every writer sorts after merging and holds one chunk per
+    /// `(end_leaf, layer)`, so such a row was not written by this code. A
+    /// reader that took the first of two layer-`L` bodies would be choosing
+    /// between two conflicting persisted values with no refusal — the
+    /// condition `ConflictingCapture` exists to make loud at write time.
+    #[test]
+    fn a_capture_row_with_a_repeated_or_unordered_layer_is_refused() {
+        let chunk = |layer: u8| CapturedChunk {
+            layer,
+            bytes: vec![layer; 32],
+        };
+        assert!(
+            decode_captured_chunks(&encode_captured_chunks(&[chunk(0), chunk(1), chunk(2)]))
+                .is_ok(),
+            "ascending layers decode"
+        );
+        for row in [
+            vec![chunk(1), chunk(1)],
+            vec![chunk(2), chunk(1)],
+            vec![chunk(0), chunk(2), chunk(2)],
+        ] {
+            let layers: Vec<u8> = row.iter().map(|c| c.layer).collect();
+            assert!(
+                decode_captured_chunks(&encode_captured_chunks(&row)).is_err(),
+                "layers {layers:?} must refuse: repeated or out of order"
+            );
+        }
+    }
+
     #[test]
     fn a_truncated_capture_row_is_refused() {
         let full = encode_captured_chunks(&[CapturedChunk {
