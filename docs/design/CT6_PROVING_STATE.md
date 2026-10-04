@@ -1215,61 +1215,66 @@ an **over-capture**, not a wrong proof, because assembly still resolves by
 `(output_key, commitment)` (`ClientError::IdentityMismatch`). The wallet's own
 rescan is what retracts the registration. The reorg red-bite owes this a row.
 
-**The rule, after two candidates failed.** A rollback trims two holders, and
-they are one event in two units. Positions are in drained-leaf coordinates and
-retain below the surviving count, as above. Registrations are in `gindex`, and
-getting that one right took three attempts.
+**A `gindex` is a name, not an identity — and that is the whole lesson.**
+Three rules tried to work out, *after* a rollback, which output a number used
+to point to. Each failed differently, and the pattern is the finding:
 
 *Candidate 1 — `gindex >= surviving_leaf_count`.* The tempting tidy-up: the
-same inequality on the same quantity as the positions. It does not typecheck
-against reality. `surviving_leaf_count` counts drained **positions**, while a
-`gindex` is a global output index that skips values consumed by
-leaf-ineligible outputs (`types.rs`, `LeafEntry::gindex`) and that no pending
-output has drained at all. `a_gindex_is_not_a_position` builds a block with a
-`TargetKind::Other` output and shows the last drained leaf's `gindex` equal to
-the drained count — so the rule would discard a registration for a leaf that
-is present and valid.
+same inequality on the same quantity as the positions. It mixes units.
+`surviving_leaf_count` counts drained **positions**, while a `gindex` is a
+global output index that skips values consumed by leaf-ineligible outputs
+(`types.rs`, `LeafEntry::gindex`). `a_gindex_is_not_a_position` builds a block
+with a `TargetKind::Other` output and shows a valid leaf whose `gindex` equals
+the drained count.
 
 *Candidate 2 — `gindex < next_gindex && !entries.contains(gindex)`.* This one
-typechecks, and the first clause is there for a real case: a registration for
-an output the scanner identified in a block this client has not ingested sits
-*above* `next_gindex` and must survive. It still fails, **in the case it was
-written for**. A rollback removes the chain's tail, and `rebuild_from_store`
-sets `next_gindex` to `entries.last() + 1` over what survived — so every
-output a rollback removes holds a gindex at or above it, lands in exactly the
-band that clause protects, and the rule drops nothing.
-`a_removed_gindex_sits_above_the_rebuilt_next_gindex` pins that, and the
-mutation is conclusive: substituting candidate 2 fails the same two passes as
-performing no trim at all.
+typechecks. Its first clause protects a registration for an output the scanner
+found in a block this client has not ingested, which sits above `next_gindex`.
+It is **inert**: a rollback removes the chain's *tail*, and
+`rebuild_from_store` sets `next_gindex` to `entries.last() + 1` over the
+survivors, so every removed output lands inside the band that clause protects.
+Substituting it fails the same passes as performing no trim at all —
+`a_removed_gindex_sits_above_the_rebuilt_next_gindex`.
 
-*The rule.* A registration is stale iff the output it names **was** here and
-is **gone** — a set difference taken across the rollback, with the held set
-read before the rebuild. No inequality appears in it. The two states candidate
-2 could not separate — an output the reorg removed, and one not yet ingested —
-differ only in whether this client held it before the cut, which is a fact
-about the old state and not recoverable from the new one. Nothing persists the
-registry (`resume` starts empty), so there is no stale trace to re-derive on a
-later open either, which is what makes the in-memory difference sufficient.
+*Candidate 3 — the set difference on `gindex` alone, taken across the
+rollback.* Correct for a removed output, and it **misses rebinding**: a
+rollback that gives the gindex to a *different* output leaves it present, so
+the difference sees nothing gone.
 
-Three states, three verdicts, and each candidate got a different one wrong:
+*And the case none of them could reach.* A registration made **before** this
+client ingests the output's creation block is not in the held set at all, so
+no cross-the-rollback rule touches it — correctly, because until the fork it
+was a legitimate registration for a block not yet seen. If the reorg goes past
+that creation, the arriving chain can hand the gindex to another output, and a
+registry keyed on the number marks a stranger's leaf as owned. Nothing
+financial breaks (spending is driven by the wallet's ledger, which never holds
+it) but the registry and the plaintext capture table would be wrong and
+nothing would correct them.
 
-| registration | after the fork | verdict |
-| --- | --- | --- |
-| names a surviving output | still in `entries` | keep |
-| names a removed output | gone from `entries` | **drop** |
-| names an output never ingested | never in `entries` | keep |
+**So the registration carries `(gindex, O)`, and ownership is tested by
+identity.** `O` is a one-time key, so the pair names one specific output. A
+leaf is owned only if the registry holds *its* key at *its* gindex, which
+makes the rebinding case impossible by construction rather than detectable
+afterwards. Registration refuses a key the client disagrees with
+(`ClientError::RegistrationIdentityMismatch`) — the same inter-component
+invariant `IdentityMismatch` guards at assembly, raised at registration rather
+than at the spend that needed the capture — and a re-registration *replaces*,
+so a rescan rebinds a gindex with no separate retraction.
 
-A plain `retain(|g| entries.contains(g))` gets the first two right and the
-third wrong, which is its own mutation.
+The rollback trim stays, but it is now **cleanup, not correctness**: it keeps
+the registry from accumulating dead rows, and it is the candidate-3 difference
+widened to the pair, so it catches rebinding too. Correctness is the identity
+test, and `an_early_registration_does_not_claim_a_strangers_output` is where
+that is graded — the one case the trim cannot reach, and the mutation that
+reverts ownership to `gindex` alone fails exactly it.
 
-**And the rebinding is what the red-bite checks.** Dropping the stale
+**And the rebinding is what the reorg red-bite checks.** Retiring a stale
 registration is half the claim; the other half is that what replaces it is
-correct. `a_reorg_past_creation_retires_the_registration_and_rebinds_it` forks
+right. `a_reorg_past_creation_retires_the_registration_and_rebinds_it` forks
 below the output's creation, re-ingests a *different* chain so the same gindex
-names a different output, re-registers as the wallet's rescan would, and
-compares the capture against the path `assemble_paths` builds from the
-post-reorg tree — the same two-route comparison as the unforked case, now
-across a fork.
+names a different output, refuses a re-offer of the **old** key, re-registers
+with the new one as a rescan would, and compares the capture against the path
+`assemble_paths` builds from the post-reorg tree.
 
 ### 11.10 Reconciliation is the backfill, and the list of its causes is short
 

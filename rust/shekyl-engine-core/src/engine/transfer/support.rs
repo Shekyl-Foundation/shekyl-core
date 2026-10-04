@@ -137,7 +137,11 @@ fn client_reanchor_class(err: &ClientError) -> ClientReanchorClass {
         ClientError::PathRootMismatch { .. }
         | ClientError::CaptureIdentitiesIncomplete { .. }
         | ClientError::OwnedPositionDrift { .. } => ClientReanchorClass::Terminal,
-        ClientError::RootMismatch { .. }
+        // A registration disagreeing with the client's chain view is the
+        // reselection family: the wallet's rescan re-registers against the
+        // chain it now sees, which is the same remedy a stale input gets.
+        ClientError::RegistrationIdentityMismatch { .. }
+        | ClientError::RootMismatch { .. }
         | ClientError::OutputNotDrained { .. }
         | ClientError::IdentityMismatch { .. }
         | ClientError::TooManyInputs { .. }

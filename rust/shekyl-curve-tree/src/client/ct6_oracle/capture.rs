@@ -50,6 +50,20 @@ fn seeded_raw(seed: u64) -> RawOutput {
     }
 }
 
+/// The output key the fixture gives the leaf at `gindex`.
+///
+/// Seeds start at 1 for gindex 0 ([`ingest_fixture`] increments before each
+/// output), so this is the inverse of that schedule. Registration is bound
+/// to `O`, not to the number, so a pass that registers before ingest has to
+/// name the key the ingest will produce — which is also the only reason a
+/// test can register early at all.
+fn owned_key(gindex: u64) -> OneTimePubkey {
+    // Saturating because the never-ingested gindex a pass registers is
+    // `u64::MAX`; that key is never matched against anything, it only has
+    // to exist.
+    seeded_raw(gindex.saturating_add(1)).output_key
+}
+
 /// The Ed25519 basepoint, as every output's commitment. A valid point is
 /// all `C` has to be here; `O` is what carries the per-leaf distinction.
 const ED25519_BASEPOINT: [u8; 32] = [
@@ -195,7 +209,7 @@ fn drained_chunks(register: &[u64]) -> (CurveTreeClient, BlockHeight) {
     for gindex in register {
         assert_eq!(
             client
-                .register_owned(Gindex::from_raw(*gindex))
+                .register_owned(Gindex::from_raw(*gindex), owned_key(*gindex))
                 .expect("a live client registers"),
             OwnedRegistration::BeforeDrain,
             "an empty client has drained nothing"
@@ -408,7 +422,7 @@ fn a_registration_after_the_drain_reports_itself() {
     let (mut client, _) = drained_chunks(&[]);
     assert_eq!(
         client
-            .register_owned(Gindex::from_raw(0))
+            .register_owned(Gindex::from_raw(0), owned_key(0))
             .expect("a live client registers"),
         OwnedRegistration::AfterDrain,
         "leaf 0 drained long before this call"
@@ -416,7 +430,7 @@ fn a_registration_after_the_drain_reports_itself() {
     // A gindex this client has never seen is a future leaf, not an error.
     assert_eq!(
         client
-            .register_owned(Gindex::from_raw(u64::MAX))
+            .register_owned(Gindex::from_raw(u64::MAX), owned_key(u64::MAX))
             .expect("a live client registers"),
         OwnedRegistration::BeforeDrain,
         "an unseen gindex has not drained"
@@ -476,7 +490,7 @@ fn a_rollback_keeps_the_registry_and_drops_cut_positions() {
         .expect("the fork rolls back");
 
     assert!(
-        client.owned_gindexes.contains(&owned),
+        client.owned_outputs.contains_key(&owned),
         "a registration is the wallet's statement about its own output; a \
          rollback is a statement about the chain, and cannot retract it"
     );
@@ -531,7 +545,7 @@ fn a_missing_leaf_row_refuses_rather_than_capturing_short() {
     let maturity = BlockHeight::from_raw(owned_creation) + lock_count();
     let mut client = CurveTreeClient::new();
     client
-        .register_owned(Gindex::from_raw(OWNED_POSITION))
+        .register_owned(Gindex::from_raw(OWNED_POSITION), owned_key(OWNED_POSITION))
         .expect("a live client registers");
     ingest_fixture(&mut client, maturity, &counts);
     assert!(
@@ -607,7 +621,7 @@ fn a_poisoned_client_refuses_to_register() {
     client.poisoned = true;
     assert!(
         matches!(
-            client.register_owned(Gindex::from_raw(0)),
+            client.register_owned(Gindex::from_raw(0), owned_key(0)),
             Err(crate::ClientError::Poisoned)
         ),
         "registration must fail fast while memory is inconsistent"
@@ -651,7 +665,7 @@ fn a_reconciled_row_equals_the_folded_one() {
     let (mut rebuilt, _) = drained_chunks(&[]);
     assert_eq!(
         rebuilt
-            .register_owned(Gindex::from_raw(OWNED_POSITION))
+            .register_owned(Gindex::from_raw(OWNED_POSITION), owned_key(OWNED_POSITION))
             .expect("a live client registers"),
         OwnedRegistration::AfterDrain,
         "the fixture must have drained the leaf already, or there is nothing to backfill"
@@ -702,7 +716,7 @@ fn a_late_layer_zero_capture_does_not_erase_a_folded_layer_one() {
     let layer_one = body_at(&folded, 1);
 
     client
-        .register_owned(Gindex::from_raw(OWNED_POSITION))
+        .register_owned(Gindex::from_raw(OWNED_POSITION), owned_key(OWNED_POSITION))
         .expect("a live client registers");
     client.reconcile_captures().expect("reconciliation runs");
 
@@ -733,7 +747,7 @@ fn a_late_layer_zero_capture_does_not_erase_a_folded_layer_one() {
 fn reconciling_twice_rebuilds_nothing_the_second_time() {
     let (mut client, _) = drained_chunks(&[]);
     client
-        .register_owned(Gindex::from_raw(OWNED_POSITION))
+        .register_owned(Gindex::from_raw(OWNED_POSITION), owned_key(OWNED_POSITION))
         .expect("a live client registers");
     let first = client.reconcile_captures().expect("the first pass runs");
     assert!(first.chunks_written > 0, "the first pass has work to do");
@@ -775,11 +789,11 @@ fn a_resume_with_nothing_owed_hashes_nothing() {
     // Early registration, so the fold wrote every due chunk.
     let (mut client, _) = drained_chunks(&[OWNED_POSITION]);
     // A resume loses the registry; the wallet re-registers what it holds.
-    client.owned_gindexes.clear();
+    client.owned_outputs.clear();
     client.owned_positions.clear();
     assert_eq!(
         client
-            .register_owned(Gindex::from_raw(OWNED_POSITION))
+            .register_owned(Gindex::from_raw(OWNED_POSITION), owned_key(OWNED_POSITION))
             .expect("a live client registers"),
         OwnedRegistration::AfterDrain,
         "a re-registration after a resume is always a late one"
@@ -842,7 +856,7 @@ fn reconciliation_resolves_the_position_so_the_fold_continues() {
     );
 
     client
-        .register_owned(Gindex::from_raw(late))
+        .register_owned(Gindex::from_raw(late), owned_key(late))
         .expect("a live client registers");
     client.reconcile_captures().expect("reconciliation runs");
     assert!(
@@ -902,7 +916,7 @@ fn reconcile_one_leaf_short(span: u64) -> crate::CaptureReconciliation {
     let short = counts_totalling(usize::try_from(span - 1).expect("a leaf total fits usize"));
     let mut client = CurveTreeClient::new();
     client
-        .register_owned(Gindex::from_raw(0))
+        .register_owned(Gindex::from_raw(0), owned_key(0))
         .expect("a live client registers");
     ingest_fixture(&mut client, tip_for(&short), &short);
     assert_eq!(
@@ -1049,7 +1063,7 @@ fn a_rollback_drops_a_registration_only_when_its_output_is_gone() {
     let unseen = Gindex::from_raw(u64::MAX);
     assert_eq!(
         client
-            .register_owned(unseen)
+            .register_owned(unseen, owned_key(u64::MAX))
             .expect("a live client registers"),
         OwnedRegistration::BeforeDrain,
         "an unseen gindex is a future output"
@@ -1060,16 +1074,20 @@ fn a_rollback_drops_a_registration_only_when_its_output_is_gone() {
         .expect("the fork rolls back");
 
     assert!(
-        client.owned_gindexes.contains(&Gindex::from_raw(SURVIVES)),
+        client
+            .owned_outputs
+            .contains_key(&Gindex::from_raw(SURVIVES)),
         "the output survived the fork, so its registration must"
     );
     assert!(
-        !client.owned_gindexes.contains(&Gindex::from_raw(REMOVED)),
+        !client
+            .owned_outputs
+            .contains_key(&Gindex::from_raw(REMOVED)),
         "the output is gone from the new chain; the gindex will be re-derived \
          there and may name a different output, so the registration must go"
     );
     assert!(
-        client.owned_gindexes.contains(&unseen),
+        client.owned_outputs.contains_key(&unseen),
         "a registration for an output never ingested is an early one, not a \
          stale one"
     );
@@ -1133,7 +1151,9 @@ fn a_reorg_past_creation_retires_the_registration_and_rebinds_it() {
     let fork = fork_between();
     client.rollback_to_fork(fork).expect("the fork rolls back");
     assert!(
-        !client.owned_gindexes.contains(&Gindex::from_raw(REMOVED)),
+        !client
+            .owned_outputs
+            .contains_key(&Gindex::from_raw(REMOVED)),
         "the registration must not survive its output"
     );
 
@@ -1158,10 +1178,22 @@ fn a_reorg_past_creation_retires_the_registration_and_rebinds_it() {
         "the fork must hand this gindex a different output or the pass is vacuous"
     );
 
+    // Re-offering the OLD key is refused: the client's chain view has a
+    // different output at that number now, and the registry is bound to
+    // the pair.
+    assert!(
+        matches!(
+            client.register_owned(Gindex::from_raw(REMOVED), before),
+            Err(crate::ClientError::RegistrationIdentityMismatch { .. })
+        ),
+        "a registration naming the pre-reorg output must not be accepted"
+    );
+
     // The wallet rescans, finds it owns the new output, and re-registers.
+    // The insert rebinds the gindex; no separate retraction is needed.
     assert_eq!(
         client
-            .register_owned(Gindex::from_raw(REMOVED))
+            .register_owned(Gindex::from_raw(REMOVED), after)
             .expect("a live client registers"),
         OwnedRegistration::AfterDrain,
         "the new output has already drained by the post-reorg tip"
@@ -1201,4 +1233,92 @@ fn a_reorg_past_creation_retires_the_registration_and_rebinds_it() {
         "the capture at the new position must be the leaf chunk assembly builds \
          from the post-reorg tree"
     );
+}
+
+/// An **early** registration never claims a stranger's output.
+///
+/// This is the case identity binding exists for, and the one no rollback
+/// rule could reach. A registration made before the client ingests the
+/// output's creation block is not in the held set, so the rollback trim
+/// correctly leaves it alone — it looks exactly like a legitimate
+/// registration for a block not yet seen, because until the fork it was
+/// one. If the reorg goes past that creation, the new chain can hand the
+/// same `gindex` to a different output, and a registry keyed on the number
+/// would then mark a stranger's leaf as owned and capture its chunks.
+///
+/// Nothing financial breaks — spending is driven by the wallet's ledger,
+/// which never holds the stranger's output — but the registry and the
+/// plaintext capture table would be wrong, and nothing would ever correct
+/// them. Binding to `O` makes the case impossible by construction rather
+/// than detectable after the fact.
+#[test]
+fn an_early_registration_does_not_claim_a_strangers_output() {
+    let counts = counts();
+    let fork = fork_between();
+
+    // Ingest only as far as the fork, so `REMOVED`'s creation block is not
+    // in `entries` yet. Registering here is the early case.
+    let mut client = CurveTreeClient::new();
+    ingest_fixture(&mut client, fork, &counts);
+    assert!(
+        CurveTreeClient::held_output(&client.entries, Gindex::from_raw(REMOVED)).is_none(),
+        "the fixture must not have ingested {REMOVED}'s creation block yet"
+    );
+    assert_eq!(
+        client
+            .register_owned(Gindex::from_raw(REMOVED), owned_key(REMOVED))
+            .expect("a live client registers"),
+        OwnedRegistration::BeforeDrain,
+        "an output whose creation block is not ingested has not drained"
+    );
+
+    // The chain that actually arrives is a different one, and it gives that
+    // gindex to another output.
+    ingest_range_seeded(
+        &mut client,
+        fork + BlockCount::ONE,
+        tip_for(&counts),
+        &counts,
+        1_000_000,
+    );
+    let stranger = CurveTreeClient::held_output(&client.entries, Gindex::from_raw(REMOVED))
+        .expect("the arriving chain created an output at that gindex");
+    assert_ne!(
+        stranger,
+        owned_key(REMOVED),
+        "the arriving chain must bind the gindex to a different output, or \
+         this pass is vacuous"
+    );
+
+    // The registration survives — it is indistinguishable from a legitimate
+    // early one — but it matches nothing, so nothing of the stranger's is
+    // captured.
+    assert!(
+        client
+            .owned_outputs
+            .contains_key(&Gindex::from_raw(REMOVED)),
+        "the trim cannot retire this and must not try: it never named a held \
+         output"
+    );
+    let tip = client.ingested_tip_height.expect("the client ingested");
+    let position = crate::recon::drained_sorted(&client.entries, tip - BlockCount::ONE)
+        .iter()
+        .position(|e| e.gindex.to_raw() == REMOVED)
+        .expect("the stranger drained");
+    let end_leaf = chunk_start(u64::try_from(position).expect("a position fits u64"))
+        + SELENE_CHUNK_WIDTH as u64
+        - 1;
+    assert!(
+        held_at(&client, end_leaf).is_empty(),
+        "the stranger's chunk must not be captured: the registration names a \
+         key this leaf does not carry"
+    );
+
+    // And reconciliation agrees — it must not resolve a position for it.
+    let report = client.reconcile_captures().expect("reconciliation runs");
+    assert_eq!(
+        report.positions_resolved, 0,
+        "no owned position exists; the registered key matches no drained leaf"
+    );
+    assert_eq!(report.chunks_written, 0, "so nothing is owed");
 }

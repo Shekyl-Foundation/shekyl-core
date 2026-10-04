@@ -53,7 +53,7 @@
 //! See `docs/design/CURVE_TREE_CLIENT.md` §3 and
 //! `docs/design/CT2_DRAIN_ORDER.md` §7 (data flow).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -153,6 +153,28 @@ pub enum ClientError {
         claimed: CurveTreeRoot,
         /// Which step of the fold refused.
         fault: crate::assemble::PathRootFault,
+    },
+    /// A registration names an output this client does not hold at that
+    /// `gindex`.
+    ///
+    /// The wallet says it owns `O` at `gindex`; the client's chain view has
+    /// a different output there. One of the two is reading a different
+    /// chain, which is the same inter-component invariant
+    /// [`ClientError::IdentityMismatch`] guards at assembly — raised here so
+    /// it surfaces at registration rather than at the spend that needed the
+    /// capture.
+    ///
+    /// Refused rather than stored: a registration this client cannot match
+    /// would capture nothing and report nothing, and the remedy is the
+    /// wallet's own rescan, which re-registers with the key its scan of the
+    /// current chain found (rule 82).
+    RegistrationIdentityMismatch {
+        /// The global output index the registration named.
+        gindex: Gindex,
+        /// The output key the registration carried.
+        expected: OneTimePubkey,
+        /// The output key this client holds at that `gindex`.
+        got: OneTimePubkey,
     },
     /// A held owned position is not one the canonical drain order produces.
     ///
@@ -406,7 +428,11 @@ impl ClientError {
             // more than the fault (rule 82). It is also not an open-time
             // outcome at all, which is what `Internal` says here, exactly
             // as `PathRootMismatch` does.
-            ClientError::OwnedPositionDrift { .. }
+            // A registration disagreeing with the chain view is the same
+            // family as `IdentityMismatch` below it: a caller-vs-client
+            // disagreement, not an open-time outcome.
+            ClientError::RegistrationIdentityMismatch { .. }
+            | ClientError::OwnedPositionDrift { .. }
             | ClientError::RootMismatch { .. }
             | ClientError::PathRootMismatch { .. }
             | ClientError::OutputNotDrained { .. }
@@ -473,7 +499,18 @@ pub struct CurveTreeClient {
     /// in-memory state ([`Self::resume`], [`Self::rollback_to_fork`])
     /// re-derives it from the store rather than adjusting it.
     frontier: Frontier,
-    /// Gindexes whose membership-path material this client captures.
+    /// Outputs whose membership-path material this client captures, as
+    /// `gindex -> O`.
+    ///
+    /// **Both halves, because a `gindex` is a name and not an identity.** It
+    /// is a position in the chain's output sequence, and a reorg re-derives
+    /// it: the same number can name a different output on the new chain. A
+    /// registry keyed on the number alone would then mark a stranger's leaf
+    /// as owned and capture its chunks, and no rule evaluated on the rebuilt
+    /// state can tell the two apart — see [`Self::rollback_to_fork`] for the
+    /// two inequalities that tried. `O` is a one-time key, so the pair names
+    /// one specific output and the question stops being answerable only in
+    /// hindsight.
     ///
     /// Registered by the wallet ([`Self::register_owned`]), never derived:
     /// the curve-tree client sees every output on the chain and cannot tell
@@ -487,10 +524,10 @@ pub struct CurveTreeClient {
     /// The wallet re-registers what it holds; what that leaves owed is the
     /// captures for chunks that closed before the registration, which
     /// reconciliation discharges.
-    owned_gindexes: HashSet<Gindex>,
+    owned_outputs: BTreeMap<Gindex, OneTimePubkey>,
     /// Drain positions of owned leaves, as the fold assigned them.
     ///
-    /// Not derived from [`Self::owned_gindexes`] on demand: a position is
+    /// Not derived from [`Self::owned_outputs`] on demand: a position is
     /// the leaf's index in drain order, which is what the frontier counts as
     /// it pushes. Recording it there is the one instrument; resolving it
     /// again from the maturity index would be a second.
@@ -680,7 +717,7 @@ impl CurveTreeClient {
             ingested_tip_height: None,
             poisoned: false,
             frontier: Frontier::new(),
-            owned_gindexes: HashSet::new(),
+            owned_outputs: BTreeMap::new(),
             owned_positions: BTreeSet::new(),
         })
     }
@@ -874,8 +911,8 @@ impl CurveTreeClient {
             frontier: rebuilt.frontier,
             // A resumed client holds no registrations: the wallet's output
             // list is the wallet's, and re-registering is what tells this
-            // client what to capture. See `owned_gindexes`.
-            owned_gindexes: HashSet::new(),
+            // client what to capture. See `owned_outputs`.
+            owned_outputs: BTreeMap::new(),
             owned_positions: BTreeSet::new(),
         })
     }
@@ -1047,11 +1084,11 @@ impl CurveTreeClient {
         // before the rebuild, because staleness is a set difference **across**
         // the rollback and neither side alone answers it. See the retain
         // below for why no inequality on `gindex` can.
-        let named_a_held_output: Vec<Gindex> = self
-            .owned_gindexes
+        let named_a_held_output: Vec<(Gindex, OneTimePubkey)> = self
+            .owned_outputs
             .iter()
-            .copied()
-            .filter(|gindex| Self::holds_gindex(&self.entries, *gindex))
+            .filter(|(gindex, key)| Self::held_output(&self.entries, **gindex) == Some(**key))
+            .map(|(gindex, key)| (*gindex, *key))
             .collect();
         let rebuilt = Self::rebuild_from_store(&self.store)?;
         self.entries = rebuilt.entries;
@@ -1071,10 +1108,20 @@ impl CurveTreeClient {
         self.owned_positions
             .retain(|position| *position < surviving);
 
-        // **Registrations**, in `gindex`. A registration is stale iff the
-        // output it names *was* here and is *gone* — the set difference
-        // taken above and below the rebuild. It is deliberately not an
-        // inequality, and two were tried:
+        // **Registrations**, in `(gindex, O)`. This is now *cleanup*, not
+        // the correctness rule: ownership is tested by identity at the fold
+        // and in reconciliation, so a rebound gindex simply does not match
+        // and a stranger's chunks are never captured, whatever this does.
+        // What it buys is a registry that does not accumulate dead rows
+        // across reorgs.
+        //
+        // A registration is dropped iff the output it names *was* here and
+        // is now absent **or different** — the set difference taken above
+        // and below the rebuild, over the pair rather than the number. The
+        // identity half is load-bearing even here: a rollback that rebinds a
+        // gindex leaves it present, so a gindex-only difference keeps the
+        // dead row. Three rules were tried before this one, and the first
+        // two were not merely untidy but wrong:
         //
         // `gindex >= surviving_leaf_count` mixes units (a gindex is not a
         // position; `TargetKind::Other` consumes one without draining a
@@ -1089,14 +1136,19 @@ impl CurveTreeClient {
         // and the rule drops nothing — `a_removed_gindex_sits_above_the_
         // rebuilt_next_gindex`.
         //
-        // The two are only told apart by whether this client held the output
-        // before the cut, which is a fact about the old state and not
-        // recoverable from the new one. Nothing persists the registry
-        // (`resume` starts empty), so there is no stale trace to re-derive on
-        // a later open either.
-        for gindex in named_a_held_output {
-            if !Self::holds_gindex(&self.entries, gindex) {
-                self.owned_gindexes.remove(&gindex);
+        // *Candidate 3 — the same difference on `gindex` alone.* Shipped,
+        // then found to miss the rebinding case: a rollback that gives the
+        // gindex to a different output leaves it present, so the difference
+        // sees nothing gone.
+        //
+        // None of the three could answer the question from the rebuilt state,
+        // because a `gindex` is a name. Binding the registration to `O` at
+        // registration time is what makes it answerable at all — see
+        // `owned_outputs`. Nothing persists the registry (`resume` starts
+        // empty), so there is no stale trace to re-derive on a later open.
+        for (gindex, key) in named_a_held_output {
+            if Self::held_output(&self.entries, gindex) != Some(key) {
+                self.owned_outputs.remove(&gindex);
             }
         }
         self.frontier = rebuilt.frontier;
@@ -1146,9 +1198,26 @@ impl CurveTreeClient {
     /// drained — which is the one wrong answer that reports *nothing owed*
     /// and so silently loses the captures.
     #[must_use = "a registration after the drain owes captures to                   reconciliation; dropping the verdict hides that"]
-    pub fn register_owned(&mut self, gindex: Gindex) -> Result<OwnedRegistration, ClientError> {
+    pub fn register_owned(
+        &mut self,
+        gindex: Gindex,
+        output_key: OneTimePubkey,
+    ) -> Result<OwnedRegistration, ClientError> {
         self.ensure_live()?;
-        self.owned_gindexes.insert(gindex);
+        // Checked before the insert, so a refused registration leaves the
+        // registry as it was.
+        if let Some(held) = Self::held_output(&self.entries, gindex) {
+            if held != output_key {
+                return Err(ClientError::RegistrationIdentityMismatch {
+                    gindex,
+                    expected: output_key,
+                    got: held,
+                });
+            }
+        }
+        // An insert REPLACES, which is how a rescan rebinds a gindex after a
+        // reorg without a separate retraction.
+        self.owned_outputs.insert(gindex, output_key);
         let Some(tip) = self.ingested_tip_height else {
             return Ok(OwnedRegistration::BeforeDrain);
         };
@@ -1271,7 +1340,7 @@ impl CurveTreeClient {
         // check the fold's against them before using either.
         let mut positions = BTreeSet::new();
         for (position, entry) in drained.iter().enumerate() {
-            if self.owned_gindexes.contains(&entry.gindex) {
+            if self.owned_outputs.get(&entry.gindex) == Some(&entry.identity.output_key) {
                 positions.insert(u64::try_from(position).expect("a drain position fits u64"));
             }
         }
@@ -1423,16 +1492,17 @@ impl CurveTreeClient {
         Ok((CapturedChunk { layer, bytes }, span))
     }
 
-    /// Is `gindex` among `entries`?
+    /// The output key `entries` holds at `gindex`, if any.
     ///
     /// A binary search, on the strictly-increasing order
-    /// `entries_stay_sorted_by_gindex` pins. Not a `HashSet` built per call:
-    /// a rollback is rare and the registry is small, so `O(owned · log n)`
+    /// `entries_stay_sorted_by_gindex` pins. Not a map built per call: a
+    /// rollback is rare and the registry is small, so `O(owned · log n)`
     /// beats `O(n)` memory for the event.
-    fn holds_gindex(entries: &[LeafEntry], gindex: Gindex) -> bool {
+    fn held_output(entries: &[LeafEntry], gindex: Gindex) -> Option<OneTimePubkey> {
         entries
             .binary_search_by(|held| held.gindex.cmp(&gindex))
-            .is_ok()
+            .ok()
+            .map(|i| entries[i].identity.output_key)
     }
 
     /// Does this chunk's leaf span hold an owned position?
@@ -1614,7 +1684,9 @@ impl CurveTreeClient {
         let pending_owned: Vec<u64> = drained
             .iter()
             .enumerate()
-            .filter(|(_, entry)| self.owned_gindexes.contains(&entry.gindex))
+            .filter(|(_, entry)| {
+                self.owned_outputs.get(&entry.gindex) == Some(&entry.identity.output_key)
+            })
             .map(|(i, _)| base + u64::try_from(i).expect("a block's drain count fits u64"))
             .collect();
 
