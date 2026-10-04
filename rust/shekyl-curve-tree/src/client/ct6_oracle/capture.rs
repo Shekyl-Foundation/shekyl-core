@@ -12,7 +12,7 @@
 //! comparison is the point — a capture that agreed with its own encoder
 //! would establish nothing.
 
-use super::super::tests::ingest_outputs_at;
+use super::super::test_fixtures::ingest_outputs_at;
 use super::super::{
     BlockLeaves, OwnedRegistration, RawOutput, TxLeafInputs, CAPTURED_IDENTITY_BYTES,
     CAPTURED_IDENTITY_CM_X_AT, CAPTURED_IDENTITY_COMMITMENT_AT, CAPTURED_IDENTITY_OUTPUT_KEY_AT,
