@@ -264,10 +264,15 @@ impl CurveTreeClient {
                 );
             }
         }
-        if let Some(stale) = self
+        // The whole mapping, not the key set. Two registered outputs whose
+        // positions swapped between the fold's order and `drained_sorted`'s
+        // leave both keys present, so a key-only comparison would overwrite
+        // `owned_positions` with the other order and every capture over
+        // either leaf would be keyed on the wrong one.
+        if let Some((stale, _)) = self
             .owned_positions
-            .keys()
-            .find(|held| !positions.contains_key(held))
+            .iter()
+            .find(|(held, gindex)| positions.get(held) != Some(gindex))
         {
             return Err(ClientError::OwnedPositionDrift { position: *stale });
         }

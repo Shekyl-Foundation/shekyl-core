@@ -95,7 +95,8 @@ const PENDING_TABLE: TableDefinition<GindexKey, &[u8; 320]> = TableDefinition::n
 // `root_at_count`, and the ring refills as blocks arrive.
 //
 // That is not backward compatibility. A pre-ring (≤5) store is **refused at
-// open** and re-synced; `SCHEMA_VERSION` is 6 precisely so it is, because a
+// open** and re-synced; the ring bumped `SCHEMA_VERSION` to 6 precisely so it
+// would be (the capture table bumped it again, to 7, below), because a
 // pre-ring **writer** cannot see this table and can roll back and replay
 // while leaving rows above the new tip in place, where a stale row can hold
 // the expected leaf count over the abandoned branch's root. A binding
@@ -4669,18 +4670,6 @@ mod tests {
         );
     }
 
-    /// The truncation fencepost, asserted on **both** sides of the edge.
-    ///
-    /// A chunk is final only while every leaf under it survives, and its key
-    /// is the position of its last leaf. So the boundary is exact: a cut
-    /// whose first removed position **is** `end_leaf` takes that leaf away
-    /// and must drop the capture; a cut at `end_leaf + 1` leaves the chunk
-    /// whole and must keep it.
-    ///
-    /// Both sides, because one side alone cannot tell `<` from `<=`. A
-    /// scenario deep inside the region — leaf 100 against a cut to 150 —
-    /// passes under either inequality, which is the flat-region failure this
-    /// round has been bitten by before.
     /// A late capture at a cascade key must not erase the chunk already there.
     ///
     /// This is the sequence an `insert` would have lost, and it is reachable
@@ -4769,6 +4758,18 @@ mod tests {
         );
     }
 
+    /// The truncation fencepost, asserted on **both** sides of the edge.
+    ///
+    /// A chunk is final only while every leaf under it survives, and its key
+    /// is the position of its last leaf. So the boundary is exact: a cut
+    /// whose first removed position **is** `end_leaf` takes that leaf away
+    /// and must drop the capture; a cut at `end_leaf + 1` leaves the chunk
+    /// whole and must keep it.
+    ///
+    /// Both sides, because one side alone cannot tell `<` from `<=`. A
+    /// scenario deep inside the region — leaf 100 against a cut to 150 —
+    /// passes under either inequality, which is the flat-region failure this
+    /// round has been bitten by before.
     #[test]
     fn a_capture_survives_a_cut_above_its_end_and_not_at_it() {
         let end = 40_u64;

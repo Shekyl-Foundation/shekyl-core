@@ -898,6 +898,31 @@ fn reconciliation_resolves_the_position_so_the_fold_continues() {
 /// Two orders over one field, so reconciliation compares them instead of
 /// silently overwriting one with the other — a wrong coordinate means every
 /// capture keyed on it is keyed on the wrong leaf.
+/// A held position that names the **wrong** gindex is refused too.
+///
+/// The key-set comparison this replaces would have passed: swap two
+/// registered outputs' positions and both keys are still present. The
+/// mapping is what the captures are keyed on, so the mapping is what is
+/// compared.
+#[test]
+fn a_held_position_naming_the_wrong_gindex_is_refused() {
+    let (mut client, _) = drained_chunks(&[OWNED_POSITION, CASCADE_PARTNER]);
+    let a = client.owned_positions[&OWNED_POSITION];
+    let b = client.owned_positions[&CASCADE_PARTNER];
+    assert_ne!(a, b);
+    client.owned_positions.insert(OWNED_POSITION, b);
+    client.owned_positions.insert(CASCADE_PARTNER, a);
+    match client.reconcile_captures() {
+        Err(crate::ClientError::OwnedPositionDrift { position }) => {
+            assert!(
+                position == OWNED_POSITION || position == CASCADE_PARTNER,
+                "the refusal names one of the swapped positions, got {position}"
+            );
+        }
+        other => panic!("expected OwnedPositionDrift for a swapped mapping, got {other:?}"),
+    }
+}
+
 #[test]
 fn a_drifted_owned_position_is_refused() {
     let (mut client, _) = drained_chunks(&[OWNED_POSITION]);
