@@ -1358,6 +1358,30 @@ most of the tree, so an inequality would measure the fixture rather than the
 bound — and `a_resume_with_nothing_owed_hashes_nothing` is where it reaches
 zero.
 
+**Span-bounded is not the same as cheap, and the worst case belongs here
+beside the zero.** A missing chunk's rebuild scales with its *layer*, because
+that is what its span is:
+
+| missing chunk at layer | leaves rebuilt | at §11.2's observed rate |
+| --- | --- | --- |
+| 0 | 38 | negligible |
+| 1 | 684 | ~0.2 s |
+| 2 | 25 992 | ~6 s |
+| 3 | 467 856 | ~1.7 min |
+| 4 | 17 778 528 | ~65 min |
+
+The seconds are the **assembly** rate (221 µs/leaf) used as a proxy; assembly
+does more per leaf than this rebuild does, so they are an upper bound on the
+hashing and are quoted to an order, not a figure. The leaf counts are exact —
+`outputs_per_node(layer)`.
+
+So a late registration under a long-finalized high-layer chunk can still cost
+tens of minutes, the same order as the old per-spend figure. It is rare,
+because ownership has to be learned long after the fact for a *high* chunk to
+be the missing one, and it is bounded by the chunk rather than the chain — a
+chunk's span does not grow once it has closed, while the chain does. But it is
+the worst case that remains, and "span-bounded" should not be read as "cheap".
+
 What stays `O(n)` is `drained_sorted`, for the positions and the drift check.
 It is a sort, not a hash, and it goes with `entries` at increment 7.
 
