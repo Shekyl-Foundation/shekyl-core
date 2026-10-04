@@ -216,6 +216,9 @@ pub struct EconomicParams {
     pub burn_cap: u64,
     pub staker_pool_share: u64,
     pub emission_curve_asymptote: u64,
+    /// Right-shift of the remaining supply. Each block emits
+    /// `remaining >> emission_speed_factor_per_block`. Per block: the
+    /// design's 22 (`DESIGN_CONCEPTS.md` §3).
     pub emission_speed_factor_per_block: u64,
     pub final_subsidy_per_minute: u64,
     pub daa_target_seconds: u64,

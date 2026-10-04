@@ -1166,10 +1166,10 @@ Status column: **V** = definition and use both read; **I** = inferred.
 - **`cartel.rs:81-85`** — `bond_floor_of`, `reinstate_connect`, `BadInterval`, `FAILURE_WINDOW_M/N`, `MAX_HOLDINGS_SHARDS`, `SLASH_GRACE_EPOCHS`.
 - **`challenge_coverage.rs:36`** — `SETTLEMENT_EPOCH_BLOCKS`.
 - **`distribution.rs:43`** — `curve_milli`, `scarcity_micro`, `work_milli_from_micro`.
-- **`engine.rs:2-7,146,166-169`** — the burn, emission and release functions, `calc_stake_ratio`; `staker_pool_share`, DAA target and escalation fields from `EconomicParams::default()`.
+- **`engine.rs:2-7,148,178`** — the burn, emission and release functions, `calc_stake_ratio`. `SimParams::default` incorporates the shipped curve, release, burn, `staker_pool_share`, and `BLOCKS_PER_YEAR`, `STAKER_EMISSION_SHARE`, `STAKER_EMISSION_DECAY`. A run replaces fields to price an alternative; `economic()` writes those knobs onto `EconomicParams::default()` and leaves the DAA target and the escalation fields shipped. An escalation alternative is an `EscalationCurve`.
 - **`escalation.rs:35-38,237`** — `staker_pool_share_at`, `EscalationParams`, `SCALE`, floor from the shipped config, `SHARD_LENGTH`. Nothing computes a ramp locally.
 - **`fee_floor.rs:65-69`** — `TX_VOLUME_WINDOW`, `base_block_reward`, `BLOCKS_PER_YEAR`, `RELAY_ADMISSION_SLACK_BP`, `RELAY_FLOOR_LOOKBACK`.
-- **`fee_ladder.rs:44-56`** — `corrected_fee_ladder`, `relay_fee_floor`, `hysteresis_step/fold/settled`, `paid_block_reward`, `effective_emission`, `projected_already_generated`, `tail_subsidy_per_block`, `emission_speed_factor`, `STAKER_EMISSION_SHARE/DECAY`, `BLOCKS_PER_YEAR`, `FULL_REWARD_ZONE`.
+- **`fee_ladder.rs:44-56`** — `corrected_fee_ladder`, `relay_fee_floor`, `hysteresis_step/fold/settled`, `paid_block_reward`, `effective_emission`, `projected_already_generated`, `tail_subsidy_per_block`, `EconomicParams::emission_speed_factor_per_block`, `STAKER_EMISSION_SHARE/DECAY`, `BLOCKS_PER_YEAR`, `FULL_REWARD_ZONE`.
 - **`main.rs`** — none.
 - **`mn_feasibility.rs:46-48`** — `FAILURE_WINDOW_M/N`, `MAX_HOLDINGS_SHARDS`, `SETTLEMENT_EPOCH_BLOCKS`.
 - **`onset.rs:69-72,584,746`** — `ARCHIVAL_BOND_FLOOR_ATOMIC`, `calc_burn_pct`, `calc_effective_emission_share`, `SHARD_LENGTH`.

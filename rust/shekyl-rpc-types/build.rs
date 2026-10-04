@@ -184,7 +184,7 @@ use std::path::PathBuf;
 /// the curve read it through Monero's per-minute conversion as 21 per block;
 /// it now reads 22, the design's (`DESIGN_CONCEPTS.md` §3). Every block
 /// reward above genesis changes, so this is a different chain, not a pure
-/// rename (`shekyl_economics::emission_speed_factor`).
+/// rename (`EconomicParams::emission_speed_factor_per_block`).
 const PINNED_DIGEST: &str = "4bad8c3eafe2a03224238d2140e3a5ef3d72ce73c75837d6726d37112f15f54f";
 
 fn main() {

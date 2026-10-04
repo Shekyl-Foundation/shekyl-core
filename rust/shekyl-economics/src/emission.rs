@@ -23,28 +23,11 @@ pub enum EmissionError {
     BlockTooBig,
 }
 
-/// The emission speed factor: each block emits `remaining >> esf`.
-///
-/// **Per block, as the design states it** (`DESIGN_CONCEPTS.md` §3: 22,
-/// "50 % emitted ~year 11, 80 % ~year 25"). Until 2026-10-04 this applied
-/// Monero's per-minute convention, `per_minute − (target_minutes − 1)`,
-/// built so a per-minute factor survives a block-time change; Shekyl's block
-/// time is fixed at genesis, and the conversion turned the configured 22
-/// into 21 per block — twice the design's rate, half its timeline.
-///
-/// Returned as `u64` because its sole consumer is the right-shift in
-/// `base_block_reward` (`remaining >> esf`), and Rust shifts accept a `u64`
-/// shift amount directly.
-#[inline]
-pub fn emission_speed_factor(params: &EconomicParams) -> u64 {
-    params.emission_speed_factor_per_block
-}
-
 /// Tail (minimum) subsidy per block in atomic units.
 ///
-/// `pub` (with [`emission_speed_factor`]) since the FL round: the fee-ladder
-/// instrument's degenerate pins consume both, and a local re-derivation
-/// there was a third undeclared drift pair (FL round review round 3).
+/// `pub` since the FL round: the fee-ladder instrument's degenerate pins
+/// consume it, and a local re-derivation there was a third undeclared drift
+/// pair (FL round review round 3).
 #[inline]
 pub fn tail_subsidy_per_block(params: &EconomicParams) -> Result<u64, EmissionError> {
     params
@@ -64,7 +47,7 @@ fn curve_emission(already_generated_coins: u64, params: &EconomicParams) -> u64 
     params
         .emission_curve_asymptote
         .saturating_sub(already_generated_coins)
-        >> emission_speed_factor(params)
+        >> params.emission_speed_factor_per_block
 }
 
 /// The M_r-neutral emission view: `max(curve, TAIL)` (0h).
@@ -385,49 +368,105 @@ pub fn advance_already_generated(already_generated_coins: u64, block_reward: u64
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+    use crate::params::EconomicParams;
+
+    /// Genesis block on the design curve: `2³² · 10⁹ >> 22` = 1 024 SKL.
+    const GENESIS_BLOCK_REWARD: u64 = 1_024_000_000_000;
+    /// `2²² · ln 2`. First height at which the neutral trajectory has
+    /// emitted half the asymptote.
+    const HALF_EMITTED_HEIGHT: u64 = 2_907_270;
+    /// `2²² · ln 5`. First height at which it has emitted 80 %.
+    const EIGHTY_PCT_EMITTED_HEIGHT: u64 = 6_750_472;
+    /// Bracket around [`HALF_EMITTED_HEIGHT`]. A factor rescaled by the
+    /// block time misses it.
+    const HALF_WINDOW: (u64, u64) = (2_900_000, 2_915_000);
+    /// Bracket around [`EIGHTY_PCT_EMITTED_HEIGHT`].
+    const EIGHTY_WINDOW: (u64, u64) = (6_740_000, 6_765_000);
+
+    /// Plain sum of `base_block_reward` at each probe, one walk from genesis.
+    /// The projection and its inverse are not called: this is their oracle.
+    fn accumulated_supply_at(params: &EconomicParams, probes: &[u64]) -> BTreeMap<u64, u64> {
+        let mut wanted = probes.to_vec();
+        wanted.sort_unstable();
+        wanted.dedup();
+        let mut supply = BTreeMap::new();
+        let mut already_generated = 0u64;
+        let mut next = 0usize;
+        let horizon = *wanted.last().expect("at least one probe");
+        for height in 0..=horizon {
+            if wanted[next] == height {
+                supply.insert(height, already_generated);
+                next += 1;
+                if next == wanted.len() {
+                    break;
+                }
+            }
+            already_generated = already_generated
+                .checked_add(base_block_reward(already_generated, params).expect("base reward"))
+                .expect("neutral supply fits in u64 through the probed horizon");
+        }
+        supply
+    }
 
     /// The design's emission curve (`DESIGN_CONCEPTS.md` §3, §13): an
     /// emission speed factor of **22 per block**, which puts the first
     /// block at `2³² · 10⁹ >> 22` = 1 024 SKL, half the asymptote emitted
-    /// near year 11 (`2²² · ln 2` ≈ 2 907 300 blocks) and 80 % near year
-    /// 25.7 (`2²² · ln 5` ≈ 6 750 500 blocks). Pinned at the owner so a
+    /// near year 11 (`2²² · ln 2` ≈ 2 907 270 blocks) and 80 % near year
+    /// 25.7 (`2²² · ln 5` ≈ 6 750 472 blocks). Pinned at the owner so a
     /// convention that rescales the factor by the block time fails here.
     #[test]
     fn the_curve_is_the_designs_esf_22_per_block() {
         let p = EconomicParams::default();
-        assert_eq!(emission_speed_factor(&p), 22, "the factor is per block");
         assert_eq!(
-            base_block_reward(0, &p).expect("genesis reward"),
-            p.emission_curve_asymptote >> 22,
-            "the first block pays the asymptote shifted by 22"
+            p.emission_speed_factor_per_block, 22,
+            "the factor is per block"
         );
+        let genesis = base_block_reward(0, &p).expect("genesis reward");
         assert_eq!(
-            base_block_reward(0, &p).expect("genesis reward"),
-            1_024_000_000_000
+            genesis,
+            p.emission_curve_asymptote >> p.emission_speed_factor_per_block,
+            "the first block pays the asymptote shifted by the factor"
         );
+        assert_eq!(genesis, GENESIS_BLOCK_REWARD);
         let half = p.emission_curve_asymptote / 2;
-        let at = |h| projected_already_generated(h, &p).expect("projected");
+        let eighty = p.emission_curve_asymptote / 5 * 4;
+        let supply = accumulated_supply_at(
+            &p,
+            &[
+                HALF_WINDOW.0,
+                HALF_EMITTED_HEIGHT - 1,
+                HALF_EMITTED_HEIGHT,
+                HALF_WINDOW.1,
+                EIGHTY_WINDOW.0,
+                EIGHTY_PCT_EMITTED_HEIGHT - 1,
+                EIGHTY_PCT_EMITTED_HEIGHT,
+                EIGHTY_WINDOW.1,
+            ],
+        );
+        let at = |height: u64| supply[&height];
         assert!(
-            at(2_900_000) < half && half < at(2_915_000),
+            at(HALF_WINDOW.0) < half && half < at(HALF_WINDOW.1),
             "half emitted near year 11"
         );
-        let eighty = p.emission_curve_asymptote / 5 * 4;
         assert!(
-            at(6_740_000) < eighty && eighty < at(6_765_000),
+            at(EIGHTY_WINDOW.0) < eighty && eighty < at(EIGHTY_WINDOW.1),
             "80 % near year 25.7"
         );
-        // The inverse lands on the same heights by its own walk: the first
-        // height at or past each target, one block after the last short of
-        // it: 2²²·ln 2 ≈ 2 907 270 and 2²²·ln 5 ≈ 6 750 472, where
-        // `remaining >> 22` has fallen to a half and a fifth.
-        for (target, expected) in [(half, 2_907_270), (eighty, 6_750_472)] {
-            let h = neutral_height_reaching(target, &p).expect("reachable");
-            assert_eq!(h, expected);
-            assert!(at(h - 1) < target && target <= at(h));
+        // The inverse lands on the same heights by its own walk. The supply
+        // map is the independent sum, so a shared bug in the walk cannot
+        // satisfy both.
+        for (target, expected) in [
+            (half, HALF_EMITTED_HEIGHT),
+            (eighty, EIGHTY_PCT_EMITTED_HEIGHT),
+        ] {
+            let height = neutral_height_reaching(target, &p).expect("reachable");
+            assert_eq!(height, expected);
+            assert!(at(height - 1) < target && target <= at(height));
         }
     }
-    use crate::params::EconomicParams;
 
     /// A height past tail entry must TERMINATE, not walk the tail one
     /// block at a time.
@@ -463,7 +502,7 @@ mod tests {
             emission_speed_factor_per_block: 4,
             ..EconomicParams::default()
         };
-        let esf = emission_speed_factor(&p);
+        let esf = p.emission_speed_factor_per_block;
         let tail = tail_subsidy_per_block(&p).expect("tail");
         p.emission_curve_asymptote = (tail << esf) * 4;
 
@@ -504,7 +543,7 @@ mod tests {
             emission_speed_factor_per_block: 4,
             ..EconomicParams::default()
         };
-        let esf = emission_speed_factor(&p);
+        let esf = p.emission_speed_factor_per_block;
         let tail = tail_subsidy_per_block(&p).expect("tail");
         p.emission_curve_asymptote = (tail << esf) * 4;
 

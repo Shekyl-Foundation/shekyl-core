@@ -11,7 +11,9 @@
   reward ~970 SKL). Until now `shekyl_economics::emission_speed_factor`
   applied Monero's per-minute convention, `22 − (2 − 1)`, and ran the curve
   at 21 per block: twice the design's rate, 2 048 SKL at genesis, half emitted
-  by ~year 5.5. The genesis reward is now 1 024 SKL.
+  by ~year 5.5. The genesis reward is now 1 024 SKL. The conversion
+  function is deleted; the curve shifts by
+  `EconomicParams::emission_speed_factor_per_block`.
 - `config/economics_params.json`: `emission_speed_factor_per_minute` →
   `emission_speed_factor_per_block` (value 22). The generated C macro
   `EMISSION_SPEED_FACTOR_PER_MINUTE`, which nothing read, is deleted.
