@@ -127,7 +127,7 @@ sizes the work, so state it precisely rather than as a flat "no predecessor":**
 
 | Half | Predecessor in **design** | Predecessor in **code** |
 | --- | --- | --- |
-| **"closed and final"** | **Partly yes.** `PDM-Q6` item 3 already rules the **open frontier shard** (no `b_{k+1}` yet) **not bondable** — *"a clean `HoldingsUpdate` admission rule the per-tx model did not give"* (`ARCHIVAL_PRUNED_DAEMON_MODE.md:458-459`). **Unbuilt**, and silent on the reorg window, which this ruling adds | **No** |
+| **"closed and final"** | **Partly yes.** `PDM-Q6` item 3 already rules the **open frontier shard** (no `b_{k+1}` yet) **not bondable** — *"a clean `HoldingsUpdate` admission rule the per-tx model did not give"* (`ARCHIVAL_PRUNED_DAEMON_MODE.md:458-459`; the quoted kind is REJECTED 2026-09-20 and the source struck it 2026-09-22 — the rule now admits at `JoinMarket`, the only bonding event). **Unbuilt**, and silent on the reorg window, which this ruling adds | **No** |
 | **"exists"** | **No** | **No** |
 
 So the task is **a new rule plus an unimplemented old one**, not a translation
