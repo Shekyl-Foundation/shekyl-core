@@ -26,7 +26,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **Re-base `shekyl-staking-sim` on production code.** What remains is the reward path, the bond lifecycle and the unit system on production code, fed from the production purse, with L11–L19 re-derived. Separate validation surface from ESR- (rule 19). Falsifier: an abstract-purse control arm reproduces the existing L11 and L13 pins.
+- **Check `shekyl-staking-sim` against the staking code built so far.** The staking sim is the plan for staking (the cycle ruling, Rick 2026-10-04): design in the sim, implement in code, incorporate the code into the sim as a check, repeat. This PR is the check half for what is implemented and settled: the reward arithmetic, the bond floor, the challenge count, the failure window, the release cooldown, the settlement epoch and the block time. Each Appendix B row either incorporates the code (the sim was behind) or is declared as the plan ahead of the code. What is not built (the purse's shape, the rest of the bond lifecycle, the yield a staker sees) stays the sim's design surface, fed by the purse the economics sim computes. Separate validation surface from ESR- (rule 19). Falsifier: an abstract-purse control arm reproduces the existing L11 and L13 pins.
   - Owner: [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6, Appendix B
   - Target: pre-genesis
 

@@ -5,8 +5,8 @@
 **`ESR-`** (work items), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
 (rule 94 §1). This document owns the re-base of `shekyl-economics-sim`.
-The re-base of `shekyl-staking-sim` is a separate PR against the same
-census (§6), and the design round the measurements feed is not opened
+Checking `shekyl-staking-sim` against the staking code built so far is a
+separate PR against the same census (§6), and the design round the measurements feed is not opened
 here (§7).
 
 **One sentence.** The archival economics was measured on a fee the chain
@@ -143,7 +143,15 @@ Two rulings govern the repair.
   drift; a divergence is allowed for experimental work or for planning a
   different strategy, and then it is express. §4 is the register of the
   divergences this crate keeps.
-- **Order of work (Rick, same day).** First the sim is put in order; then
+- **The sim is the plan (Rick, 2026-10-04).** The cycle: we tweak the sim
+  until the economy is what we need it to be, to know and to do; then it is
+  implemented in code; then the sim incorporates that code as a check; then
+  the cycle repeats. The sim keeps a current snapshot of development,
+  aligned to the plan. The first ruling is the check half of that cycle:
+  it binds to what has been built. Where a mechanism is still being
+  designed — staking, now — the sim leads the code, and a surface the
+  daemon does not read yet is not dead (ESR-8, census D4).
+- **Order of work (Rick, 2026-10-02).** First the sim is put in order; then
   the current system is measured under its own rules; only then are levers
   designed or moved. So nothing in this round proposes a mechanism. A
   candidate fee policy, bond policy or controller is out of scope by
@@ -864,13 +872,37 @@ flat 0.1 SKL fee against a small reward makes the **penalty** leg the
 cheaper one: one stuffing transaction a block, 239 blocks a shard. That is
 the whole-transaction floor of the design, appearing where it should.
 
-## 6. The staking sim — a separate PR
+## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
-Appendix B is the work list. It is a re-base, not a wiring change: the
-reward path, the bond lifecycle and the unit system all move onto
-production code, and the purse stops being an abstract 100 units per
-epoch. Its falsifier is that an abstract-purse control arm reproduces the
-existing L11 and L13 pins in
+**Reworded 2026-10-04, under the cycle ruling (§0).** Staking is being
+designed now, and the staking sim is where it is designed. It is not a
+re-base onto a finished system. Its next PR is the *check* half of the cycle,
+for the pieces that have been implemented and settled:
+
+- the reward arithmetic (`g_age_milli`, `scarcity_micro`,
+  `reward_share_floor`);
+- the bond floor;
+- the challenge count;
+- the failure window;
+- the release cooldown;
+- the settlement epoch;
+- the block time.
+
+Appendix B lists every place the sim restates or departs from one of them.
+Each row is resolved in one of two ways, and says which:
+
+- **The sim is behind the code.** The sim incorporates the code, and calls
+  it.
+- **The plan is ahead of the code.** The sim keeps its mechanism as the plan,
+  declared, and the code follows. The release cooldown's per-shard versus
+  whole-record anchoring (Appendix B, R10) is the first row that has to say
+  which.
+
+What has not been built — the purse's shape, the parts of the bond
+lifecycle not yet coded, the yield a staker sees — stays the sim's design
+surface. The purse stops being an abstract 100 units per epoch: it becomes
+the one this sim computes, the economy's plan. Its falsifier is that an
+abstract-purse control arm reproduces the existing L11 and L13 pins in
 [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md).
 
 Two consequences are recorded here so they are not discovered later.
@@ -883,8 +915,8 @@ Two consequences are recorded here so they are not discovered later.
   repeated.
 
 It is a separate PR because it is a separate validation surface (rule 19),
-and it is carried by the `FOLLOWUPS.md` row *Re-base `shekyl-staking-sim`
-on production code*.
+and it is carried by the `FOLLOWUPS.md` row *Check `shekyl-staking-sim`
+against the staking code built so far*.
 
 ## 7. What this round does not decide
 
