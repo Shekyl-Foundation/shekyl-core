@@ -4746,6 +4746,22 @@ fn capture_build_identity(daemon_version: &str) -> String {
     head
 }
 
+/// A daemon whose version names no commit cannot vouch for a capture. No
+/// daemon needed: the refusal precedes every probe of the checkout.
+#[test]
+#[should_panic(expected = "names no commit")]
+fn a_capture_refuses_a_daemon_version_naming_no_commit() {
+    capture_build_identity("3.1.0-release");
+}
+
+/// A daemon built at another commit than the checkout's `HEAD` would stamp
+/// the vector with code that did not mine it.
+#[test]
+#[should_panic(expected = "but the checkout is at")]
+fn a_capture_refuses_a_daemon_built_at_another_commit() {
+    capture_build_identity("3.1.0-000000000");
+}
+
 /// Capture the regtest chain as the **E2 replay pair** — a corpus and a
 /// trace — for the consensus validator's verification-era fixtures
 /// (`CHAIN_RULES_SLICE_6.md` §5.2, Q1 (ii)), under

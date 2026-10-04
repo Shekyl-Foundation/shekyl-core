@@ -30,7 +30,7 @@ Ordered, because each step's numbers are inputs to the next.
 
 | Step | What | Owner | State |
 | --- | --- | --- | --- |
-| **EUP-1** | The emission speed factor per block, as designed (A below), fixed in the code on `dev`. This document and the `DESIGN_CONCEPTS.md` drift corrections (B, C, E) land beside it. | the ESF PR (`fix/esf-per-block`); this PR | in progress |
+| **EUP-1** | The emission speed factor per block, as designed (A below), fixed in the code on `dev`. This document and the `DESIGN_CONCEPTS.md` drift corrections (B, C, E) land beside it. | #951 (`fix/esf-per-block`); #948 | landed |
 | **EUP-2** | The economics sim realigned to the code: #936 merges `dev` (and with it the ESF fix); ESR-8 (restated constants → imports); ESR-10 (fee multiplier and rung mix, each run on `w_ref` and the zone as they are **and** re-derived from the post-quantum ordinary weight). | [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md) | ESR-1…ESR-7 landed on #936; ESR-8 in progress |
 | **EUP-3** | Staking coupled in: the purse the economics sim computes feeds the population model; L19i's challenge egress in the same model; the bond at the shipped floor. The staking sim is checked against what has been built, and leads what has not. | `shekyl-staking-sim`; the staking-sim row in `FOLLOWUPS.md` (reworded on PR #936 to *Check `shekyl-staking-sim` against the staking code built so far*) | not started |
 | **EUP-4** | The full per-year set, run on the design curve, every scenario, both fee arms, the ESR-7 envelope. **This is the assessment baseline.** §4's criteria are graded against it, and they are written before it runs. | this document | waits on EUP-1…EUP-3 |
