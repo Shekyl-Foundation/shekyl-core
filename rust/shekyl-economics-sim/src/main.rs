@@ -1,4 +1,5 @@
 mod admission;
+mod block_space;
 mod budget;
 mod budget_scenarios;
 mod burden;

@@ -351,7 +351,7 @@ eviction. The C++ relay-floor ring keeps the same median the same way
 
 The block's weight is what its transactions weigh, and how many it takes
 is not the schedule's: it is what the producer's fill rule admits
-(`shekyl_block_template::Fill`, §5.6). `median_window::BlockSpace` holds
+(`shekyl_block_template::Fill`, §5.6). `block_space::BlockSpace` holds
 the medians and the waiting transactions. One cursor,
 `chain_cursor::ChainCursor`, steps that space and CEN-F20's volume window
 together: the engine, the budget and the stage-2 fold each call it once

@@ -19,9 +19,9 @@ use shekyl_economics::{
     TxVolume,
 };
 
+use crate::block_space::{BlockSpace, Filled};
 use crate::engine::{net_supply, SimParams, EMISSION_SPLIT_EPOCH_HEIGHT};
 use crate::fee_model::{FeePoint, OrdinaryTx};
-use crate::median_window::{BlockSpace, Filled};
 use crate::volume_window::VolumeWindow;
 
 /// The chain state a fold carries from block to block: the volume window
