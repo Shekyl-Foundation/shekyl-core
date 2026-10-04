@@ -1436,7 +1436,9 @@ carry rides it (GF-9 label). No box is `[ ]` at close.
   gate-4 §3.5 step 5 / §4.1 / §3.4.1). The account `P_pubkey` never authorizes a value-out;
   identity-only invariant preserved. Custody model (§3.2) not reopened; the receipt-UTXO
   alternative was declined and given a reopen criterion (§9.6).
-- **Reinstate/release FSM** — `HoldingsUpdate` promoted V3.1→genesis (V3.0, decided 2026-06-15); the
+- **Reinstate/release FSM** — `HoldingsUpdate` promoted V3.1→genesis (V3.0, decided 2026-06-15)
+  *[and REJECTED 2026-09-20 under the immutable-bond ruling; there is no top-up path — a bond's
+  set is fixed at post and changes by persona rotation, lifecycle doc §5.3]*; the
   add-shard credit path covers top-up (gate-4 §4.4 / FSM retool); **blocks the R-3 sim
   reconciliation and thus the genesis seal** (§6 scope note); the reconciliation must be
   **age-stratified, not a re-tuned flat cost**. *(Records-was. Discharged 2026-07-15; then
@@ -3027,7 +3029,10 @@ closes when the GF-10 single-axis grade runs and clears the advantage claim.
 **Decision 4 — the F-D4 §16.4 proposal is ACCEPTED as an F-D2-class wallet default.**
 The honest-wallet builder self-funds `HoldingsUpdate`-add and credit-bearing `Reinstate`
 from reward-lineage outputs — the GF-4b `BackingSet` machinery already classifies exactly
-this. External funding for growth is never silently built: it is an explicit, **loud**
+this. *[Both classes are without subject since 2026-09-20: `HoldingsUpdate` is REJECTED
+and `Reinstate` is zero-money by consensus (PR #808). The default stands as ruled for any
+growth-funding crossing a future design mints; today none exists to self-fund.]*
+External funding for growth is never silently built: it is an explicit, **loud**
 override treated as what it is — a `JoinMarket`-class principal crossing — and routed
 through the entry-standoff draw (`draw_entry_gap`), inheriting GF-7's per-event
 treatment. Cost accepted with eyes open (F-D4 §16.4 constraint 2): default-path portfolio
