@@ -1662,6 +1662,10 @@ get_context_ref` in `levin_protocol_handler_async.h` is:
 | `:907` | `foreach_connection` hands the walker the context |
 | `:921` | `for_connection` hands the caller the context |
 
+The six hits at `:234`–`:304` run on the connection's own timer
+handler. They are strand-side by construction, and the falsifier
+expects them to remain.
+
 `:921` is not only a walker. `node_server::for_connection`
 (`net_node.inl:169`) reaches it. So do `try_add_next_blocks`
 (`cryptonote_protocol_handler.inl:1437`, `:1477`, `:1512`, `:1538`),
@@ -1678,24 +1682,22 @@ the 14 on `connection_context_base` (`net_utils_base.h`) and the 16
 on `cryptonote_connection_context` (`connection_context.h`), plus
 `support_flags`, `m_in_timedsync`, and `sent_addresses` on
 `p2p_connection_context_t`. The test for each is who asserted it.
-This draft is for review. It is not a struct.
+This is the sort. It is not a struct.
 
 | Bin | Members | Rule |
 | --- | --- | --- |
-| Observed, we measured it | `m_connection_id`, `m_remote_address` as connected, `m_is_income` as direction, `m_connector`, `m_started` as established-at, `m_last_recv`, `m_last_send`, `m_current_speed_down`, `m_current_speed_up`, `m_max_speed_down`, `m_max_speed_up` | Eviction, admission, the protection set, and the operator view read only this bin (§2.8.2). |
-| Claimed, the peer told us | `m_remote_blockchain_height`, `m_last_known_hash`, `support_flags`, the handshake's advertised port and address (§2.7.4; not one of these 33 members), `m_remote_height_source` | Sync may read a claim as a hypothesis to test (§2.11). Nothing that decides who stays connected may. `Claimed<T>` so a reader cannot forget. |
-| Local state, ours about this session | `m_state`, `m_last_response_height`, `m_expected_heights_start`, `m_last_request_time`, `m_callback_request_count`, `m_expect_response`, `m_expect_height`, `m_num_requested`, `m_score`, `m_in_timedsync`, `sent_addresses` | Owned by the component that drives that protocol. The sync fields go with the sync driver when it moves. Until then they are plain fields the C++ handler reads through the handle. |
+| Observed, we measured it | `m_connection_id`, `m_remote_address` as connected, `m_is_income` as direction, `m_connector`, `m_started` as established-at, `m_last_recv`, `m_last_send`, `m_recv_cnt`, `m_send_cnt`, `m_current_speed_down`, `m_current_speed_up`, `m_max_speed_down`, `m_max_speed_up` | Eviction, admission, the protection set, and the operator view read only this bin (§2.8.2). `m_recv_cnt` and `m_send_cnt` are byte counters this node kept from the socket. |
+| Claimed, the peer told us | `m_remote_blockchain_height`, `m_last_known_hash`, `support_flags`, the handshake's advertised port and address (§2.7.4; not one of these 33 members), `m_remote_height_source` | Sync may read a claim as a hypothesis to test (§2.11). Nothing that decides who stays connected may. `Claimed<T>` so a reader cannot forget. The advertised port and address are the sole claimed-to-observed promotion: a successful re-dial sets an `Observed` result, distinct from the `Claimed` that arrived in the handshake. |
+| Local state, ours about this session | `m_state`, `m_needed_objects`, `m_expected_heights`, `m_requested_objects`, `m_last_response_height`, `m_expected_heights_start`, `m_last_request_time`, `m_callback_request_count`, `m_expect_response`, `m_expect_height`, `m_num_requested`, `m_idle_peer_notification`, `m_score`, `m_in_timedsync`, `sent_addresses` | Owned by the component that drives that protocol. The sync fields, including the three lists this node built from a peer's chain response, go with the sync driver when it moves. `m_idle_peer_notification` is this node's timer flag. Until then they are plain fields the C++ handler reads through the handle. |
 
 `m_state` is this node's pull relationship with the session. `m_ssl`
 is not in a bin: p2p SSL was deleted in #909, the field is false by
 construction, and it leaves the base struct. `m_score` is listed under
 local state and is not kept by that listing. A score that accumulates
 from claimed inputs is the self-selection trap §2.7.2 names, and that
-look happens before the struct. Six members are not placed:
-`m_recv_cnt`, `m_send_cnt`, `m_needed_objects`, `m_expected_heights`,
-`m_requested_objects`, `m_idle_peer_notification`. They take the same
-test. Constraint 2 covers the object: nothing in it is stable across
-reconnects except the observed endpoint, which is already public.
+look happens before the struct. Constraint 2 covers the object:
+nothing in it is stable across reconnects except the observed
+endpoint, which is already public.
 
 **Step b is the ownership cut.** `p2p_connection_context` becomes a
 handle to the Rust object. Through b the C++ handler still runs
