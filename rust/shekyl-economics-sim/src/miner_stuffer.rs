@@ -86,15 +86,35 @@ pub(crate) struct Envelope {
 }
 
 impl Envelope {
-    /// The cheapest shard on the chain as it stands: relay or unenforced miner.
+    /// The cheapest shard on the chain as it stands. Self-archiving is a
+    /// report of the enforced miner, so it is not an attacker here.
     pub(crate) fn today_atomic(&self) -> u128 {
-        self.relay_atomic.min(self.unenforced.cost_atomic)
+        cheapest_of([self.relay_atomic, self.unenforced.cost_atomic])
     }
 
-    /// The cheapest shard once the floor applies to a block's own bodies.
-    pub(crate) fn after_fix_atomic(&self) -> u128 {
-        self.relay_atomic.min(self.enforced.cost_atomic)
+    /// What each attacker pays once the floor applies to a block's own
+    /// bodies: the relay stuffer, the enforced miner, and that miner
+    /// recovering the staker pool as one holder and as the whole set.
+    fn post_fix_costs(&self) -> [u128; 4] {
+        [
+            self.relay_atomic,
+            self.enforced.cost_atomic,
+            self.self_archiving_one_of_many.cost_atomic,
+            self.self_archiving_whole_set.cost_atomic,
+        ]
     }
+
+    /// The cheapest shard on the post-fix chain: the minimum of
+    /// `post_fix_costs`.
+    pub(crate) fn after_fix_atomic(&self) -> u128 {
+        cheapest_of(self.post_fix_costs())
+    }
+}
+
+/// The cheapest shard among the attackers one chain prices.
+fn cheapest_of<const N: usize>(costs: [u128; N]) -> u128 {
+    let (first, rest) = costs.split_first().expect("a chain names its attackers");
+    rest.iter().copied().fold(*first, u128::min)
 }
 
 /// The holders a shard's staker-pool share divides among, for the one-of-many
@@ -488,7 +508,24 @@ mod tests {
             assert!(
                 e.self_archiving_whole_set.cost_atomic <= e.self_archiving_one_of_many.cost_atomic
             );
-            assert!(e.today_atomic() <= e.relay_atomic);
+            assert_eq!(
+                e.today_atomic(),
+                e.relay_atomic.min(e.unenforced.cost_atomic),
+                "today prices the relay stuffer and the unenforced miner"
+            );
+            let post_fix = e.post_fix_costs();
+            assert!(post_fix.contains(&e.relay_atomic));
+            assert!(post_fix.contains(&e.enforced.cost_atomic));
+            assert!(post_fix.contains(&e.self_archiving_one_of_many.cost_atomic));
+            assert!(post_fix.contains(&e.self_archiving_whole_set.cost_atomic));
+            assert_eq!(
+                e.after_fix_atomic(),
+                post_fix
+                    .into_iter()
+                    .min()
+                    .expect("the post-fix chain names its attackers"),
+                "fixed is the minimum over every post-fix attacker"
+            );
         }
     }
 

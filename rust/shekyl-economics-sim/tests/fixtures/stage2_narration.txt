@@ -73,10 +73,10 @@ cheapest of free room / penalty / displaced fees; miner E = the same paying the 
 100 holders, and as the whole holder set. 'today' / 'fixed' = the minimum over the
 attackers on each chain.
 scenario       y era          M (KB)   room       relay      miner U   (placement)     miner E  self 1/100    self all       today       fixed
-baseline_ste   5 constrained     322      0    374.0067     325.1688  Displacement    337.3938    337.3633    334.3430    325.1688    337.3938
-baseline_ste  20 carried         764      0     25.0020      13.8901  Displacement     16.6677     16.6608     15.9735     13.8901     16.6677
-baseline_ste  45 tail            764      0      1.2210       0.6150  Displacement      0.7657      0.7653      0.7280      0.6150      0.7657
-high_history  50 below zone      300     71      0.8820       0.0000      FreeRoom      0.2384      0.2378      0.1788      0.0000      0.2384
+baseline_ste   5 constrained     322      0    374.0067     325.1688  Displacement    337.3938    337.3633    334.3430    325.1688    334.3430
+baseline_ste  20 carried         764      0     25.0020      13.8901  Displacement     16.6677     16.6608     15.9735     13.8901     15.9735
+baseline_ste  45 tail            764      0      1.2210       0.6150  Displacement      0.7657      0.7653      0.7280      0.6150      0.7280
+high_history  50 below zone      300     71      0.8820       0.0000      FreeRoom      0.2384      0.2378      0.1788      0.0000      0.1788
   -> Shards a miner stuffs at the U price within a budget: share x budget / blocks per shard.
 Hashrate and time set a rate, not a price; a larger campaign raises the overshoot and the price.
        baseline_ste y5      11 blocks/shard; relay at 120297 atomic/B (outranking honest): 10%/epoch 90, 10%/year 2389, 10%/decade 23890, 33%/epoch 300, 33%/year 7884, 33%/decade 78840
