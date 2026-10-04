@@ -4765,6 +4765,7 @@ name = "shekyl-seam"
 version = "3.1.0"
 dependencies = [
  "shekyl-capped-stream",
+ "shekyl-onion-v3",
  "shekyl-peer-policy",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
