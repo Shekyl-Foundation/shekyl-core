@@ -38,14 +38,26 @@ pub const BLOCK_WEIGHT_FLOOR: u64 = shekyl_economics::FULL_REWARD_ZONE;
 
 pub use shekyl_economics::{blocks_to_surge_saturation, BLOCK_WEIGHT_SURGE_FACTOR};
 
-/// Saturated effective median: `S ·` the penalty-free zone.
-pub const BLOCK_WEIGHT_PENALTY_FREE: u64 = BLOCK_WEIGHT_FLOOR * BLOCK_WEIGHT_SURGE_FACTOR;
+/// Saturated effective median: the validator's clamp
+/// ([`shekyl_economics::effective_median`]) with the short-term median past
+/// its ceiling, `S ·` the penalty-free zone.
+#[must_use]
+pub fn block_weight_penalty_free() -> u64 {
+    shekyl_economics::effective_median(BLOCK_WEIGHT_FLOOR, u64::MAX)
+}
 
-/// The legal per-block ceiling: `2 ×` the effective median. Using it costs the
-/// miner-reward penalty, so a flooder pays for the extra capacity twice (fees and
-/// penalty compensation) — but it is available, and it is **double** what a
-/// penalty-free model predicts.
-pub const BLOCK_WEIGHT_MAX: u64 = BLOCK_WEIGHT_PENALTY_FREE * 2;
+/// The legal per-block ceiling at that median
+/// ([`shekyl_economics::block_weight_limit`]). Using it costs the
+/// miner-reward penalty, so a flooder pays for the extra capacity twice (fees
+/// and penalty compensation) — but it is available, and it is **double** what
+/// a penalty-free model predicts.
+#[must_use]
+pub fn block_weight_max() -> u64 {
+    shekyl_economics::block_weight_limit(
+        block_weight_penalty_free(),
+        &shekyl_economics::EconomicParams::default(),
+    )
+}
 
 /// Settlement epoch length, blocks.
 pub const EPOCH_BLOCKS: u64 = shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
@@ -100,14 +112,35 @@ pub fn delta_share(curve: &EscalationCurve, n: u64, delta: u64) -> u64 {
 /// ```
 ///
 /// At `B = 2M` this is **exactly zero** — the miner forfeits the *entire* block
-/// reward — so a flooder at the ceiling must compensate `base_reward` per block or
-/// no rational miner includes the flood. Over an epoch that is
-/// `base_reward × EPOCH_BLOCKS`, which **dwarfs the stuffing fees**.
+/// reward — so a flooder at the ceiling must compensate it per block or no
+/// rational miner includes the flood. The forfeit is the caller's, measured on
+/// the owner ([`forfeit_at_the_ceiling`]); over an epoch it is
+/// `forfeit × EPOCH_BLOCKS`, which **dwarfs the stuffing fees**.
 #[must_use]
-pub fn penalty_compensation_skl_per_epoch(base_block_reward_atomic: u64) -> f64 {
-    // reward at B = 2M is 0 ⇒ full base_reward forfeited, every block.
-    (u128::from(base_block_reward_atomic) * u128::from(EPOCH_BLOCKS)) as f64
+pub fn penalty_compensation_skl_per_epoch(forfeit_per_block_atomic: u64) -> f64 {
+    (u128::from(forfeit_per_block_atomic) * u128::from(EPOCH_BLOCKS)) as f64
         / crate::burden::COIN as f64
+}
+
+/// What a block at the legal ceiling forfeits at a supply of
+/// `already_generated` and baseline volume: the paid emission less the
+/// penalised reward at [`block_weight_max`] over [`block_weight_penalty_free`]
+/// — the penalty's own arithmetic, not the closed form above.
+#[must_use]
+pub fn forfeit_at_the_ceiling(
+    already_generated: u64,
+    params: &shekyl_economics::EconomicParams,
+) -> u64 {
+    let emission = shekyl_economics::PrePenaltyEmission::of(
+        already_generated,
+        shekyl_economics::TxVolume::per_block(params.tx_volume_baseline),
+        params,
+    )
+    .expect("a mid-chain supply is priced");
+    let at_ceiling = emission
+        .penalised(block_weight_penalty_free(), block_weight_max(), params)
+        .expect("the ceiling is within twice the median");
+    emission.to_raw() - at_ceiling
 }
 
 /// A6 report: the slew ceiling, per-epoch `Δshare` under a sustained flood, and
@@ -116,7 +149,7 @@ pub fn penalty_compensation_skl_per_epoch(base_block_reward_atomic: u64) -> f64 
 pub fn a6_report(
     out: &mut impl fmt::Write,
     n_samples: &[u64],
-    base_block_reward_atomic: u64,
+    forfeit_per_block_atomic: u64,
     admission: &AdmissionAtShards,
 ) -> fmt::Result {
     let curve = family()
@@ -124,7 +157,7 @@ pub fn a6_report(
         .max_by_key(|c| c.asymptote)
         .copied()
         .unwrap_or_else(crate::escalation::flat_25);
-    let surge = BLOCK_WEIGHT_PENALTY_FREE;
+    let surge = block_weight_penalty_free();
     writeln!(
         out,
         "\nA6 — swing / band width (§12.2): the empirical check on §6.0's STRUCTURAL claim\n\
@@ -159,7 +192,7 @@ pub fn a6_report(
     for &n in n_samples {
         let rate = admission.at(n);
         let dn_epoch = max_shards_per_window(EPOCH_BLOCKS, surge, n, rate);
-        let dn_pen = max_shards_per_window(EPOCH_BLOCKS, BLOCK_WEIGHT_MAX, n, rate);
+        let dn_pen = max_shards_per_window(EPOCH_BLOCKS, block_weight_max(), n, rate);
         let dn_reorg = max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n, rate);
         let ds_epoch = delta_share(&curve, n, dn_epoch);
         let ds_reorg = delta_share(&curve, n, dn_reorg);
@@ -230,7 +263,7 @@ pub fn a6_report(
         )
         .cost_atomic as f64
             / crate::burden::COIN as f64,
-        P = penalty_compensation_skl_per_epoch(base_block_reward_atomic),
+        P = penalty_compensation_skl_per_epoch(forfeit_per_block_atomic),
     )?;
 
     Ok(())
@@ -246,7 +279,7 @@ mod tests {
 
     #[test]
     fn flood_ceiling_is_finite_and_nearly_depth_flat() {
-        let surge = BLOCK_WEIGHT_PENALTY_FREE;
+        let surge = block_weight_penalty_free();
         let early = max_shards_per_window(EPOCH_BLOCKS, surge, 1_000, RATE);
         let late = max_shards_per_window(EPOCH_BLOCKS, surge, 5_000_000, RATE);
         assert!(early > 0, "a flood must be able to move n at all");
@@ -276,7 +309,7 @@ mod tests {
             .max_by_key(|c| c.asymptote)
             .copied()
             .unwrap();
-        let surge = BLOCK_WEIGHT_PENALTY_FREE;
+        let surge = block_weight_penalty_free();
         for &n in &[0u64, 1_000, 25_000, 100_000, 250_000] {
             // Monotone: the share never falls as n rises.
             assert!(curve.share(n + 1) >= curve.share(n), "monotone at n={n}");
@@ -297,7 +330,7 @@ mod tests {
     fn reorg_bound_is_a_strict_subset_of_the_epoch_bound() {
         // The only down-swing reaches at most REORG_DEPTH_BLOCKS, which is a small
         // fraction of an epoch — so reversibility cannot exceed the up-slew.
-        let surge = BLOCK_WEIGHT_PENALTY_FREE;
+        let surge = block_weight_penalty_free();
         const _: () = assert!(REORG_DEPTH_BLOCKS < EPOCH_BLOCKS);
         let n = 50_000;
         assert!(

@@ -207,7 +207,7 @@ impl Lever {
 /// (pinned below).
 #[must_use]
 pub fn emission_leg_at_decay(a: &A1YearAgg, params: &SimParams, annual_decay: u64) -> u128 {
-    let mid_height = (a.year - 1) * params.blocks_per_year + params.blocks_per_year / 2;
+    let mid_height = a.start_height + params.blocks_per_year / 2;
     let share = calc_effective_emission_share(
         mid_height,
         crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT,

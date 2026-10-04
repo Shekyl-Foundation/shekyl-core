@@ -381,6 +381,9 @@ defect.
 | `REF_TX_WEIGHT = 3_000` | The ladder's reference weight is a C++ macro with no single Rust owner. The crate's one existing declared copy (`fee_ladder.rs`) is reused, not duplicated | Declared at its definition |
 | Fee floor enforced in consensus | Not the current system: the floor is relay policy (C2-R2 Q9, reopened 2026-10-02) | Second arm of ESR-7 |
 | Traffic schedules, opportunity-cost band, SKL price band, storage and Kryder terms, replica target `R = 6` | No production owner exists | Exogenous; each already declared at its definition (Appendix A, class A) |
+| The fee-floor instrument's floor at `SCALE` resolution (Appendix A R29) | FL-E1–E3 measure the floor's per-block slew, which is finer than one atomic unit per byte; the owner rounds to whole units | `fee_floor.rs`; pinned to `relay_fee_floor` and the ladder's `4F` by `the_floor_is_the_owners_at_scale_resolution` |
+| The fee-ladder instrument's nearest-pow2 rule (R26) | An alternative the instrument measures against the owner's ceiling snap; it has no owner because it was not chosen | `fee_ladder.rs`; the ceiling arm calls `quantize_pow2_ceil` |
+| The ArticMine transliteration's KAT inputs (R30) | The 300 000 in the inherited-ladder tests is an input of the C++ `scaling_2021` vectors, fixed with them; importing the zone would move a KAT with the config | `fee_ladder.rs` tests |
 | Demand does not respond to the fee or to congestion | A schedule is a number of transactions per block, the same whatever they cost or however long they wait: no elasticity, no rung escalation, no resubmission after expiry. What the chain fails to carry expires; it is not deterred | Stated at the head of this document beside the result it governs |
 
 ## 5. Predictions, written before any run (2026-10-02)

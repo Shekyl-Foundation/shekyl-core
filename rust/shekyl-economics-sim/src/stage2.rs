@@ -22,7 +22,6 @@ use std::io::Write;
 
 use shekyl_chain_rules::EffectiveMedian;
 use shekyl_economics::{
-    base_block_reward,
     burn::{calc_burn_pct_at, compute_burn_split},
     calc_effective_emission_share,
     params::SCALE,
@@ -176,6 +175,9 @@ pub fn burden_trajectory(params: &SimParams, config: &ScenarioConfig) -> BurdenT
 #[derive(Debug, Clone, Serialize)]
 pub struct A1YearAgg {
     pub year: u64,
+    /// The chain height of the year's first block: the scenario's genesis
+    /// offset plus the years before it.
+    pub start_height: u64,
     /// Closed shards at year end (the D2 operand `n`).
     pub n: u64,
     /// Cumulative outputs (leaves) at year end — the curve-tree depth a claim
@@ -398,6 +400,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
             let year = (block + 1) / params.blocks_per_year;
             aggs.push(A1YearAgg {
                 year,
+                start_height: config.genesis_height_offset + (year - 1) * params.blocks_per_year,
                 n: fold.closed_shard_count(),
                 cumulative_outputs: fold.leaves(),
                 cumulative_archival_bytes: fold.archival_bytes(),
@@ -1716,11 +1719,13 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
         }
     }
     {
-        // Base block reward at a representative mid-chain supply, for A6's measured
-        // penalty-compensation term (the production emission fn, not a constant).
+        // What a block at the legal ceiling forfeits at a representative
+        // mid-chain supply, for A6's penalty-compensation term — measured on
+        // the penalty, not asserted.
         let econ = params.economic();
-        let br = base_block_reward(params.emission_curve_asymptote / 2, &econ).unwrap_or(0);
-        crate::swing::a6_report(out, &ESCALATION_PREVIEW_N, br, &admission)?;
+        let forfeit =
+            crate::swing::forfeit_at_the_ceiling(params.emission_curve_asymptote / 2, &econ);
+        crate::swing::a6_report(out, &ESCALATION_PREVIEW_N, forfeit, &admission)?;
     }
     let a4 = a4_stuffing_report(out, params)?;
 

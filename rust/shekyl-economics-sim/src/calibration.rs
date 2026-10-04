@@ -541,8 +541,7 @@ mod tests {
         // The physical ceiling is argmax ⌊B/w⌋·archival over every shape; the
         // fee-per-byte argmin is a candidate, never above the max. At the
         // surge ceiling the two differ: whole transactions, finite block.
-        let block_weight =
-            shekyl_economics::FULL_REWARD_ZONE * shekyl_economics::BLOCK_WEIGHT_SURGE_FACTOR;
+        let block_weight = crate::swing::block_weight_penalty_free();
         let mut differs_somewhere = false;
         for depth in 2..=MAX_TREE_DEPTH {
             let best = max_archival_bytes_per_block(block_weight, depth, CONTROL);

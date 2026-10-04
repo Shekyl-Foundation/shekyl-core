@@ -408,9 +408,11 @@ mod tests {
     }
     use serde_json::Value;
 
+    const FLOOR: u64 = shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
+
     fn tiny_lock_model(admission_min_atomic: u64) -> ArchivalLockModel {
         ArchivalLockModel {
-            bond_floor_atomic: 750_000_000,
+            bond_floor_atomic: FLOOR,
             replicas_per_shard: 6,
             blocks_per_shard: 100,
             n_p: 79,
@@ -424,15 +426,15 @@ mod tests {
         assert_eq!(arm_a.locked_atomic(0), 0);
         assert_eq!(arm_a.locked_atomic(99), 0);
         // one shard frozen: floor x replicas
-        assert_eq!(arm_a.locked_atomic(100), 750_000_000u128 * 6);
-        assert_eq!(arm_a.locked_atomic(1_000), 750_000_000u128 * 6 * 10);
+        assert_eq!(arm_a.locked_atomic(100), u128::from(FLOOR) * 6);
+        assert_eq!(arm_a.locked_atomic(1_000), u128::from(FLOOR) * 6 * 10);
 
-        let arm_b = tiny_lock_model(750_000_000);
+        let arm_b = tiny_lock_model(FLOOR);
         // admission term is flat MIN x N_P on top of the bond term
-        assert_eq!(arm_b.locked_atomic(0), 750_000_000u128 * 79);
+        assert_eq!(arm_b.locked_atomic(0), u128::from(FLOOR) * 79);
         assert_eq!(
             arm_b.locked_atomic(100),
-            750_000_000u128 * 6 + 750_000_000u128 * 79
+            u128::from(FLOOR) * 6 + u128::from(FLOOR) * 79
         );
     }
 
@@ -469,8 +471,9 @@ mod tests {
         let gate7 = run_scenario(&params, &tiny_config(Some(tiny_lock_model(0))));
         let last = gate7.years.last().expect("snapshot");
         let locked = last.locked_supply_coins.expect("derived lock reported");
-        // snapshot at block 9_999: 99 shards x 6 replicas x 0.75 coin
-        assert!((locked - 445.5).abs() < 1e-6);
+        // snapshot at block 9_999: 99 shards x 6 replicas x the bond floor
+        let expected = 99.0 * 6.0 * FLOOR as f64 / crate::burden::COIN as f64;
+        assert!((locked - expected).abs() < 1e-6);
         // derived ratio against multi-million-coin circulating is far below
         // the asserted 25%
         assert!(last.stake_ratio_pct < 0.01);
