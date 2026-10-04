@@ -1569,12 +1569,12 @@ recount. `apply_inbound_ceiling` (`net_node.inl:3009`) charges
 `shekyl_seam_inbound_held()` (`net_node.inl:2975`). The once-per-second
 peers-monitor thread is deleted. *Records-was: `node_server::run`
 (`:1163`) slept one second and wrote `m_current_number_of_in_peers`
-and `m_current_number_of_out_peers`.* The out-count cache is
-`try_to_connect_and_handshake_with_new_peer` (`:1573`). *Records-was:
-`:1605`.* It is not refreshed by that thread. Slice 3 keeps the fill
-loops that read it. `get_outgoing_connections_count` still stores the
-recount it just made (`:2170`), and the fill path does not call that
-function. The in-count atomic is written by
+and `m_current_number_of_out_peers`.* The dial cap recounts through `get_outgoing_connections_count`
+(`try_to_connect_and_handshake_with_new_peer`). *Records-was: the cap
+read the stored atomic at `:1573`, which the deleted thread used to
+write, and an exclusive list returned before any recount.* That
+function still stores the recount (`:2170`). Slice 3 keeps the fill
+loops. The in-count atomic is written by
 `get_incoming_connections_count` (`:2150`) and has no reader in
 `src/`. Deleting the thread removes the one-second `--in-peers`
 measurement input (rule 76;

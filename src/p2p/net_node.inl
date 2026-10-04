@@ -1570,14 +1570,15 @@ namespace nodetool
       return false;
     }
 
-    if (zone.m_current_number_of_out_peers == zone.m_config.m_net_config.max_out_connection_count) // out peers limit
+    // Recount. The one-second thread no longer stores this, and an
+    // exclusive list returns before connections_maker's own recount,
+    // so the stored atomic is not the cap.
+    const size_t out_peers = get_outgoing_connections_count(zone);
+    const uint32_t max_out = zone.m_config.m_net_config.max_out_connection_count;
+    if (out_peers >= max_out)
     {
-      return false;
-    }
-    else if (zone.m_current_number_of_out_peers > zone.m_config.m_net_config.max_out_connection_count)
-    {
-      zone.m_net_server.get_config_object().del_out_connections(1);
-      --(zone.m_current_number_of_out_peers); // stored out-count; the one-second thread no longer writes it
+      if (out_peers > max_out)
+        zone.m_net_server.get_config_object().del_out_connections(1);
       return false;
     }
 
@@ -2164,9 +2165,8 @@ namespace nodetool
       return true;
     });
 
-    // Store this recount. The one-second thread that used to refresh the
-    // cache is gone. `try_to_connect_and_handshake_with_new_peer` reads the
-    // stored value and does not call this function.
+    // Store this recount for a reader that still looks at the atomic.
+    // The dial cap calls this function rather than reading the stored value.
     zone.m_current_number_of_out_peers = count;
 
     return count;
