@@ -122,6 +122,26 @@ pub enum ClientError {
         /// Root the client reconstructed from its leaves.
         got: CurveTreeRoot,
     },
+    /// An assembled path does not commit to the root it claims (`CT-6` §11.6).
+    ///
+    /// Raised after assembly, from `verify_path_against_its_branches`.
+    /// The store gate above it compares two store reads and cannot see this:
+    /// [`crate::types::TreeContext::tree_root`] is copied from the gated reference while the
+    /// branches come from replay. [`crate::assemble::PathRootFault`] names
+    /// which step refused. [`crate::assemble::PathRootFault::ChildAbsent`] is
+    /// the membership link. [`crate::assemble::PathRootFault::RootDisagrees`]
+    /// is the final comparison.
+    ///
+    /// This is a defect, not a user condition: the wallet's two views of one
+    /// tree disagree. Refusing is the point — an inconsistent path yields a
+    /// proof that fails after the prover has run, or a transaction the daemon
+    /// rejects, and neither says what went wrong.
+    PathRootMismatch {
+        /// The root the path claimed, copied from the gated reference.
+        claimed: CurveTreeRoot,
+        /// Which step of the fold refused.
+        fault: crate::assemble::PathRootFault,
+    },
     /// The requested output is not a drained leaf at the reference height,
     /// so no membership path exists for it there (the §4.3 lookup miss).
     OutputNotDrained {
@@ -321,6 +341,7 @@ impl ClientError {
             | ClientError::Frontier { .. }
             | ClientError::SnapshotLeafCountMismatch { .. } => StoreOpenFault::Corrupt,
             ClientError::RootMismatch { .. }
+            | ClientError::PathRootMismatch { .. }
             | ClientError::OutputNotDrained { .. }
             | ClientError::IdentityMismatch { .. }
             | ClientError::TooManyInputs { .. }

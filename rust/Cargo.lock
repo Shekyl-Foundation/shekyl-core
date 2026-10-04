@@ -4813,6 +4813,7 @@ dependencies = [
  "kameo",
  "shekyl-archival-retention",
  "shekyl-crypto-pq",
+ "shekyl-difficulty",
  "shekyl-fcmp",
  "shekyl-p-fetch",
  "shekyl-p-serve",

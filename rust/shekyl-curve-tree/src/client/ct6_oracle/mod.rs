@@ -22,9 +22,12 @@
 
 use super::tests::{coinbase_raw, ingest_outputs_at};
 use super::{BlockLeaves, CurveTreeClient, TxLeafInputs};
+use crate::assemble::verify_path_against_its_branches;
 use crate::recon::{assemble_leaf_stream, drained_sorted, root_from_scalars};
-use crate::types::{AssembleInput, BlockHeight, CurveTreeRoot, LeafEntry, ReferenceBlock};
-use crate::ClientError;
+use crate::types::{
+    AssembleInput, BlockHeight, ChunkLeaf, CurveTreeRoot, LeafEntry, ReferenceBlock,
+};
+use crate::{ClientError, PathRootFault};
 use shekyl_consensus::COINBASE_LOCK_WINDOW;
 use shekyl_fcmp::tree::{
     layer_count_for_leaves, HELIOS_CHUNK_WIDTH, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
@@ -715,38 +718,35 @@ mod ring;
 // CT-6 increment 5 — capture's red-bite: assembly must not read foreign leaves
 // ---------------------------------------------------------------------------
 
-/// Assembly today depends on **every** leaf in the tree, not just the owned
-/// one — and when the others are absent it does not refuse, it emits a path
-/// that claims the real root.
+/// With every foreign leaf removed, assembly refuses.
 ///
-/// # What changes when capture lands
+/// # Three states
 ///
-/// The claim is one comparison. A path assembled with every foreign leaf
-/// absent equals the path assembled with the whole tree present. Today they
-/// differ, so the comparison is [`assert_ne!`]. Capture turns that one
-/// assertion into [`assert_eq!`] and **deletes the witness block under it**.
+/// Capture's claim is one comparison: a path assembled with every foreign
+/// leaf absent equals the path assembled with the whole tree present.
 ///
-/// The witnesses describe today's failure mode: a one-leaf chunk under the
-/// real root. Equal paths have equal chunk lengths, so the witnesses
-/// contradict the inverted comparison. Leaving them in place makes a correct
-/// capture look red.
+/// | | with foreign leaves absent |
+/// | --- | --- |
+/// | before the §11.6 gate | succeeded, returning a wrong path under the real root |
+/// | now (gate landed) | refuses with [`PathRootFault::RootDisagrees`] |
+/// | after capture | succeeds, and the path equals `full` |
 ///
-/// The [`TreeContext::tree_root`] equality is not a witness. A correct path
-/// still commits to the oracle root, and that assertion stays.
+/// State 3 replaces the refusal with `assert_eq!(full, sparse)`.
 ///
 /// This is not a timing test. A cost curve across populations only estimates
 /// the property. A slower implementation cannot pass the inverted comparison,
 /// and neither can one that keeps a fallback rebuild, because the fallback
 /// has nothing to rebuild from.
 ///
-/// # The gate does not cover the path material
+/// # What this refusal is
 ///
-/// `assemble_paths` runs two mechanisms. The integrity gate reads the store
-/// tier (`root_at`). The branches are rebuilt from replay-held `entries`.
-/// Nothing checks that the two agree, and
-/// [`CurveTreeClient::root_and_depth_at`] is not called from assembly. With
-/// `entries` reduced to one leaf the gate still passes, and the emitted
-/// `tree_root` is copied from the gated reference.
+/// The store gate reads `root_at` and still passes: the store is left
+/// untouched. The branches are rebuilt from the one remaining entry.
+/// [`verify_path_against_its_branches`] hashes those branches and they are
+/// not the oracle root, so the fault is [`PathRootFault::RootDisagrees`].
+/// Membership holds on this shape — the one leaf's scalar is in the branch
+/// built from it. [`a_mutated_leaf_chunk_is_absent_from_its_branch`] pins
+/// the membership link.
 #[test]
 fn assembly_today_depends_on_every_foreign_leaf() {
     let tip = varying_tip();
@@ -764,6 +764,10 @@ fn assembly_today_depends_on_every_foreign_leaf() {
     // assembles against is the real consensus anchor rather than one the
     // subject chose for itself.
     let (oracle_root, oracle_leaves) = oracle_at(&client.entries, cutoff);
+    assert!(
+        oracle_leaves > 1,
+        "the tree must hold more than the owned leaf, or removing the others proves nothing"
+    );
     assert_eq!(
         client.root_at(height).expect("store root reads"),
         oracle_root,
@@ -779,6 +783,17 @@ fn assembly_today_depends_on_every_foreign_leaf() {
         .pop()
         .expect("one input yields one path");
 
+    // The positive half, and it is not incidental: `full` came back at all,
+    // which means the §11.6 gate hashed its branches and accepted them. A
+    // gate that refused *everything* would satisfy the negative assertion
+    // below while being worthless, so the passing case is asserted here in
+    // the same test rather than left to the suite at large.
+    assert!(
+        full.leaf_chunk.len() > 1,
+        "the owned leaf's real chunk holds its siblings; a one-leaf chunk here would mean \
+         the fixture, not the gate, is doing the work"
+    );
+
     // Remove every leaf that is not the owned output's. The store is left
     // untouched, which is what keeps the integrity gate green below.
     let before = client.entries.len();
@@ -789,45 +804,123 @@ fn assembly_today_depends_on_every_foreign_leaf() {
         "the fixture must hold foreign leaves for their absence to mean anything"
     );
 
-    let sparse = client
+    // STATE 2 of 3. Before the §11.6 gate this SUCCEEDED, returning a path
+    // whose `tree_root` was the real consensus root over a one-leaf tree.
+    // The gate now recomputes the root from the path's own branches, so the
+    // same call refuses. Capture is state 3: it will succeed again, with the
+    // branches the owned leaf actually has.
+    let refusal = client
         .assemble_paths(&[owned], &reference)
-        .expect(
-            "TODAY assembly SUCCEEDS with foreign leaves absent -- it does not \
-             refuse. If this now errors, capture (or a new guard) changed the \
-             failure mode and this test must be re-read, not relaxed",
-        )
+        .expect_err("the §11.6 gate must refuse a path whose branches are not the tree's");
+
+    match refusal {
+        ClientError::PathRootMismatch { claimed, fault } => {
+            assert_eq!(
+                claimed, oracle_root,
+                "the refusal must name the root the path claimed, which is the real one: \
+                 that is what makes the store gate above it blind to this"
+            );
+            assert_eq!(
+                fault,
+                PathRootFault::RootDisagrees,
+                "the one-leaf branch contains its own leaf; the refusal is the root. \
+                 ChildAbsent here would mean the fixture stopped building that branch \
+                 from the remaining leaf"
+            );
+        }
+        other => panic!(
+            "expected PathRootMismatch from the artifact check; got {other:?}. If capture \
+             landed, this is state 3 — assert the path EQUALS `full` instead of asserting a \
+             refusal, and see the header"
+        ),
+    }
+}
+
+/// Membership binds the leaf chunk to the branches.
+///
+/// The branch hash does not take the child as an input. A path that already
+/// folds to its root, with one byte of `CM.x` flipped, must still refuse:
+/// the branches are untouched, so the top hash still equals `tree_root`.
+/// The edit that makes this pass for the wrong reason is deleting the
+/// `contains` check in [`verify_path_against_its_branches`].
+///
+/// A real sibling chunk from this fixture is not the mutation. At this
+/// depth every leaf-chunk node sits in the one Helios branch, so that
+/// splice is a valid path and must be accepted.
+#[test]
+fn a_mutated_leaf_chunk_is_absent_from_its_branch() {
+    let tip = varying_tip();
+    let mut client = CurveTreeClient::new();
+    ingest_through(&mut client, tip, scheduled_outputs);
+    let height = tip;
+    let cutoff = height - BlockCount::ONE;
+    let (inputs, _, _) = two_inputs_in_different_chunks(&client, cutoff);
+    let reference = reference_at(&client, height);
+
+    let path = client
+        .assemble_paths(&[inputs[0]], &reference)
+        .expect("assembly with the whole tree present")
         .pop()
         .expect("one input yields one path");
-
-    // The claim. When capture lands, invert this one assertion to `assert_eq!`
-    // and delete the witness block below it. Do not invert the witnesses:
-    // equal paths have equal chunk lengths, so they cannot survive the flip.
-    assert_ne!(
-        full, sparse,
-        "assembly produced the same path with the foreign leaves absent. That is \
-         capture's structural property. Invert this assertion to assert_eq! and \
-         delete the witness block below — it is the red-bite, not a bug"
-    );
-
-    // Stays across the inversion. A correct path still commits to the oracle root.
     assert_eq!(
-        sparse.tree.tree_root, oracle_root,
-        "the emitted path claims the real root even with one leaf present: \
-         tree_root is copied from the gated reference, which the store tier \
-         answered, so the gate cannot see that the branches came from elsewhere"
+        verify_path_against_its_branches(&path),
+        Ok(()),
+        "the path assemble just accepted must fold"
     );
 
-    // Witnesses of today's failure mode. Delete this block when the claim
-    // above becomes assert_eq!.
-    assert_ne!(
-        full.leaf_chunk.len(),
-        sparse.leaf_chunk.len(),
-        "the leaf chunk is what a wrong population changes first"
-    );
+    let mut spliced = path;
+    spliced.leaf_chunk[0].cm_x[0] ^= 0x01;
     assert_eq!(
-        sparse.leaf_chunk.len(),
-        1,
-        "the one-leaf replay yields a one-leaf chunk under a root that commits \
-         to {oracle_leaves} leaves"
+        verify_path_against_its_branches(&spliced),
+        Err(PathRootFault::ChildAbsent),
+        "the folded root is unchanged; only membership can refuse this path"
     );
+}
+
+/// [`ChunkLeaf::scalars`] reproduces the leaf bytes `construct_leaf` wrote.
+///
+/// `ChunkLeaf::scalars` delegates to `leaf_from_chunk_entry`, the chunk-entry
+/// inverse, because `construct_leaf` takes the `CM` point and a chunk carries
+/// only its x-coordinate. So this compares **two production functions**
+/// rather than a local restatement against one: the leaf bytes
+/// `construct_leaf` wrote at ingest must be exactly what
+/// `leaf_from_chunk_entry` rebuilds from the prover-facing view. They are
+/// written for opposite directions and only agree if both are right, which a
+/// test over a single derivation could not establish.
+#[test]
+fn chunk_leaf_scalars_match_construct_leaf() {
+    let tip = varying_tip();
+    let mut client = CurveTreeClient::new();
+    ingest_through(&mut client, tip, scheduled_outputs);
+    let cutoff = tip - BlockCount::ONE;
+
+    let drained = drained_sorted(&client.entries, cutoff);
+    assert!(!drained.is_empty(), "the fixture must drain some leaves");
+
+    for entry in &drained {
+        let chunk_leaf = ChunkLeaf {
+            output_key: entry.identity.output_key,
+            key_image_gen: shekyl_fcmp::tree::key_image_generator(
+                entry.identity.output_key.as_bytes(),
+            ),
+            commitment: entry
+                .identity
+                .commitment
+                .expect("a drained leaf carries a commitment"),
+            cm_x: entry.cm_x(),
+        };
+        let scalars = chunk_leaf
+            .scalars()
+            .expect("a drained leaf's points convert");
+
+        let mut flat = [0u8; 128];
+        for (slot, scalar) in flat.chunks_exact_mut(32).zip(scalars) {
+            slot.copy_from_slice(&scalar);
+        }
+        assert_eq!(
+            flat, entry.leaf,
+            "ChunkLeaf::scalars drifted from the leaf construct_leaf stored at gindex {:?}",
+            entry.gindex
+        );
+    }
 }
