@@ -19,12 +19,16 @@ urn + `W₂` ring, no checkpoints, one set live, digest carve-out — §7.2).
 one customization + KAT; carrier semantics RULED (B), §7.6.2). **Q4
 RESOLVED 2026-09-17** (one production constructor reads the constant;
 `assign_epoch` feeds it; explicit λ is `#[cfg(test)]` —
-`fix/so-q4-pin-lambda`). Slice C is not
-authorized. `ARCHIVAL_SETTLEMENT_WRITER.md` §12's rule-22 hold on the
-writer's call site **stands**. No admission code, no consensus code, and
-no writer call site were written for this round (Slices A and B of the
-2026-09-13 brief were authorized; Slice C — implementation — was not,
-and §8 is its plan, not its work).
+`fix/so-q4-pin-lambda`). **Slice C AUTHORIZED 2026-10-04** (maintainer;
+[`SERVE_CREDIT_VERIFIER.md`](../completed/SERVE_CREDIT_VERIFIER.md)
+`SCV-Q3`): this round owns its third slice, the admission rows and the
+writer's call site together. §8.0 is its first increment. §8's two
+preconditions are no longer waits, and
+`ARCHIVAL_SETTLEMENT_WRITER.md` §12's rule-22 hold on the writer's call
+site is **lifted** in favour of this round's ownership. As of the
+authorization, no admission code, no consensus code and no writer call
+site exist for this round: Slices A and B of the 2026-09-13 brief were its
+design work, and §8 is Slice C's plan.
 
 **Mission hierarchy** ([`00-mission`](../../.cursor/rules/00-mission.mdc)):
 security and quantum resilience are preconditions; privacy is second, as the
@@ -121,7 +125,13 @@ reopener conceals `h` and forbids publishing `pk`.
 > the live connect validator (`ChainValid` minted without a C++-verdict
 > shim) **and** a production caller of the settlement write in the Rust
 > apply/slash path. Until both, Slice C is not authorized. Q14 is
-> resolved by this ruling (§10). **Q12 RULED 2026-09-16 (§7.9):** bare
+> resolved by this ruling (§10). *SUPERSEDED in part 2026-10-04
+> (`SCV-Q3`, `SCV-Q5`; §8.0): Slice C is authorized, and it owns the
+> writer's call site, which no longer waits on S-ARCH porting the table.
+> The two falsifier conditions above are no longer waits. The first
+> stands as Slice C's landing rule: Rust only, in `shekyl-chain-rules`,
+> never a C++-verdict shim. Q14's prohibition stands: the C++ tautology
+> is not repaired.* **Q12 RULED 2026-09-16 (§7.9):** bare
 > 32-byte hash, on its own analysis, not as F5 inheritance. *SUPERSEDED:
 > "Q12 is sequenced behind F5."*
 
@@ -1378,7 +1388,8 @@ DrawableSet::at_epoch_open(view, E) -> Vec<DrawablePair>
 No snapshot table. Runs once per epoch into `EpochAssignmentCache`, which
 was already designed as derived-never-persisted (`SO-D8e`) and is therefore
 untouched by the redb port. The named type is STAGED in this plan; the
-body lands with Slice C (not authorized).
+body lands with Slice C (authorized 2026-10-04, §8.0; *was* "not
+authorized").
 
 **(3.3) The drop filter lives at settlement, not at draw.**
 
@@ -2218,7 +2229,68 @@ criterion; count-pin +1 in this docs PR.
 
 ---
 
-## 8. Slice C — implementation plan (NOT AUTHORIZED; written so it can be built when ruled)
+## 8. Slice C — implementation plan (AUTHORIZED 2026-10-04; *was* "NOT AUTHORIZED; written so it can be built when ruled")
+
+### 8.0 Slice C's first increment — Round 0: the design inputs (brief, 2026-10-04)
+
+**1. Owner, authorization, surface.** The SO-D8 round owns Slice C, which is
+authorized (`SCV-Q3`). One document holds the admission rows and the
+settlement writer's Rust call site, the two halves the serve-credit round
+found each waiting on the other (`SCV-1`).
+- **Slice C's surface:** the successors of CEN-J1–J3 and J7–J10, the
+  writer's call site, the witness (Q8), the `0x0C` writer (Q13) and the
+  carrier (Q9; `SCV-Q4` confirmed `serve_credit_only`).
+- **Not Slice C's:** E6 slice 8 keeps the rest of census 4.J and does not
+  wait on Slice C.
+- **The genesis gate** (`SCV-Q5`, recorded on `DEL-008`): no genesis, and
+  no `DEL-008` cutover, until Slice C's admission rows are `implemented` in
+  `census.rs` and J8–J10 are retired.
+
+**2. Round 0 — four inputs, ruled before anything is built.** Ownership does
+not wait on them; building does.
+1. **Q9's set-commitment bytes** (§7.6.1, PROPOSED): the customization and
+   the four-vector KAT.
+2. **The R-B record layout, written once** (`SCV-3`): kept and pruned
+   fields, including where `SF-D8`'s carried `nonce` and `anchor_height`
+   ride. This is the response-format round's reopen (§2.1 item 1), with its
+   rule-42 version bump. It includes **the anchor window's operand**: the
+   landed `PassAnchorWindow::shape_for_predecessor` keys it on the
+   *including* block's predecessor; whether R-B keeps that or moves it to
+   the issuing block `h` is unwritten.
+3. **The height that replaces "the fire height"** (`SCV-12`). §8's
+   enumeration row asks `holds_shard_of` "at the fire height" and deletes
+   the function that computes one. The answer must read strictly above a
+   same-block slash, as `holds_shard_at` does (`ARW-27` is the live C++
+   getting that boundary wrong). Decide it alongside item 2's anchor
+   window: both are "which height" questions.
+4. **The bond-admission closed-and-final shard predicate** (`SCV-6`,
+   FOLLOWUPS row *Bond admission's shard predicate*): ruled and unbuilt,
+   and its listed blocker (the A4 rows, `b_*`) dissolved by `PDM-Q6` item 5
+   and `SHT-Q2`. It carries the job of the freeze clause J8 loses.
+
+Also owed with the census change that lands the rows (`SCV-Q6`): a
+`RowStatus` arm for a row retired by ruling, carrying its citation, so the
+gate's second half is a state a check reads.
+
+**3. Evidence facts** carried from the serve-credit round's withdrawn
+interim (`SCV-Q1`). Each becomes an expectation in the evidence plan below,
+not interim code:
+- **Zero passes slash every honest archiver.** `challenge_failed` answers
+  *not slashable* only through `passed` (`archival/slash.rs:154`, `:162`),
+  which reads only this block's credits and `pass_count`
+  (`archival/mod.rs:297`; `store/archival_reads.rs:256`). With no credit
+  rows, every good-through pair that holds its shard walks the failure
+  window into a slash.
+- **Credits accrue for shards the persona does not hold.**
+  `credited_shards` (`archival/close.rs:337`) reads credit rows, and
+  nothing on the accrual path, or in L7, checks holdings.
+- **A credit on an unclosed shard id counts toward scarcity**
+  (`close.rs:270–273`).
+
+The admission rows close the second and third (membership in
+`assignment(h)` implies holding at the epoch's open). The first is why the
+settlement writer and the admission rows land as one unit.
+
 
 **Home is Rust, and only Rust (Q15, 2026-09-16).** `20-rust-vs-cpp-policy`
 and DRS-D12 agree: everything that computes lives in `shekyl-chain-rules`
@@ -2285,8 +2357,20 @@ gates do **not** all wait on the second:
    essentially the whole port." Falsify: a production caller of the
    settlement write on the Rust apply/slash path.
 
-Until both, the LMDB daemon's beacon / `h_close` / seal gates stay, and
-Slice C is not authorized. The wait's load-bearing reason is
+*SUPERSEDED 2026-10-04 (`SCV-Q3`, `SCV-Q5`): "Until both, the LMDB
+daemon's beacon / `h_close` / seal gates stay, and Slice C is not
+authorized."*
+- **Precondition 2** waited on a lane that had scoped the work out as
+  waiting on Slice C. Its falsifier had no lane left to fire it once DRS-E4
+  closed (`SCV-1`). It is struck: the writer's call site is Slice C's own.
+- **Precondition 1, kept as a wait, would deadlock with the genesis gate.**
+  The cutover now waits on Slice C's rows. It survives as Slice C's
+  **landing rule**: Rust only, in `shekyl-chain-rules` (Q15), never a
+  C++-verdict shim. Its falsifier is unchanged (`ChainValid` constructed
+  from a C++ return code).
+
+The LMDB daemon's beacon, `h_close` and seal gates stay until the
+`DEL-008` cutover, which waits on Slice C. The wait's load-bearing reason is
 **re-derivation plus a second bite at a genesis-frozen wire** (Q15
 header), not only the shim prohibition. The settlement methods are
 **not** on the S-ARCH method list today (the table was born after that
@@ -2571,5 +2655,9 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
     stays closed. Falsify by `shekyl-chain-rules` being the live connect
     validator (`ChainValid` without a C++-verdict shim) **and** a
     production settlement write on the Rust apply/slash path. Until
-    both, Slice C is not authorized. Subsumes Q14. *SUPERSEDED: Q12
+    both, Slice C is not authorized. Subsumes Q14. *SUPERSEDED in part
+    2026-10-04 (`SCV-Q3`, `SCV-Q5`; §8.0): Slice C is authorized; the
+    falsifier conditions are no longer waits. "Wait until SO can be
+    written directly in Rust; no C++ mirroring" stands as Slice C's
+    landing rule, and Q14's no-repair prohibition stands.* *SUPERSEDED: Q12
     sequenced behind F5.* Q12 RULED independently (§7.9).
