@@ -835,16 +835,24 @@ segment to verify `R_k`. `PDM-Q6` retired that premise: `R_k` is gone
 per transaction against the retained hash rows, aborting on the first miss
 (item 5; `ARCHIVAL_PRUNED_DAEMON_MODE.md`, `SF-D7`'s row in its downstream
 table). So the memory leg of `N`'s upper bound is **the widest `N` whose
-in-flight bytes, one transaction per fetch, fit the floor's fetch memory**:
-`N × MAX_TX_SIZE` must fit it (`shekyl_wire::transaction::MAX_TX_SIZE`, 1 MB,
-so 8 MB at `N = 8`). That is taken with the circuit-churn width as their
-minimum, as before, and it does not grow with the shard length `W`.
+in-flight memory fits the floor's fetch memory**, where one fetch holds one
+transaction plus fixed costs of its own (the signature envelope, one
+transaction's parse). The term that scales with `N` is `N × MAX_TX_SIZE`
+(`shekyl_wire::transaction::MAX_TX_SIZE`, 1 MB, so 8 MB at `N = 8`). That leg
+is taken with the circuit-churn width as their minimum, as before, and it does
+not grow with the shard length `W`.
 
-- **What ships today sits between the two.** `shekyl-p-fetch` still buffers
-  each body whole (`Vec<u8>`, bounded by `max_body_bytes()`, which is still
-  the leaf figure), so its resident worst case at `N = 8` is about 53 MB
-  until fetch Sub-PR 2 brings the per-transaction verifier and the body's
-  unit. Neither figure binds on the floor, and neither moves `N`.
+- **That bound needs a verify seam that streams, and none is built yet.**
+  `ContentVerify::verify(shard_id, body: &[u8])` is handed the whole body. A
+  per-transaction verifier plugged into it — fetch Sub-PR 2 as its FOLLOWUPS
+  row was written, before item 5 — checks each transaction but still holds the
+  whole shard's bytes per fetch (more than `W`: a transaction's bytes include
+  its prefix and base, not only its archival length). Item 5's bound needs the
+  client to verify **as it reads**; the Sub-PR 2 row now says so.
+- **What ships today buffers more than either.** `shekyl-p-fetch` reads each
+  body whole into a `Vec<u8>` bounded by `max_body_bytes()`, which is still the
+  leaf figure, so its resident worst case at `N = 8` is about 53 MB.
+- None of the three binds on the floor, and none moves `N`.
 - **No memory bound on `W` comes from this row.** One would need a client
   that materialises a shard, and none does
   (`ARCHIVAL_SHARD_T_DERIVATION.md`, `SHT-3`).
