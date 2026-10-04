@@ -1215,52 +1215,61 @@ an **over-capture**, not a wrong proof, because assembly still resolves by
 `(output_key, commitment)` (`ClientError::IdentityMismatch`). The wallet's own
 rescan is what retracts the registration. The reorg red-bite owes this a row.
 
-**A coordinate hazard, recorded before anything is built on it.** The obvious
-tidy-up is to drop a stale registration with the *same* inequality the other
-two holders use — `gindex >= surviving_leaf_count`. That does not typecheck
-against reality: `surviving_leaf_count` counts drained **positions**, while a
+**The rule, after two candidates failed.** A rollback trims two holders, and
+they are one event in two units. Positions are in drained-leaf coordinates and
+retain below the surviving count, as above. Registrations are in `gindex`, and
+getting that one right took three attempts.
+
+*Candidate 1 — `gindex >= surviving_leaf_count`.* The tempting tidy-up: the
+same inequality on the same quantity as the positions. It does not typecheck
+against reality. `surviving_leaf_count` counts drained **positions**, while a
 `gindex` is a global output index that skips values consumed by
 leaf-ineligible outputs (`types.rs`, `LeafEntry::gindex`) and that no pending
-output has drained at all. The two are only equal in a fixture where every
-output is leaf-eligible and every one has drained — which this file's fixture
-is, so a pass written on it could not see the error.
+output has drained at all. `a_gindex_is_not_a_position` builds a block with a
+`TargetKind::Other` output and shows the last drained leaf's `gindex` equal to
+the drained count — so the rule would discard a registration for a leaf that
+is present and valid.
 
-The honest discriminator is a set membership on the rebuilt state, not an
-inequality: a registration is stale iff `gindex < next_gindex` **and** the
-gindex is absent from the rebuilt `entries`. The second clause is what keeps a
-legitimate early registration — one made for an output the client has not
-ingested yet, which sits at or above `next_gindex` — from being dropped. Its
-red-bite therefore needs all three states of that comparison: below and
-present, below and absent, at or above.
+*Candidate 2 — `gindex < next_gindex && !entries.contains(gindex)`.* This one
+typechecks, and the first clause is there for a real case: a registration for
+an output the scanner identified in a block this client has not ingested sits
+*above* `next_gindex` and must survive. It still fails, **in the case it was
+written for**. A rollback removes the chain's tail, and `rebuild_from_store`
+sets `next_gindex` to `entries.last() + 1` over what survived — so every
+output a rollback removes holds a gindex at or above it, lands in exactly the
+band that clause protects, and the rule drops nothing.
+`a_removed_gindex_sits_above_the_rebuilt_next_gindex` pins that, and the
+mutation is conclusive: substituting candidate 2 fails the same two passes as
+performing no trim at all.
 
-**The observer is infallible; the read that can fail is outside it.** A node
-chunk is copied as the frontier folded it. A layer-0 chunk is only *recorded
-as a coordinate*, because its children are leaf scalars and a path needs
-compressed points. Its identities are assembled after the fold and before the
-transaction (B5): positions below this block's first drain come from
-`read_drained_range` — `O(38)`, not the whole-table read capture exists to
-delete — and the rest from the block in hand, which the store has not
-committed yet. A short row set is **refused**
-(`ClientError::CaptureIdentitiesIncomplete`), not written: only `prune_frozen`
-produces one, resume already refuses such a store (F5), and a short chunk is
-something the merge would accept.
+*The rule.* A registration is stale iff the output it names **was** here and
+is **gone** — a set difference taken across the rollback, with the held set
+read before the rebuild. No inequality appears in it. The two states candidate
+2 could not separate — an output the reorg removed, and one not yet ingested —
+differ only in whether this client held it before the cut, which is a fact
+about the old state and not recoverable from the new one. Nothing persists the
+registry (`resume` starts empty), so there is no stale trace to re-derive on a
+later open either, which is what makes the in-memory difference sufficient.
 
-**What the oracle compares.** `a_captured_chunk_equals_what_assembly_builds`
-takes one value by two independent routes: the capture, written leaf by leaf
-at ingest from store rows and the block's own leaves, against
-`assemble_paths`, which rebuilds the whole tree at the reference height and
-slices it. Seven mutations were run against it and all seven bite — span
-off-by-one, the store-read half removed, `O`/`C` swapped, siblings reversed,
-`CM.x` omitted, and both halves of the rollback rule.
+Three states, three verdicts, and each candidate got a different one wrong:
 
-The fixture earns two of those. Leaf chunks are deliberately **not** aligned
-with blocks (one fewer leaf per block than the chunk width), so every chunk
-straddles and the store-read half is exercised; the first version aligned them
-and never called the ranged read it was built on. And every output carries a
-**distinct** `O`, distinct from its `C`: the shared `coinbase_raw` fixture
-carries the Ed25519 basepoint as both, for every output, and under it the
-`O`/`C` swap and the reversal both passed. A collapsed observable caps every
-assertion built on it, however exact the assertion looks.
+| registration | after the fork | verdict |
+| --- | --- | --- |
+| names a surviving output | still in `entries` | keep |
+| names a removed output | gone from `entries` | **drop** |
+| names an output never ingested | never in `entries` | keep |
+
+A plain `retain(|g| entries.contains(g))` gets the first two right and the
+third wrong, which is its own mutation.
+
+**And the rebinding is what the red-bite checks.** Dropping the stale
+registration is half the claim; the other half is that what replaces it is
+correct. `a_reorg_past_creation_retires_the_registration_and_rebinds_it` forks
+below the output's creation, re-ingests a *different* chain so the same gindex
+names a different output, re-registers as the wallet's rescan would, and
+compares the capture against the path `assemble_paths` builds from the
+post-reorg tree — the same two-route comparison as the unforked case, now
+across a fork.
 
 ### 11.10 Reconciliation is the backfill, and the list of its causes is short
 

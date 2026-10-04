@@ -1043,22 +1043,62 @@ impl CurveTreeClient {
         // client poisoned, which is the contract.
         self.poisoned = true;
         self.store.verify_frozen_tail().map_err(ClientError::from)?;
+        // Which registrations name an output this client holds *now* — read
+        // before the rebuild, because staleness is a set difference **across**
+        // the rollback and neither side alone answers it. See the retain
+        // below for why no inequality on `gindex` can.
+        let named_a_held_output: Vec<Gindex> = self
+            .owned_gindexes
+            .iter()
+            .copied()
+            .filter(|gindex| Self::holds_gindex(&self.entries, *gindex))
+            .collect();
         let rebuilt = Self::rebuild_from_store(&self.store)?;
         self.entries = rebuilt.entries;
         self.next_gindex = rebuilt.next_gindex;
         self.drained_through_counts = Vec::new();
         self.entries_by_maturity = rebuilt.entries_by_maturity;
         self.ingested_tip_height = rebuilt.ingested_tip_height;
-        // Registrations survive a rollback; the positions they resolved to
-        // survive only below the new tip. Truncation deletes `range(start..)`
-        // and shifts nothing, so a surviving leaf keeps its position, and a
-        // removed one re-resolves through the fold when it drains again on
-        // the new chain. `start` is the surviving leaf count, which is the
+        // The two holders a rollback has to trim, one event in two units.
+        //
+        // **Positions**, in drained-leaf coordinates: truncation deletes
+        // `range(start..)` and shifts nothing, so a surviving leaf keeps its
+        // position and a removed one re-resolves through the fold when it
+        // drains again. `start` is the surviving leaf count, which is the
         // rebuilt frontier's — the same coordinate `FoldedChunk::end_leaf`
         // is compared against.
         let surviving = rebuilt.frontier.leaf_count();
         self.owned_positions
             .retain(|position| *position < surviving);
+
+        // **Registrations**, in `gindex`. A registration is stale iff the
+        // output it names *was* here and is *gone* — the set difference
+        // taken above and below the rebuild. It is deliberately not an
+        // inequality, and two were tried:
+        //
+        // `gindex >= surviving_leaf_count` mixes units (a gindex is not a
+        // position; `TargetKind::Other` consumes one without draining a
+        // leaf) — `a_gindex_is_not_a_position`.
+        //
+        // `gindex < next_gindex && !entries.contains(gindex)` typechecks and
+        // still fails, in the case it was written for. A rollback removes
+        // the chain's tail, so every output it removes holds a gindex at or
+        // above the **rebuilt** `next_gindex`, which is `entries.last() + 1`
+        // over what survived. The clause meant to protect a registration for
+        // a not-yet-ingested output therefore protects every removed one too,
+        // and the rule drops nothing — `a_removed_gindex_sits_above_the_
+        // rebuilt_next_gindex`.
+        //
+        // The two are only told apart by whether this client held the output
+        // before the cut, which is a fact about the old state and not
+        // recoverable from the new one. Nothing persists the registry
+        // (`resume` starts empty), so there is no stale trace to re-derive on
+        // a later open either.
+        for gindex in named_a_held_output {
+            if !Self::holds_gindex(&self.entries, gindex) {
+                self.owned_gindexes.remove(&gindex);
+            }
+        }
         self.frontier = rebuilt.frontier;
         self.poisoned = false;
         Ok(())
@@ -1381,6 +1421,18 @@ impl CurveTreeClient {
             children.iter().flatten().copied().collect()
         };
         Ok((CapturedChunk { layer, bytes }, span))
+    }
+
+    /// Is `gindex` among `entries`?
+    ///
+    /// A binary search, on the strictly-increasing order
+    /// `entries_stay_sorted_by_gindex` pins. Not a `HashSet` built per call:
+    /// a rollback is rare and the registry is small, so `O(owned · log n)`
+    /// beats `O(n)` memory for the event.
+    fn holds_gindex(entries: &[LeafEntry], gindex: Gindex) -> bool {
+        entries
+            .binary_search_by(|held| held.gindex.cmp(&gindex))
+            .is_ok()
     }
 
     /// Does this chunk's leaf span hold an owned position?

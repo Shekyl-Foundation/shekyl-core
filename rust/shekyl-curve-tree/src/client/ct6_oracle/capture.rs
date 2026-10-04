@@ -130,12 +130,26 @@ fn ingest_range(
     to: BlockHeight,
     counts: &[usize],
 ) {
+    ingest_range_seeded(client, from, to, counts, 0);
+}
+
+/// [`ingest_range`] with a seed offset, so a post-reorg chain can hand the
+/// *same* gindexes to **different** outputs — which is what a reorg past an
+/// output's creation actually does.
+fn ingest_range_seeded(
+    client: &mut CurveTreeClient,
+    from: BlockHeight,
+    to: BlockHeight,
+    counts: &[usize],
+    seed_offset: u64,
+) {
     let before = usize::try_from(from.to_raw()).expect("a height fits usize");
-    let mut seed: u64 = counts
-        .iter()
-        .take(before)
-        .map(|n| u64::try_from(*n).expect("a count fits u64"))
-        .sum();
+    let mut seed: u64 = seed_offset
+        + counts
+            .iter()
+            .take(before)
+            .map(|n| u64::try_from(*n).expect("a count fits u64"))
+            .sum::<u64>();
     let end = to
         .checked_add(BlockCount::ONE)
         .expect("the ingested tip has a successor");
@@ -992,5 +1006,199 @@ fn a_gindex_is_not_a_position() {
          `gindex >= surviving_leaf_count` would discard a registration for a \
          leaf that is present and valid",
         last.gindex.to_raw()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A rollback trims two holders, in two units
+// ---------------------------------------------------------------------------
+
+/// A registered output created early enough to survive the forks below.
+const SURVIVES: u64 = 100;
+/// A registered output created late enough that those forks remove it.
+const REMOVED: u64 = 500;
+
+/// Fork height that keeps [`SURVIVES`]'s creation block and drops
+/// [`REMOVED`]'s.
+fn fork_between() -> BlockHeight {
+    let keep = creation_block_of(SURVIVES);
+    assert!(
+        creation_block_of(REMOVED) > keep,
+        "the fixture must create {REMOVED} after {SURVIVES}"
+    );
+    BlockHeight::from_raw(keep)
+}
+
+/// A rollback drops a registration exactly when its output is gone.
+///
+/// Three states, because the rule has to get all three right and two
+/// candidate rules got one each wrong:
+///
+/// | registration | after the fork | verdict |
+/// | --- | --- | --- |
+/// | names a surviving output | still in `entries` | **keep** |
+/// | names a removed output | gone from `entries` | **drop** |
+/// | names an output never ingested | never in `entries` | **keep** |
+///
+/// The third is the early registration the scanner makes when it identifies
+/// an output from a block this client has not reached. A rule that simply
+/// retained what `entries` contains would discard it.
+#[test]
+fn a_rollback_drops_a_registration_only_when_its_output_is_gone() {
+    let (mut client, _) = drained_chunks(&[SURVIVES, REMOVED]);
+    let unseen = Gindex::from_raw(u64::MAX);
+    assert_eq!(
+        client
+            .register_owned(unseen)
+            .expect("a live client registers"),
+        OwnedRegistration::BeforeDrain,
+        "an unseen gindex is a future output"
+    );
+
+    client
+        .rollback_to_fork(fork_between())
+        .expect("the fork rolls back");
+
+    assert!(
+        client.owned_gindexes.contains(&Gindex::from_raw(SURVIVES)),
+        "the output survived the fork, so its registration must"
+    );
+    assert!(
+        !client.owned_gindexes.contains(&Gindex::from_raw(REMOVED)),
+        "the output is gone from the new chain; the gindex will be re-derived \
+         there and may name a different output, so the registration must go"
+    );
+    assert!(
+        client.owned_gindexes.contains(&unseen),
+        "a registration for an output never ingested is an early one, not a \
+         stale one"
+    );
+}
+
+/// Every output a rollback removes holds a gindex **at or above** the
+/// rebuilt `next_gindex`.
+///
+/// The falsifier for the second candidate rule, pinned the way
+/// [`a_gindex_is_not_a_position`] pins the first. `gindex < next_gindex &&
+/// !entries.contains(gindex)` typechecks, and its first clause was there to
+/// protect a registration for a not-yet-ingested output. But a rollback
+/// removes the chain's **tail**, and `rebuild_from_store` sets `next_gindex`
+/// to `entries.last() + 1` over what survived — so every removed output
+/// lands in exactly the band that clause protects, and the rule drops
+/// nothing in the case it was written for.
+///
+/// That is why staleness is a set difference taken across the rollback
+/// rather than a test on the state after it: the two are indistinguishable
+/// from the new state alone.
+#[test]
+fn a_removed_gindex_sits_above_the_rebuilt_next_gindex() {
+    let (mut client, _) = drained_chunks(&[]);
+    client
+        .rollback_to_fork(fork_between())
+        .expect("the fork rolls back");
+    assert!(
+        REMOVED >= client.next_gindex,
+        "removed gindex {REMOVED} is below the rebuilt next_gindex {}, which \
+         would make the inequality rule look like it worked",
+        client.next_gindex
+    );
+    assert!(
+        SURVIVES < client.next_gindex,
+        "the surviving gindex must be below it, or the fixture proves nothing"
+    );
+}
+
+/// A reorg past an output's creation: the registration goes, and a
+/// re-registration on the new chain captures the **new** output correctly.
+///
+/// The second half is the one that matters. After the fork the same gindex
+/// names a different output, so the question is not only whether the stale
+/// registration was dropped but whether what replaces it is right. The
+/// capture written for the re-registered output is compared against the path
+/// `assemble_paths` builds from the post-reorg tree — the same two-route
+/// comparison as [`a_captured_chunk_equals_what_assembly_builds`], now over a
+/// chain that forked.
+#[test]
+fn a_reorg_past_creation_retires_the_registration_and_rebinds_it() {
+    let counts = counts();
+    let (mut client, _) = drained_chunks(&[REMOVED]);
+    let before = client
+        .entries
+        .iter()
+        .find(|e| e.gindex.to_raw() == REMOVED)
+        .expect("the fixture created it")
+        .identity
+        .output_key;
+
+    let fork = fork_between();
+    client.rollback_to_fork(fork).expect("the fork rolls back");
+    assert!(
+        !client.owned_gindexes.contains(&Gindex::from_raw(REMOVED)),
+        "the registration must not survive its output"
+    );
+
+    // A different chain from the fork: the same block shape, different
+    // outputs, so `REMOVED` is handed to one the wallet never owned.
+    ingest_range_seeded(
+        &mut client,
+        fork + BlockCount::ONE,
+        tip_for(&counts),
+        &counts,
+        1_000_000,
+    );
+    let after = client
+        .entries
+        .iter()
+        .find(|e| e.gindex.to_raw() == REMOVED)
+        .expect("the new chain created one too")
+        .identity
+        .output_key;
+    assert_ne!(
+        before, after,
+        "the fork must hand this gindex a different output or the pass is vacuous"
+    );
+
+    // The wallet rescans, finds it owns the new output, and re-registers.
+    assert_eq!(
+        client
+            .register_owned(Gindex::from_raw(REMOVED))
+            .expect("a live client registers"),
+        OwnedRegistration::AfterDrain,
+        "the new output has already drained by the post-reorg tip"
+    );
+    client.reconcile_captures().expect("reconciliation runs");
+
+    let tip = client
+        .ingested_tip_height
+        .expect("the client has ingested the new chain");
+    let reference = reference_at(&client, tip);
+    let drained = crate::recon::drained_sorted(&client.entries, tip - BlockCount::ONE);
+    let position = drained
+        .iter()
+        .position(|e| e.gindex.to_raw() == REMOVED)
+        .expect("the re-registered output drained");
+    let owned = drained[position];
+    let path = client
+        .assemble_path(
+            &AssembleInput {
+                gindex: owned.gindex,
+                output_key: owned.identity.output_key,
+                commitment: owned
+                    .identity
+                    .commitment
+                    .expect("a drained leaf carries a commitment"),
+            },
+            &reference,
+        )
+        .expect("the re-registered output's path assembles on the new chain");
+
+    let end_leaf = chunk_start(u64::try_from(position).expect("a position fits u64"))
+        + SELENE_CHUNK_WIDTH as u64
+        - 1;
+    assert_eq!(
+        decode_identities(&body_at(&held_at(&client, end_leaf), 0)),
+        path.leaf_chunk,
+        "the capture at the new position must be the leaf chunk assembly builds \
+         from the post-reorg tree"
     );
 }
