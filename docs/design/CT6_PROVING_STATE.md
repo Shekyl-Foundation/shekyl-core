@@ -308,7 +308,7 @@ have re-imported the dependency this round exists outside of.
 | **2** | **The C1 oracle, height-keyed.** At every fixture height `h`, root, depth, and drained-leaf count equal `assemble_leaf_stream` + `root_from_scalars` over the leaves drained through `h - 1`. That cutoff is written in the test, not read from `drained_through`. Depth is graded at the two leaf counts where `layer_count_for_leaves` steps (`0`, and `SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH`). **Q2 examiner armed here, graded at increment 4:** `examine_tier_readings` compares a `TierReading` (root and depth) per tier. `TierCoverage::OutsideSpan` is the only non-answer; a tier error has no variant to hide in. Agreeing overlap is success, a root or depth mismatch is `Disagree`, and a height in neither `HeightSpan` is `Uncovered`. The 2026-09-23 decision-log row records why the examiner is armed before its tiers exist | §6.3.4 row 4; Q2 | Q2 (**ruled**); Q1's *shape* only — its constants are not inputs to the oracle |
 | **3** | **Per-transaction reconstruction reuse.** `drained`/`layers` once per tx, `gindex → drain-position` index | **Closeout (a)** — F3b | 2 |
 | **4** | **The snapshot ring + advance — BUILT (§10).** One dense ring over the reorg horizon, total by construction (`Q1` RULED 2026-09-28, §9) — no tiers, no spacing, no eviction. `shekyl_curve_tree::frontier::Frontier` advances inside `ingest_block`; the ring is the `frontier_snapshots` table of the wallet's own `LeafStore`, written and evicted in the block's own transaction; `root_and_depth_at` reads it for in-horizon heights and falls through to `root_at_count` elsewhere. `per_block_advance_worst_case_s` is **re-derived from the built advance** (Q4). The increment-2 examiner grades the real segment tier against the real snapshot tier, **unmodified** | **Closeout (b)** — F3a | 2, 3; Q2, Q3 (**ruled**); **`Q1` RULED by derivation (§9); `Q4` pre-registered with its re-point as a landing condition** — the gate is open |
-| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture is in build** — its *instrument* landed first (the structural red-bite, the O(chain) before-figure, and §11.6's gate spec, PRs #927/#931), and **§11.6's integrity gate is BUILT**: `verify_path_against_its_branches` recomputes the root from an assembled path's own branches and refuses with `PathRootMismatch`, so the artifact is checked rather than the store compared with itself. **The capture mechanism is BUILT** (PR #945): the fold captures every chunk that closes over a registered output, reconciliation backfills what a late registration is owed, and assembly reads captures and the frontier snapshot without touching `entries` — `assembly_today_depends_on_every_foreign_leaf` is at **state 3 of 3** as `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`. The engine's registrant is the next slice, as its own PR (rule 19: it lands in the refresh driver, a different validation surface); until it does, no production batch is registered and assembly takes the rebuild it keeps as a named fallback. The §6.3.3 precondition this row used to carry is **discharged** — that sentence was reconciled on `dev` (`WALLET_SIDE_STORE.md` §6.3.3 now reads *"There is one capture side, not two"*), so nothing waits on it | §6.3.3; C7; §11.6 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
+| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture is BUILT** — its *instrument* landed first (the structural red-bite, the O(chain) before-figure, and §11.6's gate spec, PRs #927/#931), and **§11.6's integrity gate is BUILT**: `verify_path_against_its_branches` recomputes the root from an assembled path's own branches and refuses with `PathRootMismatch`, so the artifact is checked rather than the store compared with itself. **The capture mechanism is BUILT** (PR #945): the fold captures every chunk that closes over a registered output, reconciliation backfills what a late registration is owed, and assembly reads captures and the frontier snapshot without touching `entries` — `assembly_today_depends_on_every_foreign_leaf` is at **state 3 of 3** as `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`. The engine's registrant is the next slice, as its own PR (rule 19: it lands in the refresh driver, a different validation surface); until it does, no production batch is registered and assembly takes the rebuild it keeps as a named fallback. The §6.3.3 precondition this row used to carry is **discharged** — that sentence was reconciled on `dev` (`WALLET_SIDE_STORE.md` §6.3.3 now reads *"There is one capture side, not two"*), so nothing waits on it | §6.3.3; C7; §11.6 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
 | **6** | **Re-grade rows 2 and 3** on the amortized form, same harness, same rig — **and it is also `Q4`'s only seat.** Increment 4 re-derived the advance field and measured it off-rig; a fraction of cadence computed anywhere but the pinned Pi 4 is a property of the machine that computed it (rule 76). The blocker is the board, not the code | §6.3.4; Q4 | 4 |
 | **7** | **`.curvetree` retirement** | `WSS-18` | **P-store lane** (Q6) |
 
@@ -1006,21 +1006,22 @@ turned up the gap. With `entries` reduced to the owned leaf alone,
 the real consensus root while every branch below it came from a one-leaf tree
 — a leaf chunk of 1 under a root committing to 44.
 
-The red-bite therefore has **three states**, and the gate moved it to the
-second. It asserted a wrong path. It now asserts `PathRootFault::RootDisagrees`.
-Capture makes it assert the path equals the full-tree path. The chunk-length
-witnesses of the pre-gate failure were removed with the gate: the call no
-longer returns a path to measure. State 3's edit is that equality, not a
-second deletion.
+The red-bite therefore has **three states**. The gate moved it to the second:
+it asserts `PathRootFault::RootDisagrees`. Capture moved it to the third.
+`capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`
+asserts the path equals the full-tree path. The chunk-length witnesses of the
+pre-gate failure were removed with the gate: the call no longer returns a
+path to measure. State 3's edit was that equality.
 
-The cause was that the two mechanisms never met, and they still do not —
-what changed is that nothing downstream has to trust them to. The gate
-compares the **store-backed** `root_at` against `reference.curve_tree_root`;
-the branches are rebuilt from replay-held `entries`; `tree_root` is then
-*copied from the gated reference*, so it is always the store's answer whatever
-the branches say. The
-docstring used to assert the paths came from "the same `layers` that gate
-approved" — withdrawn 2026-10-01, because they do not.
+The cause was that the two mechanisms never met. The gate is
+`root_and_depth_at`: it checks the reference's root and supplies the depth
+both routes stamp on `tree_depth`. The branches come from the route. A
+registered batch reads them from the capture table and the frontier snapshot.
+An unregistered batch rebuilds them from replay-held `entries`, which is the
+route production spends take until the engine registrant names what the
+wallet holds. `tree_root` is copied from the gated reference, so the gate's
+answers do not see the branches. The docstring that said the paths came from
+"the same `layers` that gate approved" was withdrawn 2026-10-01.
 
 **The check that closes it is not a comparison of two store reads.**
 `root_and_depth_at` answers both root and depth from the store tier, so
@@ -1045,10 +1046,10 @@ such fold: the assembly KAT does not carry a second copy. Cost is `O(depth)`.
 
 The gap it closes was *latent*:
 `entries` is append-only and a pruned-store resume is refused (`F5`), so
-production never assembles from a truncated set. It becomes *live* when capture
-introduces a second branch source — captured chunks plus a frontier snapshot —
-whose mutual consistency is exactly what can drift. So this is **capture's
-integrity gate**, and it lands as the first production commit of that build,
+production never assembles from a truncated set. It is *live* now that capture
+is a second branch source — captured chunks plus a frontier snapshot — whose
+mutual consistency is exactly what can drift. So this is **capture's
+integrity gate**, and it landed as the first production commit of that build,
 policing the source it exists for.
 
 Threat model, kept proportionate: **no funds are at risk.** An inconsistent path
@@ -1167,8 +1168,9 @@ settles the whole shape of this side.
 **Ownership is registered, never derived.** `CurveTreeClient` sees every
 output on the chain and cannot tell which are the wallet's — that is the
 scanner's knowledge, and putting it here would mean either a second view-key
-consumer or a guess. So `register_owned(gindex)` is the input, and it returns
-what the call *bought*:
+consumer or a guess. So `register_owned(gindex, output_key)` is the input —
+the index and the one-time key, because a `gindex` alone is a name that a
+reorg can hand to a different output — and it returns what the call *bought*:
 
 | | |
 | --- | --- |
@@ -1206,14 +1208,16 @@ keeps its position and a removed one re-resolves when it re-drains:
 `owned_positions.retain(|p| p < surviving_leaf_count)`, the same coordinate
 `FoldedChunk::end_leaf` is compared against (§11.8).
 
-One case the registry's survival does **not** cover cleanly: a reorg past the
+One case a registry keyed on `gindex` alone does not cover: a reorg past the
 owned output's *creation*, not merely its drain. `gindex` is re-derived from
 the replayed block sequence, so on the new chain that number may name a
-different output. The registry keeps it and captures that output's chunks —
-an **over-capture**, not a wrong proof, because assembly still resolves by
-`gindex` and refuses a leaf that does not carry the expected
-`(output_key, commitment)` (`ClientError::IdentityMismatch`). The wallet's own
-rescan is what retracts the registration. The reorg red-bite owes this a row.
+different output. That registry keeps the number and captures the stranger's
+chunks — an **over-capture**. That is the failure the `(gindex, O)` pair
+below closed. It was never a wrong proof: assembly resolves by `gindex` and
+refuses a leaf that does not carry the expected `(output_key, commitment)`
+(`ClientError::IdentityMismatch`). The wallet's rescan rebinds the
+registration. The reorg red-bite is
+`a_reorg_past_creation_retires_the_registration_and_rebinds_it`.
 
 **A `gindex` is a name, not an identity — and that is the whole lesson.**
 Three rules tried to work out, *after* a rollback, which output a number used
@@ -1270,10 +1274,10 @@ therefore classify it as *the caller's view is stale*: retry once the scan has
 caught up past the fork, never internal, never fatal, nothing poisoned. Its
 durability classification and rule-82 copy should say so, and it owes a
 red-bite of its own: a lagging scan re-offering the old key after a reorg must
-recover once its rescan reaches the new chain. The exhaustive re-anchor match
-in `shekyl-engine-core` places the variant in the reselection family for now
-because that match cannot be left open; the registrant's classification is the
-real one.
+recover once its rescan reaches the new chain. The exhaustive re-anchor match in `shekyl-engine-core` places the variant in
+the reselection family, and that is the remedy the registrant preserves: the
+caller's view is stale, a rescan re-registers against the chain it now sees,
+and discarding the selection is what that rescan does.
 
 The rollback trim stays, but it is now **cleanup, not correctness**: it keeps
 the registry from accumulating dead rows, and it is the candidate-3 difference
@@ -1413,14 +1417,13 @@ the worst case that remains, and "span-bounded" should not be read as "cheap".
 What stays `O(n)` is `drained_sorted`, for the positions and the drift check.
 It is a sort, not a hash, and it goes with `entries` at increment 7.
 
-One pass serves every late registration — the reasonOne pass serves every late registration — the reason
-`register_owned` does not resolve positions itself, and the reason a caller
-registers everything it holds and then reconciles **once**. Every chunk is
-computed before the write opens and the whole batch commits in one
-transaction, so a failure part-way leaves the store untouched. Only the delta
-is written: a reconcile with nothing owed opens no write transaction, which is
-the steady state and is pinned by
-`reconciling_twice_writes_nothing_the_second_time`.
+One pass serves every late registration. That is why `register_owned` does
+not resolve positions itself, and why a caller registers everything it holds
+and then reconciles **once**. Every chunk is computed before the write opens
+and the whole batch commits in one transaction, so a failure part-way leaves
+the store untouched. Only the delta is written: a reconcile with nothing owed
+opens no write transaction, which is the steady state and is pinned by
+`reconciling_twice_rebuilds_nothing_the_second_time`.
 
 The resolved positions then **become** the fold's. Without that the backfill
 would be a one-shot — the chunks already closed get written and every chunk
@@ -1431,23 +1434,24 @@ reconcile, because that is the only way to observe it.
 
 ### 11.11 What capture still does not do
 
-**Nothing in the engine calls `register_owned` yet,
-and nothing reads a capture: assembly still rebuilds from `entries`, which is
-why `assembly_today_depends_on_every_foreign_leaf` is still in state 2. Three
-things are owed — the registration path, reconciliation for what `AfterDrain`
-names, and the state-3 flip that makes a capture load-bearing. The
-registration path is the curve-tree actor's protocol plus the scan that learns
-a `global_output_index`, which is a wider slice than the other two; whether it
-lands beside them or as its own is a slice-order call for the round, and rule
-19's producers-and-callers reading is the argument for beside.
+**The engine registrant is the outstanding production work.** Nothing in the
+engine calls `register_owned`. Until it does, no production batch is
+registered, and assembly takes the rebuild it keeps for that batch. The
+mechanism the registrant will call is built: the fold writes a chunk when it
+closes over a registered output, `reconcile_captures` backfills what
+`AfterDrain` names, and a registered batch is assembled from captures and the
+frontier snapshot. The state-3 oracle
+`capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`
+is green. The registrant is the refresh driver, its own PR (rule 19: a
+different validation surface). It preserves the reselection class of
+`RegistrationIdentityMismatch`.
 
-Two things the oracle cannot reach yet, named so the next commit does not
+Two limits the oracle does not cover, named so a later commit does not
 inherit them silently. The fixture's depth puts only layer 1 under a closed
-chunk, so **one parity** is compared; capture is a byte copy, so that is
-sufficient *here*, but the state-3 consumer applies a per-parity conversion
-and a layer-2 chunk needs 25 992 leaves — so the state-3 passes grade a
-captured branch at layer 1 and open branches at layers 1 and 2, which covers
-both parities and both sources but not a *captured* Selene layer.
+chunk. A layer-2 chunk needs 25 992 leaves, so the state-3 passes grade a
+captured branch at layer 1 and open branches at layers 1 and 2. That covers
+both parities and both sources, and it does not cover a *captured* Selene
+layer.
 
 **A fixture-wide blind spot, found by the mutation sweep and wider than
 capture.** `coinbase_raw()` gives every output the Ed25519 basepoint as *both*
