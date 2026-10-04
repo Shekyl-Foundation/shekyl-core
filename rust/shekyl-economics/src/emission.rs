@@ -344,8 +344,10 @@ mod tests {
         // and the supply until the curve crosses within a few dozen
         // blocks. Only the crossing's POSITION moves; the recurrence and
         // the stationarity being asserted are the shipped ones.
-        let mut p = EconomicParams::default();
-        p.emission_speed_factor_per_block = 4;
+        let mut p = EconomicParams {
+            emission_speed_factor_per_block: 4,
+            ..EconomicParams::default()
+        };
         let esf = emission_speed_factor(&p);
         let tail = tail_subsidy_per_block(&p).expect("tail");
         p.emission_curve_asymptote = (tail << esf) * 4;
