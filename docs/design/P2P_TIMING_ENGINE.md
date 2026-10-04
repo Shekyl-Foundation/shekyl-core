@@ -90,7 +90,7 @@ Levin invoke timeouts are not in this table. They are keyed one-shots,
 below. The C++ type at `levin_protocol_handler_async.h:226` is spelled
 `anvoke_handler`. That file goes away with the event loop, so the
 spelling is not renamed there. Rust spells it `invoke`. The waits are
-at `:236` and `:298`.
+armed at `:237` and `:289`. *Records-was: `:236` and `:298`.*
 
 Anything that merely expires is evaluated when it is next used, from
 timestamps: ban entries, the 24-hour peerlist demotion, the accept-rate

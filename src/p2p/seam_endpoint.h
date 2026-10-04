@@ -216,8 +216,8 @@ namespace shekyl
 
     boost::asio::io_context& get_io_context() override { return m_io; }
 
-    /// The connection strand. Invoke completions and the caller's log
-    /// post here before they read the context.
+    /// The connection strand. An invoke-timeout completion posts here
+    /// before it reads the context.
     void post(std::function<void()> fn) override
     {
       boost::asio::post(m_strand, std::move(fn));

@@ -229,13 +229,10 @@ public:
   {
     anvoke_handler(const callback_t& cb, const std::chrono::milliseconds timeout,  async_protocol_handler& con, int command)
       :m_cb(cb), m_timeout(timeout), m_con(con), m_timer(con.m_pservice_endpoint->get_io_context()), m_timer_started(false),
-      m_cancel_timer_called(false), m_timer_cancelled(false), m_command(command)
+      m_cancel_timer_called(false), m_timer_cancelled(false), m_outer_finished(false), m_command(command)
     {
       if(m_con.start_outer_call())
       {
-        con.m_pservice_endpoint->post([&con, timeout] {
-          MDEBUG(con.get_context_ref() << "anvoke_handler, timeout: " << timeout.count());
-        });
         m_timer.expires_after(timeout);
         arm_timeout(command, cb, timeout);
         m_timer_started = true;
@@ -249,6 +246,9 @@ public:
     bool m_timer_started;
     bool m_cancel_timer_called;
     bool m_timer_cancelled;
+    // start_outer_call's ref is released once, from whichever of
+    // handle, cancel, or the timeout completion runs.
+    std::atomic<bool> m_outer_finished;
     const std::chrono::milliseconds m_timeout;
     int m_command;
     virtual bool handle(int res, const epee::span<const uint8_t> buff, typename async_protocol_handler::connection_context& context)
@@ -256,7 +256,7 @@ public:
       if(!cancel_timer())
         return false;
       m_cb(res, buff, context);
-      m_con.finish_outer_call();
+      finish_outer_call_once();
       return true;
     }
     virtual bool is_timer_started() const
@@ -269,7 +269,7 @@ public:
       {
         epee::span<const uint8_t> fake;
         m_cb(LEVIN_ERROR_CONNECTION_DESTROYED, fake, m_con.get_context_ref());
-        m_con.finish_outer_call();
+        finish_outer_call_once();
       }
     }
     virtual bool cancel_timer()
@@ -296,16 +296,41 @@ public:
       {
         if(ec == boost::asio::error::operation_aborted)
           return;
-        // The list may drop its `shared_ptr` before this post runs. Hold one.
+        // The wait completed on a zone worker. begin_closed's cancel
+        // sees m_timer.cancel() == 0 and leaves this completion to
+        // finish. Hold the endpoint count across the post, as
+        // request_callback does, so begin_closed does not post
+        // destruction while the completion is queued. The
+        // shared_ptr keeps this handler alive until that post runs;
+        // start_outer_call's ref is released on the strand, after
+        // the completion, by finish_outer_call_once.
         auto self = this->shared_from_this();
-        self->m_con.m_pservice_endpoint->post([self, command, cb, timeout] {
-          MINFO(self->m_con.get_context_ref() << "Timeout on invoke operation happened, command: " << command << " timeout: " << timeout.count());
-          epee::span<const uint8_t> fake;
-          cb(LEVIN_ERROR_CONNECTION_TIMEDOUT, fake, self->m_con.get_context_ref());
-          self->m_con.close();
-          self->m_con.finish_outer_call();
+        auto* endpoint = self->m_con.m_pservice_endpoint;
+        if(!endpoint->add_ref())
+        {
+          self->finish_outer_call_once();
+          return;
+        }
+        endpoint->post([self, endpoint, command, cb, timeout] {
+          // The post cannot be recalled. cancel() may have claimed
+          // the timer on the strand after it fired.
+          if(!self->m_cancel_timer_called)
+          {
+            MINFO(self->m_con.get_context_ref() << "Timeout on invoke operation happened, command: " << command << " timeout: " << timeout.count());
+            epee::span<const uint8_t> fake;
+            cb(LEVIN_ERROR_CONNECTION_TIMEDOUT, fake, self->m_con.get_context_ref());
+            self->m_con.close();
+          }
+          self->finish_outer_call_once();
+          endpoint->release();
         });
       });
+    }
+    void finish_outer_call_once()
+    {
+      bool expected = false;
+      if(m_outer_finished.compare_exchange_strong(expected, true))
+        m_con.finish_outer_call();
     }
   };
   critical_section m_invoke_response_handlers_lock;
