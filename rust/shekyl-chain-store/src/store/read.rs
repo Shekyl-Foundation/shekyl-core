@@ -755,7 +755,7 @@ impl ReadSnapshot<'_> {
 
     /// **T4b.** Whether the transaction at `id` is in the **archival shard
     /// partition's domain** — it carries archival good (`SHT-Q1` RULED, Rick
-    /// 2026-09-27; `docs/design/ARCHIVAL_SHARD_T_DERIVATION.md` §2).
+    /// 2026-09-27; `docs/completed/ARCHIVAL_SHARD_T_DERIVATION.md` §2).
     ///
     /// Answered from the two digests **as recorded at ingest**, which a prune
     /// never deletes — so this is the one safe way to evaluate the ruling's
