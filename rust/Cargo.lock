@@ -4390,6 +4390,7 @@ dependencies = [
  "shekyl-levin",
  "shekyl-logging",
  "shekyl-net-address",
+ "shekyl-onion-v3",
  "shekyl-p2p-transport",
  "shekyl-peer-policy",
  "shekyl-pow-randomx",

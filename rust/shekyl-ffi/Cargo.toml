@@ -116,6 +116,9 @@ shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
 # The p2p seam. C++ posts onto the connection strand; this crate
 # records the cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
 shekyl-seam = { path = "../shekyl-seam" }
+# v3 onion hostname <-> service key. The seam stores the key; this crate
+# decodes a dialed hostname at the boundary and re-encodes it for SOCKS.
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 shekyl-clearnet = { path = "../shekyl-clearnet" }
 shekyl-tor = { path = "../shekyl-tor" }
 shekyl-runtime = { path = "../shekyl-runtime" }

@@ -23,7 +23,6 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use shekyl_onion_v3::v3_pubkey;
 use shekyl_transport_layer::{ConnectorId, Direction, SocketId};
 
 use crate::endpoint::Endpoint;
@@ -34,11 +33,15 @@ use crate::endpoint::Endpoint;
 /// no peer address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PeerEnd {
-    /// A clearnet host and port.
+    /// A clearnet host and the port of this socket.
+    ///
+    /// The port is the one the socket connected on. On an accept that is
+    /// the peer's ephemeral source port, not the port the peer advertised.
+    /// The advertised port is a claim, and it is not this field.
     Host {
         /// The address the socket connected.
         ip: IpAddr,
-        /// The port the socket connected.
+        /// The socket's port.
         port: u16,
     },
     /// A v3 onion that was dialed.
@@ -48,9 +51,7 @@ pub enum PeerEnd {
         /// The port that was dialed.
         port: u16,
     },
-    /// No comparable peer address.
-    ///
-    /// Tor inbound is this. So is a dial whose host is not a v3 onion.
+    /// Tor inbound. The zone has no peer address.
     Unaddressed,
 }
 
@@ -62,9 +63,9 @@ impl PeerEnd {
                 port: *port,
             },
             Endpoint::TorInbound => Self::Unaddressed,
-            Endpoint::Tor { host, port } => match v3_pubkey(host) {
-                Some(key) => Self::Onion { key, port: *port },
-                None => Self::Unaddressed,
+            Endpoint::Tor { key, port } => Self::Onion {
+                key: *key,
+                port: *port,
             },
         }
     }
@@ -137,8 +138,10 @@ pub struct Board {
 }
 
 impl Board {
-    pub(crate) fn from_sessions(mut sessions: Vec<Session>) -> Self {
-        sessions.sort_by_key(|session| session.id.get());
+    /// `sessions` is already in admission-id order. The hub's table is a
+    /// `BTreeMap` keyed by that id, so the order is the table's.
+    pub(crate) fn from_sessions(sessions: Vec<Session>) -> Self {
+        debug_assert!(sessions.is_sorted_by_key(|session| session.id.get()));
         Self {
             sessions: Arc::from(sessions),
         }

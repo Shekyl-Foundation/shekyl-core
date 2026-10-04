@@ -82,7 +82,7 @@ impl Dial for Loopback {
         Ok(Channel {
             open,
             session: ends.session,
-            endpoint: endpoint.clone(),
+            endpoint: *endpoint,
             gap: None,
         })
     }

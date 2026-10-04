@@ -11,7 +11,7 @@
 //! the strand returns. The first [`CloseCause`] wins. [`Hub::reap`] drops
 //! the row when the executor drops the link.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock};
 
@@ -128,7 +128,7 @@ struct Conn {
 
 struct Inner {
     sockets: Sockets,
-    conns: HashMap<SocketId, Conn>,
+    conns: BTreeMap<SocketId, Conn>,
     ceiling: InboundCeiling,
     /// The last board published. Readers clone this. They do not lock the table.
     board: Board,
@@ -176,7 +176,7 @@ impl Hub {
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 sockets,
-                conns: HashMap::new(),
+                conns: BTreeMap::new(),
                 ceiling,
                 board: Board::empty(),
             })),
@@ -322,10 +322,11 @@ impl Hub {
 
     /// Rebuild the published board from rows that are still connected.
     ///
-    /// This copies the slice. Under an accept flood that is O(N) per
-    /// accept. D5's thread-budget flood leg measures that cost; it is
-    /// not a reason to hand a reader the live row. A closed row stays
-    /// in the table until [`Self::reap`] and is not on the board.
+    /// The table is a `BTreeMap` keyed by admission id, so iteration is
+    /// that order. This copies the slice. Under an accept flood that is
+    /// O(N) per accept. D5's thread-budget flood leg measures that cost;
+    /// it is not a reason to hand a reader the live row. A closed row
+    /// stays in the table until [`Self::reap`] and is not on the board.
     fn republish(inner: &mut Inner) {
         let sessions = inner
             .conns
