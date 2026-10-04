@@ -170,32 +170,35 @@ fn store_root_matches_oracle_and_header_tier_a() {
     }
 }
 
-const ED25519_BASEPOINT: [u8; 32] = [
-    0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-    0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-];
+/// A canonical prime-order point per `tag`: `Hp` over a tag-filled key.
+/// Distinct tags give distinct points.
+fn fixture_point(tag: u8) -> [u8; 32] {
+    shekyl_fcmp::tree::key_image_generator(&[tag; 32])
+}
+
+/// An output and its `0x07` entry (`CM ‖ record`, PL-D3), with `O`, `C` and
+/// `CM` three points no other `slot` shares.
+fn fixture_output(slot: u8) -> (RawOutput, [u8; 64]) {
+    let raw = RawOutput {
+        output_key: OneTimePubkey::from_bytes(fixture_point(3 * slot + 1)),
+        commitment: Some(CommitmentBytes::from_bytes(fixture_point(3 * slot + 2))),
+        target: TargetKind::TaggedKey,
+    };
+    let mut entry = [0x07u8; 64];
+    entry[..32].copy_from_slice(&fixture_point(3 * slot + 3));
+    (raw, entry)
+}
 
 #[test]
 fn store_root_mixed_maturity_drain_order() {
     // Coinbase (m=60) then regular (m=10) in block 0. At height 61 both are
     // drained; canonical order is by maturity, not block insertion order.
-    let coinbase = RawOutput {
-        output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
-        commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
-        target: TargetKind::TaggedKey,
-    };
-    let regular = RawOutput {
-        output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
-        commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
-        target: TargetKind::TaggedKey,
-    };
-    // One 64-byte `0x07` entry per output (`CM ‖ record`, PL-D3): the point
-    // half must decompress (the client refuses a non-point); the record half
-    // is free and keeps the two entries distinct.
-    let mut blob_cb = [0x01u8; 64];
-    blob_cb[..32].copy_from_slice(&ED25519_BASEPOINT);
-    let mut blob_reg = [0x02u8; 64];
-    blob_reg[..32].copy_from_slice(&ED25519_BASEPOINT);
+    //
+    // The two leaves differ in every scalar. Identical leaves would give the
+    // same root in either order, and the root comparison below could not
+    // fail.
+    let (coinbase, blob_cb) = fixture_output(0);
+    let (regular, blob_reg) = fixture_output(1);
     let txs = [
         TxLeafInputs {
             is_miner: true,
@@ -220,10 +223,11 @@ fn store_root_mixed_maturity_drain_order() {
     // Their coinbases mature at 62..=121 and are not drained at through=60,
     // so the drained set stays the two block-0 outputs.
     for height in 1..=61u64 {
+        let (later, blob_later) = fixture_output(u8::try_from(height + 1).expect("slot fits u8"));
         let txs_cb = [TxLeafInputs {
             is_miner: true,
-            leaf_entry_blob: Some(&blob_cb),
-            outputs: &[coinbase],
+            leaf_entry_blob: Some(&blob_later),
+            outputs: &[later],
         }];
         client
             .ingest_block(BlockLeaves {
@@ -284,6 +288,16 @@ fn store_root_mixed_maturity_drain_order() {
 
     let drained = shekyl_curve_tree::recon::drained_sorted(&recon_entries, through);
     assert_eq!(drained.len(), 2);
+    for limb in 0..4 {
+        let scalar = |entry: &shekyl_curve_tree::types::LeafEntry| {
+            entry.leaf[limb * 32..(limb + 1) * 32].to_vec()
+        };
+        assert_ne!(
+            scalar(drained[0]),
+            scalar(drained[1]),
+            "setup: the two drained leaves must differ in scalar {limb}"
+        );
+    }
     assert!(
         drained[0].maturity < drained[1].maturity,
         "regular output (m=10) must precede coinbase (m=60)"
