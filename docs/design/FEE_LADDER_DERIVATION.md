@@ -738,6 +738,10 @@ whole rung somewhere reachable.
 
 ### §4.2 Corrected vs current rung tables (extract)
 
+These rows are the retired per-minute run, genesis reward 2,048 SKL, whose
+top rung rounds to 14,000,000. The design genesis is 1,024 SKL. Its legacy
+`Fh` KAT is 6,900,000, and §4.3 is the table re-measured on that reward.
+
 | State | `C` | current (rounded) | corrected | floor-accept | floor bounce? |
 | --- | --- | --- | --- | --- | --- |
 | genesis-quiet (`v=0`) | 0.680 | 69 000 / 280 000 / 1 100 000 / 14 000 000 | 47 000 / 190 000 / 750 000 / 9 300 000 | 63 556 | **yes** |

@@ -497,7 +497,7 @@ Status column: **V** = definition and use both read; **I** = inferred.
 | A11 | `proxy.rs:474`; `mn_feasibility.rs:57`; literal 131 in tests `proxy.rs:825-1018`, `mn_feasibility.rs:1065-1067` | 131-epoch reward horizon, reused as "bond life". Production `bond_duration` (`bond_duration.rs:142`) is not consulted. | Silently pinned | I (owner mapping) |
 | A12 | `mn_feasibility.rs:370-375,386-388`; `challenge_coverage.rs:223-225` | False-slash target 1e-3, free-ride 0.80, 40,000 pairs, `p_attempt` 0.30, pair counts 4,096 / 324,000. `k_cap` is 6 in one arm and 30 in the other. | Declared provisional; the `k_cap` disagreement is silent | V |
 | A13 | `calibration.rs:57-61` | Rucknium March-2024 anchors | Declared | V |
-| A14 | `stage2.rs:57,817,1613`; `record.rs:263`; `admission.rs:46`; `fee_ladder.rs:123` | Ramp years 2, response lag 2, reward at asymptote/2, milestone height 5_788_000 (ESF 23's half-emission height; since 2026-10-04 the owner's inverse `neutral_height_reaching`, 2,907,270 at ESF 22), safety multiple 2, gap placeholder 5 | Mostly declared | V |
+| A14 | `stage2.rs:57,817,1613`; `record.rs:137,280`; `admission.rs:46`; `fee_ladder.rs:123` | Ramp years 2, response lag 2, reward at asymptote/2, half-emission height from `neutral_height_reaching` (2_907_270 at ESF 22; the removed ESF-23 literal was 5_788_000), safety multiple 2, gap placeholder 5 | Mostly declared | V |
 | A15 | `fee_ladder.rs:1708,2574-2581`; `fee_floor.rs:408` | Demand elasticity model, tier-usage shares | Declared (registered grid) | V |
 
 ### (D) Dead or stale referent
