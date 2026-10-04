@@ -104,6 +104,8 @@ struct Conn {
     /// for the row names it.
     connector: ConnectorId,
     direction: Direction,
+    /// The peer address observed at adopt. Not rewritten.
+    end: crate::registry::PeerEnd,
     /// The Levin handshake has finished. Distinct from [`Phase`]: a row can
     /// be open to frames before the handshake, and closed after it.
     established: bool,
@@ -298,6 +300,7 @@ impl Hub {
                 phase: Phase::Arming,
                 connector: endpoint.connector(),
                 direction: endpoint.direction(),
+                end: crate::registry::PeerEnd::from_endpoint(&endpoint),
                 established: false,
                 notify: Arc::new(tokio::sync::Notify::new()),
                 posted_deliveries: 0,
@@ -318,14 +321,25 @@ impl Hub {
     }
 
     /// Rebuild the published board from rows that are still connected.
-    /// A closed row stays in the table until [`Self::reap`] and is not
-    /// on the board.
+    ///
+    /// This copies the slice. Under an accept flood that is O(N) per
+    /// accept. D5's thread-budget flood leg measures that cost; it is
+    /// not a reason to hand a reader the live row. A closed row stays
+    /// in the table until [`Self::reap`] and is not on the board.
     fn republish(inner: &mut Inner) {
         let sessions = inner
             .conns
             .iter()
             .filter(|(_, conn)| !matches!(conn.phase, Phase::Closed))
-            .map(|(&id, conn)| Listed::new(id, conn.connector, conn.direction, conn.established))
+            .map(|(&id, conn)| {
+                Listed::new(
+                    id,
+                    conn.connector,
+                    conn.direction,
+                    conn.established,
+                    conn.end,
+                )
+            })
             .collect();
         inner.board = Board::from_sessions(sessions);
     }

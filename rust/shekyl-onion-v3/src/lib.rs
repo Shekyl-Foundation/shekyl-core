@@ -63,21 +63,29 @@ pub fn v3_onion_hostname(pubkey: &[u8; 32]) -> String {
 /// function accepts re-encodes to itself.
 #[must_use]
 pub fn is_v3_onion_hostname(host: &str) -> bool {
-    let Some(id) = host.strip_suffix(".onion") else {
-        return false;
-    };
+    v3_pubkey(host).is_some()
+}
+
+/// The 32-byte service key of a v3 onion hostname, when `host` is one.
+///
+/// The hostname is not returned. A caller that needs the address again
+/// re-encodes the key with [`v3_onion_hostname`].
+#[must_use]
+pub fn v3_pubkey(host: &str) -> Option<[u8; 32]> {
+    let id = host.strip_suffix(".onion")?;
     if id.len() != 56 {
-        return false;
+        return None;
     }
-    let Some(raw) = base32_decode_35(id) else {
-        return false;
-    };
+    let raw = base32_decode_35(id)?;
     if raw[34] != ONION_ADDRESS_VERSION {
-        return false;
+        return None;
     }
     let mut pubkey = [0u8; 32];
     pubkey.copy_from_slice(&raw[..32]);
-    v3_service_id(&pubkey) == id
+    if v3_service_id(&pubkey) != id {
+        return None;
+    }
+    Some(pubkey)
 }
 
 /// Inverse of [`base32_lower`] for the 35-byte v3 address body.
@@ -201,6 +209,7 @@ mod tests {
     fn a_v3_hostname_verifies_and_a_changed_character_does_not() {
         let host = v3_onion_hostname(&[0x11; 32]);
         assert!(is_v3_onion_hostname(&host));
+        assert_eq!(v3_pubkey(&host), Some([0x11; 32]));
         assert!(is_v3_onion_hostname(
             "efjprum3peosirjsilqv6lvlns3476t3njpngaexsyhangeb3mjo7sad.onion"
         ));

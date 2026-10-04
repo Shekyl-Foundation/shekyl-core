@@ -1644,9 +1644,33 @@ and `peer_sync_idle_maker` (`:2366`) sets `m_in_timedsync`. The
 snapshot gains what each of those reads before it writes. The `run`
 thread at `:1163` is gone, and that deletion is recorded as removing
 the `--in-peers` measurement input named above. The out-count cache
-at `:1605` is a separate staleness and stays through this step. This
-step does not wait behind steps a and b. Those follow it. It does not
-wait on slices 1–4, the timing-engine bridge, or relay dispatch.
+at `:1605` is a separate staleness and stays through this step.
+
+**Which of the twelve move in step c.** The board carries the id, the
+connector, the direction, whether the handshake has finished, and the
+observed endpoint. It does not carry support flags or the pull
+relationship. Those arrive when their owner publishes them, through
+the step-b handle, not as blanks on the board. Step c's falsifier is
+this subset, plus the `run` thread being gone. The twelve reading
+snapshots greens at b.
+
+| Step c | Step b |
+| --- | --- |
+| `for_each_connection` `:158`, for the reads this row answers. A callback that reads support flags or the pull relationship waits. | `peer_sync_idle_maker` `:2366`. It reads the pull relationship and writes `m_in_timedsync`. |
+| `run` `:1174`, and then the thread is deleted | A sync-state line on the connection print. `:2846` does not print one today. |
+| `send_stop_signal` `:1280` | |
+| `has_outbound_connection_to_host` `:1524` | |
+| `is_peer_used` `:1545` | |
+| `is_addr_connected` `:1570` | |
+| `make_new_connection_from_peerlist` `:1802` | |
+| `get_incoming_connections_count` `:2173` | |
+| `get_outgoing_connections_count` `:2192`. The out-count cache at `:1605` stays. | |
+| `get_incoming_connections_count` `:2224` | |
+| `print_connections_container` `:2846`, the address, the id, and the direction | |
+
+This step does not wait behind steps a and b. Those follow it. It
+does not wait on slices 1–4, the timing-engine bridge, or relay
+dispatch.
 
 `get_context_ref` is what lets a caller who is not the strand hold a
 mutable context across a strand write. At `684673611e`, `rg

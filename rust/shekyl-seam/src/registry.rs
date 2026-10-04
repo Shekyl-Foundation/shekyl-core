@@ -12,11 +12,63 @@
 //! This is not the C++ connection context. A walker that needs a fact asks
 //! the board. It does not borrow the row the strand is writing. Support
 //! flags and the pull relationship are not here: the seam does not know
-//! them yet, and a zeroed copy of those fields would be a second context.
+//! them, and a blank field would be a second context. They arrive when
+//! their owner publishes them.
+//!
+//! Republishing copies the slice. An accept flood against a large inbound
+//! cap is O(N) per accept, so O(N²) across the flood. The readers' guarantee
+//! is that cost. D5's thread-budget flood leg is what measures it; that
+//! measurement is the reopen, not a reason to publish a mutable row.
 
+use std::net::IpAddr;
 use std::sync::Arc;
 
+use shekyl_onion_v3::v3_pubkey;
 use shekyl_transport_layer::{ConnectorId, Direction, SocketId};
+
+use crate::endpoint::Endpoint;
+
+/// The peer address this node observed, written once when the row is created.
+///
+/// An onion is the 32-byte service key, not the hostname. Tor inbound has
+/// no peer address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PeerEnd {
+    /// A clearnet host and port.
+    Host {
+        /// The address the socket connected.
+        ip: IpAddr,
+        /// The port the socket connected.
+        port: u16,
+    },
+    /// A v3 onion that was dialed.
+    Onion {
+        /// The service key.
+        key: [u8; 32],
+        /// The port that was dialed.
+        port: u16,
+    },
+    /// No comparable peer address.
+    ///
+    /// Tor inbound is this. So is a dial whose host is not a v3 onion.
+    Unaddressed,
+}
+
+impl PeerEnd {
+    pub(crate) fn from_endpoint(endpoint: &Endpoint) -> Self {
+        match endpoint {
+            Endpoint::Clearnet { ip, port, .. } => Self::Host {
+                ip: *ip,
+                port: *port,
+            },
+            Endpoint::TorInbound => Self::Unaddressed,
+            Endpoint::Tor { host, port } => match v3_pubkey(host) {
+                Some(key) => Self::Onion { key, port: *port },
+                None => Self::Unaddressed,
+            },
+        }
+    }
+}
 
 /// One session on a [`Board`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +77,7 @@ pub struct Session {
     connector: ConnectorId,
     direction: Direction,
     established: bool,
+    end: PeerEnd,
 }
 
 impl Session {
@@ -52,17 +105,25 @@ impl Session {
         self.established
     }
 
+    /// The peer address observed when the row was created. It does not change.
+    #[must_use]
+    pub const fn end(self) -> PeerEnd {
+        self.end
+    }
+
     pub(crate) const fn new(
         id: SocketId,
         connector: ConnectorId,
         direction: Direction,
         established: bool,
+        end: PeerEnd,
     ) -> Self {
         Self {
             id,
             connector,
             direction,
             established,
+            end,
         }
     }
 }

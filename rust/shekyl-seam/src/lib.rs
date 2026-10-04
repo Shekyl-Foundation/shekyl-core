@@ -29,7 +29,7 @@ pub use drive::{drive_inbound, drive_inbound_async};
 pub use endpoint::{admit, connector_from_index, direction_from_index, Endpoint, TOR_HOST_MAX};
 pub use hub::{Attached, Hub, Post};
 pub use loopback::Loopback;
-pub use registry::{Board, Session};
+pub use registry::{Board, PeerEnd, Session};
 pub use shekyl_transport_layer::{
     deadline_after, BanLeft, CloseCause, CloseKind, ConnectorId, Direction, Ipv4Subnet, ListedBan,
     SocketId, Sockets,

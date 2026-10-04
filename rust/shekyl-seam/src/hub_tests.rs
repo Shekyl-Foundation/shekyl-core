@@ -17,6 +17,7 @@ use shekyl_transport_layer::{CloseCause, CloseKind, CloseResult, ConnectorId, Di
 use super::{Hub, Phase, Post};
 use crate::drive_inbound;
 use crate::endpoint::{admit, Endpoint};
+use crate::PeerEnd;
 
 fn endpoint(ip: Ipv4Addr, direction: Direction) -> Endpoint {
     Endpoint::Clearnet {
@@ -513,6 +514,13 @@ fn the_board_is_the_sessions_and_a_held_board_does_not_move() {
     assert_eq!(inbound_row.connector(), ConnectorId::Clearnet);
     assert_eq!(inbound_row.direction(), Direction::Inbound);
     assert!(!inbound_row.established());
+    assert_eq!(
+        inbound_row.end(),
+        PeerEnd::Host {
+            ip: IpAddr::V4(doc_ip()),
+            port: 18080,
+        }
+    );
 
     rig.hub.session_established(inbound.id);
     assert!(!held.get(inbound.id).expect("held").established());
