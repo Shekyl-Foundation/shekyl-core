@@ -1,7 +1,7 @@
 # The serve-credit verifier hole (CEN-J8, J9, J10) — Round 0 (`SCV-`)
 
 **Status: ROUND 0 — OPEN; six questions POSED (§8), none ruled.** Ground:
-`dev@61feff8fe` (§0). Pre-flight under
+`dev@e951cd309` (§0). Pre-flight under
 [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc):
 **no implementation commit cuts against this document until §8 is ruled**
 (rule 26's halt condition). Identifier families **`SCV-`** (findings) and
@@ -29,8 +29,8 @@ and whether to authorize it (`SCV-Q3`).
 
 ## 0. Ground
 
-Every line cite resolves at **`dev@61feff8fe`**, the merge of PR #937
-(DRS-E4 PR-b). The brief was written before that merge, and several of its
+Every line cite resolves at **`dev@e951cd309`**, which contains PR #937
+(DRS-E4 PR-b) and #942 (`SHT-9`, CEN-H20 requires the RF-D1 region). The brief was written before that merge, and several of its
 premises (`DEL-008`, the mirror's deletion, the inland-height gate, the
 FOLLOWUPS J8–J10 row, the slash-log round) existed then only on #937's
 branch. `SCV-7` and `SCV-9` record the two that matter.
@@ -41,11 +41,11 @@ branch. `SCV-7` and `SCV-9` record the two that matter.
 
 | Validator | What a serve-credit vin faces | Where |
 | --- | --- | --- |
-| Rust (`shekyl-chain-rules`) | H20 shape; G7 block-level `(P, shard, E)` uniqueness; L7 "the persona has a record"; then it is recorded | `rules/tx.rs:543–556`; `rules/body.rs:295–321`; `archival/inputs.rs:40–58` |
+| Rust (`shekyl-chain-rules`) | H20 shape; G7 block-level `(P, shard, E)` uniqueness; L7 "the persona has a record"; then it is recorded | `rules/tx.rs:553–589`; `rules/body.rs:295–321`; `archival/inputs.rs:40–58` |
 | C++ (`blockchain.cpp`) | parse, size, pair-epoch dedup (J3), record (J4), `E_first` (J5), `good_through` (J6), `h_close` and seal-on-chain (J7), held at `H_fire` (J8), segment at `H_fire`, derived leaf index (J9), chunk bounds, chunk read, FFI verify (J10) | `check_archival_serve_credit_input`, `:4756–4970` |
 
 **The C++'s J8 carries a known live defect, `ARW-27`**
-(`docs/completed/DRS_E4_ARCHIVAL_WRITER.md:1394`; `CHANGELOG.md:510`).
+(`docs/completed/DRS_E4_ARCHIVAL_WRITER.md:1394`; `CHANGELOG.md:534`).
 The C++ writer keys a slash-log row at the post-connect **count**
 (`blockchain_db.cpp:652`, `prev_height + 1`). Its reader scans strictly
 above a **height**. So `archival_bond_holds_shard(…, h_fire)`
@@ -160,7 +160,7 @@ layout (`SCV-3`).
   challenged leaf without learning which request is the challenge. Under
   the tx unit there is no leaf to sample at all
   (`ARCHIVAL_PRUNED_DAEMON_MODE.md:851`, row 2). `PC-D3`'s job was closing
-  TJ-1's leaf-index beacon (FOLLOWUPS `:274`). That job leaves with the
+  TJ-1's leaf-index beacon (FOLLOWUPS `:266`). That job leaves with the
   index. Its block binding is replaced by `h`.
 - **J8's second clause ("the shard's frozen segment must exist at
   `H_fire`") dies with the freeze** (`PDM-Q12`). Its job was "the shard is
@@ -232,7 +232,7 @@ The brief calls this a new question. **It is ruled three times over:**
 2. **`SO-D8` Q15** (2026-09-16, `§8` `:2223–2231`): "The LMDB daemon keeps
    today's beacon / `h_close` / seal gates until `shekyl-chain-rules` is the
    live validator". There is also an explicit **prohibition** on repairing
-   anything in `blockchain.cpp` (FOLLOWUPS `:233`).
+   anything in `blockchain.cpp` (FOLLOWUPS `:225`).
 3. **`DEL-008`** (`DAEMON_REDB_STORE.md:2670`): the gate and its FFI delete at the cutover.
 
 The C++ keeps running unchanged and is deleted at the cutover. It is the
@@ -295,13 +295,12 @@ them.
 
   **What it costs, priced as far as this round read.** The grep surface
   is `rg -n "serve_credit_vin\(|serve_credit_only\(|credited\(|\.serve_credit\(|serve_credit_body\(" rust`.
-  It returns 44 call lines (definitions and comments excluded) across 20
-  files. Two of those files, `shekyl-ffi` and `shekyl-wire`, do not run
-  `validate`. The rest are in `shekyl-chain-rules` (`body_tests`,
-  `tx_*_tests`, `tx_conformance_trips`, the harness), `shekyl-chain-ingest`
-  (`scenario_archival_tests`, `mutation_tests`) and `shekyl-chain-store`
-  (`connect_tests`, `archival_write_tests`, `amendments_tests`,
-  `tx_read_tests`, through `connect_fixtures::credited`).
+  Its hits in `shekyl-ffi` and `shekyl-wire` do not run `validate`; the
+  rest are tests and fixtures in `shekyl-chain-rules`, `shekyl-chain-ingest`
+  and `shekyl-chain-store` (the last through `connect_fixtures::credited`).
+  The grep is the instrument. A count is not written here: the surface moves
+  with every PR that touches a credit fixture (#942 did), so commit 3 counts
+  it at its own pin.
 
   **Where the row is ordered decides which of those change.** A row that
   refuses every credit vin in the per-transaction pass runs **before** G7
@@ -354,8 +353,8 @@ them.
 | **SCV-2** | `PDM-Q6` item 4 row 1's signed bounds term is unreconciled with `SF-D8`, and under `SHT-Q2` it binds nothing (§2.2). Four places carry it forward as the successor: the C++ comment above the live gate (`blockchain.cpp:4750`), the FOLLOWUPS J8–J10 row (`:21`), the census J8 and J10 notes (`CONSENSUS_RULE_CENSUS.md:491`, `:493`), and the brief. | PDM `:794–797`, `:850`; `ARCHIVAL_SHARD_FETCH.md` `SF-D8`; `shard_of` | maintainer — `SCV-Q2` |
 | **SCV-3** | No single document states the R-B record's layout. SO-D8 §2.1 item 1 says "the RF round reopens" (`h` on the kept side, rule 42), but `ARCHIVAL_RESPONSE_FORMAT.md` records no reopen. The `PDM-Q6` item-4 rule ("reopenings get a dated sub-section in the owning doc") is unmet in RF, CREDIT_WIRE and PER_CHALLENGE_RECORD. A grep for `PDM`, `SHT`, `tx_id` and "tx unit" returns zero hits in each. So item 4's own reversion falsifier ("the owning doc's dated sub-section cites no leaf-specific premise") cannot be evaluated. | PDM `:843–845`, `:866–868`; RF banner | Slice C's precondition (§6 sizing) |
 | **SCV-4** | **The pass record has two ruled carriers.** CEN-B4 verifies `SF-D8` countersignatures in the block's attestation witness, recomputed against the header's `attestation_root` (census `:338`; `ARCHIVAL_CREDIT_WIRE.md` §3 shape 4; landed C++ `verify_block_attestation`). SO-D8 Q9 (§7.6, RULED 2026-09-16) puts records in ordinary `serve_credit_only` transactions, "never the coinbase", with residence per `RF-D10`. Both verify through the same function (§2.2), so the verify code is one. The **carrier** is two. | census B4; SO-D8 §2.1 item 8; `SETTLEMENT_WRITER.md:651–654` | maintainer — `SCV-Q4` |
-| **SCV-5** | SO-D9's sentence that "(i) on the R-A operand flips exactly one block per epoch" is not true at this pin. J7's window is `h_seal(E) < h ≤ last_block(E)`, with `h_seal = E·SEB + 1` (`constants.rs:78`) and `last_block = (E+1)·SEB − 1` (`settlement_schedule.rs:171`; the rename at `9ca950f4a` was value-preserving). Every admissible slot is therefore inside epoch `E`, and (i) evaluated at the connecting height is implied by J7 and cannot fail on its own. **Moot**, because (i) lands on R-B's operand `h`, where it is independent. This is recorded so that nobody writes a `CenRow` at the R-A operand whose negative fixture J7 refuses first. | FOLLOWUPS `:233`; SO-D8 `:2312` | Slice C (the SO-D9 row's fixture) |
-| **SCV-6** | The bond-admission closed-and-final shard predicate, which now carries J8's "the shard exists" job, is RULED and unbuilt. Its FOLLOWUPS row says it is "gated on the A4 length rows (S-CHAIN-W) and S-PRUNE deriving `b_*`". Both gates dissolved by ruling: `PDM-Q6` item 5 says "A4 is not owed" (2026-09-23), and `SHT-Q2` retired `b_*` for `shard_of(cumulative_archival_len)`, which `closed_shards_through` reads today. A fired condition read as pending. | FOLLOWUPS `:213`; PDM `:975` | slice 8 (a 4.J bond row) |
+| **SCV-5** | SO-D9's sentence that "(i) on the R-A operand flips exactly one block per epoch" is not true at this pin. J7's window is `h_seal(E) < h ≤ last_block(E)`, with `h_seal = E·SEB + 1` (`constants.rs:78`) and `last_block = (E+1)·SEB − 1` (`settlement_schedule.rs:171`; the rename at `9ca950f4a` was value-preserving). Every admissible slot is therefore inside epoch `E`, and (i) evaluated at the connecting height is implied by J7 and cannot fail on its own. **Moot**, because (i) lands on R-B's operand `h`, where it is independent. This is recorded so that nobody writes a `CenRow` at the R-A operand whose negative fixture J7 refuses first. | FOLLOWUPS `:225`; SO-D8 `:2312` | Slice C (the SO-D9 row's fixture) |
+| **SCV-6** | The bond-admission closed-and-final shard predicate, which now carries J8's "the shard exists" job, is RULED and unbuilt. Its FOLLOWUPS row says it is "gated on the A4 length rows (S-CHAIN-W) and S-PRUNE deriving `b_*`". Both gates dissolved by ruling: `PDM-Q6` item 5 says "A4 is not owed" (2026-09-23), and `SHT-Q2` retired `b_*` for `shard_of(cumulative_archival_len)`, which `closed_shards_through` reads today. A fired condition read as pending. | FOLLOWUPS `:205`; PDM `:975` | slice 8 (a 4.J bond row) |
 | **SCV-7** | The brief's account of how the C++ gate depends on the freeze has three errors. (1) It cites `blockchain.cpp:1504`, which is CEN-F17's operand; the gate reads LMDB `archival_shard_segment` (`db_lmdb.cpp:5090`). (2) It says the verifier "supplies [the terms] from `LeafStore::frozen_segment`". That echoes `wire.rs:352`'s table, which is wrong about the live verifier: `LeafStore::frozen_segment` (`shekyl-curve-tree/src/store/redb_backend.rs:2189`) has no consensus caller, only a bench and a test. (3) It calls the C++ disposition unruled (§2.5). Recorded under rule 16's corollary: a grouping someone else drew is a claim about its members. | §1, §2.5 | this round (corrected here); `wire.rs:352` dies with the preimage at Slice C |
 | **SCV-8** | Under R-B, `SLK-Q1`'s premise that the fold is asked at `h_fire ∈ (H_seal, H_close]` loses its height term: `H_fire`'s function is deleted, and its successor is unwritten (`SCV-12`). The horizon arithmetic re-derives once `SCV-12` is answered, not before. | `DRS_E4_SLASH_LOG_ROUND.md` §2 | the `SLK-` round |
 | **SCV-9** | The deleted mirror **had** a production caller. Until #937 merged, the Rust validator's G7 called `serve_credit_decisions::serve_credit_block_unique`. The brief's "zero production callers" was true of D-SC-A/B (the gate mirror) and false of D-SC-C. Commit `583214b5f` re-homed G7 to `second_occurrence` (`rules/body.rs:316`), so this is not a defect in #937. It is a precision note on a claim that will otherwise be cited as precedent. | `583214b5f` | record |
@@ -368,16 +367,18 @@ them.
 
 ## 6. Commit sequence and the expectation, written before the work
 
-These are this round's own rows **after §8 is ruled**. They are not Slice
-C's; SO-D8 §8 is Slice C's plan.
+Commit 1 is this Round-0 document, which lands before any ruling: rule 26
+halts implementation, not the pre-flight record. Commits 2–5 cut only
+**after §8 is ruled**. None of them is Slice C's; SO-D8 §8 is Slice C's
+plan.
 
 | # | Commit | Cost | What would make it larger |
 | --- | --- | --- | --- |
-| 1 | **This document** and the index rows (`SCV-`, `SCV-Q`, the §7 doc row). FOLLOWUPS is not touched here: the J8–J10 row's re-key is commit 5 | S | — |
-| 2 | **Census dispositions** (`SCV-Q6`): J3, J7, J8, J9 and J10 marked superseded-by-ruling with a pointer to SO-D8 §8; `census.rs` statuses only if the ruling changes them (the enum may have no "superseded" arm, and adding one is a census-crate change) | S–M | `RowStatus` lacking an arm for a row retired by ruling |
+| 1 | **This document** and the index rows (`SCV-`, `SCV-Q`, the §7 doc row), before any ruling. FOLLOWUPS is not touched here: the J8–J10 row's re-key is commit 5 | S | — |
+| 2 | **Census dispositions** (`SCV-Q6`): J3, J7, J8 and J10 marked superseded by ruling and J9 deleted by ruling, each with a pointer to SO-D8 §8; `census.rs` statuses only if the ruling changes them (the enum may have no "superseded" arm, and adding one is a census-crate change) | S–M | `RowStatus` lacking an arm for a row retired by ruling |
 | 3 | **The interim row** (`SCV-Q1` (a)): one `CenRow` refusing every serve-credit vin, ordered after G7 and L7, with its negative fixture on a driven chain. First task: enumerate the positive-admission assertions inside §4's grep surface. Each moves to a typed-refusal assertion, and the writer's row moves to the injector door. The pop-lifts-credit gap is disclosed | M | a test whose real subject is the credit's *admission* rather than the writer's row, which would have no honest home until Slice C |
 | 4 | **`DEL-008`'s conjunct** (`SCV-Q5`) | S | — |
-| 5 | **Docs** (rule 91): line-local pointers in `PDM-Q6` item 4 rows 1, 3 and 4 (the `W` re-key and `SCV-Q2`'s ruling), SLK §2 (`SCV-8`), FOLLOWUPS `:213` (`SCV-6`'s fired blocker), FOLLOWUPS `:233` (`SCV-5`) | S | — |
+| 5 | **Docs** (rule 91): line-local pointers in `PDM-Q6` item 4 rows 1, 3 and 4 (the `W` re-key and `SCV-Q2`'s ruling), SLK §2 (`SCV-8`), FOLLOWUPS `:205` (`SCV-6`'s fired blocker), FOLLOWUPS `:225` (`SCV-5`) | S | — |
 
 **Expectation: five commits.** **The signal:** more than **seven** means
 the substrate was not what this document claims. The most likely cause is
@@ -429,7 +430,7 @@ FOLLOWUPS rows named in §5.
 `ARCHIVAL_SHARD_FETCH.md` past its SF-D8 row; SO-D8 §6 and §7.2's
 integrity layers and cache (Slice C's internals); the emission-claim side
 of 4.J (J19–J26); bond-post rows J11–J18 beyond `SCV-6`; the economics of
-unpaid inclusion (FOLLOWUPS `:235`).
+unpaid inclusion (FOLLOWUPS `:227`).
 
 **No test was run.** This is a documentation round, and none of its claims
 is a measurement. Rule 26's artifact execution applies to Slice C's
@@ -471,10 +472,10 @@ pre-flight, not here.
   falsifier is a cutover PR that deletes `check_archival_serve_credit_input`
   while those rows are `pending`. Without the conjunct, the cutover is the
   event that opens the hole on the live chain.
-- **`SCV-Q6` — the census rows.** *Default:* J3, J7, J8, J9 and J10 are
-  marked **superseded by ruling** in `CONSENSUS_RULE_CENSUS.md`, with a
-  pointer to SO-D8 §8 and to this file (rule 23's grep surface). J9 is
-  marked **deleted by ruling**. No new `CEN-` ids are minted here; Slice C
+- **`SCV-Q6` — the census rows.** *Default:* J3, J7, J8 and J10 are
+  marked **superseded by ruling** in `CONSENSUS_RULE_CENSUS.md`, and J9
+  **deleted by ruling** (§3), each with a pointer to SO-D8 §8 and to this
+  file (rule 23's grep surface). No new `CEN-` ids are minted here; Slice C
   mints them (SO-D8 §8). The FOLLOWUPS J8–J10 row (`:21`; falsifier: J8–J10 reading
   other than `pending`) is re-keyed to the successor rows' ids when they
   exist.
@@ -483,12 +484,11 @@ pre-flight, not here.
 
 ## 9. Documentation owed (rule 91)
 
-When §8 is ruled, the owed edits are §6's commit 5 rows, plus:
-
-- `IMPLEMENTATION_INDEX.md` §7's row for this document;
-- the census pointer (`SCV-Q6`);
-- the FOLLOWUPS J8–J10 row's re-key, naming this document
-  as the round that answered the "how".
+The documentation owed is §6's commits: the index rows land in commit 1,
+the census dispositions in commit 2, and the line-local pointers and the
+FOLLOWUPS J8–J10 row's re-key (naming this document as the round that
+answered the "how") in commit 5. When §8 is ruled, this document's status
+and the index rows record the rulings in the same change.
 
 This document then archives to `docs/completed/` when Slice C opens its own
 pre-flight or rules this round's questions in place.
@@ -503,3 +503,4 @@ pre-flight or rules this round's questions in place.
 | 2026-10-02 | **Re-verified against PR #937** (head `f10ebea9d5`) **and `dev@b9a793a03e`.** `dev`'s delta (#933, the prunable digest moved to Rust) touches none of this round's surfaces; every `dev` cite re-resolved after the merge. PR #937 adds two commits beyond the Round-0 pin, neither on the serve-credit surface. **`SCV-10` (a) retracted** (`e5a646016`): the "duplicated row" was this round's own `grep -n` plus `sed` printing one line twice; the part is deleted from the row. **`SCV-13` added** (the closing banner's `SF-D8` pointer). **`ARW-27` folded in** (§1, §2.5, `SCV-12`). `SCV-1` re-checked: E4 §2.2's settlement-writer line is unchanged at `:338`, and the closing banner re-homes every residue except that one, so the circle stands. |
 | 2026-10-03 | **Cites re-pinned at `dev@6b1eb6ffb`.** #935 added four FOLLOWUPS lines above this round's rows; the four FOLLOWUPS cites move by +4 (`:213`, `:233`, `:235`, `:274`). Nothing else this round cites changed. |
 | 2026-10-03 | **Re-grounded at `dev@61feff8fe`** after PR #937 merged: the `[PR-b]` taxonomy is gone, because everything it marked is on `dev`. On review of #939: the anchor window's operand in §2.2 is the **including** block's predecessor, not R-B's issuing `h` (`pass_anchor.rs:108`); the registered-family count is dropped from the status block, since the gate is the check and the count changed twice in a day; `SCV-2` gains the census J8/J10 notes #937 added. |
+| 2026-10-04 | **Re-grounded at `dev@e951cd309`** (#942 removed the closed `SHT-9` FOLLOWUPS row, so four cites move by −8). On review of #939: J9's disposition is *deleted* in §6 commit 2 and `SCV-Q6`, not grouped with the superseded rows; §6 separates commit 1, which lands before any ruling, from commits 2–5; §9 restates the owed docs by commit instead of re-listing commits' contents; §4's call-line count is dropped for the grep that produces it. |
