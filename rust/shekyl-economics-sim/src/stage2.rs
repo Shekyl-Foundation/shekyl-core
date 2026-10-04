@@ -24,7 +24,7 @@ use shekyl_economics::{
     base_block_reward,
     burn::{calc_burn_pct_at, compute_burn_split},
     calc_effective_emission_share,
-    params::{EconomicParams, SCALE},
+    params::SCALE,
     split_block_emission, ScaledShare,
 };
 
@@ -279,21 +279,7 @@ pub fn year_share_atomic(pool_atomic: u128, share_milli: u64) -> u128 {
 /// pass). Mirrors `budget.rs`'s per-block economics.
 #[must_use]
 pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAgg> {
-    let economic = EconomicParams {
-        release_min: params.release_min,
-        release_max: params.release_max,
-        tx_volume_baseline: params.tx_volume_baseline,
-        burn_base_rate: params.burn_base_rate,
-        burn_cap: params.burn_cap,
-        staker_pool_share: params.staker_pool_share,
-        emission_curve_asymptote: params.emission_curve_asymptote,
-        emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
-        final_subsidy_per_minute: params.final_subsidy_per_minute,
-        daa_target_seconds: EconomicParams::default().daa_target_seconds,
-        // Escalation numerics come from the shipped config: the sim must never
-        // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
-        ..EconomicParams::default()
-    };
+    let economic = params.economic();
     let total_blocks = params.blocks_per_year * config.sim_years;
     let mut already_generated: u128 =
         (config.initial_emitted_fraction * params.emission_curve_asymptote as f64) as u128;
@@ -1695,21 +1681,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     {
         // Base block reward at a representative mid-chain supply, for A6's measured
         // penalty-compensation term (the production emission fn, not a constant).
-        let econ = EconomicParams {
-            release_min: params.release_min,
-            release_max: params.release_max,
-            tx_volume_baseline: params.tx_volume_baseline,
-            burn_base_rate: params.burn_base_rate,
-            burn_cap: params.burn_cap,
-            staker_pool_share: params.staker_pool_share,
-            emission_curve_asymptote: params.emission_curve_asymptote,
-            emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
-            final_subsidy_per_minute: params.final_subsidy_per_minute,
-            daa_target_seconds: EconomicParams::default().daa_target_seconds,
-            // Escalation numerics come from the shipped config: the sim must never
-            // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
-            ..EconomicParams::default()
-        };
+        let econ = params.economic();
         let br = base_block_reward(params.emission_curve_asymptote / 2, &econ).unwrap_or(0);
         crate::swing::a6_report(out, &ESCALATION_PREVIEW_N, br, &admission)?;
     }

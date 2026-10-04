@@ -37,7 +37,7 @@
 //! forgotten regen cannot silently pass.
 
 use serde::{Deserialize, Serialize};
-use shekyl_economics::params::{EconomicParams, SCALE};
+use shekyl_economics::params::SCALE;
 use shekyl_economics::{
     base_block_reward, base_emission_at, calc_burn_pct_from_activity,
     calc_effective_emission_share, calc_release_multiplier, compute_burn_split_at,
@@ -157,21 +157,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         .flat_per_tx_atomic()
         .expect("the recorder runs on the flat arm");
 
-    let params = EconomicParams {
-        release_min: sim.release_min,
-        release_max: sim.release_max,
-        tx_volume_baseline: sim.tx_volume_baseline,
-        burn_base_rate: sim.burn_base_rate,
-        burn_cap: sim.burn_cap,
-        staker_pool_share: sim.staker_pool_share,
-        emission_curve_asymptote: sim.emission_curve_asymptote,
-        emission_speed_factor_per_minute: sim.emission_speed_factor_per_minute,
-        final_subsidy_per_minute: sim.final_subsidy_per_minute,
-        daa_target_seconds: EconomicParams::default().daa_target_seconds,
-        // Escalation numerics come from the shipped config: the sim must never
-        // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
-        ..EconomicParams::default()
-    };
+    let params = sim.economic();
 
     let blocks_per_year = sim.blocks_per_year;
     let total_blocks = blocks_per_year * config.sim_years;

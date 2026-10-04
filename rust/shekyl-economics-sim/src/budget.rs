@@ -53,7 +53,7 @@ use shekyl_economics::{
     base_block_reward,
     burn::{calc_burn_pct_at, compute_burn_split_at},
     calc_effective_emission_share, calc_release_multiplier,
-    params::{EconomicParams, SCALE},
+    params::SCALE,
     split_block_emission, ClosedShardCount,
 };
 
@@ -140,21 +140,7 @@ pub struct BudgetScenarioResult {
 /// year-snapshot engine does not carry.
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> BudgetScenarioResult {
-    let economic = EconomicParams {
-        release_min: params.release_min,
-        release_max: params.release_max,
-        tx_volume_baseline: params.tx_volume_baseline,
-        burn_base_rate: params.burn_base_rate,
-        burn_cap: params.burn_cap,
-        staker_pool_share: params.staker_pool_share,
-        emission_curve_asymptote: params.emission_curve_asymptote,
-        emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
-        final_subsidy_per_minute: params.final_subsidy_per_minute,
-        daa_target_seconds: EconomicParams::default().daa_target_seconds,
-        // Escalation numerics come from the shipped config: the sim must never
-        // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
-        ..EconomicParams::default()
-    };
+    let economic = params.economic();
 
     let mut already_generated: u128 =
         (params.emission_curve_asymptote as f64 * scenario.initial_emitted_fraction) as u128;

@@ -161,6 +161,28 @@ impl Default for SimParams {
 }
 
 impl SimParams {
+    /// The production parameter set this run prices against: the shipped
+    /// [`EconomicParams`] with this run's emission, release, burn and staker
+    /// knobs. Escalation numerics come from the shipped config; the sim
+    /// never invents them, since the asymptote is ceremony-gated and
+    /// unpinned (§11.4). The one construction every fold uses.
+    #[must_use]
+    pub fn economic(&self) -> EconomicParams {
+        EconomicParams {
+            release_min: self.release_min,
+            release_max: self.release_max,
+            tx_volume_baseline: self.tx_volume_baseline,
+            burn_base_rate: self.burn_base_rate,
+            burn_cap: self.burn_cap,
+            staker_pool_share: self.staker_pool_share,
+            emission_curve_asymptote: self.emission_curve_asymptote,
+            emission_speed_factor_per_minute: self.emission_speed_factor_per_minute,
+            final_subsidy_per_minute: self.final_subsidy_per_minute,
+            daa_target_seconds: EconomicParams::default().daa_target_seconds,
+            ..EconomicParams::default()
+        }
+    }
+
     /// The parameters of the control arm: the shipped economics with the
     /// flat fee the §12.13–§12.14 tables were measured on. A declared
     /// divergence from production, kept so those tables stay reproducible.
@@ -194,21 +216,7 @@ pub(crate) fn net_supply(already_generated: u128, total_burned: u128) -> Circula
 }
 
 pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResult {
-    let economic = EconomicParams {
-        release_min: params.release_min,
-        release_max: params.release_max,
-        tx_volume_baseline: params.tx_volume_baseline,
-        burn_base_rate: params.burn_base_rate,
-        burn_cap: params.burn_cap,
-        staker_pool_share: params.staker_pool_share,
-        emission_curve_asymptote: params.emission_curve_asymptote,
-        emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
-        final_subsidy_per_minute: params.final_subsidy_per_minute,
-        daa_target_seconds: EconomicParams::default().daa_target_seconds,
-        // Escalation numerics come from the shipped config: the sim must never
-        // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
-        ..EconomicParams::default()
-    };
+    let economic = params.economic();
 
     let total_blocks = params.blocks_per_year * config.sim_years;
 
