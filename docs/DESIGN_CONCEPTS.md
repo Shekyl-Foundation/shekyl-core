@@ -310,7 +310,7 @@ curve ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md) step 4).*
 
 The burn automatically transitions the economy from inflationary growth (gentle early burns) to deflationary maturity (aggressive late burns) without any governance intervention.
 
-### Component 3: Archival Staking (Pay-for-Service) and Implicit Governance
+### Component 3: Archival Staking (Pay-for-Service)
 
 Staking is **pay-for-service archival**. A staker posts an on-chain bond, joins
 the archival market, and holds and serves the archival good — each
@@ -511,7 +511,7 @@ The economic system creates a natural progression for participants:
 - The emission share provides attractive yields from day one, rewarding early believers.
 - As the chain matures, yield composition shifts from emission-funded to fee-funded — no action required.
 - Yield scales with **verified serve-work** (anti-whale capped), not with a duration lock; more useful archival service earns more, up to the concentration cap.
-- The act of staking implicitly governs the burn rate — no active decision-making required.
+- ~~The act of staking implicitly governs the burn rate~~ — struck (F-D): the burn does not read staking.
 - Principal at the pseudonym stays liquid between settlement epochs; the bond, not a lock, keeps the staker honest. Spending rewards feeds the very system that generates the yield.
 
 ### Value flow between participants
@@ -738,9 +738,9 @@ Adopt the **Four-Component Model**:
 
 1. **`2^32` whole SHEKYL as the emission curve's ASYMPTOTE**, with 9-decimal atomic precision — not a hard cap: the curve approaches it and the perpetual 0.6/block tail continues past it (FL-R12′). Item 2 states the same thing from the release side; they agree.
 2. **Transaction-responsive release rate** that accelerates or slows the emission curve based on real network usage, with gross issuance anchored to the curve's asymptote (plus the perpetual 0.6/block tail — there is no hard cutoff; FL-R12′).
-3. **Adaptive fee burn** driven algorithmically by transaction volume, chain maturity, and aggregate staking behavior — with a portion of the burn funding staker yields.
+3. **Adaptive fee burn** driven algorithmically by transaction volume and chain maturity (net circulating supply) — with a portion of the burn funding staker yields. (Aggregate staking behavior was a third driver until F-D deleted it.)
 4. **Decaying staker emission share** that bootstraps meaningful staker yields from launch, funded by redirecting a small, declining fraction of block emission from miners to stakers.
-5. **Implicit staker governance** where the act of locking coins is the sole governance input, eliminating the need for voting mechanisms.
+5. ~~**Implicit staker governance** where the act of locking coins is the sole governance input~~ — struck (F-D): staking feeds no governance input, and it is a bond, not a lock. It couples to the economy through the archival budget and the escalation (Component 3).
 6. **Wallet-first presentation** with a gamified dashboard making the economic system legible and engaging.
 
 This design creates a self-regulating economic system where miners, stakers, and transactors form complementary constituencies. The system transitions automatically from inflationary growth to deflationary maturity, maintains perpetual security incentives through tail emission, bootstraps staker participation through a self-retiring emission subsidy, and resists gaming through interlocking negative feedback loops.

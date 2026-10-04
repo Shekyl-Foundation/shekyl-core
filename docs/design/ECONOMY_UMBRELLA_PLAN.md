@@ -36,10 +36,12 @@ Ordered, because each step's numbers are inputs to the next.
 | **EUP-4** | The full per-year set, run on the design curve, every scenario, both fee arms, the ESR-7 envelope. **This is the assessment baseline.** §4's criteria are graded against it, and they are written before it runs. | this document | waits on EUP-1…EUP-3 |
 | **EUP-5** | The decisions, with numbers: D (the floor in consensus, holistically), F (the escalation and its GF-7 asymptote), G (zone and `w_ref` derivations, FL-R13), H (challenge doctrine against the budget), I (bond sizing, first-time sim), and the stress test of the 720-block window's length. | each row's owner (§3) | waits on EUP-4 |
 
-**No production-arm table is run between EUP-1 and EUP-4** (design-owner
-lane, 2026-10-04): every number in ESR-1…ESR-7 was computed on the Monero
-curve, and a table run before the fix lands on `dev` and #936 merges it would
-be a third curve's worth of numbers.
+**No production-arm table is run until the ESF fix is on `dev` and #936 has
+merged it** (design-owner lane, 2026-10-04): every number in ESR-1…ESR-7 was
+computed on the Monero curve, and a table run before then would be a third
+curve's worth of numbers. From that point EUP-2's registered runs (ESR-10's
+tables and the realigned fixtures) run on the design curve; the full
+assessment set, graded against §4, is EUP-4's.
 
 **Whether we are "not terribly far off"** is held until EUP-4. The emission
 speed factor is the input under every other number, and it could move that
