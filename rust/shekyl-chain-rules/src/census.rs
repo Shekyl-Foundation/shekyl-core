@@ -498,7 +498,6 @@ census_rows! {
         J14 pending,
         J15 pending,
         J16 pending,
-        J17 pending,
         J18 pending,
         J19 pending,
         J20 pending,

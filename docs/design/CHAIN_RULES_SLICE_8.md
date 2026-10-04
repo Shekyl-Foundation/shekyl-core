@@ -119,7 +119,8 @@ Three things make 4.J unlike 4.G and 4.I:
 - **Three of its rows and two of its clauses describe a mechanism that
   was retired by ruling.** J8–J10 encode the beacon-fire / sampled-leaf /
   leaf-path mechanism `PDM-Q12` retired (`ARW-13`, SCV §3); J17 and J13's
-  drop arm name `HoldingsUpdate`, REJECTED 2026-09-20 (`ARW-14`). A row
+  drop arm name `HoldingsUpdate`, REJECTED 2026-09-20 (`ARW-14`) — re-keyed
+  at §5 row 1 (PR-a commit 2, 2026-10-04; §3.2). A row
   that names a deleted type cannot be implemented as written, and a rule
   built to a retired mechanism is built to be deleted. §1.2 draws the
   seam; commit 1 does the re-key before any rule cuts.
@@ -402,7 +403,7 @@ already refuses at the connect fold.
 | J14 | JoinMarket semantics: shape, no debit, `credit == bonded_total == bond_floor(holdings)`, record absent | `verify_join_market_bond_post(vin, record_exists)`; partial under L7 (record absent, empty set) | `TxAgainstRule` | corpus accept |
 | J15 | admission viability (D3/R3) over per-shard `r_market` + presence at the parent | `admission::check_admission(holdings, parent_state)`; `parent_state_shards_from_gather`; **absent** in the validator; the C++ gather is `blockchain.cpp:4640–4680`. Presence under `SHT-Q2` is *closed before the parent*, not a freeze height | `TxAgainstRule` over `r_market`, `closed_shards_before` | corpus accept (shard set) |
 | J16 | Unbond: full exit, cooldown elapsed from last-served anchors, slashes settled through the anchor | `verify_release_bond_post(vin, total, intervals, last_served, last_settled, epoch)` with `release_cooldown::*`; partial under L7 (`release_connect`: debit is the total) — **cooldown and settlement are unjudged today** | `TxAgainstRule` over `bond_record`, `last_served_epoch`, `last_settled_slash_epoch` | none |
-| J17 | HoldingsUpdate add / drop arms | **no such kind exists** (`ARW-14`) | **Q1**: REJECTED → bucket 3 | n/a |
+| J17 | HoldingsUpdate add / drop arms | **no such kind exists** (`ARW-14`) | **Q1**: REJECTED → bucket 3 — **re-keyed 2026-10-04** (§5 row 1) | n/a |
 | J18 | Reinstate: single open interval, headroom, credit against identity key | `verify_reinstate_bond_post`; partial under L7 (`reinstate_connect`'s preconditions) | `TxAgainstRule` | none (no driver constructor) |
 
 **Reward emission** (per tx; H22 the shape):
@@ -477,6 +478,40 @@ an unrepresentable state. (b) would have kept J17 in the denominator with a
 falsifier watching a decoder property that belongs to a general
 unknown-kind refusal, not to J17; a deleted subject does not inflate the
 denominator, so `152 → 151`.
+
+**Landed 2026-10-04 (PR-a commit 2, #953).** What the re-key touched, and
+two things it found that §3.2 had not named:
+
+- Census: J17 → bucket 3 in CEN-F12's shape (disposition, deleting commit
+  `7909719f11`, sites as records-was); J15's *"drops deliberately ungated"*
+  struck. **J13 named the type twice, not once** — the drop arm on the
+  debit side *and* `HU-add` on the credit side (*"HU-add auth key must
+  equal `P_pubkey`"*). Both struck line-local; the rule's two key-selection
+  legs stand over the kinds that remain (Unbond; JoinMarket, Reinstate).
+  Row 4 implements J13 as it now reads.
+- `census.rs` loses `J17` with no placeholder, as F12 left — the census row
+  and `census_tests.rs`'s count history are the record; `CenRow::ALL.len()`
+  `154 → 153`; the gate's `validator-enforced` `152 → 151`.
+- **The conformance register carried a verdict on the deleted arms.**
+  `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1 had J17 CHECKED-CONFORMANT, and
+  its gate refuses a register row for a rule outside bucket 1/2 — so the row
+  leaves with the rule (recorded in that file's log, 2026-10-04; tally
+  `126 / 2 / 5 → 125 / 2 / 5`; the grader's fixture regenerated with
+  `--out`). The FOLLOWUPS row that register row pointed at — *"CEN-J17's
+  dropped-shard derivation lives in the C++ marshal"* — asked for a Rust
+  drop-arm verify to derive a shard the C++ no longer derives; closed as
+  mooted, no successor.
+- Two doc comments that named the drop arm's grace tail as a consumer
+  (`view.rs` A4, `serve.rs` `ServedShard`) re-worded as records-was; J16's
+  cooldown is the read's remaining consumer.
+- FOLLOWUPS' shard-predicate row carries its landing (§3.4; §5 row 6) and
+  an `Owner:`.
+
+Not touched: the broader `HoldingsUpdate` prose sweep (FOLLOWUPS,
+*"Propagate the immutable-bond ruling through the `HoldingsUpdate`
+documentation surface"*) is the archival bond lane's and stays theirs; this
+commit took only the census family `ARW-14` assigned to slice 8 and the
+rows that cited it.
 
 ### 3.3 `SAR-Q6`'s question, now askable: what is `None` to admission?
 
@@ -773,7 +808,7 @@ changes (rows 1, 6, 7, 9, 10) rather than restated beneath the table.
 
 | # | commit | gate |
 | --- | --- | --- |
-| 1 | **This file on review; the index rows; §5.1; the `ARW-14` census re-key** — J17 REJECTED → bucket 3 (Q1 (a), ruled), J13's drop arm and J15's ungated-drops clause struck line-local; `census.rs` loses `J17`; FOLLOWUPS `:205` noted as landing here (§3.4) — the `:197` re-point to Slice C already landed with the pre-flight PR (§1.2 item 1); the DRS-E6 row. **Lands before any rule**, so the completeness gate measures the rules against rows that describe something that exists | docs gates; the coverage gate's denominator moves `152 → 151` |
+| 1 | **This file on review; the index rows; §5.1; the `ARW-14` census re-key** — J17 REJECTED → bucket 3 (Q1 (a), ruled), J13's drop arm and J15's ungated-drops clause struck line-local; `census.rs` loses `J17`; FOLLOWUPS `:205` noted as landing here (§3.4) — the `:197` re-point to Slice C already landed with the pre-flight PR (§1.2 item 1); the DRS-E6 row. **Lands before any rule**, so the completeness gate measures the rules against rows that describe something that exists. **LANDED 2026-10-04 — PR-a commit 2 (PR #953); §3.2 records what it touched, including two sites the row had not named (J13's `HU-add` leg; the register's J17 verdict and the FOLLOWUPS row it carried)** | docs gates; the coverage gate's denominator moves `152 → 151` — **measured: `validator-enforced 151`, `CenRow::ALL.len() == 153`, register `125 / 2 / 5`** |
 | 2 | **Driver measurements, no rules.** (a) The two corpus shapes: what each block's archival inputs are, read off the replay, so the positive witnesses are enumerated rather than assumed; (b) `Persona::reinstate` and a Release that the driver *validates* (today it only constructs); (c) a serve credit from an unbonded persona and one at `E_join` through `mine_listing` — both connect today, pinned to flip at row 3; (d) the J11 mismatched-hint post — connects today (§2's finding), pinned to flip at row 4 | the pins |
 | 3 | **J4, J5, J6** — the bond-state rows on the serve-credit vin: the named persona has a bond record (`bond_record`), the claimed epoch is `≥ E_first` (join epoch + 1), and the persona is `good_through` it. Three `TxAgainstRule`s over one view read, each with its negative fixture on a driven chain (an unbonded persona; a credit for the join epoch; a persona past its `good_through`). Named by what they check — they touch no credit, no preimage, no window; J1's parse and J7's window are Slice C's (§1.2 item 1) | corpus parity holds |
 | 4 | **J11, J12, J13** — the bond-post statics and the key-selection rule; J11's fixture is the mismatched hint, J13's a Release whose slot carries `P_pubkey` | corpus parity |
@@ -885,6 +920,7 @@ at close, as slice 7 did.
 | 0 (ruled) | 2026-10-04 | eight rulings from the maintainer: six defaults (Q1, Q2, Q4, Q5, Q7, Q8), one amendment (Q6 — `Option<WitnessSet>`, `None` = not supplied, B4 vacuous and recorded as a gap), one condition (Q3 — the byte-identity test; the third-assembly trigger); Q5's owed sentence widened to height semantics; Q9's struck number kept. Written into §3.2–§3.5, §4, §5, §5.1, §6. Implementation opens with PR-a commit 1; still no code |
 | 0 (refuted) | 2026-10-04 | review on #947, verified at source: §3.5's premise *"nothing carries a witness"* false at the pin (`Candidate::attestation_witness`, E4 commit 5); Q6's amendment mechanically impossible — a vacuous row is in coverage, a gap is absent from it, `ChainValid::mint` panics on the absence (`verdict.rs:84–95`); `Some(empty)` unrepresentable (`AttestationWitness` non-empty by construction). Corrected disposition written (§3.5; ruled in the next row): B4 over the existing field, always evaluated, `None` the empty preimage against the header root, fail closed on a non-empty root; the store's B4 gap retires at row 10. FOLLOWUPS `:186` re-pointed in this PR rather than commit 1 (§1.2). Ruling's intent kept; still no code |
 | 0 (Q6 re-ruled) | 2026-10-04 | the maintainer verified both mechanical facts at `dev@638f4999f7` (`archival/mod.rs:257–259`; `verdict.rs:87–95` with `rules/mod.rs:328`) and **ruled the corrected mechanism** — stronger than the amendment because the header's root, consensus-bound, is what tells *none exist* from *not supplied*; the error's mechanism recorded once in §3.5. "Posed" struck everywhere; Q6 is RULED. **This commit opens PR-a** (`feat/chain-rules-slice-8-pr-a` off `dev@638f4999f7`) so the ruling rides the implemented code; §5 row 1's census re-key is the next commit; still no code in this one |
+| 1 | 2026-10-04 | **§5 row 1 — the `ARW-14` census re-key (PR-a commit 2).** CEN-J17 → bucket 3 (Q1 (a)); J13's two `HoldingsUpdate` legs and J15's ungated-drops clause struck line-local; `census.rs` loses `J17` (`CenRow::ALL.len()` 154 → 153, `validator-enforced` 152 → 151); the conformance register's J17 verdict leaves with the rule (125 / 2 / 5, fixture regenerated) and its FOLLOWUPS row closes as mooted; two doc comments naming the drop arm's grace tail re-worded; the shard-predicate FOLLOWUPS row carries its landing and an owner. Found beyond the row's text: J13's `HU-add` leg; the register row. §3.2 holds the list. The completeness gate now measures against rows whose subjects exist |
 
 ---
 

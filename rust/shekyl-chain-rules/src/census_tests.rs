@@ -274,7 +274,11 @@ fn registries_are_the_expected_size_at_this_increment() {
     // predicate, an R8-class placement row minted by S-ARCH's pre-flight,
     // DRS_E1_SARCH.md SAR-2 / SAR-7) — pending here until E4 moves the fold
     // to shekyl-archival-retention and slice 8 judges through it.
-    assert_eq!(CenRow::ALL.len(), 154);
+    // 154 → 153 on 2026-10-04: CEN-J17 (the `HoldingsUpdate` add / drop
+    // arms, a post kind REJECTED 2026-09-20 and deleted by E4's ARW-14) went
+    // to bucket 3 (E6 slice 8 Q1 (a)) — a row whose subject is gone does
+    // not inflate the denominator.
+    assert_eq!(CenRow::ALL.len(), 153);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }
 
