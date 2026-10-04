@@ -8,12 +8,23 @@ implementation (rule 94 §5): the DRS-E6 row in
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) and the doc row in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §7 name this file. No
 identifier family is minted here: the slice's rows are the census's
-`CEN-J*` and `CEN-B4`, its questions are `Q1…Q9` of §8 scoped to this
+`CEN-J*` and `CEN-B4`, its questions are `Q1…Q8` of §8 (Q9 struck by
+ruling, kept as a numbered line so nothing re-uses it) scoped to this
 document as the earlier slices' were, and the one disposition it makes
 against a `CEN-` row is recorded on that row. Process per
 `26-sub-pr-design-discipline.mdc`, cited as the pre-flight's shape:
 substrate re-read at the pin, the expectation table written before the
 second commit, artifact execution before a budget becomes a gate.
+
+**UPDATE 2026-10-04 (Round 0, boundary ruling at `dev` @ `7003bd629`,
+#946):** the serve-credit round closed and Slice C was authorized, and the
+boundary it draws cuts this slice's row list — CEN-J1 is Slice C's
+(`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §8.0 `:2240`), the interim row
+(`SCV-Q1`) is withdrawn, and `SCV-Q5` makes this slice pre-genesis critical
+path. §1.2 items 1 and 2, §2, §4, §5, §6 and §8 carry the correction; the
+figure moved for the third time, so §1.2 item 2 now derives it from the
+row list and every other surface repeats the sum, not the total. Code
+pins are unchanged (#946 touched documents only).
 
 Branch commits are named by PR and subject, never by SHA (slice 6's rule at
 its head, inherited). A `dev` SHA is an era; every line number in this file
@@ -25,9 +36,10 @@ and the DRS-E6 row, `:1336`). Census:
 [`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §4.J (`:478–519`) and
 CEN-B4 (`:338`). The state this slice judges over was delivered by DRS-E4
 ([`DRS_E4_ARCHIVAL_WRITER.md`](../completed/DRS_E4_ARCHIVAL_WRITER.md),
-archived; §2.3 *What E6 slice 8 gets*). The three serve-credit rows this
-slice does **not** build have their own Round 0:
-[`SERVE_CREDIT_VERIFIER.md`](SERVE_CREDIT_VERIFIER.md) (§1.2 below).
+archived; §2.3 *What E6 slice 8 gets*). The serve-credit rows this slice
+does **not** build had their own Round 0 —
+[`SERVE_CREDIT_VERIFIER.md`](../completed/SERVE_CREDIT_VERIFIER.md), closed
+as record 2026-10-04 — and now belong to SO-D8 Slice C (§1.2 below).
 
 ---
 
@@ -70,8 +82,8 @@ Three things make 4.J unlike 4.G and 4.I:
 - **Its witnesses are made, not captured.** §1.2 item 2 prices this. The
   corpus carries the *accept* path for a JoinMarket and an emission claim
   and nothing else of this family; every refusal and every Release,
-  Reinstate, B4 record, and serve-credit eligibility case is a scenario
-  the driver has to be taught to produce.
+  Reinstate, B4 record, and bond-state (J4–J6) case is a scenario the
+  driver has to be taught to produce.
 - **Three of its rows and two of its clauses describe a mechanism that
   was retired by ruling.** J8–J10 encode the beacon-fire / sampled-leaf /
   leaf-path mechanism `PDM-Q12` retired (`ARW-13`, SCV §3); J17 and J13's
@@ -155,9 +167,9 @@ wants — FOLLOWUPS `:190`).
 Three dispositions are made here, at the start, so the slice's record is
 honest from its first commit rather than corrected at its fourth.
 
-**1. CEN-J8, J9 and J10 are not this slice's; nor, with them, are J3 and
-J7.** [`SERVE_CREDIT_VERIFIER.md`](SERVE_CREDIT_VERIFIER.md) is their Round
-0 — not this slice's. The seam is the one DRS-E4 drew when it scoped the
+**1. CEN-J8, J9 and J10 are not this slice's; nor, with them, are J1, J3
+and J7.** [`SERVE_CREDIT_VERIFIER.md`](../completed/SERVE_CREDIT_VERIFIER.md)
+was their Round 0 — not this slice's. The seam is the one DRS-E4 drew when it scoped the
 verifier out of itself (`DRS_E4_ARCHIVAL_WRITER.md` §2.2, RULED 2026-09-29:
 *E4 owns the typed state and the transition, slice 8 owns the 4.J rule that
 reads them*). This slice's rows are admission rules over state the view
@@ -174,23 +186,55 @@ with J1/J2's wire*. J3's pair-epoch dedup and J7's `≤ H_close` / seal-on-chain
 window are the beacon mechanism's rows as much as J8's fire height is
 (superseded by `SO-D8b` and `SO-D8a` respectively — SCV §3's first two
 rows). A rule built in this slice to the retired window would be built to
-be deleted at Slice C. So they go with the surface. **Carrier** (rule 22):
-the successor is Slice C — [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
-§8 (`:2221`, *NOT AUTHORIZED; written so it can be built when ruled*) —
-with SCV as its input; **owner** of the five rows' interim disposition is
-SCV (`SCV-Q6`: J3, J7, J8, J10 marked superseded by ruling, J9 deleted by
-ruling; SCV §6 commit 2), and of the Rust validator's interim behaviour on
-a serve-credit vin is `SCV-Q1` (default: one fail-closed row after G7 and
-L7; SCV §6 commit 3). **Falsifier** that the scoping was wrong: any of the
-five reading `implemented` in `census.rs` under this slice's record.
-**What stays:** J1 (the vin parses), J4 (the persona has a record), J5
-(`E ≥ E_join + 1`), J6 (`good_through`) are persona-eligibility rows that
-survive R-B unchanged (SCV §3 lists none of them as superseded) and read
-only `bond_record` and the schedule. They land here. One consequence for
-`SCV-Q1`'s interim row, recorded as this slice's preference and not its
-decision: the surviving rows should run *before* the interim refusal, so a
-credit from an unbonded persona is refused by J4 with J4's reason and only
-a well-formed credit from an eligible persona meets the blanket row.
+be deleted at Slice C. So they go with the surface.
+
+*Ruled the next day, and the ruling draws the line one row further.* The
+first draft of this item kept J1 — *the vin is an opaque blob; only the
+Rust codec parses it* (census `:484`) — as an eligibility row. Slice C's
+surface as ruled is **"the successors of CEN-J1–J3 and J7–J10"**
+([`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
+§8.0 `:2240`, AUTHORIZED 2026-10-04), and the census says why: J1 is the
+vin's codec-parse row, and the codec parses the R-B record whose layout is
+Slice C's Round 0 input 2 (`SCV-3`; §8.0 `:2253–2259`). A parse rule moves
+with the bytes it parses. J2 is the one row of the J1–J3 run already
+`implemented` (2026-10-03, `rules::tx_inputs::J2`); it stays landed and its
+*successor* is Slice C's, which is what "successors of" says.
+
+**What stays — and why the cut stops there.** J4 (*the named P must have a
+bond record*), J5 (*claimed epoch ≥ E_first*), J6 (*P must be `good_through`
+the claimed epoch*) — census `:487–489` — read bond state E4 already
+delivers (`bond_record`, the join epoch, `good_through`) and touch neither
+the preimage, nor the freeze, nor anything `SHT-Q2` re-keyed. `RC-114 ⇒
+split across CEN-J4–J7` is the census recording that these were once one
+check; Slice C took J7 (the close-height and seal-on-chain row, the beacon
+window's) and left the three bond-state rows. They land here, and §5's
+row 3 names them by what they check rather than by the transaction they
+happen to sit on.
+
+**Carrier** (rule 22): Slice C — SO-D8 §8 (`:2232`), authorized, with the
+closed serve-credit round's §8 dispositions as its Round 0 (§8.0 `:2234`).
+**Owner** of the six rows' census disposition is Slice C: `SCV-Q6`
+transferred there, with a retired-by-ruling `RowStatus` arm owed with the
+census change that lands Slice C's rows (§8.0 `:2271–2273`). The Rust
+validator's *interim* behaviour on a serve-credit vin is no longer anyone's
+question: `SCV-Q1` was **withdrawn as moot** and its three evidence facts
+became Slice C's expectations (§8.0 item 3), so nothing in this slice
+orders itself relative to an interim row — the earlier draft's preference
+on that ordering is struck with it (was Q9). **Falsifier** that the
+boundary moved without a ruling: any of the six — J1, J3, J7, J8, J9, J10
+— reading `implemented` in `census.rs` under this slice's record.
+
+**The genesis gate reaches this slice.** `SCV-Q5`, recorded on `DEL-008`
+(§8.0 `:2245–2247`): *no genesis, and no `DEL-008` cutover, until Slice C's
+admission rows are `implemented` in `census.rs` and J8–J10 are retired.*
+Two consequences for this plan. Slice 8 and Slice C are both pre-genesis
+critical path — this slice's `Target:` lines and its three PRs are
+scheduled as such, not as a coverage sweep. And `DEL-008`'s trigger moved
+from the cutover — the furthest date in the programme — to a near, owned,
+checkable event (`check_chain_rules_coverage.py --describe` reading the
+Slice C rows `implemented` and J8–J10 in the retired arm). The
+serve-credit brief proposed that conversion from the other direction two
+days earlier (`SCV-Q5`, posed 2026-10-02); it arrives here as a ruling.
 
 This also re-points one inherited item. FOLLOWUPS `:197` (*Split
 `archival_reorg_depth_blocks`*) names E6 slice 8 as the landing lane
@@ -200,12 +244,22 @@ rule*. That lane is now Slice C; commit 1 edits the row's *Owed* and
 unchanged.
 
 **2. The two-number record, and what the numbers count.** The census
-section this slice is named for has 26 rows. Of them J2 is landed, five
-(J3, J7, J8, J9, J10) are the successor's, and J17 — if Q1's default holds
-(§3.2) — leaves the validator-enforced denominator as a REJECTED mechanism,
-the way CEN-F12 did. That leaves **19 4.J rows for this slice to
-implement**: J1, J4, J5, J6 (four), J11–J16 (six), J18–J26 (nine). Beside
-them land rows that are not 4.J's at all:
+section this slice is named for has 26 rows. Of them J2 is landed, six
+(J1, J3, J7, J8, J9, J10) are the successor's, and J17 — if Q1's default
+holds (§3.2) — leaves the validator-enforced denominator as a REJECTED
+mechanism, the way CEN-F12 did. What is left is **derived from the row
+list, not restated** — this figure has moved three times in two days and
+each time the per-row audit (§2) was right and the headline wrong:
+
+| rows this slice implements | count |
+| --- | --- |
+| J4, J5, J6 | 3 |
+| J11, J12, J13, J14, J15, J16 | 6 |
+| J18, J19, J20, J21, J22, J23, J24, J25, J26 | 9 |
+| **4.J rows in** | **18** |
+
+Check: 26 = 1 landed (J2) + 6 Slice C + 1 J17 + **18**. Beside the
+eighteen land rows that are not 4.J's at all:
 
 - **CEN-B4** is a 4.B row. Slice 1 deferred it (*"until bond records are on
   `ChainView`"*, DRS-E6 row `:1336`); E4 §2.2 names this slice as where
@@ -227,12 +281,13 @@ them land rows that are not 4.J's at all:
   in a 4.J slice, exactly as B4 is a 4.B row landing in one.
 
 So the record this slice aims at, written before any measurement (§5.1):
-`implemented 97 → 119 / validator-enforced 152 → 151` if Q1 and Q2 hold
-(19 + B4 + I13 + I15 = 22 rows in; J17's denominator out), `4.J 1 → 20 /
-25`, `4.B 5 → 6 / 7`, `4.I 18 → 20 / 20`. If Q2 goes the other way: `→ 117
-/ 151`, with J21 and J26 landing their non-proof clauses and the proof
-halves staying with I15's FOLLOWUPS row. Either way the five successor
-rows stay `pending` until Slice C mints theirs (SCV-Q6's default leaves
+`implemented 97 + 18 + 1 + 2 = 118 / validator-enforced 152 − 1 = 151` if
+Q1 and Q2 hold (the table's 18, B4, I13 and I15 in; J17's denominator
+out); `4.J 1 + 18 = 19 / 26 − 1 = 25`; `4.B 5 + 1 = 6 / 7`;
+`4.I 18 + 2 = 20 / 20`. If Q2 goes the other way: `97 + 18 + 1 = 116 /
+151`, with J21 and J26 landing their non-proof clauses and the proof
+halves staying with I15's FOLLOWUPS row. Either way the six successor
+rows stay `pending` until Slice C mints theirs (SCV-Q6, now Slice C's, leaves
 `census.rs` unchanged for a row retired by ruling).
 
 **3. No captured chain carries most of what this slice judges, and that is
@@ -245,7 +300,7 @@ today is a regression gate on every rule this slice adds (a new row that
 refuses a corpus block is a finding, not a fixture). What the corpus does
 **not** carry: any Release (J16), any Reinstate (J18), any serve credit as
 a vin (the `emission-claim` credit is the injector's row — `ARW-13`; so
-J1, J4–J6 have no corpus witness at all), any attestation witness (the RPC
+J4–J6 have no corpus witness at all), any attestation witness (the RPC
 edge drops the sidecar — FOLLOWUPS `:184`; B4 has none), and
 **no refusal of any kind** — the C++ daemon captured only what it accepted.
 Every negative fixture in this slice is scenario-driven. The driver can
@@ -285,7 +340,7 @@ cost ten minutes.
 
 ---
 
-## 2. Row-body audit (§7.5.1 (b)) — the 19 4.J rows in scope, J17's disposition, and B4; pins read at `01a4494f1a`
+## 2. Row-body audit (§7.5.1 (b)) — the 18 4.J rows in scope, J17's disposition, and B4; pins read at `01a4494f1a`
 
 Site columns are the census's C++ line pins (which predate several
 re-numberings; the C++ function names are the stable handle) and the Rust
@@ -297,7 +352,7 @@ already refuses at the connect fold.
 
 | row | rule (short) | Rust body today | class | witness today |
 | --- | --- | --- | --- | --- |
-| J1 | the vin is opaque; the codec's parse must succeed | `ArchivalKey::of` (`rules/body.rs:226`) skips an unparseable vin in G7/G9/G10 and L7 refuses it (`inputs.rs:42–46`, *"CEN-J1 will refuse it earlier; this is the backstop"*) — the row named as the earlier refusal does not exist | `TxRule`, `tx_form` | none (corpus credit is injected) |
+| J1 — **Slice C's, ruled 2026-10-04** (§1.2 item 1); audited here because the finding is this slice's to hand over | the vin is opaque; the codec's parse must succeed | `ArchivalKey::of` (`rules/body.rs:226`) skips an unparseable vin in G7/G9/G10 and L7 refuses it (`inputs.rs:42–46`, *"CEN-J1 will refuse it earlier; this is the backstop"*) — the row named as the earlier refusal does not exist, and the codec it names parses the R-B record Slice C re-lays | not this slice's | none (corpus credit is injected) |
 | J4 | the named P has a bond record | partial under L7 (`inputs.rs:49–53`) | `TxAgainstRule` over `bond_record` | none |
 | J5 | `E ≥ E_join + 1` | `serve_eligibility::serve_credit_epoch_ok` — called by nothing in the validator | `TxAgainstRule` | none |
 | J6 | P `good_through` the claimed epoch | the retention crate's `good_through` (FFI `shekyl_archival_good_through`); the validator reads `bad_intervals` in the folds only | `TxAgainstRule` | none |
@@ -351,9 +406,11 @@ fixture is the mismatched hint.
 `archival/inputs.rs:41–46` refuses an unparseable serve-credit vin under L7
 with the comment *"CEN-J1 will refuse it earlier; this is the backstop."*
 J1 is `pending`. The same shape at `:75–79` for the emission vin (J19). Both
-are the transition correctly declining to be the rule, and both are the
-rows this slice makes exist. Not a defect; recorded because the comment
-reads as a claim about the present and is a claim about this slice.
+are the transition correctly declining to be the rule. J19 is the row this
+slice makes exist; J1 is Slice C's (§1.2 item 1, ruled 2026-10-04), so the
+`:41–46` comment stays a claim about a future rule until Slice C lands it —
+handed over, not made true here. Not a defect; recorded because each
+comment reads as a claim about the present and is a claim about a slice.
 
 ### 3.2 J17 names a type that was REJECTED, and the census registry still counts it
 
@@ -441,6 +498,20 @@ shard **accepted**; a ghost `shard_id` (past the frontier), the open
 frontier shard, and a closed-but-not-final shard (closed within `D_max` of
 the parent) each **refused**, each as J15 and not as a fold failure.
 
+*The boundary ruling names this predicate too.* Slice C's Round 0 lists it
+as its **input 4** (`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §8.0
+`:2266–2269`: *"ruled and unbuilt … It carries the job of the freeze
+clause J8 loses"*). That is a claim on the predicate's *existence*, not a
+second site for it: Slice C's rows need bond admission to have already
+refused a shard that is not closed and final, so that a persona's holdings
+can mean something at the epoch's open. The site is still J15's — the
+predicate judges a bond post, and Slice C judges credits. **Default,
+posed to the reviewer rather than assumed (Q5, second half):** this slice
+builds it in J15 (PR-b), Slice C consumes it, and Slice C's input 4 is
+discharged by `CEN-J15` reading `implemented` with the predicate clause on
+its row text. Falsifier: Slice C's Round 1 minting its own `CEN-` row for
+the predicate — then two rows judge one fact and one must go.
+
 - **Default: amend CEN-J15's row text** to carry the predicate as its
   first clause, with the three answers above recorded on the row; no new
   `CEN-` id. The census is the registry of consensus rules, and a rule's
@@ -508,10 +579,11 @@ the C++ accepted something the census says it should not have (the slice-7
 
 ## 4. Stage placement — proposed, shaped by §8
 
-- **`tx_form`** (stateless, `TxRule`): J1, J11, J12, J19, J20, J24, and
+- **`tx_form`** (stateless, `TxRule`): J11, J12, J19, J20, J24, and
   J22 if its body reads only bytes. After the 4.H shape arms (a malformed
   bond post is H21's, not J11's — `tx_inputs.rs:9–13`'s rule), beside J2.
-- **`tx_against`** (`TxAgainstRule`): J4, J5, J6 (serve credit); J13, J14,
+- **`tx_against`** (`TxAgainstRule`): J4, J5, J6 (bond state, read on the
+  serve-credit vin); J13, J14,
   J15, J16, J18 (bond post); J21, J23, J25, J26 (emission). After I7 and
   `judge_reference`, before `judge_signatures` — the C++'s
   `check_tx_inputs` order (the archival arms sit between the key-image walk
@@ -527,7 +599,7 @@ the C++ accepted something the census says it should not have (the slice-7
 | --- | --- | --- |
 | 1 | **This file on review; the index rows; §5.1; the `ARW-14` census re-key** — J17 per Q1, J13's drop arm and J15's ungated-drops clause struck line-local; `census.rs` per Q1; FOLLOWUPS `:197` re-pointed to Slice C (§1.2 item 1), `:205` noted as landing here (§3.4); the DRS-E6 row. **Lands before any rule**, so the completeness gate measures the rules against rows that describe something that exists | docs gates; the coverage gate's denominator moves if Q1 (a) |
 | 2 | **Driver measurements, no rules.** (a) The two corpus shapes: what each block's archival inputs are, read off the replay, so the positive witnesses are enumerated rather than assumed; (b) `Persona::reinstate` and a Release that the driver *validates* (today it only constructs); (c) a serve credit from an unbonded persona and one at `E_join` through `mine_listing` — both connect today, pinned to flip at row 3; (d) the J11 mismatched-hint post — connects today (§2's finding), pinned to flip at row 4 | the pins |
-| 3 | **J1, J4, J5, J6** — the serve-credit eligibility rows, `tx_form` / `tx_against`, each with its negative fixture on a driven chain; the `inputs.rs:41` comment made true | corpus parity holds |
+| 3 | **J4, J5, J6** — the bond-state rows on the serve-credit vin: the named persona has a bond record (`bond_record`), the claimed epoch is `≥ E_first` (join epoch + 1), and the persona is `good_through` it. Three `TxAgainstRule`s over one view read, each with its negative fixture on a driven chain (an unbonded persona; a credit for the join epoch; a persona past its `good_through`). Named by what they check — they touch no credit, no preimage, no window; J1's parse and J7's window are Slice C's (§1.2 item 1) | corpus parity holds |
 | 4 | **J11, J12, J13** — the bond-post statics and the key-selection rule; J11's fixture is the mismatched hint, J13's a Release whose slot carries `P_pubkey` | corpus parity |
 | 5 | **J14, J16, J18** — the three kind verifies as callers of the retention crate's bodies; J16's cooldown operands off `last_served_epoch` / `last_settled_slash_epoch`; J18 over the driver's new Reinstate | corpus parity |
 | 6 | **J15** with the closed-and-final predicate (Q5) and the `None` ruling (Q4); `parent_state_shards_from_gather` over `r_market` and `closed_shards_before` | corpus parity; FOLLOWUPS `:205` closes |
@@ -539,7 +611,7 @@ the C++ accepted something the census says it should not have (the slice-7
 
 Eleven rows is past the ten-commit ceiling before the overrun; the slice
 lands as **three PRs** in dependency order — **PR-a** rows 1–3 (docs,
-driver, serve-credit eligibility), **PR-b** rows 4–6 (the bond post),
+driver, the bond-state rows), **PR-b** rows 4–6 (the bond post),
 **PR-c** rows 7–11 (the emission, B4, docs) — the E4 PR-a / PR-b shape.
 Each PR's record is stated in the row when it lands.
 
@@ -555,7 +627,7 @@ priced by the admission crate already.
 | --- | --- | --- | --- |
 | 1 | this file; index; re-key; FOLLOWUPS re-points | 1 | — |
 | 2 | four measurements, no rules | **2** | two of the four are driver capabilities the driver has never had (Reinstate; a Release that reaches `validate`), and the first attempt at each has cost a commit (slice 6 §5.3.3, slice 7 §5.1 row 2) |
-| 3 | J1, J4, J5, J6 | 1 | four callers of landed bodies over one read |
+| 3 | J4, J5, J6 | 1 | three callers of landed bodies over one read |
 | 4 | J11, J12, J13 | 1 | statics plus one record read |
 | 5 | J14, J16, J18 | **2** | J16's cooldown has three operands and the C++ gather is the slice's most-marshalled site (`blockchain.cpp:4520–4600`); the second commit is the one that finds the operand the first missed |
 | 6 | J15 + predicate | **2** | a new rule (the predicate) plus an unimplemented old one (admission), on a question (Q4) with a non-parity default — the fixture set must fail in both directions |
@@ -566,9 +638,11 @@ priced by the admission crate already.
 | 11 | docs | 1 | — |
 
 **Expectation: eighteen commits** (sixteen if Q2 defers I13/I15), across
-three PRs. Registry `implemented 97 → 119` (`→ 117`), `validator-enforced
-152 → 151` (Q1 (a)); `4.J 1 → 20 / 25`; `4.B 5 → 6 / 7`; `4.I 18 → 20 / 20`
-(Q2). **The signal:** more than **twenty-two** means the substrate was not
+three PRs. Registry, as the sum §1.2 item 2 derives from its row table and
+not as a figure of its own: `implemented 97 + 18 + 1 + 2 = 118`
+(`97 + 18 + 1 = 116` without I13/I15), `validator-enforced 152 − 1 = 151`
+(Q1 (a)); `4.J 1 + 18 = 19 / 25`; `4.B 5 + 1 = 6 / 7`;
+`4.I 18 + 2 = 20 / 20` (Q2). **The signal:** more than **twenty-two** means the substrate was not
 what this document claims. Slice 7 missed by 20 % with corpus witnesses for
 its rows; this slice has none for its refusals, so the signal is set at the
 slice-7 ratio over a larger base, not tighter. The most likely causes, in
@@ -581,17 +655,20 @@ at close, as slice 7 did.
 
 ## 6. What this slice does not build
 
-- **J3, J7, J8, J9, J10** — Slice C's, with SCV as the input (§1.2 item 1).
-- **The interim fail-closed serve-credit row** — `SCV-Q1`'s, SCV §6
-  commit 3. This slice records a preference on its ordering (§1.2) and
-  nothing more.
-- **`DEL-008`'s conjunct** — `SCV-Q5`'s.
+- **J1, J3, J7, J8, J9, J10** — Slice C's, authorized 2026-10-04 with the
+  closed serve-credit round as its Round 0 (§1.2 item 1).
+- **Any interim serve-credit row.** `SCV-Q1` was withdrawn as moot; there
+  is no interim, and this slice orders nothing relative to one.
+- **`DEL-008`'s trigger** — ruled (`SCV-Q5`): Slice C's rows `implemented`
+  and J8–J10 retired. This slice is on that gate's critical path and does
+  not move it.
 - **The `archival_reorg_depth_blocks` split** — re-pointed to Slice C.
 - **The attestation-record producer** (the block-template writer's,
   FOLLOWUPS `:181`) and the witness crossing the RPC edge (its second row).
   B4's record arm is tested with a driver-supplied witness; the corpus
   stays at `None`.
-- **The settlement writer** (`SO-D8`, blocked on Slice C) and anything in
+- **The settlement writer** (Slice C's, landing as one unit with its
+  admission rows — SO-D8 §8.0 item 3) and anything in
   `archival/{inputs,slash,close}.rs` — the transition is E4's, landed, and
   this slice adds rules in front of it, not arithmetic inside it.
 - **Any C++ change.** The C++ gates stay as `DEL-008`'s cutover-day list has
@@ -607,6 +684,7 @@ at close, as slice 7 did.
 | round | date | state |
 | --- | --- | --- |
 | 0 | 2026-10-03 | pre-flight written at `01a4494f1a`; §1.3's blocker check run first; nine questions posed with defaults (§8); no code |
+| 0 (boundary) | 2026-10-04 | #946 read at `7003bd629`: Slice C authorized, its surface *"the successors of CEN-J1–J3 and J7–J10"* — J1 leaves this slice (one row, not four: J4–J6 are bond-state rows and stay); `SCV-Q1` withdrawn, Q9 struck; `SCV-Q5`'s genesis gate read into the plan; Slice C's input 4 (the shard predicate) and this slice's Q5 reconciled as build-here / consume-there, posed; figure re-derived from the row list (18 4.J rows; `118 / 151`); still no code |
 
 ---
 
@@ -636,8 +714,12 @@ Each has a default; a ruling that takes the default needs only the date.
   settled epoch has no `r_market` row is not admissible (fail closed; the
   C++'s `0` recorded as an inheritance finding). *Alternative:* `None ⇒
   0`, parity.
-- **Q5 — the closed-and-final predicate's row** (§3.4). *Default:* amend
-  CEN-J15's text; no new id. *Alternative:* mint `CEN-J27`.
+- **Q5 — the closed-and-final predicate's row, and who builds it** (§3.4).
+  *Default:* amend CEN-J15's text; no new id; this slice builds it in J15
+  and Slice C's Round 0 input 4 is discharged by that row reading
+  `implemented`. *Alternatives:* mint `CEN-J27`; or Slice C builds it,
+  which puts a bond-admission rule in a serve-credit slice and leaves J15
+  reading a fact nothing enforces until Slice C lands.
 - **Q6 — the witness door for B4** (§3.5). *Default:* a parameter on
   `validate`, `None` the empty set. *Alternatives:* (b) inside the block
   type (rule 42 refuses); (c) the empty arm only.
@@ -651,17 +733,18 @@ Each has a default; a ruling that takes the default needs only the date.
   `hybrid_public_key` otherwise, run before `judge_signatures` so a
   wrong-key post is refused as J13 and not as a bad signature.
   *Alternative:* fold the key selection into I18's archival arm.
-- **Q9 — the interim row's position relative to J1/J4–J6** (§1.2 item 1).
-  Not this slice's to decide (`SCV-Q1`); posed so the preference is on the
-  record where SCV's Round 1 will read it. *Preference:* the surviving rows
-  first, the blanket refusal after.
+- **Q9 — STRUCK 2026-10-04.** *Was:* the interim row's position relative to
+  J1/J4–J6, a preference posed for `SCV-Q1`'s Round 1 to read. `SCV-Q1` was
+  withdrawn as moot at #946 (§1.2 item 1); there is no interim row to order
+  against, and J1 is no longer this slice's. The number is kept so nothing
+  re-uses it.
 
 ---
 
 ## 9. Documentation owed (rule 91)
 
 Row 11 of §5. In addition, at this file's commit 1: the DRS-E6 row and the
-§7.5 4.J row in `DAEMON_REDB_STORE.md` (the slice opened; the five
+§7.5 4.J row in `DAEMON_REDB_STORE.md` (the slice opened; the six
 successor rows named; the `SAR-Q6` forward action pointed at Q4), the index
 doc row, and the two FOLLOWUPS re-points named in §1.2. This document
 archives to `docs/completed/` when PR-c lands (archive-or-contract, rule
