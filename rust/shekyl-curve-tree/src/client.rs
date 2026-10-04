@@ -1017,6 +1017,9 @@ impl CurveTreeClient {
             &removed,
             block.height,
             &snapshot,
+            // Captures are threaded here by the next commit; the store side
+            // is in place so they ride this transaction when they arrive.
+            &[],
         )?;
 
         // Store committed — the in-memory commit below is infallible.

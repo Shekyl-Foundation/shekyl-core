@@ -1192,7 +1192,14 @@ impl LeafStore {
         pending_removed: &[Gindex],
         tip_height: BlockHeight,
     ) -> Result<(), StoreError> {
-        self.write_block_deltas(drained, pending_added, pending_removed, tip_height, None)
+        self.write_block_deltas(
+            drained,
+            pending_added,
+            pending_removed,
+            tip_height,
+            None,
+            &[],
+        )
     }
 
     /// [`Self::append_block_deltas`] plus one frontier snapshot, in the same
@@ -1208,6 +1215,12 @@ impl LeafStore {
     /// [`StoreError::SnapshotBelowSyncTip`] when `tip_height` is strictly
     /// below the store's sync tip, plus every error of
     /// [`Self::append_block_deltas`]. The refusal happens before any write.
+    /// `captures` are the chunks that finalized during this block, keyed by
+    /// the position each closed at. They are written **inside this block's
+    /// transaction**, beside the leaves and the ring snapshot, so a crash
+    /// cannot separate a fold from its capture on the normal path. Pass an
+    /// empty slice when nothing was captured, which is every block for a
+    /// wallet that owns nothing in the chunks that closed.
     pub fn append_block_with_snapshot(
         &self,
         drained: &[LeafEntry],
@@ -1215,6 +1228,7 @@ impl LeafStore {
         pending_removed: &[Gindex],
         tip_height: BlockHeight,
         frontier_snapshot: &[u8],
+        captures: &[(TreePosition, Vec<CapturedChunk>)],
     ) -> Result<(), StoreError> {
         self.write_block_deltas(
             drained,
@@ -1222,6 +1236,7 @@ impl LeafStore {
             pending_removed,
             tip_height,
             Some(frontier_snapshot),
+            captures,
         )
     }
 
@@ -1238,6 +1253,7 @@ impl LeafStore {
         pending_removed: &[Gindex],
         tip_height: BlockHeight,
         frontier_snapshot: Option<&[u8]>,
+        captures: &[(TreePosition, Vec<CapturedChunk>)],
     ) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         let mut leaf_count = {
@@ -1301,6 +1317,13 @@ impl LeafStore {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_LEAF_COUNT, &leaf_count)?;
             meta.insert(META_SYNC_TIP, &effective_tip)?;
+        }
+        // Captures ride the block's own transaction, beside the ring. A
+        // crash between the fold and its capture is then not a state the
+        // normal path can reach, which leaves reconciliation a net under the
+        // mechanism rather than the mechanism itself.
+        for (end_leaf, chunks) in captures {
+            merge_captured_chunks(&txn, *end_leaf, chunks)?;
         }
         if let Some(bytes) = frontier_snapshot {
             Self::write_frontier_snapshot_in_txn(&txn, tip_height, bytes)?;
@@ -2293,34 +2316,66 @@ impl LeafStore {
         end_leaf: TreePosition,
         chunks: &[CapturedChunk],
     ) -> Result<(), StoreError> {
-        let key = TreePositionKey::from(end_leaf);
         let txn = self.db.begin_write()?;
-        {
-            let mut table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
-            let mut merged = match table.get(key)? {
-                Some(v) => decode_captured_chunks(v.value())?,
-                None => Vec::new(),
-            };
-            for incoming in chunks {
-                match merged.iter().find(|held| held.layer == incoming.layer) {
-                    Some(held) if held.bytes == incoming.bytes => {}
-                    Some(_) => {
-                        return Err(StoreError::ConflictingCapture {
-                            end_leaf: end_leaf.to_raw(),
-                            layer: incoming.layer,
-                        })
-                    }
-                    None => merged.push(incoming.clone()),
-                }
-            }
-            // Deterministic order, so one set of chunks has one encoding
-            // however it arrived.
-            merged.sort_unstable_by_key(|c| c.layer);
-            let encoded = encode_captured_chunks(&merged);
-            table.insert(key, encoded.as_slice())?;
-        }
+        merge_captured_chunks(&txn, end_leaf, chunks)?;
         txn.commit()?;
         Ok(())
+    }
+
+    /// Drained entries at positions `start..=end`, in position order.
+    ///
+    /// The ranged counterpart to [`Self::read_drained_entries`], which walks
+    /// every row. Capture needs one layer-0 chunk's worth of identities —
+    /// `SELENE_CHUNK_WIDTH` of them — and reading the whole table to find 38
+    /// adjacent rows would reintroduce, inside the thing meant to remove it,
+    /// the `O(n)` pass capture exists to delete.
+    ///
+    /// Short rows are not an error: a range that runs past the drained tail
+    /// returns what exists, so a caller sizing a chunk against a partial tail
+    /// sees the partial tail.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::CorruptMeta`] if the two position-keyed tables disagree
+    /// about which rows exist, which is the invariant
+    /// [`Self::read_drained_entries`] checks across the whole table and this
+    /// checks across the range it reads.
+    pub fn read_drained_range(
+        &self,
+        start: TreePosition,
+        end: TreePosition,
+    ) -> Result<Vec<LeafEntry>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let leaves = txn.open_table(LEAVES_TABLE)?;
+        let meta = txn.open_table(LEAF_META_TABLE)?;
+        let mut out = Vec::new();
+        for raw in start.to_raw()..=end.to_raw() {
+            let pos = TreePositionKey::from_raw(raw);
+            match (leaves.get(pos)?, meta.get(pos)?) {
+                (Some(leaf), Some(meta_row)) => {
+                    let stored = decode_stored_leaf_meta(meta_row.value())?;
+                    out.push(LeafEntry {
+                        gindex: stored.gindex,
+                        maturity: stored.maturity,
+                        creation_height: stored.creation_height,
+                        leaf: *leaf.value(),
+                        identity: stored.identity,
+                    });
+                }
+                // Absence of BOTH is the end of the drained range, which a
+                // caller sizing a chunk against a partial tail should see.
+                (None, None) => break,
+                // One table holding a position the other does not is the
+                // asymmetry `read_drained_entries` refuses across the whole
+                // table; this refuses it across the range it reads.
+                _ => {
+                    return Err(StoreError::CorruptMeta(
+                        "leaves/leaf_meta key-set asymmetry",
+                    ))
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// The chunks that closed at `end_leaf`, empty when none were captured.
@@ -2464,6 +2519,52 @@ pub struct CapturedChunk {
     pub layer: u8,
     /// The chunk's bytes, in the shape the layer implies.
     pub bytes: Vec<u8>,
+}
+
+/// Merge `chunks` into the row at `end_leaf`, inside the caller's
+/// transaction.
+///
+/// Factored out of [`LeafStore::put_captured_chunks`] so the ingest can write
+/// captures in the **block's own transaction**, beside the leaves and the
+/// ring snapshot. A crash then cannot separate a fold from its capture on the
+/// normal path, which leaves reconciliation a net under the mechanism rather
+/// than the mechanism itself.
+///
+/// Merge semantics are [`LeafStore::put_captured_chunks`]'s, because they are
+/// this function: identical bytes are a no-op, different bytes for one
+/// `(end_leaf, layer)` are [`StoreError::ConflictingCapture`].
+fn merge_captured_chunks(
+    txn: &redb::WriteTransaction,
+    end_leaf: TreePosition,
+    chunks: &[CapturedChunk],
+) -> Result<(), StoreError> {
+    if chunks.is_empty() {
+        return Ok(());
+    }
+    let key = TreePositionKey::from(end_leaf);
+    let mut table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+    let mut merged = match table.get(key)? {
+        Some(v) => decode_captured_chunks(v.value())?,
+        None => Vec::new(),
+    };
+    for incoming in chunks {
+        match merged.iter().find(|held| held.layer == incoming.layer) {
+            Some(held) if held.bytes == incoming.bytes => {}
+            Some(_) => {
+                return Err(StoreError::ConflictingCapture {
+                    end_leaf: end_leaf.to_raw(),
+                    layer: incoming.layer,
+                })
+            }
+            None => merged.push(incoming.clone()),
+        }
+    }
+    // Deterministic order, so one set of chunks has one encoding however it
+    // arrived.
+    merged.sort_unstable_by_key(|c| c.layer);
+    let encoded = encode_captured_chunks(&merged);
+    table.insert(key, encoded.as_slice())?;
+    Ok(())
 }
 
 /// `layer ‖ len ‖ bytes`, repeated. Self-describing, because a cascade writes
@@ -3010,7 +3111,7 @@ mod tests {
         let store = LeafStore::open_ephemeral().unwrap();
         let snapshot = b"a frontier's bytes".as_slice();
         store
-            .append_block_with_snapshot(&[], &[], &[], BlockHeight::from_raw(100), snapshot)
+            .append_block_with_snapshot(&[], &[], &[], BlockHeight::from_raw(100), snapshot, &[])
             .unwrap();
         assert_eq!(
             store.frontier_snapshot_span().unwrap(),
@@ -3022,7 +3123,7 @@ mod tests {
         // call would otherwise succeed and insert a row at height 90 —
         // widening the span downward past what the ring's own bound placed.
         let err = store
-            .append_block_with_snapshot(&[], &[], &[], BlockHeight::from_raw(90), snapshot)
+            .append_block_with_snapshot(&[], &[], &[], BlockHeight::from_raw(90), snapshot, &[])
             .expect_err("a snapshot below the sync tip is a caller bug");
         assert!(
             matches!(
@@ -4387,6 +4488,59 @@ mod tests {
             store.open_frozen_segment_body(SegmentId(0)),
             Err(StoreError::CorruptMeta(_))
         ));
+    }
+
+    /// `read_drained_range` returns the positions asked for, in order, and
+    /// stops at the drained tail rather than erring.
+    ///
+    /// Capture needs one chunk's identities — 38 adjacent rows — and the
+    /// whole-table read would reintroduce, inside the mechanism meant to
+    /// remove it, the `O(n)` pass capture exists to delete. So the range read
+    /// is the subject: it must agree with the full read over the same window,
+    /// which is what makes it a narrowing rather than a second reader.
+    #[test]
+    fn a_ranged_read_agrees_with_the_full_read_and_stops_at_the_tail() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        let count = 50_u64;
+        seed_leaves(&store, count);
+
+        let all = store.read_drained_entries().unwrap();
+        assert_eq!(all.len() as u64, count);
+
+        // A window strictly inside the drained range.
+        let got = store
+            .read_drained_range(TreePosition::from_raw(10), TreePosition::from_raw(19))
+            .unwrap();
+        assert_eq!(got.len(), 10, "a ten-position window returns ten rows");
+        assert_eq!(
+            got.iter().map(|e| e.gindex).collect::<Vec<_>>(),
+            all[10..20].iter().map(|e| e.gindex).collect::<Vec<_>>(),
+            "the ranged read must be the full read's slice, in the same order"
+        );
+
+        // A window that runs past the tail returns what exists. A caller
+        // sizing a chunk against a partial tail has to see the partial tail,
+        // which is exactly the last chunk before the frontier.
+        let past = store
+            .read_drained_range(
+                TreePosition::from_raw(count - 3),
+                TreePosition::from_raw(count + 10),
+            )
+            .unwrap();
+        assert_eq!(
+            past.len(),
+            3,
+            "a range past the tail is short, not an error"
+        );
+
+        // A window entirely past the tail is empty, not an error.
+        assert!(store
+            .read_drained_range(
+                TreePosition::from_raw(count + 1),
+                TreePosition::from_raw(count + 5)
+            )
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
