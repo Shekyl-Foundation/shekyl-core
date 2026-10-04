@@ -19,30 +19,31 @@ request a held decoy and file the signature as a pass for an unheld
 target. `SF-D8` RULED 2026-09-13 (amended twice later the same day; the
 second amendment is what landed) that `P` gates `anchor_height` against
 its own height ±`L` and signs the **decoded** 72 bytes ‖ `shard_id_le[8]`
-under a new versioned domain; the v1 nonce-only message is not reused;
-the pass record carries the 32-byte random and the 8-byte anchor height;
+‖ `D[32]` — `D` a nonce-salted cSHAKE256 digest of the response body
+ahead of the signature (added 2026-10-04) — under a versioned domain
+(`…-scheme-v3`; the v1 nonce-only and v2 digest-less messages are not
+reused); the pass record carries the 32-byte random, the 8-byte anchor
+height and the 32-byte `D`;
 admission requires `anchor_height ∈ [h − 720 − L, h − 720]` for validated
 predecessor `h`, rebuilds the transcript with the connecting chain's hash
 at that height, and refuses every pass record while `h < 720 + L` (724).
-`verify_pass_countersignature` is amended to that v2 message by (a0): the
+`verify_pass_countersignature` verifies that message: the
 verify context carries `predecessor_height` and the `L + 1` anchor hashes
 (`anchor_hashes_ptr/len`, sized through `shekyl_archival_pass_anchor_window`)
 and no longer carries `cb_out_key`, `cb_out_key_readable`, or
 `prev_block_hash`; verdict codes 8 (`CBKEY_UNREADABLE`) and 12
 (`PREVHASH_UNPOPULATED`) are RETIRED, never reused; 13, 14, 15 are minted
 for the malformed table, out-of-window anchor, and below-threshold cases;
-the prunable witness entry is `nonce[32] ‖ anchor_height_le[8] ‖
+the prunable witness entry is `nonce[32] ‖ anchor_height_le[8] ‖ D[32] ‖
 HybridSignature`. The challenge
 tuple and `cb_out_key` are not in the fetch signature: the fetch proves
 `P` served, not which miner asked. `SF-D8` also ruled the carrier: the
 HTTP body is the unchanged `RF-D4` frame followed by a fixed-length
-outer envelope holding the canonical `HybridSignature`, last so that it
-seals the delivery (*corrected 2026-10-04; landed ahead of the frame*);
-response
+outer envelope holding the canonical `HybridSignature`, last because it
+covers a digest of everything ahead of it; response
 headers stay exactly `content-type` and `content-length`, which covers
 envelope plus frame. The 2026-08-21 status above remains the record of
-what landed, not a claim that the v2 message or the envelope is
-implemented. **The `RF-D4` section below is left as the CLOSED record
+what landed then; the message and the envelope landed with `SF`. **The `RF-D4` section below is left as the CLOSED record
 of the inner frame; where it calls that frame the whole body ("no
 envelope", `served response :=`) it is superseded in scope by `SF-D8`
 and is rewritten by the implementation PR that lands the envelope.**
@@ -1273,8 +1274,7 @@ a raw `FrozenSegmentBody` — a flat concatenation of leaf bytes — with
 `content-length = (end − next) · LEAF_BYTES` (`redb_backend.rs:363-365`). No
 envelope, no fields. *(Records-was: the state this section set out to fix.
 Since 2026-09-13 `SF-D8` places a fixed-length `HybridSignature` envelope
-after the frame this section defines, as the response's last bytes
-(corrected 2026-10-04; it was first built ahead of the frame).)*
+after the frame this section defines, as the response's last bytes.)*
 
 **`content-length` cannot be TJ-H's reserved header**, for three reasons:
 

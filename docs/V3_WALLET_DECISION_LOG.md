@@ -5891,9 +5891,13 @@ shard byte arrived.
    3,425) and the witness maximum is 885,000 B (was 876,808). `D` joins
    each record's contribution to `attestation_root`. **The empty root is
    unchanged**, so the genesis header value does not move.
-4. **The signature is the response's last bytes.** `P` signs over the
-   digest of the exact buffer it sends, then sends the buffer, then the
-   signature. A transfer that fails mid-body yields no signature.
+4. **The signature is the response's last bytes.** `P` reads the body
+   once to compute `D`, signs, then reads it again and streams it while
+   hashing what it writes, and appends the signature only if the sent
+   bytes hash to the signed `D`. Neither pass holds more than one chunk,
+   so the serving ceiling's memory bound is unchanged. A transfer that
+   fails mid-body, or a body that differs between the two reads, yields
+   no signature.
 5. **The scheme domain** rotates `shekyl/archival-attestation-scheme-v2` →
    `…-v3`. One label never names two messages (`30-cryptography.mdc`); a v2
    signature can never verify as v3. No retired-label constant is kept;

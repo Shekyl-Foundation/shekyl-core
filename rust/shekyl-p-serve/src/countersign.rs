@@ -6,13 +6,14 @@
 //! The serve side of the SF-D8 pass countersignature.
 //!
 //! A `P` answering a shard request binds the daemon's 72-byte request
-//! header and the shard id under `SCHEME_DOMAIN_ATTESTATION`; the daemon
-//! verifies that binding against the `P` public key it already holds from
-//! the bond record. The transcript both ends agree on —
-//! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` —
-//! and the anchor-gate constants are consensus values owned by
-//! `shekyl_archival_retention::pass_anchor`; this module only pairs them
-//! with a signer.
+//! header, the shard id and a nonce-salted digest of the response it
+//! delivers under `SCHEME_DOMAIN_ATTESTATION`; the daemon verifies that
+//! binding against the `P` public key it already holds from the bond
+//! record. The transcript both ends agree on —
+//! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ delivery_digest[32]` —
+//! the digest construction and the anchor-gate constants are consensus
+//! values owned by `shekyl_archival_retention::pass_anchor`; this module
+//! only pairs them with a signer.
 //!
 //! ## Who holds the key
 //!
@@ -66,7 +67,7 @@ pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
 /// for the pre-sign gate is [`PassSigner::own_height`] — a signer is a
 /// key plus a height source, not a second `sign_pass`.
 pub trait PassKey: Send + Sync {
-    /// Sign the 80-byte SF-D8 transcript under the attestation domain.
+    /// Sign the 112-byte SF-D8 transcript under the attestation domain.
     ///
     /// # Errors
     ///

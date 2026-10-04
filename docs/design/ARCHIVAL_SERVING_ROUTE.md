@@ -2,8 +2,8 @@
 
 **Status: LIVING CONTRACT.** Ruled 2026-09-10 (`RF-R1`). Last verified
 2026-10-04 (the countersignature envelope **closes** the body, after the
-frame, so it seals the delivery — `SF-D8`, corrected that day; request
-header still the 2026-09-13 (a)+(b) landing; client
+frame, and signs a nonce-salted digest of it — `SF-D8`; request
+header the 2026-09-13 (a)+(b) landing; client
 `shekyl_p_fetch::MAX_INFLIGHT = 8` W₂ pin; grammar homed in
 `shekyl_curve_tree::serving_route`).
 
@@ -30,10 +30,11 @@ The body after `\r\n\r\n` is the `RF-D4` frame then the
 `shekyl_curve_tree::served_frame::ServedFrameHeader` ‖ payload ‖
 `HybridSignature` canonical bytes
 (`SIGNATURE_ENVELOPE_LEN = HybridSignature::CANONICAL_LEN`, 3385)
-(`SF-D8`). The envelope is the response's last bytes: `P` releases the
-signature only once the frame is delivered, so holding it means the whole
-read crossed `P`'s link. This document owns the envelope's *position and width*; the
-signature's transcript is `SF-D8`'s and the frame is `RF-D4`'s.
+(`SF-D8`). The envelope is the response's last bytes: the signed
+transcript includes a digest of every body byte ahead of it, salted with
+the request's nonce. This document owns the envelope's *position and
+width*; the signature's transcript is `SF-D8`'s and the frame is
+`RF-D4`'s.
 
 ---
 
@@ -110,7 +111,10 @@ the tests are the spec.
   `content-length: 0`.
 - On 200, `content-length` is `framed_len + SIGNATURE_ENVELOPE_LEN`;
   the body is the `RF-D4` frame, then the countersignature as its last
-  bytes. A body that fails mid-stream ends without one.
+  bytes. `P` reads the shard twice — once to digest and sign, once to
+  send — and appends the signature only if the bytes it sent hash to the
+  digest it signed. A body that fails mid-stream, or that differs from
+  the signed read, ends without one.
 - **One response, then close.** `P` shuts its write half as soon as
   the last body byte is written (`close_gracefully`), so the client's
   EOF is behind the body, not behind a keep-alive. The client reads
@@ -120,10 +124,10 @@ the tests are the spec.
   "no" with bytes behind it is not the identical 404.
 - Incomplete heads (oversized, mid-head EOF, read timeout) and
   over-capacity arrivals are **closed with no HTTP bytes**.
-- Which response a complete head gets is settled before any byte is
-  written. The gate check runs **before** the shard lookup, and the
-  signature is computed **after** it, so an out-of-gate request costs
-  no store read and a miss costs no signature.
+- Whether a complete head gets the 404 or a 200 is settled before any
+  byte is written. The gate check runs **before** the shard lookup, and
+  the signature is computed **after** the digesting read, so an
+  out-of-gate request costs no store read and a miss costs no signature.
 - No request logging at any level. Observables are five aggregate
   monotone counters (served, refused, lookup failures, sign failures,
   accept failures).
@@ -159,7 +163,7 @@ header level. That is the privacy invariant
   anchor at depth 720 yet and `P` refuses every request; for
   `720 ≤ p < 720 + L` the window's lower edge clamps at height 0
   (`anchor_within_gate`, `shekyl-p-serve`). `P` signs the **decoded**
-  72 bytes ‖ `shard_id_le[8]`
+  72 bytes ‖ `shard_id_le[8]` ‖ `delivery_digest[32]`
   under `SCHEME_DOMAIN_ATTESTATION` (`SF-D8`;
   `shekyl_archival_retention::pass_anchor::pass_countersignature_message`),
   never the textual form. Every other request header is ignored.
@@ -234,8 +238,10 @@ auth (no per-fetch circuit isolation).
 the header and the envelope —
 `request_header_parsing_is_http_lenient_and_value_strict` and
 `the_served_body_is_the_frame_then_the_countersignature` and
-`the_countersignature_is_released_only_after_the_whole_frame`
+`the_countersignature_is_released_only_after_the_whole_frame` and
+`a_body_that_changes_between_the_signed_read_and_the_sent_one_gets_no_signature`
 (`shekyl-p-serve`) green beside
+`garbage_with_a_valid_signature_appended_is_refused` and
 `a_signature_sent_ahead_of_the_body_is_refused` (`shekyl-p-fetch`) and
 `a_signed_shard_comes_back_verified_and_the_proxy_got_the_onion_name`
 (`shekyl-p-fetch`), which pins the client's request bytes verbatim.

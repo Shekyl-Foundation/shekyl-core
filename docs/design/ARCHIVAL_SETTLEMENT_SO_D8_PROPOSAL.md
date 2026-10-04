@@ -2251,8 +2251,10 @@ not wait on them; building does.
 1. **Q9's set-commitment bytes** (§7.6.1, PROPOSED): the customization and
    the four-vector KAT.
 2. **The R-B record layout, written once** (`SCV-3`): kept and pruned
-   fields, including where `SF-D8`'s carried `nonce` and `anchor_height`
-   ride. This is the response-format round's reopen (§2.1 item 1), with its
+   fields, including where `SF-D8`'s carried `nonce`, `anchor_height` and
+   32-byte delivery digest ride. The per-record figures this document
+   computes with (~3,411 B, §7's split arithmetic) predate those carried
+   fields and are re-derived from the layout this item writes. This is the response-format round's reopen (§2.1 item 1), with its
    rule-42 version bump. It includes **the anchor window's operand**: the
    landed `PassAnchorWindow::shape_for_predecessor` keys it on the
    *including* block's predecessor; whether R-B keeps that or moves it to

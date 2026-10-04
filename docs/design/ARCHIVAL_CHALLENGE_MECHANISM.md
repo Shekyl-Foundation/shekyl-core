@@ -72,7 +72,8 @@ sentence listed was REJECTED 2026-09-13 — see §7 item 2).
 once named as the live remainder has run: response wire (`RF-`), pass-record
 tx carrier + prunable residence (`CR-`), binding artifact and countersignature
 (`SF-D8` / `SF-D13` — the signed message is the requester-random `nonce[32]` ‖
-the requester's chain anchor at `tip − 720` ‖ `shard_id_le[8]`; `block_hash(h−1)`,
+the requester's chain anchor at `tip − 720` ‖ `shard_id_le[8]` ‖ a
+nonce-salted digest of the delivered response; `block_hash(h−1)`,
 `cb_out_key`, `(P, s, E)` and `r` are all out of it — §2 step 3), key tiers
 (§7.2). W₂ is ruled (§9.7 item 6a). **What remains: two derivations** — (m, n)
 (§3) and the `λ_eff` tripwire *response*. Note
@@ -174,7 +175,10 @@ The read itself (unchanged from the TJ round):
    72-byte request header `nonce[32] ‖ anchor_height_le[8] ‖
    anchor_hash[32]` — requester-random nonce plus the requester's chain
    anchor at `tip − 720` — followed by `shard_id_le[8]`, the route id P
-   parsed, under the bond record's hybrid identity key (`SF-D13`; the
+   parsed, and `D[32]`, a cSHAKE256 digest of the response P delivered
+   salted with the nonce (2026-10-04; under
+   `shekyl/archival-attestation-scheme-v3`), all under the bond record's
+   hybrid identity key (`SF-D13`; the
    §7.2(i) anchor-key fork is **closed**). P gates `anchor_height`
    against its own height ±`L` before signing; admission looks the anchor
    hash up on the connecting chain inside `[h − 720 − L, h − 720]`. The
@@ -915,7 +919,7 @@ the round kept trying to add forensics underneath it.
    this fork handed over — nonce = `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)`
    — is **SUPERSEDED (`SF-D8`, 2026-09-13)**: the signed message is the
    requester-random `nonce[32]` ‖ `anchor_height ‖ anchor_hash` at `tip − 720`
-   ‖ `shard_id_le[8]`, with no `block_hash(h−1)`, no `cb_out_key` and no
+   ‖ `shard_id_le[8]` ‖ the delivery digest, with no `block_hash(h−1)`, no `cb_out_key` and no
    `(P, s, E)` in it, because the fetch proves `P` served, not which miner
    asked (§2 step 3). The property this paragraph argued for survives in that
    form — a nonce the requester draws at request time cannot be pre-signed —

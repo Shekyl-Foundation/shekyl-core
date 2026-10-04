@@ -47,7 +47,7 @@ as a security property.
 | Site | Op | Signed input | Structural domain? |
 |---|---|---|---|
 | ~~`shekyl-archival-bond-builder` S1 on-vin sign~~ | — | — | **Deleted in SA-2b** (§2.2): bond vin rides generic surface-A `pqc_auths` (see `stake_engine/bond.rs` bond-slot row). Live census = eight sites below |
-| `shekyl-archival-retention/src/attestation_wire.rs` (`verify_pass_countersignature`) | verify | `pass_countersignature_message(header[72], shard_id)` — decoded `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` | **no** — bare transcript; scheme domain `shekyl/archival-attestation-scheme-v2` is supplied to `verify` (row E of §5) |
+| `shekyl-archival-retention/src/attestation_wire.rs` (`verify_pass_countersignature`) | verify | `pass_countersignature_message(header[72], shard_id, delivery_digest)` — decoded `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ delivery_digest[32]` | **no** — bare transcript; scheme domain `shekyl/archival-attestation-scheme-v3` is supplied to `verify` (row E of §5) |
 | `shekyl-crypto-pq/src/output.rs:991` | sign | caller's `message` (`sign_pqc_auth_for_output`) | **no** — bare |
 | `shekyl-engine-core/…/stake_engine/bond.rs:313` | sign | `bond_payload_hash` | **no** — bare hash |
 | `shekyl-engine-core/…/stake_engine/claim.rs:337,484` | sign | claim / emission payload hash | **no** — bare hash |
@@ -322,7 +322,7 @@ not by which was less work.
 | B | Archival bond-post vin (rides surface A) | bond slot signs surface-A hash (`bond.rs:313`) | submit verifier / C++ `tx_pqc_verify` (as surface A) | **`shekyl/pqc-auth-tx-v1`** (same as A). Slot-preimage choice **resolved in SA-2b: generic wins**; S1 + `signature_preimage` + `SCHEME_DOMAIN_BOND_POST` deleted (§2.2) |
 | C | Emission auth — claim | `claim.rs` claim | emission_verify claim leg | `shekyl/archival-emission-claim-scheme-v1` |
 | D | Emission auth — backing | `claim.rs` backing (`sign_pqc_auth_for_output`) | emission_verify backing leg | `shekyl/archival-emission-backing-scheme-v1` |
-| E | Attestation countersignature | `shekyl-p-serve` (signer lands with `SF` (a); none in-repo at ratification) | `verify_pass_countersignature` ← C++ | `shekyl/archival-attestation-scheme-v2` — **v1 RETIRED 2026-09-13** by `SF-D8` (a0): the message became `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` (the decoded request header ‖ route id), so the string moved with it (`CRYPTO_DOMAIN_REGISTRY.tsv`); no v1 signature was ever produced |
+| E | Attestation countersignature | `shekyl-p-serve` (signer lands with `SF` (a); none in-repo at ratification) | `verify_pass_countersignature` ← C++ | `shekyl/archival-attestation-scheme-v3` — **v1 RETIRED 2026-09-13** by `SF-D8` (a0), when the message became the decoded request header ‖ route id; **v2 RETIRED 2026-10-04**, when it gained the nonce-salted delivery digest: `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ delivery_digest[32]`. The string moves with the message (`CRYPTO_DOMAIN_REGISTRY.tsv`); no chain carried a v1 or v2 signature |
 | F | Serve-credit response | none in-repo | serve_credit (F1) | `shekyl/archival-serve-credit-scheme-v1` (assignable unilaterally) |
 
 Distinct `…-scheme-vN` per surface (SA-R-2 principle; every surface is at
@@ -338,7 +338,7 @@ former C++/Rust differential pair is now a captured KAT,
 assignable now with the KAT writer the only lockstep. E's was assignable the
 same way until `SF-D8` (a0) landed its verifier and armed pinned vector
 (2026-09-13); the string is now pinned by
-`attestation_pass_countersignature_v2_pinned.json` and
+`attestation_pass_countersignature_v3_pinned.json` and
 moves only with a regeneration recorded in the decision log.
 
 ### Census corrections folded as facts
