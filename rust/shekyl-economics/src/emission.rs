@@ -109,11 +109,10 @@ pub fn effective_emission(
     Ok(modulated.max(tail_subsidy_per_block(params)?))
 }
 
-/// The heaviest block [`apply_weight_penalty`] pays in full under
-/// `median_weight`: the median, raised to [`EconomicParams::full_reward_zone`]
-/// when the median sits below it ("make it soft"). The paid amount does not
-/// enter. A caller that has not priced an emission yet asks this, not a
-/// method on one.
+/// The heaviest block weight the penalty pays in full: `median_weight`,
+/// raised to [`EconomicParams::full_reward_zone`] when the median sits
+/// below it. The paid amount does not enter. A caller that has not priced
+/// an emission yet asks this, not a method on one.
 #[must_use]
 pub fn penalty_free_weight(median_weight: u64, params: &EconomicParams) -> u64 {
     median_weight.max(params.full_reward_zone)
