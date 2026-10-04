@@ -23,13 +23,17 @@ cases (`relayed_zone`, pool callbacks) become seam tests in that deletion.
 
 **UPDATE 2026-10-03:** Two residues land in this slice and are not a
 C++ patch. The forget-cause split — `TransportTimeout` and `LocalClose`
-do not mark the address; `DialFailed`, `ProxyRefused`, and a Levin
-handshake rejection do — runs through `zone_server::open` and
-`do_handshake_with_peer`. The write-stall samples sit on the
-connection's writer: per session, both connectors, no threshold (D9
-forbids a millisecond without a distribution). Both are this rewrite.
-The seam already carries the close cause, and the stall is a span on
-the Rust writer loop. Doing either in C++ is work this slice deletes.
+do not mark the address, so it stays dialable; `DialFailed`,
+`ProxyRefused`, and a Levin handshake rejection take the existing
+forget window; there is no second window — runs through
+`zone_server::open` and `do_handshake_with_peer`. The write-stall
+samples sit on the connection's writer: per session, both connectors,
+no threshold (D9 forbids a millisecond without a distribution). The
+samples and the forget-cause split are this rewrite. The `AfterChannel`
+deadline those samples derive is not: the stalled write still holds
+the task and the fd until that deadline exists. The seam already
+carries the close cause, and the stall is a span on the Rust writer
+loop. Doing either residue in C++ is work this slice deletes.
 
 **SCOPE NARROWED 2026-09-21 (steering).** *Records-was: "P2P-3 slice 1", and the
 scope was the whole p2p surface.* **LV-3 is the `levin_notify` / `net_node`
