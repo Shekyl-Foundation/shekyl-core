@@ -170,7 +170,8 @@ pub use rule_set::{
 };
 pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::block_weight::{
-    cxx_median, effective_median_at, medians_from, medians_over, EffectiveMedian, Weights,
+    effective_median_at, even_pair_median, median, medians_from, medians_over, EffectiveMedian,
+    Weights,
 };
 pub use rules::body::ArchivalKey;
 pub use rules::difficulty::Target;

@@ -14,17 +14,19 @@
 //! block ([`shekyl_chain_rules::medians_over`]). A fold of sixty years cannot
 //! afford a 100 000-row selection per block, so [`RollingMedian`] keeps each
 //! window split into a lower and an upper half as blocks arrive and leave,
-//! and hands the middle value or values to the validator's own
-//! [`cxx_median`] — the even-count rule stays production's — and the result
-//! to [`medians_from`] for the composition. The tests hold the per-block
-//! result equal to [`shekyl_chain_rules::medians_over`] over the same
-//! window.
+//! and hands the middle pair to the validator's own
+//! [`even_pair_median`](shekyl_chain_rules::even_pair_median) — the
+//! even-count rule stays production's — and the result to [`medians_from`]
+//! for the composition. The tests hold the per-block result equal to
+//! [`shekyl_chain_rules::medians_over`] over the same window, and the
+//! rolling median itself equal to [`shekyl_chain_rules::median`] over the
+//! explicit window.
 
 use std::collections::{BTreeMap, VecDeque};
 
 use crate::fee_model::{FeePoint, OrdinaryTx};
 use shekyl_block_template::Fill;
-use shekyl_chain_rules::{cxx_median, medians_from, EffectiveMedian};
+use shekyl_chain_rules::{even_pair_median, medians_from, EffectiveMedian};
 use shekyl_economics::block_weight::long_term_weight;
 use shekyl_economics::params::{BLOCK_WEIGHT_LONG_TERM_WINDOW, BLOCK_WEIGHT_SHORT_TERM_WINDOW};
 
@@ -51,13 +53,13 @@ impl RollingMedian {
     }
 
     /// The median of the values held, by the validator's rule: the middle
-    /// value of an odd count, [`cxx_median`] of the middle pair of an even
-    /// one, `0` of none.
+    /// value of an odd count, [`even_pair_median`] of the middle pair of an
+    /// even one, `0` of none.
     pub(crate) fn median(&self) -> u64 {
         match (self.low.max(), self.high.min()) {
-            (None, _) => cxx_median(&mut []),
+            (None, _) => 0,
             (Some(lower), Some(upper)) if self.low.len == self.high.len => {
-                cxx_median(&mut [lower, upper])
+                even_pair_median(lower, upper)
             }
             (Some(lower), _) => lower,
         }
@@ -304,7 +306,7 @@ fn window_len(blocks: u64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_chain_rules::{medians_over, RecordedWeights};
+    use shekyl_chain_rules::{median, medians_over, RecordedWeights};
     use shekyl_economics::{EconomicParams, TxVolume};
     use shekyl_types::{BlockWeight, LongTermWeight};
 
@@ -326,7 +328,7 @@ mod tests {
     /// every step: small capacities so the window fills, evicts and churns
     /// through odd and even counts many times.
     #[test]
-    fn the_rolling_median_is_cxx_median_over_the_window() {
+    fn the_rolling_median_is_the_validators_median_over_the_window() {
         for (capacity, modulus) in [(1usize, 5u64), (2, 3), (7, 10), (64, 50), (101, 1_000_000)] {
             let mut rolling = RollingMedian::new(capacity);
             let mut window: VecDeque<u64> = VecDeque::new();
@@ -339,10 +341,10 @@ mod tests {
                 if window.len() > capacity {
                     window.pop_front();
                 }
-                let mut explicit: Vec<u64> = window.iter().copied().collect();
+                let explicit: Vec<u64> = window.iter().copied().collect();
                 assert_eq!(
                     rolling.median(),
-                    cxx_median(&mut explicit),
+                    median(&explicit),
                     "capacity {capacity}, step {step}"
                 );
             }
