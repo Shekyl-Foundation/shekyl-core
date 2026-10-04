@@ -1637,35 +1637,84 @@ grows the Hub row until it publishes the snapshot above, and the count
 is owned there. `Relay::contexts` becomes a reader of that registry,
 or a view over it.
 
-**What greens step c.** The twelve callbacks read snapshots.
-`get_context_ref()` has no caller outside the strand. The `run` thread
-at `:1163` is gone, and that deletion is recorded as removing the
-`--in-peers` measurement input named above. This step does not wait
-behind steps a and b. Those follow it. It does not wait on slices 1–4,
-the timing-engine bridge, or relay dispatch.
+**What greens step c.** The twelve callbacks read snapshots. The two
+mutable walks become posts to that connection's strand:
+`for_each_connection` (`:158`) hands its callback a mutable context,
+and `peer_sync_idle_maker` (`:2366`) sets `m_in_timedsync`. The
+snapshot gains what each of those reads before it writes. The `run`
+thread at `:1163` is gone, and that deletion is recorded as removing
+the `--in-peers` measurement input named above. The out-count cache
+at `:1605` is a separate staleness and stays through this step. This
+step does not wait behind steps a and b. Those follow it. It does not
+wait on slices 1–4, the timing-engine bridge, or relay dispatch.
 
-**Step a, before a struct.** The members that cross are the 14 on
-`connection_context_base` (`net_utils_base.h`) and the 16 on
-`cryptonote_connection_context` (`connection_context.h`), plus
+`get_context_ref` is what lets a caller who is not the strand hold a
+mutable context across a strand write. At `684673611e`, `rg
+get_context_ref` in `levin_protocol_handler_async.h` is:
+
+| Line | What holds the reference |
+| --- | --- |
+| `:790` | the definition |
+| `:234` | `anvoke_handler`'s constructor, a log |
+| `:240`, `:242` | the invoke-timeout timer: a log, then the callback |
+| `:276` | `anvoke_handler::cancel`, the callback |
+| `:302`, `:304` | `reset_timer`'s wait: a log, then the callback |
+| `:907` | `foreach_connection` hands the walker the context |
+| `:921` | `for_connection` hands the caller the context |
+
+`:921` is not only a walker. `node_server::for_connection`
+(`net_node.inl:169`) reaches it. So do `try_add_next_blocks`
+(`cryptonote_protocol_handler.inl:1437`, `:1477`, `:1512`, `:1538`),
+`update_sync_search` (`:1757`), `should_download_next_span`
+(`:1849`), `drop_connection` by id (`:2624`, and the comment there
+says the call can be outside the strand), `drop_connections` by host
+(`:2665`), and `levin_notify.cpp:374` and `:430`. Step c is green when
+`rg get_context_ref` returns only strand-side callers, and the commit
+that claims it lists them. A caller that cannot move onto the strand
+is a finding, not a carve-out.
+
+**Step a, a starting table (2026-10-04).** The members that cross are
+the 14 on `connection_context_base` (`net_utils_base.h`) and the 16
+on `cryptonote_connection_context` (`connection_context.h`), plus
 `support_flags`, `m_in_timedsync`, and `sent_addresses` on
-`p2p_connection_context_t`. They sort into claimed, observed, and
-local-state. The claimed port is the only handshake field whose truth
-is resolved (§2.7.4, §2.8.2). Eviction and the protection set read
-observed only. The category is accounting, never on the wire, and not
-stable across reconnects. That sort is a table here before it is a
-type. The table is not written yet.
+`p2p_connection_context_t`. The test for each is who asserted it.
+This draft is for review. It is not a struct.
+
+| Bin | Members | Rule |
+| --- | --- | --- |
+| Observed, we measured it | `m_connection_id`, `m_remote_address` as connected, `m_is_income` as direction, `m_connector`, `m_started` as established-at, `m_last_recv`, `m_last_send`, `m_current_speed_down`, `m_current_speed_up`, `m_max_speed_down`, `m_max_speed_up` | Eviction, admission, the protection set, and the operator view read only this bin (§2.8.2). |
+| Claimed, the peer told us | `m_remote_blockchain_height`, `m_last_known_hash`, `support_flags`, the handshake's advertised port and address (§2.7.4; not one of these 33 members), `m_remote_height_source` | Sync may read a claim as a hypothesis to test (§2.11). Nothing that decides who stays connected may. `Claimed<T>` so a reader cannot forget. |
+| Local state, ours about this session | `m_state`, `m_last_response_height`, `m_expected_heights_start`, `m_last_request_time`, `m_callback_request_count`, `m_expect_response`, `m_expect_height`, `m_num_requested`, `m_score`, `m_in_timedsync`, `sent_addresses` | Owned by the component that drives that protocol. The sync fields go with the sync driver when it moves. Until then they are plain fields the C++ handler reads through the handle. |
+
+`m_state` is this node's pull relationship with the session. `m_ssl`
+is not in a bin: p2p SSL was deleted in #909, the field is false by
+construction, and it leaves the base struct. `m_score` is listed under
+local state and is not kept by that listing. A score that accumulates
+from claimed inputs is the self-selection trap §2.7.2 names, and that
+look happens before the struct. Six members are not placed:
+`m_recv_cnt`, `m_send_cnt`, `m_needed_objects`, `m_expected_heights`,
+`m_requested_objects`, `m_idle_peer_notification`. They take the same
+test. Constraint 2 covers the object: nothing in it is stable across
+reconnects except the observed endpoint, which is already public.
 
 **Step b is the ownership cut.** `p2p_connection_context` becomes a
-handle to the Rust object. The forget-cause split and the per-session
-write-stall samples land there. `handle_recv`, the invoke timers, and
-`message_writer::finalize` stay C++ through b. Swapping the reader for
-`BucketReader`, `send_txs` handing a plan to the seam, and deleting
-`levin_notify.cpp` and `levin.cpp` are the RD row.
+handle to the Rust object. Through b the C++ handler still runs
+`handle_recv` and the invoke timers, so it reads local state and
+claimed fields, and writes local state only, through FFI accessors on
+the handle. The observed bin is write-once at establishment, by the
+seam. C++ never writes an observed field. The forget-cause split and
+the per-session write-stall samples land here. `message_writer::finalize`
+stays C++ through b. Swapping the reader for `BucketReader`,
+`send_txs` handing a plan to the seam, and deleting `levin_notify.cpp`
+and `levin.cpp` are the RD row.
 
 **Shape.** Three PRs, one per step, each inside rule 06.
 `check-goldens` is unchanged at every step. `unit_tests` and the
 relay, seam, and transport crate tests are green. The clearnet
 cross-build is the gate at b. The D-5 rig is not a gate until RD.
+Each PR's text carries the re-anchored counts of `foreach_connection`,
+`get_context_ref`, and the mutable-context walks, so those numbers
+are seen going to zero.
 
 ### 6.3 This slice's falsifiers (rule 21)
 
