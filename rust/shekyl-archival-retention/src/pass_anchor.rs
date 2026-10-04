@@ -31,6 +31,10 @@
 
 use shekyl_types::{BlockCount, BlockHeight};
 
+use sha3::digest::core_api::CoreWrapper;
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use sha3::{CShake256, CShake256Core};
+
 use crate::bond_floor::{ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS, ARCHIVAL_REORG_DEPTH_BLOCKS};
 
 /// Requester-random nonce `P` signs over (`SF-D5`: exactly 32 bytes).
@@ -47,8 +51,18 @@ pub const PASS_ANCHOR_HASH_LEN: usize = 32;
 pub const PASS_REQUEST_HEADER_LEN: usize =
     PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN + PASS_ANCHOR_HASH_LEN;
 
-/// Signed transcript: 72-byte header followed by `shard_id` as 8 LE bytes.
-pub const PASS_COUNTERSIGNATURE_MESSAGE_LEN: usize = PASS_REQUEST_HEADER_LEN + 8;
+/// The delivery digest `P` signs and the pass record carries
+/// ([`pass_delivery_digest`]).
+pub const PASS_DELIVERY_DIGEST_LEN: usize = 32;
+
+/// cSHAKE256 customization for [`pass_delivery_digest`] (rule 30: one label,
+/// one function, versioned).
+pub const PASS_DELIVERY_DIGEST_CUSTOMIZATION: &[u8] = b"shekyl/archival-pass-delivery-digest-v1";
+
+/// Signed transcript: 72-byte header, `shard_id` as 8 LE bytes, then the
+/// 32-byte delivery digest.
+pub const PASS_COUNTERSIGNATURE_MESSAGE_LEN: usize =
+    PASS_REQUEST_HEADER_LEN + 8 + PASS_DELIVERY_DIGEST_LEN;
 
 /// Requester anchors at `tip − depth`; admission's upper bound is `h − depth`.
 /// This is `archival_reorg_depth_blocks` (720). Generated config stays `u64`
@@ -244,15 +258,91 @@ impl PassRequestHeader {
         pass_request_header_bytes(&self.nonce, self.anchor_height, &self.anchor_hash)
     }
 
-    /// The SF-D8 transcript for this header and `shard_id`.
+    /// The SF-D8 transcript for this header, `shard_id`, and the digest of
+    /// the bytes delivered under this header's nonce.
     #[must_use]
-    pub fn transcript(&self, shard_id: u64) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
-        pass_countersignature_message(&self.nonce, self.anchor_height, &self.anchor_hash, shard_id)
+    pub fn transcript(
+        &self,
+        shard_id: u64,
+        delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
+    ) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
+        pass_countersignature_message(
+            &self.nonce,
+            self.anchor_height,
+            &self.anchor_hash,
+            shard_id,
+            delivery_digest,
+        )
     }
 }
 
-/// Transcript `P` signs: [`pass_request_header_bytes`] ‖ `shard_id_le[8]`.
-/// Plain concatenation, not a hash. Domain is
+/// Digest of one delivered response, salted by the request's nonce:
+/// `cSHAKE256(PASS_DELIVERY_DIGEST_CUSTOMIZATION, nonce ‖ framed)[..32]`.
+///
+/// `framed` is exactly the response body `P` sends ahead of its
+/// countersignature — the `RF-D4` frame header, the payload and any padding,
+/// byte for byte as it goes on the wire. `P` signs this digest inside the
+/// transcript ([`pass_countersignature_message`]), so the signature commits
+/// to the bytes delivered for *this* request.
+///
+/// **The nonce is the salt.** It is requester-random, so `P` cannot compute
+/// the digest before the request arrives, and a digest made for one request
+/// answers no other. It leads the preimage and has a fixed width, so the
+/// split between salt and body is unambiguous without a length field.
+///
+/// **What this does not claim.** It does not show that `P` stores the bytes:
+/// a `P` that fetches them from a co-holder on demand produces the same
+/// digest (`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §9.4 (ii)); the route's
+/// topology prices that, not this. And admission cannot recompute it — the
+/// body is off chain — so the pass record carries it and the requester, who
+/// holds the body, is the party that checks it against the bytes.
+///
+/// Every read is hashed the same way, so a challenge read and an ordinary
+/// one remain indistinguishable to `P`.
+#[must_use]
+pub fn pass_delivery_digest(
+    nonce: &[u8; PASS_NONCE_LEN],
+    framed: &[u8],
+) -> [u8; PASS_DELIVERY_DIGEST_LEN] {
+    let mut hasher = PassDeliveryHasher::new(nonce);
+    hasher.update(framed);
+    hasher.finalize()
+}
+
+/// [`pass_delivery_digest`] computed incrementally, for a body read in
+/// chunks: the serving persona hashes a shard as it reads it and never
+/// holds the whole of it. Feeding the same bytes in any chunking gives the
+/// one-shot digest, and this type is the one-shot function's own body, so
+/// the two cannot differ.
+pub struct PassDeliveryHasher(CShake256);
+
+impl PassDeliveryHasher {
+    /// Start a digest salted with `nonce`.
+    #[must_use]
+    pub fn new(nonce: &[u8; PASS_NONCE_LEN]) -> Self {
+        let mut hasher: CShake256 =
+            CoreWrapper::from_core(CShake256Core::new(PASS_DELIVERY_DIGEST_CUSTOMIZATION));
+        hasher.update(nonce);
+        Self(hasher)
+    }
+
+    /// Absorb the next bytes of the framed body.
+    pub fn update(&mut self, framed: &[u8]) {
+        self.0.update(framed);
+    }
+
+    /// The 32-byte digest.
+    #[must_use]
+    pub fn finalize(self) -> [u8; PASS_DELIVERY_DIGEST_LEN] {
+        let mut out = [0u8; PASS_DELIVERY_DIGEST_LEN];
+        self.0.finalize_xof().read(&mut out);
+        out
+    }
+}
+
+/// Transcript `P` signs: [`pass_request_header_bytes`] ‖ `shard_id_le[8]` ‖
+/// [`pass_delivery_digest`]. Plain concatenation of fixed-width fields.
+/// Domain is
 /// [`SCHEME_DOMAIN_ATTESTATION`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION).
 #[must_use]
 pub fn pass_countersignature_message(
@@ -260,14 +350,17 @@ pub fn pass_countersignature_message(
     anchor_height: BlockHeight,
     anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
     shard_id: u64,
+    delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
 ) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
+    const SHARD_END: usize = PASS_REQUEST_HEADER_LEN + 8;
     let mut out = [0u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN];
     out[..PASS_REQUEST_HEADER_LEN].copy_from_slice(&pass_request_header_bytes(
         nonce,
         anchor_height,
         anchor_hash,
     ));
-    out[PASS_REQUEST_HEADER_LEN..].copy_from_slice(&shard_id.to_le_bytes());
+    out[PASS_REQUEST_HEADER_LEN..SHARD_END].copy_from_slice(&shard_id.to_le_bytes());
+    out[SHARD_END..].copy_from_slice(delivery_digest);
     out
 }
 
@@ -310,9 +403,82 @@ mod tests {
         );
         assert_eq!(&bytes[40..], &[0x22; 32]);
         assert_eq!(
-            h.transcript(9),
-            pass_countersignature_message(&[0x11; 32], bh(0x0102_0304_0506_0708), &[0x22; 32], 9)
+            h.transcript(9, &[0x33; 32]),
+            pass_countersignature_message(
+                &[0x11; 32],
+                bh(0x0102_0304_0506_0708),
+                &[0x22; 32],
+                9,
+                &[0x33; 32]
+            )
         );
+    }
+
+    /// The delivery digest against an implementation that is not this
+    /// crate's: a standalone Keccak-f[1600] / SP 800-185 cSHAKE256 written
+    /// for the purpose and checked against NIST's cSHAKE256 samples #3 and
+    /// #4 before these two values were taken from it. `nonce = [0x03; 32]`.
+    #[test]
+    fn delivery_digest_matches_an_independent_cshake256() {
+        let nonce = [0x03u8; 32];
+        assert_eq!(
+            hex::encode(pass_delivery_digest(&nonce, b"")),
+            "383cb87634c654105464750338339c6e4d88260a46599eac0e46ef09a9ac9806",
+            "empty framed body: the preimage is the nonce alone"
+        );
+        let framed: Vec<u8> = (1u8..=48).collect();
+        assert_eq!(
+            hex::encode(pass_delivery_digest(&nonce, &framed)),
+            "0758cedb256259dd3d372560884dcaec515857360ed434155bae0bbb4c85a6bb",
+            "nonce, then the framed bytes 0x01..=0x30"
+        );
+    }
+
+    /// The incremental hasher against the one-shot digest, at every split of
+    /// a body: the server hashes in chunks and the client in one call, so a
+    /// chunk boundary must not be able to move the digest.
+    #[test]
+    fn the_incremental_hasher_equals_the_one_shot_digest_at_every_split() {
+        let nonce = [0x03u8; 32];
+        let body: Vec<u8> = (0u8..200).collect();
+        let whole = pass_delivery_digest(&nonce, &body);
+        for split in 0..=body.len() {
+            let mut hasher = PassDeliveryHasher::new(&nonce);
+            hasher.update(&body[..split]);
+            hasher.update(&body[split..]);
+            assert_eq!(hasher.finalize(), whole, "split at {split}");
+        }
+        // Many small chunks, and none at all.
+        let mut hasher = PassDeliveryHasher::new(&nonce);
+        for chunk in body.chunks(7) {
+            hasher.update(chunk);
+        }
+        assert_eq!(hasher.finalize(), whole);
+        assert_eq!(
+            PassDeliveryHasher::new(&nonce).finalize(),
+            pass_delivery_digest(&nonce, &[])
+        );
+    }
+
+    #[test]
+    fn delivery_digest_is_salted_by_the_nonce_and_covers_every_byte() {
+        let framed: Vec<u8> = (1u8..=48).collect();
+        let d = pass_delivery_digest(&[0x03; 32], &framed);
+        // Another request's nonce over the same bytes is another digest.
+        assert_ne!(d, pass_delivery_digest(&[0x04; 32], &framed));
+        // One flipped byte anywhere in the body is another digest.
+        for i in [0, framed.len() / 2, framed.len() - 1] {
+            let mut other = framed.clone();
+            other[i] ^= 1;
+            assert_ne!(d, pass_delivery_digest(&[0x03; 32], &other), "byte {i}");
+        }
+        // The split between salt and body is fixed: moving a byte across it
+        // is a different preimage.
+        let mut shifted_nonce = [0x03u8; 32];
+        shifted_nonce[31] = framed[0];
+        assert_ne!(d, pass_delivery_digest(&shifted_nonce, &framed[1..]));
+        // A truncated body is another digest.
+        assert_ne!(d, pass_delivery_digest(&[0x03; 32], &framed[..47]));
     }
 
     #[test]
@@ -328,43 +494,42 @@ mod tests {
         );
         assert_eq!(&header[40..72], &hash);
 
-        let msg = pass_countersignature_message(
-            &nonce,
-            bh(0x0102_0304_0506_0708),
-            &hash,
-            0x1112_1314_1516_1718,
-        );
+        let digest = [0xCCu8; 32];
+        let shard = 0x1112_1314_1516_1718;
+        let height = bh(0x0102_0304_0506_0708);
+        let msg = pass_countersignature_message(&nonce, height, &hash, shard, &digest);
         assert_eq!(msg.len(), PASS_COUNTERSIGNATURE_MESSAGE_LEN);
+        assert_eq!(PASS_COUNTERSIGNATURE_MESSAGE_LEN, 112);
         assert_eq!(&msg[..72], &header);
         assert_eq!(
             &msg[72..80],
             &[0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11]
         );
+        assert_eq!(
+            &msg[80..],
+            &digest,
+            "the delivery digest closes the transcript"
+        );
+        // Every term moves the message.
         assert_ne!(
             msg,
-            pass_countersignature_message(
-                &[0xABu8; 32],
-                bh(0x0102_0304_0506_0708),
-                &hash,
-                0x1112_1314_1516_1718
-            )
+            pass_countersignature_message(&[0xABu8; 32], height, &hash, shard, &digest)
         );
         assert_ne!(
             msg,
-            pass_countersignature_message(&nonce, bh(1), &hash, 0x1112_1314_1516_1718)
+            pass_countersignature_message(&nonce, bh(1), &hash, shard, &digest)
         );
         assert_ne!(
             msg,
-            pass_countersignature_message(
-                &nonce,
-                bh(0x0102_0304_0506_0708),
-                &[0xBCu8; 32],
-                0x1112_1314_1516_1718
-            )
+            pass_countersignature_message(&nonce, height, &[0xBCu8; 32], shard, &digest)
         );
         assert_ne!(
             msg,
-            pass_countersignature_message(&nonce, bh(0x0102_0304_0506_0708), &hash, 1)
+            pass_countersignature_message(&nonce, height, &hash, 1, &digest)
+        );
+        assert_ne!(
+            msg,
+            pass_countersignature_message(&nonce, height, &hash, shard, &[0xCDu8; 32])
         );
     }
 

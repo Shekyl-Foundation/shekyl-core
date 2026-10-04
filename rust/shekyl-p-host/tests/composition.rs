@@ -22,7 +22,7 @@ use std::time::Duration;
 use shekyl_archival_retention::pass_anchor::{
     pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
 };
-use shekyl_archival_retention::verify_pass_transcript;
+use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::{encode_request_header, REQUEST_HEADER_NAME};
 use shekyl_curve_tree::{
@@ -543,16 +543,35 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     // The envelope verifies against the key the host was started with,
     // over the transcript the request fixed — at a gate centred on the
     // daemon tip the host was started with (`WSS-24`).
-    let (signature, _) = envelope_of(&first);
+    // The digest is recomputed here from the bytes that came over the wire,
+    // as a fetcher does: it verifies only if the persona signed for exactly
+    // these bytes under this request's nonce.
+    let (signature, framed) = envelope_of(&first);
     verify_pass_transcript(
         key.public_key(),
         &NONCE,
         anchor_for(10_000),
         &ANCHOR_HASH,
         0,
+        &pass_delivery_digest(&NONCE, framed),
         &signature,
     )
-    .expect("the served countersignature binds header and shard id");
+    .expect("the served countersignature binds header, shard id and the delivered bytes");
+    let mut tampered = framed.to_vec();
+    *tampered.last_mut().expect("a served shard is not empty") ^= 1;
+    assert!(
+        verify_pass_transcript(
+            key.public_key(),
+            &NONCE,
+            anchor_for(10_000),
+            &ANCHOR_HASH,
+            0,
+            &pass_delivery_digest(&NONCE, &tampered),
+            &signature,
+        )
+        .is_err(),
+        "the same signature must not cover a body that differs in one byte"
+    );
 
     // Let the supervisor fail several incarnations.
     let mut posture = host.posture();
@@ -597,6 +616,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
         anchor_for(10_000),
         &ANCHOR_HASH,
         0,
+        &pass_delivery_digest(&NONCE, second_frame),
         &second_signature,
     )
     .expect("the second serve is countersigned too");
@@ -1729,13 +1749,14 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
     );
     // And the countersignature binds the anchor the requester actually sent,
     // so "served" is not merely "did not 404".
-    let (signature, _) = envelope_of(&served);
+    let (signature, framed) = envelope_of(&served);
     verify_pass_transcript(
         key.public_key(),
         &NONCE,
         anchor_for(CHAIN_TIP),
         &ANCHOR_HASH,
         0,
+        &pass_delivery_digest(&NONCE, framed),
         &signature,
     )
     .expect("the served countersignature binds the requester's anchor");

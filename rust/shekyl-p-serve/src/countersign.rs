@@ -269,7 +269,8 @@ mod tests {
     fn test_key_signer_round_trips_through_the_consensus_verifier() {
         let signer = TestKeySigner::ephemeral(bh(DEPTH + 50));
         let f = PassRequestHeader::from_parts([7; 32], bh(49), [8; 32]);
-        let sig = signer.sign_pass(&f.transcript(7)).expect("sign");
+        let digest = [9u8; 32];
+        let sig = signer.sign_pass(&f.transcript(7, &digest)).expect("sign");
         assert_eq!(
             sig.to_canonical_bytes().unwrap().len(),
             SIGNATURE_ENVELOPE_LEN
@@ -280,9 +281,21 @@ mod tests {
             f.anchor_height(),
             f.anchor_hash(),
             7,
+            &digest,
             &sig,
         );
         assert!(ok.is_ok());
+        // The delivery digest is bound: another digest does not verify.
+        assert!(verify_pass_transcript(
+            signer.public_key(),
+            f.nonce(),
+            f.anchor_height(),
+            f.anchor_hash(),
+            7,
+            &[10u8; 32],
+            &sig,
+        )
+        .is_err());
         // Shard id is bound: a neighbouring id does not verify.
         let bad = verify_pass_transcript(
             signer.public_key(),
@@ -290,6 +303,7 @@ mod tests {
             f.anchor_height(),
             f.anchor_hash(),
             8,
+            &digest,
             &sig,
         );
         assert!(bad.is_err());

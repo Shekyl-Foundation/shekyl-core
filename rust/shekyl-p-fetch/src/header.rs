@@ -106,13 +106,15 @@ impl RequestHeader {
         encode_request_header(&self.to_bytes())
     }
 
-    /// The 80-byte transcript `P` countersigns for `shard_id`.
+    /// The transcript `P` countersigns for `shard_id` and the digest of the
+    /// bytes it delivered under this header's nonce.
     #[must_use]
     pub fn transcript(
         &self,
         shard_id: u64,
+        delivery_digest: &[u8; shekyl_archival_retention::pass_anchor::PASS_DELIVERY_DIGEST_LEN],
     ) -> [u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
-        self.0.transcript(shard_id)
+        self.0.transcript(shard_id, delivery_digest)
     }
 }
 
@@ -152,11 +154,12 @@ mod tests {
     }
 
     #[test]
-    fn the_transcript_is_the_header_then_the_shard_id() {
+    fn the_transcript_is_the_header_the_shard_id_then_the_delivery_digest() {
         let h = RequestHeader::with_nonce([1; 32], BlockHeight::from_raw(5), [2; 32]);
-        let t = h.transcript(0x0a0b);
+        let t = h.transcript(0x0a0b, &[3; 32]);
         assert_eq!(&t[..72], &h.to_bytes());
-        assert_eq!(&t[72..], &[0x0b, 0x0a, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(&t[72..80], &[0x0b, 0x0a, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(&t[80..], &[3; 32]);
     }
 
     #[test]

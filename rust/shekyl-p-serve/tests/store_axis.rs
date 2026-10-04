@@ -15,7 +15,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use shekyl_archival_retention::pass_anchor::{pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS};
-use shekyl_archival_retention::verify_pass_transcript;
+use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{
@@ -140,9 +140,10 @@ async fn served_shard_recomputes_to_the_committed_r_k() {
         BlockHeight::from_raw(ANCHOR_HEIGHT),
         &ANCHOR_HASH,
         0,
+        &pass_delivery_digest(&NONCE, body),
         &signature,
     )
-    .expect("the countersignature covers this request's header and shard id");
+    .expect("the countersignature covers this request's header, shard id and delivered bytes");
 
     // Then the frame (`RF-D4`): it says how
     // many leaves the response carries and how many bytes follow them that

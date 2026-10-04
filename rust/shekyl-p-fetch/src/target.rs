@@ -8,6 +8,7 @@
 
 use std::fmt;
 
+use shekyl_archival_retention::PASS_DELIVERY_DIGEST_LEN;
 use shekyl_crypto_pq::signature::{HybridPublicKey, HybridSignature};
 
 /// The raw 32-byte Ed25519 public key of a persona's v3 onion service, as
@@ -137,22 +138,38 @@ impl std::error::Error for ContentRefused {}
 ///
 /// There is no unverified variant of this type: the only way to obtain one
 /// is through [`PFetchClient::fetch`](crate::PFetchClient::fetch), after
-/// both checks (`SF-D8`: verified-or-refused). The signature is kept
-/// because the pass record the requester goes on to build carries it.
+/// both checks (`SF-D8`: verified-or-refused). The signature and the
+/// delivery digest are kept because the pass record the requester goes on
+/// to build carries both.
 #[derive(Clone, Debug)]
 pub struct VerifiedShard {
     shard_id: u64,
+    delivery_digest: [u8; PASS_DELIVERY_DIGEST_LEN],
     signature: HybridSignature,
     body: Vec<u8>,
 }
 
 impl VerifiedShard {
-    pub(crate) fn new(shard_id: u64, signature: HybridSignature, body: Vec<u8>) -> Self {
+    pub(crate) fn new(
+        shard_id: u64,
+        delivery_digest: [u8; PASS_DELIVERY_DIGEST_LEN],
+        signature: HybridSignature,
+        body: Vec<u8>,
+    ) -> Self {
         Self {
             shard_id,
+            delivery_digest,
             signature,
             body,
         }
+    }
+
+    /// The digest of the body this client received, salted by its request's
+    /// nonce — recomputed here, never read from the response. `P`'s
+    /// signature verified over it, so it is the pass record's digest.
+    #[must_use]
+    pub fn delivery_digest(&self) -> &[u8; PASS_DELIVERY_DIGEST_LEN] {
+        &self.delivery_digest
     }
 
     /// The shard the path named.

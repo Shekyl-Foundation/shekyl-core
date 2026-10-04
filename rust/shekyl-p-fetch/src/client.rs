@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use shekyl_archival_retention::verify_pass_transcript;
+use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::{
     CONTENT_TYPE, REQUEST_HEADER_NAME, RESPONSE_HEADER_NAMES, ROUTE_PREFIX, SERVING_VIRTUAL_PORT,
@@ -290,19 +290,30 @@ impl PFetchClient {
             let envelope = content.split_off(content.len() - SIGNATURE_ENVELOPE_LEN);
             let signature = HybridSignature::from_canonical_bytes(&envelope)
                 .map_err(|_| FetchError::Malformed(Malformed::Envelope))?;
+            // The digest is recomputed from the bytes in hand under this
+            // request's own nonce, never taken from `P`: a signature over
+            // any other bytes, or over these bytes for another request,
+            // fails the next check.
+            let delivery_digest = pass_delivery_digest(header.nonce(), &content);
             verify_pass_transcript(
                 &verifying_key,
                 header.nonce(),
                 header.anchor_height(),
                 header.anchor_hash(),
                 shard_id,
+                &delivery_digest,
                 &signature,
             )
             .map_err(|_| FetchError::BadCountersignature)?;
             verifier
                 .verify(shard_id, &content)
                 .map_err(FetchError::ContentRefused)?;
-            Ok(VerifiedShard::new(shard_id, signature, content))
+            Ok(VerifiedShard::new(
+                shard_id,
+                delivery_digest,
+                signature,
+                content,
+            ))
         })
         .await
         .expect("verify task does not panic")

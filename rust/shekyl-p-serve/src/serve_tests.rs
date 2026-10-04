@@ -14,7 +14,7 @@ use shekyl_archival_retention::pass_anchor::{
     pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
     PASS_REQUEST_HEADER_LEN,
 };
-use shekyl_archival_retention::verify_pass_transcript;
+use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{ServedFrameHeader, LEAF_BYTES};
@@ -129,6 +129,9 @@ fn leaves(n: usize, seed: u8) -> Vec<u8> {
 struct Served {
     head: String,
     signature: HybridSignature,
+    /// The body ahead of the envelope, byte for byte: frame header, then
+    /// payload. What the countersignature's delivery digest is over.
+    framed: Vec<u8>,
     frame: ServedFrameHeader,
     body: Vec<u8>,
 }
@@ -145,10 +148,12 @@ fn parse_served(response: &[u8]) -> Served {
     let (mut body, sig) = after_head.split_at(after_head.len() - SIGNATURE_ENVELOPE_LEN);
     let signature =
         HybridSignature::from_canonical_bytes(sig).expect("served body ends with a signature");
+    let framed = body.to_vec();
     let frame = ServedFrameHeader::read(&mut body).expect("served body carries a frame header");
     Served {
         head,
         signature,
+        framed,
         frame,
         body: body.to_vec(),
     }
@@ -160,6 +165,37 @@ struct FailingProvider;
 impl ShardProvider for FailingProvider {
     fn shard_bytes(&self, _shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
         Err(ProviderError::other("synthetic store failure"))
+    }
+}
+
+/// Provider that answers the first `shard_bytes` with one body and every
+/// later call with another. A conforming store cannot do this: it is the
+/// fault the two-read serve has to survive, built by wrapper (rule 50).
+struct ShiftingProvider {
+    first: Arc<[u8]>,
+    later: Option<Arc<[u8]>>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl ShiftingProvider {
+    fn new(first: Vec<u8>, later: Option<Vec<u8>>) -> Arc<Self> {
+        Arc::new(Self {
+            first: Arc::from(first.into_boxed_slice()),
+            later: later.map(|b| Arc::from(b.into_boxed_slice())),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+}
+
+impl ShardProvider for ShiftingProvider {
+    fn shard_bytes(&self, _shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        let bytes = if call == 0 {
+            Some(Arc::clone(&self.first))
+        } else {
+            self.later.clone()
+        };
+        Ok(bytes.and_then(ShardBody::flat))
     }
 }
 
@@ -530,9 +566,11 @@ async fn the_served_body_is_the_frame_then_the_countersignature() {
     let Served {
         head,
         signature,
+        framed,
         frame,
         body,
     } = parse_served(&r);
+    let digest = pass_delivery_digest(&NONCE, &framed);
     assert!(head.starts_with("HTTP/1.1 200 OK"));
     // The countersignature verifies through the consensus verifier the
     // daemon runs, against exactly the header the request carried.
@@ -542,9 +580,10 @@ async fn the_served_body_is_the_frame_then_the_countersignature() {
         BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,
         0,
+        &digest,
         &signature,
     )
-    .expect("the served signature covers the request header and shard id");
+    .expect("the served signature covers the request header, shard id and delivered bytes");
     // ...and is bound to *this* shard id and *this* nonce.
     assert!(verify_pass_transcript(
         signer.public_key(),
@@ -552,6 +591,7 @@ async fn the_served_body_is_the_frame_then_the_countersignature() {
         BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,
         1,
+        &digest,
         &signature
     )
     .is_err());
@@ -561,9 +601,29 @@ async fn the_served_body_is_the_frame_then_the_countersignature() {
         BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,
         0,
+        &digest,
         &signature
     )
     .is_err());
+    // ...and to *these* bytes: the digest of a body one byte different, or
+    // of this body under another request's nonce, does not verify.
+    let mut tampered = framed.clone();
+    *tampered.last_mut().expect("a served shard is not empty") ^= 1;
+    for other in [
+        pass_delivery_digest(&NONCE, &tampered),
+        pass_delivery_digest(&[0u8; 32], &framed),
+    ] {
+        assert!(verify_pass_transcript(
+            signer.public_key(),
+            &NONCE,
+            BlockHeight::from_raw(IN_GATE_ANCHOR),
+            &ANCHOR_HASH,
+            0,
+            &other,
+            &signature
+        )
+        .is_err());
+    }
 
     assert_eq!(frame.leaf_count(), 9);
     assert_eq!(frame.segment_bytes(), payload.len() as u64);
@@ -583,13 +643,10 @@ async fn the_served_body_is_the_frame_then_the_countersignature() {
 
 #[tokio::test]
 async fn the_countersignature_is_released_only_after_the_whole_frame() {
-    // The seal. The signed message names the request, not the bytes, so
-    // what makes the signature a receipt for the read is that nobody holds
-    // it before the frame has crossed this persona's link. Two halves:
-    // the signature is exactly the response's last bytes, and no copy of
-    // it appears anywhere ahead of them — so every proper prefix of the
-    // response, which is all a reader that stops early can have, is
-    // without it.
+    // The signature is released last. It is exactly the response's last
+    // bytes, and no copy of it appears anywhere ahead of them — so every
+    // proper prefix of the response, which is all a reader that stops early
+    // can have, is without it.
     let payload = leaves(9, 0x40);
     let (ep, signer) = bind(FixtureProvider::new([(0, payload.clone())])).await;
     let r = fetch(ep.addr(), "/shard/0").await;
@@ -608,9 +665,10 @@ async fn the_countersignature_is_released_only_after_the_whole_frame() {
         BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,
         0,
+        &pass_delivery_digest(&NONCE, &before[end..]),
         &signature,
     )
-    .expect("the closing signature covers this request");
+    .expect("the closing signature covers this request and the bytes ahead of it");
 
     // The first body bytes are the frame, not a signature.
     let mut framed = &before[end..];
@@ -623,6 +681,71 @@ async fn the_countersignature_is_released_only_after_the_whole_frame() {
         !before.windows(SIGNATURE_ENVELOPE_LEN).any(|w| w == sealed),
         "the signature must not appear ahead of the frame it seals"
     );
+}
+
+#[tokio::test]
+async fn a_body_that_changes_between_the_signed_read_and_the_sent_one_gets_no_signature() {
+    // The persona hashes the body, signs, then streams a second read. If
+    // the store answers that second read with other bytes, the signature
+    // describes bytes that were not sent — so it must not be sent either.
+    // The response ends after the body, short of its `content-length`,
+    // which a fetcher reads as a truncated transfer.
+    let signed_for = leaves(9, 0x40);
+    let mut sent = signed_for.clone();
+    *sent.last_mut().expect("nine leaves") ^= 1;
+    let (ep, signer) = bind(ShiftingProvider::new(
+        signed_for.clone(),
+        Some(sent.clone()),
+    ))
+    .await;
+    let r = fetch(ep.addr(), "/shard/0").await;
+
+    assert!(head_of(&r).starts_with("HTTP/1.1 200 OK"));
+    let end = r
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .expect("response has a head")
+        + 4;
+    let mut framed = &r[end..];
+    let frame = ServedFrameHeader::read(&mut framed).expect("the body opens with the frame");
+    assert_eq!(framed, &sent[..], "the body on the wire is the second read");
+    assert_eq!(
+        (r.len() - end) as u64,
+        frame.framed_len(),
+        "the response stops at the end of the frame: no envelope follows"
+    );
+    assert!(
+        head_of(&r).contains(&format!(
+            "content-length: {}",
+            frame.framed_len() + SIGNATURE_ENVELOPE_LEN as u64
+        )),
+        "so it is short of its declared length by exactly one signature"
+    );
+    assert_eq!(ep.served_count(), 0);
+    assert_eq!(ep.lookup_failure_count(), 1);
+    assert_eq!(ep.sign_failure_count(), 0);
+    let _ = signer;
+}
+
+#[tokio::test]
+async fn a_shard_that_vanishes_between_the_two_reads_is_the_identical_404() {
+    // Signed for, then gone before it could be sent: nothing has been
+    // written, so this is still the shared miss, counted as a store fault.
+    let (ep, _) = bind(ShiftingProvider::new(leaves(9, 0x40), None)).await;
+    let r = fetch(ep.addr(), "/shard/0").await;
+    assert_eq!(r, render_not_found().as_bytes());
+    assert_eq!(ep.served_count(), 0);
+    assert_eq!(ep.lookup_failure_count(), 1);
+
+    // And a shard whose frame changed (a different length) between them.
+    let (ep, _) = bind(ShiftingProvider::new(
+        leaves(9, 0x40),
+        Some(leaves(8, 0x40)),
+    ))
+    .await;
+    let r = fetch(ep.addr(), "/shard/0").await;
+    assert_eq!(r, render_not_found().as_bytes());
+    assert_eq!(ep.lookup_failure_count(), 1);
 }
 
 #[tokio::test]

@@ -34,7 +34,7 @@ fn empty_block() -> BlockCompleteEntry {
 
 #[test]
 fn witness_cap_is_cpp_formula() {
-    assert_eq!(ATTESTATION_WITNESS_MAX_BYTES, 876_808);
+    assert_eq!(ATTESTATION_WITNESS_MAX_BYTES, 885_000);
     assert_eq!(HASH_SIZE, 32);
 }
 

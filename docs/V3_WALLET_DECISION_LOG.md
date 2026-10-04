@@ -5860,3 +5860,79 @@ archival surface is ported — FOLLOWUPS row), `docs/design/ARCHIVAL_BOND_SP_R0_
 (the R2-1 reserve).
 
 ---
+
+## 2026-10-04 — Attestation pass countersignature moves to v3: `P` signs a nonce-salted digest of the response it delivered; pinned attestation vectors regenerated
+
+**Ruled by the maintainer, 2026-10-04.** `P`'s countersignature has two
+jobs: it shows the read reached `P`'s key, and it seals what `P` delivered.
+The v2 transcript (`SF-D8`, 2026-09-13) did the first and not the second: it
+named the request and the shard id, and nothing in it described the bytes.
+`P` could stream anything and append a valid signature. The serving code
+also sent the signature ahead of the body, so a requester held it before a
+shard byte arrived.
+
+**What moves.**
+
+1. **The delivery digest.** `D = cSHAKE256("shekyl/archival-pass-delivery-digest-v1",
+   nonce ‖ framed)[..32]`, where `framed` is the response body `P` sends
+   ahead of its signature (the `RF-D4` frame header, the payload and any
+   padding, byte for byte) and `nonce` is the request's 32 requester-random
+   bytes. **The nonce is the salt:** `P` cannot compute `D` before the
+   request arrives, and a digest made for one request answers no other. It
+   leads the preimage at a fixed width, so no length field is needed.
+2. **The signed message** gains `D` as its last term:
+   `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖
+   D[32]`, 112 bytes (was 80).
+3. **The pass record and the witness entry carry `D`.** Admission cannot
+   recompute it, because the body is not on chain. It verifies that `P`
+   signed the carried digest; the requester, who holds the body, is the
+   party that checked the digest against the bytes before filing. The
+   witness entry is `nonce ‖ anchor_height ‖ D ‖ signature` (3,457 B, was
+   3,425) and the witness maximum is 885,000 B (was 876,808). `D` joins
+   each record's contribution to `attestation_root`. **The empty root is
+   unchanged**, so the genesis header value does not move.
+4. **The signature is the response's last bytes.** `P` signs over the
+   digest of the exact buffer it sends, then sends the buffer, then the
+   signature. A transfer that fails mid-body yields no signature.
+5. **The scheme domain** rotates `shekyl/archival-attestation-scheme-v2` →
+   `…-v3`. One label never names two messages (`30-cryptography.mdc`); a v2
+   signature can never verify as v3. No retired-label constant is kept;
+   `a_retired_domain_signature_does_not_verify_under_v3` is the negative
+   control for both retired labels.
+
+**What the digest does and does not establish.** The signature now commits
+to the bytes delivered under this request's nonce: garbage with a valid
+signature appended no longer verifies at the requester. It does **not** show
+that `P` stores the bytes. A `P` that fetches them from a co-holder on demand
+produces the same digest (`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §9.4 (ii));
+the route's topology prices that. Every read is hashed and signed the same
+way, so a challenge read stays indistinguishable from an ordinary one.
+
+**Superseded by this entry.** `ARCHIVAL_CREDIT_WIRE.md` §3's *"there is no
+`transfer_digest` … admission could never reconstruct the signed message"*:
+admission does not reconstruct the digest, it carries it. And
+`ARCHIVAL_PRUNED_DAEMON_MODE.md` `PDM-Q6` item 3's *"no signed content
+artifact is added to the wire"*. That item's own argument stands as far as
+it goes: an *unsalted* digest that admission could rebuild from the hash
+rows would prove nothing, which is why this one is salted by the request and
+carried, not rebuilt.
+
+**Not decided here.** The admission windows under `SO-D8` shape R-B (a read
+window against an inclusion window) and whether admission carries `P`'s
+signature at all are Slice C's Round 0
+(`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §8.0).
+
+**Vectors regenerated under this entry.**
+
+- `rust/shekyl-archival-retention/tests/attestation_wire_kat.rs`:
+  `MSG_EXPECT_HEX` (the digest closes the transcript), `ROOT_TWO_EXPECT_HEX`
+  (each record gained the digest), the size pins (112; 885,000), and two
+  delivery-digest vectors taken from an independent cSHAKE256 implementation
+  checked against NIST's SP 800-185 samples.
+- `rust/shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v3_pinned.json`
+  replaces the `_v2_` fixture. It carries the framed body as an input, so
+  its digest can be re-derived.
+- `docs/test_vectors/PQC_HYBRID_V2_KAT.json`: the attestation vector's
+  domain.
+
+---
