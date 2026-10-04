@@ -50,8 +50,12 @@ shekyl-p-fetch = { path = "../shekyl-p-fetch" }
 # `PASS_ANCHOR_DEPTH_BLOCKS` — the one burial depth both sides of the apparatus
 # anchor against, read from the same constant the verifier reads.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
-# `PSlot` — the persona identity the derivation binds to.
+# `PSlot` — the persona identity the derivation binds to; and
+# `MAX_HOLDINGS_SHARDS`, the list bound reading B reports as one row.
 shekyl-types = { path = "../shekyl-types" }
+# `T_SECONDS`, the target block time: reading B's epoch is the consensus
+# epoch's blocks at that time, not a literal.
+shekyl-difficulty = { path = "../shekyl-difficulty" }
 # `derive_p_hs_id_seed` (+ `DerivationNetwork` / `SeedFormat`) — the production
 # GF-9 HS-identity seed the onion encoding consumes (SPIKE-F-4 relocation).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
@@ -83,6 +87,10 @@ path = "bins/pd_f2_diff.rs"
 [[bin]]
 name = "pd-f2-ceiling"
 path = "bins/pd_f2_ceiling.rs"
+
+[[bin]]
+name = "pd-f2-u1b"
+path = "bins/pd_f2_u1b.rs"
 
 [[bin]]
 name = "serve-only"

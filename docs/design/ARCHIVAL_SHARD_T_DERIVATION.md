@@ -903,7 +903,7 @@ that gate's bookkeeping:
 | **`SHT-5`** | `U1b` — an honest server's sustained egress on the rule-76 floor device — **has no authority anywhere in the tree**. The only transport figure (180 KB/s) is requester-side and a burst floor from a null result. This is the one bound that cannot be closed by reasoning. | OPEN — FOLLOWUPS row, measurement owed |
 | **`SHT-6`** | `rust/shekyl-economics-sim/src/burden.rs:33-39`'s `SHARD_BYTES` comment derives 3.33 MB from `SEGMENT_LEAF_COUNT × ~128 B` — the retired **leaf-segment** estimate — while presenting it as the "§2 corpus figure". Corrected in this PR (the only code this round touches). | FIXED here |
 | **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner once the ramp is on, with no economics changed** (it ships flat, so the effect is latent — `SCC-Q2`), and every `T` re-pin thereafter moving when the staker share saturates. **It is a consensus operand, not an economics knob.** `n` reaches consensus through `Blockchain::parent_frozen_segment_count` → `validate_miner_transaction` (`src/cryptonote_core/blockchain.cpp:1494-1508`), derived from `get_curve_tree_leaf_count()` — the **retired leaf geometry** — and read at a pinned parent state with a throwing assert (*"escalation operand read-point violated"*). So the coinbase's fee split depends on it. **CORRECTED 2026-09-27 (`SCC-Q2`'s ruling):** the stronger claim this row first made — *"a wrong re-key changes which coinbases are valid"* — holds only **once the escalation is switched on**. It ships **flat**: `shekyl_escalation_asymptote_share` equals the floor `shekyl_staker_pool_share` (`config/economics_params.json:16-18`, *"the DELIBERATE pre-ceremony NEUTRAL value"*), so the split is 25 % whatever `n` is and a wrong re-key changes no coinbase's validity **today**. The requirement that the re-key be one atomic C++/Rust change is unchanged, and its reason is sharper: the operand is computed on both sides, and a mismatch that is harmless while flat becomes a chain split the moment the GF-7 ceremony raises the asymptote. Likewise the ~65× figure bites only after the ceremony. **Blast radius, otherwise bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so what it clocks is **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table. **Owners RULED 2026-10-01 (§10.4):** `n`'s re-key landed in the Rust validator on 2026-09-30; `g(age)`'s segment-keyed no-segment branch is re-keyed in the **shard-count cutover** ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md)), Rust-side — **LANDED 2026-10-01** (`ShardClose`, `shard_close`; falsifier run, §2's falsifier table); `escalation_knee_n`'s re-derivation is the **sim lane's**, per `SCC-Q2` — **LANDED 2026-10-01** (`2,250,000` closed shards, `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13) |
-| **`SHT-9`** | **A `shekyl-chain-rules` fixture carries a shape consensus refuses.** `harness::fixture::serve_credit_only` builds `prunable: None` with empty `pqc_auths` — the **pre-`RF-D1`** serve-credit form, identified by the *absence* of a prunable region. `RF-D1` inverted that: the region is now present and holds one non-empty pruned pass record per credit vin. Verified empirically rather than read off: `Transaction::validate_context_free_pruned` refuses it — *"serve_credit tx must be fee-only — no outputs, empty `pqc_auths`, no spend-proof material, and exactly one pruned pass record per serve-credit vin (§2.5, RF-D1)"*. It does **not** break `SHT-Q1`'s equivalence (a conforming serve-credit body carries good, and `tx_domain_tests` builds one), but a fixture that consensus would refuse is a false negative waiting for any test that assumes it is valid. | CONFIRMED — found while building the equivalence test; owner the `CHAIN_RULES_SLICE` lane, FOLLOWUPS |
+| **`SHT-9`** | **A `shekyl-chain-rules` fixture carries a shape consensus refuses.** `harness::fixture::serve_credit_only` builds `prunable: None` with empty `pqc_auths` — the **pre-`RF-D1`** serve-credit form, identified by the *absence* of a prunable region. `RF-D1` inverted that: the region is now present and holds one non-empty pruned pass record per credit vin. Verified empirically rather than read off: `Transaction::validate_context_free_pruned` refuses it — *"serve_credit tx must be fee-only — no outputs, empty `pqc_auths`, no spend-proof material, and exactly one pruned pass record per serve-credit vin (§2.5, RF-D1)"*. It does **not** break `SHT-Q1`'s equivalence (a conforming serve-credit body carries good, and `tx_domain_tests` builds one), but a fixture that consensus would refuse is a false negative waiting for any test that assumes it is valid. | CONFIRMED — found while building the equivalence test; owner the `CHAIN_RULES_SLICE` lane, FOLLOWUPS. **FIXED 2026-10-03 (PR #942):** worse than a false fixture — CEN-H20 admitted the shape, which live C++ refuses and the store cannot hold. H20 now requires the `RF-D1` region and CEN-J2, newly implemented, one record per credit vin (a conformance correction, `CHAIN_RULES_SLICE_5.md` §5); both fixtures carry the region, and leg (f) covers a connected credit end to end |
 | **`SHT-10`** | **An FCMP++ proof verifies with trailing bytes.** `Fcmp::read` consumes exactly `proof_size(n, layers)` bytes (`shekyl-oxide/crypto/fcmps/src/lib.rs`), and neither the verifier (`shekyl-fcmp/src/proof.rs`) nor any consensus rule compares `fcmp_proof.len()` with it — the rows check emptiness only (`rules/tx.rs`, `rules/tx_inputs.rs`; C++ `blockchain.cpp`). Probe: a valid proof extended by 1, 64 and 4,096 zero bytes verifies `Ok(true)`. Every hybrid signature binds `prunable_hash`, so only the signer can pad (paying fee), but the good is not a closed function of structure and the encoding is not canonical. Fix: `fcmp_proof.len() == proof_size(n_spend, depth + 1)`. | CONFIRMED by probe — consensus canonical-form gap; **fix directed by the design owner 2026-09-28**, built in PR #899 |
 | **`SHT-11`** | **A serve-credit path verifies with zero scalars appended to a branch layer.** `recompute_subroot` hashes each layer as `hash_grow(init, 0, ZERO, chunk)`, a vector commitment on which a zero scalar contributes nothing (`shekyl-archival-retention/src/path.rs`); widths are bounded only by `MAX_BRANCH_SCALARS = 256`. Probe: the `assembled_path_crosscheck` fixture's Helios layer widened 5 → 6 and 5 → 45 verifies `Ok(())`. The ML-DSA countersignature binds `encode(path)`, so only the bonded signer can pad. Fix: canonical widths for a frozen segment, or refuse trailing zero scalars. | CONFIRMED by probe — consensus canonical-form gap; **fix directed by the design owner 2026-09-28**, built in PR #899 |
 | **`SHT-12`** | **An input's authorization size is not skeleton-bound.** `scheme_id`, the multisig key container's `n_total` and threshold, and the signature count all live in the `pqc_auths` segment, which the archival prune discards (`shekyl-chain-store/src/store/prune.rs`). The spent output carries no marker (`Output` is amount, key, view tag) and FCMP++ hides which output is spent. So the skeleton cannot tell a 5,389 B single-sig authorization from a 27,083 B 5-of-5 one. The premise that "multisig parameters sit in prefixes the txid binds" does not hold at source. | CONFIRMED at source — the structural question inside `SHT-Q2` (§8.3) |
@@ -1510,26 +1510,11 @@ rate at the 1× object with its 95 % Wilson interval, against 0.30.
 - Anything else: no verdict. The rig cannot tell the device as a reader from the
   device as a server. It triggers the split rig (below).
 
-**Read 2 — an epoch of reads.** From the device's 1× arm, with one read always in
-flight:
-
-- `c = completions / Σ elapsed` reads per second. A miss costs the time it took and
-  delivers nothing.
-- capacity `R = c × 1,200,000` reads per epoch (`settlement_epoch_blocks` = 10,000
-  blocks of 120 s).
-- load `3 × H`: three challenge reads per drawable pair per epoch
-  (`CHALLENGES_PER_PAIR_PER_EPOCH`), `H` the pairs one `P` holds.
-- **`H` is pre-registered at 4,096**, the list bound (`archival_max_holdings_shards`),
-  so the load is 12,288 reads. That is the most one record can hold, which is the
-  conservative reading. The honest-operator holding §5 owes is the design owner's and
-  is not stated yet, so the reading also reports `R / 3`, the `H` at which this leg
-  binds.
-- `R ≥ 12,288`: `U1b` does not bind at the list bound. One read in flight is a floor
-  on capacity, since the server admits concurrent reads and `SPIKE-F-11` found
-  reader concurrency does not materially degrade a persona.
-- `R < 12,288`: no verdict, for the same reason as read 1. It triggers the split rig.
-- Organic and band-2 reads have no authority in the tree, so they are not in the
-  verdict. The headroom `R / 12,288` is reported as the room left for them.
+**Read 2 — WITHDRAWN 2026-10-03, before the reading.** As pre-registered at
+`ebb1d73b54` it was a verdict on `U1b` at the list bound: capacity with one read in
+flight, against 12,288 challenge reads (4,096 pairs). It is replaced by reading B in
+the amendment below, which keeps the computation and drops both the anchor and the
+verdict.
 
 **Reported, not judged.**
 
@@ -1549,8 +1534,48 @@ and readers on other hosts. The reader half does not exist since `SF` (a) made t
 reader `shekyl-p-fetch`. It is built and pre-registered then, with a concurrency
 sweep, and `W` stays provisional until it is read.
 
-**Direction.** This can only lower `W`'s ceiling. If both reads pass, `W` rests on
-no open measurement and goes to the Round-2 gate as it stands.
+**Direction.** This can only lower `W`'s ceiling, and only through reading A (the
+amendment below): if it passes, `W` rests on no open measurement and goes to the
+Round-2 gate as it stands.
+
+#### Amendment, 2026-10-03 (design owner) — before the reading
+
+Made after the run started (2026-10-02 20:40:19 UTC, both hosts) and before either
+reading was computed. The only look at the data so far was a liveness check that
+counted outcomes on each host at about 260 observations; no statistic below was
+computed. The instrument that computes both readings is committed with this
+amendment, so it is fixed before the reading too.
+
+Read 2 used `MAX_HOLDINGS_SHARDS` as its anchor, which contradicts `L2`'s ruling
+(§3): the cap bounds one record's list, not an operator, who can post another record.
+And capacity is not what bounds `W`. So the two reads become two separate questions.
+
+**Reading A — bears on `W`.** Read 1, restated as the server-side twin of `U1a`: does
+the floor device serve one whole-shard read inside the single-attempt deadline? The
+miss interval at the largest object, which must bound the heaviest shard
+(`W` + 149.4 KB = 3,149,400 B) from above, against the same 0.30 target. A wholly
+lower interval is the verdict that the device does not lower `W`'s ceiling. Anything
+else is no verdict and triggers the split rig, as before. Computed by
+`shekyl_sp_t3_spike::ceiling::floor_device_read`.
+
+**Reading B — does not bear on `W`.** Read 2's computation, reported as the
+**maximum sustainable holding per floor device**: with one read in flight,
+`c = completions / Σ elapsed`, the epoch is `settlement_epoch_blocks` at the target
+block time, and a holding of `H` pairs is sustainable when `3 H ≤ c × epoch`. It is
+reported across a fixed table of holdings — 1, 16, 128, 512, 1,024, 2,048, 4,096,
+8,192 and 16,384 pairs — in which the list bound is one row and not the anchor. It is
+an input to the participation floor (gates 4 and 5), not to this derivation. No row
+triggers the split rig or moves `W`. One read in flight is a floor on capacity (the
+server admits concurrent reads, and `SPIKE-F-11` found reader concurrency does not
+materially degrade a persona). Organic and band-2 reads have no rate in the tree, so
+they are not load; each row's headroom is the room left for them. An arm with a
+refused exchange gives no capacity, by the rule that voids it for reading A.
+Computed by `shekyl_sp_t3_spike::capacity`.
+
+`pd-f2-u1b` prints both for the device's file. The tests pin each computation and its
+threshold. Everything else in this section stands: the rig, the control, what is
+reported without a verdict and the voids. The direction rests on reading A alone,
+as stated above.
 
 ### 9.4 Soft upward pressure: bookkeeping
 
@@ -2145,12 +2170,12 @@ testnet gate (§5, §9.5).
 
 **Closed.** `SHT-1` (the inherited 3.33 MB: `W` is derived in bytes), `SHT-2` (by
 `SHT-Q1`), `SHT-4` (`U1a` is read and does not bind), `SHT-6`, `SHT-7`, `SHT-8`,
-`SHT-10`, `SHT-11`, `SHT-12` (by `SHT-Q2`).
+`SHT-9` (2026-10-03: CEN-H20 requires the `RF-D1` region and CEN-J2 its records, and
+leg (f) now covers a connected serve credit end to end), `SHT-10`, `SHT-11`, `SHT-12` (by `SHT-Q2`).
 
 **Handed off.** Each is a `FOLLOWUPS.md` row whose owner is another document:
 
 - `SHT-3`, the stale materialise premise on `SF-D7`: `ARCHIVAL_SHARD_FETCH.md`.
-- `SHT-9`, the fixture consensus refuses: `CHAIN_RULES_SLICE_5.md`.
 - The `PDM-Q-F34` coverage row and its sim arms, and the single home of the production
   `W`: `ARCHIVAL_PRUNED_DAEMON_MODE.md`.
 - What the txid still takes from C++ until the engine swap — the stored length on the
@@ -2163,6 +2188,3 @@ testnet gate (§5, §9.5).
 - **`U1b`** (`SHT-5`): an honest server's sustained egress over Tor on the Pi 4 floor
   device. It can only lower `W`'s ceiling, and it is the one row the constant waits
   on. This lane runs it; the run is pre-registered in §9.3a.
-- One row of test coverage, not of the derivation: leg (f) of `SHT-Q1`'s equivalence
-  covers a connected serve-credit transaction only at the row level (§2.1). It waits
-  on `SHT-9`'s fixture.

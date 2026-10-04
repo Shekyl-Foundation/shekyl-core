@@ -10,7 +10,9 @@
 use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
 use shekyl_types::PCanonicalId;
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
-use shekyl_wire::{BondPost, BondPostKind, Ct, CtBase, Holdings, Input, Transaction, TxPrefix};
+use shekyl_wire::{
+    BondPost, BondPostKind, Ct, CtBase, Holdings, Input, Prunable, Transaction, TxPrefix,
+};
 
 use super::{balanced_bond_post, UNRECORDED_REFERENCE};
 
@@ -115,8 +117,16 @@ pub fn join_market(key_image: [u8; 32], p: [u8; 32]) -> Transaction {
     )
 }
 
+/// The pruned half of one pass record in the serve-credit fixtures: a
+/// non-empty opaque blob inside the wire's length bound. CEN-H20 counts the
+/// records and the wire bounds their length; what one holds is CEN-J10's,
+/// and no fixture claims to satisfy it.
+pub const PRUNED_PASS_RECORD: [u8; 8] = [0xA5; 8];
+
 /// A **serve-credit-only** transaction (CEN-H20's shape: serve-credit
-/// inputs and nothing else, no outputs, zero fee, no spend material)
+/// inputs and nothing else, no outputs, zero fee, no spend material, and the
+/// `RF-D1` prunable region holding one pruned pass record per serve-credit
+/// vin — [`PRUNED_PASS_RECORD`], a marker no verifier reads)
 /// crediting persona `p` for shard 0 in settlement epoch 0 — the open
 /// epoch on any chain shorter than one (every fixture chain is). The one
 /// legal non-coinbase shape with **no key image** — what a test needs
@@ -142,7 +152,13 @@ pub fn serve_credit_only(p: [u8; 32]) -> Transaction {
                 commitments: Vec::new(),
             },
             pqc_auths: Vec::new(),
-            prunable: None,
+            prunable: Some(Prunable {
+                bulletproofs: Vec::new(),
+                tree_depth: 0,
+                fcmp_proof: Vec::new(),
+                pseudo_outs: Vec::new(),
+                serve_credit_pruned: vec![PRUNED_PASS_RECORD.to_vec()],
+            }),
         },
     }
 }
