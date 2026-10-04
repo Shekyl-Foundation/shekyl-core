@@ -5,7 +5,7 @@
 
 //! The archival shard partition's **domain** — `SHT-Q1` RULED (Rick,
 //! 2026-09-27, design-owner lane), recorded in
-//! [`ARCHIVAL_SHARD_T_DERIVATION.md`](../../../../docs/design/ARCHIVAL_SHARD_T_DERIVATION.md)
+//! [`ARCHIVAL_SHARD_T_DERIVATION.md`](../../../../docs/completed/ARCHIVAL_SHARD_T_DERIVATION.md)
 //! §2.
 //!
 //! The ruling defines the domain by a **property**: a transaction is in it iff

@@ -930,7 +930,9 @@ with a named owner, not an assumption.
 **The per-key membership grade (`VC-R19`), because "integer authority" was
 doing the work of a decision one level up.** `VC-R11` closed that move for the
 *type* of values; the same move survived at the choice of *keys*, which were
-ingested wholesale. All eighteen economics keys were walked. The grade is
+ingested wholesale. All eighteen economics keys were walked, and the two archival keys of
+`consensus_constants.json` that are provisional-until-testnet are graded beside them
+(2026-10-03). The grade is
 recorded so §3.7 is checkable by a reviewer rather than aspirational:
 
 | Key(s) | Does a different value make a different chain? |
@@ -942,6 +944,8 @@ recorded so §3.7 is checkable by a reviewer rather than aspirational:
 | `shekyl_staker_pool_share`, `shekyl_staker_emission_share`, `shekyl_staker_emission_decay`, `shekyl_blocks_per_year` | **Yes** — the staker split and its decay (`calc_effective_emission_share`) |
 | `shekyl_burn_base_rate`, `shekyl_burn_cap`, `shekyl_tx_volume_baseline`, `shekyl_tx_volume_window` | **Yes** — burn rate and the window it is measured over |
 | `shekyl_escalation_asymptote_share`, `shekyl_escalation_knee_n`, `shekyl_release_min`, `shekyl_release_max` | **Yes** — D2 escalation; provisional-until-testnet, and §3.12 already rules that a change detector is *supposed* to move on them |
+| `archival_shard_length_bytes` (`W = 3,000,000 B`) | **Yes** — the shard partition: which shard every transaction belongs to (`SHT-Q2`). Provisional-until-testnet, pinned at the Round-2 testnet gate together with `L` ([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §11). **Reopens** if a measured window's single-attempt miss interval at the heaviest shard has its upper bound above 0.30 (the `p_attempt` bound, §10.6 item 1), or if `U1a` or `U1b`, re-measured at the gate, binds (§10.5, §10.8) |
+| `archival_attestation_anchor_lag_blocks` (`L = 4`) | **Yes** — the pass-anchor admission window. Provisional-until-testnet, pinned at the Round-2 testnet gate together with `W` (same §11; `ARCHIVAL_SHARD_FETCH.md` `SF-D8`). **Reopens** on its own falsifier, re-measured at the gate: a p99 fetch-plus-retry under two minutes drops it to 3; one over six tightens `SF-D6`'s retry budget (2 retries) and never raises `L` (§10.6 item 3, §10.7) |
 
 **`display_decimal_point` is the one that needed the walk.** On its own it is
 a rendering convention, and a rendering convention does not make a different
