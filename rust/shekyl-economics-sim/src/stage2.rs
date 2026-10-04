@@ -52,8 +52,8 @@ use shekyl_archival_retention::{
     reward_share_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_HOLDINGS_SHARDS,
 };
 
-/// Atomic units per SKL (mirrors `engine.rs`).
-const COIN: f64 = 1_000_000_000.0;
+/// Atomic units per SKL ([`crate::burden::COIN`]).
+const COIN: f64 = crate::burden::COIN as f64;
 
 /// Ramp years excluded from the A1 clearance verdict: the first two years, where
 /// the corpus is tiny and any share trivially "clears". Clearance is judged on
@@ -555,7 +555,7 @@ fn a1_candidate_result(
         asymptote_pct: if is_flat {
             None
         } else {
-            Some(curve.asymptote as f64 / 10_000.0)
+            Some(curve.asymptote as f64 / (SCALE as f64 / 100.0))
         },
         knee_shards: if is_flat {
             None
@@ -748,7 +748,7 @@ fn print_escalation_family(out: &mut impl fmt::Write) -> fmt::Result {
         write!(
             out,
             "{:>8.0} {:>9}",
-            c.asymptote as f64 / 10_000.0,
+            c.asymptote as f64 / (SCALE as f64 / 100.0),
             c.knee_shards
         )?;
         for n in ESCALATION_PREVIEW_N {
@@ -1171,7 +1171,7 @@ fn a4_candidate_result(
         asymptote_pct: if is_flat {
             None
         } else {
-            Some(curve.asymptote as f64 / 10_000.0)
+            Some(curve.asymptote as f64 / (SCALE as f64 / 100.0))
         },
         knee_shards: if is_flat {
             None
@@ -1386,7 +1386,7 @@ fn a3_stranding_report(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Re
     writeln!(
         out,
         "\nA3 — budget stranding (§12.2): fraction of budget(E) that NEVER MINTS.\n\
-         budget is a minting ENTITLEMENT — unclaimed past MAX_CLAIM_AGE_W=26 is \"supply\n\
+         budget is a minting ENTITLEMENT — unclaimed past MAX_CLAIM_AGE_W={CLAIM_AGE} is \"supply\n\
          never created\" (ARCHIVAL_BUDGET_SCHEDULE §4). A class claims iff its reward\n\
          covers one claim tx ({CC0:.6}..{CC1:.6} SKL early..late @ the {FLOOR}\n\
          floor, via the production predictor at each year's tree depth). PRE-D1 vs\n\
@@ -1394,6 +1394,7 @@ fn a3_stranding_report(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Re
          holders past the co-holder cliff (r_market > g_milli ≈ 1000), and a\n\
          structural-zero cohort's slice never mints.",
         CC0 = claim_skl(first),
+        CLAIM_AGE = shekyl_archival_retention::MAX_CLAIM_AGE_W,
         CC1 = claim_skl(last),
         FLOOR = params.fee.admission_floor_label(first.admission_rate),
     )?;

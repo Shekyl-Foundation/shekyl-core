@@ -318,7 +318,7 @@ pub(crate) fn print_envelope(
         "today",
         "fixed"
     )?;
-    let skl = |atomic: u128| atomic as f64 / 1.0e9;
+    let skl = |atomic: u128| atomic as f64 / crate::burden::COIN as f64;
     let mut shard_rows = Vec::new();
     for (name, year, era) in ROWS {
         let config = crate::onset::at_horizon(

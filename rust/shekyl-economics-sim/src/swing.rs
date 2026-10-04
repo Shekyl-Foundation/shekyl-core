@@ -47,12 +47,12 @@ pub const BLOCK_WEIGHT_PENALTY_FREE: u64 = BLOCK_WEIGHT_FLOOR * BLOCK_WEIGHT_SUR
 /// penalty-free model predicts.
 pub const BLOCK_WEIGHT_MAX: u64 = BLOCK_WEIGHT_PENALTY_FREE * 2;
 
-/// Settlement epoch length, blocks (`SETTLEMENT_EPOCH_BLOCKS`).
-pub const EPOCH_BLOCKS: u64 = 10_000;
+/// Settlement epoch length, blocks.
+pub const EPOCH_BLOCKS: u64 = shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 
-/// Reorg depth bound, blocks (`ARCHIVAL_REORG_DEPTH_BLOCKS`) — the reach of the
-/// only down-swing the operand admits.
-pub const REORG_DEPTH_BLOCKS: u64 = 720;
+/// Reorg depth bound, blocks — the reach of the only down-swing the operand
+/// admits.
+pub const REORG_DEPTH_BLOCKS: u64 = shekyl_archival_retention::ARCHIVAL_REORG_DEPTH_BLOCKS;
 
 /// Archival bytes a flood can land in one block at `block_weight` when the
 /// chain has closed `n_shards` — the physical ceiling on the fold, searched
@@ -106,7 +106,8 @@ pub fn delta_share(curve: &EscalationCurve, n: u64, delta: u64) -> u64 {
 #[must_use]
 pub fn penalty_compensation_skl_per_epoch(base_block_reward_atomic: u64) -> f64 {
     // reward at B = 2M is 0 ⇒ full base_reward forfeited, every block.
-    (u128::from(base_block_reward_atomic) * u128::from(EPOCH_BLOCKS)) as f64 / 1.0e9
+    (u128::from(base_block_reward_atomic) * u128::from(EPOCH_BLOCKS)) as f64
+        / crate::burden::COIN as f64
 }
 
 /// A6 report: the slew ceiling, per-epoch `Δshare` under a sustained flood, and
@@ -142,7 +143,7 @@ pub fn a6_report(
             / EPOCH_BLOCKS as f64,
         EB = EPOCH_BLOCKS,
         RD = REORG_DEPTH_BLOCKS,
-        A = curve.asymptote as f64 / 10_000.0,
+        A = curve.asymptote as f64 / (SHARE_SCALE as f64 / 100.0),
         K = curve.knee_shards,
     )?;
     writeln!(
@@ -228,7 +229,7 @@ pub fn a6_report(
             admission.at(worst_dn_at_n),
         )
         .cost_atomic as f64
-            / 1.0e9,
+            / crate::burden::COIN as f64,
         P = penalty_compensation_skl_per_epoch(base_block_reward_atomic),
     )?;
 

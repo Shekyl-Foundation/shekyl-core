@@ -77,8 +77,8 @@ use crate::stage2::{
     a1_year_clearance_ratio, year_share_atomic, A1YearAgg,
 };
 
-/// Atomic units per SKL (mirrors `engine.rs`).
-const COIN: f64 = 1_000_000_000.0;
+/// Atomic units per SKL ([`crate::burden::COIN`]).
+const COIN: f64 = crate::burden::COIN as f64;
 
 /// The horizon every scenario is run to for the onset table. Long enough that
 /// the emission curve (12.5 %/yr of the remainder at ESF 22 on 2-minute
@@ -663,18 +663,20 @@ pub fn lever_report(
         "  -> The WHOLE perpetual tail ({tail:.0} SKL/yr) funds the bond opp cost of {} shards,\n\
          and it is a CONSTANT flow against a corpus that keeps growing — the fee share's\n\
          shape with a longer fuse, not a structural answer. The lever is the bond itself\n\
-         (0.75 SKL locked per {W} B forever, R = {R}): what it is FOR decides its size.",
+         ({BOND:.2} SKL locked per {W} B forever, R = {R}): what it is FOR decides its size.",
         funded.join(", "),
+        BOND = shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN,
         W = shekyl_types::SHARD_LENGTH.to_raw(),
         R = REPLICAS_PER_SHARD,
     )?;
     Ok(results)
 }
 
-/// The perpetual tail per year in SKL: `final_subsidy_per_minute × 2 min ×
-/// blocks_per_year`, from the params (mirrors `tail_subsidy_per_block`).
+/// The perpetual tail per year in SKL: the owner's tail per block
+/// (`tail_subsidy_per_block`) times the run's `blocks_per_year`.
 fn tail_skl_per_year(params: &SimParams) -> f64 {
-    let per_block = params.final_subsidy_per_minute * 2;
+    let per_block = shekyl_economics::tail_subsidy_per_block(&params.economic())
+        .expect("the run's tail subsidy is priced");
     (per_block as f64 / COIN) * params.blocks_per_year as f64
 }
 
@@ -816,7 +818,8 @@ mod tests {
         );
         let w = shekyl_types::SHARD_LENGTH.to_raw();
         let base = crate::fee_horizon::fee_era_burn_fraction(&params, params.tx_volume_baseline);
-        let h = crate::fee_horizon::fee_horizon_years(fee, base, 0.25, 0.10, bytes, w);
+        let share = crate::escalation::floor_share() as f64 / SCALE as f64;
+        let h = crate::fee_horizon::fee_horizon_years(fee, base, share, 0.10, bytes, w);
         let a = aggs.last().expect("60 years");
         // Fee leg alone, so the comparison isolates the closed form.
         let flat = flat_25();

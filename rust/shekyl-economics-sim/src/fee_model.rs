@@ -195,7 +195,7 @@ impl FeeModel {
             Self::FlatControl { per_tx_atomic, .. } => format!(
                 "FEE ARM: CONTROL — flat {:.3} SKL per transaction at every height. A declared \
                  divergence: the chain charges no flat fee (ECONOMICS_SIM_PRODUCTION_REBASE.md §4).",
-                per_tx_atomic as f64 / 1.0e9
+                per_tx_atomic as f64 / crate::burden::COIN as f64
             ),
             Self::ProductionStandard { multiplier_milli } => format!(
                 "FEE ARM: production ladder — Standard rung x{:.3} (corrected_fee_ladder at each \

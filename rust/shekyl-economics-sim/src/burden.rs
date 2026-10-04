@@ -36,8 +36,9 @@ use shekyl_types::{shard_of, ArchivalLength, SHARD_LENGTH};
 
 use crate::calibration::{tree_depth_for_leaves, PerByteRate, Shape};
 
-/// Atomic units per SKL — the SKL/atomic conversion factor.
-pub const COIN: u64 = 1_000_000_000;
+/// Atomic units per SKL, from the units crate that generates it
+/// (`config/consensus_constants.json` `coin`).
+pub const COIN: u64 = shekyl_units::ATOMIC_UNITS_PER_SKL;
 
 /// Bytes an archiver stores per closed shard: **`W`**, the archival length of a
 /// shard (`shekyl_types::SHARD_LENGTH`, sourced from

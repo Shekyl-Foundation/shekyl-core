@@ -63,7 +63,7 @@ use crate::fee_model::{ChargedBlock, FeePoint};
 use crate::median_window::BlockSpace;
 use crate::volume_window::VolumeWindow;
 
-const COIN: f64 = 1_000_000_000.0;
+const COIN: f64 = crate::burden::COIN as f64;
 
 /// A tx-volume regime to probe. `get_volume(block, blocks_per_year)` returns the
 /// per-block tx count, exactly the `VolumeSchedule` shape the legacy engine uses.

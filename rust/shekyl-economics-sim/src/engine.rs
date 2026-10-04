@@ -195,7 +195,7 @@ impl SimParams {
     }
 }
 
-const COIN: f64 = 1_000_000_000.0;
+const COIN: f64 = crate::burden::COIN as f64;
 
 /// The height the staker emission share decays from. The validator's own
 /// (`shekyl_chain_rules::EMISSION_SPLIT_EPOCH`), read here so that every

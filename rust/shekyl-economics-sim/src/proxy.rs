@@ -44,8 +44,9 @@ use shekyl_archival_retention::{
 
 use crate::burden::{COIN, SHARD_BYTES};
 
-/// Blocks per year — the sim's economic year (mirrors `SimParams::default`).
-pub const BLOCKS_PER_YEAR: u64 = 262_800;
+/// Blocks per year — the chain's year at the DAA target
+/// (`shekyl_economics::BLOCKS_PER_YEAR`).
+pub const BLOCKS_PER_YEAR: u64 = shekyl_economics::BLOCKS_PER_YEAR;
 
 /// Settlement epochs per year: `blocks_per_year / SETTLEMENT_EPOCH_BLOCKS`.
 #[must_use]
