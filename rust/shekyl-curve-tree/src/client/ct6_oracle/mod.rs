@@ -20,7 +20,7 @@
 //! [`HeightAnswers`]. Increment 4 builds those answers in `ring`, from the
 //! segment tier and the snapshot tier; this function does not change.
 
-use super::tests::{coinbase_raw, ingest_outputs_at};
+use super::test_fixtures::{ingest_outputs_at, raw_outputs_at};
 use super::{BlockLeaves, CurveTreeClient, TxLeafInputs};
 use crate::assemble::verify_path_against_its_branches;
 use crate::recon::{assemble_leaf_stream, drained_sorted, root_from_scalars};
@@ -374,7 +374,7 @@ fn ingest_through(
                 .ingest_block(BlockLeaves { height, txs: &txs })
                 .unwrap();
         } else {
-            let outs = vec![coinbase_raw(); n];
+            let outs = raw_outputs_at(height.to_raw(), n);
             ingest_outputs_at(client, height.to_raw(), &outs);
         }
     }

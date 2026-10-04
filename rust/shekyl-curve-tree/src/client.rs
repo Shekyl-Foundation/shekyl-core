@@ -1724,91 +1724,22 @@ impl From<StoreError> for ClientError {
 #[cfg(test)]
 mod ct6_oracle;
 
+// The leaf fixtures every test under this module builds its chains from.
+#[cfg(test)]
+pub(crate) mod test_fixtures;
+
 #[cfg(test)]
 mod tests {
+    use super::test_fixtures::{
+        coinbase_block, ingest_coinbase_blocks, ingest_outputs_at, leaf_blob_at, leaf_entry_at,
+        leaves_pairwise_distinct, raw_output_at, raw_outputs_at,
+    };
     use super::*;
     use crate::recon::{
         assemble_leaf_stream, drained_sorted, newly_drained_at_cutoff, root_from_scalars,
     };
     use crate::types::{BlockHash, CurveTreeRoot};
     use shekyl_consensus::COINBASE_LOCK_WINDOW;
-
-    /// Standard Ed25519 basepoint, compressed — a valid, torsion-free
-    /// point `construct_leaf` accepts for both `O` and `C`.
-    const ED25519_BASEPOINT: [u8; 32] = [
-        0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-        0x66, 0x66,
-    ];
-
-    pub(super) fn coinbase_raw() -> RawOutput {
-        RawOutput {
-            output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
-            commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
-            target: TargetKind::TaggedKey,
-        }
-    }
-
-    /// One conforming `0x07` entry: `CM` is a valid, torsion-free point
-    /// derived deterministically from `seed` (`Hp` over a seed-filled key,
-    /// via the crate's existing point primitive), followed by an opaque
-    /// record. Distinct seeds give byte-distinct commitment points and so
-    /// byte-distinct leaves — which is what lets an ordering test tell two
-    /// leaves apart.
-    fn leaf_entry(seed: u8) -> [u8; 64] {
-        let mut entry = [0x07u8; 64];
-        entry[..32].copy_from_slice(&shekyl_fcmp::tree::key_image_generator(&[seed; 32]));
-        entry
-    }
-
-    /// One conforming `0x07` entry per output, as a V3 chain always emits
-    /// (`PL-D3`); entry `i` is seeded `i + 1`, so entries within one blob
-    /// are byte-distinct.
-    fn leaf_blob(n: usize) -> Vec<u8> {
-        (0..n)
-            .flat_map(|i| leaf_entry(u8::try_from(i + 1).expect("test blob fits u8")))
-            .collect()
-    }
-
-    /// One coinbase tx carrying a per-output `0x07` blob of `n` × 64 bytes.
-    fn coinbase_block<'a>(outputs: &'a [RawOutput], blob: &'a [u8]) -> Vec<TxLeafInputs<'a>> {
-        vec![TxLeafInputs {
-            is_miner: true,
-            leaf_entry_blob: Some(blob),
-            outputs,
-        }]
-    }
-
-    /// Ingest consecutive single-coinbase blocks at heights `from..=to` — the
-    /// production chain shape (every real block carries a coinbase).
-    fn ingest_coinbase_blocks(client: &mut CurveTreeClient, from: u64, to: u64) {
-        let outs = [coinbase_raw()];
-        let blob = leaf_blob(1);
-        for height in from..=to {
-            let txs = coinbase_block(&outs, &blob);
-            client
-                .ingest_block(BlockLeaves {
-                    height: BlockHeight::from_raw(height),
-                    txs: &txs,
-                })
-                .unwrap();
-        }
-    }
-
-    pub(super) fn ingest_outputs_at(
-        client: &mut CurveTreeClient,
-        height: u64,
-        outputs: &[RawOutput],
-    ) {
-        let blob = leaf_blob(outputs.len());
-        let txs = coinbase_block(outputs, &blob);
-        client
-            .ingest_block(BlockLeaves {
-                height: BlockHeight::from_raw(height),
-                txs: &txs,
-            })
-            .unwrap();
-    }
 
     fn ingest_class_b_fixture_prefix(client: &mut CurveTreeClient, tip: u64) {
         for height in 0..=tip {
@@ -1818,45 +1749,64 @@ mod tests {
                 // = 124, far past the test's 66-block window). Post claim-era
                 // cutover the coinbase lock is the longest wire-real maturity,
                 // so a near-tip coinbase replaces the old staked fixture.
-                let outputs = [coinbase_raw(), coinbase_raw()];
-                ingest_outputs_at(client, height, &outputs);
+                ingest_outputs_at(client, height, &raw_outputs_at(height, 2));
             } else {
-                let outputs = [coinbase_raw()];
-                ingest_outputs_at(client, height, &outputs);
+                ingest_outputs_at(client, height, &raw_outputs_at(height, 1));
             }
         }
     }
 
     #[test]
     fn newly_drained_from_index_matches_oracle() {
-        let outs = [coinbase_raw()];
-        let blob = leaf_blob(1);
-        let txs0 = coinbase_block(&outs, &blob);
-        let txs1 = coinbase_block(&outs, &blob);
-        let client = CurveTreeClient::from_blocks(&[
-            BlockLeaves {
-                height: BlockHeight::from_raw(0),
-                txs: &txs0,
-            },
-            BlockLeaves {
-                height: BlockHeight::from_raw(1),
-                txs: &txs1,
-            },
-        ])
-        .unwrap();
-        for through in 0..=61u64 {
+        // Two coinbase outputs (m = h+60) and two regular outputs (m = h+10)
+        // per block, so a maturity bucket holds leaves from two blocks and
+        // two leaves from each. A one-leaf bucket has one order, and neither
+        // side's ordering could be wrong on it.
+        let mut client = CurveTreeClient::new();
+        for height in 0..=80u64 {
+            let cb_outs = [raw_output_at(height, 0), raw_output_at(height, 1)];
+            let reg_outs = [raw_output_at(height, 2), raw_output_at(height, 3)];
+            let cb_blob = leaf_blob_at(height, 2);
+            let reg_blob: Vec<u8> = [leaf_entry_at(height, 2), leaf_entry_at(height, 3)].concat();
+            let txs = [
+                TxLeafInputs {
+                    is_miner: true,
+                    leaf_entry_blob: Some(&cb_blob),
+                    outputs: &cb_outs,
+                },
+                TxLeafInputs {
+                    is_miner: false,
+                    leaf_entry_blob: Some(&reg_blob),
+                    outputs: &reg_outs,
+                },
+            ];
+            client
+                .ingest_block(BlockLeaves {
+                    height: BlockHeight::from_raw(height),
+                    txs: &txs,
+                })
+                .unwrap();
+        }
+        let mut widest = 0;
+        for through in 0..=80u64 {
+            let from_index = client.newly_drained_from_index(BlockHeight::from_raw(through));
+            widest = widest.max(from_index.len());
             assert_eq!(
-                client.newly_drained_from_index(BlockHeight::from_raw(through)),
+                from_index,
                 newly_drained_at_cutoff(&client.entries, BlockHeight::from_raw(through)),
                 "through={through}"
             );
         }
+        assert_eq!(
+            widest, 4,
+            "a bucket must hold both blocks' pairs, or no ordering was compared"
+        );
     }
 
     #[test]
     fn ingest_block_rejects_non_consecutive_heights() {
-        let outs = [coinbase_raw()];
-        let blob = leaf_blob(1);
+        let outs = raw_outputs_at(0, 1);
+        let blob = leaf_blob_at(0, 1);
         let txs = coinbase_block(&outs, &blob);
         let block0 = BlockLeaves {
             height: BlockHeight::from_raw(0),
@@ -1936,22 +1886,8 @@ mod tests {
 
     #[test]
     fn duplicate_drained_through_updates_cache_in_place() {
-        let outs = [coinbase_raw()];
-        let blob = leaf_blob(1);
-        let txs = coinbase_block(&outs, &blob);
         let mut client = CurveTreeClient::new();
-        client
-            .ingest_block(BlockLeaves {
-                height: BlockHeight::from_raw(0),
-                txs: &txs,
-            })
-            .unwrap();
-        client
-            .ingest_block(BlockLeaves {
-                height: BlockHeight::from_raw(1),
-                txs: &txs,
-            })
-            .unwrap();
+        ingest_coinbase_blocks(&mut client, 0, 1);
         assert_eq!(client.drained_through_counts.len(), 1);
         assert_eq!(client.drained_through_counts[0].0, BlockHeight::from_raw(0));
         assert_eq!(
@@ -2002,26 +1938,21 @@ mod tests {
         // holds two entries from two different blocks. The O(1) incremental
         // count in ingest_block must agree with the maturity-index scan at
         // every cutoff (the ingest-path debug_assert also checks each step).
-        let cb = coinbase_raw();
-        let regular = RawOutput {
-            output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
-            commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
-            target: TargetKind::TaggedKey,
-        };
-        let blob = leaf_blob(1);
-        let cb_outs = [cb];
-        let reg_outs = [regular];
         let mut client = CurveTreeClient::new();
         for height in 0..=100u64 {
+            let cb_outs = [raw_output_at(height, 0)];
+            let reg_outs = [raw_output_at(height, 1)];
+            let cb_blob = leaf_entry_at(height, 0);
+            let reg_blob = leaf_entry_at(height, 1);
             let txs = [
                 TxLeafInputs {
                     is_miner: true,
-                    leaf_entry_blob: Some(&blob),
+                    leaf_entry_blob: Some(&cb_blob),
                     outputs: &cb_outs,
                 },
                 TxLeafInputs {
                     is_miner: false,
-                    leaf_entry_blob: Some(&blob),
+                    leaf_entry_blob: Some(&reg_blob),
                     outputs: &reg_outs,
                 },
             ];
@@ -2054,40 +1985,23 @@ mod tests {
         // lower-maturity regular output (m=11). Insertion order differs from
         // canonical `(maturity, gindex)` drain order; the store mirror must
         // produce the canonical-order root anyway.
-        let outs_cb = [coinbase_raw()];
-        let regular = RawOutput {
-            output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
-            commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
-            target: TargetKind::TaggedKey,
-        };
-        // Three byte-distinct entries (distinct commitment points), so the
-        // three leaves are byte-distinct and the root comparison below can
-        // actually fail if the store mirror routes two of them in the wrong
-        // order — identical leaves would make every ordering produce the
-        // same root.
-        let blob0 = leaf_entry(1).to_vec();
-        let blob1_cb = leaf_entry(2).to_vec();
-        let blob1_reg = leaf_entry(3).to_vec();
-        {
-            // The test observes its own setup: the discrimination claim
-            // rests on pairwise-distinct commitment points.
-            let points = [&blob0[..32], &blob1_cb[..32], &blob1_reg[..32]];
-            assert!(
-                points[0] != points[1] && points[0] != points[2] && points[1] != points[2],
-                "setup: the three 0x07 commitment points must be pairwise distinct"
-            );
-        }
-        let txs0 = coinbase_block(&outs_cb, &blob0);
+        let outs0 = [raw_output_at(0, 0)];
+        let outs1_cb = [raw_output_at(1, 0)];
+        let outs1_reg = [raw_output_at(1, 1)];
+        let blob0 = leaf_entry_at(0, 0);
+        let blob1_cb = leaf_entry_at(1, 0);
+        let blob1_reg = leaf_entry_at(1, 1);
+        let txs0 = coinbase_block(&outs0, &blob0);
         let txs1 = [
             TxLeafInputs {
                 is_miner: true,
                 leaf_entry_blob: Some(&blob1_cb),
-                outputs: &outs_cb,
+                outputs: &outs1_cb,
             },
             TxLeafInputs {
                 is_miner: false,
                 leaf_entry_blob: Some(&blob1_reg),
-                outputs: &[regular],
+                outputs: &outs1_reg,
             },
         ];
         let mut client = CurveTreeClient::new();
@@ -2109,6 +2023,11 @@ mod tests {
         // m=61 (cb 1) — none of the later coinbases.
         let drained = drained_sorted(&client.entries, BlockHeight::from_raw(61));
         assert_eq!(drained.len(), 3);
+        // The test observes its own setup. With identical leaves every
+        // ordering produces the same root, and the comparison below could
+        // not fail.
+        let drained_leaves: Vec<LeafEntry> = drained.iter().map(|entry| **entry).collect();
+        assert_eq!(leaves_pairwise_distinct(&drained_leaves), Ok(()));
         assert!(drained
             .windows(2)
             .all(|w| (w[0].maturity, w[0].gindex) <= (w[1].maturity, w[1].gindex)));
@@ -2164,10 +2083,10 @@ mod tests {
         // The entry's commitment point yields the leaf's 4th scalar (its
         // x-coordinate, always a canonical Selene scalar) and the store
         // validates pending rows at write time.
-        let outs = [coinbase_raw()];
-        let blob = leaf_blob(1);
-        let txs0 = coinbase_block(&outs, &blob);
-        let txs1 = coinbase_block(&outs, &blob);
+        let (outs0, blob0) = (raw_outputs_at(0, 1), leaf_blob_at(0, 1));
+        let (outs1, blob1) = (raw_outputs_at(1, 1), leaf_blob_at(1, 1));
+        let txs0 = coinbase_block(&outs0, &blob0);
+        let txs1 = coinbase_block(&outs1, &blob1);
         let blocks = [
             BlockLeaves {
                 height: BlockHeight::from_raw(0),
@@ -2189,8 +2108,8 @@ mod tests {
     fn ingest_resolves_h_pqc_from_blob() {
         // The entry's commitment point must land in the leaf's 4th scalar as
         // its Wei25519 x-coordinate (`construct_leaf` extracts it).
-        let outs = [coinbase_raw()];
-        let blob = leaf_blob(1);
+        let outs = raw_outputs_at(0, 1);
+        let blob = leaf_blob_at(0, 1);
         let mut cm = [0u8; 32];
         cm.copy_from_slice(&blob[..32]);
         let txs = coinbase_block(&outs, &blob);
@@ -2203,7 +2122,7 @@ mod tests {
             .unwrap();
         assert_eq!(client.entries.len(), 1);
         let cm_x = shekyl_fcmp::tree::ed25519_point_to_selene_scalar(&cm)
-            .expect("leaf_blob commitment point decompresses");
+            .expect("fixture commitment point decompresses");
         assert_eq!(&client.entries[0].leaf[96..128], &cm_x);
         assert_eq!(client.entries[0].identity.cm, cm);
     }
@@ -2211,10 +2130,10 @@ mod tests {
     #[test]
     fn other_target_consumes_index_but_is_not_a_leaf() {
         // [Other, valid]: the Other output advances gindex but is no leaf.
-        let mut other = coinbase_raw();
+        let mut other = raw_output_at(0, 0);
         other.target = TargetKind::Other;
-        let outs = [other, coinbase_raw()];
-        let blob = leaf_blob(2); // one entry per vout
+        let outs = [other, raw_output_at(0, 1)];
+        let blob = leaf_blob_at(0, 2); // one entry per vout
         let txs = coinbase_block(&outs, &blob);
         let client = CurveTreeClient::from_blocks(&[BlockLeaves {
             height: BlockHeight::from_raw(0),
@@ -2422,11 +2341,11 @@ mod tests {
     fn from_blocks_pending_matches_explicit_replay() {
         // CT-3c's fresh-build oracle is meaningful only because
         // from_blocks replays the same per-block delta path.
-        let out0 = [coinbase_raw()];
-        let blob0 = leaf_blob(1);
+        let out0 = raw_outputs_at(0, 1);
+        let blob0 = leaf_blob_at(0, 1);
         let txs0 = coinbase_block(&out0, &blob0);
-        let out1 = [coinbase_raw(), coinbase_raw()];
-        let blob1 = leaf_blob(2);
+        let out1 = raw_outputs_at(1, 2);
+        let blob1 = leaf_blob_at(1, 2);
         let txs1 = coinbase_block(&out1, &blob1);
         let blocks = [
             BlockLeaves {
@@ -2493,8 +2412,7 @@ mod tests {
             "long-maturity coinbase row stays pending and directly compared"
         );
 
-        let output = [coinbase_raw()];
-        ingest_outputs_at(&mut orphaned, 66, &output);
+        ingest_outputs_at(&mut orphaned, 66, &raw_outputs_at(66, 1));
         let mut fresh_redrain = CurveTreeClient::new();
         ingest_class_b_fixture_prefix(&mut fresh_redrain, 66);
         assert_eq!(
@@ -2747,8 +2665,8 @@ mod tests {
         // Resume picks the persisted tip up directly: a genesis replay is
         // structurally rejected as a non-consecutive ingest.
         assert_eq!(resumed.ingested_tip_height, Some(BlockHeight::from_raw(70)));
-        let outs = [coinbase_raw()];
-        let blob = leaf_blob(1);
+        let outs = raw_outputs_at(0, 1);
+        let blob = leaf_blob_at(0, 1);
         let genesis_txs = coinbase_block(&outs, &blob);
         assert!(matches!(
             resumed.ingest_block(BlockLeaves {
