@@ -1,9 +1,11 @@
 mod admission;
+mod block_space;
 mod budget;
 mod budget_scenarios;
 mod burden;
 mod calibration;
 mod cartel;
+mod chain_cursor;
 mod challenge_coverage;
 mod distribution;
 mod engine;
@@ -12,6 +14,8 @@ mod fee_floor;
 mod fee_horizon;
 mod fee_ladder;
 mod fee_model;
+mod median_window;
+mod miner_stuffer;
 mod mn_feasibility;
 mod onset;
 mod population;
@@ -19,6 +23,7 @@ mod proxy;
 mod redistribution;
 mod stranding;
 mod swing;
+mod volume_window;
 // The `RecordedChainFixture` recorder is test-substrate only: it
 // generates / verifies `docs/test_vectors/economics/*.json` for the
 // `EconomicsEngine` C4 differential (`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`

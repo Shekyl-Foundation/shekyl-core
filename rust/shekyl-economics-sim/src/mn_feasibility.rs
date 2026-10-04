@@ -390,7 +390,7 @@ impl FeasibilityTargets {
     #[must_use]
     pub fn operative_defaults() -> Self {
         Self {
-            lambda_target: 3.0,
+            lambda_target: f64::from(shekyl_archival_retention::CHALLENGES_PER_PAIR_PER_EPOCH),
             false_slash_target: 1e-3,
             free_ride_bound: 0.80,
             k_cap: 6.0,
