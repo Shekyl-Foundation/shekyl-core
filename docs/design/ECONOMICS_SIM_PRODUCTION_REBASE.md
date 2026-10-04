@@ -712,6 +712,105 @@ it destroys. Registered:
 | 2. The recorder's vectors move only in their net columns, a few basis points late, genesis untouched | **Held in the columns named, missed in the count.** `circulating_supply` is down 0.069 % at year 10. `burn_pct_bp` moves by at most 2 bp in six later rows. `actually_destroyed` and `staker_fee_pool` follow the burn at full precision, so they move in rows whose basis-point value did not. The genesis row is untouched, and engine-core's differential passes on the regenerated vector. But `total_staked` and `total_weighted_stake_lo` move too: they are the supply times the stake ratio, and the prediction overlooked them. |
 | 3. The gate-7 burn fraction falls by under 0.1 % relative; no verdict moves | **Missed in size.** The fall is 0.5 % relative (last-year burn 48.47 % → 48.22 %, total burned −0.48 %). Gate-7 runs 30 years on the production fee, and its cumulative burn, about 21 M SKL, is about 0.5 % of supply; the estimate was sized at the recorder's year 10. The gate-7 mode prints no verdicts, so the second half holds only trivially. |
 
+### 5.10 ESR-7, designed and predicted before it is built (2026-10-03)
+
+**The question (design owner, relayed).** The chain does not care which
+adversary stuffs; it cares about the cheapest archival byte in each era. So
+ESR-7 prints an **envelope**: per-shard cost by era for each attacker, and
+the minimum across them, which is the number the burden model consumes. A
+51 % miner is out of scope: once the median can be moved, the question is no
+longer economic.
+
+**The attackers**, each priced through production functions — the fee
+ladder, `PrePenaltyEmission::penalised`, the burn split, and the production
+weight and archival predictors over every shape the builder accepts:
+
+1. **Relay stuffer.** Pays the relay path. The pool offers bodies by fee per
+   byte (`tx_pool.cpp`, `fee / weight`), so whether he gets in depends on the
+   honest traffic.
+2. **Miner, floor unenforced (today).** Lists its own zero-fee transactions
+   in the blocks it mines (`kept_by_block` exempts them from the relay
+   floor). It chooses the cheaper of two legs:
+   - **displacement:** listing its bytes in place of honest bodies under the
+     median, and forgoing their fee net of the burn;
+   - **penalty:** listing them past the median and losing reward.
+3. **Miner, floor enforced (after C2-R2 Q9's fix, a declared divergence).**
+   As 2, but every transaction pays the floor. The miner recovers its own
+   miner leg, so it nets `b·F` per byte. It is reported twice more, as a
+   **self-archiver** that also holds its stuffed shards and recovers the
+   staker pool's portion: once as one of the ~100 co-holders, and once as
+   the whole holder set (Sybil). The lower bound is
+   `b·(1 − p·q)·F`, with `p` the pool share of the burn and `q` the
+   attacker's share of the pool payout.
+
+**Table.** Columns: each attacker; cells are SKL per shard. For the miners
+it adds the shards a hashrate share `h` ∈ {10 %, 33 %} can stuff at that
+price within a budget `N` ∈ {one settlement epoch (10 000 blocks), one
+year, ten years}. Rows:
+
+- three eras of the baseline (constrained, years 1–11; carried, years
+  12–30; tail);
+- one demand-below-the-zone row, where free room exists.
+
+The last column is the envelope minimum.
+
+**Where this departs from the relayed recommendation, and why:**
+
+- **The relay stuffer is not shut out in years 1–11.** At the Economy rung
+  he waits behind Standard and expires, as the relay said. But he sets his
+  own fee. The price of entry is outbidding the marginal honest body,
+  about the Standard rate, and each byte he gets in pushes out an honest
+  one. In the constrained era he pays about four times the floor ESR-2
+  priced him at, so the defence is a price and not a wall.
+- **The patient miner's cost does not converge to zero, nor to displaced
+  fees alone.** The penalty is quadratic in a block's overshoot past the
+  median, `R·X²/m²` for an overshoot `X`, but an overshoot is whole
+  transactions. Per shard it is therefore `R·W·x/(α·m²)` at the
+  stuffing transaction that minimises `x²/a` (weight `x`, archival `a`,
+  `α = a/x`), provided the attacker has `W/a` blocks to spread over. That is
+  `x/(α·C·w_ref)` floors per archival byte at `M = m`.
+  - With a short budget the overshoot per block grows, and the cost is
+    `R·W²/(N_h·α²·m²)` over the `N_h` blocks it mines.
+  - Patience buys the floor, not zero.
+- **Free room is a property of demand, not of the era.** The baseline's tail
+  carries 50 a block at a 764 KB median, with no free room. Room exists
+  where demand sits below the zone.
+
+**Registered:**
+
+1. **Constrained era (years 1–11).**
+   - The relay stuffer pays about the Standard rate.
+   - The unenforced miner's cheapest leg is within a factor of two of it:
+     the penalty floor `x/(α·C·w_ref)` and the displacement leg
+     `(1 − b)·4` floors are of the same order, both 4–5× the Economy
+     floor.
+   - The envelope minimum is the miner, at 3–5 floors per byte.
+2. **Carried era (years 12–30).**
+   - The relay stuffer pays the Economy floor at the margin of the median.
+   - The unenforced miner's penalty floor is about 4–5 Economy floors
+     (the same `w_ref` mismatch).
+   - The envelope minimum is the relay stuffer, at one floor.
+   - The enforced miner nets `b·F`, below both, so once the fix lands the
+     envelope minimum is the enforced miner.
+3. **Free room (demand below the zone).**
+   - The unenforced miner stuffs for **zero**.
+   - The enforced miner pays `b·F` per byte. At the tail `F` is about
+     0.00035 SKL per transaction, so the cost is negligible.
+   - **The floor fix does not close this case**: it is right for the
+     self-dealing reason, not as an archival-burden defence.
+4. **Hashrate share and budget set a rate, not a price.**
+   - A shard needs about `W/a` ≈ 250 mined blocks at the floor.
+   - A miner at `h` = 10 % mines 1 000 blocks an epoch and 26 280 a year,
+     so `h` and `N` leave the per-shard floor alone and cap how many shards
+     it can stuff at that price: `N_h·a/W`, about 4 an epoch and 100 a year
+     at 10 %.
+   - A larger campaign raises the overshoot per block and the price with
+     it.
+   - The table prints the floor price and the shards a budget buys at it.
+5. **Self-archiving.** It lowers the enforced miner by at most the pool
+   share of the burn (25 % flat today): `b·(1 − p·q)·F` with `q` = 1, and
+   barely at all at `q` = 1/100.
+
 ## 6. The staking sim — a separate PR
 
 Appendix B is the work list. It is a re-base, not a wiring change: the
