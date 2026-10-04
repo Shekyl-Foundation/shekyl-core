@@ -20,6 +20,12 @@
   first-values and mid-curve pins in Rust and C++, the genesis ladder
   anchors, the chain store's slashing-tip snapshot hash, the recorded economics
   vector and the captured replay chains.
+- `shekyl_economics::neutral_height_reaching`: the first height the neutral
+  trajectory reaches a given emission, the inverse of
+  `projected_already_generated` on one shared walk. The recorder's
+  half-emission milestone reads it (2 907 270).
+- A captured replay chain's `built_at_dev_sha` is the SHA the daemon reports,
+  and the capture refuses unless it is the checkout's clean `HEAD`.
 
 ### Archival shards — `U1b` is read: the floor device does not lower `W`'s ceiling
 

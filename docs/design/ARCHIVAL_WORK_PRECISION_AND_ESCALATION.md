@@ -2225,7 +2225,11 @@ read from the parameter's name): `0.15 · 0.9^40 ≈ 0.0022` of emission at year
 40, and scenario 9 runs to 60 with its emission near the tail (the curve still
 mints ≈ 1.04 SKL/block at year 60 against the 2³² SKL asymptote at ESF 21; the
 0.6 SKL/block floor binds from ≈ year 64 — "exhausted" was wrong at source,
-corrected 2026-10-01). **Stakers are decayed out of the perpetual tail by
+corrected 2026-10-01. Those are the per-minute convention's 21; at the
+design's 22 per block, corrected 2026-10-04, the curve mints ≈ 23.9 SKL/block
+at year 60 and the floor binds from ≈ year 119. The decay's conclusion holds
+— `0.15 · 0.9^60` of either is negligible — but this section's run figures are
+the ESF-21 curve's until re-run on the design's). **Stakers are decayed out of the perpetual tail by
 design**, so a settled chain's archival budget is the fee leg alone, and
 15 tx/block of fees cannot carry a bond on 4.9 M shards at any share ≤ 90 %.
 ~~The only lever that matches the failure is a staker floor on the tail~~ —

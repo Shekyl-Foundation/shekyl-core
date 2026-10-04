@@ -455,10 +455,16 @@ FL-C6 explicitly. (Bound is hand-derived; the instrument re-derives it.)
 `tests/unit_tests/scaling_2021.cpp:88-119` pins the ladder at a
 **10 SKL reward** across three median states (340/1400/5400/67000 at
 `Mnw=Mlw=Zm`; 22000 top with `Mnw=15,000,000`; 13/53/1100/14000 at
-`Mnw=Mlw=1,500,000`). Genesis conditions are ~2048 SKL reward at `M=Zm`,
-whose daemon-rounded `Fh` = 14,000,000 is the KAT-pinned wallet cap
-(`fee_policy.rs:23-27`). The two "14000"-shaped numbers are different
-states; citations must not conflate them.
+`Mnw=Mlw=1,500,000`). Genesis conditions are a 1,024 SKL reward at
+`M=Zm` (the design's ESF 22 per block), where the legacy transliteration's
+daemon-rounded `Fh` is 6,900,000 (`genesis_fh_of_the_legacy_transliteration`,
+`shekyl-economics-sim/src/fee_ladder.rs`). The wallet cap is no longer
+derived from `Fh`: it is the structural bound `absolute_fee_rate_cap`,
+109,226,666 (`fee_policy.rs`). When this finding was written, the code
+applied the emission speed factor per minute, so genesis paid ~2,048 SKL
+and `Fh` was 14,000,000 — the figure that sat beside the scaling test's
+"14000" (corrected 2026-10-04). Hypothetical-state and genesis-state
+numbers are different states; citations must not conflate them.
 
 ---
 
@@ -602,6 +608,12 @@ than the one ArticMine's constants (`w_ref = 3000`, `Zm = 300 000`) were
 tuned for — on a chain where stakers are paid to store whatever the
 floor admits, and where the burn loop is downstream of fee level.
 
+*Measured on the per-minute convention's ESF 21 (corrected 2026-10-04).*
+At the design's 22 per block, genesis pays 1,024 SKL, so genesis
+`Fl = 34 133` atomic/byte against the same tail-era 20: a **1 707× decay**,
+~29× wider than Monero's span. The finding's shape stands; the figures in
+its heading are the ESF-21 measurement.
+
 Two things stated on the record:
 
 1. **The instrument printed this number and the round failed to name the
@@ -699,9 +711,12 @@ Instrument: `shekyl-economics-sim --fee-ladder` (`src/fee_ladder.rs`),
 calling only canonical `shekyl-economics` functions for economics
 quantities; its "current-ladder" comparison column is pinned against the
 C++ oracle by four KATs (the three `scaling_2021.cpp` `wallet_fee_estimate`
-triples, the `relay_fee` set, and the genesis-condition
-`Fh = 14,000,000` the wallet cap is derived from). Full JSON is
-reproducible from the module; headline numbers:
+triples, the `relay_fee` set, and the genesis-condition legacy `Fh`, now
+6,900,000 at the design's 1,024-SKL genesis). Full JSON is reproducible
+from the module; headline numbers. The run these were measured on applied
+the emission speed factor per minute, a 2,048-SKL genesis; §4.3 is
+re-measured at 1,024 SKL (2026-10-04), and the other subsections keep their
+measured values:
 
 ### §4.1 The correction surface (FL-C5 input)
 
@@ -770,7 +785,7 @@ emits — through the production owner `shekyl_economics::corrected_fee_ladder`.
 
 `x_i = f_i·M/R` is the expansion fraction of the median that rung `i` funds on
 an average-cost basis. Measured at genesis with baseline volume, where
-`R` = 2048 SKL and the correction is **`C` = 0.85**. **Every row states `C`
+`R` = 1,024 SKL and the correction is **`C` = 0.85**. **Every row states `C`
 because `x` is not invariant under it:** the correction sits inside the floor
 and the priority rung while `R` is the `M_r`-neutral total, so `C` scales the
 fee side without scaling the divisor. (This is a change from the previous
@@ -782,7 +797,13 @@ measured had no correction at all.)
 | `Zm` (300 000) | 0.850% | 3.400% | **170.0%** | 4.00, **50** |
 | `3·Zm` | 0.283% | 1.133% | **170.0%** | 4.00, **150** |
 | `10·Zm` | 0.085% | 0.340% | **170.0%** | 4.00, **500** |
-| `50·Zm` | 0.017% | 0.067% | **170.0%** | 4.00, **2523** |
+| `50·Zm` | 0.016% | 0.064% | **170.0%** | 4.00, **2638** |
+
+Re-measured 2026-10-04 at `R` = 1,024 SKL, the design's ESF 22 per block.
+The table was first measured at the per-minute convention's 2,048 SKL; the
+first three rows are unchanged, and the `50·Zm` row read 0.017%, 0.067%
+and 2523. That row moves because its economy rung is a few atomic units
+per weight, where integer rounding is coarse, and halving `R` coarsens it.
 
 Reproduce with
 `cargo test -p shekyl-economics-sim served_ladder_spacing_table -- --nocapture`.

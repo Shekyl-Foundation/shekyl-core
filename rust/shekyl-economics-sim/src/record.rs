@@ -131,33 +131,12 @@ fn sample_heights(blocks_per_year: u64, sim_years: u64) -> Vec<u64> {
     heights
 }
 
-/// The first height at which the owner's neutral trajectory
-/// (`projected_already_generated`) has emitted half the asymptote, found by
-/// bisecting the owner rather than restating the curve. Until 2026-10-04
-/// this milestone was a literal, 5 788 000 labelled "ESF-22 milestone",
-/// which is where half is emitted at 23 per block — a third figure beside
-/// the design's 22 and the code's 21 of the time.
+/// The first height at which the owner's neutral trajectory has emitted half
+/// the asymptote — the owner's inverse of `projected_already_generated`,
+/// not a figure restated here.
 fn half_emitted_height(params: &EconomicParams) -> u64 {
-    let half = params.emission_curve_asymptote / 2;
-    let reached = |h: u64| {
-        shekyl_economics::projected_already_generated(h, params)
-            .expect("the neutral projection stays within supply bounds")
-            >= half
-    };
-    let (mut lo, mut hi) = (0u64, 1u64);
-    while !reached(hi) {
-        lo = hi;
-        hi *= 2;
-    }
-    while lo + 1 < hi {
-        let mid = lo + (hi - lo) / 2;
-        if reached(mid) {
-            hi = mid;
-        } else {
-            lo = mid;
-        }
-    }
-    hi
+    shekyl_economics::neutral_height_reaching(params.emission_curve_asymptote / 2, params)
+        .expect("the neutral trajectory reaches half the asymptote")
 }
 
 /// Record the `baseline_steady_state` scenario into a

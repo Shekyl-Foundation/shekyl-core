@@ -187,23 +187,36 @@ pub fn paid_block_reward(
     )
 }
 
-/// Neutral-trajectory `already_generated` at `height` under interpretation (A) (0h′).
+/// Where [`walk_neutral`] stopped: at the caller's predicate, or at tail
+/// entry with the per-block tail every later block adds.
+enum NeutralWalk {
+    Stopped { height: u64, ag: u64 },
+    Tail { height: u64, ag: u64, tail: u64 },
+}
+
+/// The neutral trajectory under interpretation (A) (0h′): `already_generated`
+/// accrues `base_block_reward` block by block from genesis with no release
+/// multiplier, until `stop(height, ag)` holds or the curve reaches the tail.
 ///
-/// Sum of `base_block_reward` for blocks `0..height` with no release multiplier.
-pub fn projected_already_generated(
-    height: u64,
+/// The one walk both directions of the projection share, so the recurrence
+/// and its stationary arm have one copy.
+fn walk_neutral(
     params: &EconomicParams,
-) -> Result<u64, EmissionError> {
+    stop: impl Fn(u64, u64) -> bool,
+) -> Result<NeutralWalk, EmissionError> {
     let tail = tail_subsidy_per_block(params)?;
-    let mut ag = 0u64;
-    let mut h = 0u64;
-    while h < height {
+    let (mut height, mut ag) = (0u64, 0u64);
+    loop {
+        if stop(height, ag) {
+            return Ok(NeutralWalk::Stopped { height, ag });
+        }
         let base = base_block_reward(ag, params)?;
         if base == tail {
-            // STATIONARY FROM HERE — close the form rather than iterate.
-            // `curve_emission` is non-increasing in `already_generated`
-            // and `ag` only grows, so once the curve has fallen to the
-            // tail floor every remaining block adds exactly `tail`.
+            // STATIONARY FROM HERE — the caller closes the form rather than
+            // iterating. `curve_emission` is non-increasing in
+            // `already_generated` and `ag` only grows, so once the curve has
+            // fallen to the tail floor every remaining block adds exactly
+            // `tail`.
             //
             // This is not tidying a loop that would have finished. The
             // `ag >= emission_curve_asymptote` early return that FL-R12′ retired with
@@ -213,18 +226,56 @@ pub fn projected_already_generated(
             // FL-R14 headroom, ≈ 89 750 years of tail — adding the same
             // number to itself before reporting `Overflow`, which is a
             // hang in a public projection rather than an answer.
-            let added = u64::try_from(u128::from(height - h) * u128::from(tail))
-                .map_err(|_| EmissionError::Overflow)?;
-            return ag.checked_add(added).ok_or(EmissionError::Overflow);
+            return Ok(NeutralWalk::Tail { height, ag, tail });
         }
         // No saturation at the asymptote (FL-R12′): the neutral trajectory
         // keeps accruing the perpetual tail past it, exactly as consensus
         // does. The FL-R14 build assertion in `params.rs` documents why
         // this cannot overflow on any realistic horizon.
         ag = ag.checked_add(base).ok_or(EmissionError::Overflow)?;
-        h += 1;
+        height += 1;
     }
-    Ok(ag)
+}
+
+/// Neutral-trajectory `already_generated` at `height` under interpretation (A) (0h′).
+///
+/// Sum of `base_block_reward` for blocks `0..height` with no release multiplier.
+pub fn projected_already_generated(
+    height: u64,
+    params: &EconomicParams,
+) -> Result<u64, EmissionError> {
+    match walk_neutral(params, |h, _| h >= height)? {
+        NeutralWalk::Stopped { ag, .. } => Ok(ag),
+        NeutralWalk::Tail {
+            height: h,
+            ag,
+            tail,
+        } => {
+            let added = u64::try_from(u128::from(height - h) * u128::from(tail))
+                .map_err(|_| EmissionError::Overflow)?;
+            ag.checked_add(added).ok_or(EmissionError::Overflow)
+        }
+    }
+}
+
+/// The inverse of [`projected_already_generated`]: the first height `h` at
+/// which the neutral trajectory has emitted at least `target`, so
+/// `projected_already_generated(h) >= target` and, for `h > 0`,
+/// `projected_already_generated(h - 1) < target`.
+///
+/// One walk, where bisecting the projection replays it from genesis on
+/// every probe. Past tail entry the answer is closed-form, as the
+/// projection's is. `Overflow` when no `u64` height reaches `target`,
+/// including a zero tail that leaves the trajectory short of it forever.
+pub fn neutral_height_reaching(target: u64, params: &EconomicParams) -> Result<u64, EmissionError> {
+    match walk_neutral(params, |_, ag| ag >= target)? {
+        NeutralWalk::Stopped { height, .. } => Ok(height),
+        NeutralWalk::Tail { tail: 0, .. } => Err(EmissionError::Overflow),
+        // The walk stopped short of `target`, so `ag < target`.
+        NeutralWalk::Tail { height, ag, tail } => height
+            .checked_add((target - ag).div_ceil(tail))
+            .ok_or(EmissionError::Overflow),
+    }
 }
 
 /// Neutral base subsidy at `height`: `base_block_reward(projected_already_generated(h))`.
@@ -311,6 +362,15 @@ mod tests {
             at(6_740_000) < eighty && eighty < at(6_765_000),
             "80 % near year 25.7"
         );
+        // The inverse lands on the same heights by its own walk: the first
+        // height at or past each target, one block after the last short of
+        // it: 2²²·ln 2 ≈ 2 907 270 and 2²²·ln 5 ≈ 6 750 472, where
+        // `remaining >> 22` has fallen to a half and a fifth.
+        for (target, expected) in [(half, 2_907_270), (eighty, 6_750_472)] {
+            let h = neutral_height_reaching(target, &p).expect("reachable");
+            assert_eq!(h, expected);
+            assert!(at(h - 1) < target && target <= at(h));
+        }
     }
     use crate::params::EconomicParams;
 
@@ -379,6 +439,64 @@ mod tests {
                 "closed form and walk must agree at height {height} (crossing at {crossing})"
             );
         }
+    }
+
+    /// The inverse must name the first height the walk reaches a target,
+    /// on both sides of tail entry — the walked arm and the closed form.
+    #[test]
+    fn the_inverse_agrees_with_the_naive_search_across_tail_entry() {
+        let mut p = EconomicParams {
+            emission_speed_factor_per_block: 4,
+            ..EconomicParams::default()
+        };
+        let esf = emission_speed_factor(&p);
+        let tail = tail_subsidy_per_block(&p).expect("tail");
+        p.emission_curve_asymptote = (tail << esf) * 4;
+
+        let at = |h| projected_already_generated(h, &p).expect("projection");
+        let mut crossing = 0u64;
+        while base_emission_at(crossing, &p).expect("base") > tail {
+            crossing += 1;
+            assert!(crossing < 100_000, "setup never reaches the tail");
+        }
+        assert!(crossing > 1, "setup must start above the tail, not on it");
+
+        let naive_first = |target: u64| (0u64..).find(|&h| at(h) >= target).expect("reached");
+        let at_crossing = at(crossing);
+        for target in [
+            0,
+            1,
+            at(1),
+            at(1) + 1,
+            at_crossing - 1,
+            at_crossing,
+            at_crossing + 1,
+            at_crossing + tail,
+            at_crossing + 37 * tail - 1,
+        ] {
+            assert_eq!(
+                neutral_height_reaching(target, &p).expect("reachable"),
+                naive_first(target),
+                "inverse and naive search must agree at target {target} (crossing at {crossing})"
+            );
+        }
+    }
+
+    /// A target the trajectory never reaches is an error, not a hang or a
+    /// division by zero: a zero tail leaves the curve short of the
+    /// asymptote forever.
+    #[test]
+    fn an_unreachable_target_is_an_error() {
+        let mut zero_tail = EconomicParams {
+            emission_speed_factor_per_block: 4,
+            final_subsidy_per_minute: 0,
+            ..EconomicParams::default()
+        };
+        zero_tail.emission_curve_asymptote = 1 << 12;
+        assert!(matches!(
+            neutral_height_reaching(zero_tail.emission_curve_asymptote, &zero_tail),
+            Err(EmissionError::Overflow)
+        ));
     }
 
     /// First values of the curve at ESF 22 per block, minted from the closed
