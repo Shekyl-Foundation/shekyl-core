@@ -1213,8 +1213,25 @@ different output. The registry keeps it and captures that output's chunks —
 an **over-capture**, not a wrong proof, because assembly still resolves by
 `gindex` and refuses a leaf that does not carry the expected
 `(output_key, commitment)` (`ClientError::IdentityMismatch`). The wallet's own
-rescan is what retracts the registration. The reorg red-bite owes this a
-row.
+rescan is what retracts the registration. The reorg red-bite owes this a row.
+
+**A coordinate hazard, recorded before anything is built on it.** The obvious
+tidy-up is to drop a stale registration with the *same* inequality the other
+two holders use — `gindex >= surviving_leaf_count`. That does not typecheck
+against reality: `surviving_leaf_count` counts drained **positions**, while a
+`gindex` is a global output index that skips values consumed by
+leaf-ineligible outputs (`types.rs`, `LeafEntry::gindex`) and that no pending
+output has drained at all. The two are only equal in a fixture where every
+output is leaf-eligible and every one has drained — which this file's fixture
+is, so a pass written on it could not see the error.
+
+The honest discriminator is a set membership on the rebuilt state, not an
+inequality: a registration is stale iff `gindex < next_gindex` **and** the
+gindex is absent from the rebuilt `entries`. The second clause is what keeps a
+legitimate early registration — one made for an output the client has not
+ingested yet, which sits at or above `next_gindex` — from being dropped. Its
+red-bite therefore needs all three states of that comparison: below and
+present, below and absent, at or above.
 
 **The observer is infallible; the read that can fail is outside it.** A node
 chunk is copied as the frontier folded it. A layer-0 chunk is only *recorded
@@ -1245,7 +1262,87 @@ carries the Ed25519 basepoint as both, for every output, and under it the
 `O`/`C` swap and the reversal both passed. A collapsed observable caps every
 assertion built on it, however exact the assertion looks.
 
-**What this does not do.** Nothing in the engine calls `register_owned` yet,
+### 11.10 Reconciliation is the backfill, and the list of its causes is short
+
+A capture that is **due and missing** is a late registration, whatever made it
+late, so `reconcile_captures` is one mechanism rather than a repair beside a
+backfill.
+
+**Two triggers, not four.** The working list carried four, and two of them do
+not survive grounding:
+
+| cause | status |
+| --- | --- |
+| **Resume** — the registry does not persist, so every held output returns `AfterDrain` | **real, and the mass case** |
+| **Late discovery** — the scanner identifies an output after its chunks closed, including a lagging scan | **real** |
+| A pre-capture (`SCHEMA_VERSION` 6) store opened by this binary | **unreachable.** The version cell is a strict equality check; such a store is refused at open and re-synced, not migrated |
+| A crash between a fold and its capture | **unreachable.** Captures ride the block's own transaction beside the leaves and the ring snapshot, so the two commit together or neither does |
+
+Recorded as a correction rather than silently dropped, because the four-case
+list is the kind of thing a later reader re-inherits from a summary.
+
+**Due is the same one comparison.** A chunk over owned position `p` at layer
+`L` ends at `(p / outputs_per_node(L) + 1) * outputs_per_node(L) - 1`, and it
+is due exactly when that end is **strictly below** the drained leaf count —
+the same `end_leaf < surviving_leaf_count` a rollback applies and the table is
+keyed on (§11.8). One quantity, three readers.
+
+That strictness is a fencepost, and it was shown to be load-bearing the hard
+way: `<=` instead of `<` passed every other pass in the file, because the
+fixture drains a whole number of chunks and so never puts a chunk's end *at*
+the drained count. `an_unclosed_chunk_is_not_due` is the boundary, at both
+shapes — one leaf short of a layer-0 chunk, and one short of a layer-1 node —
+because they fail differently. Layer 0 reads past the end of the drained
+entries; layer 1's node slice stays in bounds and would write a **wrong**
+chunk silently.
+
+**It also checks the fold.** The owned positions are recomputed from
+`drained_sorted` — the order assembly resolves against — rather than trusted
+from `owned_positions`, which the fold wrote leaf by leaf. The recomputed set
+must *contain* every held position, and is a superset because it also covers
+registrations the fold never saw. A held position it does not produce is
+`ClientError::OwnedPositionDrift`, not a silent overwrite: two orders over one
+field with no comparison between them is how a wrong coordinate survives, and
+a capture keyed on the wrong leaf is a path that fails after the prover has
+run.
+
+**The oracle is the fold, not assembly.** Reconciliation and assembly both go
+through `drained_sorted` + `build_layers`, so comparing them compares a
+function with itself. The fold is the independent producer: it writes from the
+store's committed rows plus the block in hand, while reconciliation rebuilds
+the layer stack from `entries`. `a_reconciled_row_equals_the_folded_one`
+registers early on one client and late on another and requires the rows to be
+**byte-equal**.
+
+**And the cascade rule gets its end-to-end bite.** Leaf 0's layer-1 node and
+leaf 683's layer-0 chunk both end at leaf 683, with different owners. Leaf 0
+is registered early so the fold writes layer 1; leaf 683 is registered late so
+reconciliation writes layer 0 at the same key. Replacing instead of merging
+drops leaf 0's branch, and
+`a_late_layer_zero_capture_does_not_erase_a_folded_layer_one` is what notices
+— the hazard §11.8 names, now exercised through both producers rather than at
+the store alone.
+
+**Cost and shape.** `O(n)` in drained leaves, which is what assembly pays per
+spend today, and one pass serves every late registration — the reason
+`register_owned` does not resolve positions itself, and the reason a caller
+registers everything it holds and then reconciles **once**. Every chunk is
+computed before the write opens and the whole batch commits in one
+transaction, so a failure part-way leaves the store untouched. Only the delta
+is written: a reconcile with nothing owed opens no write transaction, which is
+the steady state and is pinned by
+`reconciling_twice_writes_nothing_the_second_time`.
+
+The resolved positions then **become** the fold's. Without that the backfill
+would be a one-shot — the chunks already closed get written and every chunk
+closing afterwards is missed, leaving the leaf silently unprotected from the
+backfill onward. `reconciliation_resolves_the_position_so_the_fold_continues`
+grows the fixture to the chunk count that closes a layer-1 node after the
+reconcile, because that is the only way to observe it.
+
+### 11.11 What capture still does not do
+
+**Nothing in the engine calls `register_owned` yet,
 and nothing reads a capture: assembly still rebuilds from `entries`, which is
 why `assembly_today_depends_on_every_foreign_leaf` is still in state 2. Three
 things are owed — the registration path, reconciliation for what `AfterDrain`
@@ -1263,3 +1360,15 @@ and a layer-2 chunk needs 25 992 leaves. And `IMPLEMENTATION_INDEX.md`'s `CT`
 row still reads *"path capture's MECHANISM is not built"*, which stays true
 until the three above land — amending it now would be a status claim ahead of
 the status.
+
+**A fixture-wide blind spot, found by the mutation sweep and wider than
+capture.** `coinbase_raw()` gives every output the Ed25519 basepoint as *both*
+`O` and `C`, and it has twenty call sites. Every oracle built on it
+distinguishes leaves only by `cm_x`, which `leaf_blob` seeds by **in-block
+index** — so leaves at the same index in different blocks are identical too.
+Permutations are therefore invisible to those passes: sibling order, `O`/`C`
+swaps, and **drain order**, which is consensus-critical, since reordering
+identical leaves produces the same root. This is a test blind spot over
+consensus-adjacent code, not a defect in the code under test, and the fix is
+the generator rather than the tests — a seeded helper already sits beside it.
+Its own change, not this one's.

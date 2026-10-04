@@ -121,20 +121,22 @@ enum ClientReanchorClass {
 
 /// Classify `err` for [`map_handle_err_to_reanchor`].
 ///
-/// [`ClientError::PathRootMismatch`] and
-/// [`ClientError::CaptureIdentitiesIncomplete`] are
-/// [`ClientReanchorClass::Terminal`]. Every other variant is
-/// [`ClientReanchorClass::Reselect`].
+/// [`ClientError::PathRootMismatch`],
+/// [`ClientError::CaptureIdentitiesIncomplete`] and
+/// [`ClientError::OwnedPositionDrift`] are [`ClientReanchorClass::Terminal`].
+/// Every other variant is [`ClientReanchorClass::Reselect`].
 fn client_reanchor_class(err: &ClientError) -> ClientReanchorClass {
     match err {
-        // `CaptureIdentitiesIncomplete` shares this arm because it shares
-        // the verdict: it is an ingest-path refusal over a store missing
-        // leaf bytes (`prune_frozen`), and reselecting inputs cannot help,
-        // since no other input is served by a store in that state. Rule 82
-        // puts it here rather than naming a remedy that does nothing.
-        ClientError::PathRootMismatch { .. } | ClientError::CaptureIdentitiesIncomplete { .. } => {
-            ClientReanchorClass::Terminal
-        }
+        // Two capture-path refusals share this arm because they share the
+        // verdict, and for both, reselecting inputs is a remedy that does
+        // nothing (rule 82). `CaptureIdentitiesIncomplete` is a store
+        // missing leaf bytes (`prune_frozen`), and no other input is served
+        // by a store in that state. `OwnedPositionDrift` is the client's own
+        // two views of drain order disagreeing, which a different input
+        // reproduces.
+        ClientError::PathRootMismatch { .. }
+        | ClientError::CaptureIdentitiesIncomplete { .. }
+        | ClientError::OwnedPositionDrift { .. } => ClientReanchorClass::Terminal,
         ClientError::RootMismatch { .. }
         | ClientError::OutputNotDrained { .. }
         | ClientError::IdentityMismatch { .. }

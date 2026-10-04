@@ -59,8 +59,8 @@ use std::sync::Arc;
 
 use crate::frontier::{FoldedChunk, Frontier};
 use crate::recon::{
-    assemble_leaf_stream, collect_block_leaves, extract_leaf_commitments, root_from_scalars,
-    TxOutputs,
+    assemble_leaf_stream, collect_block_leaves, drained_sorted, extract_leaf_commitments,
+    root_from_scalars, TxOutputs,
 };
 use crate::segment::outputs_per_node;
 use crate::store::{
@@ -71,7 +71,7 @@ use crate::types::{
     BlockHeight, CommitmentBytes, CurveTreeRoot, Gindex, LeafEntry, OneTimePubkey, OutputIdentity,
     ReferenceBlock, TargetKind, TreePosition,
 };
-use shekyl_fcmp::tree::SELENE_CHUNK_WIDTH;
+use shekyl_fcmp::tree::{build_layers, chunk_width, SELENE_CHUNK_WIDTH};
 
 /// Bytes a layer-0 capture stores per sibling: `O ‖ C ‖ CM.x`.
 ///
@@ -151,6 +151,24 @@ pub enum ClientError {
         claimed: CurveTreeRoot,
         /// Which step of the fold refused.
         fault: crate::assemble::PathRootFault,
+    },
+    /// A held owned position is not one the canonical drain order produces.
+    ///
+    /// `owned_positions` is written by the fold, leaf by leaf, as the
+    /// frontier counts. [`CurveTreeClient::reconcile_captures`] recomputes
+    /// the same set from `drained_sorted` — the order assembly resolves
+    /// against — and the two must agree, with the recomputed set a superset
+    /// (it also covers registrations the fold never saw). A held position
+    /// the recomputation does not produce means the two orders have
+    /// diverged, and every capture keyed on the fold's coordinate is then
+    /// keyed on the wrong leaf.
+    ///
+    /// Reported rather than repaired: reconciliation would otherwise
+    /// silently overwrite one order's coordinates with the other's, and
+    /// nothing says which is right.
+    OwnedPositionDrift {
+        /// The held position the canonical order does not produce.
+        position: u64,
     },
     /// Capture needed the leaf identities under a closing layer-0 chunk and
     /// the store did not hold all of them.
@@ -373,6 +391,7 @@ impl ClientError {
             | ClientError::CaptureIdentitiesIncomplete { .. } => StoreOpenFault::Unsupported,
             ClientError::ResumeFromCorruptStore { .. }
             | ClientError::Frontier { .. }
+            | ClientError::OwnedPositionDrift { .. }
             | ClientError::SnapshotLeafCountMismatch { .. } => StoreOpenFault::Corrupt,
             ClientError::RootMismatch { .. }
             | ClientError::PathRootMismatch { .. }
@@ -488,6 +507,25 @@ pub enum OwnedRegistration {
     /// the registry does not persist
     /// ([`CurveTreeClient::register_owned`]).
     AfterDrain,
+}
+
+/// What one [`CurveTreeClient::reconcile_captures`] call did.
+///
+/// Reported rather than returned as a bare count because the three numbers
+/// answer different questions: whether the call found work it did not know
+/// about, how many rows it touched, and how much it wrote. A reconcile that
+/// resolves positions but writes nothing is the normal steady state; one
+/// that writes on every call would mean the delta check is not working.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CaptureReconciliation {
+    /// Owned positions this call resolved that were not already held — the
+    /// late registrations it picked up.
+    pub positions_resolved: usize,
+    /// Capture rows (`end_leaf` keys) written.
+    pub rows_written: usize,
+    /// Chunks written across those rows. Higher than `rows_written` wherever
+    /// a cascade put two layers under one key.
+    pub chunks_written: usize,
 }
 
 /// Append one sibling's capture body: `O ‖ C ‖ CM.x`,
@@ -1067,6 +1105,196 @@ impl CurveTreeClient {
         } else {
             OwnedRegistration::BeforeDrain
         })
+    }
+
+    /// Write every capture an owned output is **due** but the store lacks.
+    ///
+    /// This is the backfill and the reconciliation in one mechanism, because
+    /// they are one mechanism: a capture that is due and missing is a late
+    /// registration, whatever made it late.
+    ///
+    /// # What makes a capture late
+    ///
+    /// Two triggers, and the list is shorter than it first looks:
+    ///
+    /// 1. **Resume**, which is a *mass* late registration. The registry does
+    ///    not persist ([`Self::register_owned`]), so after every resume each
+    ///    held output comes back [`OwnedRegistration::AfterDrain`]. This is
+    ///    the dominant case by far.
+    /// 2. **Late discovery** — the scanner identifies an owned output after
+    ///    the chunks over it have closed, which includes a lagging scan.
+    ///
+    /// Two cases that were on this list and are **not** reachable, recorded
+    /// so they are not re-inherited. A **pre-capture store** cannot be
+    /// opened at all: [`crate::store::StoreError::SchemaVersionMismatch`] is
+    /// a strict equality check, and the disposition is delete-and-re-sync,
+    /// not migrate. And a **crash between a fold and its capture** cannot
+    /// happen: captures ride the block's own transaction beside the leaves
+    /// and the ring snapshot, so the two commit together or neither does.
+    ///
+    /// # Due, and the one coordinate
+    ///
+    /// A chunk over an owned position `p` at layer `L` ends at
+    /// `(p / outputs_per_node(L) + 1) * outputs_per_node(L) - 1`, and it is
+    /// due exactly when that end is **below the drained leaf count** — the
+    /// same `end_leaf < surviving_leaf_count` comparison a rollback applies
+    /// and the capture table is keyed on (`CT6_PROVING_STATE.md` §11.8). One
+    /// quantity, three readers.
+    ///
+    /// # It also checks the fold
+    ///
+    /// The owned positions are recomputed here from `drained_sorted` — the
+    /// order assembly resolves against — rather than trusted from
+    /// `owned_positions`, which the fold wrote. The recomputed set must
+    /// *contain* every held position; it is a superset, because it also
+    /// covers registrations the fold never saw. A held position it does not
+    /// produce is [`ClientError::OwnedPositionDrift`], not a silent
+    /// overwrite: two orders over one field with no comparison between them
+    /// is how a wrong coordinate survives.
+    ///
+    /// # Cost, and why one call covers every output
+    ///
+    /// `O(n)` in drained leaves — it rebuilds the layer stack, which is what
+    /// assembly does today per spend. One pass serves every late
+    /// registration, which is why [`Self::register_owned`] does not resolve
+    /// positions itself and why the caller should register everything it
+    /// holds and then reconcile **once**.
+    ///
+    /// Every chunk is computed before the write opens, and the whole batch
+    /// commits in one transaction, so a failure part-way through leaves the
+    /// store untouched. Re-offering identical bytes is a no-op, so calling
+    /// this twice writes nothing the second time.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Poisoned`] on a poisoned client;
+    /// [`ClientError::OwnedPositionDrift`] if the fold's coordinates and the
+    /// canonical drain order disagree; [`ClientError::Store`] on a read or
+    /// write failure, including
+    /// [`crate::store::StoreError::ConflictingCapture`] if a recomputed
+    /// chunk disagrees with one already stored.
+    pub fn reconcile_captures(&mut self) -> Result<CaptureReconciliation, ClientError> {
+        self.ensure_live()?;
+        let Some(tip) = self.ingested_tip_height else {
+            return Ok(CaptureReconciliation::default());
+        };
+        let cutoff = Self::drained_through(tip);
+        let drained = drained_sorted(&self.entries, cutoff);
+        let drained_count = u64::try_from(drained.len()).expect("drained count fits u64");
+
+        // Recompute the owned positions from the canonical drain order, and
+        // check the fold's against them before using either.
+        let mut positions = BTreeSet::new();
+        for (position, entry) in drained.iter().enumerate() {
+            if self.owned_gindexes.contains(&entry.gindex) {
+                positions.insert(u64::try_from(position).expect("a drain position fits u64"));
+            }
+        }
+        if let Some(stale) = self.owned_positions.difference(&positions).next() {
+            return Err(ClientError::OwnedPositionDrift { position: *stale });
+        }
+
+        let layers = build_layers(&assemble_leaf_stream(&self.entries, cutoff));
+        let mut rows: BTreeMap<u64, Vec<CapturedChunk>> = BTreeMap::new();
+        for position in &positions {
+            // Layer 0's body is the siblings' identities, taken from
+            // `drained` here rather than from the store rows the fold reads.
+            // Two sources, one encoder — which is what lets a pass compare a
+            // reconciled row with a folded one and have the comparison mean
+            // something.
+            if let Some(end_leaf) = Self::due_chunk_end(*position, 0, drained_count) {
+                let (key, chunk) = Self::backfill_leaf_chunk(end_leaf, &drained)?;
+                Self::offer(&mut rows, key, chunk);
+            }
+            for layer in 1..u8::try_from(layers.len()).expect("curve-tree depth fits u8") {
+                let Some(end_leaf) = Self::due_chunk_end(*position, layer, drained_count) else {
+                    continue;
+                };
+                let width = chunk_width(layer);
+                let node = usize::try_from(*position).expect("a position fits usize")
+                    / outputs_per_node(layer);
+                let children = &layers[usize::from(layer) - 1][node * width..][..width];
+                Self::offer(
+                    &mut rows,
+                    end_leaf,
+                    CapturedChunk {
+                        layer,
+                        bytes: children.iter().flatten().copied().collect(),
+                    },
+                );
+            }
+        }
+
+        // Only the delta is written: a reconcile with nothing owed opens no
+        // write transaction at all.
+        let mut missing: Vec<(TreePosition, Vec<CapturedChunk>)> = Vec::new();
+        for (end_leaf, chunks) in rows {
+            let held = self
+                .store
+                .captured_chunks(TreePosition::from_raw(end_leaf))?;
+            let owed: Vec<CapturedChunk> = chunks
+                .into_iter()
+                .filter(|chunk| !held.iter().any(|h| h.layer == chunk.layer))
+                .collect();
+            if !owed.is_empty() {
+                missing.push((TreePosition::from_raw(end_leaf), owed));
+            }
+        }
+        let chunks_written = missing.iter().map(|(_, chunks)| chunks.len()).sum();
+        self.store.merge_captured_chunk_rows(&missing)?;
+
+        // Committed. The resolved positions become the fold's, so the chunks
+        // over a late-registered leaf that have *not* closed yet are
+        // captured as they do — without this the backfill would be a
+        // one-shot and the leaf unprotected from here on.
+        let resolved = positions.len() - self.owned_positions.len();
+        self.owned_positions = positions;
+        Ok(CaptureReconciliation {
+            positions_resolved: resolved,
+            rows_written: missing.len(),
+            chunks_written,
+        })
+    }
+
+    /// Inclusive leaf position at which the layer-`layer` chunk over
+    /// `position` closes, or `None` if it has not closed yet.
+    ///
+    /// Closed means `end_leaf < drained_count` — the one comparison (see
+    /// [`Self::reconcile_captures`]).
+    fn due_chunk_end(position: u64, layer: u8, drained_count: u64) -> Option<u64> {
+        let covered = u64::try_from(outputs_per_node(layer)).expect("node capacity fits u64");
+        let end_leaf = (position / covered + 1)
+            .checked_mul(covered)?
+            .checked_sub(1)?;
+        (end_leaf < drained_count).then_some(end_leaf)
+    }
+
+    /// The layer-0 capture body for the chunk ending at `end_leaf`, from the
+    /// drain-ordered entries rather than the store.
+    fn backfill_leaf_chunk(
+        end_leaf: u64,
+        drained: &[&LeafEntry],
+    ) -> Result<(u64, CapturedChunk), ClientError> {
+        let start =
+            usize::try_from(end_leaf).expect("a position fits usize") + 1 - SELENE_CHUNK_WIDTH;
+        let end = start + SELENE_CHUNK_WIDTH;
+        if end > drained.len() {
+            return Err(ClientError::CaptureIdentitiesIncomplete {
+                end_leaf,
+                want: SELENE_CHUNK_WIDTH,
+                got: drained.len().saturating_sub(start),
+            });
+        }
+        let mut bytes = Vec::with_capacity(SELENE_CHUNK_WIDTH * CAPTURED_IDENTITY_BYTES);
+        for entry in &drained[start..end] {
+            push_captured_identity(&mut bytes, entry);
+        }
+        Ok((end_leaf, CapturedChunk { layer: 0, bytes }))
+    }
+
+    /// Add `chunk` under `end_leaf`, where a cascade shares the key.
+    fn offer(rows: &mut BTreeMap<u64, Vec<CapturedChunk>>, end_leaf: u64, chunk: CapturedChunk) {
+        rows.entry(end_leaf).or_default().push(chunk);
     }
 
     /// Does this chunk's leaf span hold an owned position?

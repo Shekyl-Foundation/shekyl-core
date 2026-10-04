@@ -60,30 +60,7 @@ const ED25519_BASEPOINT: [u8; 32] = [
 /// Ingest blocks 0..=`tip`, giving creation block `i` `counts[i]` outputs
 /// with globally distinct output keys.
 fn ingest_fixture(client: &mut CurveTreeClient, tip: BlockHeight, counts: &[usize]) {
-    let mut seed = 0u64;
-    let end = tip
-        .checked_add(BlockCount::ONE)
-        .expect("the ingested tip has a successor");
-    for height in BlockHeight::ZERO.ordinals_until(end) {
-        let n = usize::try_from(height.to_raw())
-            .ok()
-            .and_then(|i| counts.get(i).copied())
-            .unwrap_or(0);
-        if n == 0 {
-            let txs: Vec<TxLeafInputs<'_>> = Vec::new();
-            client
-                .ingest_block(BlockLeaves { height, txs: &txs })
-                .expect("an empty block ingests");
-        } else {
-            let outs: Vec<RawOutput> = (0..n)
-                .map(|_| {
-                    seed += 1;
-                    seeded_raw(seed)
-                })
-                .collect();
-            ingest_outputs_at(client, height.to_raw(), &outs);
-        }
-    }
+    ingest_range(client, BlockHeight::ZERO, tip, counts);
 }
 
 /// Blocks of one full Selene chunk each, enough that the owned leaf's
@@ -119,7 +96,17 @@ const FOREIGN_CHUNK_END: u64 = (SELENE_CHUNK_WIDTH as u64) * (CHUNKS as u64) - 1
 /// built on was never called. One fewer leaf per block than the chunk width
 /// makes every chunk span at least two blocks, whatever the widths are.
 fn counts() -> Vec<usize> {
-    let target = CHUNKS * SELENE_CHUNK_WIDTH;
+    counts_for(CHUNKS)
+}
+
+/// [`counts`] for an arbitrary number of leaf chunks.
+fn counts_for(chunks: usize) -> Vec<usize> {
+    counts_totalling(chunks * SELENE_CHUNK_WIDTH)
+}
+
+/// [`counts`] for an arbitrary leaf total, which need not be a whole number
+/// of chunks — the boundary passes need a count that is one short.
+fn counts_totalling(target: usize) -> Vec<usize> {
     let per_block = SELENE_CHUNK_WIDTH - 1;
     let mut out = vec![per_block; target / per_block];
     let rest = target % per_block;
@@ -132,6 +119,52 @@ fn counts() -> Vec<usize> {
         "counts must drain the fixture"
     );
     out
+}
+
+/// Ingest heights `from..=to`, continuing a fixture already ingested below
+/// `from`. Seeds are a prefix sum over `counts`, so a continuation hands out
+/// the same output keys the one-shot [`ingest_fixture`] would have.
+fn ingest_range(
+    client: &mut CurveTreeClient,
+    from: BlockHeight,
+    to: BlockHeight,
+    counts: &[usize],
+) {
+    let before = usize::try_from(from.to_raw()).expect("a height fits usize");
+    let mut seed: u64 = counts
+        .iter()
+        .take(before)
+        .map(|n| u64::try_from(*n).expect("a count fits u64"))
+        .sum();
+    let end = to
+        .checked_add(BlockCount::ONE)
+        .expect("the ingested tip has a successor");
+    for height in from.ordinals_until(end) {
+        let n = usize::try_from(height.to_raw())
+            .ok()
+            .and_then(|i| counts.get(i).copied())
+            .unwrap_or(0);
+        if n == 0 {
+            let txs: Vec<TxLeafInputs<'_>> = Vec::new();
+            client
+                .ingest_block(BlockLeaves { height, txs: &txs })
+                .expect("an empty block ingests");
+        } else {
+            let outs: Vec<RawOutput> = (0..n)
+                .map(|_| {
+                    seed += 1;
+                    seeded_raw(seed)
+                })
+                .collect();
+            ingest_outputs_at(client, height.to_raw(), &outs);
+        }
+    }
+}
+
+/// The tip at which every leaf a `counts` fixture creates has drained.
+fn tip_for(counts: &[usize]) -> BlockHeight {
+    let last_creation = u64::try_from(counts.len() - 1).expect("block count fits u64");
+    BlockHeight::from_raw(last_creation) + lock_count() + BlockCount::ONE
 }
 
 /// A client with `CHUNKS` full leaf chunks drained, and the gindexes that
@@ -154,10 +187,7 @@ fn drained_chunks(register: &[u64]) -> (CurveTreeClient, BlockHeight) {
             "an empty client has drained nothing"
         );
     }
-    // The last creation is the last counted block; it drains at `+ lock`,
-    // and the root at `h` drains through `h - 1`, so the tip is one past.
-    let last_creation = u64::try_from(counts.len() - 1).expect("block count fits u64");
-    let tip = BlockHeight::from_raw(last_creation) + lock_count() + BlockCount::ONE;
+    let tip = tip_for(&counts);
     ingest_fixture(&mut client, tip, &counts);
     let drained = client.drained_leaf_count(tip);
     assert_eq!(
@@ -568,4 +598,278 @@ fn a_poisoned_client_refuses_to_register() {
         ),
         "registration must fail fast while memory is inconsistent"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Reconciliation: a capture that is due and missing is a late registration
+// ---------------------------------------------------------------------------
+
+/// Position whose layer-1 chunk ends at [`OWNED_POSITION`] but whose layer-0
+/// chunk does **not**: leaf 0.
+///
+/// The pair `(0, OWNED_POSITION)` is the cascade-key hazard with two
+/// different owners. Leaf 0's layer-1 node spans `0..=683` and so shares key
+/// 683 with leaf 683's *layer-0* chunk, while leaf 0's own layer-0 chunk ends
+/// at 37. One owner's chunk is written by the fold and the other's by
+/// reconciliation, at one key.
+const CASCADE_PARTNER: u64 = 0;
+
+/// Every key a reconciliation of `register` would write at, and its chunks.
+fn rows_for(client: &CurveTreeClient, keys: &[u64]) -> Vec<(u64, Vec<CapturedChunk>)> {
+    keys.iter().map(|k| (*k, held_at(client, *k))).collect()
+}
+
+/// A reconciled row is **byte-equal** to the one the fold writes.
+///
+/// This is reconciliation's oracle, and it is deliberately not
+/// `assemble_paths`: reconciliation and assembly both go through
+/// `drained_sorted` + `build_layers`, so comparing them would compare a
+/// function with itself. The fold is the independent producer — it writes
+/// leaf by leaf, from the store's committed rows plus the block in hand,
+/// while reconciliation rebuilds the layer stack from `entries`. Two
+/// sources, one encoder, and the bytes must agree.
+#[test]
+fn a_reconciled_row_equals_the_folded_one() {
+    // Early registration: the fold writes.
+    let (folded, _) = drained_chunks(&[OWNED_POSITION]);
+
+    // Late registration: reconciliation writes.
+    let (mut rebuilt, _) = drained_chunks(&[]);
+    assert_eq!(
+        rebuilt
+            .register_owned(Gindex::from_raw(OWNED_POSITION))
+            .expect("a live client registers"),
+        OwnedRegistration::AfterDrain,
+        "the fixture must have drained the leaf already, or there is nothing to backfill"
+    );
+    let report = rebuilt.reconcile_captures().expect("reconciliation runs");
+    assert_eq!(report.positions_resolved, 1, "one late registration");
+    assert_eq!(
+        report.chunks_written, 2,
+        "the cascade puts layer 0 and layer 1 under one key"
+    );
+    assert_eq!(
+        report.rows_written, 1,
+        "both chunks share key {OWNED_POSITION}"
+    );
+
+    let keys = [OWNED_POSITION];
+    assert_eq!(
+        rows_for(&rebuilt, &keys),
+        rows_for(&folded, &keys),
+        "a backfilled row must be byte-equal to the folded one; the fold reads \
+         store rows and the block, reconciliation rebuilds from entries, so a \
+         difference is a real disagreement about the same chunk"
+    );
+    assert!(
+        !held_at(&rebuilt, OWNED_POSITION).is_empty(),
+        "the comparison must not be two empty vectors"
+    );
+}
+
+/// A late layer-0 capture does not erase a folded layer-1 chunk.
+///
+/// The end-to-end form of the merge-by-layer rule. Leaf 0 is registered
+/// early, so the fold writes its layer-1 chunk at key 683. Leaf 683 is
+/// registered late, and its *layer-0* chunk ends at the same key. A write
+/// that replaced would drop leaf 0's branch — latent until the backfill
+/// exists, which is exactly what triggers it.
+#[test]
+fn a_late_layer_zero_capture_does_not_erase_a_folded_layer_one() {
+    let (mut client, _) = drained_chunks(&[CASCADE_PARTNER]);
+    let folded = held_at(&client, OWNED_POSITION);
+    assert_eq!(
+        folded.iter().map(|c| c.layer).collect::<Vec<_>>(),
+        vec![1],
+        "leaf {CASCADE_PARTNER}'s layer-1 node ends at {OWNED_POSITION}, and its \
+         own layer-0 chunk ends at {} — so the fold wrote layer 1 only here",
+        SELENE_CHUNK_WIDTH - 1
+    );
+    let layer_one = body_at(&folded, 1);
+
+    client
+        .register_owned(Gindex::from_raw(OWNED_POSITION))
+        .expect("a live client registers");
+    client.reconcile_captures().expect("reconciliation runs");
+
+    let after = held_at(&client, OWNED_POSITION);
+    assert_eq!(
+        after.iter().map(|c| c.layer).collect::<Vec<_>>(),
+        vec![0, 1],
+        "the backfill must ADD layer 0 beside the folded layer 1, not replace it"
+    );
+    assert_eq!(
+        body_at(&after, 1),
+        layer_one,
+        "the folded layer-1 bytes must be untouched"
+    );
+}
+
+/// Reconciling twice writes nothing the second time.
+///
+/// Identical bytes merge as a no-op, so the steady state after a resume is a
+/// call that resolves positions and writes nothing. A second call that wrote
+/// would mean the delta check is not working, and the engine is going to
+/// depend on this being cheap.
+#[test]
+fn reconciling_twice_writes_nothing_the_second_time() {
+    let (mut client, _) = drained_chunks(&[]);
+    client
+        .register_owned(Gindex::from_raw(OWNED_POSITION))
+        .expect("a live client registers");
+    let first = client.reconcile_captures().expect("the first pass runs");
+    assert!(first.chunks_written > 0, "the first pass has work to do");
+
+    let second = client.reconcile_captures().expect("the second pass runs");
+    assert_eq!(
+        second,
+        crate::CaptureReconciliation {
+            positions_resolved: 0,
+            rows_written: 0,
+            chunks_written: 0,
+        },
+        "nothing is due the second time"
+    );
+}
+
+/// Reconciliation resolves the position, so the fold keeps capturing.
+///
+/// Without this the backfill would be a one-shot: the chunks that had already
+/// closed get written, and every chunk that closes *after* the late
+/// registration is missed, because the fold matches on `owned_positions`.
+/// The leaf would be silently unprotected from the backfill onward.
+///
+/// Leaf 700's layer-0 chunk has closed by `CHUNKS`, but its layer-1 node —
+/// spanning `684..=1367` — has not, so the fixture grows to the chunk count
+/// that closes it and the pass reconciles in between.
+#[test]
+fn reconciliation_resolves_the_position_so_the_fold_continues() {
+    let late = 700u64;
+    let layer_one_end = 2 * (SELENE_CHUNK_WIDTH as u64) * (HELIOS_CHUNK_WIDTH as u64) - 1;
+    let chunks = usize::try_from((layer_one_end + 1) / SELENE_CHUNK_WIDTH as u64)
+        .expect("chunk count fits usize");
+    let counts = counts_for(chunks);
+    let full_tip = tip_for(&counts);
+
+    // Ingest only far enough that leaf `late`'s layer-0 chunk has closed —
+    // `chunk_start(late) + width` leaves must have drained — and no further.
+    // Derived from this fixture's own counts: `creation_block_of` reads the
+    // default fixture's, which is what the first version of this pass used
+    // and why it did not land where it claimed.
+    let needed = chunk_start(late) + SELENE_CHUNK_WIDTH as u64;
+    let mut cumulative = 0u64;
+    let mut creation = 0usize;
+    while cumulative < needed {
+        cumulative += u64::try_from(counts[creation]).expect("a count fits u64");
+        creation += 1;
+    }
+    let mut client = CurveTreeClient::new();
+    let partial_tip =
+        BlockHeight::from_raw(u64::try_from(creation - 1).expect("a block index fits u64"))
+            + lock_count()
+            + BlockCount::ONE;
+    ingest_fixture(&mut client, partial_tip, &counts);
+    let drained = client.frontier.leaf_count();
+    assert!(
+        drained >= needed && drained <= layer_one_end,
+        "the fixture must have closed leaf {late}'s layer-0 chunk ({needed} leaves)          and not its layer-1 node ({} leaves); drained {drained}",
+        layer_one_end + 1
+    );
+
+    client
+        .register_owned(Gindex::from_raw(late))
+        .expect("a live client registers");
+    client.reconcile_captures().expect("reconciliation runs");
+    assert!(
+        held_at(&client, layer_one_end).is_empty(),
+        "leaf {late}'s layer-1 chunk has not closed, so nothing is due at its key yet"
+    );
+
+    // Forward to where the layer-1 node closes. The fold must capture it.
+    ingest_range(
+        &mut client,
+        partial_tip + BlockCount::ONE,
+        full_tip,
+        &counts,
+    );
+    assert_eq!(
+        held_at(&client, layer_one_end)
+            .iter()
+            .map(|c| c.layer)
+            .collect::<Vec<_>>(),
+        vec![1],
+        "the chunk closed after the backfill, so only a resolved position could \
+         have captured it"
+    );
+}
+
+/// A held position the canonical drain order does not produce is refused.
+///
+/// `owned_positions` is the fold's; the recomputation is `drained_sorted`'s.
+/// Two orders over one field, so reconciliation compares them instead of
+/// silently overwriting one with the other — a wrong coordinate means every
+/// capture keyed on it is keyed on the wrong leaf.
+#[test]
+fn a_drifted_owned_position_is_refused() {
+    let (mut client, _) = drained_chunks(&[OWNED_POSITION]);
+    // A position no registration can account for.
+    client.owned_positions.insert(OWNED_POSITION - 1);
+    match client.reconcile_captures() {
+        Err(crate::ClientError::OwnedPositionDrift { position }) => {
+            assert_eq!(
+                position,
+                OWNED_POSITION - 1,
+                "the refusal names the position"
+            );
+        }
+        other => panic!("expected OwnedPositionDrift, got {other:?}"),
+    }
+}
+
+/// A chunk that has **not** closed is not due, at either shape.
+///
+/// This is the fencepost the whole design rests on: `end_leaf <
+/// drained_leaf_count`, the one comparison a rollback, the capture key and
+/// the backfill all share. `<=` instead of `<` passed every other pass in
+/// this file, because the default fixture drains a whole number of chunks
+/// and so never puts a chunk's end *at* the drained count.
+///
+/// Both shapes, because they fail differently. At layer 0 the body would be
+/// read past the end of the drained entries. At layer 1 the node slice is
+/// still in bounds, so it would write a **wrong** chunk silently — the
+/// children of a layer-0 row whose last node covers a partial chunk.
+#[test]
+fn an_unclosed_chunk_is_not_due() {
+    let width = SELENE_CHUNK_WIDTH as u64;
+    let layer_one_span = width * HELIOS_CHUNK_WIDTH as u64;
+    // One leaf short of closing a layer-0 chunk, then of closing a layer-1
+    // node: in both cases the chunk over leaf 0 ends exactly *at* the
+    // drained count.
+    for leaves in [width, layer_one_span] {
+        let counts = counts_totalling(usize::try_from(leaves).expect("a leaf total fits usize"));
+        let mut client = CurveTreeClient::new();
+        client
+            .register_owned(Gindex::from_raw(0))
+            .expect("a live client registers");
+        // `counts_totalling` lands on `leaves`; ingest one block less than
+        // the full tip so the last chunk is one leaf short of closing.
+        let short = counts_totalling(usize::try_from(leaves - 1).expect("fits usize"));
+        ingest_fixture(&mut client, tip_for(&short), &short);
+        let drained = client.frontier.leaf_count();
+        assert_eq!(drained, leaves - 1, "the fixture must be one leaf short");
+        assert_eq!(
+            counts.iter().sum::<usize>() as u64,
+            leaves,
+            "the full fixture would have closed it"
+        );
+
+        let report = client
+            .reconcile_captures()
+            .expect("an unclosed chunk must be skipped, not read past");
+        assert_eq!(
+            report.chunks_written, 0,
+            "with {drained} drained leaves the chunk over leaf 0 ends at exactly \
+             {drained}, and a chunk is due only strictly below the count"
+        );
+    }
 }

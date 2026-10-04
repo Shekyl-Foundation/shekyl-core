@@ -2283,6 +2283,35 @@ impl LeafStore {
         Ok(())
     }
 
+    /// Merge several capture rows in **one** transaction.
+    ///
+    /// The batch counterpart to [`Self::put_captured_chunks`], for the
+    /// backfill: reconciliation computes every missing chunk first and then
+    /// commits them together, so a failure part-way through the computation
+    /// leaves the store untouched rather than half-reconciled. Merge
+    /// semantics are [`Self::put_captured_chunks`]'s, because both go
+    /// through `merge_captured_chunks`.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::ConflictingCapture`] if any layer already holds
+    /// different bytes; [`StoreError`] on a read or write failure. Either
+    /// way the whole batch is abandoned.
+    pub fn merge_captured_chunk_rows(
+        &self,
+        rows: &[(TreePosition, Vec<CapturedChunk>)],
+    ) -> Result<(), StoreError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let txn = self.db.begin_write()?;
+        for (end_leaf, chunks) in rows {
+            merge_captured_chunks(&txn, *end_leaf, chunks)?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
     /// Remove the leaf **and** meta rows at `position`, leaving
     /// `leaf_count` alone.
     ///
