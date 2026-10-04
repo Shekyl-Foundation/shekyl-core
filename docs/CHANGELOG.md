@@ -13,6 +13,11 @@
   drawable pairs per epoch, an input to the participation floor.
 - The two observation files, the device and its same-window control, are in
   `docs/benchmarks/`.
+- The derivation is archived as a record
+  (`docs/completed/ARCHIVAL_SHARD_T_DERIVATION.md`). `W` and `L` are listed
+  with their reopen conditions among the provisional-until-testnet keys in
+  `CLIENT_VERSION_CONSTANTS_VALIDATION.md`, and reading B is the gate 4/5
+  owner's participation-floor input.
 
 ### Chain rules — CEN-H20 requires the serve credit's pass records (`SHT-9`)
 

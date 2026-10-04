@@ -38,9 +38,9 @@ home; the operative consequences are restated only as far as this census needs.
 
 | input | ruling | home |
 |---|---|---|
-| **`SHT-Q1`** | **RULED (Rick, 2026-09-27, design-owner lane): the partition is over transactions that carry archival good** — a non-empty prunable region or `pqc_auths`, decided from the **rows recorded at ingest**, never recomputed from a possibly-pruned body. Shard `k` is the domain's transactions `[k·T, (k+1)·T)` in chain order. **Shards close on count only; there is no clock.** The coinbase is outside by the definition, not by exclusion. Closed shards never change membership; any later change to what counts as good activates by height. The equality with the non-coinbase set is an **invariant, not a definition**, pinned by `rules::tx::tx_domain_tests` and leg (f). | [`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md) §2 |
+| **`SHT-Q1`** | **RULED (Rick, 2026-09-27, design-owner lane): the partition is over transactions that carry archival good** — a non-empty prunable region or `pqc_auths`, decided from the **rows recorded at ingest**, never recomputed from a possibly-pruned body. Shard `k` is the domain's transactions `[k·T, (k+1)·T)` in chain order. **Shards close on count only; there is no clock.** The coinbase is outside by the definition, not by exclusion. Closed shards never change membership; any later change to what counts as good activates by height. The equality with the non-coinbase set is an **invariant, not a definition**, pinned by `rules::tx::tx_domain_tests` and leg (f). | [`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §2 |
 | **`SHT-8`** | D2's operand `n` and `g(age)`'s no-segment branch are keyed on the **retired** segment count. `n` reaches consensus, and a shard-unit re-key would move `escalation_knee_n` ~65× sooner and make `T` a clock on monetary policy — **once the escalation is switched on**. It is flat at the shipped parameters (§G `SCC-Q2`), so the re-key is behaviour-neutral today. | same doc, §6 and §5 |
-| **`SHT-Q2`** | **RULED (Rick, 2026-09-29): shards are cut by archival length, bound through the txid.** Each in-domain transaction's archival length (prunable + `pqc_auths` bytes) is folded into its txid and stored as a skeleton row — never declared or signed, supplied by storage-pruned forms like the prunable hash. Membership `⌊cum_before / W⌋` over the cumulative archival length: global multiples of `W`, no table; static `max archival length < W`. `W = 3,000,000 B` PROVISIONAL (same day). `SHT-Q1`'s domain unchanged. | [`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md) §8.6, §9 |
+| **`SHT-Q2`** | **RULED (Rick, 2026-09-29): shards are cut by archival length, bound through the txid.** Each in-domain transaction's archival length (prunable + `pqc_auths` bytes) is folded into its txid and stored as a skeleton row — never declared or signed, supplied by storage-pruned forms like the prunable hash. Membership `⌊cum_before / W⌋` over the cumulative archival length: global multiples of `W`, no table; static `max archival length < W`. `W = 3,000,000 B` PROVISIONAL (same day). `SHT-Q1`'s domain unchanged. | [`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §8.6, §9 |
 | **`L2`** | **RULED and withdrawn as a bound on `T`.** `MAX_HOLDINGS_SHARDS` is a **list-size bound** on one bond record and one transaction, not bond-size policy; personas are free (G-1) and splitting is rational, so no per-persona limit binds. The 13.6/13.7 GB byte products are retired from reasoning. Two couplings survive, owed **only if the cap's own value moves** (§E). | same doc, §3 `L2` |
 
 **Out of scope for this round:** any code change, any re-derivation of a
@@ -280,7 +280,7 @@ which shard an id names:
 **How a pruned form supplies the length — RULED 2026-10-01 (design owner, relayed by
 Rick): option (iv).** C++ passes full segments to Rust; Rust measures the length and
 computes the txid; the FFI entry has no length parameter. Verified at source, with two
-premises corrected ([`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md)
+premises corrected ([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md)
 §10.3):
 
 - the C++ pruned-txid path (`get_pruned_transaction_hash`, and the `allow_pruned` arm
@@ -302,7 +302,7 @@ reader and no writer. The skeleton sync wire is `PDM-Q-F28`'s, unbuilt, and owes
 `pqc_auths` digest and the length together (FOLLOWUPS, "Skeleton block payload"). The mixer's word
 encoding, its three arities, the shape of the FFI entry and the RPC field are the
 build's choices and are recorded for ratification in
-[`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md) §10.3 ("As
+[`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §10.3 ("As
 built"). One consequence is the engine swap's: the Rust store, unlike LMDB, discards
 prunable halves, so when it backs the daemon RPC its transaction slot must carry the
 `txs_archival_len` row — the serve path cannot measure bytes it no longer holds.

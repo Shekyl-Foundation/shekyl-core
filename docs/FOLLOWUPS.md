@@ -94,6 +94,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L19i
   - Target: pre-genesis
 
+- **Gate 4/5 participation floor: one Pi 4 sustains challenge reads for up to 18,229 drawable pairs per settlement epoch (`U1b` reading B, 2026-10-03).** Measured with one read in flight on the floor device carrying reader and server, so it is a floor on capacity; the list bound (4,096 pairs) is 22.5 % of it, and the remainder is what is left for organic and band-2 reads, which have no rate in the tree (`ARCHIVAL_SHARD_T_DERIVATION.md` §10.8, archived). An input to the participation floor beside the funding finding above, not a bound on `W`.
+  - Owner: [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L19i
+  - Target: pre-genesis
+
 - **Two C++ serializer wrappers still drop the serializer's refusal: the value-returning `t_serializable_object_to_blob` template and `block_to_blob`.** What remains is a per-caller walk of some thirty sites choosing each one's failure mode; a blanket throw was tried on the transaction form and is wrong (the consensus verifier must return a verdict). *Falsifier for leaving it:* a block or header the daemon builds or re-serializes whose serializer can return `false` on a path that hashes, stores or sends the result.
   - Owner: [`BLOCK_TX_WIRE_FORMAT_PORT.md`](design/BLOCK_TX_WIRE_FORMAT_PORT.md) §4.1
   - Target: pre-genesis

@@ -1434,7 +1434,7 @@ fixed effort, not by a flood.
 ## 19b. SPIKE-F-15 at zero effort, measured: no measurable PoW cost on a size ladder; sign unresolved (2026-10-02)
 
 The `SPIKE-F-15` row records `D*` as measured with PoW disabled. The W₂ PoW comparison
-([`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md) §4.1a, read in
+([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §4.1a, read in
 §10.5) measured both postures inside one 24-hour window: four personas, PoW off, on,
 off, on, three object sizes, 955 fetches per posture, every fetch on fresh circuits.
 The verdicts were fixed before the run (bootstrap interval of on − off against a

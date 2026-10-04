@@ -1,6 +1,14 @@
 # `T` — deriving the archival shard cardinality
 
-**Status:** OPEN — Round 0 executed 2026-09-26 at `b72aac2fc` (the composition
+**Status:** CLOSED-as-record — **archived 2026-10-03 (PR #944, design owner)**; owns
+no open residue. `W = 3,000,000 B` rests on no open measurement; its Round-2 testnet pin,
+together with `L = 4`, lives in
+[`CLIENT_VERSION_CONSTANTS_VALIDATION.md`](../design/CLIENT_VERSION_CONSTANTS_VALIDATION.md)'s
+provisional-until-testnet rows with their reopen conditions. `U1b`'s reading B went to the
+gate 4/5 owner as a participation-floor input. Every finding is closed or handed off,
+each to a named owner (§11).
+
+*The round's course, as its banner carried it before archiving:* OPEN — Round 0 executed 2026-09-26 at `b72aac2fc` (the composition
 arm with `origin/dev@ad557ac5a` merged in); **AMENDED on review the same day
 (at `9e8c0bee0`)**; **`SHT-Q1` RULED (Rick, 2026-09-27, design-owner lane)** —
 the partition is over transactions that **carry archival good**, a property
@@ -39,7 +47,7 @@ retry budget is 2 retries. §11 is the closing state.** **`U1b` read 2026-10-03
 the floor device does not lower `W`'s ceiling, and `W` rests on no open measurement.**
 Identifier families **`SHT-`** (findings) and
 **`SHT-Q`** (questions), registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file
+[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 with this file
 (rule 94 §1; `check_index_prefix_uniqueness.py` branch (a) — 105 prefixes
 unique at the pin, `SHT` clear of `SPR`, `SPR-Q` and `SP-T`). Template: the
 I4 round's shape — state the objective, enumerate constraints at source,
@@ -85,13 +93,13 @@ Numerics this round must reason against, all read at source:
 | block target | `daa_target_seconds = 120` | `config/consensus_constants.json:10` |
 | `SEB` | `settlement_epoch_blocks = 10000` (~14 d) | `:23` |
 | `D_max` / pass-anchor depth | `archival_reorg_depth_blocks = 720` | `:29` |
-| `CRB` | `challenge_resolution_blocks = 10000` in the JSON *(as read at the pin; the key was removed 2026-09-30 — the slash grace is `SLASH_GRACE_EPOCHS · SEB`, one epoch, the same 10 000 on this pin)*; the **response** deadline is `CHALLENGE_RESPONSE_BLOCKS = SEB / 20 = 500` blocks | `:31`; [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md):1991, [`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md):1266 |
-| `L` | `archival_attestation_anchor_lag = 4` blocks, of which **two blocks are the fetch-plus-retry span** | `config/consensus_constants.json:33`; [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1074-1090 |
-| `N` | in-flight fetch cap `8` (`shekyl_p_fetch::MAX_INFLIGHT`) | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):6, `:796` |
+| `CRB` | `challenge_resolution_blocks = 10000` in the JSON *(as read at the pin; the key was removed 2026-09-30 — the slash grace is `SLASH_GRACE_EPOCHS · SEB`, one epoch, the same 10 000 on this pin)*; the **response** deadline is `CHALLENGE_RESPONSE_BLOCKS = SEB / 20 = 500` blocks | `:31`; [`ARCHIVAL_CHALLENGE_MECHANISM.md`](../design/ARCHIVAL_CHALLENGE_MECHANISM.md):1991, [`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](../design/ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md):1266 |
+| `L` | `archival_attestation_anchor_lag = 4` blocks, of which **two blocks are the fetch-plus-retry span** | `config/consensus_constants.json:33`; [`ARCHIVAL_SHARD_FETCH.md`](../design/ARCHIVAL_SHARD_FETCH.md):1074-1090 |
+| `N` | in-flight fetch cap `8` (`shekyl_p_fetch::MAX_INFLIGHT`) | [`ARCHIVAL_SHARD_FETCH.md`](../design/ARCHIVAL_SHARD_FETCH.md):6, `:796` |
 | holdings cap | `MAX_HOLDINGS_SHARDS = 4096`, over `ShardSet(Vec<u64>)` | `rust/shekyl-types/src/archival/mod.rs:73`, `:205` |
-| transport figure (the one `L`'s span was sized on) | **a burst floor near 180 KB/s** — "a floor from a null result, not a sustained figure", quoted as "~20 s for 3.33 MB" | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1079 |
-| **transport figure, MEASURED** | **W₂, 2026-09-16, single-attempt, PR #746: cold p99 = 48.27 s, soak p99 = 86.06 s** for a 3.33 MB shard — i.e. **69.0 / 38.7 KB/s effective**, 2.4–4.3× worse than the 20 s premise on the same page | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1091-1095 |
-| good per spend | ~16.7 KB/tx = ~6.1 KB prunable + ~10.6 KB `pqc_auths` of a ~17–18 KB 2-in/2-out | [`ARCHIVAL_PRUNED_DAEMON_MODE_ROUND.md`](../completed/ARCHIVAL_PRUNED_DAEMON_MODE_ROUND.md):525 |
+| transport figure (the one `L`'s span was sized on) | **a burst floor near 180 KB/s** — "a floor from a null result, not a sustained figure", quoted as "~20 s for 3.33 MB" | [`ARCHIVAL_SHARD_FETCH.md`](../design/ARCHIVAL_SHARD_FETCH.md):1079 |
+| **transport figure, MEASURED** | **W₂, 2026-09-16, single-attempt, PR #746: cold p99 = 48.27 s, soak p99 = 86.06 s** for a 3.33 MB shard — i.e. **69.0 / 38.7 KB/s effective**, 2.4–4.3× worse than the 20 s premise on the same page | [`ARCHIVAL_SHARD_FETCH.md`](../design/ARCHIVAL_SHARD_FETCH.md):1091-1095 |
+| good per spend | ~16.7 KB/tx = ~6.1 KB prunable + ~10.6 KB `pqc_auths` of a ~17–18 KB 2-in/2-out | [`ARCHIVAL_PRUNED_DAEMON_MODE_ROUND.md`](ARCHIVAL_PRUNED_DAEMON_MODE_ROUND.md):525 |
 
 ---
 
@@ -108,13 +116,13 @@ input to it rather than the price. **None of that is in question here.**
 
 `T = 200` is `3.33 MB ÷ 16.7 KB/tx = 199.4 → 200`
 (`config/consensus_constants.json:36`: *"Chosen so a typical shard at
-~16.7 KB/tx lands near 3.33 MB"*; [`DRS_E1_SPRUNE.md`](DRS_E1_SPRUNE.md):424
+~16.7 KB/tx lands near 3.33 MB"*; [`DRS_E1_SPRUNE.md`](../design/DRS_E1_SPRUNE.md):424
 repeats it). Both inputs were checked:
 
 - **16.7 KB/tx is sound in form and is *not* circular.** It is a component
   estimate of a spend's *good* — ~6.1 KB prunable region + ~10.6 KB
   `pqc_auths` of a ~17–18 KB 2-in/2-out
-  ([`ARCHIVAL_PRUNED_DAEMON_MODE_ROUND.md`](../completed/ARCHIVAL_PRUNED_DAEMON_MODE_ROUND.md):525,
+  ([`ARCHIVAL_PRUNED_DAEMON_MODE_ROUND.md`](ARCHIVAL_PRUNED_DAEMON_MODE_ROUND.md):525,
   `PDM-Q-F24`, 2026-09-13) — built from transaction anatomy and introduced ten
   days *before* item 5 chose `T = 200`. The arithmetic coincidence
   `3.33e6 / 200 = 16,650` is a consequence of the division, not evidence that
@@ -124,7 +132,7 @@ repeats it). Both inputs were checked:
   × ~128 B/leaf — the size of the **leaf segment**, the unit `PDM-Q6` item 3
   used and item 5 retired (`rust/shekyl-economics-sim/src/burden.rs:33-38`
   still carries that derivation; `RF-D6`'s fixed byte size is "retired
-  entirely", [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md):933-936).
+  entirely", [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](../design/ARCHIVAL_PRUNED_DAEMON_MODE.md):933-936).
 
 So `T`'s justification reduces to **"a shard should hold as many bytes as the
 old leaf segment held"**. That is not a statement about the archival
@@ -303,7 +311,7 @@ shard. And "ordinal" must count **all four** classes; if it counted only
 | Axis | (A) storage ids | (B) non-coinbase ordinal |
 |---|---|---|
 | **Closure liveness** | A shard closes within **at most `T` blocks** whatever the usage — at `T = 200`, ≤ 400 min. The frontier shard is never stuck. | Close cadence depends **only on usage**. A quiet chain keeps its frontier shard open indefinitely: unbondable, and retained on every daemon because discard needs `close_epoch`. Against Q2's freeze-one-epoch rule and `discard(k) ⇔ current_epoch ≥ close_epoch(k) + 2`, an open frontier shard simply never enters the pipeline. Whether that is harmless (the good is small, so "no market" is the correct answer) or a gap (an unbounded universal-retention tail on a quiet chain) is the ruling's question. |
-| **The zero floor** | Admits coinbase-only shards with **zero good**, which a run of `T` empty blocks produces. Nothing in [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) says what the draw does with one — drawable and trivially passable, unposeable, or unbondable. Unresolved at the pin. | Unrepresentable by the table above. |
+| **The zero floor** | Admits coinbase-only shards with **zero good**, which a run of `T` empty blocks produces. Nothing in [`ARCHIVAL_CHALLENGE_MECHANISM.md`](../design/ARCHIVAL_CHALLENGE_MECHANISM.md) says what the draw does with one — drawable and trivially passable, unposeable, or unbondable. Unresolved at the pin. | Unrepresentable by the table above. |
 | **Consensus touch points** | `close_height`, the serve-credit preimage terms `(k·T, (k+1)·T)`, bond admission's closed-shard predicate (ruled 2026-09-19, unbuilt), and prune's range mapping — which must already tolerate interleaved coinbases having no body rows. Note `first_tx_id` must **add** the coinbase term (`listed + h + 1`) at every one of those sites. | Same four, re-keyed — but **cheaper, not dearer, and the round's first reading of this was wrong.** `cumulative_tx_count` *is* the non-coinbase ordinal (`prune.rs:421-428`, `listed_before`'s own contract), so under (B) a boundary is `⌊cumulative_tx_count / T⌋` read straight off the stored cell, with **no coinbase term to add**. Mapping a boundary ordinal back to a storage id is `height_of_tx_id`'s binary search over the running total — which **dev already performs under (A)**, on the `h_scarce` path (`prune.rs:490-500`). So (B) does not introduce a height lookup; it removes an addition from four sites. |
 | **Sizing** | `SHT-2`: the shard's good scales with usage; 3.33 MB is the saturation case. | The shard's good is `T` × per-spend good in **any** era — the case the JSON comment describes. |
 
@@ -418,7 +426,7 @@ At `T = 200`, one record covers 819,200 ids — about 3.1 years of chain at
 1 listed tx/block and 120 s blocks. The Foundation `CompleteTree` floor does
 **not** bind here: its owed set is *computed* ("a reconcile whose owed set is
 every closed, final shard — a configuration of the same store",
-[`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md):463), not listed on a wire. What
+[`WALLET_SIDE_STORE.md`](../design/WALLET_SIDE_STORE.md):463), not listed on a wire. What
 the cap prices is a **large market archiver's persona count**, which is a
 privacy cost, not a capacity one.
 
@@ -460,7 +468,7 @@ encoding whose cap is reached by an honest single-persona archiver at the
 chosen `T` within the mining era.
 
 **`L3` — challenge and settlement work per shard per epoch.** Draws are
-`k = λ·D/E` per block ([`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md):79)
+`k = λ·D/E` per block ([`ARCHIVAL_CHALLENGE_MECHANISM.md`](../design/ARCHIVAL_CHALLENGE_MECHANISM.md):79)
 and each drawable pair receives 3 derived challenges per epoch (`:243`), with
 the settlement writer enumerating drawable pairs. Work scales as
 pairs ∝ shards × holders ∝ `X/T`. Same direction as `L2`'s per-shard state count
@@ -483,14 +491,14 @@ because the conclusion is the one to distrust:**
   3.34 MB shard — three orders of magnitude of slack. This bound is not close.
 - The memory leg is **gone by item 5's own ruling**: `SF-D1`'s whole-shard
   *read* stands, its whole-shard *materialise* does not
-  ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md):933-936),
+  ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](../design/ARCHIVAL_PRUNED_DAEMON_MODE.md):933-936),
   and F32's reason 2 (`T × MAX_TX_SIZE` as an in-flight ceiling at `N = 8`) was
   **refuted** on exactly that ground (`:897-901`). So the in-flight cost is one
   transaction, not `T`.
 - **What `T` is actually bounded by, on measured data.** W₂ has *measured*
   single-attempt fetch since 2026-09-16 and this round's first pass missed it,
   deriving the row against the 180 KB/s burst floor instead
-  ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):1091-1095): **cold
+  ([`ARCHIVAL_SHARD_FETCH.md`](../design/ARCHIVAL_SHARD_FETCH.md):1091-1095): **cold
   p99 = 48.27 s, soak p99 = 86.06 s** for a 3.33 MB shard, graded against a
   **one-block (120 s)** criterion — "both under 120 s". That is 69.0 / 38.7 KB/s
   effective, **2.4–4.3× worse than the 20 s premise** on the same page.
@@ -558,7 +566,7 @@ the round most wants, and it is cheap.
 
 **`U1b` — the server's egress. No authority exists in the tree.** An honest `P`
 on the rule-76 floor device (Pi 4, whose "binding constraint is uplink and Tor
-circuit throughput", [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):758)
+circuit throughput", [`ARCHIVAL_SHARD_FETCH.md`](../design/ARCHIVAL_SHARD_FETCH.md):758)
 must serve, per epoch: 3 challenge reads per drawable `(P, shard)` pair, plus
 organic reads, plus band-2 syncers filling from `(C, h_scarce]`. Each read is
 `T` × per-tx good. The 180 KB/s figure is **requester-side and a burst floor
@@ -898,12 +906,12 @@ that gate's bookkeeping:
 |---|---|---|
 | **`SHT-1`** | `T = 200` is 3.33 MB ÷ 16.7 KB/tx, and 3.33 MB is the **retired leaf segment's** size (`SEGMENT_LEAF_COUNT × ~128 B`). `T`'s justification is inheritance from a retired geometry. 16.7 KB/tx is **not** circular — it is a component estimate predating `T` by ten days. | CONFIRMED — the round's subject |
 | **`SHT-2`** | The JSON comment's *"typical shard at ~16.7 KB/tx lands near 3.33 MB"* holds only under the **non-coinbase ordinal**. Under the landed storage-id domain, 3.33 MB is the *saturation* case; at 1 listed tx/block a shard holds ~1.7 MB. The sizing rationale presumes the answer to `SHT-Q1`. | CONFIRMED |
-| **`SHT-3`** | `SF-D7` still states *"`N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`)"* ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md):183). Item 5 retired the whole-shard materialise and refuted F32's reason 2 on that ground. Stale premise on a RULED row, and it is the text a future reader would use to derive a memory bound on `T`. | STALE TEXT on a RULED row — owner `SF-` |
+| **`SHT-3`** | `SF-D7` still states *"`N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`)"* ([`ARCHIVAL_SHARD_FETCH.md`](../design/ARCHIVAL_SHARD_FETCH.md):183). Item 5 retired the whole-shard materialise and refuted F32's reason 2 on that ground. Stale premise on a RULED row, and it is the text a future reader would use to derive a memory bound on `T`. | STALE TEXT on a RULED row — owner `SF-` |
 | **`SHT-4`** | `U1` is not bounded by `CHALLENGE_RESPONSE_BLOCKS` (500 blocks ⇒ a 10.8 GB budget against a 3.34 MB shard) and the memory leg is retired by item 5. **AMENDED on review:** the first pass then derived the real bound against the 180 KB/s *burst floor* and reported the row as slack, having missed W₂'s **measured** single-attempt figures on the same page (`:1091-1095`). On the measurement the heavy-end ceiling is ~[140, 490] and **`T = 200` is inside it** — `U1a` is unresolved at 200, not slack. The steering prediction that `U1` is the bound most likely to set `T` is **reinstated**; what was wrong in it was only the denominator. | CONFIRMED, then AMENDED — the amendment is the round's headline |
 | **`SHT-7`** | **`L`'s fetch-span component is justified by a byte count from the retired segment, and its own page already contradicts it.** `L = 4`'s span was sized on "~20 s for 3.33 MB" (`ARCHIVAL_SHARD_FETCH.md`:1074-1090, the 180 KB/s floor); W₂ at `:1091-1095` then measured **48.27 / 86.06 s** for the same object — 2.4–4.3× worse — and `L` stayed 4 on a *different* argument ("seven attempts of the cold p99 fit under six minutes"). So the span text is stale relative to the measurement one paragraph below it, and **deriving `T` from that span would be circular**: it would feed the retired 3.33 MB back into `T`'s own bound, which is exactly what this round was opened to remove. The independent half is `SF-D6`'s retry budget; that is the part to keep. Restate `L`'s span **per byte**, or re-pin `T` and `L` together — but do not call selecting inside the current span "the cheaper option", which the first pass did. | CONFIRMED — owner `SF-`, and it is why §4's rule selects from the lower edge. **CLOSED 2026-10-02 (§10.6 item 3):** the span is restated per byte on the worse measured day and `L = 4` holds |
 | **`SHT-5`** | `U1b` — an honest server's sustained egress on the rule-76 floor device — **has no authority anywhere in the tree**. The only transport figure (180 KB/s) is requester-side and a burst floor from a null result. This is the one bound that cannot be closed by reasoning. | OPEN — FOLLOWUPS row, measurement owed. **CLOSED 2026-10-03 (§10.8):** measured on the floor device; at the 1× object 12 of 616 fetches missed (95 % interval 1.12 – 3.37 %), so `U1b` does not lower `W`'s ceiling |
 | **`SHT-6`** | `rust/shekyl-economics-sim/src/burden.rs:33-39`'s `SHARD_BYTES` comment derives 3.33 MB from `SEGMENT_LEAF_COUNT × ~128 B` — the retired **leaf-segment** estimate — while presenting it as the "§2 corpus figure". Corrected in this PR (the only code this round touches). | FIXED here |
-| **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner once the ramp is on, with no economics changed** (it ships flat, so the effect is latent — `SCC-Q2`), and every `T` re-pin thereafter moving when the staker share saturates. **It is a consensus operand, not an economics knob.** `n` reaches consensus through `Blockchain::parent_frozen_segment_count` → `validate_miner_transaction` (`src/cryptonote_core/blockchain.cpp:1494-1508`), derived from `get_curve_tree_leaf_count()` — the **retired leaf geometry** — and read at a pinned parent state with a throwing assert (*"escalation operand read-point violated"*). So the coinbase's fee split depends on it. **CORRECTED 2026-09-27 (`SCC-Q2`'s ruling):** the stronger claim this row first made — *"a wrong re-key changes which coinbases are valid"* — holds only **once the escalation is switched on**. It ships **flat**: `shekyl_escalation_asymptote_share` equals the floor `shekyl_staker_pool_share` (`config/economics_params.json:16-18`, *"the DELIBERATE pre-ceremony NEUTRAL value"*), so the split is 25 % whatever `n` is and a wrong re-key changes no coinbase's validity **today**. The requirement that the re-key be one atomic C++/Rust change is unchanged, and its reason is sharper: the operand is computed on both sides, and a mismatch that is harmless while flat becomes a chain split the moment the GF-7 ceremony raises the asymptote. Likewise the ~65× figure bites only after the ceremony. **Blast radius, otherwise bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so what it clocks is **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table. **Owners RULED 2026-10-01 (§10.4):** `n`'s re-key landed in the Rust validator on 2026-09-30; `g(age)`'s segment-keyed no-segment branch is re-keyed in the **shard-count cutover** ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md)), Rust-side — **LANDED 2026-10-01** (`ShardClose`, `shard_close`; falsifier run, §2's falsifier table); `escalation_knee_n`'s re-derivation is the **sim lane's**, per `SCC-Q2` — **LANDED 2026-10-01** (`2,250,000` closed shards, `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13) |
+| **`SHT-8`** | **Two of `SHT-Q1`'s five falsifier surfaces were evaluated against the retired partition, and fixing one of them can hand `T` a fifth job.** `FrozenSegmentCount` counts **J-segments** (`escalation.rs:48-58`), and `shard_age_milli`'s no-segment branch is segment-keyed (`admission.rs:305-341`) — the leaf partition `PDM-Q12` retired. So "not frozen, not counted" and "scores `age_milli = 0`" are true of segments and say nothing about an open **T-shard**; for those two surfaces the falsifier is **unrun**, not passed. The consequence is bigger than the table: `staker_pool_share_at` saturates at `shekyl_escalation_knee_n = 100,000`, and re-keying `n` from segments to closed T-shards turns 100,000 × 25,992 leaves (~1.3 × 10⁹ txs) into 100,000 × 200 = 2 × 10⁷ storage ids — the knee **~65× sooner once the ramp is on, with no economics changed** (it ships flat, so the effect is latent — `SCC-Q2`), and every `T` re-pin thereafter moving when the staker share saturates. **It is a consensus operand, not an economics knob.** `n` reaches consensus through `Blockchain::parent_frozen_segment_count` → `validate_miner_transaction` (`src/cryptonote_core/blockchain.cpp:1494-1508`), derived from `get_curve_tree_leaf_count()` — the **retired leaf geometry** — and read at a pinned parent state with a throwing assert (*"escalation operand read-point violated"*). So the coinbase's fee split depends on it. **CORRECTED 2026-09-27 (`SCC-Q2`'s ruling):** the stronger claim this row first made — *"a wrong re-key changes which coinbases are valid"* — holds only **once the escalation is switched on**. It ships **flat**: `shekyl_escalation_asymptote_share` equals the floor `shekyl_staker_pool_share` (`config/economics_params.json:16-18`, *"the DELIBERATE pre-ceremony NEUTRAL value"*), so the split is 25 % whatever `n` is and a wrong re-key changes no coinbase's validity **today**. The requirement that the re-key be one atomic C++/Rust change is unchanged, and its reason is sharper: the operand is computed on both sides, and a mismatch that is harmless while flat becomes a chain split the moment the GF-7 ceremony raises the asymptote. Likewise the ~65× figure bites only after the ceremony. **Blast radius, otherwise bounded:** per `FL-V4` the escalation splits the *burned* amount between destruction and the staker pool and **cannot move a fee rung** (miner income depends on `burn_pct` alone), so what it clocks is **monetary policy** — how much burned value is redirected rather than destroyed — a gate-1/7 concern, not a ladder one. **Also unlisted:** `n` appears in **no** row of `PDM-Q6` item 4's nine-row re-key table, and `knee_n` is named by no design doc that owns its unit — so this is a consumer of the retired geometry that the re-key census missed. Fix: re-key `n` to a `T`-independent burden quantity (§5). | CONFIRMED — found on review of this round's own falsifier table. **Owners RULED 2026-10-01 (§10.4):** `n`'s re-key landed in the Rust validator on 2026-09-30; `g(age)`'s segment-keyed no-segment branch is re-keyed in the **shard-count cutover** ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](../design/ARCHIVAL_SHARD_COUNT_CUTOVER.md)), Rust-side — **LANDED 2026-10-01** (`ShardClose`, `shard_close`; falsifier run, §2's falsifier table); `escalation_knee_n`'s re-derivation is the **sim lane's**, per `SCC-Q2` — **LANDED 2026-10-01** (`2,250,000` closed shards, `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13) |
 | **`SHT-9`** | **A `shekyl-chain-rules` fixture carries a shape consensus refuses.** `harness::fixture::serve_credit_only` builds `prunable: None` with empty `pqc_auths` — the **pre-`RF-D1`** serve-credit form, identified by the *absence* of a prunable region. `RF-D1` inverted that: the region is now present and holds one non-empty pruned pass record per credit vin. Verified empirically rather than read off: `Transaction::validate_context_free_pruned` refuses it — *"serve_credit tx must be fee-only — no outputs, empty `pqc_auths`, no spend-proof material, and exactly one pruned pass record per serve-credit vin (§2.5, RF-D1)"*. It does **not** break `SHT-Q1`'s equivalence (a conforming serve-credit body carries good, and `tx_domain_tests` builds one), but a fixture that consensus would refuse is a false negative waiting for any test that assumes it is valid. | CONFIRMED — found while building the equivalence test; owner the `CHAIN_RULES_SLICE` lane, FOLLOWUPS. **FIXED 2026-10-03 (PR #942):** worse than a false fixture — CEN-H20 admitted the shape, which live C++ refuses and the store cannot hold. H20 now requires the `RF-D1` region and CEN-J2, newly implemented, one record per credit vin (a conformance correction, `CHAIN_RULES_SLICE_5.md` §5); both fixtures carry the region, and leg (f) covers a connected credit end to end |
 | **`SHT-10`** | **An FCMP++ proof verifies with trailing bytes.** `Fcmp::read` consumes exactly `proof_size(n, layers)` bytes (`shekyl-oxide/crypto/fcmps/src/lib.rs`), and neither the verifier (`shekyl-fcmp/src/proof.rs`) nor any consensus rule compares `fcmp_proof.len()` with it — the rows check emptiness only (`rules/tx.rs`, `rules/tx_inputs.rs`; C++ `blockchain.cpp`). Probe: a valid proof extended by 1, 64 and 4,096 zero bytes verifies `Ok(true)`. Every hybrid signature binds `prunable_hash`, so only the signer can pad (paying fee), but the good is not a closed function of structure and the encoding is not canonical. Fix: `fcmp_proof.len() == proof_size(n_spend, depth + 1)`. | CONFIRMED by probe — consensus canonical-form gap; **fix directed by the design owner 2026-09-28**, built in PR #899 |
 | **`SHT-11`** | **A serve-credit path verifies with zero scalars appended to a branch layer.** `recompute_subroot` hashes each layer as `hash_grow(init, 0, ZERO, chunk)`, a vector commitment on which a zero scalar contributes nothing (`shekyl-archival-retention/src/path.rs`); widths are bounded only by `MAX_BRANCH_SCALARS = 256`. Probe: the `assembled_path_crosscheck` fixture's Helios layer widened 5 → 6 and 5 → 45 verifies `Ok(())`. The ML-DSA countersignature binds `encode(path)`, so only the bonded signer can pad. Fix: canonical widths for a frozen segment, or refuse trailing zero scalars. | CONFIRMED by probe — consensus canonical-form gap; **fix directed by the design owner 2026-09-28**, built in PR #899 |
@@ -1796,7 +1804,7 @@ the build:
   `calculate_transaction_prunable_hash` now hands its range to Rust
   (`shekyl_tx_prunable_hash`) and its separate serialize path is deleted.
   `get_transaction_prefix_hash` stays C++ and is recorded as transitional
-  ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md) §F).
+  ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](../design/ARCHIVAL_SHARD_COUNT_CUTOVER.md) §F).
 - **The pruned RPC reply.** `get_transactions` entries gain a required
   `archival_len` (`CORE_RPC_VERSION` 3.39). The Rust server measures it from the
   pruned half and the prunable half LMDB hands it, and fails the reply rather than
@@ -1822,7 +1830,7 @@ the build:
 ### 10.4 `SHT-8`'s residues have owners
 
 - **`g(age)`'s segment-keyed no-segment branch** is re-keyed in the shard-count
-  cutover ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md)), as a
+  cutover ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](../design/ARCHIVAL_SHARD_COUNT_CUTOVER.md)), as a
   Rust-side row. **LANDED 2026-10-01:** `ShardClose::{Open, ClosedAt(h)}` in
   `shekyl-archival-retention`, `h` from the fold via
   `shekyl_chain_rules::shard_close` on a `ClosedUniverse` (the count and the
@@ -2206,9 +2214,17 @@ cargo run --release -p shekyl-sp-t3-spike --bin pd-f2-ceiling -- ../docs/benchma
 
 ## 11. Closing state — 2026-10-02
 
+**Archived as a record (2026-10-03, PR #944); the Round-2 pin lives in
+[`CLIENT_VERSION_CONSTANTS_VALIDATION.md`](../design/CLIENT_VERSION_CONSTANTS_VALIDATION.md).**
+This file owns no FOLLOWUPS row.
+
 **`W = 3,000,000 B`** (`archival_shard_length_bytes`). It rests on no open measurement
 since `U1b` was read on 2026-10-03 (§10.8): the floor device does not lower its
-ceiling. It is pinned, together with `L = 4`, at the Round-2 testnet gate (§5, §9.5).
+ceiling. It is pinned, together with `L = 4`, at the Round-2 testnet gate (§5, §9.5); the
+two rows that carry the pin and its reopen conditions are in
+`CLIENT_VERSION_CONSTANTS_VALIDATION.md`. `U1b`'s reading B, the sustainable holding per
+floor device, is the gate 4/5 owner's (`STAKER_ARCHIVAL_SIM.md` §L19i, beside the
+funding finding in `FOLLOWUPS.md`).
 
 **Ruled.**
 
