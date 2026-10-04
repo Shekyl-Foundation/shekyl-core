@@ -71,7 +71,9 @@ use crate::types::{
     BlockHeight, CommitmentBytes, CurveTreeRoot, Gindex, LeafEntry, OneTimePubkey, OutputIdentity,
     ReferenceBlock, TargetKind, TreePosition,
 };
-use shekyl_fcmp::tree::{build_layers, chunk_width, SELENE_CHUNK_WIDTH};
+use shekyl_fcmp::tree::{
+    build_layers, chunk_width, layer_count_for_leaves, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
+};
 
 /// Bytes a layer-0 capture stores per sibling: `O ‖ C ‖ CM.x`.
 ///
@@ -538,6 +540,15 @@ pub struct CaptureReconciliation {
     /// Chunks written across those rows. Higher than `rows_written` wherever
     /// a cascade put two layers under one key.
     pub chunks_written: usize,
+    /// Leaves read and hashed to rebuild the missing chunks.
+    ///
+    /// The cost figure, and the one a caller should watch. **Zero** when
+    /// every due capture is already present, which is the normal resume —
+    /// reconciliation then costs a table read per due coordinate and no
+    /// hashing at all. A non-zero value is bounded by the spans of the
+    /// chunks actually missing (`outputs_per_node(layer)` each), never by
+    /// the chain's length.
+    pub leaves_rebuilt: u64,
 }
 
 /// Append one sibling's capture body: `O ‖ C ‖ CM.x`,
@@ -1164,19 +1175,30 @@ impl CurveTreeClient {
     /// overwrite: two orders over one field with no comparison between them
     /// is how a wrong coordinate survives.
     ///
-    /// # Cost, and why one call covers every output
+    /// # Cost: lazy, and bounded by what is missing
     ///
-    /// `O(n)` in drained leaves — it rebuilds the layer stack, which is what
-    /// assembly does today per spend, so `CT6_PROVING_STATE.md` §11.2's table
-    /// prices it: **~65 min** at `min_leaves_for_depth(6)` on the
-    /// staker-class host, **~2.5 h** projected on the floor device.
+    /// Due coordinates are **arithmetic**, so the call first asks the table
+    /// what it already has: one read per distinct `end_leaf`, no hashing. On
+    /// a normal resume every due chunk is present, and that is the entire
+    /// cost — `O(owned * depth)` reads, [`CaptureReconciliation::leaves_rebuilt`]
+    /// zero.
     ///
-    /// **And a resume is a call to this**, because the registry does not
-    /// persist — so that cost lands on opening a wallet, not only on
-    /// spending. Reconciliation inherits the population capture exists to
-    /// remove; bounding it is increment 7's identity tail, not this
-    /// mechanism. A caller putting this on a path a user waits on owes them
-    /// a rule-82 answer about the wait.
+    /// Only a **missing** chunk is rebuilt, and only from the leaves under
+    /// it — 38 at layer 0, 684 at layer 1. The bound is the chunk's own
+    /// span, never the chain's length.
+    ///
+    /// This matters because **a resume is a call to this**: the registry
+    /// does not persist, so whatever this costs is charged on opening a
+    /// wallet, not only on spending. An earlier revision rebuilt the whole
+    /// tree before comparing anything, which put `CT6_PROVING_STATE.md`
+    /// §11.2's figures — ~65 min at `min_leaves_for_depth(6)` on the
+    /// staker-class host, ~2.5 h projected on the floor device — on every
+    /// wallet open. That is the cost capture exists to remove, and nothing
+    /// required paying it.
+    ///
+    /// What remains `O(n)` is `drained_sorted`, for the positions and the
+    /// drift check. It is a sort, not a hash, and it goes with `entries` at
+    /// increment 7.
     ///
     /// One pass serves every late registration, which is why
     /// [`Self::register_owned`] does not resolve positions itself and why
@@ -1217,53 +1239,52 @@ impl CurveTreeClient {
             return Err(ClientError::OwnedPositionDrift { position: *stale });
         }
 
-        let layers = build_layers(&assemble_leaf_stream(&self.entries, cutoff));
-        let mut rows: BTreeMap<u64, Vec<CapturedChunk>> = BTreeMap::new();
+        // Which due coordinates are MISSING. Pure arithmetic plus one table
+        // read per distinct key — no hashing, and no rebuild. On a normal
+        // resume every due chunk is present and this is the whole cost.
+        let depth = layer_count_for_leaves(drained_count);
+        let mut held: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
+        let mut owed: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
         for position in &positions {
-            // Layer 0's body is the siblings' identities, taken from
-            // `drained` here rather than from the store rows the fold reads.
-            // Two sources, one encoder — which is what lets a pass compare a
-            // reconciled row with a folded one and have the comparison mean
-            // something.
-            if let Some(end_leaf) = Self::due_chunk_end(*position, 0, drained_count) {
-                let (key, chunk) = Self::backfill_leaf_chunk(end_leaf, &drained)?;
-                Self::offer(&mut rows, key, chunk);
-            }
-            for layer in 1..u8::try_from(layers.len()).expect("curve-tree depth fits u8") {
+            for layer in 0..depth {
                 let Some(end_leaf) = Self::due_chunk_end(*position, layer, drained_count) else {
                     continue;
                 };
-                let width = chunk_width(layer);
-                let node = usize::try_from(*position).expect("a position fits usize")
-                    / outputs_per_node(layer);
-                let children = &layers[usize::from(layer) - 1][node * width..][..width];
-                Self::offer(
-                    &mut rows,
-                    end_leaf,
-                    CapturedChunk {
-                        layer,
-                        bytes: children.iter().flatten().copied().collect(),
-                    },
-                );
+                let present = match held.get(&end_leaf) {
+                    Some(layers) => layers.contains(&layer),
+                    None => {
+                        let rows = self
+                            .store
+                            .captured_chunks(TreePosition::from_raw(end_leaf))?;
+                        let layers: Vec<u8> = rows.iter().map(|c| c.layer).collect();
+                        let present = layers.contains(&layer);
+                        held.insert(end_leaf, layers);
+                        present
+                    }
+                };
+                let already = owed
+                    .get(&end_leaf)
+                    .is_some_and(|layers| layers.contains(&layer));
+                if !present && !already {
+                    owed.entry(end_leaf).or_default().push(layer);
+                }
             }
         }
 
-        // Only the delta is written: a reconcile with nothing owed opens no
-        // write transaction at all.
+        // Rebuild only what is missing, each chunk from its OWN span.
         let mut missing: Vec<(TreePosition, Vec<CapturedChunk>)> = Vec::new();
-        for (end_leaf, chunks) in rows {
-            let held = self
-                .store
-                .captured_chunks(TreePosition::from_raw(end_leaf))?;
-            let owed: Vec<CapturedChunk> = chunks
-                .into_iter()
-                .filter(|chunk| !held.iter().any(|h| h.layer == chunk.layer))
-                .collect();
-            if !owed.is_empty() {
-                missing.push((TreePosition::from_raw(end_leaf), owed));
+        let mut leaves_rebuilt = 0u64;
+        let mut chunks_written = 0usize;
+        for (end_leaf, layers) in owed {
+            let mut chunks = Vec::with_capacity(layers.len());
+            for layer in layers {
+                let (chunk, read) = self.rebuild_chunk(end_leaf, layer)?;
+                leaves_rebuilt += read;
+                chunks.push(chunk);
             }
+            chunks_written += chunks.len();
+            missing.push((TreePosition::from_raw(end_leaf), chunks));
         }
-        let chunks_written = missing.iter().map(|(_, chunks)| chunks.len()).sum();
         self.store.merge_captured_chunk_rows(&missing)?;
 
         // Committed. The resolved positions become the fold's, so the chunks
@@ -1276,6 +1297,7 @@ impl CurveTreeClient {
             positions_resolved: resolved,
             rows_written: missing.len(),
             chunks_written,
+            leaves_rebuilt,
         })
     }
 
@@ -1292,32 +1314,73 @@ impl CurveTreeClient {
         (end_leaf < drained_count).then_some(end_leaf)
     }
 
-    /// The layer-0 capture body for the chunk ending at `end_leaf`, from the
-    /// drain-ordered entries rather than the store.
-    fn backfill_leaf_chunk(
-        end_leaf: u64,
-        drained: &[&LeafEntry],
-    ) -> Result<(u64, CapturedChunk), ClientError> {
-        let start =
-            usize::try_from(end_leaf).expect("a position fits usize") + 1 - SELENE_CHUNK_WIDTH;
-        let end = start + SELENE_CHUNK_WIDTH;
-        if end > drained.len() {
+    /// Rebuild one missing chunk from the leaves **under it**, and report
+    /// how many leaves that cost.
+    ///
+    /// This is what keeps reconciliation off the chain's length. A layer-`L`
+    /// chunk is a function of exactly the `outputs_per_node(L)` leaves it
+    /// covers, so it is rebuilt from a ranged read of that span and nothing
+    /// wider — 38 leaves at layer 0, 684 at layer 1. The earlier revision
+    /// rebuilt the **whole tree** before comparing anything, which charged
+    /// every resume the full `O(chain)` hash even when nothing was owed:
+    /// the cost capture exists to remove, moved from spend to wallet open.
+    /// Nothing required it, and on a normal resume the captures are already
+    /// there.
+    ///
+    /// Above layer 0 the children are rebuilt rather than read, because the
+    /// store holds leaves and captures, not interior nodes. `build_layers`
+    /// over an aligned span reproduces the real tree's nodes within it:
+    /// `outputs_per_node(L)` is `outputs_per_node(L - 1) * chunk_width(L)`,
+    /// so the grouping is the same one the whole-tree build would make.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::CaptureIdentitiesIncomplete`] if the span's leaf rows
+    /// are short — the pruned-store shape, as on the ingest path;
+    /// [`ClientError::Store`] on a read failure.
+    fn rebuild_chunk(&self, end_leaf: u64, layer: u8) -> Result<(CapturedChunk, u64), ClientError> {
+        let span = u64::try_from(outputs_per_node(layer)).expect("node capacity fits u64");
+        let start = end_leaf
+            .checked_add(1)
+            .and_then(|past| past.checked_sub(span))
+            .expect("a closed chunk's span starts at or above zero");
+        let entries = self.store.read_drained_range(
+            TreePosition::from_raw(start),
+            TreePosition::from_raw(end_leaf),
+        )?;
+        let want = usize::try_from(span).expect("a chunk span fits usize");
+        if entries.len() != want {
             return Err(ClientError::CaptureIdentitiesIncomplete {
                 end_leaf,
-                want: SELENE_CHUNK_WIDTH,
-                got: drained.len().saturating_sub(start),
+                want,
+                got: entries.len(),
             });
         }
-        let mut bytes = Vec::with_capacity(SELENE_CHUNK_WIDTH * CAPTURED_IDENTITY_BYTES);
-        for entry in &drained[start..end] {
-            push_captured_identity(&mut bytes, entry);
-        }
-        Ok((end_leaf, CapturedChunk { layer: 0, bytes }))
-    }
-
-    /// Add `chunk` under `end_leaf`, where a cascade shares the key.
-    fn offer(rows: &mut BTreeMap<u64, Vec<CapturedChunk>>, end_leaf: u64, chunk: CapturedChunk) {
-        rows.entry(end_leaf).or_default().push(chunk);
+        let bytes = if layer == 0 {
+            let mut bytes = Vec::with_capacity(SELENE_CHUNK_WIDTH * CAPTURED_IDENTITY_BYTES);
+            for entry in &entries {
+                push_captured_identity(&mut bytes, entry);
+            }
+            bytes
+        } else {
+            let mut scalars = Vec::with_capacity(entries.len() * SCALARS_PER_LEAF);
+            for entry in &entries {
+                for scalar in entry.leaf.chunks_exact(32) {
+                    let mut word = [0u8; 32];
+                    word.copy_from_slice(scalar);
+                    scalars.push(word);
+                }
+            }
+            let sub = build_layers(&scalars);
+            let children = &sub[usize::from(layer) - 1];
+            debug_assert_eq!(
+                children.len(),
+                chunk_width(layer),
+                "an aligned span yields exactly one chunk's worth of children"
+            );
+            children.iter().flatten().copied().collect()
+        };
+        Ok((CapturedChunk { layer, bytes }, span))
     }
 
     /// Does this chunk's leaf span hold an owned position?

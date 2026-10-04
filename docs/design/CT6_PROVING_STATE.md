@@ -1323,23 +1323,45 @@ drops leaf 0's branch, and
 — the hazard §11.8 names, now exercised through both producers rather than at
 the store alone.
 
-**Cost, and the number that matters.** `O(n)` in drained leaves, rebuilding
-the same layer stack assembly rebuilds per spend — so §11.2's table prices it
-directly. At `min_leaves_for_depth(6)`, about 23 days of chain, that is
-**~65 min** on the staker-class x86 host and **~2.5 h** projected on the floor
-device.
+**Cost: lazy, and bounded by what is missing.** Due coordinates are
+arithmetic, so the call first asks the table what it already holds — one read
+per distinct `end_leaf`, no hashing. On a normal resume every due chunk is
+present, and that is the whole cost: `O(owned × depth)` reads and
+`leaves_rebuilt == 0`. Only a **missing** chunk is rebuilt, and only from the
+leaves under it — 38 at layer 0, 684 at layer 1. The bound is the chunk's own
+span, never the chain's length.
 
-**And it runs on every wallet open**, because resume is the mass late
-registration. That is a worse exposure than the per-spend figure it borrows:
-a spend is a deliberate act, and opening a wallet is not. Nothing in this
-section improves it — reconciliation inherits the population capture exists to
-remove, and the mechanism that bounds it is increment 7's identity tail, where
-an owned output's stored material replaces the rebuild. Stated here so the
-`O(n)` is not read as cheap. It also means the engine must not call this on a
-path a user waits on without saying so (rule 82), which is part of what the
-registrant slice has to decide.
+Above layer 0 the children are rebuilt rather than read, because the store
+holds leaves and captures, not interior nodes. `build_layers` over an aligned
+span reproduces the real tree's nodes within it: `outputs_per_node(L)` is
+`outputs_per_node(L - 1) · chunk_width(L)`, so the grouping is the one the
+whole-tree build would have made.
 
-One pass serves every late registration — the reason
+**This is a correction, and the reason it matters is the arc's own.** A first
+revision rebuilt the entire layer stack before comparing anything against the
+table, then wrote the difference — so "only the delta is written" held for the
+writes and not for the work. Since the registry does not persist, **a resume is
+a call to this**, which put §11.2's figures — ~65 min at
+`min_leaves_for_depth(6)` on the staker-class host, ~2.5 h projected on the
+floor device — on every wallet open, where they hurt more than at spend, a
+spend being a deliberate act and opening a wallet not. That is precisely the
+cost capture exists to remove. It was recorded here as a population
+reconciliation *inherits*; it is not inherited, because nothing requires the
+rebuild when the captures are already there, and on a normal resume they are.
+
+The cost is a **reported field** rather than an implementation detail for that
+reason: a pass asserting only "wrote nothing" passes the rebuilding revision
+unchanged. `reconciling_twice_rebuilds_nothing_the_second_time` asserts
+`leaves_rebuilt` is exactly the missing chunks' spans — an equality, not
+"fewer than the chain", because at this fixture's size a layer-1 span *is*
+most of the tree, so an inequality would measure the fixture rather than the
+bound — and `a_resume_with_nothing_owed_hashes_nothing` is where it reaches
+zero.
+
+What stays `O(n)` is `drained_sorted`, for the positions and the drift check.
+It is a sort, not a hash, and it goes with `entries` at increment 7.
+
+One pass serves every late registration — the reasonOne pass serves every late registration — the reason
 `register_owned` does not resolve positions itself, and the reason a caller
 registers everything it holds and then reconciles **once**. Every chunk is
 computed before the write opens and the whole batch commits in one

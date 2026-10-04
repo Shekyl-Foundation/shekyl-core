@@ -705,20 +705,36 @@ fn a_late_layer_zero_capture_does_not_erase_a_folded_layer_one() {
     );
 }
 
-/// Reconciling twice writes nothing the second time.
+/// Reconciling twice writes nothing — and **hashes nothing** — the second
+/// time.
 ///
-/// Identical bytes merge as a no-op, so the steady state after a resume is a
-/// call that resolves positions and writes nothing. A second call that wrote
-/// would mean the delta check is not working, and the engine is going to
-/// depend on this being cheap.
+/// `leaves_rebuilt == 0` is the load-bearing half. The first revision of
+/// this mechanism rebuilt the whole tree before comparing anything, so a
+/// resume with every capture already present still paid the full `O(chain)`
+/// hash: the cost capture exists to remove, charged on wallet open, where it
+/// hurts more than at spend. Nothing required it. Asserting only "wrote
+/// nothing" would have passed that revision unchanged, which is exactly why
+/// the cost is a reported field rather than an implementation detail.
 #[test]
-fn reconciling_twice_writes_nothing_the_second_time() {
+fn reconciling_twice_rebuilds_nothing_the_second_time() {
     let (mut client, _) = drained_chunks(&[]);
     client
         .register_owned(Gindex::from_raw(OWNED_POSITION))
         .expect("a live client registers");
     let first = client.reconcile_captures().expect("the first pass runs");
     assert!(first.chunks_written > 0, "the first pass has work to do");
+    // Exactly the missing chunks' own spans — leaf 683 is owed a layer-0
+    // chunk (38 leaves) and a layer-1 node (38 x 18). Asserted as an
+    // equality, not as "fewer than the chain": at this fixture's size the
+    // layer-1 span is most of the tree, so an inequality would be measuring
+    // the fixture rather than the bound. The bound is per chunk, and
+    // `a_resume_with_nothing_owed_hashes_nothing` is where it reaches zero.
+    let width = SELENE_CHUNK_WIDTH as u64;
+    assert_eq!(
+        first.leaves_rebuilt,
+        width + width * HELIOS_CHUNK_WIDTH as u64,
+        "the backfill must read each missing chunk's own span and nothing wider"
+    );
 
     let second = client.reconcile_captures().expect("the second pass runs");
     assert_eq!(
@@ -727,9 +743,44 @@ fn reconciling_twice_writes_nothing_the_second_time() {
             positions_resolved: 0,
             rows_written: 0,
             chunks_written: 0,
+            leaves_rebuilt: 0,
         },
-        "nothing is due the second time"
+        "nothing is due the second time, so nothing is read and nothing hashed"
     );
+}
+
+/// A resume with every capture present hashes nothing.
+///
+/// The normal case, stated on its own rather than as the tail of the
+/// idempotence pass: a wallet opens, re-registers what it holds, and
+/// reconciles. Every due chunk is already in the table, so the call costs a
+/// table read per due coordinate and no hashing — `O(owned × depth)`, not
+/// `O(chain)`.
+#[test]
+fn a_resume_with_nothing_owed_hashes_nothing() {
+    // Early registration, so the fold wrote every due chunk.
+    let (mut client, _) = drained_chunks(&[OWNED_POSITION]);
+    // A resume loses the registry; the wallet re-registers what it holds.
+    client.owned_gindexes.clear();
+    client.owned_positions.clear();
+    assert_eq!(
+        client
+            .register_owned(Gindex::from_raw(OWNED_POSITION))
+            .expect("a live client registers"),
+        OwnedRegistration::AfterDrain,
+        "a re-registration after a resume is always a late one"
+    );
+
+    let report = client.reconcile_captures().expect("reconciliation runs");
+    assert_eq!(
+        report.positions_resolved, 1,
+        "the position is resolved again, which is what lets the fold continue"
+    );
+    assert_eq!(
+        report.leaves_rebuilt, 0,
+        "every due capture is present, so a resume must not rebuild the tree"
+    );
+    assert_eq!(report.chunks_written, 0, "and must not write");
 }
 
 /// Reconciliation resolves the position, so the fold keeps capturing.
