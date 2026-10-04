@@ -125,7 +125,13 @@ reopener conceals `h` and forbids publishing `pk`.
 > the live connect validator (`ChainValid` minted without a C++-verdict
 > shim) **and** a production caller of the settlement write in the Rust
 > apply/slash path. Until both, Slice C is not authorized. Q14 is
-> resolved by this ruling (§10). **Q12 RULED 2026-09-16 (§7.9):** bare
+> resolved by this ruling (§10). *SUPERSEDED in part 2026-10-04
+> (`SCV-Q3`, `SCV-Q5`; §8.0): Slice C is authorized, and it owns the
+> writer's call site, which no longer waits on S-ARCH porting the table.
+> The two falsifier conditions above are no longer waits. The first
+> stands as Slice C's landing rule: Rust only, in `shekyl-chain-rules`,
+> never a C++-verdict shim. Q14's prohibition stands: the C++ tautology
+> is not repaired.* **Q12 RULED 2026-09-16 (§7.9):** bare
 > 32-byte hash, on its own analysis, not as F5 inheritance. *SUPERSEDED:
 > "Q12 is sequenced behind F5."*
 
@@ -1382,7 +1388,8 @@ DrawableSet::at_epoch_open(view, E) -> Vec<DrawablePair>
 No snapshot table. Runs once per epoch into `EpochAssignmentCache`, which
 was already designed as derived-never-persisted (`SO-D8e`) and is therefore
 untouched by the redb port. The named type is STAGED in this plan; the
-body lands with Slice C (not authorized).
+body lands with Slice C (authorized 2026-10-04, §8.0; *was* "not
+authorized").
 
 **(3.3) The drop filter lives at settlement, not at draw.**
 
@@ -2648,5 +2655,9 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
     stays closed. Falsify by `shekyl-chain-rules` being the live connect
     validator (`ChainValid` without a C++-verdict shim) **and** a
     production settlement write on the Rust apply/slash path. Until
-    both, Slice C is not authorized. Subsumes Q14. *SUPERSEDED: Q12
+    both, Slice C is not authorized. Subsumes Q14. *SUPERSEDED in part
+    2026-10-04 (`SCV-Q3`, `SCV-Q5`; §8.0): Slice C is authorized; the
+    falsifier conditions are no longer waits. "Wait until SO can be
+    written directly in Rust; no C++ mirroring" stands as Slice C's
+    landing rule, and Q14's no-repair prohibition stands.* *SUPERSEDED: Q12
     sequenced behind F5.* Q12 RULED independently (§7.9).

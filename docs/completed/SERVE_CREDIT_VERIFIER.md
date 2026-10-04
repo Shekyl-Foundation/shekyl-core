@@ -18,7 +18,7 @@ deadline is `W₂`, and the witness authenticates against `h`'s coinbase. `P`'s
 countersignature is the landed `SF-D8` transcript, with no shard bounds in
 it. That successor is already specified in full as
 [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](../design/ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
-§8 ("Slice C"). Slice C is **not authorized**. Its second precondition
+§8 ("Slice C"). Slice C was **not authorized** at writing (authorized 2026-10-04; §8 `SCV-Q3`). Its second precondition
 waits on a lane that scoped the same work out as waiting on Slice C, and
 that lane has now closed. The central finding is that circular,
 ownerless deferral (`SCV-1`). The central question is who owns Slice C

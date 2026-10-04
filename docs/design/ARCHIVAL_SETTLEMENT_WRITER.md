@@ -363,7 +363,10 @@ that cutover is Rust-direct — `shekyl-chain-rules` for the admission
 gates, S-ARCH (DRS-E4) for the write — not a C++ loop over an FFI batch.
 The pre-cutover daemon keeps the beacon, so this section's interim-writer
 question stays **closed** and is not revisited. Falsify by a production
-settlement write on the Rust apply/slash path. **The revert is wired now**
+settlement write on the Rust apply/slash path. **UPDATE 2026-10-04:** the
+call site is SO-D8 Slice C's, landed with the admission rows (proposal §8.0),
+not S-ARCH's. DRS-E4 closed with it scoped out (`SCV-1`). Still Rust-direct,
+and still no C++ writer. **The revert is wired now**
 regardless, because it is pure cleanup with no such dependency, and it is the
 half `SO-D6` was actually open about — proven by a pop round-trip rather than
 by argument.
