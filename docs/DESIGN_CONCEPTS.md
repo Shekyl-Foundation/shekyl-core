@@ -115,7 +115,12 @@ Shekyl monetary policy should satisfy six constraints at once:
 6. **Self-regulating economic balance**
    - Miners, stakers, and transactors should form interlocking constituencies with complementary incentives.
    - The system should self-stabilize without manual governance intervention.
-   - Staking behavior should implicitly govern deflationary parameters.
+   - ~~Staking behavior should implicitly govern deflationary parameters.~~
+     **Struck (F-D, recorded 2026-10-04):** the `(1 + stake_ratio)` burn term
+     that carried this was deleted
+     ([`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md)
+     F-D); the burn reads volume and net supply only. Staking's coupling to the
+     economy is now the archival budget and the escalation (Component 3).
 
 ---
 
@@ -253,7 +258,7 @@ release_multiplier = clamp(
 
 ### Component 2: Adaptive Fee Burn
 
-A percentage of each transaction fee is permanently destroyed. The burn rate adjusts algorithmically based on three inputs: transaction volume, circulating supply ratio, and stake ratio.
+A percentage of each transaction fee is permanently destroyed. The burn rate adjusts algorithmically based on two inputs: transaction volume and the circulating supply ratio. (A third input, the stake ratio, was deleted by F-D; see the note below the formula.)
 
 #### Burn formula
 
@@ -263,16 +268,21 @@ burn_pct = min(
     BURN_BASE_RATE
         * sqrt(tx_volume / tx_baseline)
         * (circulating_supply / total_supply)
-        * (1 + stake_ratio)
 )
 ```
 
 Where:
 - `BURN_BASE_RATE`: Base burn coefficient (e.g., 50%)
 - `BURN_CAP`: Maximum burn percentage (e.g., 90%)
-- `tx_volume / tx_baseline`: Volume-driven scaling (sublinear via `sqrt`)
-- `circulating_supply / total_supply`: Supply-maturity scaling (0.0 to ~1.0)
-- `stake_ratio`: Staker-driven governance signal (see Component 3)
+- `tx_volume / tx_baseline`: Volume-driven scaling (sublinear via `sqrt`), over the 720-block window (FL-R24)
+- `circulating_supply / total_supply`: Supply-maturity scaling (0.0 to ~1.0), with circulating supply **net** of what has been burned, `coins_generated − total_burned` (FL-R16c; `shekyl_economics::CirculatingSupply::derive`)
+
+**Corrected 2026-10-04 (recording an existing ruling).** This formula carried
+a `* (1 + stake_ratio)` factor, "the staker-driven governance signal". F-D
+deleted it
+([`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md));
+the code (`shekyl_economics::calc_burn_pct`) has no stake term.
+`total_staked` survives as an observable, not a burn input.
 
 #### Fee distribution per block
 
@@ -293,16 +303,24 @@ miner_fee_income = total_fees - burned_amount
 | Maturity | 60-85% | 25-40% | High (2-4x) | 35-65% |
 | Late (Tail Era) | 85%+ | 30-45% | Variable | 45-80%+ |
 
+*Records-was: this table was computed with the deleted `(1 + stake_ratio)`
+factor, so its burn column overstates the current formula by that factor.
+The economics sim is the source for these figures once it runs on the design
+curve ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md) step 4).*
+
 The burn automatically transitions the economy from inflationary growth (gentle early burns) to deflationary maturity (aggressive late burns) without any governance intervention.
 
-### Component 3: Archival Staking (Pay-for-Service) and Implicit Governance
+### Component 3: Archival Staking (Pay-for-Service)
 
-Staking is **pay-for-service archival**, and it is also the sole governance
-action. A staker posts an on-chain bond, joins the archival market, and serves
-chain data the network needs for FCMP++ proof construction; in return the staker
-earns reward emission. There are no votes, proposals, or governance forums — the
-protocol reads aggregate staking participation as a confidence signal and adjusts
-the burn rate algorithmically. Staking is **not** a passive lock: there is no
+Staking is **pay-for-service archival**. A staker posts an on-chain bond, joins
+the archival market, and holds and serves the archival good — each
+transaction's prunable body and `pqc_auths`, which every daemon discards after
+its window — so that rescan from seed, audit and dispute stay possible; in
+return the staker earns reward emission. There are no votes, proposals, or
+governance forums. (This section used to call staking "the sole governance
+action", the protocol reading aggregate participation through a stake-ratio
+term in the burn; F-D deleted that term — see Component 2.) Staking is **not**
+a passive lock: there is no
 duration tier, no `staked_amount × duration_multiplier` weighting, and no
 claim transaction — rewards arrive by consensus emission, never a user
 claim cycle (exiting is the single permanent `unstake`, not a recurring
@@ -313,26 +331,34 @@ reward leg).
 
 #### Why archival is the "useful work"
 
-FCMP++ transaction construction needs the curve-tree state at historical heights,
-which requires long-term archival of chain data. Rather than leaving this to
-foundation-operated archival nodes (a centralization concern), Shekyl pays stakers
-to perform distributed archival. Miners optimize for the current block; transactors
+Every daemon keeps the curve tree whole and the txid commitments to every
+transaction forever, but discards the bulk of each old transaction — its
+prunable body (`CtSigPrunable`) and its `pqc_auths`, ~95 % of its bytes — once
+the shard's window has passed (`PDM-Q2`, `PDM-Q6`). Rescan from seed, audit and
+dispute all need those bodies, so they have to be held by someone or they are
+gone ([`V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md), the design home).
+~~FCMP++ transaction construction needs the curve-tree state at historical
+heights~~ — struck: the tree is complete on every node and spending never
+touches a pruned region, so archival is audit-critical, not proof-critical.
+Rather than leaving the bodies to foundation-operated archival nodes (a
+centralization concern), Shekyl pays stakers to perform distributed archival. Miners optimize for the current block; transactors
 are transient; **stakers are the only actor class with a long-horizon economic stake
 in the chain's health**, which is exactly what archival demands. Consensus-securing
 work (capital at risk) and useful work (archival service) are decoupled and paid
 from related-but-distinct reward streams.
 
-#### Governance signal
+#### Governance signal (deleted)
 
 ```
 stake_ratio = total_staked / circulating_supply
 ```
 
-This ratio feeds directly into the burn formula via the `(1 + stake_ratio)` term.
-Higher aggregate archival participation → higher burn rate → stronger deflationary
-pressure → value preservation for holders. "Staking behavior implicitly governs
-the deflationary parameters" remains true; the underlying action is now archival
-market participation rather than a duration lock.
+This ratio used to feed the burn through a `(1 + stake_ratio)` term. F-D deleted
+the term ([`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md));
+the burn does not read staking. `total_staked` — under bonds-only staking, the
+bonded principal — is retained as an observable (`shekyl_economics::ActivityMetric`).
+How staking couples to the rest of the economy is being designed now
+([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md)).
 
 #### Staking mechanics
 
@@ -409,10 +435,8 @@ the extended signature-list format. See `docs/PQC_MULTISIG.md`.
   across more capped-work), and marginal servers exit — restoring equilibrium.
 - If too few stakers serve: reward per staker rises, attracting participants and
   restoring archival coverage.
-- High stake ratio pushes the burn rate higher, increasing deflationary pressure —
-  rewarding participation.
-- Low stake ratio reduces burn, preserving miner fee income during downturns —
-  protecting chain security when it is most vulnerable.
+- ~~High stake ratio pushes the burn rate higher…~~ / ~~Low stake ratio reduces
+  burn…~~ — struck with the stake-ratio burn term (F-D).
 
 ### Component 4: Staker Emission Share (Bootstrap Subsidy)
 
@@ -444,6 +468,14 @@ The decay is multiplicative per year, causing the emission share to decline expo
 - **Bridges the yield gap.** Produces 1.7% staker yield at year 10 under baseline conditions, and 4–6% during years 1–5, making staking genuinely attractive from launch.
 
 #### Staker yield composition over time
+
+*Records-was (marked 2026-10-04).* The yields in this subsection and in
+§13's projected outcomes were computed in April at a flat 0.10 SKL fee and a
+20 % stake ratio feeding the burn. Both inputs are gone: the fee is
+reward-indexed (FL-R20) and the stake-ratio burn term was deleted (F-D). They
+are kept as the design's intent at the time; the economics sim is their
+source once it runs on the design curve
+([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md) step 4).
 
 | Year | Emission share (effective) | Yield from emission | Yield from fees | Total yield |
 |---|---|---|---|---|
@@ -479,7 +511,7 @@ The economic system creates a natural progression for participants:
 - The emission share provides attractive yields from day one, rewarding early believers.
 - As the chain matures, yield composition shifts from emission-funded to fee-funded — no action required.
 - Yield scales with **verified serve-work** (anti-whale capped), not with a duration lock; more useful archival service earns more, up to the concentration cap.
-- The act of staking implicitly governs the burn rate — no active decision-making required.
+- ~~The act of staking implicitly governs the burn rate~~ — struck (F-D): the burn does not read staking.
 - Principal at the pseudonym stays liquid between settlement epochs; the bond, not a lock, keeps the staker honest. Spending rewards feeds the very system that generates the yield.
 
 ### Value flow between participants
@@ -515,6 +547,7 @@ Under this design, stuffing (creating fake transactions to inflate the volume me
 
 1. **Release rate, not total supply:** Stuffing pulls coins forward from future emission; it does not create new coins. The `2^32` ceiling is immutable.
 2. **Fee burn cost is real:** The `burn_pct` of every fake transaction's fee is irrecoverably destroyed. The stuffer cannot recover burned fees even if they mine the block.
+   *Not true of the chain today (noted 2026-10-04):* the fee floor is relay policy, and a block's own transactions bypass it (`kept_by_block`), so a miner can list its own transactions at no fee. C2-R2 Q9 is reopened as a bug, and the economics sim measures the cheapest stuffer with the floor unenforced and enforced (ESR-7, [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §5.11 on PR #936).
 3. **Benefits are socialized:** Accelerated emission benefits ALL miners proportionally, but the stuffer alone bears the burn cost.
 4. **Self-limiting:** Higher volume increases the burn rate (via `sqrt(tx_volume / baseline)`), making each additional fake transaction more expensive.
 5. **Dilution:** Accelerated emission dilutes the stuffer's existing holdings.
@@ -532,7 +565,7 @@ A large pool that also accumulates a staking position could attempt to extract m
 
 - Archival rewards are paid for **verified serve-work capped by an anti-concentration curve** (Component 3, form C): a whale's marginal work redistributes to smaller servers via the price rather than paying out linearly, so buying a dominant reward share is structurally throttled.
 - Posting a bond and running archival infrastructure is real capital and operational commitment, not a costless side-position; a slashable bond puts that capital at risk against misbehavior.
-- Stake ratio governance is proportional — no outsized influence from single large stakers.
+- ~~Stake ratio governance is proportional~~ — struck: there is no stake-ratio governance (F-D).
 - The system is transparent: stake concentration and archival coverage are publicly visible and monitored as chain health metrics (`gini`/whale gauges in the sim calibration).
 
 ### Empty-chain manipulation
@@ -705,9 +738,9 @@ Adopt the **Four-Component Model**:
 
 1. **`2^32` whole SHEKYL as the emission curve's ASYMPTOTE**, with 9-decimal atomic precision — not a hard cap: the curve approaches it and the perpetual 0.6/block tail continues past it (FL-R12′). Item 2 states the same thing from the release side; they agree.
 2. **Transaction-responsive release rate** that accelerates or slows the emission curve based on real network usage, with gross issuance anchored to the curve's asymptote (plus the perpetual 0.6/block tail — there is no hard cutoff; FL-R12′).
-3. **Adaptive fee burn** driven algorithmically by transaction volume, chain maturity, and aggregate staking behavior — with a portion of the burn funding staker yields.
+3. **Adaptive fee burn** driven algorithmically by transaction volume and chain maturity (net circulating supply) — with a portion of the burn funding staker yields. (Aggregate staking behavior was a third driver until F-D deleted it.)
 4. **Decaying staker emission share** that bootstraps meaningful staker yields from launch, funded by redirecting a small, declining fraction of block emission from miners to stakers.
-5. **Implicit staker governance** where the act of locking coins is the sole governance input, eliminating the need for voting mechanisms.
+5. ~~**Implicit staker governance** where the act of locking coins is the sole governance input~~ — struck (F-D): staking feeds no governance input, and it is a bond, not a lock. It couples to the economy through the archival budget and the escalation (Component 3).
 6. **Wallet-first presentation** with a gamified dashboard making the economic system legible and engaging.
 
 This design creates a self-regulating economic system where miners, stakers, and transactors form complementary constituencies. The system transitions automatically from inflationary growth to deflationary maturity, maintains perpetual security incentives through tail emission, bootstraps staker participation through a self-retiring emission subsidy, and resists gaming through interlocking negative feedback loops.
@@ -748,7 +781,7 @@ The following values are derived from simulation sweeps across ESF, burn rate, s
 
 Effective burn formula:
 ```
-burn_pct = min(BURN_CAP, BURN_BASE_RATE × √(tx_volume / baseline) × (circulating / total_supply) × (1 + stake_ratio))
+burn_pct = min(BURN_CAP, BURN_BASE_RATE × √(tx_volume / baseline) × (circulating / total_supply))   // net circulating (FL-R16c); stake term deleted (F-D)
 ```
 
 ### Staking (Component 3)
@@ -782,6 +815,13 @@ Effective share schedule:
 | 30 | 0.6% | 99.4% |
 
 ### Projected outcomes at baseline (50 tx/block, 0.10 SHEKYL fee, 20% stake ratio)
+
+*Records-was (marked 2026-10-04): computed at a flat fee and the deleted
+stake-ratio burn term (see Component 4). The block-reward rows are the
+design's ESF 22-per-block curve; the code applied 21 per block until the
+emission-speed-factor fix. The economics sim is the source once it runs on the
+design curve ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md)
+step 4).*
 
 | Metric | Year 1 | Year 5 | Year 10 | Year 20 |
 |---|---|---|---|---|

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Docs: the economy's umbrella plan (`ECONOMY_UMBRELLA_PLAN.md`, `EUP-`); `DESIGN_CONCEPTS.md` records F-D, its design home's archival rationale, and its April tables' inputs.
+
 ### Archival shards — `U1b` is read: the floor device does not lower `W`'s ceiling
 
 - A Pi 4 serving the largest shard object for 24 hours, with PoW on and the
