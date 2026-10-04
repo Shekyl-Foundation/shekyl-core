@@ -35,6 +35,10 @@ the task and the fd until that deadline exists. The seam already
 carries the close cause, and the stall is a span on the Rust writer
 loop. Doing either residue in C++ is work this slice deletes.
 
+**UPDATE 2026-10-04:** The register's inventory is re-anchored at `dev`
+`684673611e` (§6.2.1). The design round stays closed. No connection
+type has been cut.
+
 **SCOPE NARROWED 2026-09-21 (steering).** *Records-was: "P2P-3 slice 1", and the
 scope was the whole p2p surface.* **LV-3 is the `levin_notify` / `net_node`
 seam — the socket layer and relay dispatch — and nothing else.** The peerlist,
@@ -1548,7 +1552,7 @@ wrong was calling them the round.*
 | Step | What | Note |
 | --- | --- | --- |
 | **c** | The connection registry, **including its own count**. **UPDATE 2026-09-28: first, immediately after the transport cutover.** The strand is the only writer. Walkers read snapshots. A change is a post. | the `foreach_connection` race, above |
-| **a** | The `Connection` type — the endpoint with Round 2's claimed/observed provenance, direction, zone, established-at. Follows step c. | `Claimed<T>` / `Observed<T>` distinct in the type, per §2.7.4 |
+| **a** | The `Connection` type — the endpoint with Round 2's claimed/observed provenance, direction, connector, established-at. Follows step c. *Records-was: zone.* | `Claimed<T>` / `Observed<T>` distinct in the type, per §2.7.4 |
 | **b** | Ownership transfer — the Rust object becomes authoritative; `p2p_connection_context` becomes a handle. Follows step c. | |
 | **d** | Relay dispatch — moved out 2026-09-25 to the RD row, after the timing engine | not this slice; see §6.3 item 3 |
 
@@ -1560,14 +1564,21 @@ handshake phases are in Rust before this slice's connection object.
 the sockets moved here.*
 
 **And one concrete inheritance worth naming**, because it is invisible from
-`levin_notify`: admission's ceiling is compared against an atomic that a
-**once-per-second `foreach_connection` recount** maintains
-([`net_node.inl:1112`](../../src/p2p/net_node.inl#L1112)). **A Rust connection
-registry should own its own count** rather than inherit a sleeping recount
-thread, so step **c** is where `:1112` dies. *(The one-second staleness is
-separately a rule-76 measurement input for `--in-peers` —
-[`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §7.4 item 2 —
-not a design question for this slice.)*
+`levin_notify`. **UPDATE 2026-10-04:** admission does not read the
+recount. `apply_inbound_ceiling` (`net_node.inl:3009`) charges
+`shekyl_seam_inbound_held()`. The once-per-second thread is still
+`node_server::run` (`:1163`), and its walk is `:1174`: it sleeps one
+second and writes `m_current_number_of_in_peers` and
+`m_current_number_of_out_peers`. The out-count is what
+`try_to_connect_and_handshake_with_new_peer` reads (`:1605`), with the
+comment that the update time is one second. The in-count atomic is
+written by that thread and by `get_incoming_connections_count`
+(`:2182`) and has no reader in `src/`. Step **c** owns the count, and
+that thread goes with it. Deleting it removes the one-second
+`--in-peers` measurement input (rule 76;
+[`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §7.4
+item 2). *Records-was: the ceiling was compared against the atomic the
+recount at `net_node.inl:1112` maintained.*
 
 **UPDATE 2026-09-28. Step c is first, and it follows the transport
 cutover.** The seam leaves `foreach_connection` as it is. That walk is
@@ -1582,21 +1593,79 @@ Step c's first input is that race. The registry makes each connection's
 strand the only writer.
 
 - **Snapshots for reading.** A connection publishes an immutable
-  snapshot of what a walk needs: session established, direction,
-  network key, peer id, support flags, sync state. The strand
-  republishes it when those fields change, by swapping in a fresh
-  snapshot. Walkers only read snapshots.
+  snapshot of what a walk needs: established, direction, connector,
+  support flags, sync state. The strand republishes it when those
+  fields change, by swapping in a fresh snapshot. Walkers only read
+  snapshots. *Records-was at `9bc062036`: "network key, peer id".
+  `peer_id` and `pruning_seed` are not fields.*
 - **Messages for writing.** A walker that changes a connection posts
   that change to the connection's strand. It does not write the
   context itself.
 
-The inventory at `dev` `9bc062036` is 15 calls in `net_node.inl` and
-2 calls in `levin_notify.cpp` (`:190`, `:232`). `levin_notify.cpp:472`
-names the walk in a comment and is not a call. This step does not wait
+**UPDATE 2026-10-04. Inventory at `dev` `684673611e`.** `git grep -c
+foreach_connection` is the number: 12 in `src/p2p/net_node.inl`, 1 in
+`src/cryptonote_protocol/levin_notify.cpp`. The twelve are calls. The
+one is a comment at `:406`, not a call. *Records-was at `9bc062036`:
+15 calls in `net_node.inl` and 2 calls in `levin_notify.cpp` (`:190`,
+`:232`), plus a comment at `:472`.*
+
+| Call | Site |
+| --- | --- |
+| `for_each_connection` | `:158`, mutable context |
+| `run` (the one-second thread) | `:1174` |
+| `send_stop_signal` | `:1280` |
+| `has_outbound_connection_to_host` | `:1524` |
+| `is_peer_used` | `:1545` |
+| `is_addr_connected` | `:1570` |
+| `make_new_connection_from_peerlist` | `:1802` |
+| `get_incoming_connections_count` (one zone) | `:2173`, also writes the in-count cache |
+| `get_outgoing_connections_count` (one zone) | `:2192`, also writes the out-count cache |
+| `get_incoming_connections_count` (every zone) | `:2224` |
+| `peer_sync_idle_maker` | `:2366`, mutable; sets `m_in_timedsync` |
+| `print_connections_container` | `:2846` |
+
+`foreach_connection` hands the callback `get_context_ref()`
+(`levin_protocol_handler_async.h:907`). `for_connection` does the same
+at `:921`. The session's network is `m_connector`, a `ConnectorId`.
+
+**Two Rust session tables already exist. Step c does not add a
+third.** `shekyl_seam::Hub` (`hub.rs:136`) holds every admitted
+session, and the strand is its writer. `Relay::contexts`
+(`zone/mod.rs:380`) holds every established session, with direction
+and connector, filled by `on_session_established` (`:590`). Step c
+grows the Hub row until it publishes the snapshot above, and the count
+is owned there. `Relay::contexts` becomes a reader of that registry,
+or a view over it.
+
+**What greens step c.** The twelve callbacks read snapshots.
+`get_context_ref()` has no caller outside the strand. The `run` thread
+at `:1163` is gone, and that deletion is recorded as removing the
+`--in-peers` measurement input named above. This step does not wait
 behind steps a and b. Those follow it. It does not wait on slices 1–4,
-the timing-engine bridge, or relay dispatch. It is undefined behaviour
-in the shipping daemon, so it is the first LV-3 work after the
-transport cutover.
+the timing-engine bridge, or relay dispatch.
+
+**Step a, before a struct.** The members that cross are the 14 on
+`connection_context_base` (`net_utils_base.h`) and the 16 on
+`cryptonote_connection_context` (`connection_context.h`), plus
+`support_flags`, `m_in_timedsync`, and `sent_addresses` on
+`p2p_connection_context_t`. They sort into claimed, observed, and
+local-state. The claimed port is the only handshake field whose truth
+is resolved (§2.7.4, §2.8.2). Eviction and the protection set read
+observed only. The category is accounting, never on the wire, and not
+stable across reconnects. That sort is a table here before it is a
+type. The table is not written yet.
+
+**Step b is the ownership cut.** `p2p_connection_context` becomes a
+handle to the Rust object. The forget-cause split and the per-session
+write-stall samples land there. `handle_recv`, the invoke timers, and
+`message_writer::finalize` stay C++ through b. Swapping the reader for
+`BucketReader`, `send_txs` handing a plan to the seam, and deleting
+`levin_notify.cpp` and `levin.cpp` are the RD row.
+
+**Shape.** Three PRs, one per step, each inside rule 06.
+`check-goldens` is unchanged at every step. `unit_tests` and the
+relay, seam, and transport crate tests are green. The clearnet
+cross-build is the gate at b. The D-5 rig is not a gate until RD.
 
 ### 6.3 This slice's falsifiers (rule 21)
 
