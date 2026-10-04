@@ -1813,7 +1813,7 @@ mod tests {
             .unwrap();
         assert_eq!(client.entries.len(), 1);
         let cm_x = shekyl_fcmp::tree::ed25519_point_to_selene_scalar(&cm)
-            .expect("leaf_blob commitment point decompresses");
+            .expect("fixture commitment point decompresses");
         assert_eq!(&client.entries[0].leaf[96..128], &cm_x);
         assert_eq!(client.entries[0].identity.cm, cm);
     }
