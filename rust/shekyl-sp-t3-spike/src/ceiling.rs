@@ -36,7 +36,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use crate::measure::{nearest_rank, FailureKind, Observation};
+use crate::measure::{nearest_rank, parse_row, FailureKind, Observation, ROW_HEADER};
 
 /// The single-attempt deadline a witness read has (`U1a`).
 pub const DEADLINE: Duration = Duration::from_secs(120);
@@ -282,6 +282,55 @@ pub fn decide(reading: &SizeReading) -> Decision {
     }
 }
 
+/// `U1b`'s reading A (`ARCHIVAL_SHARD_T_DERIVATION.md` §9.3a): a floor
+/// device's whole-shard serve against the single-attempt deadline — the
+/// server-side twin of `U1a`, and the only `U1b` reading that bears on `W`.
+///
+/// One-sided, because the rig is: the device carries reader, server and both
+/// Tors, all of which work against it. So only [`Decision::Stands`] is a
+/// verdict; anything else says nothing about the device as a server alone and
+/// sends the measurement to the split rig.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloorDeviceRead {
+    /// The miss interval at the heaviest shard is wholly at or under the
+    /// target: the floor device does not lower `W`'s ceiling.
+    DoesNotLowerTheCeiling,
+    /// Not a verdict on `U1b`: the split rig runs.
+    NoVerdict(Decision),
+}
+
+/// Why a ladder cannot give reading A: its largest object is smaller than
+/// the heaviest shard, so a pass there would not cover the shard `W` sizes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BelowTheHeaviestShard {
+    /// The ladder's largest object.
+    pub largest_bytes: u32,
+}
+
+/// Reading A on a ladder's readings, ordered by size: the decision at the
+/// largest object, which must bound [`HEAVIEST_SHARD_BYTES`] from above.
+///
+/// `None` for no readings.
+///
+/// # Errors
+///
+/// [`BelowTheHeaviestShard`] when the largest object is smaller than the
+/// heaviest shard.
+pub fn floor_device_read(
+    readings: &[SizeReading],
+) -> Option<Result<FloorDeviceRead, BelowTheHeaviestShard>> {
+    let largest = readings.iter().max_by_key(|r| r.bytes())?;
+    if largest.bytes() < HEAVIEST_SHARD_BYTES {
+        return Some(Err(BelowTheHeaviestShard {
+            largest_bytes: largest.bytes(),
+        }));
+    }
+    Some(Ok(match decide(largest) {
+        Decision::Stands => FloorDeviceRead::DoesNotLowerTheCeiling,
+        other => FloorDeviceRead::NoVerdict(other),
+    }))
+}
+
 /// Why a fitted model is not used.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Rejection {
@@ -468,6 +517,30 @@ pub fn completion_line(sizes: &[(u32, &[Observation])], p: u8) -> Result<Line, N
     line_through(&points)
 }
 
+/// The arm prefix the size ladder's soak writes: `soak@<object bytes>`.
+pub const SOAK_ARM_PREFIX: &str = "soak@";
+
+/// The soak arms of one observations file's text, by object size. Rows of
+/// other arms are skipped.
+///
+/// # Errors
+///
+/// A row that does not parse, or a soak arm that names no object size.
+pub fn soak_ladder(text: &str) -> Result<BTreeMap<u32, Vec<Observation>>, String> {
+    let mut sizes: BTreeMap<u32, Vec<Observation>> = BTreeMap::new();
+    for line in text.lines().filter(|l| *l != ROW_HEADER && !l.is_empty()) {
+        let (arm, observation) = parse_row(line).map_err(|e| e.to_string())?;
+        let Some(bytes) = arm.strip_prefix(SOAK_ARM_PREFIX) else {
+            continue;
+        };
+        let bytes: u32 = bytes
+            .parse()
+            .map_err(|_| format!("arm {arm} names no object size"))?;
+        sizes.entry(bytes).or_default().push(observation);
+    }
+    Ok(sizes)
+}
+
 /// The part of `L`'s four blocks allotted to fetch-plus-retry: two blocks
 /// (`ARCHIVAL_SHARD_FETCH.md`, `SF-D8`, "`L = 4` — why, and how it moves").
 pub const FETCH_SPAN: Duration = Duration::from_secs(240);
@@ -649,6 +722,37 @@ mod tests {
         SizeReading::of(bytes, &observations).expect("attempts, none refused")
     }
 
+    /// Reading A is read at the largest object, which has to be at least
+    /// the heaviest shard, and only a whole interval under the target is a
+    /// verdict.
+    #[test]
+    fn reading_a_is_one_sided_and_needs_the_heaviest_shard() {
+        let above = HEAVIEST_SHARD_BYTES + 1;
+        // 4 of 319 missed: the interval tops out near 3.2 %, wholly under 30 %.
+        assert_eq!(
+            floor_device_read(&[reading(1_000, 100, 0, 5), reading(above, 319, 4, 9)]),
+            Some(Ok(FloorDeviceRead::DoesNotLowerTheCeiling))
+        );
+        // 30 of 100: the interval straddles the target, which is no verdict.
+        assert_eq!(
+            floor_device_read(&[reading(above, 100, 30, 9)]),
+            Some(Ok(FloorDeviceRead::NoVerdict(Decision::Inconclusive)))
+        );
+        // 80 of 100: wholly over, and still no verdict on this rig.
+        assert_eq!(
+            floor_device_read(&[reading(above, 100, 80, 9)]),
+            Some(Ok(FloorDeviceRead::NoVerdict(Decision::Binds)))
+        );
+        // A clean ladder that stops short of the heaviest shard is not reading A.
+        assert_eq!(
+            floor_device_read(&[reading(HEAVIEST_SHARD_BYTES - 1, 100, 0, 5)]),
+            Some(Err(BelowTheHeaviestShard {
+                largest_bytes: HEAVIEST_SHARD_BYTES - 1
+            }))
+        );
+        assert_eq!(floor_device_read(&[]), None);
+    }
+
     /// The interval is the textbook Wilson score interval, to four places,
     /// on the count the first governing reading produced.
     #[test]
@@ -779,19 +883,7 @@ mod tests {
     fn the_recorded_ladder_reads_as_the_record_says() {
         let file =
             include_str!("../../../docs/benchmarks/w2_ladder_interleaved_pow_on_20261001.tsv");
-        let mut sizes: std::collections::BTreeMap<u32, Vec<Observation>> =
-            std::collections::BTreeMap::new();
-        for line in file
-            .lines()
-            .filter(|l| *l != crate::measure::ROW_HEADER && !l.is_empty())
-        {
-            let (arm, observation) = crate::measure::parse_row(line).expect("a row");
-            let bytes = arm.strip_prefix("soak@").expect("a soak arm");
-            sizes
-                .entry(bytes.parse().expect("an object size"))
-                .or_default()
-                .push(observation);
-        }
+        let sizes = soak_ladder(file).expect("the committed file parses");
         let readings: Vec<SizeReading> = sizes
             .iter()
             .map(|(bytes, observations)| {
@@ -1022,19 +1114,7 @@ mod tests {
     #[test]
     fn the_worse_day_reads_as_the_record_says_for_the_span() {
         let file = include_str!("../../../docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv");
-        let mut sizes: std::collections::BTreeMap<u32, Vec<Observation>> =
-            std::collections::BTreeMap::new();
-        for line in file
-            .lines()
-            .filter(|l| *l != crate::measure::ROW_HEADER && !l.is_empty())
-        {
-            let (arm, observation) = crate::measure::parse_row(line).expect("a row");
-            let bytes = arm.strip_prefix("soak@").expect("a soak arm");
-            sizes
-                .entry(bytes.parse().expect("an object size"))
-                .or_default()
-                .push(observation);
-        }
+        let sizes = soak_ladder(file).expect("the committed file parses");
         let readings: Vec<SizeReading> = sizes
             .iter()
             .map(|(bytes, observations)| {
