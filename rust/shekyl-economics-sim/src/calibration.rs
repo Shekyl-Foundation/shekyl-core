@@ -175,7 +175,7 @@ impl Shape {
 /// Every shape the builder accepts, `1..=MAX_INPUTS` × `1..=MAX_OUTPUTS`. The
 /// input cap is read off the bounded type (it is crate-internal to the
 /// predictor by design); clamping `usize::MAX` lands on it.
-fn all_shapes() -> impl Iterator<Item = Shape> {
+pub(crate) fn all_shapes() -> impl Iterator<Item = Shape> {
     let max_in = InputCount::clamped(usize::MAX).get();
     (1..=max_in).flat_map(move |i| {
         (1..=MAX_OUTPUTS).map(move |o| Shape {

@@ -20,12 +20,13 @@ use std::fmt;
 use serde::Serialize;
 use std::io::Write;
 
+use shekyl_chain_rules::EffectiveMedian;
 use shekyl_economics::{
     base_block_reward,
     burn::{calc_burn_pct_at, compute_burn_split},
     calc_effective_emission_share,
     params::SCALE,
-    split_block_emission, ScaledShare,
+    split_block_emission, ScaledShare, TxVolume,
 };
 
 use crate::burden::{
@@ -40,7 +41,7 @@ use crate::calibration::{
 };
 use crate::engine::{ScenarioConfig, SimParams};
 use crate::escalation::{family, flat_25, EscalationCurve, KNEE_ARCHIVAL_LEN_BYTES, KNEE_BAND};
-use crate::fee_model::{ChargedBlock, FeePoint};
+use crate::fee_model::{ChargedBlock, FeePoint, OrdinaryTx};
 use crate::median_window::BlockSpace;
 use crate::population::{
     attacker_capped_work_milli, honest_sigma_work_milli, honest_sigma_work_milli_deleted, DQ2H_TAIL,
@@ -223,6 +224,27 @@ pub struct A1YearAgg {
     /// The long-term effective median (CEN-G6) at year end, bytes — the
     /// `M` the next block's fee divides by.
     pub long_term_median: u64,
+    /// The year's last block as the fold built it: the operands an attacker
+    /// prices a block against (ESR-7).
+    #[serde(skip)]
+    pub last_block: LastBlock,
+}
+
+/// One block's state as a fold built it, for pricing what an attacker could
+/// add to it (`miner_stuffer.rs`). Every field is an operand the fold
+/// already held for that block.
+#[derive(Debug, Clone, Copy)]
+pub struct LastBlock {
+    pub already_generated: u64,
+    pub volume: TxVolume,
+    pub sigma_scaled: u64,
+    pub burn_pct_scaled: u64,
+    pub chain_leaves: u64,
+    pub closed_shards: u64,
+    pub medians: EffectiveMedian,
+    /// Honest transactions offered to the block, and the one they all are.
+    pub honest_offered: u64,
+    pub honest_tx: OrdinaryTx,
 }
 
 /// The admission rate the honest chain serves when it has closed a given
@@ -334,7 +356,19 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
             params: &economic,
         };
         let tx = params.fee.ordinary_tx(&fee_point);
+        let closed_before = fold.closed_shard_count();
         let filled = space.fill(block, medians, tx_volume, tx, &fee_point);
+        let last_block = LastBlock {
+            already_generated: ag,
+            volume,
+            sigma_scaled: emission_share,
+            burn_pct_scaled: burn_pct,
+            chain_leaves: leaves_priced,
+            closed_shards: closed_before,
+            medians,
+            honest_offered: filled.offered,
+            honest_tx: tx,
+        };
         window.push(filled.included);
         let total_fees = ChargedBlock::of_uniform(tx.fee_atomic, filled.included).total_atomic;
         fold.add_block(filled.included);
@@ -376,6 +410,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 demand_txs: year_demand,
                 expired_txs: year_expired,
                 long_term_median: space.medians().long_term_effective_median.to_raw(),
+                last_block,
             });
             year_carried = 0;
             year_demand = 0;
@@ -679,7 +714,7 @@ fn a1_clearance_report(
     Ok(results)
 }
 
-fn trunc(s: &str, n: usize) -> String {
+pub(crate) fn trunc(s: &str, n: usize) -> String {
     if s.len() <= n {
         s.to_string()
     } else {
@@ -1644,6 +1679,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     print_escalation_family(out)?;
     let admission = AdmissionAtShards::on_the_baseline(params);
     print_stuffer_cost_curve(out, params, &admission)?;
+    crate::miner_stuffer::print_envelope(out, params)?;
     let a1 = a1_clearance_report(out, params)?;
     // A1-T / A1-L (§12.14): A1's min hides when the failure arrives; the onset
     // table and the lever table fold the same per-year ratio.

@@ -63,6 +63,25 @@ with depth, and it is archival good the stuffer is buying). The rate is constant
 below weighs the one-shot (binding, attacker-favouring) cost against the escalation
 Delta-pool a stuffing staker captures: a survivor of A1 must ALSO price the stuffer out.
 
+ESR-7 — THE CHEAPEST ARCHIVAL BYTE: SKL to add one shard at a block the honest fold built.
+relay = through the pool at the rate that gets listed (floor, or one atomic/B above the
+honest rate); miner U = own bodies at no fee (today: the relay floor does not apply to them),
+cheapest of free room / penalty / displaced fees; miner E = the same paying the floor
+(C2-R2 Q9's fix, a declared divergence); self = E recovering the staker pool's part as one of
+100 holders, and as the whole holder set. 'today' / 'fixed' = the minimum over the
+attackers on each chain.
+scenario       y era          M (KB)   room       relay      miner U   (placement)     miner E  self 1/100    self all       today       fixed
+baseline_ste   5 constrained     300      7     21.2347      18.5855  Displacement     18.7027     18.7024     18.6736     18.5855     18.7027
+baseline_ste  20 carried         300      7     21.2347      15.4244  Displacement     15.6803     15.6796     15.6165     15.4244     15.6803
+baseline_ste  45 tail            764      0     20.5415       1.4661       Penalty      1.9615      1.9602      1.8378      1.4661      1.9615
+high_history  50 below zone      300     71      0.9417       0.0000      FreeRoom      0.2559      0.2553      0.1920      0.0000      0.2559
+  -> Shards a miner stuffs at the U price within a budget: share x budget / blocks per shard.
+Hashrate and time set a rate, not a price; a larger campaign raises the overshoot and the price.
+       baseline_ste y5      11 blocks/shard; relay at 6830 atomic/B (outranking honest): 10%/epoch 90, 10%/year 2389, 10%/decade 23890, 33%/epoch 300, 33%/year 7884, 33%/decade 78840
+       baseline_ste y20     11 blocks/shard; relay at 6830 atomic/B (outranking honest): 10%/epoch 90, 10%/year 2389, 10%/decade 23890, 33%/epoch 300, 33%/year 7884, 33%/decade 78840
+       baseline_ste y45    239 blocks/shard; relay at 6544 atomic/B (outranking honest): 10%/epoch 4, 10%/year 109, 10%/decade 1099, 33%/epoch 13, 33%/year 362, 33%/decade 3628
+       high_history y50     48 blocks/shard; relay at 300 atomic/B (the floor): 10%/epoch 20, 10%/year 547, 10%/decade 5475, 33%/epoch 68, 33%/year 1806, 33%/decade 18067
+
 A1 — burden clearance (§12.2, F-G): min budget / (bond-opp-cost + storage) ratio.
 budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor 0.75 x R6 x n x rate.
 >=1.0 keeps the staker whole every sustained year. Columns = opp-cost rate [0.02, 0.05, 0.1] (10% binding).
