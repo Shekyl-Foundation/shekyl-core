@@ -52,12 +52,14 @@
 
 use std::io::Write as _;
 
-/// Leaves per frozen level-2 segment.
-const SEGMENT_LEAF_COUNT: u64 = 25_992;
-/// The same count as a `usize`, for buffer sizing without a lossy cast.
-const SEGMENT_LEAF_COUNT_USIZE: usize = 25_992;
-/// Leaf-chunk width (`SELENE_CHUNK_WIDTH`).
-const CHUNK_WIDTH: u64 = 38;
+use shekyl_fcmp::tree::{leaves_per_segment, SELENE_CHUNK_WIDTH};
+
+/// Leaves per frozen level-2 segment, from its one owner.
+const SEGMENT_LEAF_COUNT_USIZE: usize = leaves_per_segment();
+/// The same count as a `u64`, for the position arithmetic.
+const SEGMENT_LEAF_COUNT: u64 = SEGMENT_LEAF_COUNT_USIZE as u64;
+/// Leaf-chunk width, from its one owner.
+const CHUNK_WIDTH: u64 = SELENE_CHUNK_WIDTH as u64;
 /// Indices per RPC call — bounded so one request stays a reasonable size.
 const BATCH: usize = 64;
 
