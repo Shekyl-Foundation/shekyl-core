@@ -875,7 +875,7 @@ over-cap block, must be rejected by both impls).
   `pqc_auths` segment as the body carries it (no count prefix) plus the bytes of
   the prunable region — as a `u64`, little-endian in the low 8 bytes of the word,
   the other 24 zero. It is the operand the shard partition is cut by
-  ([`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md) §8.6): bound
+  ([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §8.6): bound
   here, it cannot be reported differently for a transaction that keeps its id. It
   is **not** on the wire and **not** signed — it is measured from the body, or
   supplied beside a pruned one and checked by this recomputation. The three

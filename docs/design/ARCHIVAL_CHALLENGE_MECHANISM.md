@@ -28,10 +28,11 @@ is **REJECTED** — Rick's HARD NO of 2026-09-13, recorded in
 [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md): a bonded persona's
 endpoint never changes; a new address is a new persona; the settlement writer is
 [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)'s
-(`SO-D8`; its Slice C stays unauthorized until Q15's falsifiers fire —
-[`FOLLOWUPS.md`](../FOLLOWUPS.md)). Consensus code for this mechanism lands only
-in `shekyl-chain-rules` at E4 / S-ARCH (`PDM-Q6` item 4, row 1), never in
-`blockchain.cpp`. The ruling of record from this round: challenge
+(`SO-D8`; its Slice C authorized 2026-10-04 and owns the admission rows
+and the writer's call site, proposal §8.0 — *was* "stays unauthorized until
+Q15's falsifiers fire"). Consensus code for this mechanism lands only in
+`shekyl-chain-rules`, as SO-D8 Slice C (`PDM-Q6` item 4 row 1's "E4 /
+S-ARCH" named a crate, not the lane), never in `blockchain.cpp`. The ruling of record from this round: challenge
 assignment is **derived, not committed** (§2, ruled 2026-08-07 — "the more the
 system regulates itself, the better"; derivation makes challenges verifiable
 by anyone and scope-limited against DDoS). Everything else here is the round's
