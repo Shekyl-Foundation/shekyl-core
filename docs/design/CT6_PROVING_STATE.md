@@ -1158,3 +1158,86 @@ store's tables *at the CTS round's own pin*, where `SCHEMA_VERSION` was 5.
 This table arrived after it. Neither document is wrong; the enumeration is
 dated, and it is not edited here because rewriting a pinned list would make
 the pin a fiction.
+
+### 11.9 The client side: ownership is registered, and the fold writes
+
+Capture rides the **fold**, and a chunk folds once. That single sentence
+settles the whole shape of this side.
+
+**Ownership is registered, never derived.** `CurveTreeClient` sees every
+output on the chain and cannot tell which are the wallet's — that is the
+scanner's knowledge, and putting it here would mean either a second view-key
+consumer or a guess. So `register_owned(gindex)` is the input, and it returns
+what the call *bought*:
+
+| | |
+| --- | --- |
+| `OwnedRegistration::BeforeDrain` | the leaf has not drained; every chunk over it is captured as the fold closes it |
+| `OwnedRegistration::AfterDrain` | the leaf had drained; chunks that already closed are **owed to reconciliation**, and no future fold reports them |
+
+The two are not cosmetic. A late registration that returned `()` would read
+exactly like a working one, and the thing it silently did not do is the thing
+capture exists for. An unseen `gindex` is `BeforeDrain`, not an error: the
+scanner may identify an output from a block this client has not ingested, and
+the registry is matched at each leaf's own drain, so an early registration
+simply works.
+
+**The registry does not persist.** `resume` starts empty. A copy of the
+wallet's output list kept here would be the copy that rots when the two
+diverge; the wallet re-registers what it holds. The consequence is stated
+rather than hidden: after every resume, each held output is `AfterDrain`, and
+what that leaves owed is reconciliation's whole job.
+
+**Positions come from the fold, because the fold is the one instrument.** A
+leaf's position is its index in drain order, which is what the frontier counts
+as it pushes. `ingest_block` resolves this block's owned positions before the
+advance — a chunk closing here may hold a leaf draining in the same block —
+and commits them beside the frontier. Resolving a position a second way, from
+the maturity index, would be a second instrument over one field with no
+cross-check between them.
+
+**A rollback keeps the registry and cuts the positions.** Opposite failure
+directions, so both are asserted. Losing the registry stops capture for every
+held output after the first reorg, silently, because the fold finds nothing
+registered. Keeping a position past the cut leaves a coordinate that now names
+a *different* leaf, so a chunk holding nothing of the wallet's reads as owned.
+Truncation deletes `range(start..)` and shifts nothing, so a surviving leaf
+keeps its position and a removed one re-resolves when it re-drains:
+`owned_positions.retain(|p| p < surviving_leaf_count)`, the same coordinate
+`FoldedChunk::end_leaf` is compared against (§11.8).
+
+**The observer is infallible; the read that can fail is outside it.** A node
+chunk is copied as the frontier folded it. A layer-0 chunk is only *recorded
+as a coordinate*, because its children are leaf scalars and a path needs
+compressed points. Its identities are assembled after the fold and before the
+transaction (B5): positions below this block's first drain come from
+`read_drained_range` — `O(38)`, not the whole-table read capture exists to
+delete — and the rest from the block in hand, which the store has not
+committed yet. A short row set is **refused**
+(`ClientError::CaptureIdentitiesIncomplete`), not written: only `prune_frozen`
+produces one, resume already refuses such a store (F5), and a short chunk is
+something the merge would accept.
+
+**What the oracle compares.** `a_captured_chunk_equals_what_assembly_builds`
+takes one value by two independent routes: the capture, written leaf by leaf
+at ingest from store rows and the block's own leaves, against
+`assemble_paths`, which rebuilds the whole tree at the reference height and
+slices it. Seven mutations were run against it and all seven bite — span
+off-by-one, the store-read half removed, `O`/`C` swapped, siblings reversed,
+`CM.x` omitted, and both halves of the rollback rule.
+
+The fixture earns two of those. Leaf chunks are deliberately **not** aligned
+with blocks (one fewer leaf per block than the chunk width), so every chunk
+straddles and the store-read half is exercised; the first version aligned them
+and never called the ranged read it was built on. And every output carries a
+**distinct** `O`, distinct from its `C`: the shared `coinbase_raw` fixture
+carries the Ed25519 basepoint as both, for every output, and under it the
+`O`/`C` swap and the reversal both passed. A collapsed observable caps every
+assertion built on it, however exact the assertion looks.
+
+**What this does not do.** Nothing in the engine calls `register_owned` yet,
+and nothing reads a capture: assembly still rebuilds from `entries`, which is
+why `assembly_today_depends_on_every_foreign_leaf` is still in state 2. Both
+are owed inside this PR — the registration path, and the state-3 flip that
+makes a capture load-bearing — along with reconciliation for what
+`AfterDrain` names.

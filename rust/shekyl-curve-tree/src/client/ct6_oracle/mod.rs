@@ -714,6 +714,10 @@ fn a_root_mismatch_refuses_the_whole_batch() {
 // that its three verdicts fire.
 mod ring;
 
+// Capture's own passes: what the fold wrote, graded against what assembly
+// builds from the whole tree.
+mod capture;
+
 // ---------------------------------------------------------------------------
 // CT-6 increment 5 — capture's red-bite: assembly must not read foreign leaves
 // ---------------------------------------------------------------------------

@@ -121,11 +121,20 @@ enum ClientReanchorClass {
 
 /// Classify `err` for [`map_handle_err_to_reanchor`].
 ///
-/// [`ClientError::PathRootMismatch`] is [`ClientReanchorClass::Terminal`].
-/// Every other variant is [`ClientReanchorClass::Reselect`].
+/// [`ClientError::PathRootMismatch`] and
+/// [`ClientError::CaptureIdentitiesIncomplete`] are
+/// [`ClientReanchorClass::Terminal`]. Every other variant is
+/// [`ClientReanchorClass::Reselect`].
 fn client_reanchor_class(err: &ClientError) -> ClientReanchorClass {
     match err {
-        ClientError::PathRootMismatch { .. } => ClientReanchorClass::Terminal,
+        // `CaptureIdentitiesIncomplete` shares this arm because it shares
+        // the verdict: it is an ingest-path refusal over a store missing
+        // leaf bytes (`prune_frozen`), and reselecting inputs cannot help,
+        // since no other input is served by a store in that state. Rule 82
+        // puts it here rather than naming a remedy that does nothing.
+        ClientError::PathRootMismatch { .. } | ClientError::CaptureIdentitiesIncomplete { .. } => {
+            ClientReanchorClass::Terminal
+        }
         ClientError::RootMismatch { .. }
         | ClientError::OutputNotDrained { .. }
         | ClientError::IdentityMismatch { .. }

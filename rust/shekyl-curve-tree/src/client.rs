@@ -53,22 +53,32 @@
 //! See `docs/design/CURVE_TREE_CLIENT.md` §3 and
 //! `docs/design/CT2_DRAIN_ORDER.md` §7 (data flow).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::frontier::Frontier;
+use crate::frontier::{FoldedChunk, Frontier};
 use crate::recon::{
     assemble_leaf_stream, collect_block_leaves, extract_leaf_commitments, root_from_scalars,
     TxOutputs,
 };
+use crate::segment::outputs_per_node;
 use crate::store::{
-    LeafStore, PostureDeclaration, SegmentPin, ServingReader, StoreError, StoreOpenFault,
+    CapturedChunk, LeafStore, PostureDeclaration, SegmentPin, ServingReader, StoreError,
+    StoreOpenFault,
 };
 use crate::types::{
     BlockHeight, CommitmentBytes, CurveTreeRoot, Gindex, LeafEntry, OneTimePubkey, OutputIdentity,
-    ReferenceBlock, TargetKind,
+    ReferenceBlock, TargetKind, TreePosition,
 };
+use shekyl_fcmp::tree::SELENE_CHUNK_WIDTH;
+
+/// Bytes a layer-0 capture stores per sibling: `O ‖ C ‖ CM.x`.
+///
+/// `I` is **not** stored — it is `key_image_generator(O)`, derived at
+/// assembly. A stored copy of a recomputable value is a second copy that can
+/// disagree (`CT6_PROVING_STATE.md` §11.8).
+const CAPTURED_IDENTITY_BYTES: usize = 96;
 
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
 /// **before** `h_pqc` resolution. The client resolves `h_pqc` from the
@@ -141,6 +151,26 @@ pub enum ClientError {
         claimed: CurveTreeRoot,
         /// Which step of the fold refused.
         fault: crate::assemble::PathRootFault,
+    },
+    /// Capture needed the leaf identities under a closing layer-0 chunk and
+    /// the store did not hold all of them.
+    ///
+    /// The chunk's siblings come from the leaf rows at `end_leaf + 1 -
+    /// SELENE_CHUNK_WIDTH ..= end_leaf`: the rows below this block's first
+    /// drain from [`LeafStore::read_drained_range`], the rest from the block
+    /// being ingested. A short count means a leaf row is gone from a position
+    /// the store still counts — which only [`LeafStore::prune_frozen`]
+    /// produces, by dropping non-owned frozen leaf bytes. Resume already
+    /// refuses such a store ([`ClientError::ResumeFromPrunedStore`], F5);
+    /// this is the same refusal for a store pruned while open, and it refuses
+    /// the block rather than writing a short chunk the merge would accept.
+    CaptureIdentitiesIncomplete {
+        /// Leaf position at which the chunk closed — the capture row's key.
+        end_leaf: u64,
+        /// Siblings the chunk has, which is [`SELENE_CHUNK_WIDTH`].
+        want: usize,
+        /// Siblings the leaf rows yielded.
+        got: usize,
     },
     /// The requested output is not a drained leaf at the reference height,
     /// so no membership path exists for it there (the §4.3 lookup miss).
@@ -336,7 +366,11 @@ impl ClientError {
             ClientError::Store(e) => e.open_fault(),
             // Pruned-store resume is unbuilt (F5): a shape this build cannot
             // resume, not a broken store.
-            ClientError::ResumeFromPrunedStore { .. } => StoreOpenFault::Unsupported,
+            ClientError::ResumeFromPrunedStore { .. }
+            // Same cause, same verdict: leaf bytes capture needs are gone
+            // from a position the store counts. Pruned-store *support* is
+            // F5 work, so this build cannot proceed over one.
+            | ClientError::CaptureIdentitiesIncomplete { .. } => StoreOpenFault::Unsupported,
             ClientError::ResumeFromCorruptStore { .. }
             | ClientError::Frontier { .. }
             | ClientError::SnapshotLeafCountMismatch { .. } => StoreOpenFault::Corrupt,
@@ -406,6 +440,77 @@ pub struct CurveTreeClient {
     /// in-memory state ([`Self::resume`], [`Self::rollback_to_fork`])
     /// re-derives it from the store rather than adjusting it.
     frontier: Frontier,
+    /// Gindexes whose membership-path material this client captures.
+    ///
+    /// Registered by the wallet ([`Self::register_owned`]), never derived:
+    /// the curve-tree client sees every output on the chain and cannot tell
+    /// which are the wallet's — that is the scanner's knowledge, and keeping
+    /// it on this side would mean either a second view-key consumer or a
+    /// guess.
+    ///
+    /// **Session-scoped on purpose.** [`Self::resume`] starts empty, because
+    /// a registry persisted here would be a second copy of the wallet's own
+    /// output list — the thing that would silently rot when the two diverge.
+    /// The wallet re-registers what it holds; what that leaves owed is the
+    /// captures for chunks that closed before the registration, which
+    /// reconciliation discharges.
+    owned_gindexes: HashSet<Gindex>,
+    /// Drain positions of owned leaves, as the fold assigned them.
+    ///
+    /// Not derived from [`Self::owned_gindexes`] on demand: a position is
+    /// the leaf's index in drain order, which is what the frontier counts as
+    /// it pushes. Recording it there is the one instrument; resolving it
+    /// again from the maturity index would be a second.
+    ///
+    /// A rollback **retains** the positions below the surviving leaf count
+    /// and drops the rest — see [`Self::rollback_to_fork`].
+    owned_positions: BTreeSet<u64>,
+}
+
+/// What registering an owned output means for the captures it needs
+/// ([`CurveTreeClient::register_owned`]).
+///
+/// The distinction is not cosmetic: capture rides the **fold**, and a fold
+/// happens once. Registering before the leaf drains puts every chunk over it
+/// on the capture path; registering after means the chunks that already
+/// closed were folded without a reason to keep them, and no future fold
+/// reports them again.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OwnedRegistration {
+    /// The leaf has not drained at the ingested tip. Every chunk over it is
+    /// captured as the fold closes it; nothing is owed.
+    BeforeDrain,
+    /// The leaf had already drained. Chunks over it that closed before this
+    /// call are **not** captured, and are owed to reconciliation; chunks
+    /// that have yet to close are captured as normal.
+    ///
+    /// This is the state a [`Self::resume`] leaves every held output in,
+    /// since the registry does not persist.
+    AfterDrain,
+}
+
+/// Append one sibling's capture body: `O ‖ C ‖ CM.x`,
+/// [`CAPTURED_IDENTITY_BYTES`] in all.
+///
+/// `I` is omitted deliberately — it is `key_image_generator(O)`, which
+/// [`crate::assemble`] already derives when it builds a
+/// [`crate::types::ChunkLeaf`]. Storing it would be a second copy that can
+/// disagree with the derivation.
+fn push_captured_identity(bytes: &mut Vec<u8>, entry: &LeafEntry) {
+    bytes.extend_from_slice(entry.identity.output_key.as_bytes());
+    bytes.extend_from_slice(
+        entry
+            .identity
+            .commitment
+            // A drained leaf always has a commitment (`try_build_leaf`
+            // required `i < outPk.size()`), the same ground
+            // `assemble_paths` states when it builds the chunk from these
+            // fields. A short *row set* is a different modality — pruning
+            // can produce it — and that one is refused, not expected away.
+            .expect("a drained leaf carries a commitment")
+            .as_bytes(),
+    );
+    bytes.extend_from_slice(&entry.cm_x());
 }
 
 /// The authority to rebuild the single writer over an already-open store —
@@ -513,6 +618,8 @@ impl CurveTreeClient {
             ingested_tip_height: None,
             poisoned: false,
             frontier: Frontier::new(),
+            owned_gindexes: HashSet::new(),
+            owned_positions: BTreeSet::new(),
         })
     }
 
@@ -703,6 +810,11 @@ impl CurveTreeClient {
             ingested_tip_height: rebuilt.ingested_tip_height,
             poisoned: false,
             frontier: rebuilt.frontier,
+            // A resumed client holds no registrations: the wallet's output
+            // list is the wallet's, and re-registering is what tells this
+            // client what to capture. See `owned_gindexes`.
+            owned_gindexes: HashSet::new(),
+            owned_positions: BTreeSet::new(),
         })
     }
 
@@ -875,6 +987,16 @@ impl CurveTreeClient {
         self.drained_through_counts = Vec::new();
         self.entries_by_maturity = rebuilt.entries_by_maturity;
         self.ingested_tip_height = rebuilt.ingested_tip_height;
+        // Registrations survive a rollback; the positions they resolved to
+        // survive only below the new tip. Truncation deletes `range(start..)`
+        // and shifts nothing, so a surviving leaf keeps its position, and a
+        // removed one re-resolves through the fold when it drains again on
+        // the new chain. `start` is the surviving leaf count, which is the
+        // rebuilt frontier's — the same coordinate `FoldedChunk::end_leaf`
+        // is compared against.
+        let surviving = rebuilt.frontier.leaf_count();
+        self.owned_positions
+            .retain(|position| *position < surviving);
         self.frontier = rebuilt.frontier;
         self.poisoned = false;
         Ok(())
@@ -889,6 +1011,129 @@ impl CurveTreeClient {
         Ok(())
     }
 
+    /// Capture this output's membership-path material as the fold closes the
+    /// chunks over it.
+    ///
+    /// The wallet calls this for each output it owns. Registration is
+    /// idempotent, and the return value says what the call *bought* — which
+    /// depends only on whether the leaf has drained, because capture rides
+    /// the fold and a leaf folds once ([`OwnedRegistration`]).
+    ///
+    /// A `gindex` this client has never seen is accepted as
+    /// [`OwnedRegistration::BeforeDrain`], not refused: the scanner may
+    /// identify an output from a block this client has not ingested yet, and
+    /// the registry is matched against each leaf at *its* drain, so a
+    /// registration that arrives first simply works. There is nothing to
+    /// refuse — an unknown gindex and a future one are the same state here.
+    ///
+    /// # Nothing calls this in production yet
+    ///
+    /// The engine's registration path is owed inside this PR. Until it
+    /// lands, the captures exist for an output nothing registers, and the
+    /// gate on that is `assembly_today_depends_on_every_foreign_leaf`'s
+    /// state 3, which no commit has flipped.
+    pub fn register_owned(&mut self, gindex: Gindex) -> OwnedRegistration {
+        self.owned_gindexes.insert(gindex);
+        let Some(tip) = self.ingested_tip_height else {
+            return OwnedRegistration::BeforeDrain;
+        };
+        let cutoff = Self::drained_through(tip);
+        // `entries` is strictly increasing in `gindex` — `rebuild_from_store`
+        // sorts and refuses duplicates, and ingest appends gindexes above
+        // every held one. `rebuild_from_store`'s `next_gindex` already reads
+        // `entries.last()` on that basis, so this is the invariant as it
+        // stands rather than a new one. Pinned by
+        // `entries_stay_sorted_by_gindex`.
+        let drained = self
+            .entries
+            .binary_search_by(|held| held.gindex.cmp(&gindex))
+            .is_ok_and(|i| self.entries[i].maturity <= cutoff);
+        if drained {
+            OwnedRegistration::AfterDrain
+        } else {
+            OwnedRegistration::BeforeDrain
+        }
+    }
+
+    /// Does this chunk's leaf span hold an owned position?
+    ///
+    /// A layer-`L` chunk covers [`outputs_per_node`] consecutive leaves and
+    /// closes only at capacity, so `end_leaf + 1` is a multiple of that
+    /// width and the span is exact. `resolved` holds the positions earlier
+    /// blocks assigned; `pending` holds those this block is assigning, which
+    /// are not in `resolved` yet because the store has not committed —
+    /// without them a chunk closing over a leaf that drains in the same
+    /// block would be missed.
+    fn chunk_holds_owned(
+        chunk: &FoldedChunk<'_>,
+        resolved: &BTreeSet<u64>,
+        pending: &[u64],
+    ) -> bool {
+        let covered = u64::try_from(outputs_per_node(chunk.layer)).expect("node capacity fits u64");
+        let start = chunk
+            .end_leaf
+            .checked_add(1)
+            .and_then(|past| past.checked_sub(covered))
+            .expect("a closed chunk's span starts at or above zero");
+        resolved.range(start..=chunk.end_leaf).next().is_some()
+            || pending
+                .iter()
+                .any(|position| *position >= start && *position <= chunk.end_leaf)
+    }
+
+    /// The layer-0 capture body for the chunk that closed at `end_leaf`:
+    /// `O ‖ C ‖ CM.x` per sibling, in drain order.
+    ///
+    /// Layer 0 cannot come from the fold — the frontier holds leaf
+    /// *scalars*, and `O.x` is a one-way projection of `O`
+    /// ([`FoldedChunk`]). The identities come from the leaf rows instead:
+    /// positions below `base` from [`LeafStore::read_drained_range`], which
+    /// is `O(SELENE_CHUNK_WIDTH)` rather than the whole-table read capture
+    /// exists to delete, and positions from `base` up from `drained`, this
+    /// block's own leaves, which the store has not committed yet (B5).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::CaptureIdentitiesIncomplete`] if the rows are short of
+    /// the chunk's width; [`ClientError::Store`] on a read failure. Both are
+    /// ahead of the block's transaction.
+    fn captured_leaf_identities(
+        &self,
+        end_leaf: u64,
+        base: u64,
+        drained: &[LeafEntry],
+    ) -> Result<Vec<u8>, ClientError> {
+        let width = u64::try_from(SELENE_CHUNK_WIDTH).expect("leaf chunk width fits u64");
+        let start = end_leaf
+            .checked_add(1)
+            .and_then(|past| past.checked_sub(width))
+            .expect("a closed leaf chunk spans a full width");
+        let mut bytes = Vec::with_capacity(SELENE_CHUNK_WIDTH * CAPTURED_IDENTITY_BYTES);
+        if start < base {
+            let last = (base - 1).min(end_leaf);
+            let stored = self
+                .store
+                .read_drained_range(TreePosition::from_raw(start), TreePosition::from_raw(last))?;
+            for entry in &stored {
+                push_captured_identity(&mut bytes, entry);
+            }
+        }
+        for position in start.max(base)..=end_leaf {
+            let offset =
+                usize::try_from(position - base).expect("a block's drain index fits usize");
+            push_captured_identity(&mut bytes, &drained[offset]);
+        }
+        let got = bytes.len() / CAPTURED_IDENTITY_BYTES;
+        if got != SELENE_CHUNK_WIDTH {
+            return Err(ClientError::CaptureIdentitiesIncomplete {
+                end_leaf,
+                want: SELENE_CHUNK_WIDTH,
+                got,
+            });
+        }
+        Ok(bytes)
+    }
+
     /// Ingest one block, resolving each output's leaf commitment, threading the global
     /// output index, and accumulating drained-leaf entries. Blocks must be
     /// ingested in strictly consecutive height order from genesis (`0`, `1`,
@@ -897,7 +1142,9 @@ impl CurveTreeClient {
     ///
     /// **Store-write-before-commit (B5).** The block's full delta — newly
     /// drained bucket, newly created pending leaves, drained pending
-    /// removals, tip advance, and the frontier snapshot — lands in one ACID
+    /// removals, tip advance, the frontier snapshot, and the path material
+    /// captured for registered outputs ([`Self::register_owned`]) — lands in
+    /// one ACID
     /// [`LeafStore::append_block_with_snapshot`] transaction *before* any
     /// in-memory state changes. On `Err` the client is unchanged on both
     /// sides and the same block can be re-ingested; on `Ok` the in-memory
@@ -979,19 +1226,74 @@ impl CurveTreeClient {
         let drained = self.newly_drained_from_index(through);
         let removed: Vec<Gindex> = drained.iter().map(|entry| entry.gindex).collect();
 
+        // Ownership is resolved before the fold, because a chunk closing in
+        // this block may hold an owned leaf that drains in this same block.
+        // A leaf's position is its index in drain order, and `drained` is
+        // pushed in that order, so the `i`th leaf lands at `base + i`.
+        let base = self.frontier.leaf_count();
+        let pending_owned: Vec<u64> = drained
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| self.owned_gindexes.contains(&entry.gindex))
+            .map(|(i, _)| base + u64::try_from(i).expect("a block's drain count fits u64"))
+            .collect();
+
         // The frontier advances on a CLONE, before the transaction opens.
         // A fold is fallible, and B5 puts every fallible step ahead of the
         // commit: a leaf whose bytes will not hash refuses the block with
         // both sides untouched, exactly as a bad published point does.
+        //
+        // The observer is where capture happens, and it is infallible by
+        // construction. A node chunk is copied as the frontier folded it. A
+        // layer-0 chunk is only *recorded as a coordinate*, because its
+        // children are scalars rather than the points a path needs; the read
+        // that assembles its identities can fail, so it stays outside the
+        // closure — and therefore still ahead of the transaction.
         let mut advanced = self.frontier.clone();
+        let mut leaf_chunk_ends: Vec<u64> = Vec::new();
+        let mut node_captures: Vec<(u64, CapturedChunk)> = Vec::new();
         for entry in &drained {
             advanced
-                .push_leaf(&entry.leaf)
+                .push_leaf_observed(&entry.leaf, &mut |chunk| {
+                    if !Self::chunk_holds_owned(&chunk, &self.owned_positions, &pending_owned) {
+                        return;
+                    }
+                    if chunk.layer == 0 {
+                        leaf_chunk_ends.push(chunk.end_leaf);
+                    } else {
+                        node_captures.push((
+                            chunk.end_leaf,
+                            CapturedChunk {
+                                layer: chunk.layer,
+                                bytes: chunk.children.iter().flatten().copied().collect(),
+                            },
+                        ));
+                    }
+                })
                 .map_err(|source| ClientError::Frontier {
                     height: block.height,
                     source,
                 })?;
         }
+
+        // One row per `end_leaf`: a fold cascade closes several layers on one
+        // leaf, and they share a key because they became final at one
+        // instant (`CT6_PROVING_STATE.md` §11.8).
+        let mut by_end: BTreeMap<u64, Vec<CapturedChunk>> = BTreeMap::new();
+        for end_leaf in leaf_chunk_ends {
+            let bytes = self.captured_leaf_identities(end_leaf, base, &drained)?;
+            by_end
+                .entry(end_leaf)
+                .or_default()
+                .push(CapturedChunk { layer: 0, bytes });
+        }
+        for (end_leaf, chunk) in node_captures {
+            by_end.entry(end_leaf).or_default().push(chunk);
+        }
+        let captures: Vec<(TreePosition, Vec<CapturedChunk>)> = by_end
+            .into_iter()
+            .map(|(end_leaf, chunks)| (TreePosition::from_raw(end_leaf), chunks))
+            .collect();
         // C3 in production, not only in a test: the snapshot this block
         // captures must carry exactly the drain index's count for the
         // cutoff, because root and depth are both read back off it.
@@ -1017,9 +1319,7 @@ impl CurveTreeClient {
             &removed,
             block.height,
             &snapshot,
-            // Captures are threaded here by the next commit; the store side
-            // is in place so they ride this transaction when they arrive.
-            &[],
+            &captures,
         )?;
 
         // Store committed — the in-memory commit below is infallible.
@@ -1034,6 +1334,7 @@ impl CurveTreeClient {
         self.next_gindex = next_gindex;
         self.ingested_tip_height = Some(block.height);
         self.frontier = advanced;
+        self.owned_positions.extend(pending_owned);
         self.record_drained_count(through, canonical);
         Ok(())
     }
