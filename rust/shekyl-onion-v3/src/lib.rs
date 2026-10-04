@@ -5,9 +5,8 @@
 
 //! rend-spec-v3 §6 onion hostname from an Ed25519 public key.
 //!
-//! This crate is **encoding only**. It holds no secret, opens no socket,
-//! and does not name a Tor instance. Two owners read it so they cannot
-//! drift:
+//! It holds no secret, opens no socket, and does not name a Tor instance.
+//! Two owners read it so they cannot drift:
 //!
 //! - the wallet serving path (`shekyl-tor-control-client::OnionIdentity`)
 //!   publishes at the address this function derives from the persona's
@@ -18,12 +17,14 @@
 //! Those are different types on purpose (`PWD-E9`: the serving P's Tor
 //! instance is wallet-owned; every other Tor process is daemon-owned).
 //! The transform they share is this one function of 32 public bytes.
-//! [`is_v3_onion_hostname`] is that encoding run backwards: decode, then
-//! compare to [`v3_service_id`]. It still holds no secret and names no
-//! Tor instance.
+//! [`v3_pubkey`] runs it backwards: the hostname must be the canonical
+//! encoding of its key, and that key must decompress to an Edwards point
+//! that is not small-order. It still holds no secret and names no Tor
+//! instance.
 
 #![deny(unsafe_code)]
 
+use curve25519_dalek::edwards::CompressedEdwardsY;
 use sha3::{Digest, Sha3_256};
 
 /// Version byte of a v3 onion address (rend-spec-v3 §6).
@@ -33,6 +34,9 @@ const ONION_ADDRESS_VERSION: u8 = 0x03;
 const ONION_CHECKSUM_PREFIX: &[u8] = b".onion checksum";
 
 /// 56-character lowercase base32 v3 service id (no `.onion` suffix).
+///
+/// Encodes the bytes it is given. Whether they are a curve point is
+/// [`v3_pubkey`]'s question.
 #[must_use]
 pub fn v3_service_id(pubkey: &[u8; 32]) -> String {
     let mut hasher = Sha3_256::new();
@@ -56,11 +60,9 @@ pub fn v3_onion_hostname(pubkey: &[u8; 32]) -> String {
     address
 }
 
-/// Whether `host` is a v3 onion hostname: 56 lowercase base32 characters,
-/// the `.onion` suffix, version byte 3, and the rend-spec checksum.
+/// Whether `host` is a v3 onion hostname.
 ///
-/// The checksum is [`v3_service_id`] of the decoded key. A hostname this
-/// function accepts re-encodes to itself.
+/// This is [`v3_pubkey`]`(host).is_some()`.
 #[must_use]
 pub fn is_v3_onion_hostname(host: &str) -> bool {
     v3_pubkey(host).is_some()
@@ -70,6 +72,11 @@ pub fn is_v3_onion_hostname(host: &str) -> bool {
 ///
 /// The hostname is not returned. A caller that needs the address again
 /// re-encodes the key with [`v3_onion_hostname`].
+///
+/// `host` must be the canonical lowercase encoding of its key. Tor's
+/// parser tolerates either case; this one does not, so one service has
+/// one spelling. The key must decompress to an Edwards point that is not
+/// small-order. A torsion component past that subgroup is accepted.
 #[must_use]
 pub fn v3_pubkey(host: &str) -> Option<[u8; 32]> {
     let id = host.strip_suffix(".onion")?;
@@ -85,11 +92,17 @@ pub fn v3_pubkey(host: &str) -> Option<[u8; 32]> {
     if v3_service_id(&pubkey) != id {
         return None;
     }
+    let point = CompressedEdwardsY(pubkey).decompress()?;
+    if point.is_small_order() {
+        return None;
+    }
     Some(pubkey)
 }
 
 /// Inverse of [`base32_lower`] for the 35-byte v3 address body.
 ///
+/// The alphabet is lowercase `a-z` and `2-7`. Tor's parser accepts
+/// uppercase as well; this one rejects it, so one service has one spelling.
 /// 56 characters are exactly 35 bytes, so a leftover bit is a rejection.
 fn base32_decode_35(id: &str) -> Option<[u8; 35]> {
     let mut out = [0u8; 35];
@@ -219,5 +232,40 @@ mod tests {
         assert!(!is_v3_onion_hostname(&flipped));
         assert!(!is_v3_onion_hostname("not-an-onion"));
         assert!(!is_v3_onion_hostname(&host.to_ascii_uppercase()));
+    }
+
+    /// Tor's `test_build_address` (`src/test/test_hs_common.c`). The script
+    /// `hs_build_address.py` builds this hostname from the first public key
+    /// of RFC 8032 §7.1. Both literals are from that test.
+    #[test]
+    fn pubkey_matches_tors_address_vector() {
+        let pubkey: [u8; 32] = [
+            0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64,
+            0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68,
+            0xf7, 0x07, 0x51, 0x1a,
+        ];
+        let host = "25njqamcweflpvkl73j4szahhihoc4xt3ktcgjnpaingr5yhkenl5sid.onion";
+        assert_eq!(v3_pubkey(host), Some(pubkey));
+        assert_eq!(v3_onion_hostname(&pubkey), host);
+        assert!(is_v3_onion_hostname(host));
+    }
+
+    /// A correct checksum over a key that is not a curve point, and one
+    /// over the identity. The hostnames were built with SHA3-256 and
+    /// base32 outside this crate. The encoder still spells them; the
+    /// parser refuses them.
+    #[test]
+    fn a_checksum_over_a_non_point_is_not_a_key() {
+        let mut not_a_point = [0u8; 32];
+        not_a_point[0] = 2;
+        let host = "aiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab3did.onion";
+        assert_eq!(v3_onion_hostname(&not_a_point), host);
+        assert_eq!(v3_pubkey(host), None);
+
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let host = "aeaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaahmjqd.onion";
+        assert_eq!(v3_onion_hostname(&identity), host);
+        assert_eq!(v3_pubkey(host), None);
     }
 }
