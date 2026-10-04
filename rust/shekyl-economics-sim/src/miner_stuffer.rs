@@ -302,6 +302,7 @@ const SHARES_PCT: [u64; 2] = [10, 33];
 pub(crate) fn print_envelope(
     out: &mut impl core::fmt::Write,
     params: &SimParams,
+    folded: &[crate::stage2::FoldedScenario],
 ) -> core::fmt::Result {
     let budgets = [
         ("epoch", shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS),
@@ -338,14 +339,11 @@ pub(crate) fn print_envelope(
     let skl = |atomic: u128| atomic as f64 / crate::burden::COIN as f64;
     let mut shard_rows = Vec::new();
     for (name, year, era) in ROWS {
-        let config = crate::onset::at_horizon(
-            crate::scenarios::all_scenarios(params)
-                .into_iter()
-                .find(|c| c.name == name)
-                .expect("the scenario exists"),
-        );
-        let aggs = crate::stage2::a1_year_aggs(params, &config);
-        let Some(agg) = aggs.iter().find(|a| a.year == year) else {
+        let scenario = folded
+            .iter()
+            .find(|s| s.name == name)
+            .expect("the scenario exists");
+        let Some(agg) = scenario.aggs.iter().find(|a| a.year == year) else {
             continue;
         };
         let last = agg.last_block;

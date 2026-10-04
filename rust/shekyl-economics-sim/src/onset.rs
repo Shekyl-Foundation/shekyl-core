@@ -45,9 +45,10 @@
 //! traffic up to the cap and is flat above it. This module measures all of
 //! that rather than taking it from the hand model.
 //!
-//! **A1-T** runs every Stage-2 scenario to [`ONSET_HORIZON_YEARS`] (the
-//! schedules' own closures evaluated past their horizons — mechanical, and
-//! flagged where unphysical) and reports, per scenario: the year the staker
+//! **A1-T** runs every Stage-2 scenario at least to [`ONSET_HORIZON_YEARS`]
+//! (a longer scenario keeps its length; the schedules' own closures evaluated
+//! past their horizons — mechanical, and flagged where unphysical) and
+//! reports, per scenario: the year the staker
 //! emission leg first falls below the bond opportunity cost, the first year
 //! the shipped budget fails to clear, and the flat-25 ratio per decade.
 //!
@@ -74,7 +75,7 @@ use crate::escalation::{family, flat_25, EscalationCurve};
 use crate::scenarios::all_scenarios;
 use crate::stage2::{
     a1_min_clearance_ratio, a1_shipped_budget_atomic, a1_sustained_years, a1_year_aggs,
-    a1_year_clearance_ratio, year_share_atomic, A1YearAgg,
+    a1_year_clearance_ratio, year_share_atomic, A1YearAgg, FoldedScenario,
 };
 
 /// Atomic units per SKL ([`crate::burden::COIN`]).
@@ -296,10 +297,11 @@ fn lever_set(best: EscalationCurve) -> Vec<Lever> {
     ]
 }
 
-/// A scenario's config re-horizoned to [`ONSET_HORIZON_YEARS`]. The schedule
-/// is the scenario's own closure evaluated past its horizon.
+/// Extend `config` to at least [`ONSET_HORIZON_YEARS`]. A longer scenario
+/// keeps its length. The schedule is the scenario's own closure evaluated
+/// past its horizon.
 pub(crate) fn at_horizon(mut config: ScenarioConfig) -> ScenarioConfig {
-    config.sim_years = ONSET_HORIZON_YEARS;
+    config.sim_years = config.sim_years.max(ONSET_HORIZON_YEARS);
     config
 }
 
@@ -415,6 +417,7 @@ pub struct LeverResult {
 pub fn onset_report(
     out: &mut impl fmt::Write,
     params: &SimParams,
+    folded: &[FoldedScenario],
 ) -> Result<Vec<OnsetScenarioResult>, fmt::Error> {
     writeln!(
         out,
@@ -447,10 +450,10 @@ pub fn onset_report(
     let mut results = Vec::new();
     let mut fee_rows: Vec<(String, String)> = Vec::new();
     let mut space_rows: Vec<(String, String)> = Vec::new();
-    for config in all_scenarios(params).into_iter().map(at_horizon) {
-        let aggs = a1_year_aggs(params, &config);
+    for scenario in folded {
+        let aggs = &scenario.aggs;
         fee_rows.push((
-            config.name.clone(),
+            scenario.name.clone(),
             aggs.iter()
                 .filter(|a| DECADES.contains(&a.year))
                 .map(|a| {
@@ -468,7 +471,7 @@ pub fn onset_report(
         ));
         let per_block = |txs: u128| txs as f64 / params.blocks_per_year as f64;
         space_rows.push((
-            config.name.clone(),
+            scenario.name.clone(),
             aggs.iter()
                 .filter(|a| BLOCK_SPACE_YEARS.contains(&a.year))
                 .map(|a| {
@@ -528,15 +531,15 @@ pub fn onset_report(
         writeln!(
             out,
             "{:<20} {:>10} {:>6}   {}   {}",
-            trunc(&config.name, 20),
+            trunc(&scenario.name, 20),
             aggs.last().map_or(0, |a| a.n),
             emission_crossover_year.map_or("never".to_string(), |y| format!("y{y}")),
             onset_cols.join("   "),
             series,
         )?;
         results.push(OnsetScenarioResult {
-            scenario: config.name.clone(),
-            horizon_years: ONSET_HORIZON_YEARS,
+            scenario: scenario.name.clone(),
+            horizon_years: aggs.last().map_or(0, |a| a.year),
             final_n: aggs.last().map_or(0, |a| a.n),
             emission_crossover_year,
             onset_flat_by_rate,
@@ -573,6 +576,7 @@ pub fn onset_report(
 pub fn lever_report(
     out: &mut impl fmt::Write,
     params: &SimParams,
+    folded: &[FoldedScenario],
 ) -> Result<Vec<LeverResult>, fmt::Error> {
     writeln!(
         out,
@@ -587,24 +591,18 @@ pub fn lever_report(
     )?;
     let binding = OPP_COST_RATE_BAND[BINDING];
     let mut results = Vec::new();
-    let scenarios = all_scenarios(params);
     let picks = [
-        scenarios.len() - 1, // scenario 9: the settled-chain tail
-        0,                   // baseline steady state: the busy comparator
+        folded.len() - 1, // scenario 9: the settled-chain tail
+        0,                // baseline steady state: the busy comparator
     ];
     for idx in picks {
-        let config = at_horizon(
-            all_scenarios(params)
-                .into_iter()
-                .nth(idx)
-                .expect("scenario index in range"),
-        );
-        let aggs = a1_year_aggs(params, &config);
-        let best = best_candidate(&aggs);
+        let scenario = &folded[idx];
+        let aggs = &scenario.aggs;
+        let best = best_candidate(aggs);
         writeln!(
             out,
             "\n  {} (n = {} at {} y; best band cand. {}%/{})",
-            config.name,
+            scenario.name,
             aggs.last().map_or(0, |a| a.n),
             ONSET_HORIZON_YEARS,
             best.asymptote / (SCALE / 100),
@@ -639,7 +637,7 @@ pub fn lever_report(
                 fmt_onset(onset_binding),
             )?;
             results.push(LeverResult {
-                scenario: config.name.clone(),
+                scenario: scenario.name.clone(),
                 lever,
                 min_ratio_by_rate,
                 replicas_sustained_binding,

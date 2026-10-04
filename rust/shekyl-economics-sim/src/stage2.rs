@@ -110,15 +110,31 @@ pub struct BurdenTrajectory {
 /// Kryder-band burden cost at each year boundary.
 ///
 /// The bytes are those of the transactions the chain took, which the fill
-/// rule decides from the fee (ESR-6), so this reads the one fold that prices
-/// them rather than folding the demand schedule a second time.
+/// rule decides from the fee (ESR-6). This folds the one scenario it is
+/// asked for. The stage-2 report folds each scenario once and reads the
+/// trajectory from that series.
 ///
 /// The Kryder decline runs over **elapsed years** (the base scenarios start at
 /// genesis, `genesis_height_offset == 0`); scenario 9's pre-existing history is
 /// handled where it lands.
 #[must_use]
 pub fn burden_trajectory(params: &SimParams, config: &ScenarioConfig) -> BurdenTrajectory {
-    let years: Vec<BurdenYearRow> = a1_year_aggs(params, config)
+    trajectory_from(
+        config.name.clone(),
+        config.description.clone(),
+        config.sim_years,
+        &a1_year_aggs(params, config),
+    )
+}
+
+/// The burden rows of an aggregate series already folded.
+fn trajectory_from(
+    name: String,
+    description: String,
+    sim_years: u64,
+    aggs: &[A1YearAgg],
+) -> BurdenTrajectory {
+    let years: Vec<BurdenYearRow> = aggs
         .iter()
         .map(|agg| {
             let (year, shards) = (agg.year, agg.n);
@@ -152,9 +168,9 @@ pub fn burden_trajectory(params: &SimParams, config: &ScenarioConfig) -> BurdenT
 
     let final_closed_shards = years.last().map_or(0, |y| y.closed_shards);
     BurdenTrajectory {
-        scenario: config.name.clone(),
-        description: config.description.clone(),
-        sim_years: config.sim_years,
+        scenario: name,
+        description,
+        sim_years,
         final_closed_shards,
         years,
     }
@@ -267,13 +283,10 @@ pub(crate) struct AdmissionAtShards {
 }
 
 impl AdmissionAtShards {
-    pub(crate) fn on_the_baseline(params: &SimParams) -> Self {
-        let config = crate::onset::at_horizon(all_scenarios(params).remove(0));
+    /// Year-end `(closed shards, admission rate)` pairs, in year order.
+    pub(crate) fn from_aggs(aggs: &[A1YearAgg]) -> Self {
         Self {
-            points: a1_year_aggs(params, &config)
-                .iter()
-                .map(|a| (a.n, a.admission_rate))
-                .collect(),
+            points: aggs.iter().map(|a| (a.n, a.admission_rate)).collect(),
         }
     }
 
@@ -285,6 +298,47 @@ impl AdmissionAtShards {
             .map(|&(_, rate)| rate)
             .expect("the baseline scenario closes at least one year")
     }
+}
+
+/// One scenario folded once, far enough for every stage-2 arm.
+///
+/// `aggs` runs at least to the onset horizon ([`crate::onset::at_horizon`]).
+/// [`Self::native`] is the scenario's own length. The schedule is a function
+/// of the block index and extending the horizon only evaluates it further, so
+/// the prefix is the run the scenario was written as.
+pub(crate) struct FoldedScenario {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    /// Years the scenario itself runs. `aggs` may be longer.
+    native_years: u64,
+    pub(crate) aggs: Vec<A1YearAgg>,
+}
+
+impl FoldedScenario {
+    /// The years the scenario itself runs.
+    pub(crate) fn native(&self) -> &[A1YearAgg] {
+        let years = usize::try_from(self.native_years).unwrap_or(usize::MAX);
+        &self.aggs[..years.min(self.aggs.len())]
+    }
+}
+
+/// Fold every stage-2 scenario once, out to at least the onset horizon.
+pub(crate) fn fold_all(params: &SimParams) -> Vec<FoldedScenario> {
+    all_scenarios(params)
+        .into_iter()
+        .map(|config| {
+            let native_years = config.sim_years;
+            let name = config.name.clone();
+            let description = config.description.clone();
+            let extended = crate::onset::at_horizon(config);
+            FoldedScenario {
+                name,
+                description,
+                native_years,
+                aggs: a1_year_aggs(params, &extended),
+            }
+        })
+        .collect()
 }
 
 /// A fixed-point `SCALE` share of a **year aggregate**: `floor(pool × share /
@@ -556,10 +610,11 @@ fn a1_candidate_result(
 /// `budget/burden` ratio of the flat-25 baseline and every candidate, across the
 /// opportunity-cost-rate band. `budget = emission_leg + fee_burn·share(n)`;
 /// `burden = locked-bond opportunity cost (binding) + minor storage`. Prints a
-/// stderr table, returns the data.
+/// stderr table, returns the data. Each scenario's own years, not the
+/// horizon the onset table reads.
 fn a1_clearance_report(
     out: &mut impl fmt::Write,
-    params: &SimParams,
+    folded: &[FoldedScenario],
 ) -> Result<Vec<A1ScenarioResult>, fmt::Error> {
     writeln!(out,
         "\nA1 — burden clearance (§12.2, F-G): min budget / (bond-opp-cost + storage) ratio.\n\
@@ -585,8 +640,8 @@ fn a1_clearance_report(
     )?;
 
     let mut results = Vec::new();
-    for config in all_scenarios(params) {
-        let aggs = a1_year_aggs(params, &config);
+    for scenario in folded {
+        let aggs = scenario.native();
         let final_n = aggs.last().map_or(0, |a| a.n);
         let flat25 = a1_candidate_result(&aggs, &flat_25(), true);
         let candidates: Vec<A1CandidateResult> = family()
@@ -609,7 +664,7 @@ fn a1_clearance_report(
         writeln!(
             out,
             "{:<20} {:>12}   {:>7.2} {:>7.2} {:>7.2}   {:>7.2} {:>7.2} {:>7.2}   {:>8.2} {:>8.2}",
-            trunc(&config.name, 20),
+            trunc(&scenario.name, 20),
             best.asymptote_pct
                 .map(|a| format!("{a:.0}%/{}", best.knee_shards.unwrap_or(0)))
                 .unwrap_or_default(),
@@ -624,7 +679,7 @@ fn a1_clearance_report(
         )?;
 
         results.push(A1ScenarioResult {
-            scenario: config.name.clone(),
+            scenario: scenario.name.clone(),
             final_n,
             flat25,
             candidates,
@@ -1175,7 +1230,7 @@ fn a4_candidate_result(
 /// executable form of "stuffing it funds it".
 fn a4_stuffing_report(
     out: &mut impl fmt::Write,
-    params: &SimParams,
+    folded: &[FoldedScenario],
 ) -> Result<Vec<A4ScenarioResult>, fmt::Error> {
     writeln!(
         out,
@@ -1200,8 +1255,8 @@ fn a4_stuffing_report(
 
     let mut results = Vec::new();
     let mut decomp_rows: Vec<(String, A4Decomp)> = Vec::new();
-    for config in all_scenarios(params) {
-        let aggs = a1_year_aggs(params, &config);
+    for scenario in folded {
+        let aggs = scenario.native();
         let sigma = SigmaCache::build(&aggs);
         let flat25 = a4_candidate_result(&aggs, &sigma, &flat_25(), true);
         let candidates: Vec<A4CandidateResult> = family()
@@ -1227,7 +1282,7 @@ fn a4_stuffing_report(
         writeln!(
             out,
             "{:<20} {:>10.4} {:>14.4} {:>14.4} {:>10}/{:>5}/{:>2}",
-            trunc(&config.name, 20),
+            trunc(&scenario.name, 20),
             flat25.roi_by_hholdings[0],
             worst_real.roi_by_hholdings[0],
             worst_capped_roi,
@@ -1236,10 +1291,10 @@ fn a4_stuffing_report(
             whz,
         )?;
         if let Some(d) = worst_real.worst_decomp {
-            decomp_rows.push((config.name.clone(), d));
+            decomp_rows.push((scenario.name.clone(), d));
         }
         results.push(A4ScenarioResult {
-            scenario: config.name.clone(),
+            scenario: scenario.name.clone(),
             flat25,
             candidates,
         });
@@ -1352,15 +1407,19 @@ const A3_ARCHIVER_BAND: [u64; 3] = [2_000, 20_000, 60_000];
 /// that is never claimed is *supply never created* (`ARCHIVAL_BUDGET_SCHEDULE.md`
 /// §4). The claim cost is one ordinary transaction at the year's admission
 /// rate ([`ordinary_tx_fee`]), priced at that year's own leaf count.
-fn a3_stranding_report(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result {
+fn a3_stranding_report(
+    out: &mut impl fmt::Write,
+    params: &SimParams,
+    baseline: &FoldedScenario,
+) -> fmt::Result {
     // Sweep the CORPUS TRAJECTORY, not one year: replication is
     // `archivers · holdings / n`, so the pre-fix co-holder cliff is an EARLY-chain
     // regime (few shards, many holders ⇒ r ≫ 1000) that the corpus grows out of.
     // Showing early/mid/late is what makes the crossing legible. The header's
     // cost range is this sweep's own endpoints: a knee-band depth the baseline
     // never reaches would advertise a "late" fee the table does not contain.
-    let cfg = &all_scenarios(params)[0];
-    let aggs = a1_year_aggs(params, cfg);
+    // The scenario's own years: the horizon past them is the onset table's.
+    let aggs = baseline.native();
     let years: Vec<&A1YearAgg> = aggs.iter().filter(|a| a.n > 0).collect();
     if years.is_empty() {
         return Ok(());
@@ -1461,9 +1520,8 @@ fn a3_stranding_report(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Re
 /// Prediction: the capped column vanishes, the realistic-end numbers become the
 /// only numbers, and `fee_mult_to_close` is unchanged — because reopen (c) was
 /// sized against the realistic end already.
-fn oq4_deletion_recheck(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result {
-    let cfg = &all_scenarios(params)[0];
-    let aggs = a1_year_aggs(params, cfg);
+fn oq4_deletion_recheck(out: &mut impl fmt::Write, baseline: &FoldedScenario) -> fmt::Result {
+    let aggs = baseline.native();
     let Some(a) = aggs.iter().rfind(|a| a.n > 0) else {
         return Ok(());
     };
@@ -1478,7 +1536,7 @@ fn oq4_deletion_recheck(out: &mut impl fmt::Write, params: &SimParams) -> fmt::R
         "\nOQ-4 (D3 round §12.8) — A4 gate under PLATEAU DELETION (scenario {SC}, n={N},\n\
          steepest candidate, Δn={D}, H={H}y). Prediction: the capped column vanishes and\n\
          the realistic-end numbers become the only numbers.",
-        SC = trunc(&cfg.name, 20),
+        SC = trunc(&baseline.name, 20),
         N = a.n,
         D = delta,
         H = horizon,
@@ -1551,12 +1609,13 @@ struct ShardRewardOperands {
     max_per_epoch_skl: f64,
 }
 
-fn shard_reward_operands(params: &SimParams) -> ShardRewardOperands {
+fn shard_reward_operands(folded: &[FoldedScenario]) -> ShardRewardOperands {
     let epy = crate::proxy::epochs_per_year();
     let mut rewards: Vec<f64> = Vec::new();
     let mut max_per_epoch_skl = 0.0_f64;
-    for config in all_scenarios(params) {
-        for a in a1_year_aggs(params, &config)
+    for scenario in folded {
+        for a in scenario
+            .native()
             .iter()
             .filter(|a| a.n >= MAX_HOLDINGS_SHARDS as u64)
         {
@@ -1632,9 +1691,20 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
         "scenario", "years", "final_outputs", "final_GB", "final_n", "final_burden$/yr@0%"
     )?;
 
+    // One fold per scenario, out to the onset horizon. Arms that judge the
+    // scenario as written read `native()`; the onset table, the envelope
+    // and the admission map read the whole series.
+    let folded = fold_all(params);
+    let baseline = folded.first().expect("the stage-2 set has a baseline");
+
     let mut trajectories: Vec<BurdenTrajectory> = Vec::new();
-    for config in all_scenarios(params) {
-        let traj = burden_trajectory(params, &config);
+    for scenario in &folded {
+        let traj = trajectory_from(
+            scenario.name.clone(),
+            scenario.description.clone(),
+            scenario.native_years,
+            scenario.native(),
+        );
         let final_burden = traj.years.last().map_or(0.0, |y| y.burden_fiat_stall);
         let final_outputs = traj.years.last().map_or(0, |y| y.cumulative_outputs);
         let final_gb = traj
@@ -1663,28 +1733,26 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     )?;
 
     print_escalation_family(out)?;
-    let admission = AdmissionAtShards::on_the_baseline(params);
+    let admission = AdmissionAtShards::from_aggs(&baseline.aggs);
     print_stuffer_cost_curve(out, params, &admission)?;
-    crate::miner_stuffer::print_envelope(out, params)?;
-    let a1 = a1_clearance_report(out, params)?;
+    crate::miner_stuffer::print_envelope(out, params, &folded)?;
+    let a1 = a1_clearance_report(out, &folded)?;
     // A1-T / A1-L (§12.14): A1's min hides when the failure arrives; the onset
     // table and the lever table fold the same per-year ratio.
-    let a1_onset = crate::onset::onset_report(out, params)?;
-    let a1_levers = crate::onset::lever_report(out, params)?;
-    a3_stranding_report(out, params)?;
+    let a1_onset = crate::onset::onset_report(out, params, &folded)?;
+    let a1_levers = crate::onset::lever_report(out, params, &folded)?;
+    a3_stranding_report(out, params, baseline)?;
     crate::distribution::oq1_probe_report(out)?;
     // OQ-2's corpus samples are the baseline trajectory's early / mid / late
     // `n` — read off the fold, not literals, so a re-keyed unit cannot leave a
     // stale band behind.
     let oq2_n = oq2_corpus_samples(&trajectories[0]);
     crate::admission::oq2_report(out, &A3_ARCHIVER_BAND, &oq2_n)?;
-    oq4_deletion_recheck(out, params)?;
+    oq4_deletion_recheck(out, baseline)?;
     // A2 (W6) — now unblocked by the D3 closure. Budget from the A1-conditional
     // envelope: the strongest surviving candidate's pool at the scenario's n.
     {
-        let cfg = &all_scenarios(params)[0];
-        let aggs = a1_year_aggs(params, cfg);
-        if let Some(a) = aggs.iter().rfind(|a| a.n > 0) {
+        if let Some(a) = baseline.native().iter().rfind(|a| a.n > 0) {
             let best = family()
                 .iter()
                 .max_by_key(|c| c.asymptote)
@@ -1696,7 +1764,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
                 out,
                 per_epoch,
                 20_000,
-                &format!("{} n={}", trunc(&cfg.name, 18), a.n),
+                &format!("{} n={}", trunc(&baseline.name, 18), a.n),
             )?;
         }
     }
@@ -1709,13 +1777,13 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
             crate::swing::forfeit_at_the_ceiling(params.emission_curve_asymptote / 2, &econ);
         crate::swing::a6_report(out, &ESCALATION_PREVIEW_N, forfeit, &admission)?;
     }
-    let a4 = a4_stuffing_report(out, params)?;
+    let a4 = a4_stuffing_report(out, &folded)?;
 
     // A5 / TJ-4 / TJ-7 share one per-shard post-D1/D2 reward operand family
     // (see [`shard_reward_operands`]). A5 takes the MAX (stronger forfeit ⇒
     // conservative deterrent); TJ-4/TJ-7 take MEDIAN + MAX (larger flow is
     // alarm-raising for the attacker).
-    let rewards = shard_reward_operands(params);
+    let rewards = shard_reward_operands(&folded);
     // The absorption DP prices the stream forgone FROM the slash epoch, so it
     // takes the per-epoch rate rather than a horizon lump.
     crate::proxy::a5_proxy_report(out, rewards.max_per_epoch_skl, SKL_FIAT_PRICE_BAND[1])?;
@@ -1770,6 +1838,39 @@ mod tests {
     use shekyl_economics::params::mul_scale;
 
     use crate::burden::closed_shards;
+
+    /// Extending a fold only appends years. The schedule is the block index,
+    /// so year 1 of a two-year run is year 1 of a one-year run.
+    #[test]
+    fn the_first_year_of_a_longer_fold_is_the_shorter_fold() {
+        let params = SimParams::default();
+        let mut one = crate::scenarios::scenario_4_stuffing_attack(&params);
+        let mut two = crate::scenarios::scenario_4_stuffing_attack(&params);
+        one.sim_years = 1;
+        two.sim_years = 2;
+        let short = a1_year_aggs(&params, &one);
+        let long = a1_year_aggs(&params, &two);
+        assert_eq!(short.len(), 1);
+        assert_eq!(long.len(), 2);
+        let (a, b) = (&short[0], &long[0]);
+        assert_eq!(a.carried_txs, b.carried_txs);
+        assert_eq!(a.demand_txs, b.demand_txs);
+        assert_eq!(a.expired_txs, b.expired_txs);
+        assert_eq!(a.n, b.n);
+        assert_eq!(a.cumulative_outputs, b.cumulative_outputs);
+        assert_eq!(a.cumulative_archival_bytes, b.cumulative_archival_bytes);
+        assert_eq!(a.whole_fees_atomic, b.whole_fees_atomic);
+        assert_eq!(a.whole_burn_atomic, b.whole_burn_atomic);
+        assert_eq!(a.emission_leg_atomic, b.emission_leg_atomic);
+        assert_eq!(a.total_emission_atomic, b.total_emission_atomic);
+        assert_eq!(a.long_term_median, b.long_term_median);
+        assert_eq!(a.last_block.fees, b.last_block.fees);
+        assert_eq!(a.last_block.bodies_weight, b.last_block.bodies_weight);
+        assert_eq!(a.last_block.medians, b.last_block.medians);
+        assert_eq!(a.last_block.volume, b.last_block.volume);
+        assert_eq!(a.last_block.sigma_scaled, b.last_block.sigma_scaled);
+        assert_eq!(a.last_block.honest_tx, b.last_block.honest_tx);
+    }
 
     #[test]
     fn trajectory_shards_are_monotone_and_final_is_max() {

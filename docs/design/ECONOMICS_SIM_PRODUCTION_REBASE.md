@@ -356,9 +356,12 @@ the medians and the waiting transactions. One cursor,
 `chain_cursor::ChainCursor`, steps that space and CEN-F20's volume window
 together: the engine, the budget and the stage-2 fold each call it once
 per block, and what they accumulate afterwards is their own.
-`burden_trajectory` reads the stage-2 fold's aggregates instead of folding
-the schedule a second time, so the burden side and the funding side count
-the same transactions. The recorder (`record.rs`) does not step the
+The stage-2 report folds each scenario once, out to at least the onset
+horizon, and every arm reads that fold. The burden trajectory and the
+clearance arms read the scenario's own years; the onset table, the
+envelope and the admission map read the whole horizon. `burden_trajectory`
+and `a1_year_aggs` remain the one-scenario fold a caller asks for directly.
+The recorder (`record.rs`) does not step the
 cursor: its `tx_volume` column is the schedule's demand, the input the
 wallet-engine differential feeds back in.
 
