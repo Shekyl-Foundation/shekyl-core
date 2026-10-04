@@ -89,6 +89,7 @@ close_kinds! {
     (12, IoError, ChannelExists, "SHEKYL_CLOSE_IO_ERROR"),
     (13, SendQueueFull, ChannelExists, "SHEKYL_CLOSE_SEND_QUEUE_FULL"),
     (14, LocalClose, Every, "SHEKYL_CLOSE_LOCAL_CLOSE"),
+    (15, InboundNotAccepted, BeforeChannel, "SHEKYL_CLOSE_INBOUND_NOT_ACCEPTED"),
 }
 
 /// One close cause. `reply_code` is the overlay reply for
@@ -232,6 +233,7 @@ mod tests {
             CloseKind::DialFailed,
             CloseKind::ProxyRefused,
             CloseKind::LocalClose,
+            CloseKind::InboundNotAccepted,
         ];
         let gap = [
             CloseKind::LevinHandshakeTimeout,

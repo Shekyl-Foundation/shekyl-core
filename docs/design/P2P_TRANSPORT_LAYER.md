@@ -1791,14 +1791,21 @@ hand-kept copy.
 
 | Phase | Causes |
 | --- | --- |
-| Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout`, `AdmissionRefused`, `DialFailed`, `ProxyRefused`, `LocalClose` |
+| Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout`, `AdmissionRefused`, `InboundNotAccepted`, `DialFailed`, `ProxyRefused`, `LocalClose` |
 | Channel exists, Levin handshake not done | `LevinHandshakeTimeout`, `LevinHandshakeRejected`, `LocalClose` |
 | Any time after the channel exists | `PeerClosed`, `RecordRejected`, `SessionRefused`, `IoError`, `SendQueueFull`, `LocalClose` |
 
 `SendQueueFull` is a send queue that cannot take another buffer. The
 connection closes. It is not a dropped write.
-`AdmissionRefused` is a ban-list or inbound-ceiling refusal at
-accept. `DialFailed` is an outbound TCP connect that did not complete.
+`AdmissionRefused` is a ban-list refusal, or an inbound ceiling or
+connector cap that is positive and full. `InboundNotAccepted` is a
+ceiling of 0 or a connector cap of 0: this node will not take the
+accept. A zero bound is named even when a positive cap is already
+full. The seam info line on this node names whichever of the two was
+returned. The accept closes the socket before any handshake byte.
+The dialer records its own before-channel cause for that close. It
+does not learn which refusal this node chose: this table is not on
+the pipe. `DialFailed` is an outbound TCP connect that did not complete.
 `ProxyRefused` is a SOCKS or overlay failure and carries the reply
 code (an unreachable onion is this cause, not a generic I/O error).
 `LocalClose` is this node closing, including a shutdown during the

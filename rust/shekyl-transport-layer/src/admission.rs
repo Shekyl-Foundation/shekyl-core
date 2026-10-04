@@ -149,8 +149,63 @@ fn inbound_observation_matches(connector: ConnectorId, endpoint: ObservedEndpoin
     )
 }
 
-fn admission_refused() -> OpenError {
+const fn admission_refused() -> OpenError {
     OpenError::Refused(CloseCause::new(CloseKind::AdmissionRefused))
+}
+
+const fn inbound_not_accepted() -> OpenError {
+    OpenError::Refused(CloseCause::new(CloseKind::InboundNotAccepted))
+}
+
+/// How an inbound limit stands against the sockets already held under it.
+///
+/// [`Self::Closed`] is a limit of zero: holding fewer sockets cannot open
+/// it, so the refusal is [`CloseKind::InboundNotAccepted`]. [`Self::Full`]
+/// is a positive limit the held count has reached: a later close can open
+/// a slot, so the refusal is [`CloseKind::AdmissionRefused`]. [`Self::Open`]
+/// is no limit, or a positive limit not yet reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LimitStance {
+    Open,
+    Closed,
+    Full,
+}
+
+impl LimitStance {
+    /// `None` is no limit. Zero is closed at every `held`. A positive limit
+    /// is full when `held` has reached it.
+    fn classify(limit: Option<u32>, held: u64) -> Self {
+        match limit {
+            Some(0) => Self::Closed,
+            Some(limit) if held >= u64::from(limit) => Self::Full,
+            None | Some(_) => Self::Open,
+        }
+    }
+
+    /// Closed outranks full. A connector cap and the process ceiling are
+    /// the same kind of limit, so either one being closed refuses the accept.
+    const fn prefer(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Closed, _) | (_, Self::Closed) => Self::Closed,
+            (Self::Full, _) | (_, Self::Full) => Self::Full,
+            (Self::Open, Self::Open) => Self::Open,
+        }
+    }
+
+    const fn refusal(self) -> Result<(), OpenError> {
+        match self {
+            Self::Closed => Err(inbound_not_accepted()),
+            Self::Full => Err(admission_refused()),
+            Self::Open => Ok(()),
+        }
+    }
+}
+
+fn process_limit(ceiling: InboundCeiling) -> Option<u32> {
+    match ceiling {
+        InboundCeiling::Bounded(limit) => Some(limit),
+        InboundCeiling::Unbounded(_) => None,
+    }
 }
 
 /// Per-connector, per-direction reservation counts.
@@ -239,34 +294,38 @@ impl Inner {
     }
 }
 
-fn refuse_over_process_ceiling(inner: &Inner, ceiling: InboundCeiling) -> Result<(), OpenError> {
-    let total = inner
-        .occupancy
-        .process_inbound()
-        .ok_or(OpenError::Exhausted)?;
-    if let InboundCeiling::Bounded(limit) = ceiling {
-        if total >= u64::from(limit) {
-            return Err(admission_refused());
-        }
-    }
-    Ok(())
-}
-
 /// Refuse when this connector's cap is full, and when the process
 /// ceiling is full. The cap does not replace the ceiling: each connector
 /// can be under its own number while the sum still exhausts the descriptors.
+///
+/// Both bounds are a [`LimitStance`]. A limit of zero is closed
+/// ([`CloseKind::InboundNotAccepted`]). A positive limit that occupancy
+/// has reached is full ([`CloseKind::AdmissionRefused`]). Closed outranks
+/// full. A ban is [`CloseKind::AdmissionRefused`], and it is decided before
+/// this function.
+///
+/// A closed bound returns before the process sum. A zero ceiling is then
+/// not reported as an overflow of the occupancy counter.
 fn refuse_inbound(
     inner: &Inner,
     connector: ConnectorId,
     ceiling: InboundCeiling,
 ) -> Result<(), OpenError> {
-    if let Some(cap) = inner.zone_caps[connector.index()] {
-        let held = inner.occupancy.get(connector, Direction::Inbound);
-        if held >= u64::from(cap) {
-            return Err(admission_refused());
-        }
+    let cap = inner.zone_caps[connector.index()];
+    let held = inner.occupancy.get(connector, Direction::Inbound);
+    let zone = LimitStance::classify(cap, held);
+    let limit = process_limit(ceiling);
+    // Held 0 asks only whether the ceiling is zero. A positive ceiling is
+    // open at held 0; fullness uses the real process sum below.
+    let decided = LimitStance::prefer(zone, LimitStance::classify(limit, 0));
+    if decided != LimitStance::Open {
+        return decided.refusal();
     }
-    refuse_over_process_ceiling(inner, ceiling)
+    let total = inner
+        .occupancy
+        .process_inbound()
+        .ok_or(OpenError::Exhausted)?;
+    LimitStance::classify(limit, total).refusal()
 }
 
 /// The socket table. Clones share it. A poisoned lock aborts the process:
@@ -298,8 +357,10 @@ impl Sockets {
     /// Inbound clearnet.
     ///
     /// `ceiling` is the process-wide inbound ceiling: this row and every
-    /// other connector's inbound row are one sum. A banned address is
-    /// [`CloseKind::AdmissionRefused`] and reserves nothing.
+    /// other connector's inbound row are one sum. A banned address, and a
+    /// positive ceiling or connector cap that is full, are
+    /// [`CloseKind::AdmissionRefused`]. A ceiling or connector cap of zero
+    /// is [`CloseKind::InboundNotAccepted`]. Either refusal reserves nothing.
     pub fn accept_clearnet(
         &self,
         ip: IpAddr,
@@ -342,6 +403,8 @@ impl Sockets {
     /// Inbound Tor. There is no address to ban.
     ///
     /// `ceiling` is the same process-wide sum as [`Self::accept_clearnet`].
+    /// A zero ceiling, or a zero cap on this connector, is
+    /// [`CloseKind::InboundNotAccepted`].
     pub fn accept_tor(&self, ceiling: InboundCeiling) -> Result<OpenSocket, OpenError> {
         let endpoint = ObservedEndpoint::Zone;
         assert!(
