@@ -210,7 +210,10 @@ impl<
     /// post-population ledger, never an intermediate state with
     /// freshly-merged transfers whose `output_handle` field is
     /// transiently `None`.
-    pub fn apply_scan_result(&self, mut result: ScanResult) -> Result<(), RefreshError> {
+    pub fn apply_scan_result(
+        &self,
+        mut result: ScanResult,
+    ) -> Result<Vec<OwnedOutput>, RefreshError> {
         // §3 reroute (M3b): pre-collect the public on-chain residue
         // from the scan result *before* `apply_scan_result_to_state`
         // consumes it. The post-pass below uses this map to bind
@@ -301,7 +304,14 @@ impl<
         // journal's lifecycle states hold atomically with the scan merge
         // (see `WalletLedger::reconcile_after_scan_merge`).
         state.ledger.reconcile_after_scan_merge(reorg_fork_height);
-        Ok(())
+        // The outputs this merge made the wallet's, as `(gindex, O)`, for the
+        // caller to register with the curve tree once this guard is released —
+        // this path is synchronous under the ledger write lock and cannot
+        // `ask` the actor (6-ii). Unspent only: capture serves spending, and
+        // a spent output's chunks are plaintext rows for nothing. An output
+        // a reorg makes unspent again is picked up by the next refresh's mass
+        // pass, which re-offers everything held.
+        Ok(owned_outputs_among(&state.ledger.ledger, &inserted))
     }
 
     /// Feed the curve tree the heights carried by `result` **before** the
@@ -388,6 +398,32 @@ impl<
     /// inner [`ingest_scan_result_into_curve_tree`](Self::ingest_scan_result_into_curve_tree)
     /// stays `pub(crate)` for the tests that drive the bare ingest/rollback
     /// pre-pass.
+    /// Every unspent output the ledger holds, as registration pairs, read
+    /// under a brief read guard. This is the mass pass a refresh sends on
+    /// every run: a resume is a mass late registration (the registry does
+    /// not persist), and a re-offer of a held pair is `AlreadyHeld` and
+    /// costs a map lookup, so sending it every time is what keeps the tree's
+    /// view of ownership from drifting after a rollback or a rescan.
+    pub(crate) fn owned_outputs(&self) -> Vec<OwnedOutput> {
+        let guard = self.ledger.read();
+        guard
+            .ledger
+            .ledger
+            .transfers()
+            .iter()
+            .filter(|td| !td.spent)
+            .map(owned_output)
+            .collect()
+    }
+
+    /// Register `outputs` with the curve tree ([`curve_tree_sync_owned`]).
+    pub(crate) async fn sync_owned_outputs(
+        &self,
+        outputs: Vec<OwnedOutput>,
+    ) -> Result<shekyl_curve_tree::OwnershipSync, RefreshError> {
+        curve_tree_sync_owned(&self.curve_tree, outputs).await
+    }
+
     pub(crate) async fn ingest_scan_result_with_respawn(
         &self,
         result: &mut ScanResult,
@@ -434,6 +470,78 @@ fn map_curve_tree_handle_error(err: &CurveTreeHandleError) -> RefreshError {
         }
         CurveTreeHandleError::Client(_) => CurveTreeIngestFault::ClientRejected.into(),
     }
+}
+
+/// One owned output as the curve tree registers it: `(gindex, O)`.
+///
+/// The pair, not the number alone, because a gindex is a name a reorg
+/// re-derives and `O` is the identity that survives it
+/// (`CT6_PROVING_STATE.md` §11.9).
+pub(crate) type OwnedOutput = (shekyl_curve_tree::Gindex, shekyl_curve_tree::OneTimePubkey);
+
+/// The registration pair for a ledger transfer — the same wrapping of the
+/// compressed key `transfer::support::assemble_input` uses, so the registry
+/// and the spend cannot name one output two ways.
+pub(crate) fn owned_output(td: &shekyl_engine_state::TransferDetails) -> OwnedOutput {
+    (
+        td.global_output_index,
+        shekyl_curve_tree::OneTimePubkey::from_bytes(td.key.compress().to_bytes()),
+    )
+}
+
+/// The registration pairs for the transfers at `inserted`, unspent only.
+///
+/// Pure, so the merge's one new fact can be tested on a `LedgerBlock`
+/// without an engine: the pairs it returns are exactly the unspent rows the
+/// merge appended, in insertion order, and nothing else.
+pub(crate) fn owned_outputs_among(
+    ledger: &shekyl_engine_state::LedgerBlock,
+    inserted: &[usize],
+) -> Vec<OwnedOutput> {
+    inserted
+        .iter()
+        .filter_map(|&i| ledger.transfers().get(i))
+        .filter(|td| !td.spent)
+        .map(owned_output)
+        .collect()
+}
+
+/// Register `outputs` with the curve tree, reconciling once if any is owed.
+///
+/// A stale pair — the tree holds a different output at that gindex — is the
+/// normal outcome of a scan lagging the tree across a reorg; it is logged,
+/// not an error, and the rescan re-offers the right key. Actor faults map
+/// as the ingest's do, so an unavailable actor is classified
+/// respawn-recoverable; the caller orders this **after** the respawn-aware
+/// ingest so a dead actor has already been healed by the time it is asked.
+pub(super) async fn curve_tree_sync_owned(
+    curve_tree: &CurveTreeHandle,
+    outputs: Vec<OwnedOutput>,
+) -> Result<shekyl_curve_tree::OwnershipSync, RefreshError> {
+    if outputs.is_empty() {
+        return Ok(shekyl_curve_tree::OwnershipSync::default());
+    }
+    let sync = curve_tree
+        .sync_owned(outputs)
+        .await
+        .map_err(|e| map_curve_tree_handle_error(&e))?;
+    if !sync.stale.is_empty() {
+        tracing::warn!(
+            stale = sync.stale.len(),
+            "curve tree: registrations whose key disagrees with the tree; the \
+             scan's view is behind the chain and the rescan will re-offer them"
+        );
+    }
+    if let Some(report) = sync.reconciliation {
+        tracing::info!(
+            after_drain = sync.after_drain,
+            positions_resolved = report.positions_resolved,
+            chunks_written = report.chunks_written,
+            leaves_rebuilt = report.leaves_rebuilt,
+            "curve tree: late registrations reconciled"
+        );
+    }
+    Ok(sync)
 }
 
 /// Ingest a scan result into the curve tree from cloned deps — lets the async

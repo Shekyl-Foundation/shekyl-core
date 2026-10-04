@@ -348,6 +348,74 @@ fn apply_ingests_detected_transfer_and_marks_spent() {
 /// `populate_engine_handle_fields` consumes this Vec to walk only
 /// the freshly-merged transfers in O(k) rather than scanning the
 /// full ledger in O(n).
+/// The merge hands back the `(gindex, O)` of what it inserted — unspent
+/// rows only, as `owned_output` wraps them — for the caller to register with
+/// the curve tree once the ledger guard is gone.
+///
+/// Spent is excluded on purpose: capture serves spending, and a spent
+/// output's chunks are plaintext rows for nothing. The next refresh's mass
+/// pass re-offers everything held, so an output a reorg makes unspent again
+/// is not lost by this filter.
+#[test]
+fn owned_outputs_among_are_the_inserted_unspent_pairs() {
+    let (mut ledger, mut indexes) = empty_state();
+    let result = ScanResult {
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(2),
+        parent_hash: None,
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(1),
+            BlockHash::from_bytes([0x11; 32]),
+        )],
+        new_transfers: vec![
+            DetectedTransfer {
+                block_height: shekyl_types::BlockHeight::from_raw(1),
+                output: make_recovered_output(1, 100),
+            },
+            DetectedTransfer {
+                block_height: shekyl_types::BlockHeight::from_raw(1),
+                output: make_recovered_output(2, 101),
+            },
+        ],
+        spent_key_images: Vec::new(),
+        reorg_rewind: None,
+        block_leaves: Vec::new(),
+        block_curve_tree_roots: Vec::new(),
+        bond_sightings: Vec::new(),
+    };
+    let inserted = apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
+    assert_eq!(inserted, vec![0, 1]);
+
+    let pairs = crate::engine::merge::owned_outputs_among(&ledger, &inserted);
+    let expected: Vec<_> = ledger
+        .transfers()
+        .iter()
+        .map(crate::engine::merge::owned_output)
+        .collect();
+    assert_eq!(
+        pairs, expected,
+        "every inserted row, in order, as (gindex, O)"
+    );
+    assert_eq!(
+        pairs[0].0,
+        ledger.transfers()[0].global_output_index,
+        "the pair's first half is the ledger's gindex"
+    );
+    assert_eq!(
+        pairs[0].1,
+        shekyl_curve_tree::OneTimePubkey::from_bytes(
+            ledger.transfers()[0].key.compress().to_bytes()
+        ),
+        "the pair's second half is the compressed one-time key"
+    );
+
+    // A spent row is left out.
+    ledger.transfers[1].spent = true;
+    let pairs = crate::engine::merge::owned_outputs_among(&ledger, &inserted);
+    assert_eq!(pairs.len(), 1, "a spent output is not registered");
+    assert_eq!(pairs[0].0, ledger.transfers()[0].global_output_index);
+}
+
 #[test]
 fn apply_scan_result_to_state_returns_indices_of_new_transfers() {
     let (mut ledger, mut indexes) = empty_state();

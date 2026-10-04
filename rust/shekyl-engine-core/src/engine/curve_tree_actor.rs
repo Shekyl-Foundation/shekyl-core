@@ -496,12 +496,61 @@ impl Message<AssembleTx> for CurveTreeActor {
                 max: shekyl_tx_builder::MAX_INPUTS,
             });
         }
+        // The capture path is total, and this is where that is made so: the
+        // batch's inputs are registered in the SAME handler invocation that
+        // assembles them, so no ingest or rollback interleaves (E1) and no
+        // input reaches `assemble_paths` unregistered — whether the wallet's
+        // refresh registered it earlier or not, and whichever orchestrator is
+        // asking (spend, claim, bond, release). A re-offer of a held pair is
+        // `AlreadyHeld` and costs a map lookup; an input owed captures is
+        // reconciled here, once. A stale pair — the client holds a different
+        // output at that gindex — is left unregistered and the assembly then
+        // refuses it by name, which is the caller's stale view surfacing as
+        // `OutputNotRegistered` rather than as a wrong-leaf proof.
+        let pairs: Vec<(shekyl_curve_tree::Gindex, shekyl_curve_tree::OneTimePubkey)> = msg
+            .inputs
+            .iter()
+            .map(|input| (input.gindex, input.output_key))
+            .collect();
+        let sync = self.client.sync_owned(&pairs)?;
+        if !sync.stale.is_empty() {
+            tracing::warn!(
+                stale = sync.stale.len(),
+                "assemble: inputs whose key disagrees with the tree; the caller's \
+                 view is behind the chain and the assembly will refuse them"
+            );
+        }
         // One handler invocation = one snapshot: every path is assembled
         // against the same `reference` with no ingest/rollback interleave (E1).
-        // `assemble_paths` reconstructs the tree once for the batch rather than
-        // once per input (`CT-6` increment 3), so the shared snapshot is now a
+        // `assemble_paths` reads each input's captures and the snapshot at
+        // the reference (`CT-6` increment 5), so the shared snapshot is a
         // property of the values as well as of the `reference`.
         self.client.assemble_paths(&msg.inputs, &msg.reference)
+    }
+}
+
+/// Register a batch of owned outputs, reconciling once if any is owed.
+///
+/// The wallet's refresh sends everything it holds on every pass — a resume
+/// is a mass late registration, and the registry does not persist — and the
+/// scan's newly inserted transfers after each merge. See
+/// [`CurveTreeClient::sync_owned`] for the per-pair verdicts and why a stale
+/// pair is reported rather than fatal.
+pub(crate) struct SyncOwned {
+    /// `(gindex, O)` per output; the pair, because a gindex is a name a
+    /// reorg re-derives and `O` is the identity that survives it.
+    pub(crate) outputs: Vec<(shekyl_curve_tree::Gindex, shekyl_curve_tree::OneTimePubkey)>,
+}
+
+impl Message<SyncOwned> for CurveTreeActor {
+    type Reply = Result<shekyl_curve_tree::OwnershipSync, ClientError>;
+
+    async fn handle(
+        &mut self,
+        msg: SyncOwned,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.client.sync_owned(&msg.outputs)
     }
 }
 
@@ -947,6 +996,18 @@ impl CurveTreeHandle {
             .await
             .map_err(collapse_send_error)
     }
+
+    /// Register owned outputs with the tree, reconciling once if any is owed
+    /// ([`SyncOwned`]).
+    pub(crate) async fn sync_owned(
+        &self,
+        outputs: Vec<(shekyl_curve_tree::Gindex, shekyl_curve_tree::OneTimePubkey)>,
+    ) -> Result<shekyl_curve_tree::OwnershipSync, CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(SyncOwned { outputs })
+            .await
+            .map_err(collapse_send_error)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1147,6 +1208,78 @@ mod tests {
     /// non-`None` (post-ingest, post-rollback) cursor behavior is proven at the
     /// client level (`ingested_tip_height_getter_tracks_cursor`) and exercised
     /// end-to-end once the merge-driven ingest fixtures land.
+    /// `SyncOwned` round-trips through the handle, and a re-offer is held.
+    #[tokio::test]
+    async fn sync_owned_registers_through_the_handle_and_a_re_offer_is_held() {
+        let (_dir, client) = fresh_client();
+        let handle = CurveTreeHandle::spawn(client);
+        let pair = (
+            shekyl_curve_tree::Gindex::from_raw(7),
+            shekyl_curve_tree::OneTimePubkey::from_bytes([0x11u8; 32]),
+        );
+        let first = handle
+            .sync_owned(vec![pair])
+            .await
+            .expect("sync on a live actor");
+        assert_eq!(first.before_drain, 1, "an unseen gindex is a future leaf");
+        assert_eq!(first.reconciliation, None, "nothing owed on an empty tree");
+        let again = handle
+            .sync_owned(vec![pair])
+            .await
+            .expect("sync on a live actor");
+        assert_eq!(again.already_held, 1, "the same pair is held and served");
+    }
+
+    /// `AssembleTx` registers its inputs before assembling, so an input the
+    /// wallet never registered is not refused as unregistered — it is refused
+    /// for the real reason, which on an empty tree is that it has not drained.
+    ///
+    /// The discriminator: the registry holds the pair (the handler's sync put
+    /// it there) and no position is resolved, which is `OutputNotDrained`;
+    /// `OutputNotRegistered` would mean the handler assembled without
+    /// syncing first.
+    #[tokio::test]
+    async fn assemble_tx_registers_its_inputs_before_assembling() {
+        let (_dir, client) = fresh_client();
+        let handle = CurveTreeHandle::spawn(client);
+        let input = AssembleInput {
+            gindex: shekyl_curve_tree::Gindex::from_raw(3),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes([0x22u8; 32]),
+            commitment: shekyl_curve_tree::CommitmentBytes::from_bytes([0x33u8; 32]),
+        };
+        // Height 0 on an empty client: `root_and_depth_at` needs an ingested
+        // tip, so ingest one empty block first.
+        handle
+            .ingest(shekyl_curve_tree::BlockHeight::ZERO, Arc::new(Vec::new()))
+            .await
+            .expect("an empty genesis ingests");
+        let reference = ReferenceBlock {
+            height: shekyl_curve_tree::BlockHeight::ZERO,
+            curve_tree_root: shekyl_curve_tree::CurveTreeRoot::from_bytes(
+                shekyl_fcmp::tree::selene_hash_init(),
+            ),
+            block_hash: shekyl_curve_tree::BlockHash::NULL,
+        };
+        let err = handle
+            .assemble_tx(reference, vec![input])
+            .await
+            .expect_err("an undrained input cannot have a path");
+        assert!(
+            matches!(
+                err,
+                CurveTreeHandleError::Client(ClientError::OutputNotDrained { gindex, .. })
+                    if gindex == input.gindex
+            ),
+            "expected OutputNotDrained after the handler's own sync; got {err:?}"
+        );
+        // And the sync did register it: a re-offer is held.
+        let again = handle
+            .sync_owned(vec![(input.gindex, input.output_key)])
+            .await
+            .expect("sync on a live actor");
+        assert_eq!(again.already_held, 1, "the handler registered the pair");
+    }
+
     #[tokio::test]
     async fn cursor_read_on_fresh_client_is_none() {
         let (_dir, client) = fresh_client();

@@ -146,7 +146,12 @@ fn client_reanchor_class(err: &ClientError) -> ClientReanchorClass {
         // store is sound, and the remedy is reconciliation, which the
         // registrant runs on open; until then a rebuilt path is what the
         // consumer gets by discarding this one.
+        // An unregistered input at assembly means the batch's sync reported
+        // it stale: the client holds a different output at that gindex, and
+        // the wallet's view is behind. Reselecting after the rescan is the
+        // remedy, so this is the reselection family.
         ClientError::RegistrationIdentityMismatch { .. }
+        | ClientError::OutputNotRegistered { .. }
         | ClientError::ReferenceOutsideSnapshotRing { .. }
         | ClientError::CaptureMissing { .. }
         | ClientError::RootMismatch { .. }

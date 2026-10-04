@@ -308,7 +308,7 @@ have re-imported the dependency this round exists outside of.
 | **2** | **The C1 oracle, height-keyed.** At every fixture height `h`, root, depth, and drained-leaf count equal `assemble_leaf_stream` + `root_from_scalars` over the leaves drained through `h - 1`. That cutoff is written in the test, not read from `drained_through`. Depth is graded at the two leaf counts where `layer_count_for_leaves` steps (`0`, and `SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH`). **Q2 examiner armed here, graded at increment 4:** `examine_tier_readings` compares a `TierReading` (root and depth) per tier. `TierCoverage::OutsideSpan` is the only non-answer; a tier error has no variant to hide in. Agreeing overlap is success, a root or depth mismatch is `Disagree`, and a height in neither `HeightSpan` is `Uncovered`. The 2026-09-23 decision-log row records why the examiner is armed before its tiers exist | §6.3.4 row 4; Q2 | Q2 (**ruled**); Q1's *shape* only — its constants are not inputs to the oracle |
 | **3** | **Per-transaction reconstruction reuse.** `drained`/`layers` once per tx, `gindex → drain-position` index | **Closeout (a)** — F3b | 2 |
 | **4** | **The snapshot ring + advance — BUILT (§10).** One dense ring over the reorg horizon, total by construction (`Q1` RULED 2026-09-28, §9) — no tiers, no spacing, no eviction. `shekyl_curve_tree::frontier::Frontier` advances inside `ingest_block`; the ring is the `frontier_snapshots` table of the wallet's own `LeafStore`, written and evicted in the block's own transaction; `root_and_depth_at` reads it for in-horizon heights and falls through to `root_at_count` elsewhere. `per_block_advance_worst_case_s` is **re-derived from the built advance** (Q4). The increment-2 examiner grades the real segment tier against the real snapshot tier, **unmodified** | **Closeout (b)** — F3a | 2, 3; Q2, Q3 (**ruled**); **`Q1` RULED by derivation (§9); `Q4` pre-registered with its re-point as a landing condition** — the gate is open |
-| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture is in build** — its *instrument* landed first (the structural red-bite, the O(chain) before-figure, and §11.6's gate spec, PRs #927/#931), and **§11.6's integrity gate is BUILT**: `verify_path_against_its_branches` recomputes the root from an assembled path's own branches and refuses with `PathRootMismatch`, so the artifact is checked rather than the store compared with itself. **The capture mechanism is BUILT** (PR #945): the fold captures every chunk that closes over a registered output, reconciliation backfills what a late registration is owed, and assembly reads captures and the frontier snapshot without touching `entries` — `assembly_today_depends_on_every_foreign_leaf` is at **state 3 of 3** as `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`. The engine's registrant is the next slice, as its own PR (rule 19: it lands in the refresh driver, a different validation surface); until it does, no production batch is registered and assembly takes the rebuild it keeps as a named fallback. The §6.3.3 precondition this row used to carry is **discharged** — that sentence was reconciled on `dev` (`WALLET_SIDE_STORE.md` §6.3.3 now reads *"There is one capture side, not two"*), so nothing waits on it | §6.3.3; C7; §11.6 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
+| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture is in build** — its *instrument* landed first (the structural red-bite, the O(chain) before-figure, and §11.6's gate spec, PRs #927/#931), and **§11.6's integrity gate is BUILT**: `verify_path_against_its_branches` recomputes the root from an assembled path's own branches and refuses with `PathRootMismatch`, so the artifact is checked rather than the store compared with itself. **The capture mechanism is BUILT** (PR #945): the fold captures every chunk that closes over a registered output, reconciliation backfills what a late registration is owed, and assembly reads captures and the frontier snapshot without touching `entries` — `assembly_today_depends_on_every_foreign_leaf` is at **state 3 of 3** as `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`. **The registrant is BUILT** (its own PR, rule 19) and **the rebuild is deleted**: the curve-tree actor registers a spend's inputs in the same handler invocation that assembles them, the refresh re-offers everything the wallet holds on every pass (a resume is a mass late registration, cheap because a held pair is `AlreadyHeld`), and the merge hands back what it inserted for registration outside the ledger guard — §11.12. `assemble_paths` has no fallback; an unregistered input is refused by name. The §6.3.3 precondition this row used to carry is **discharged** — that sentence was reconciled on `dev` (`WALLET_SIDE_STORE.md` §6.3.3 now reads *"There is one capture side, not two"*), so nothing waits on it | §6.3.3; C7; §11.6 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
 | **6** | **Re-grade rows 2 and 3** on the amortized form, same harness, same rig — **and it is also `Q4`'s only seat.** Increment 4 re-derived the advance field and measured it off-rig; a fraction of cadence computed anywhere but the pinned Pi 4 is a property of the machine that computed it (rule 76). The blocker is the board, not the code | §6.3.4; Q4 | 4 |
 | **7** | **`.curvetree` retirement** | `WSS-18` | **P-store lane** (Q6) |
 
@@ -818,6 +818,14 @@ pure linear term:
   `#842`'s `n + k` measured for the first time, and it says `k` is not a term
   at this scale.
 
+**Dated note (registrant PR).** Everything above is the record of the
+*rebuild* era: `assemble_paths` no longer rebuilds, so the per-spend figures
+in this section describe a cost the wallet no longer pays. A spend whose
+inputs were registered by the refresh assembles from captures; one whose
+inputs were never registered pays one reconciliation at the actor (span-
+bounded, §11.10), never the chain. The instrument now times the capture
+path, and the figure it owes is increment 6's graded run on the floor.
+
 ### What the control covers, and what it does not
 
 **This is an observational before-figure, not an attested one.** The record's
@@ -1016,7 +1024,10 @@ second deletion.
 The cause was that the two mechanisms never met, and they still do not —
 what changed is that nothing downstream has to trust them to. The gate
 compares the **store-backed** `root_at` against `reference.curve_tree_root`;
-the branches are rebuilt from replay-held `entries`; `tree_root` is then
+the branches are rebuilt from replay-held `entries` *(as of the registrant PR
+they come from captures and the frontier snapshot instead, §11.12 — the gate
+below is unchanged, and still folds the artifact rather than trusting either
+source)*; `tree_root` is then
 *copied from the gated reference*, so it is always the store's answer whatever
 the branches say. The
 docstring used to assert the paths came from "the same `layers` that gate
@@ -1261,19 +1272,19 @@ invariant `IdentityMismatch` guards at assembly, raised at registration rather
 than at the spend that needed the capture — and a re-registration *replaces*,
 so a rescan rebinds a gindex with no separate retraction.
 
-**For the registrant to inherit, not rediscover.** `RegistrationIdentityMismatch`
-is raised in **normal operation**, not only on a bug. A P-scan that lags across
-a reorg will offer the pre-reorg key for a gindex that now names a different
-output, and the client will correctly refuse it — which is exactly what
-happened to the first draft of the reorg red-bite below. The registrant must
-therefore classify it as *the caller's view is stale*: retry once the scan has
-caught up past the fork, never internal, never fatal, nothing poisoned. Its
-durability classification and rule-82 copy should say so, and it owes a
-red-bite of its own: a lagging scan re-offering the old key after a reorg must
-recover once its rescan reaches the new chain. The exhaustive re-anchor match
-in `shekyl-engine-core` places the variant in the reselection family for now
-because that match cannot be left open; the registrant's classification is the
-real one.
+**Inherited by the registrant, as written — discharged.** `RegistrationIdentityMismatch`
+is raised in **normal operation**: a P-scan lagging across a reorg offers the
+pre-reorg key for a gindex that now names a different output, and the client
+correctly refuses it — exactly what happened to the first draft of the reorg
+red-bite below. The registrant classifies it as *the caller's view is stale*
+and nothing else: the batch form `sync_owned` collects such pairs in
+`OwnershipSync::stale`, registers the rest, reconciles once if anything is
+owed, poisons nothing, and the rescan re-offers the right key. The red-bite is
+`a_batch_registers_reconciles_once_and_reports_stale_pairs`: the wrong key is
+reported, a re-offer is still reported, and the right key is then accepted and
+reconciled. The engine never sees it as an error — it is logged with a count —
+which is also why it adds no `RefreshError` variant and so no wallet-RPC
+contract bump.
 
 The rollback trim stays, but it is now **cleanup, not correctness**: it keeps
 the registry from accumulating dead rows, and it is the candidate-3 difference
@@ -1429,7 +1440,72 @@ backfill onward. `reconciliation_resolves_the_position_so_the_fold_continues`
 grows the fixture to the chunk count that closes a layer-1 node after the
 reconcile, because that is the only way to observe it.
 
+### 11.12 The registrant: three sites, one batch call, no fallback
+
+**Where ownership enters the tree.** Three sites, all through one client call,
+`sync_owned(&[(gindex, O)])`, which registers what it can, reconciles **once**
+iff anything was owed, and reports — not refuses — the pairs whose key the
+tree disagrees with.
+
+| site | when | what it buys |
+| --- | --- | --- |
+| the curve-tree actor's `AssembleTx` handler | before every assembly, in the same handler invocation (E1: no ingest or rollback interleaves) | **the capture path is total.** A spend's inputs already carry `(gindex, O)`; the handler registers them and then assembles. Whatever reached the actor — a spend, a claim, a bond, a release — assembles from captures, whether the refresh registered it earlier or not. A held pair is `AlreadyHeld` and costs a map lookup |
+| the refresh, after the respawn-aware ingest and before the merge | every refresh, with every unspent output the ledger holds | **resume as a mass late registration**: the registry does not persist, so the first refresh after open is one reconcile (zero hashing when the captures are there) and every later one is all `AlreadyHeld`. Ordered after the ingest so a dead actor has been healed before it is asked; the chunks that close *during* that first ingest for already-held outputs are backfilled by the reconcile it triggers |
+| the refresh, after the merge, outside the ledger guard | with what the merge inserted | the fold captures for a new output from the next block. The merge is synchronous under the ledger write lock and cannot `ask` the actor, so it hands the pairs back (`apply_scan_result` → `Vec<OwnedOutput>`; the sync driver's `refresh_with_outcome` carries them out of the retry loop) |
+
+**And the rebuild is deleted.** #945's dispatch comment promised the registrant
+PR would retire the fallback, and the first site is what makes that honest
+rather than a tense change: with registration only at refresh, a wallet that
+opened and spent before its first refresh would have taken the `O(chain)`
+rebuild through a door nothing closed. Now `assemble_paths` has one path.
+An input with no resolved position is refused by name —
+`OutputNotRegistered` if the pair is not held (a direct caller that skipped
+the sync, or a pair the sync reported stale), `OutputNotDrained` if it is
+held and simply has not drained yet. The three oracle passes that exercised
+the rebuild register their inputs first, as the actor does. The reference
+derivation the state-3 oracle compares against lives in the test module as
+`rebuilt_path`, built from the tree primitives — where a reference derivation
+belongs once production stops doing it.
+
+**`AlreadyHeld` is the third state, and it is what makes a per-refresh
+re-offer free.** A re-offer of a held pair is `AfterDrain` only when the leaf
+has drained *and* its position is not resolved — "held" and "served" diverged,
+and the captures are owed. Otherwise it is `AlreadyHeld` and triggers nothing.
+`a_re_offer_after_a_rollback_is_already_held_and_already_captured` grades the
+one case where that could go wrong: a rollback past the drain trims the
+position but keeps the pair, the re-drain's fold re-resolves it and writes the
+chunks, and the re-offer is held *with the captures present* — asserted on the
+rows, not the verdict, because the verdict alone would also come from a rule
+that never reconciled.
+
+**Unspent only.** Capture serves spending, and a spent output's chunks are
+plaintext rows for nothing. The mass pass runs every refresh, so an output a
+reorg makes unspent again is picked up when its flag flips.
+
+**What the instrument times now.** `shekyl-wss-q1b-bench`'s `assemble_once`
+timed the rebuild through #931; it now registers the rig's inputs outside the
+timed call (the one-off reconcile is the cost of building the fixture, not the
+subject) and times the capture path alone — the quantity §11.4's criterion
+was pre-registered for. §11.2's before-figure stays as the record of the
+rebuild era; it is not a number the rig can still produce.
+
+**Where this is graded.** Client: the batch's four verdicts and the stale
+report; the rollback re-offer above; a resumed mass registration reconciling
+once then `AlreadyHeld`; an unregistered input refused by name. Actor:
+`SyncOwned` round-trips, and `AssembleTx` registers before it assembles —
+pinned by an unregistered input on an empty tree refusing as *not drained*,
+which only the handler's own sync can produce. Engine: the merge's returned
+pairs are the inserted unspent rows as `(gindex, O)`; and over the consistent
+ledger-and-tree fixture, the registration pass reconciles once, a re-offer is
+held, and a spend then assembles through the actor from captures with no
+rebuild to fall back to. The real-proof builds in `transfer_pending_tx_tests`
+run through the syncing handler as well.
+
 ### 11.11 What capture still does not do
+
+**Superseded by §11.12 for the registrant and the fallback** — this
+section's first two paragraphs described the state between #945 and the
+registrant PR, and are kept as that record.
 
 **Nothing in the engine calls `register_owned` yet,
 and nothing reads a capture: assembly still rebuilds from `entries`, which is

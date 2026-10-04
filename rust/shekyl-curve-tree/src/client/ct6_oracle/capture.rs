@@ -19,7 +19,8 @@ use super::super::{
 use super::{lock_count, reference_at};
 use crate::store::CapturedChunk;
 use crate::types::{
-    AssembleInput, BlockHeight, ChunkLeaf, CommitmentBytes, Gindex, OneTimePubkey, TargetKind,
+    AssembleInput, AssembledPath, BlockHeight, ChunkLeaf, CommitmentBytes, Gindex, OneTimePubkey,
+    ReferenceBlock, TargetKind,
 };
 use crate::CurveTreeClient;
 use crate::TreePosition;
@@ -320,22 +321,7 @@ fn a_captured_chunk_equals_what_assembly_builds() {
     let (twin, _) = drained_chunks(&[]);
     let reference = reference_at(&twin, tip);
 
-    let cutoff = tip - BlockCount::ONE;
-    let drained = crate::recon::drained_sorted(&twin.entries, cutoff);
-    let owned = &drained[usize::try_from(OWNED_POSITION).expect("position fits usize")];
-    let path = twin
-        .assemble_path(
-            &AssembleInput {
-                gindex: owned.gindex,
-                output_key: owned.identity.output_key,
-                commitment: owned
-                    .identity
-                    .commitment
-                    .expect("a drained leaf carries a commitment"),
-            },
-            &reference,
-        )
-        .expect("the owned output's path assembles");
+    let path = rebuilt_path(&twin, OWNED_POSITION, &reference);
 
     let held = held_at(&client, OWNED_POSITION);
     assert_eq!(
@@ -438,6 +424,33 @@ fn a_registration_after_the_drain_reports_itself() {
             .expect("a live client registers"),
         OwnedRegistration::BeforeDrain,
         "an unseen gindex has not drained"
+    );
+    // Re-offering a held pair whose leaf has drained but whose position is
+    // NOT resolved is still a late registration: "held" and "served" have
+    // diverged, and the captures are owed.
+    assert_eq!(
+        client
+            .register_owned(Gindex::from_raw(0), owned_key(0))
+            .expect("a live client registers"),
+        OwnedRegistration::AfterDrain,
+        "held, drained, unresolved: owed, not already served"
+    );
+    client
+        .reconcile_captures()
+        .expect("reconciliation resolves it");
+    assert_eq!(
+        client
+            .register_owned(Gindex::from_raw(0), owned_key(0))
+            .expect("a live client registers"),
+        OwnedRegistration::AlreadyHeld,
+        "held and resolved: nothing owed"
+    );
+    assert_eq!(
+        client
+            .register_owned(Gindex::from_raw(u64::MAX), owned_key(u64::MAX))
+            .expect("a live client registers"),
+        OwnedRegistration::AlreadyHeld,
+        "held and not drained: the fold will serve it, nothing owed"
     );
 }
 
@@ -1227,20 +1240,11 @@ fn a_reorg_past_creation_retires_the_registration_and_rebinds_it() {
         .iter()
         .position(|e| e.gindex.to_raw() == REMOVED)
         .expect("the re-registered output drained");
-    let owned = drained[position];
-    let path = twin
-        .assemble_path(
-            &AssembleInput {
-                gindex: owned.gindex,
-                output_key: owned.identity.output_key,
-                commitment: owned
-                    .identity
-                    .commitment
-                    .expect("a drained leaf carries a commitment"),
-            },
-            &reference,
-        )
-        .expect("the re-registered output's path assembles on the new chain");
+    let path = rebuilt_path(
+        &twin,
+        u64::try_from(position).expect("a position fits u64"),
+        &reference,
+    );
 
     let end_leaf = chunk_start(u64::try_from(position).expect("a position fits u64"))
         + SELENE_CHUNK_WIDTH as u64
@@ -1345,6 +1349,84 @@ fn an_early_registration_does_not_claim_a_strangers_output() {
 // State 3: a capture is load-bearing
 // ---------------------------------------------------------------------------
 
+/// The path at `position`, **rebuilt** from every drained leaf in `entries`
+/// — the pre-capture derivation, kept here as the oracle after production
+/// stopped doing it.
+///
+/// Written out with the tree primitives rather than through anything in
+/// `assemble.rs`, so the comparison crosses mechanisms: production reads
+/// captures and the snapshot; this builds the whole layer stack and slices
+/// it. The `tree` context is the reference's, as production's is, so
+/// equality asserts every branch and the leaf chunk and nothing cosmetic.
+fn rebuilt_path(
+    client: &CurveTreeClient,
+    position: u64,
+    reference: &ReferenceBlock,
+) -> AssembledPath {
+    use shekyl_fcmp::tree::{
+        build_layers, chunk_width, helios_point_to_selene_scalar, layer_is_selene,
+        selene_point_to_helios_scalar,
+    };
+    let cutoff = reference.height - BlockCount::ONE;
+    let drained = crate::recon::drained_sorted(&client.entries, cutoff);
+    let scalars = crate::recon::assemble_leaf_stream(&client.entries, cutoff);
+    let layers = build_layers(&scalars);
+    let depth = u8::try_from(layers.len()).expect("depth fits u8");
+    let pos = usize::try_from(position).expect("position fits usize");
+
+    let leaf_start = pos / SELENE_CHUNK_WIDTH * SELENE_CHUNK_WIDTH;
+    let leaf_end = (leaf_start + SELENE_CHUNK_WIDTH).min(drained.len());
+    let leaf_chunk: Vec<ChunkLeaf> = drained[leaf_start..leaf_end]
+        .iter()
+        .map(|e| ChunkLeaf {
+            output_key: e.identity.output_key,
+            key_image_gen: key_image_generator(e.identity.output_key.as_bytes()),
+            commitment: e
+                .identity
+                .commitment
+                .expect("a drained leaf carries a commitment"),
+            cm_x: e.cm_x(),
+        })
+        .collect();
+
+    let mut c1_layers = Vec::new();
+    let mut c2_layers = Vec::new();
+    let mut node = leaf_start / SELENE_CHUNK_WIDTH;
+    for layer in 1..depth {
+        let width = chunk_width(layer);
+        let parent = node / width;
+        let below = &layers[usize::from(layer) - 1];
+        let start = parent * width;
+        let end = (start + width).min(below.len());
+        if layer_is_selene(layer) {
+            c1_layers.push(
+                below[start..end]
+                    .iter()
+                    .map(|p| helios_point_to_selene_scalar(p).expect("helios->selene"))
+                    .collect::<Vec<_>>(),
+            );
+        } else {
+            c2_layers.push(
+                below[start..end]
+                    .iter()
+                    .map(|p| selene_point_to_helios_scalar(p).expect("selene->helios"))
+                    .collect::<Vec<_>>(),
+            );
+        }
+        node = parent;
+    }
+    AssembledPath {
+        leaf_chunk,
+        c1_layers,
+        c2_layers,
+        tree: crate::types::TreeContext {
+            reference_block: reference.block_hash,
+            tree_root: reference.curve_tree_root,
+            tree_depth: depth,
+        },
+    }
+}
+
 /// The input for the leaf at `position` on `client`, read from its entries.
 fn input_at(client: &CurveTreeClient, tip: BlockHeight, position: u64) -> AssembleInput {
     let drained = crate::recon::drained_sorted(&client.entries, tip - BlockCount::ONE);
@@ -1409,9 +1491,12 @@ fn a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone() {
         reference.curve_tree_root,
         "the anchor is the store tier's root over the whole tree"
     );
-    let full = twin
-        .assemble_path(&input, &reference)
-        .expect("the rebuild assembles with the whole tree present");
+    let full = rebuilt_path(&twin, OWNED_POSITION, &reference);
+    assert_eq!(
+        crate::assemble::verify_path_against_its_branches(&full),
+        Ok(()),
+        "the test-side rebuild must fold to the reference root, or it is no oracle"
+    );
     assert!(
         full.leaf_chunk.len() > 1,
         "the owned leaf's real chunk holds its siblings; a one-leaf chunk here would \
@@ -1458,9 +1543,7 @@ fn captures_are_the_read_site_not_the_leaf_table() {
     let (twin, tip) = drained_chunks(&[]);
     let reference = reference_at(&twin, tip);
     let input = input_at(&twin, tip, OWNED_POSITION);
-    let full = twin
-        .assemble_path(&input, &reference)
-        .expect("the rebuild assembles");
+    let full = rebuilt_path(&twin, OWNED_POSITION, &reference);
 
     let (mut client, _) = drained_chunks(&[OWNED_POSITION]);
     keep_only(&mut client, input.gindex);
@@ -1520,9 +1603,7 @@ fn an_owned_leaf_in_the_open_leaf_chunk_assembles_from_the_tail() {
     );
     let reference = reference_at(&twin, tip);
     let input = input_at(&twin, tip, position);
-    let full = twin
-        .assemble_path(&input, &reference)
-        .expect("the rebuild assembles");
+    let full = rebuilt_path(&twin, position, &reference);
     assert_eq!(
         full.leaf_chunk.len(),
         into_tail,
@@ -1600,5 +1681,164 @@ fn a_missing_capture_is_refused_not_rebuilt() {
             assert_eq!(layer, 0, "the leaf chunk is read first");
         }
         other => panic!("expected CaptureMissing, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The batch: what the wallet and the actor actually call
+// ---------------------------------------------------------------------------
+
+/// A batch registers everything it can, reconciles once iff something is
+/// owed, and reports the pairs it could not accept without failing.
+#[test]
+fn a_batch_registers_reconciles_once_and_reports_stale_pairs() {
+    let (mut client, _) = drained_chunks(&[]);
+    let early = Gindex::from_raw(u64::MAX - 1);
+    let batch = [
+        (Gindex::from_raw(OWNED_POSITION), owned_key(OWNED_POSITION)),
+        (
+            Gindex::from_raw(CASCADE_PARTNER),
+            owned_key(CASCADE_PARTNER),
+        ),
+        (early, owned_key(u64::MAX - 1)),
+        // A stale pair: the wrong key for a gindex the client holds.
+        (Gindex::from_raw(SURVIVES), owned_key(SURVIVES + 1)),
+    ];
+    let sync = client.sync_owned(&batch).expect("a live client syncs");
+    assert_eq!(sync.after_drain, 2, "two drained outputs were owed");
+    assert_eq!(sync.before_drain, 1, "the unseen gindex is a future leaf");
+    assert_eq!(sync.already_held, 0);
+    assert_eq!(
+        sync.stale,
+        vec![Gindex::from_raw(SURVIVES)],
+        "the wrong key is reported, not fatal"
+    );
+    let report = sync
+        .reconciliation
+        .expect("something was owed, so the batch reconciled");
+    assert_eq!(report.positions_resolved, 2);
+    assert!(report.chunks_written > 0);
+    assert!(
+        !client
+            .owned_outputs
+            .contains_key(&Gindex::from_raw(SURVIVES)),
+        "a stale pair is not stored"
+    );
+
+    // The same batch again: nothing owed, nothing reconciled, still stale.
+    let again = client.sync_owned(&batch).expect("a live client syncs");
+    assert_eq!(
+        again.already_held, 3,
+        "every accepted pair is now held and served"
+    );
+    assert_eq!(again.after_drain, 0);
+    assert_eq!(again.reconciliation, None, "a re-offer must not reconcile");
+    assert_eq!(again.stale, vec![Gindex::from_raw(SURVIVES)]);
+
+    // The caller's rescan reaches the chain the client is on and re-offers
+    // the right key: accepted, owed, reconciled. Nothing was poisoned along
+    // the way.
+    let fixed = client
+        .sync_owned(&[(Gindex::from_raw(SURVIVES), owned_key(SURVIVES))])
+        .expect("a live client syncs");
+    assert_eq!(fixed.after_drain, 1);
+    assert!(fixed.stale.is_empty());
+    assert!(fixed.reconciliation.is_some());
+}
+
+/// `AlreadyHeld` never suppresses an owed reconciliation across a rollback.
+///
+/// A rollback past the drain trims the position but keeps the surviving
+/// pair. On re-ingest the fold re-resolves it — the pair is held — and
+/// writes the chunks as they close, so by the time the wallet re-offers the
+/// pair it is held *and* served: `AlreadyHeld`, with the captures present.
+/// The pass asserts the captures, not only the verdict, because the verdict
+/// alone would also be returned by a rule that simply never reconciled.
+#[test]
+fn a_re_offer_after_a_rollback_is_already_held_and_already_captured() {
+    let (mut client, tip) = drained_chunks(&[OWNED_POSITION]);
+    let cutoff = tip - BlockCount::ONE;
+    let maturity = crate::recon::drained_sorted(&client.entries, cutoff)
+        [usize::try_from(OWNED_POSITION).expect("fits")]
+    .maturity;
+    client
+        .rollback_to_fork(maturity)
+        .expect("the fork rolls back");
+    assert!(
+        held_at(&client, OWNED_POSITION).is_empty(),
+        "the cut removed the row"
+    );
+
+    let end = tip.checked_add(BlockCount::ONE).expect("successor");
+    for height in (maturity + BlockCount::ONE).ordinals_until(end) {
+        let txs: Vec<TxLeafInputs<'_>> = Vec::new();
+        client
+            .ingest_block(BlockLeaves { height, txs: &txs })
+            .expect("a re-drain ingests");
+    }
+    let sync = client
+        .sync_owned(&[(Gindex::from_raw(OWNED_POSITION), owned_key(OWNED_POSITION))])
+        .expect("a live client syncs");
+    assert_eq!(
+        sync.already_held, 1,
+        "the pair survived the rollback and re-resolved"
+    );
+    assert_eq!(sync.reconciliation, None, "nothing was owed");
+    assert_eq!(
+        held_at(&client, OWNED_POSITION)
+            .iter()
+            .map(|c| c.layer)
+            .collect::<Vec<_>>(),
+        vec![0, 1],
+        "the fold re-captured both cascade layers on the re-drain"
+    );
+}
+
+/// A resumed client's mass re-registration reconciles once, then is free.
+///
+/// Resume is the mass late registration: the registry does not persist, so
+/// every held output comes back owed on the first offer. The first sync
+/// resolves every position and rebuilds nothing when the captures are
+/// already in the store; the second sync is all `AlreadyHeld` and does not
+/// touch the table.
+#[test]
+fn a_resumed_mass_registration_reconciles_once_then_is_already_held() {
+    let (mut client, _) = drained_chunks(&[OWNED_POSITION, CASCADE_PARTNER]);
+    // A resume loses the registry; the wallet re-offers what it holds.
+    client.owned_outputs.clear();
+    client.owned_positions.clear();
+    let batch = [
+        (Gindex::from_raw(OWNED_POSITION), owned_key(OWNED_POSITION)),
+        (
+            Gindex::from_raw(CASCADE_PARTNER),
+            owned_key(CASCADE_PARTNER),
+        ),
+    ];
+    let first = client.sync_owned(&batch).expect("a live client syncs");
+    assert_eq!(first.after_drain, 2);
+    let report = first.reconciliation.expect("owed, so reconciled");
+    assert_eq!(report.positions_resolved, 2);
+    assert_eq!(
+        report.leaves_rebuilt, 0,
+        "the fold had already captured everything"
+    );
+
+    let second = client.sync_owned(&batch).expect("a live client syncs");
+    assert_eq!(second.already_held, 2);
+    assert_eq!(second.reconciliation, None);
+}
+
+/// An unregistered input is refused by name — there is no rebuild to fall
+/// back to.
+#[test]
+fn an_unregistered_input_is_refused_not_rebuilt() {
+    let (client, tip) = drained_chunks(&[]);
+    let input = input_at(&client, tip, OWNED_POSITION);
+    let reference = reference_at(&client, tip);
+    match client.assemble_path(&input, &reference) {
+        Err(crate::ClientError::OutputNotRegistered { gindex, .. }) => {
+            assert_eq!(gindex, input.gindex, "the refusal names the input");
+        }
+        other => panic!("expected OutputNotRegistered, got {other:?}"),
     }
 }

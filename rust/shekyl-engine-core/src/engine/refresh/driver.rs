@@ -329,7 +329,7 @@ impl<
             RefreshPhase::Scanning,
         ));
 
-        self.refresh_with(opts, |_attempt, snapshot| {
+        let outcome = self.refresh_with_outcome(opts, |_attempt, snapshot| {
             let mut result = runtime
                 .block_on(self.refresh.produce_scan_result(
                     snapshot.clone(),
@@ -346,8 +346,15 @@ impl<
             // attempt is safe. Mirrors the async `run_refresh_task` path,
             // including the R1-Q4 respawn-and-retry on a fail-stop / poison.
             runtime.block_on(self.ingest_scan_result_with_respawn(&mut result))?;
+            // Ownership follows the ingest, as on the async path: everything
+            // held, so the first refresh after open is the mass late
+            // registration and every later one is `AlreadyHeld`.
+            runtime.block_on(self.sync_owned_outputs(self.owned_outputs()))?;
             Ok(result)
-        })
+        });
+        let (summary, new_owned) = outcome?;
+        runtime.block_on(self.sync_owned_outputs(new_owned))?;
+        Ok(summary)
     }
 
     /// Snapshot-merge-with-retry driver, generic over the producer.
@@ -378,11 +385,32 @@ impl<
     ///   last observed `ConcurrentMutation`.
     /// - Merge returns `Err(MalformedScanResult { … })` or any other
     ///   `RefreshError` → propagate immediately.
+    ///
+    /// Test-only since the registrant landed: production goes through
+    /// [`Self::refresh_with_outcome`], which also hands back what the merge
+    /// made the wallet's. The retry-loop tests drive this form because they
+    /// grade the loop, not the registration, and a summary is what they read.
+    #[cfg(test)]
     pub(crate) fn refresh_with<F>(
         &self,
         opts: &RefreshOptions,
-        mut produce: F,
+        produce: F,
     ) -> Result<RefreshSummary, RefreshError>
+    where
+        F: FnMut(u32, &LedgerSnapshot) -> Result<ScanResult, RefreshError>,
+    {
+        self.refresh_with_outcome(opts, produce)
+            .map(|(summary, _)| summary)
+    }
+
+    /// [`Self::refresh_with`], also returning the outputs the merge made the
+    /// wallet's, for the caller to register with the curve tree once the
+    /// ledger guard the merge held is gone.
+    pub(crate) fn refresh_with_outcome<F>(
+        &self,
+        opts: &RefreshOptions,
+        mut produce: F,
+    ) -> Result<(RefreshSummary, Vec<super::super::merge::OwnedOutput>), RefreshError>
     where
         F: FnMut(u32, &LedgerSnapshot) -> Result<ScanResult, RefreshError>,
     {
@@ -404,7 +432,7 @@ impl<
             let summary = summarize(&result, retry.attempt_nz());
 
             match self.apply_scan_result(result) {
-                Ok(()) => return Ok(summary),
+                Ok(new_owned) => return Ok((summary, new_owned)),
                 Err(RefreshError::ConcurrentMutation { wallet, result }) => {
                     debug!(
                         attempt,

@@ -38,19 +38,14 @@
 //!
 //! See `docs/design/CURVE_TREE_CLIENT.md` §3.5 / §5.
 
-use std::collections::HashMap;
-
-use crate::types::Gindex;
-
 use crate::client::{ClientError, CurveTreeClient, CAPTURED_IDENTITY_BYTES};
-use crate::recon::{assemble_leaf_stream, drained_sorted};
 use crate::store::StoreError;
 use crate::types::{
     AssembleInput, AssembledPath, ChunkLeaf, CommitmentBytes, LeafEntry, OneTimePubkey,
     ReferenceBlock, TreeContext, TreePosition,
 };
 use shekyl_fcmp::tree::{
-    build_layers, chunk_width, hash_grow_helios, hash_grow_selene, helios_hash_init,
+    chunk_width, hash_grow_helios, hash_grow_selene, helios_hash_init,
     helios_point_to_selene_scalar, key_image_generator, layer_is_selene, selene_hash_init,
     selene_point_to_helios_scalar, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
 };
@@ -354,31 +349,23 @@ impl CurveTreeClient {
             });
         }
 
-        // State 3: a batch whose every input has a resolved owned position
-        // is assembled from its captures and the frontier snapshot, and
-        // never reads `entries`. The rebuild below is the fallback for a
-        // batch that does not — which, until the engine registers what it
-        // holds, is every production batch. **Retired by the registrant
-        // PR**: once every owned output is registered on open, no input
-        // reaches it, and it is deleted rather than kept; the passes that
-        // exercise it today (`batched_assembly_keeps_each_input_its_own_path`,
-        // `a_root_mismatch_refuses_the_whole_batch`,
-        // `a_mutated_leaf_chunk_is_absent_from_its_branch`) move to
-        // registered fixtures then.
-        if let Some(paths) = self.assemble_from_captures(inputs, reference, depth)? {
-            return Ok(paths);
-        }
-        self.assemble_by_rebuild(inputs, reference)
+        // State 3, total: every path comes from the captures over its
+        // input and the frontier snapshot, and nothing here reads `entries`.
+        // There is no rebuild to fall back to. An input reaches this
+        // registered — the curve-tree actor syncs a batch's inputs before
+        // assembling — or it is refused by name.
+        self.assemble_from_captures(inputs, reference, depth)
     }
 
     /// Assemble a batch from the **captured** chunks over each input and the
     /// frontier snapshot at the reference height — reading no drained leaf
     /// beyond the open leaf chunk's own tail.
     ///
-    /// Returns `None` when an input has no resolved owned position; the
-    /// caller falls back to the rebuild. Every other shortfall is a named
-    /// refusal, because a silent fallback from here would serve the spend
-    /// while hiding a hole in the mechanism it relies on.
+    /// Every shortfall is a named refusal. The one that used to be a
+    /// fallback — an input with no resolved owned position — is
+    /// [`ClientError::OutputNotRegistered`]: the rebuild it fell back to was
+    /// the `O(chain)` pass capture exists to remove, and keeping it would
+    /// have left a door nothing closed.
     ///
     /// # Each layer, from one of two places
     ///
@@ -400,8 +387,9 @@ impl CurveTreeClient {
     ///
     /// # Errors
     ///
-    /// [`ClientError::OutputNotDrained`] if a resolved position is at or
-    /// above the drained count at the reference height;
+    /// [`ClientError::OutputNotRegistered`] if an input has no resolved
+    /// owned position; [`ClientError::OutputNotDrained`] if that position is
+    /// at or above the drained count at the reference height;
     /// [`ClientError::ReferenceOutsideSnapshotRing`] if the ring has no row
     /// there; [`ClientError::SnapshotLeafCountMismatch`] if the row's count
     /// is not the height's (C3); [`ClientError::CaptureMissing`] if a closed
@@ -414,7 +402,7 @@ impl CurveTreeClient {
         inputs: &[AssembleInput],
         reference: &ReferenceBlock,
         depth: u8,
-    ) -> Result<Option<Vec<AssembledPath>>, ClientError> {
+    ) -> Result<Vec<AssembledPath>, ClientError> {
         let mut positions = Vec::with_capacity(inputs.len());
         for input in inputs {
             match self
@@ -423,7 +411,24 @@ impl CurveTreeClient {
                 .find(|(_, gindex)| **gindex == input.gindex)
             {
                 Some((position, _)) => positions.push(*position),
-                None => return Ok(None),
+                // No resolved position. Two different states, told apart by
+                // the registry: a pair that IS held has simply not drained
+                // (the fold resolves a position at the drain, and a batch's
+                // sync reconciles anything held-and-drained before this is
+                // called), which is the §4.3 lookup miss; a pair that is not
+                // held was never registered, or the sync reported it stale.
+                None if self.owned_outputs.get(&input.gindex) == Some(&input.output_key) => {
+                    return Err(ClientError::OutputNotDrained {
+                        gindex: input.gindex,
+                        output_key: input.output_key,
+                    })
+                }
+                None => {
+                    return Err(ClientError::OutputNotRegistered {
+                        gindex: input.gindex,
+                        output_key: input.output_key,
+                    })
+                }
             }
         }
 
@@ -515,7 +520,7 @@ impl CurveTreeClient {
             })?;
             paths.push(assembled);
         }
-        Ok(Some(paths))
+        Ok(paths)
     }
 
     /// The leaf chunk over `position` at a height with `drained_count`
@@ -571,130 +576,5 @@ impl CurveTreeClient {
             .find(|chunk| chunk.layer == layer)
             .map(|chunk| chunk.bytes)
             .ok_or(ClientError::CaptureMissing { end_leaf, layer })
-    }
-
-    /// Assemble a batch by rebuilding the layer stack from every drained
-    /// leaf in `entries` — the pre-capture path, kept as the fallback for a
-    /// batch with an unregistered input. See [`Self::assemble_paths`] for
-    /// its retirement.
-    fn assemble_by_rebuild(
-        &self,
-        inputs: &[AssembleInput],
-        reference: &ReferenceBlock,
-    ) -> Result<Vec<AssembledPath>, ClientError> {
-        let cutoff = Self::drained_through(reference.height);
-        let stream = assemble_leaf_stream(&self.entries, cutoff);
-        let layers = build_layers(&stream);
-
-        // One drain-order definition shared with the scalar stream, so a
-        // leaf's index here equals its index in `stream` (recon §S2).
-        let drained = drained_sorted(&self.entries, cutoff);
-        // X3: resolve by `gindex`, the tree's unique key, not by `(O, C)`
-        // content. The owned output's gindex is always present among drained
-        // leaves, so this is total — no collision case.
-        //
-        // `drained` is sorted by `(maturity, gindex)`, so `gindex` is not
-        // monotonic and a binary search does not apply. With the reconstruction
-        // hoisted, a linear scan per input would be the remaining `k · n` term,
-        // so the positions are indexed once instead: `n` inserts against `k`
-        // lookups, where `k <= shekyl_fcmp::MAX_INPUTS` (8) and `n` is the
-        // drained leaf count — every leaf since genesis, not a window (see
-        // the method docstring). `Gindex` is `Hash + Eq` from `scalar_u64!`,
-        // so this needs nothing from `shekyl-types`.
-        let positions: HashMap<Gindex, usize> = drained
-            .iter()
-            .enumerate()
-            .map(|(pos, e)| (e.gindex, pos))
-            .collect();
-
-        let mut paths = Vec::with_capacity(inputs.len());
-        for input in inputs {
-            let leaf_pos = *positions
-                .get(&input.gindex)
-                .ok_or(ClientError::OutputNotDrained {
-                    gindex: input.gindex,
-                    output_key: input.output_key,
-                })?;
-            // Post-resolution consistency check (X3): the leaf at `gindex` must be
-            // the output the caller expected. A mismatch means the tree's
-            // `next_output_seq` numbering and the wallet's `global_output_index`
-            // have diverged (or the store/scanner desynced) — refuse rather than
-            // assemble a wrong-leaf proof. This is the only runtime guard of that
-            // inter-component invariant (no single component owns it).
-            let resolved = &drained[leaf_pos];
-            if resolved.identity.output_key != input.output_key
-                || resolved.identity.commitment != Some(input.commitment)
-            {
-                return Err(ClientError::IdentityMismatch {
-                    gindex: input.gindex,
-                    expected_output_key: input.output_key,
-                    got_output_key: resolved.identity.output_key,
-                    commitment_matched: resolved.identity.commitment == Some(input.commitment),
-                });
-            }
-
-            let depth = u8::try_from(layers.len()).expect("curve-tree depth fits u8");
-
-            // Leaf chunk: the SELENE_CHUNK_WIDTH outputs of the path's layer-0
-            // node, as compressed-point tuples (the prover's `Path.leaves`).
-            let leaf_node_idx = leaf_pos / SELENE_CHUNK_WIDTH;
-            let leaf_start = leaf_node_idx * SELENE_CHUNK_WIDTH;
-            let leaf_end = (leaf_start + SELENE_CHUNK_WIDTH).min(drained.len());
-            let leaf_chunk: Vec<ChunkLeaf> = drained[leaf_start..leaf_end]
-                .iter()
-                .map(|e| chunk_leaf(e))
-                .collect();
-
-            // Branch for each path node at layers 1..=depth-1 (the topmost is the
-            // root node's children). The conversions are total for valid
-            // consensus nodes (asserted by `node_conversions_are_total` in
-            // shekyl-fcmp), and assembly runs only after verify_root succeeds.
-            let mut c1_layers: Vec<Vec<[u8; 32]>> = Vec::new();
-            let mut c2_layers: Vec<Vec<[u8; 32]>> = Vec::new();
-            let mut child_node_idx = leaf_node_idx;
-            for layer in 1..depth {
-                let width = chunk_width(layer);
-                let node_idx = child_node_idx / width;
-                let prev = &layers[usize::from(layer) - 1];
-                let start = node_idx * width;
-                let end = (start + width).min(prev.len());
-                push_branch(layer, &prev[start..end], &mut c1_layers, &mut c2_layers);
-                child_node_idx = node_idx;
-            }
-
-            // C3 self-check (the leaf layer is the `+1`; the root point is
-            // excluded). Holds by construction; a violation is a logic bug.
-            debug_assert_eq!(
-                c1_layers.len() + c2_layers.len() + 1,
-                usize::from(depth),
-                "assembled path depth must match the tree depth"
-            );
-
-            let assembled = AssembledPath {
-                leaf_chunk,
-                c1_layers,
-                c2_layers,
-                tree: TreeContext {
-                    reference_block: reference.block_hash,
-                    // Equals our reconstruction (verify_root just confirmed it);
-                    // carry the consensus value.
-                    tree_root: reference.curve_tree_root,
-                    tree_depth: depth,
-                },
-            };
-
-            // §11.6: the store gate approved a root. This is the step that
-            // looks at the branches the proof is built from.
-            verify_path_against_its_branches(&assembled).map_err(|fault| {
-                ClientError::PathRootMismatch {
-                    claimed: assembled.tree.tree_root,
-                    fault,
-                }
-            })?;
-
-            paths.push(assembled);
-        }
-
-        Ok(paths)
     }
 }

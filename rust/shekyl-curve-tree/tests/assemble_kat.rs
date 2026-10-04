@@ -163,6 +163,18 @@ fn coinbase_input(blocks: &[Block], target_height: u64) -> AssembleInput {
 ///
 /// `assemble_path` has already folded the branches onto `reference`'s header
 /// root, so a returned path committed to that root.
+/// Register `inputs` with the client, as the curve-tree actor does before it
+/// assembles a batch. Assembly reads captures only — there is no rebuild —
+/// so a direct caller registers first or is refused by name.
+fn register(client: &mut CurveTreeClient, inputs: &[AssembleInput]) {
+    let pairs: Vec<_> = inputs.iter().map(|i| (i.gindex, i.output_key)).collect();
+    let sync = client.sync_owned(&pairs).expect("a live client syncs");
+    assert!(
+        sync.stale.is_empty(),
+        "the fixture's inputs are its own outputs"
+    );
+}
+
 fn check_path(client: &CurveTreeClient, target: &AssembleInput, reference: &ReferenceBlock) {
     let path = client
         .assemble_path(target, reference)
@@ -203,7 +215,7 @@ fn check_path(client: &CurveTreeClient, target: &AssembleInput, reference: &Refe
 #[test]
 fn assembled_path_recomputes_to_consensus_root() {
     let blocks = main_chain();
-    let client = client_over(&blocks);
+    let mut client = client_over(&blocks);
 
     let tip = blocks.last().expect("non-empty chain");
     // Distinctive, non-zero, and distinct from the root so the round-trip
@@ -228,6 +240,7 @@ fn assembled_path_recomputes_to_consensus_root() {
 
     for target_height in [0u64, mid, last_drained] {
         let target = coinbase_input(&blocks, target_height);
+        register(&mut client, &[target]);
         check_path(&client, &target, &reference);
     }
 }
@@ -235,7 +248,7 @@ fn assembled_path_recomputes_to_consensus_root() {
 #[test]
 fn assemble_path_rejects_undrained_output() {
     let blocks = main_chain();
-    let client = client_over(&blocks);
+    let mut client = client_over(&blocks);
 
     let tip = blocks.last().expect("non-empty chain");
     let reference = ReferenceBlock {
@@ -246,8 +259,11 @@ fn assemble_path_rejects_undrained_output() {
 
     // The tip's own coinbase has not matured (let alone drained) at the tip, so
     // its gindex is not among the drained leaves at the reference: a lookup
-    // miss, not a bad path.
+    // miss, not a bad path. Registered — the wallet owns it — but with no
+    // resolved position yet, which is exactly what "not drained" means on
+    // the capture path.
     let undrained = coinbase_input(&blocks, tip.height);
+    register(&mut client, &[undrained]);
     match client.assemble_path(&undrained, &reference) {
         Err(shekyl_curve_tree::ClientError::OutputNotDrained { gindex, output_key }) => {
             assert_eq!(gindex, undrained.gindex);
@@ -282,7 +298,7 @@ fn assemble_path_rejects_root_mismatch() {
 #[test]
 fn assemble_path_rejects_identity_mismatch() {
     let blocks = main_chain();
-    let client = client_over(&blocks);
+    let mut client = client_over(&blocks);
 
     let tip = blocks.last().expect("non-empty chain");
     let reference = ReferenceBlock {
@@ -296,6 +312,9 @@ fn assemble_path_rejects_identity_mismatch() {
     // check rejects it (X3 — the tree-vs-scanner numbering-desync guard).
     let last_drained = reference.height.to_raw().saturating_sub(61);
     let mut tampered = coinbase_input(&blocks, last_drained);
+    // Registered with the REAL key — the registry is right; it is the
+    // caller's input that disagrees, which is the X3 guard's case.
+    register(&mut client, &[tampered]);
     let real_key = tampered.output_key;
     tampered.output_key = OneTimePubkey::from_bytes([0x99u8; 32]);
     assert_ne!(tampered.output_key, real_key, "tamper must change the key");

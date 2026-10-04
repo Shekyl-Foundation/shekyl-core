@@ -608,6 +608,18 @@ fn height_outside_both_spans_is_uncovered() {
 /// — could be computed once and reused. Inputs inside one chunk would hide
 /// that, because their `leaf_chunk` is the same slice either way. These two
 /// straddle a chunk boundary, so a reused position changes the answer.
+/// Register a batch's inputs, as the curve-tree actor does before it
+/// assembles them. Assembly reads captures only, so an unregistered input is
+/// refused by name rather than rebuilt.
+fn sync_inputs(client: &mut CurveTreeClient, inputs: &[AssembleInput]) {
+    let pairs: Vec<_> = inputs.iter().map(|i| (i.gindex, i.output_key)).collect();
+    let sync = client.sync_owned(&pairs).expect("a live client syncs");
+    assert!(
+        sync.stale.is_empty(),
+        "the fixture's inputs are its own outputs"
+    );
+}
+
 fn two_inputs_in_different_chunks(
     client: &CurveTreeClient,
     cutoff: BlockHeight,
@@ -659,6 +671,7 @@ fn batched_assembly_keeps_each_input_its_own_path() {
     let height = tip;
     let cutoff = height - BlockCount::ONE;
     let (inputs, first, second) = two_inputs_in_different_chunks(&client, cutoff);
+    sync_inputs(&mut client, &inputs);
     let reference = reference_at(&client, height);
 
     let paths = client
@@ -694,6 +707,7 @@ fn a_root_mismatch_refuses_the_whole_batch() {
     let height = tip;
     let cutoff = height - BlockCount::ONE;
     let (inputs, _, _) = two_inputs_in_different_chunks(&client, cutoff);
+    sync_inputs(&mut client, &inputs);
 
     let mut reference = reference_at(&client, height);
     let mut wrong = reference.curve_tree_root.to_bytes();
@@ -727,8 +741,9 @@ mod capture;
 // equality with the rebuilt path, which needs distinct leaves and a
 // registered output, so it is
 // `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`.
-// The passes below that assemble on THIS fixture register nothing and so
-// exercise the rebuild — the fallback the registrant PR retires.
+// The passes below that assemble on THIS fixture register their inputs
+// first (`sync_inputs`), as the actor does: the rebuild they once exercised
+// is gone, and an unregistered input is refused by name.
 
 /// Membership binds the leaf chunk to the branches.
 ///
@@ -749,6 +764,7 @@ fn a_mutated_leaf_chunk_is_absent_from_its_branch() {
     let height = tip;
     let cutoff = height - BlockCount::ONE;
     let (inputs, _, _) = two_inputs_in_different_chunks(&client, cutoff);
+    sync_inputs(&mut client, &inputs);
     let reference = reference_at(&client, height);
 
     let path = client
