@@ -33,7 +33,11 @@
 
 use serde::Serialize;
 
-use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
+use shekyl_archival_retention::{CHALLENGES_PER_PAIR_PER_EPOCH, SETTLEMENT_EPOCH_BLOCKS};
+
+/// Draws per pair per epoch: the production challenge count, which the
+/// evidence runs issue in total (`λ · D` draws over `D` pairs).
+const LAMBDA: u64 = CHALLENGES_PER_PAIR_PER_EPOCH as u64;
 
 /// Advance-notice thresholds, in blocks, at which exposure is reported.
 /// `W₂` is underived (doc §9), so the exposure curve is parameterized
@@ -224,10 +228,10 @@ pub fn evidence_runs() -> Vec<CoverageRun> {
     const MATURITY_D: u32 = 324_000;
     const K_CAP: u64 = 30;
     vec![
-        run_epoch(GENESIS_D, 3 * GENESIS_D as u64, false, 1),
-        run_epoch(GENESIS_D, 3 * GENESIS_D as u64, true, 1),
-        run_epoch(MATURITY_D, 3 * MATURITY_D as u64, false, 1),
-        run_epoch(MATURITY_D, 3 * MATURITY_D as u64, true, 1),
+        run_epoch(GENESIS_D, LAMBDA * GENESIS_D as u64, false, 1),
+        run_epoch(GENESIS_D, LAMBDA * GENESIS_D as u64, true, 1),
+        run_epoch(MATURITY_D, LAMBDA * MATURITY_D as u64, false, 1),
+        run_epoch(MATURITY_D, LAMBDA * MATURITY_D as u64, true, 1),
         run_epoch(MATURITY_D, K_CAP * SETTLEMENT_EPOCH_BLOCKS, true, 1),
     ]
 }
@@ -287,8 +291,12 @@ mod tests {
         // The ruled variant's defining property at exact budget — and the
         // redraw floor with it (every pair reaches 3 ≥ 2 before close).
         for seed in [1, 2, 3] {
-            let r = run_epoch(GENESIS_D, 3 * GENESIS_D as u64, false, seed);
-            assert_eq!(r.issued_hist, vec![(3, GENESIS_D)], "seed {seed}");
+            let r = run_epoch(GENESIS_D, LAMBDA * GENESIS_D as u64, false, seed);
+            assert_eq!(
+                r.issued_hist,
+                vec![(CHALLENGES_PER_PAIR_PER_EPOCH, GENESIS_D)],
+                "seed {seed}"
+            );
         }
     }
 
@@ -299,9 +307,9 @@ mod tests {
         // the shape and the scale-invariance, both of which a shape change
         // in the urn would break loudly.
         for d in [GENESIS_D, 4 * GENESIS_D] {
-            let r = run_epoch(d, 3 * d as u64, false, 1);
+            let r = run_epoch(d, LAMBDA * d as u64, false, 1);
             for (i, tau) in NOTICE_TAUS.iter().enumerate() {
-                let expect = exact_min_exposure_closed_form(3 * d as u64, d, *tau);
+                let expect = exact_min_exposure_closed_form(LAMBDA * d as u64, d, *tau);
                 let got = r.exposure[i];
                 assert!(
                     (got - expect).abs() <= 0.2 * expect,
@@ -316,8 +324,8 @@ mod tests {
         // The rejected alternative's two sides, kept reproducible: exposure
         // strictly below exact-min's, paid for by pairs finishing at
         // issued-2 (symmetric with issued-4 by draw conservation).
-        let exact = run_epoch(GENESIS_D, 3 * GENESIS_D as u64, false, 1);
-        let band = run_epoch(GENESIS_D, 3 * GENESIS_D as u64, true, 1);
+        let exact = run_epoch(GENESIS_D, LAMBDA * GENESIS_D as u64, false, 1);
+        let band = run_epoch(GENESIS_D, LAMBDA * GENESIS_D as u64, true, 1);
         assert!(band.exposure[2] < exact.exposure[2]);
         let at = |r: &CoverageRun, c: u32| {
             r.issued_hist
@@ -372,7 +380,7 @@ mod tests {
     #[ignore = "full-scale ~1M-draw reproduction of the ARCHIVAL_CHALLENGE_MECHANISM.md §7.1/§8 figures; run with --ignored (release)"]
     fn full_scale_maturity_reproduces_doc_figures() {
         let d: u32 = 324_000;
-        let band = run_epoch(d, 3 * d as u64, true, 1);
+        let band = run_epoch(d, LAMBDA * d as u64, true, 1);
         let at = |c: u32| {
             band.issued_hist
                 .iter()

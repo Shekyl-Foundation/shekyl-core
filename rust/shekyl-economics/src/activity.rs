@@ -84,9 +84,12 @@ pub struct ActivityMetric {
     /// volume as the exact ratio the daemon's
     /// `get_tx_volume_window(as_of_height)` marshals (FL-R24).
     tx_volume: TxVolume,
-    /// Prev-block `already_generated` at `as_of_height` — the
-    /// consensus burn-site quantity (`validate_miner_transaction`),
-    /// **not** `already_generated − total_burned`.
+    /// The circulating supply the burn reads in consensus at
+    /// `as_of_height`: `coins_generated − total_burned` at parent state
+    /// (FL-R16c, CEN-F17), the value [`crate::CirculatingSupply::derive`]
+    /// produces. A raw `u64` because the engine-core differential replays
+    /// a recorded value; a producer computes it through the owner, never
+    /// from `already_generated` alone.
     circulating_supply: u64,
     /// Principal-pool total staked amount from the chain mirror
     /// (`u128` per Bug 7), **not** a wallet-local registry.
@@ -144,7 +147,7 @@ impl ActivityMetric {
         self.tx_volume
     }
 
-    /// Consensus burn-site circulating supply (see field docs).
+    /// The net circulating supply the burn reads (see field docs).
     #[must_use]
     pub const fn circulating_supply(&self) -> u64 {
         self.circulating_supply

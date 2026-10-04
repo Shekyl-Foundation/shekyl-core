@@ -44,8 +44,10 @@
 //! (`get_mid`: `a/2 + b/2 + ((a%2) + (b%2))/2`, overflow-safe). A median
 //! that took the lower middle element would agree with the C++ on every
 //! odd window and disagree on every even one — the short window is 100.
-//! [`cxx_median`] is that definition, pinned against a sorted reference
-//! in `block_weight_tests`.
+//! `cxx_median` is that definition, pinned against a sorted reference
+//! in `block_weight_tests`. The function stays private: callers compose
+//! through [`medians_from`] and [`medians_over`], or ask [`even_pair_median`]
+//! and [`median`] when they already hold the window.
 //!
 //! # The early-chain arm
 //!
@@ -262,7 +264,18 @@ pub fn effective_median_at<'id, V: ChainView<'id>>(
 /// the whole long window, the short window its last `W_short` rows.
 /// Pure: the arithmetic the store read feeds, held on its own in
 /// `block_weight_tests` at the clamps' boundaries.
-pub(crate) fn medians_over(window: &[RecordedWeights]) -> EffectiveMedian {
+///
+/// **Public, with [`medians_from`], for one reason**
+/// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-6): the economics sim folds
+/// sixty years of blocks and cannot afford a selection over the 100 000-row
+/// window at each. It keeps the window's order statistics as it goes, asks
+/// [`even_pair_median`] for the middle pair and [`medians_from`] for the
+/// composition, and its tests hold that result equal to this function over
+/// the same window. The selecting routine stays private; [`median`] is the
+/// same selection for a caller that must not reorder its own window. The
+/// daemon judges one block per two minutes and has no such need.
+#[must_use]
+pub fn medians_over(window: &[RecordedWeights]) -> EffectiveMedian {
     let mut long_term: Vec<u64> = window.iter().map(|w| w.long_term_weight.to_raw()).collect();
     // Total: a window longer than the address space is the whole slice.
     let short_len = usize::try_from(BLOCK_WEIGHT_SHORT_TERM_WINDOW)
@@ -272,19 +285,41 @@ pub(crate) fn medians_over(window: &[RecordedWeights]) -> EffectiveMedian {
         .iter()
         .map(|w| w.weight.to_raw())
         .collect();
-    let long_term_effective = cxx_median(&mut long_term).max(FULL_REWARD_ZONE);
-    let effective = effective_median(long_term_effective, cxx_median(&mut short_term));
+    medians_from(cxx_median(&mut long_term), cxx_median(&mut short_term))
+}
+
+/// CEN-G6/G6b's composition, from the two raw medians: the long-term
+/// median floored at the zone, and the short-term median clamped to
+/// `[LTEM, S · LTEM]` by [`effective_median`]. [`medians_over`] is this
+/// over medians it selects itself.
+#[must_use]
+pub fn medians_from(long_term_median: u64, short_term_median: u64) -> EffectiveMedian {
+    let long_term_effective = long_term_median.max(FULL_REWARD_ZONE);
+    let effective = effective_median(long_term_effective, short_term_median);
     EffectiveMedian {
         long_term_effective_median: LongTermWeight::from_raw(long_term_effective),
         effective_median: BlockWeight::from_raw(effective),
     }
 }
 
+/// Floor of the mean of the two middle elements, the C++ `get_mid`:
+/// `(a + b) / 2` without the sum, so two weights near `u64::MAX` cannot
+/// wrap into a small median.
+///
+/// **Public for one reason** (ESR-6): the economics sim's rolling window
+/// already holds the middle pair, and this is the even-count rule the
+/// private selector applies to it. A second copy of the formula would be a
+/// median the validator does not judge.
+#[must_use]
+pub fn even_pair_median(lower: u64, upper: u64) -> u64 {
+    lower / 2 + upper / 2 + (lower % 2 + upper % 2) / 2
+}
+
 /// The C++'s median (`epee::misc_utils::median`, `rolling_median_t::
 /// median`): `0` of nothing, the element of one, the middle of an odd
-/// count, and for an even count the floor of the mean of the two middle
-/// elements (`get_mid`). Reorders `values`; `O(n)` by selection.
-pub(crate) fn cxx_median(values: &mut [u64]) -> u64 {
+/// count, and for an even count [`even_pair_median`] of the two middle
+/// elements. Reorders `values`; `O(n)` by selection.
+fn cxx_median(values: &mut [u64]) -> u64 {
     let n = values.len();
     if n == 0 {
         return 0;
@@ -298,9 +333,19 @@ pub(crate) fn cxx_median(values: &mut [u64]) -> u64 {
     // An even `n ≥ 2` has `mid ≥ 1` elements below; the fallback is the
     // total form of the same value (the mean of `upper` with itself).
     let lower = below.iter().copied().max().unwrap_or(upper);
-    // `get_mid`: (a + b) / 2 without the sum, so two weights near `u64::MAX`
-    // cannot wrap into a small median.
-    lower / 2 + upper / 2 + (lower % 2 + upper % 2) / 2
+    even_pair_median(lower, upper)
+}
+
+/// The private selector's median over `values`, leaving `values` in the
+/// order the caller handed them over.
+///
+/// **Public for one reason** (ESR-6): the sim's rolling-median test reads
+/// the selection the validator uses, and the test's window is also the
+/// oracle's input, so the read must not reorder it.
+#[must_use]
+pub fn median(values: &[u64]) -> u64 {
+    let mut owned = values.to_vec();
+    cxx_median(&mut owned)
 }
 
 #[cfg(test)]

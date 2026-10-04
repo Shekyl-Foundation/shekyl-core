@@ -281,8 +281,9 @@ measures the wrong thing — this is evidence validity.
   sim/production formula parity), and the `:1663` stale-comment fix. Numerically
   inert at genesis (`stake_ratio = 0 ⇒ ×1`).
 - **Stage 2 — the sim arm (needs Stage 1).** `shekyl-economics-sim` budget arm:
-  sweep shard-count trajectories against both decay curves (emission `>>21`,
-  staker share `×0.9/yr`) and answer whether a 25%-floor + shard-indexed lift
+  sweep shard-count trajectories against both decay curves (emission `>>22`
+  per block — written as `>>21`, the per-minute convention, corrected
+  2026-10-04 — staker share `×0.9/yr`) and answer whether a 25%-floor + shard-indexed lift
   clears the archival burden in the fee era, or whether burn runs out first.
   **Extend scope to the distributional shift (W6):** the D1 fix moves ex-zero
   archivers into `Σwork`, shrinking scarce-holders' shares of a fixed budget —
@@ -2181,8 +2182,14 @@ late-chain tail 1,236,719; high-history / low-activity 60 y 4,886,932.
 
 **`KNEE_BAND` re-derived: `[500_000, 2_250_000, 10_000_000]` closed shards** —
 baseline `n` at ~10 y, sustained-growth's final `n`, their geometric mean
-(≈ 2.32 M). The sim pins the band to those anchors
-(`stage2::knee_band_brackets_the_sweep_trajectories`). The config now carries
+(≈ 2.32 M). The sim pinned the band to those anchors
+(`stage2::knee_band_brackets_the_sweep_trajectories`) until ESR-6
+(2026-10-03), when the production fill rule moved the baseline's `n` at 10 y
+to 229,864 and the test did its job; the anchors are now definitions
+evaluated on the current fold
+(`stage2::shipped_knee_lies_within_the_band_its_definitions_give`,
+[`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§5.7). The config now carries
 the middle, `shekyl_escalation_knee_n = 2250000`, provisional and
 behaviour-neutral while flat; the consensus-constants digest re-pinned
 (`885f700d… → 05a1ba28…`). The ceremony still picks the knee with the asymptote.
@@ -2229,8 +2236,8 @@ corrected 2026-10-01. Those are the per-minute convention's 21; at the
 design's 22 per block, corrected 2026-10-04, the curve mints ≈ 23.9 SKL/block
 at year 60 and the floor binds from ≈ year 119. The decay's conclusion holds
 — `0.15 · 0.9^60` of either is negligible — but this section's run figures are
-the ESF-21 curve's until re-run on the design's, `EUP-4`). **Stakers are decayed out of the perpetual tail by
-design**, so a settled chain's archival budget is the fee leg alone, and
+the ESF-21 curve's until re-run on the design's, `EUP-4`).
+**Stakers are decayed out of the perpetual tail by design**, so a settled chain's archival budget is the fee leg alone, and
 15 tx/block of fees cannot carry a bond on 4.9 M shards at any share ≤ 90 %.
 ~~The only lever that matches the failure is a staker floor on the tail~~ —
 **REFUTED 2026-10-01 (design owner, §12.14 *Ruling*): the tail is a constant
@@ -2257,9 +2264,12 @@ quantity the ceremony is actually choosing — **6.75 TB** of archival
 shard count is that divided by the provisional `W`. A `W` re-pin that leaves
 `shekyl_escalation_knee_n` at 2,250,000 silently moves the knee's physical
 meaning; `escalation::knee_is_an_archival_length_pinned_against_a_w_repin`
-fails when `knee · W` moves, and `shipped_knee_is_the_band_middle` fails when
-the config and the band part company. Whichever is re-pinned, the other is
-re-derived in the same change.
+fails when `knee · W` moves, and
+`stage2::shipped_knee_lies_within_the_band_its_definitions_give` fails when the
+shipped knee leaves the band its definitions give on the current fold — and
+prints that band's middle on every run, so a knee that has stopped being the
+middle is said aloud. Re-deriving the knee is GF-7's, after ESR-10
+(`docs/FOLLOWUPS.md`).
 
 **Depth direction, corrected.** The leaf-era text said stuffing is "cheapest
 early" and the flood "harder to move over time". Byte-keyed, the FCMP proof that
