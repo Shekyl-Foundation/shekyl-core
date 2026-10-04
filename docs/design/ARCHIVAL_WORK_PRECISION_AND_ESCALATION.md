@@ -2181,8 +2181,14 @@ late-chain tail 1,236,719; high-history / low-activity 60 y 4,886,932.
 
 **`KNEE_BAND` re-derived: `[500_000, 2_250_000, 10_000_000]` closed shards** —
 baseline `n` at ~10 y, sustained-growth's final `n`, their geometric mean
-(≈ 2.32 M). The sim pins the band to those anchors
-(`stage2::knee_band_brackets_the_sweep_trajectories`). The config now carries
+(≈ 2.32 M). The sim pinned the band to those anchors
+(`stage2::knee_band_brackets_the_sweep_trajectories`) until ESR-6
+(2026-10-03), when the production fill rule moved the baseline's `n` at 10 y
+to 229,864 and the test did its job; the anchors are now definitions
+evaluated on the current fold
+(`stage2::shipped_knee_lies_within_the_band_its_definitions_give`,
+[`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§5.7). The config now carries
 the middle, `shekyl_escalation_knee_n = 2250000`, provisional and
 behaviour-neutral while flat; the consensus-constants digest re-pinned
 (`885f700d… → 05a1ba28…`). The ceremony still picks the knee with the asymptote.
@@ -2253,9 +2259,12 @@ quantity the ceremony is actually choosing — **6.75 TB** of archival
 shard count is that divided by the provisional `W`. A `W` re-pin that leaves
 `shekyl_escalation_knee_n` at 2,250,000 silently moves the knee's physical
 meaning; `escalation::knee_is_an_archival_length_pinned_against_a_w_repin`
-fails when `knee · W` moves, and `shipped_knee_is_the_band_middle` fails when
-the config and the band part company. Whichever is re-pinned, the other is
-re-derived in the same change.
+fails when `knee · W` moves, and
+`stage2::shipped_knee_lies_within_the_band_its_definitions_give` fails when the
+shipped knee leaves the band its definitions give on the current fold — and
+prints that band's middle on every run, so a knee that has stopped being the
+middle is said aloud. Re-deriving the knee is GF-7's, after ESR-10
+(`docs/FOLLOWUPS.md`).
 
 **Depth direction, corrected.** The leaf-era text said stuffing is "cheapest
 early" and the flood "harder to move over time". Byte-keyed, the FCMP proof that

@@ -979,6 +979,8 @@ mod tests {
         // No local bond_floor_skl alias: the cartel arm prices the same
         // per-shard floor A5 exposes through bond_at_risk_skl.
         assert!(bond_at_risk_skl() > 0.0);
-        assert!((bond_at_risk_skl() - 0.75).abs() < 1e-12);
+        let floor = shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC as f64
+            / crate::burden::COIN as f64;
+        assert!((bond_at_risk_skl() - floor).abs() < 1e-12);
     }
 }

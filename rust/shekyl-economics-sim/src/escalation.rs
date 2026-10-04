@@ -64,19 +64,23 @@ pub const ASYMPTOTE_BAND: [u64; 3] = [500_000, 750_000, 900_000];
 /// (`ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F step 3): the low member is the
 /// baseline-traffic trajectory's `n` at ~10 y, the high member is the
 /// sustained-growth trajectory's final `n`, the middle is their geometric
-/// mean. `stage2::knee_band_brackets_the_sweep_trajectories` pins the band to
-/// those anchors so a trajectory change that silently moved them fails here.
-/// Sweep of 2026-10-01: baseline `n` at 10 y = 523,841; sustained-growth final
+/// mean. Those are the band's **definitions**; this constant is their sweep
+/// of 2026-10-01 — baseline `n` at 10 y = 523,841; sustained-growth final
 /// `n` = 10,279,293; geometric mean ≈ 2.32 M — rounded to one significant
-/// figure and a half.
+/// figure and a half. The fold has moved since: under the production fill
+/// rule (ESR-6) the baseline carries 22 of its 50 transactions a block for
+/// eleven years, and its `n` at 10 y is 229,864.
+/// `stage2::shipped_knee_lies_within_the_band_its_definitions_give`
+/// evaluates the definitions on the current fold, holds the shipped knee
+/// inside the band they give, and prints the current middle; re-deriving
+/// the band and the knee is GF-7's, after ESR-10 (`docs/FOLLOWUPS.md`).
 ///
 /// **A knee in shards is an archival length in disguise.** `knee · W` is the
 /// quantity the sweep actually chose (how much archive is held when the share
 /// saturates); the shard count is that length divided by a provisional `W`.
 /// A `W` re-pin that left this constant alone would silently move the knee
 /// — [`KNEE_ARCHIVAL_LEN_BYTES`] pins the product so that re-pin fails here
-/// instead, and the config-parity test pins the shipped value to the middle
-/// member.
+/// instead.
 pub const KNEE_BAND: [u64; 3] = [500_000, 2_250_000, 10_000_000];
 
 /// The middle knee as the archival length it stands for: `2,250,000 · W` at
@@ -246,25 +250,6 @@ mod tests {
             KNEE_ARCHIVAL_LEN_BYTES % w,
             0,
             "the knee length is whole shards"
-        );
-    }
-
-    #[test]
-    fn shipped_knee_is_the_band_middle() {
-        // config/economics_params.json carries the sweep's middle candidate
-        // (SCC-Q2). Nothing else couples the shipped literal to KNEE_BAND —
-        // a re-derivation that updated one and not the other lands here.
-        let cfg: serde_json::Value =
-            serde_json::from_str(include_str!("../../../config/economics_params.json"))
-                .expect("economics_params.json must be valid JSON");
-        let shipped = cfg
-            .get("shekyl_escalation_knee_n")
-            .and_then(serde_json::Value::as_u64)
-            .expect("shekyl_escalation_knee_n is a u64 in economics_params.json");
-        assert_eq!(
-            shipped, KNEE_BAND[1],
-            "shipped knee {shipped} is not the re-derived band's middle {}",
-            KNEE_BAND[1]
         );
     }
 

@@ -25,14 +25,14 @@
       "base_block_reward": 1806789202890,
       "release_multiplier_milli": 1000,
       "tx_volume": 50,
-      "circulating_supply": 505855705578765395,
-      "total_staked": 25292785278938269,
+      "circulating_supply": 505826083821589145,
+      "total_staked": 25291304191079457,
       "burn_pct_bp": 588,
-      "total_weighted_stake_lo": 25292785278938269,
+      "total_weighted_stake_lo": 25291304191079457,
       "total_weighted_stake_hi": 0,
       "staker_emission": 243918349179,
-      "staker_fee_pool": 73611250,
-      "actually_destroyed": 220833750
+      "staker_fee_pool": 73606250,
+      "actually_destroyed": 220818750
     },
     {
       "height": 525599,
@@ -40,14 +40,14 @@
       "base_block_reward": 1593987142116,
       "release_multiplier_milli": 1000,
       "tx_volume": 50,
-      "circulating_supply": 952133972936044799,
-      "total_staked": 95213397293604479,
+      "circulating_supply": 952020189365123549,
+      "total_staked": 95202018936512354,
       "burn_pct_bp": 1108,
-      "total_weighted_stake_lo": 95213397293604479,
+      "total_weighted_stake_lo": 95202018936512354,
       "total_weighted_stake_hi": 0,
       "staker_emission": 193671031754,
-      "staker_fee_pool": 138552500,
-      "actually_destroyed": 415657500
+      "staker_fee_pool": 138536250,
+      "actually_destroyed": 415608750
     },
     {
       "height": 788399,
@@ -55,14 +55,14 @@
       "base_block_reward": 1406248722965,
       "release_multiplier_milli": 1000,
       "tx_volume": 50,
-      "circulating_supply": 1345849974136013658,
-      "total_staked": 201877496120402048,
+      "circulating_supply": 1345603919033056158,
+      "total_staked": 201840587854958423,
       "burn_pct_bp": 1566,
-      "total_weighted_stake_lo": 201877496120402048,
+      "total_weighted_stake_lo": 201840587854958423,
       "total_weighted_stake_hi": 0,
       "staker_emission": 153774704104,
-      "staker_fee_pool": 195846250,
-      "actually_destroyed": 587538750
+      "staker_fee_pool": 195810000,
+      "actually_destroyed": 587430000
     },
     {
       "height": 1051199,
@@ -70,14 +70,14 @@
       "base_block_reward": 1240621971527,
       "release_multiplier_milli": 1000,
       "tx_volume": 50,
-      "circulating_supply": 1693194447168116105,
-      "total_staked": 253979167075217415,
-      "burn_pct_bp": 1971,
-      "total_weighted_stake_lo": 253979167075217415,
+      "circulating_supply": 1692773683790928605,
+      "total_staked": 253916052568639290,
+      "burn_pct_bp": 1970,
+      "total_weighted_stake_lo": 253916052568639290,
       "total_weighted_stake_hi": 0,
       "staker_emission": 122097051949,
-      "staker_fee_pool": 246391250,
-      "actually_destroyed": 739173750
+      "staker_fee_pool": 246330000,
+      "actually_destroyed": 738990000
     },
     {
       "height": 1313999,
@@ -85,14 +85,14 @@
       "base_block_reward": 1094502594811,
       "release_multiplier_milli": 1000,
       "tx_volume": 50,
-      "circulating_supply": 1999628990286091860,
-      "total_staked": 299944348542913779,
+      "circulating_supply": 1998996086711443110,
+      "total_staked": 299849413006716466,
       "burn_pct_bp": 2327,
-      "total_weighted_stake_lo": 299944348542913779,
+      "total_weighted_stake_lo": 299849413006716466,
       "total_weighted_stake_hi": 0,
       "staker_emission": 96944472832,
-      "staker_fee_pool": 290983750,
-      "actually_destroyed": 872951250
+      "staker_fee_pool": 290891250,
+      "actually_destroyed": 872673750
     },
     {
       "height": 1576799,
@@ -100,14 +100,14 @@
       "base_block_reward": 965593031190,
       "release_multiplier_milli": 1000,
       "tx_volume": 50,
-      "circulating_supply": 2269971939451844323,
-      "total_staked": 453994387890368864,
-      "burn_pct_bp": 2642,
-      "total_weighted_stake_lo": 453994387890368864,
+      "circulating_supply": 2269093879110576823,
+      "total_staked": 453818775822115364,
+      "burn_pct_bp": 2641,
+      "total_weighted_stake_lo": 453818775822115364,
       "total_weighted_stake_hi": 0,
       "staker_emission": 76973214074,
-      "staker_fee_pool": 330323750,
-      "actually_destroyed": 990971250
+      "staker_fee_pool": 330196250,
+      "actually_destroyed": 990588750
     },
     {
       "height": 1839599,
@@ -115,14 +115,14 @@
       "base_block_reward": 851866323848,
       "release_multiplier_milli": 1000,
       "tx_volume": 50,
-      "circulating_supply": 2508474131208663127,
-      "total_staked": 501694826241732625,
-      "burn_pct_bp": 2920,
-      "total_weighted_stake_lo": 501694826241732625,
+      "circulating_supply": 2507321792847779377,
+      "total_staked": 501464358569555875,
+      "burn_pct_bp": 2918,
+      "total_weighted_stake_lo": 501464358569555875,
       "total_weighted_stake_hi": 0,
       "staker_emission": 61116297538,
-      "staker_fee_pool": 365030000,
-      "actually_destroyed": 1095090000
+      "staker_fee_pool": 364862500,
+      "actually_destroyed": 1094587500
     },
     {
       "height": 2102399,
@@ -130,14 +130,14 @@
       "base_block_reward": 751534249177,
       "release_multiplier_milli": 1000,
       "tx_volume": 50,
-      "circulating_supply": 2718885742269138986,
-      "total_staked": 543777148453827797,
-      "burn_pct_bp": 3165,
-      "total_weighted_stake_lo": 543777148453827797,
+      "circulating_supply": 2717433441165386486,
+      "total_staked": 543486688233077297,
+      "burn_pct_bp": 3163,
+      "total_weighted_stake_lo": 543486688233077297,
       "total_weighted_stake_hi": 0,
       "staker_emission": 48525814935,
-      "staker_fee_pool": 395648750,
-      "actually_destroyed": 1186946250
+      "staker_fee_pool": 395437500,
+      "actually_destroyed": 1186312500
     },
     {
       "height": 2365199,
@@ -145,14 +145,14 @@
       "base_block_reward": 663019198992,
       "release_multiplier_milli": 1000,
       "tx_volume": 50,
-      "circulating_supply": 2904515256794550550,
-      "total_staked": 580903051358910110,
-      "burn_pct_bp": 3381,
-      "total_weighted_stake_lo": 580903051358910110,
+      "circulating_supply": 2902740340001588050,
+      "total_staked": 580548068000317610,
+      "burn_pct_bp": 3379,
+      "total_weighted_stake_lo": 580548068000317610,
       "total_weighted_stake_hi": 0,
       "staker_emission": 38529371691,
-      "staker_fee_pool": 422662500,
-      "actually_destroyed": 1267987500
+      "staker_fee_pool": 422403750,
+      "actually_destroyed": 1267211250
     },
     {
       "height": 2627999,
@@ -160,14 +160,14 @@
       "base_block_reward": 584929374428,
       "release_multiplier_milli": 1000,
       "tx_volume": 50,
-      "circulating_supply": 3068281488559375283,
-      "total_staked": 613656297711875056,
-      "burn_pct_bp": 3571,
-      "total_weighted_stake_lo": 613656297711875056,
+      "circulating_supply": 3066163977826855283,
+      "total_staked": 613232795565371056,
+      "burn_pct_bp": 3569,
+      "total_weighted_stake_lo": 613232795565371056,
       "total_weighted_stake_hi": 0,
       "staker_emission": 30591806282,
-      "staker_fee_pool": 446492500,
-      "actually_destroyed": 1339477500
+      "staker_fee_pool": 446185000,
+      "actually_destroyed": 1338555000
     }
   ],
   "neutral_milestones": [

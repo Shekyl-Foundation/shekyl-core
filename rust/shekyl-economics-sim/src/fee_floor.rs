@@ -151,6 +151,12 @@ fn grace_sweep(floors: &[u128]) -> ([u64; 3], [u64; 3]) {
 /// resolution is far below one basis point — the daemon's integer
 /// atomic/byte (single digits at large `M`) would otherwise masquerade as
 /// slew.
+/// The relay floor at `SCALE` resolution: `R·w_ref·C/M²` before the owner's
+/// division by `SCALE` and its rounding to a whole atomic unit per byte.
+/// A declared instrument precision (§4 of the rebase document): the slew
+/// this module measures is finer than a unit per byte. The pin
+/// `the_floor_is_the_owners_at_scale_resolution` holds it to
+/// [`shekyl_economics::relay_fee_floor`].
 fn floor_rate(base_reward: u64, median: u64, c_scaled: u64) -> u128 {
     let m = u128::from(median.max(FULL_REWARD_ZONE));
     u128::from(base_reward) * u128::from(REF_TX_WEIGHT) * u128::from(c_scaled) / (m * m)
@@ -618,4 +624,40 @@ pub fn render_summary(r: &FeeFloorReport, out: &mut String) {
 
 pub fn render_json(r: &FeeFloorReport) -> String {
     serde_json::to_string_pretty(r).expect("report serializes")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shekyl_economics::params::SCALE;
+    use shekyl_economics::{corrected_fee_ladder, EconomicParams, FeeCorrection};
+
+    /// The instrument's floor is the owner's before rounding: divided by
+    /// `SCALE` it is `relay_fee_floor` exactly, and the Standard rung it
+    /// pays (`4·F`) is the owner's ladder's own multiple of that floor.
+    #[test]
+    fn the_floor_is_the_owners_at_scale_resolution() {
+        let params = EconomicParams::default();
+        for base in [1_000_000_000u64, 584_930_000_000, 2_048_000_000_000] {
+            for median in [FULL_REWARD_ZONE, 764_000, 3 * FULL_REWARD_ZONE] {
+                for c in [680_000u64, 1_000_000, 1_474_300, 12_920_000] {
+                    let at_scale = floor_rate(base, median, c);
+                    let ladder = corrected_fee_ladder(
+                        base,
+                        median,
+                        REF_TX_WEIGHT,
+                        FeeCorrection::from_scaled(c),
+                        &params,
+                    );
+                    let owned = u128::from(ladder.economy);
+                    assert_eq!(
+                        (at_scale / u128::from(SCALE)).max(1),
+                        owned,
+                        "base {base} median {median} C {c}"
+                    );
+                    assert_eq!(u128::from(ladder.standard), 4 * owned, "Standard is 4F");
+                }
+            }
+        }
+    }
 }

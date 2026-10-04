@@ -175,7 +175,7 @@ impl Shape {
 /// Every shape the builder accepts, `1..=MAX_INPUTS` × `1..=MAX_OUTPUTS`. The
 /// input cap is read off the bounded type (it is crate-internal to the
 /// predictor by design); clamping `usize::MAX` lands on it.
-fn all_shapes() -> impl Iterator<Item = Shape> {
+pub(crate) fn all_shapes() -> impl Iterator<Item = Shape> {
     let max_in = InputCount::clamped(usize::MAX).get();
     (1..=max_in).flat_map(move |i| {
         (1..=MAX_OUTPUTS).map(move |o| Shape {
@@ -541,8 +541,7 @@ mod tests {
         // The physical ceiling is argmax ⌊B/w⌋·archival over every shape; the
         // fee-per-byte argmin is a candidate, never above the max. At the
         // surge ceiling the two differ: whole transactions, finite block.
-        let block_weight =
-            shekyl_economics::FULL_REWARD_ZONE * shekyl_economics::BLOCK_WEIGHT_SURGE_FACTOR;
+        let block_weight = crate::swing::block_weight_penalty_free();
         let mut differs_somewhere = false;
         for depth in 2..=MAX_TREE_DEPTH {
             let best = max_archival_bytes_per_block(block_weight, depth, CONTROL);
