@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Docs — the economy's umbrella plan; `DESIGN_CONCEPTS.md` matches its rulings
+
+- `docs/design/ECONOMY_UMBRELLA_PLAN.md` (`EUP-`) orders how the economy is
+  realigned, measured and decided, so its mechanisms are assessed together.
+- `DESIGN_CONCEPTS.md` no longer describes the stake-ratio burn term F-D
+  deleted, states the archival rationale of its design home (prunable bodies
+  for rescan, audit and dispute), and marks its April yield and outcome tables
+  as computed at a flat fee and the deleted term.
+
 ### Chain rules — CEN-H20 requires the serve credit's pass records (`SHT-9`)
 
 - The Rust validator admitted a serve-credit transaction with no prunable
