@@ -166,6 +166,10 @@ pub enum ClientError {
     /// Reported rather than repaired: reconciliation would otherwise
     /// silently overwrite one order's coordinates with the other's, and
     /// nothing says which is right.
+    ///
+    /// Classified [`StoreOpenFault::Internal`], not `Corrupt`. The store may
+    /// be sound — the disagreement is in memory — and `Corrupt`'s remedy is
+    /// to delete the store.
     OwnedPositionDrift {
         /// The held position the canonical order does not produce.
         position: u64,
@@ -391,9 +395,17 @@ impl ClientError {
             | ClientError::CaptureIdentitiesIncomplete { .. } => StoreOpenFault::Unsupported,
             ClientError::ResumeFromCorruptStore { .. }
             | ClientError::Frontier { .. }
-            | ClientError::OwnedPositionDrift { .. }
             | ClientError::SnapshotLeafCountMismatch { .. } => StoreOpenFault::Corrupt,
-            ClientError::RootMismatch { .. }
+            // Not `Corrupt`: that fault's stated remedy is *delete the
+            // store and let the wallet rebuild it*, and drift is the
+            // client's in-memory positions disagreeing with the canonical
+            // drain order — the store may be entirely sound. Destroying a
+            // good store over a memory defect is naming a remedy that costs
+            // more than the fault (rule 82). It is also not an open-time
+            // outcome at all, which is what `Internal` says here, exactly
+            // as `PathRootMismatch` does.
+            ClientError::OwnedPositionDrift { .. }
+            | ClientError::RootMismatch { .. }
             | ClientError::PathRootMismatch { .. }
             | ClientError::OutputNotDrained { .. }
             | ClientError::IdentityMismatch { .. }
@@ -1155,10 +1167,21 @@ impl CurveTreeClient {
     /// # Cost, and why one call covers every output
     ///
     /// `O(n)` in drained leaves — it rebuilds the layer stack, which is what
-    /// assembly does today per spend. One pass serves every late
-    /// registration, which is why [`Self::register_owned`] does not resolve
-    /// positions itself and why the caller should register everything it
-    /// holds and then reconcile **once**.
+    /// assembly does today per spend, so `CT6_PROVING_STATE.md` §11.2's table
+    /// prices it: **~65 min** at `min_leaves_for_depth(6)` on the
+    /// staker-class host, **~2.5 h** projected on the floor device.
+    ///
+    /// **And a resume is a call to this**, because the registry does not
+    /// persist — so that cost lands on opening a wallet, not only on
+    /// spending. Reconciliation inherits the population capture exists to
+    /// remove; bounding it is increment 7's identity tail, not this
+    /// mechanism. A caller putting this on a path a user waits on owes them
+    /// a rule-82 answer about the wait.
+    ///
+    /// One pass serves every late registration, which is why
+    /// [`Self::register_owned`] does not resolve positions itself and why
+    /// the caller should register everything it holds and then reconcile
+    /// **once**.
     ///
     /// Every chunk is computed before the write opens, and the whole batch
     /// commits in one transaction, so a failure part-way through leaves the

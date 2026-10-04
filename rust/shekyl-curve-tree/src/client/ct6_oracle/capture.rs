@@ -826,7 +826,31 @@ fn a_drifted_owned_position_is_refused() {
     }
 }
 
-/// A chunk that has **not** closed is not due, at either shape.
+/// Reconcile a fixture that is one leaf short of closing the chunk over
+/// leaf 0 at `span`, and report what it wrote.
+///
+/// `span` is `outputs_per_node(layer)`, so the chunk over leaf 0 ends at
+/// `span - 1` and the fixture drains `span - 1` leaves — putting the chunk's
+/// end exactly **at** the drained count, which is the only place `<` and
+/// `<=` differ.
+fn reconcile_one_leaf_short(span: u64) -> crate::CaptureReconciliation {
+    let short = counts_totalling(usize::try_from(span - 1).expect("a leaf total fits usize"));
+    let mut client = CurveTreeClient::new();
+    client
+        .register_owned(Gindex::from_raw(0))
+        .expect("a live client registers");
+    ingest_fixture(&mut client, tip_for(&short), &short);
+    assert_eq!(
+        client.frontier.leaf_count(),
+        span - 1,
+        "the fixture must be one leaf short of closing the chunk"
+    );
+    client
+        .reconcile_captures()
+        .expect("an unclosed chunk must be skipped, not read past")
+}
+
+/// An unclosed **layer-0** chunk is not due.
 ///
 /// This is the fencepost the whole design rests on: `end_leaf <
 /// drained_leaf_count`, the one comparison a rollback, the capture key and
@@ -834,42 +858,88 @@ fn a_drifted_owned_position_is_refused() {
 /// this file, because the default fixture drains a whole number of chunks
 /// and so never puts a chunk's end *at* the drained count.
 ///
-/// Both shapes, because they fail differently. At layer 0 the body would be
-/// read past the end of the drained entries. At layer 1 the node slice is
-/// still in bounds, so it would write a **wrong** chunk silently — the
+/// At this shape the mutated form reads **past the end** of the drained
+/// entries.
+#[test]
+fn an_unclosed_leaf_chunk_is_not_due() {
+    let report = reconcile_one_leaf_short(SELENE_CHUNK_WIDTH as u64);
+    assert_eq!(
+        report.chunks_written, 0,
+        "the chunk over leaf 0 ends at exactly the drained count, and a chunk \
+         is due only strictly below it"
+    );
+}
+
+/// An unclosed **layer-1** node is not due.
+///
+/// Its own pass, not a second iteration of the one above, because the two
+/// shapes fail differently and a loop would stop at the first. Here the
+/// mutated form's node slice stays **in bounds** — `layers[0]` holds enough
+/// rows — so it would write a *wrong* chunk silently rather than panic: the
 /// children of a layer-0 row whose last node covers a partial chunk.
 #[test]
-fn an_unclosed_chunk_is_not_due() {
-    let width = SELENE_CHUNK_WIDTH as u64;
-    let layer_one_span = width * HELIOS_CHUNK_WIDTH as u64;
-    // One leaf short of closing a layer-0 chunk, then of closing a layer-1
-    // node: in both cases the chunk over leaf 0 ends exactly *at* the
-    // drained count.
-    for leaves in [width, layer_one_span] {
-        let counts = counts_totalling(usize::try_from(leaves).expect("a leaf total fits usize"));
-        let mut client = CurveTreeClient::new();
-        client
-            .register_owned(Gindex::from_raw(0))
-            .expect("a live client registers");
-        // `counts_totalling` lands on `leaves`; ingest one block less than
-        // the full tip so the last chunk is one leaf short of closing.
-        let short = counts_totalling(usize::try_from(leaves - 1).expect("fits usize"));
-        ingest_fixture(&mut client, tip_for(&short), &short);
-        let drained = client.frontier.leaf_count();
-        assert_eq!(drained, leaves - 1, "the fixture must be one leaf short");
-        assert_eq!(
-            counts.iter().sum::<usize>() as u64,
-            leaves,
-            "the full fixture would have closed it"
-        );
+fn an_unclosed_node_chunk_is_not_due() {
+    let span = SELENE_CHUNK_WIDTH as u64 * HELIOS_CHUNK_WIDTH as u64;
+    let report = reconcile_one_leaf_short(span);
+    assert_eq!(
+        report.chunks_written, 0,
+        "leaf 0's layer-1 node ends at exactly the drained count, so nothing \
+         is due at its key; its layer-0 chunk closed long ago and was already \
+         written by the fold"
+    );
+}
 
-        let report = client
-            .reconcile_captures()
-            .expect("an unclosed chunk must be skipped, not read past");
+/// A drained leaf's `gindex` can equal or exceed the drained leaf **count**.
+///
+/// The falsifier for a rule that has not been written yet, pinned before it
+/// is. Dropping a stale registration on rollback invites the *same*
+/// inequality the other two holders use — `gindex >= surviving_leaf_count` —
+/// and that compares two different quantities. `surviving_leaf_count` counts
+/// drained **positions**; a `gindex` is a global output index, and
+/// [`TargetKind::Other`] consumes one without producing a leaf ("the output
+/// still consumes a global output index", `types.rs`).
+///
+/// This fixture makes the gap one, which is enough: the last drained leaf's
+/// `gindex` equals the drained count, so the inequality holds for a leaf that
+/// is present, valid and must **not** be dropped. Every other fixture in this
+/// file has `position == gindex`, so none of them could show this.
+///
+/// The honest discriminator is set membership on the rebuilt state — stale
+/// iff `gindex < next_gindex` and absent from `entries` — and its red-bite
+/// needs all three states of that comparison.
+#[test]
+fn a_gindex_is_not_a_position() {
+    let mut client = CurveTreeClient::new();
+    // A leaf-ineligible output first, then leaf-eligible ones. The first
+    // consumes gindex 0 and produces no leaf, so every leaf below sits one
+    // gindex above its position.
+    let mut outs = vec![RawOutput {
+        output_key: OneTimePubkey::from_bytes(key_image_generator(&[9u8; 32])),
+        commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
+        target: TargetKind::Other,
+    }];
+    outs.extend((1..=4u64).map(seeded_raw));
+    ingest_outputs_at(&mut client, 0, &outs);
+    let tip = BlockHeight::ZERO + lock_count() + BlockCount::ONE;
+    ingest_range(&mut client, BlockHeight::from_raw(1), tip, &[]);
+
+    let drained = crate::recon::drained_sorted(&client.entries, tip - BlockCount::ONE);
+    let count = u64::try_from(drained.len()).expect("a drained count fits u64");
+    assert_eq!(count, 4, "the leaf-ineligible output produced no leaf");
+    for (position, entry) in drained.iter().enumerate() {
+        let position = u64::try_from(position).expect("a position fits u64");
         assert_eq!(
-            report.chunks_written, 0,
-            "with {drained} drained leaves the chunk over leaf 0 ends at exactly \
-             {drained}, and a chunk is due only strictly below the count"
+            entry.gindex.to_raw(),
+            position + 1,
+            "the skipped gindex offsets every leaf below it"
         );
     }
+    let last = drained.last().expect("the fixture drained leaves");
+    assert!(
+        last.gindex.to_raw() >= count,
+        "gindex {} is at or above the drained count {count}, so \
+         `gindex >= surviving_leaf_count` would discard a registration for a \
+         leaf that is present and valid",
+        last.gindex.to_raw()
+    );
 }

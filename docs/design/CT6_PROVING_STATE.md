@@ -1323,8 +1323,23 @@ drops leaf 0's branch, and
 — the hazard §11.8 names, now exercised through both producers rather than at
 the store alone.
 
-**Cost and shape.** `O(n)` in drained leaves, which is what assembly pays per
-spend today, and one pass serves every late registration — the reason
+**Cost, and the number that matters.** `O(n)` in drained leaves, rebuilding
+the same layer stack assembly rebuilds per spend — so §11.2's table prices it
+directly. At `min_leaves_for_depth(6)`, about 23 days of chain, that is
+**~65 min** on the staker-class x86 host and **~2.5 h** projected on the floor
+device.
+
+**And it runs on every wallet open**, because resume is the mass late
+registration. That is a worse exposure than the per-spend figure it borrows:
+a spend is a deliberate act, and opening a wallet is not. Nothing in this
+section improves it — reconciliation inherits the population capture exists to
+remove, and the mechanism that bounds it is increment 7's identity tail, where
+an owned output's stored material replaces the rebuild. Stated here so the
+`O(n)` is not read as cheap. It also means the engine must not call this on a
+path a user waits on without saying so (rule 82), which is part of what the
+registrant slice has to decide.
+
+One pass serves every late registration — the reason
 `register_owned` does not resolve positions itself, and the reason a caller
 registers everything it holds and then reconciles **once**. Every chunk is
 computed before the write opens and the whole batch commits in one
