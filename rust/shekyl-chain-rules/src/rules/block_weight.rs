@@ -260,20 +260,11 @@ pub fn effective_median_at<'id, V: ChainView<'id>>(
     Ok(medians_over(&window))
 }
 
-/// The two medians over a window of recorded weights in height order —
-/// the whole long window, the short window its last `W_short` rows.
-/// Pure: the arithmetic the store read feeds, held on its own in
-/// `block_weight_tests` at the clamps' boundaries.
-///
-/// **Public, with [`medians_from`], for one reason**
-/// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-6): the economics sim folds
-/// sixty years of blocks and cannot afford a selection over the 100 000-row
-/// window at each. It keeps the window's order statistics as it goes, asks
-/// [`even_pair_median`] for the middle pair and [`medians_from`] for the
-/// composition, and its tests hold that result equal to this function over
-/// the same window. The selecting routine stays private; [`median`] is the
-/// same selection for a caller that must not reorder its own window. The
-/// daemon judges one block per two minutes and has no such need.
+/// CEN-G6/G6b over one window of recorded weights, in height order. The
+/// long median is taken over every row. The short median is taken over the
+/// last `BLOCK_WEIGHT_SHORT_TERM_WINDOW` rows, or the whole window when
+/// it is shorter. [`medians_from`] composes the two. The arithmetic is
+/// pinned in `block_weight_tests`.
 #[must_use]
 pub fn medians_over(window: &[RecordedWeights]) -> EffectiveMedian {
     let mut long_term: Vec<u64> = window.iter().map(|w| w.long_term_weight.to_raw()).collect();
@@ -302,14 +293,9 @@ pub fn medians_from(long_term_median: u64, short_term_median: u64) -> EffectiveM
     }
 }
 
-/// Floor of the mean of the two middle elements, the C++ `get_mid`:
-/// `(a + b) / 2` without the sum, so two weights near `u64::MAX` cannot
-/// wrap into a small median.
-///
-/// **Public for one reason** (ESR-6): the economics sim's rolling window
-/// already holds the middle pair, and this is the even-count rule the
-/// private selector applies to it. A second copy of the formula would be a
-/// median the validator does not judge.
+/// Even-count median: the floor of the mean of the two middle elements,
+/// the C++ `get_mid`, without forming the sum. Two weights near `u64::MAX`
+/// cannot wrap into a small median.
 #[must_use]
 pub fn even_pair_median(lower: u64, upper: u64) -> u64 {
     lower / 2 + upper / 2 + (lower % 2 + upper % 2) / 2
@@ -336,12 +322,8 @@ fn cxx_median(values: &mut [u64]) -> u64 {
     even_pair_median(lower, upper)
 }
 
-/// The private selector's median over `values`, leaving `values` in the
-/// order the caller handed them over.
-///
-/// **Public for one reason** (ESR-6): the sim's rolling-median test reads
-/// the selection the validator uses, and the test's window is also the
-/// oracle's input, so the read must not reorder it.
+/// Median of `values` by the same rule as the validator's selector. `0` of
+/// an empty slice. Does not reorder `values`.
 #[must_use]
 pub fn median(values: &[u64]) -> u64 {
     let mut owned = values.to_vec();

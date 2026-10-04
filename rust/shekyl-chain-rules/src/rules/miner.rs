@@ -698,12 +698,6 @@ pub fn tx_volume_window<'id, V: ChainView<'id>>(
 /// spans and whose prefix sums it subtracts. [`tx_volume_window`] is this
 /// plus two reads of the store; [`tx_volume_span`] is the definition
 /// without the store.
-///
-/// **Public for one reason** (`ECONOMICS_SIM_PRODUCTION_REBASE.md`
-/// ESR-4): a caller that keeps its own prefix sums — the economics sim,
-/// which has no chain to read — computes the operand the validator
-/// computes by reading the same span and applying the same subtraction,
-/// rather than restating which heights the window covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TxVolumeSpan {
     /// Blocks in the window: `min(h, W)`, `0` at genesis.
