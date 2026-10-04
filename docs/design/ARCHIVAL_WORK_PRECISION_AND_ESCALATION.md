@@ -2154,7 +2154,7 @@ costs first). Nothing in 3a/3b weakens or advances that gate.
 
 ### 12.13 Byte-keyed re-baseline of the Stage-2 sweep — MEASURED 2026-10-01
 
-**Why.** `SHT-Q2` ([`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md))
+**Why.** `SHT-Q2` ([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md))
 re-keyed the D2 operand: `n` is the count of archival shards **closed** by
 cumulative archival length — `|pqc_auths| + |prunable|` per transaction,
 `W = 3,000,000 B` (PROVISIONAL) per shard, `shekyl_types::shard_of` — read by

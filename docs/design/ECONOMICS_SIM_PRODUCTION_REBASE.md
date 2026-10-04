@@ -401,7 +401,7 @@ and not a narrative.
 
 **Amended 2026-10-02, still before any run: the shape.** 17.5 KB is the
 2-in/2-out spend of
-[`ARCHIVAL_SHARD_T_DERIVATION.md`](ARCHIVAL_SHARD_T_DERIVATION.md). The
+[`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md). The
 sim's ordinary transaction is **1-in/2-out** (`burden::normal_tx_shape`),
 one authorisation lighter — roughly 12–13 KB. Every per-transaction fee
 below, and the 875 KB block figure, are therefore about 30 % too high.

@@ -275,7 +275,7 @@ invocations:
   a reverted build refuses a v13 datadir at open (pre-genesis, free).
 
 - **The txid binds the archival length** (`SHT-Q2`,
-  `docs/design/ARCHIVAL_SHARD_T_DERIVATION.md` §8.6 and §10.3; landed on
+  `docs/completed/ARCHIVAL_SHARD_T_DERIVATION.md` §8.6 and §10.3; landed on
   `dev` 2026-10-01 as PR #923, merge commit `ecdcbffec`; branch tip archived
   as tag `archive/sht-q2-txid-length-cutover-2026-10-01` at `4456a63cd`).
   Every non-coinbase transaction id mixes one more word, the transaction's

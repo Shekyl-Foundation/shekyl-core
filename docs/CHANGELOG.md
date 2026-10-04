@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+- Docs: the economy's umbrella plan (`ECONOMY_UMBRELLA_PLAN.md`, `EUP-`); `DESIGN_CONCEPTS.md` records F-D, its design home's archival rationale, and its April tables' inputs.
+
+### Archival shards — `U1b` is read: the floor device does not lower `W`'s ceiling
+
+- A Pi 4 serving the largest shard object for 24 hours, with PoW on and the
+  reader on the same device, missed 12 of 616 fetches: 1.95 %, 95 %
+  interval 1.12 – 3.37 %, against the 0.30 target
+  (`ARCHIVAL_SHARD_T_DERIVATION.md` §10.8). `W = 3,000,000 B` rests on no
+  open measurement and goes to the Round-2 gate with `L = 4`.
+- One read in flight, the device sustains challenge reads for up to 18,229
+  drawable pairs per epoch, an input to the participation floor.
+- The two observation files, the device and its same-window control, are in
+  `docs/benchmarks/`.
+- The derivation is archived as a record
+  (`docs/completed/ARCHIVAL_SHARD_T_DERIVATION.md`). `W` and `L` are listed
+  with their reopen conditions among the provisional-until-testnet keys in
+  `CLIENT_VERSION_CONSTANTS_VALIDATION.md`, and reading B is the gate 4/5
+  owner's participation-floor input.
+
 ### Chain rules — CEN-H20 requires the serve credit's pass records (`SHT-9`)
 
 - The Rust validator admitted a serve-credit transaction with no prunable
