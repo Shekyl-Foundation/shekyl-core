@@ -40,6 +40,7 @@ use shekyl_archival_retention::{
     p_canonical_id_from_hybrid_pubkey, ArchivalServeCreditResponse, HoldingsDescriptor,
     HoldingsKind,
 };
+use shekyl_chain_rules::harness::fixture::PRUNED_PASS_RECORD;
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
 use shekyl_crypto_pq::signature::{
@@ -48,7 +49,7 @@ use shekyl_crypto_pq::signature::{
 use shekyl_tx_builder::{InputTerm, OutputTerm};
 use shekyl_types::{PCanonicalId, SigningPayloadHash};
 use shekyl_wire::transaction::{BondPost, TxPrefix};
-use shekyl_wire::{Ct, CtBase, Input, Transaction};
+use shekyl_wire::{Ct, CtBase, Input, Prunable, Transaction};
 
 /// The driver's persona master seed. Any 64 bytes; fixed so the personas
 /// (and their canonical ids) are the same in every run.
@@ -192,9 +193,10 @@ impl Persona {
         *post
     }
 
-    /// The serve-credit-only transaction (CEN-H20's shape) for `shard` in
-    /// `settlement_epoch` — the kept half on the production wire type. The
-    /// countersignature is a marker (module docs).
+    /// The serve-credit-only transaction (CEN-H20's shape, with its `RF-D1`
+    /// prunable region) for `shard` in `settlement_epoch` — the kept half on
+    /// the production wire type. The countersignature and the pruned record
+    /// are markers (module docs).
     pub fn serve_credit(&self, shard: u64, settlement_epoch: u64) -> Transaction {
         let kept = ArchivalServeCreditResponse {
             p_canonical_id: *self.id().as_bytes(),
@@ -220,7 +222,16 @@ impl Persona {
                     commitments: Vec::new(),
                 },
                 pqc_auths: Vec::new(),
-                prunable: None,
+                // `RF-D1`: one pruned pass record per serve-credit vin. A
+                // marker, like the countersignature: CEN-H20 counts the
+                // records and CEN-J10, when it lands, judges them.
+                prunable: Some(Prunable {
+                    bulletproofs: Vec::new(),
+                    tree_depth: 0,
+                    fcmp_proof: Vec::new(),
+                    pseudo_outs: Vec::new(),
+                    serve_credit_pruned: vec![PRUNED_PASS_RECORD.to_vec()],
+                }),
             },
         }
     }
