@@ -297,7 +297,7 @@ public:
         if(ec == boost::asio::error::operation_aborted)
           return;
         // The list may drop its `shared_ptr` before this post runs. Hold one.
-        auto self = shared_from_this();
+        auto self = this->shared_from_this();
         self->m_con.m_pservice_endpoint->post([self, command, cb, timeout] {
           MINFO(self->m_con.get_context_ref() << "Timeout on invoke operation happened, command: " << command << " timeout: " << timeout.count());
           epee::span<const uint8_t> fake;
