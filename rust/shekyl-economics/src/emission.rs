@@ -453,15 +453,32 @@ mod tests {
         let tail = tail_subsidy_per_block(&p).expect("tail");
         p.emission_curve_asymptote = (tail << esf) * 4;
 
-        let at = |h| projected_already_generated(h, &p).expect("projection");
-        let mut crossing = 0u64;
-        while base_emission_at(crossing, &p).expect("base") > tail {
-            crossing += 1;
-            assert!(crossing < 100_000, "setup never reaches the tail");
+        // The oracle is a plain accumulation of `base_block_reward`, not the
+        // projection: the projection shares the walk under test. Targets up
+        // to `at(crossing)` are the walked arm; past it, the closed form.
+        let mut prefix = vec![0u64];
+        let mut crossing: Option<usize> = None;
+        while prefix.len() < 100_000 {
+            let ag = *prefix.last().expect("non-empty");
+            let base = base_block_reward(ag, &p).expect("base");
+            if base == tail && crossing.is_none() {
+                crossing = Some(prefix.len() - 1);
+            }
+            prefix.push(ag + base);
+            if crossing.is_some_and(|c| prefix.len() > c + 64) {
+                break;
+            }
         }
+        let crossing = crossing.expect("setup reaches the tail");
         assert!(crossing > 1, "setup must start above the tail, not on it");
-
-        let naive_first = |target: u64| (0u64..).find(|&h| at(h) >= target).expect("reached");
+        let at = |h: usize| prefix[h];
+        let naive_first = |target: u64| {
+            let h = prefix
+                .iter()
+                .position(|&ag| ag >= target)
+                .expect("within the prefix");
+            u64::try_from(h).expect("small height")
+        };
         let at_crossing = at(crossing);
         for target in [
             0,
