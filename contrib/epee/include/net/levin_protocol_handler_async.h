@@ -234,7 +234,6 @@ public:
       if(m_con.start_outer_call())
       {
         m_timer.expires_after(timeout);
-        arm_timeout(command, cb, timeout);
         m_timer_started = true;
       }
     }
@@ -338,7 +337,12 @@ public:
       MERROR("Adding response handler to a released object");
       return false;
     }
-    boost::shared_ptr<invoke_response_handler_base> handler(boost::make_shared<anvoke_handler<callback_t>>(cb, timeout, con, command));
+    // Arm after make_shared returns. shared_from_this() throws
+    // bad_weak_ptr until the shared_ptr has taken ownership, and a
+    // running io_context can fire a zero timeout during construction.
+    auto handler = boost::make_shared<anvoke_handler<callback_t>>(cb, timeout, con, command);
+    if(handler->is_timer_started())
+      handler->arm_timeout(command, cb, timeout);
     m_invoke_response_handlers.push_back(handler);
     return handler->is_timer_started();
   }
