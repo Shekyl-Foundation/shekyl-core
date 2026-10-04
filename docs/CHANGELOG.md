@@ -28,6 +28,11 @@
   half-emission milestone reads it (2 907 270).
 - A captured replay chain's `built_at_dev_sha` is the SHA the daemon reports,
   and the capture refuses unless it is the checkout's clean `HEAD`.
+- The realigned economics sim (#936) on the design curve: its 60-year horizon
+  no longer reaches the tail (≈ year 119 neutral, ≈ year 132 in the fold). The
+  two tail-era sim tests start in the tail era and assert it; the escalation
+  knee, above its band's new high, is held while the escalation is flat
+  (`ECONOMY_UMBRELLA_PLAN.md` §4.1, `FOLLOWUPS.md`).
 
 ### Archival shards — `U1b` is read: the floor device does not lower `W`'s ceiling
 

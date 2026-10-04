@@ -69,11 +69,13 @@ pub const ASYMPTOTE_BAND: [u64; 3] = [500_000, 750_000, 900_000];
 /// `n` = 10,279,293; geometric mean ≈ 2.32 M — rounded to one significant
 /// figure and a half. The fold has moved since: under the production fill
 /// rule (ESR-6) the baseline carries 22 of its 50 transactions a block for
-/// eleven years, and its `n` at 10 y is 229,864.
-/// `stage2::shipped_knee_lies_within_the_band_its_definitions_give`
-/// evaluates the definitions on the current fold, holds the shipped knee
-/// inside the band they give, and prints the current middle; re-deriving
-/// the band and the knee is GF-7's, after ESR-10 (`docs/FOLLOWUPS.md`).
+/// eleven years, and its `n` at 10 y is 229,864. On the design's emission
+/// curve the largest final `n` is 2,079,614, below the shipped knee.
+/// `stage2::an_out_of_band_knee_is_held_only_while_the_escalation_is_flat`
+/// evaluates the definitions on the current fold, prints the band and
+/// where the shipped knee stands against it, and lets an out-of-band knee
+/// stand only while the escalation is flat; re-deriving the band and the
+/// knee is GF-7's, after ESR-10 (`docs/FOLLOWUPS.md`).
 ///
 /// **A knee in shards is an archival length in disguise.** `knee · W` is the
 /// quantity the sweep actually chose (how much archive is held when the share

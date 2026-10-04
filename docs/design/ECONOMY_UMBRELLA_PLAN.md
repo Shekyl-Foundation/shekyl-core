@@ -150,6 +150,43 @@ prevent.
 Goals 1 (denomination) and 4 (`uint64_t` safety) are code properties, held by
 their own tests, and are not graded here.
 
+### 4.1 The horizon, and one reading registered before the tables run (2026-10-04)
+
+**What the first run on the design curve showed.** Merging the ESF fix over
+the realigned sim (#936) failed three tests that each used "year 60" to mean
+"the fee era". On the design curve it is not: the neutral trajectory reaches
+the tail near year 119, and the control arm's fold near year 132 (the release
+multiplier's floor slows it); at year 60 the curve still mints ≈ 23.9
+SKL/block. Two of the tests state tail-era facts and now start in the tail era
+and assert it (`onset::tests::assert_tail_era`). The third is the escalation
+knee's band, whose high fell to 2,079,614 against a shipped knee of 2,250,000;
+the knee is held, not re-pinned (`docs/FOLLOWUPS.md`).
+
+**Horizon — PROPOSED, a decision about the assessment.** The structural
+questions (onset, fee era, tail) are tail-era questions, and a 60-year run no
+longer sees them. The structural arms run to about 135 years; the remaining
+arms stay at 60. Measured cost on the control arm: the baseline to 135 years
+is 64 s. The growth schedule is not affordable that far as the fill stands —
+63 years is 337 s and 66 years exceeds 500 s — because
+`Fill::admit_up_to` batches only the penalty-free part of a block and walks
+the penalty zone one body at a time. Long growth arms wait on that zone being
+closed in form, held to the single-offer walk as the free part is.
+
+**Registered reading: the capacity cap spans most or all of the horizon on
+the production arm.** The design-owner lane's argument: the fill condition
+`w ≤ 4ρ·w_ref·(m/M)²` has no reward in it, because `R` cancels between a
+ladder fee and the penalty; the crossover moves only with `ρ = (1−σ)/(1−b)`,
+which grows as `σ` decays and the burn's supply ratio rises, and the supply
+ratio rises half as fast at 22 per block. One observation agrees: the band's
+low anchor, the production-arm baseline's closed shards at year 10, is
+229,864 on both curves. One does not bear on it: the control arm sitting at
+20 of 50 transactions a block through year 60 (and carrying 50 from between
+years 61 and 65) is the flat fee, which does not scale with `R`, so there the
+reward does not cancel. If the reading holds when the production tables run,
+G (`w_ref` and the zone) is the first decision of EUP-5 rather than one of
+six: the purse, the knee, the onset and the stuffer's cost are not readable
+on a chain capped at the zone.
+
 ---
 
 ## 5. What this document does not do

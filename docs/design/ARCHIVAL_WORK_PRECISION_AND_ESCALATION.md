@@ -2187,9 +2187,11 @@ baseline `n` at ~10 y, sustained-growth's final `n`, their geometric mean
 (2026-10-03), when the production fill rule moved the baseline's `n` at 10 y
 to 229,864 and the test did its job; the anchors are now definitions
 evaluated on the current fold
-(`stage2::shipped_knee_lies_within_the_band_its_definitions_give`,
+(`stage2::an_out_of_band_knee_is_held_only_while_the_escalation_is_flat`,
 [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
-§5.7). The config now carries
+§5.7). On the design's emission curve (2026-10-04) the band's high is
+2,079,614 and the shipped knee is above it; it is held there, not
+re-pinned, while the escalation is flat (`docs/FOLLOWUPS.md`). The config now carries
 the middle, `shekyl_escalation_knee_n = 2250000`, provisional and
 behaviour-neutral while flat; the consensus-constants digest re-pinned
 (`885f700d… → 05a1ba28…`). The ceremony still picks the knee with the asymptote.
@@ -2265,10 +2267,11 @@ shard count is that divided by the provisional `W`. A `W` re-pin that leaves
 `shekyl_escalation_knee_n` at 2,250,000 silently moves the knee's physical
 meaning; `escalation::knee_is_an_archival_length_pinned_against_a_w_repin`
 fails when `knee · W` moves, and
-`stage2::shipped_knee_lies_within_the_band_its_definitions_give` fails when the
-shipped knee leaves the band its definitions give on the current fold — and
-prints that band's middle on every run, so a knee that has stopped being the
-middle is said aloud. Re-deriving the knee is GF-7's, after ESR-10
+`stage2::an_out_of_band_knee_is_held_only_while_the_escalation_is_flat` prints
+the band its definitions give on the current fold and where the shipped knee
+stands against it on every run, and fails when the knee is outside the band
+and the asymptote is no longer the floor — the one state in which the knee
+moves consensus. Re-deriving the knee is GF-7's, after ESR-10
 (`docs/FOLLOWUPS.md`).
 
 **Depth direction, corrected.** The leaf-era text said stuffing is "cheapest
