@@ -172,6 +172,13 @@ is 64 s. The growth schedule is not affordable that far as the fill stands —
 the penalty zone one body at a time. Long growth arms wait on that zone being
 closed in form, held to the single-offer walk as the free part is.
 
+Scenario 9 (high history, low activity) is the first of the structural arms.
+It was built to be the fee-era case, and its 60 years no longer reach that
+era. Asked whether its horizon should follow the tail out, Rick's initial
+assessment (2026-10-04) is "yes it should, since that is it's actual
+purpose". The horizon moves with EUP-4's run set, not before: it changes
+every scenario-9 figure and the knee band's high.
+
 **Registered reading: the capacity cap spans most or all of the horizon on
 the production arm.** The design-owner lane's argument: the fill condition
 `w ≤ 4ρ·w_ref·(m/M)²` has no reward in it, because `R` cancels between a

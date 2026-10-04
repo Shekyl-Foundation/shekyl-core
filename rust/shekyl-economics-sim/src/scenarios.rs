@@ -238,9 +238,9 @@ pub const SCENARIO_9_TAIL_TX_PER_BLOCK: u64 = 15;
 /// The curve itself is not near its tail in this run: at 22 per block it has
 /// emitted ≈ 97.7 % by year 60, still mints ≈ 24 SKL/block, and reaches the
 /// 0.6 SKL/block floor near year 119. The scenario was sized when the code
-/// ran 21 per block (≈ 1 SKL/block at year 60, the floor from ≈ year 64);
-/// whether its horizon follows the tail out is the assessment's question
-/// (`ECONOMY_UMBRELLA_PLAN.md` §4.1).
+/// ran 21 per block (≈ 1 SKL/block at year 60, the floor from ≈ year 64).
+/// Its purpose is the fee era, so its horizon is to follow the tail out,
+/// with the assessment's run set (`ECONOMY_UMBRELLA_PLAN.md` §4.1).
 pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConfig {
     ScenarioConfig {
         name: "high_history_low_activity".into(),
