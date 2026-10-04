@@ -1921,16 +1921,18 @@ mod tests {
         [low, middle, high]
     }
 
-    /// The shipped knee (`config/economics_params.json`) read against the band
-    /// its definitions give on the current fold, under the production fee
-    /// arm. Outside the band it is **held, not re-pinned**, and only while
-    /// the escalation is flat (`asymptote == floor`), where the knee changes
-    /// nothing in consensus: a band swept now would be derived from the
-    /// capacity the inherited zone and `w_ref` allow, not from demand, and it
-    /// moves again at ESR-10 and at the `w_ref` ruling. An asymptote raised
-    /// over an out-of-band knee fails here. The state is printed on every
-    /// run; re-deriving the band and the knee is GF-7's, after ESR-10
-    /// (`docs/FOLLOWUPS.md`), where the in-band requirement returns.
+    /// The shipped knee (`config/economics_params.json`) is the swept middle
+    /// `KNEE_BAND[1]`, read against the band its definitions give on the
+    /// current fold, under the production fee arm. Outside that band the
+    /// sweep is **held, not re-pinned**, and only while the escalation is
+    /// flat (`asymptote == floor`), where the knee changes nothing in
+    /// consensus: a band swept now would be derived from the capacity the
+    /// inherited zone and `w_ref` allow, not from demand, and it moves again
+    /// at ESR-10 and at the `w_ref` ruling. Any other knee fails here, and so
+    /// does an asymptote raised over an out-of-band knee. The state is
+    /// printed on every run; re-deriving the band and the knee is GF-7's,
+    /// after ESR-10 (`docs/FOLLOWUPS.md`), where the in-band requirement
+    /// returns.
     #[test]
     fn an_out_of_band_knee_is_held_only_while_the_escalation_is_flat() {
         let cfg: serde_json::Value =
@@ -1940,6 +1942,10 @@ mod tests {
             .get("shekyl_escalation_knee_n")
             .and_then(serde_json::Value::as_u64)
             .expect("shekyl_escalation_knee_n is a u64 in economics_params.json");
+        assert_eq!(
+            shipped, KNEE_BAND[1],
+            "the hold is the 2026-10-01 sweep; a new knee is a re-pin"
+        );
         let [low, middle, high] = knee_band_by_definition(&SimParams::default());
         let in_band = (low..=high).contains(&shipped);
         let reading = format!(
@@ -1953,13 +1959,13 @@ mod tests {
             low < middle && middle < high,
             "the band is ordered: {reading}"
         );
-        let shipped_economics = shekyl_economics::EconomicParams::default();
-        assert!(
-            in_band
-                || shipped_economics.escalation_asymptote_share
-                    == shipped_economics.staker_pool_share,
-            "an out-of-band knee under a live escalation: {reading}"
-        );
+        if !in_band {
+            let shipped_economics = shekyl_economics::EconomicParams::default();
+            assert_eq!(
+                shipped_economics.escalation_asymptote_share, shipped_economics.staker_pool_share,
+                "an out-of-band knee under a live escalation: {reading}"
+            );
+        }
         if shipped != middle {
             // Straight to the process's stderr: the test harness captures
             // `eprintln!` from a passing test, and this must be seen on one.

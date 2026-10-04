@@ -33,7 +33,8 @@
 - The realigned economics sim (#936) on the design curve: its 60-year horizon
   no longer reaches the tail (≈ year 119 neutral, ≈ year 132 in the fold). The
   two tail-era sim tests start in the tail era and assert it; the escalation
-  knee, above its band's new high, is held while the escalation is flat
+  knee, above its band's new high, is held at the swept middle
+  (`KNEE_BAND[1]`) while the escalation is flat
   (`ECONOMY_UMBRELLA_PLAN.md` §4.1, `FOLLOWUPS.md`).
 
 ### Archival shards — `U1b` is read: the floor device does not lower `W`'s ceiling

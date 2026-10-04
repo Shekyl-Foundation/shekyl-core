@@ -73,9 +73,11 @@ pub const ASYMPTOTE_BAND: [u64; 3] = [500_000, 750_000, 900_000];
 /// curve the largest final `n` is 2,079,614, below the shipped knee.
 /// `stage2::an_out_of_band_knee_is_held_only_while_the_escalation_is_flat`
 /// evaluates the definitions on the current fold, prints the band and
-/// where the shipped knee stands against it, and lets an out-of-band knee
-/// stand only while the escalation is flat; re-deriving the band and the
-/// knee is GF-7's, after ESR-10 (`docs/FOLLOWUPS.md`).
+/// where the shipped knee stands against it, holds the shipped knee at
+/// the swept middle (`KNEE_BAND[1]`), and lets that knee stand outside the
+/// live band only while the escalation is flat; re-deriving the band and
+/// the knee is
+/// GF-7's, after ESR-10 (`docs/FOLLOWUPS.md`).
 ///
 /// **A knee in shards is an archival length in disguise.** `knee · W` is the
 /// quantity the sweep actually chose (how much archive is held when the share
