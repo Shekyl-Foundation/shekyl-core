@@ -72,10 +72,9 @@ use shekyl_economics::{calc_effective_emission_share, params::SCALE};
 use crate::burden::{KryderRate, OPP_COST_RATE_BAND, REPLICAS_PER_SHARD, SKL_FIAT_PRICE_BAND};
 use crate::engine::{ScenarioConfig, SimParams};
 use crate::escalation::{family, flat_25, EscalationCurve};
-use crate::scenarios::all_scenarios;
 use crate::stage2::{
-    a1_min_clearance_ratio, a1_shipped_budget_atomic, a1_sustained_years, a1_year_aggs,
-    a1_year_clearance_ratio, year_share_atomic, A1YearAgg, FoldedScenario,
+    a1_min_clearance_ratio, a1_shipped_budget_atomic, a1_sustained_years, a1_year_clearance_ratio,
+    year_share_atomic, A1YearAgg, FoldedScenario,
 };
 
 /// Atomic units per SKL ([`crate::burden::COIN`]).
@@ -487,10 +486,10 @@ pub fn onset_report(
                 .join(" |"),
         ));
         let flat = flat_25();
-        let best = best_candidate(&aggs);
+        let best = best_candidate(aggs);
         let shipped = |c: EscalationCurve| move |a: &A1YearAgg| a1_shipped_budget_atomic(a, &c);
 
-        let emission_crossover_year = a1_sustained_years(&aggs)
+        let emission_crossover_year = a1_sustained_years(aggs)
             .find(|a| {
                 a1_year_clearance_ratio(
                     a,
@@ -504,12 +503,12 @@ pub fn onset_report(
         let onset_by_rate = |c: EscalationCurve| -> Vec<Onset> {
             OPP_COST_RATE_BAND
                 .iter()
-                .map(|&rate| onset_of(year_ratios(&aggs, rate, shipped(c))))
+                .map(|&rate| onset_of(year_ratios(aggs, rate, shipped(c))))
                 .collect()
         };
         let onset_flat_by_rate = onset_by_rate(flat);
         let onset_best_by_rate = onset_by_rate(best);
-        let flat_binding_by_decade: Vec<(u64, f64)> = year_ratios(&aggs, binding, shipped(flat))
+        let flat_binding_by_decade: Vec<(u64, f64)> = year_ratios(aggs, binding, shipped(flat))
             .filter(|(y, _)| DECADES.contains(y))
             .collect();
         let series = flat_binding_by_decade
@@ -617,12 +616,12 @@ pub fn lever_report(
             let min_ratio_by_rate: Vec<f64> = OPP_COST_RATE_BAND
                 .iter()
                 .map(|&rate| {
-                    year_ratios(&aggs, rate, |a| lever.budget_atomic(a, params))
+                    year_ratios(aggs, rate, |a| lever.budget_atomic(a, params))
                         .map(|(_, r)| r)
                         .fold(f64::INFINITY, f64::min)
                 })
                 .collect();
-            let onset_binding = onset_of(year_ratios(&aggs, binding, |a| {
+            let onset_binding = onset_of(year_ratios(aggs, binding, |a| {
                 lever.budget_atomic(a, params)
             }));
             let replicas_sustained_binding = min_ratio_by_rate[BINDING] * REPLICAS_PER_SHARD as f64;
@@ -689,6 +688,8 @@ fn trunc(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenarios::all_scenarios;
+    use crate::stage2::a1_year_aggs;
 
     #[test]
     fn shipped_lever_reproduces_a1() {

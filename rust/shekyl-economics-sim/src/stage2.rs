@@ -117,6 +117,7 @@ pub struct BurdenTrajectory {
 /// The Kryder decline runs over **elapsed years** (the base scenarios start at
 /// genesis, `genesis_height_offset == 0`); scenario 9's pre-existing history is
 /// handled where it lands.
+#[cfg(test)]
 #[must_use]
 pub fn burden_trajectory(params: &SimParams, config: &ScenarioConfig) -> BurdenTrajectory {
     trajectory_from(
@@ -643,10 +644,10 @@ fn a1_clearance_report(
     for scenario in folded {
         let aggs = scenario.native();
         let final_n = aggs.last().map_or(0, |a| a.n);
-        let flat25 = a1_candidate_result(&aggs, &flat_25(), true);
+        let flat25 = a1_candidate_result(aggs, &flat_25(), true);
         let candidates: Vec<A1CandidateResult> = family()
             .iter()
-            .map(|c| a1_candidate_result(&aggs, c, false))
+            .map(|c| a1_candidate_result(aggs, c, false))
             .collect();
 
         // Headline: the flat baseline and the strongest candidate (max min-ratio
@@ -1257,11 +1258,11 @@ fn a4_stuffing_report(
     let mut decomp_rows: Vec<(String, A4Decomp)> = Vec::new();
     for scenario in folded {
         let aggs = scenario.native();
-        let sigma = SigmaCache::build(&aggs);
-        let flat25 = a4_candidate_result(&aggs, &sigma, &flat_25(), true);
+        let sigma = SigmaCache::build(aggs);
+        let flat25 = a4_candidate_result(aggs, &sigma, &flat_25(), true);
         let candidates: Vec<A4CandidateResult> = family()
             .iter()
-            .map(|c| a4_candidate_result(&aggs, &sigma, c, false))
+            .map(|c| a4_candidate_result(aggs, &sigma, c, false))
             .collect();
         let last = A4_HONEST_HOLDINGS_BAND.len() - 1;
         // Worst candidate at the realistic (index-0) end — the gate binds here.
