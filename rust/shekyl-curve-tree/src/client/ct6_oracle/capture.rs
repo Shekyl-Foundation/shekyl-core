@@ -1633,3 +1633,38 @@ fn a_missing_capture_is_refused_not_rebuilt() {
         other => panic!("expected CaptureMissing, got {other:?}"),
     }
 }
+
+/// A captured child that is not a curve point is refused as a corrupt
+/// store, not a panic.
+///
+/// The capture route hands persisted bytes to the branch conversion, and the
+/// store only length-checks them. `0xFF…FF` is not a field element on either
+/// curve, so neither conversion can succeed; before this the conversion's
+/// `expect` would have taken the wallet down on a corrupt row. The wallet
+/// must still be live afterwards — a refusal, not an abort.
+#[test]
+fn a_captured_child_that_is_not_a_point_is_refused_not_a_panic() {
+    let (client, tip) = drained_chunks(&[OWNED_POSITION]);
+    let input = input_at(&client, tip, OWNED_POSITION);
+    let reference = reference_at(&client, tip);
+
+    let mut row = held_at(&client, OWNED_POSITION);
+    let layer_one = row
+        .iter_mut()
+        .find(|c| c.layer == 1)
+        .expect("the cascade key holds the layer-1 node chunk");
+    layer_one.bytes[..32].copy_from_slice(&[0xFFu8; 32]);
+    client
+        .store
+        .replace_capture_row_for_test(TreePosition::from_raw(OWNED_POSITION), &row)
+        .expect("the row is replaced verbatim");
+
+    match client.assemble_path(&input, &reference) {
+        Err(crate::ClientError::Store(crate::store::StoreError::CorruptMeta(_))) => {}
+        other => panic!("expected CorruptMeta for a non-point child, got {other:?}"),
+    }
+    assert!(
+        client.assemble_path(&input, &reference).is_err(),
+        "still refusing, still live: the client was not poisoned by the refusal"
+    );
+}

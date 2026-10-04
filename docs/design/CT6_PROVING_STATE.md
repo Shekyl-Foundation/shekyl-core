@@ -1434,6 +1434,30 @@ reconcile, because that is the only way to observe it.
 
 ### 11.11 What capture still does not do
 
+**Two FOLLOWUPS rows keep their rationale here, not in the queue (rule 95).**
+
+*The sibling-points question (rule 30).* The tree commits only
+x-coordinates, so the leaf-layer hash needs only scalars — yet the prover's
+API takes sibling compressed points (`ProveInputLeafChunk.leaf_outputs`,
+three per sibling) beside `leaf_cm_x`. If the gadget reads only the
+x-coordinates, the points are an API artefact: capture can take its layer-0
+chunk from the frontier fold like every other layer, one value shape, and no
+identity tail is owed when `entries` retires. If the points are load-bearing,
+the tail is permanent. It must be read off the gadget's source, not inferred
+from the API.
+
+*The identity account before `entries` retires (increment 7).* Two things
+still read from it. A path whose owned leaf sits in the **open** leaf chunk at
+the reference height needs that chunk's sibling *points*, which no snapshot
+holds — the frontier keeps scalars and `O.x` is a one-way projection; with
+the anchor fixed at `tip - REF_ANCHOR_AGE` that is a bounded tail of a few
+chunks, not a window of history, and today it is a ranged read of at most
+`SELENE_CHUNK_WIDTH - 1` leaf rows. And the owned positions reconciliation
+recomputes come from `drained_sorted` over `entries` (§11.10); without
+`entries`, those come from the store. Both say one thing: retiring `entries`
+needs a precise account of which identities the wallet must still be able to
+produce, each case supplied or refused.
+
 **The engine registrant is the outstanding production work.** Nothing in the
 engine calls `register_owned`. Until it does, no production batch is
 registered, and assembly takes the rebuild it keeps for that batch. The

@@ -236,29 +236,46 @@ fn decode_captured_leaf_chunk(body: &[u8]) -> Result<Vec<ChunkLeaf>, ClientError
 /// Even layers are Selene nodes whose children are Helios points → Selene
 /// scalars (C1); odd layers are Helios nodes whose children are Selene
 /// points → Helios scalars (C2). The conversions are total for valid
-/// consensus nodes (`node_conversions_are_total` in shekyl-fcmp), and a path
-/// is only assembled after the root gate has passed.
+/// consensus nodes (`node_conversions_are_total` in shekyl-fcmp) — but the
+/// capture route hands this **persisted** bytes that were only
+/// length-checked, and a 32-byte string that is not a point is a corrupt
+/// row, not a programming error. So this is fallible, and an unconvertible
+/// child is [`StoreError::CorruptMeta`]: a refusal the caller can classify
+/// as a corrupt store, where an `expect` would have taken the wallet down
+/// with it.
+///
+/// # Errors
+///
+/// [`StoreError::CorruptMeta`] if a child does not decode as a point of the
+/// layer's curve.
 fn push_branch(
     layer: u8,
     children: &[[u8; 32]],
     c1_layers: &mut Vec<Vec<[u8; 32]>>,
     c2_layers: &mut Vec<Vec<[u8; 32]>>,
-) {
+) -> Result<(), StoreError> {
     if layer_is_selene(layer) {
-        c1_layers.push(
-            children
-                .iter()
-                .map(|p| helios_point_to_selene_scalar(p).expect("helios->selene"))
-                .collect(),
-        );
+        let scalars = children
+            .iter()
+            .map(|p| {
+                helios_point_to_selene_scalar(p).ok_or(StoreError::CorruptMeta(
+                    "captured child is not a Helios point",
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        c1_layers.push(scalars);
     } else {
-        c2_layers.push(
-            children
-                .iter()
-                .map(|p| selene_point_to_helios_scalar(p).expect("selene->helios"))
-                .collect(),
-        );
+        let scalars = children
+            .iter()
+            .map(|p| {
+                selene_point_to_helios_scalar(p).ok_or(StoreError::CorruptMeta(
+                    "captured child is not a Selene point",
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        c2_layers.push(scalars);
     }
+    Ok(())
 }
 
 /// What [`CurveTreeClient::assemble_from_captures`] decided.
@@ -412,11 +429,11 @@ impl CurveTreeClient {
     /// cost is `CT6_PROVING_STATE.md` §11.2.
     ///
     /// The structural pin is
-    /// `ct6_oracle::assembly_today_depends_on_every_foreign_leaf`. With the
-    /// foreign leaves removed, an unregistered batch refuses with
-    /// [`ClientError::PathRootMismatch`] { [`PathRootFault::RootDisagrees`] }.
-    /// The same call on a registered batch succeeds, and the path equals the
-    /// full-tree path.
+    /// `ct6_oracle::capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`:
+    /// with the foreign leaves removed from `entries`, a registered batch
+    /// assembles and the path equals the full-tree path. (Its predecessor,
+    /// which asserted the refusal an unregistered batch meets on that shape,
+    /// was retired when the equality became assertable.)
     ///
     /// # Duplicate inputs are not refused here
     ///
@@ -578,7 +595,7 @@ impl CurveTreeClient {
                             source: crate::frontier::FrontierError::EmptyWithLeaves,
                         })?,
                 };
-                push_branch(layer, &children, &mut c1_layers, &mut c2_layers);
+                push_branch(layer, &children, &mut c1_layers, &mut c2_layers)?;
             }
 
             paths.push(seal_path(
@@ -735,7 +752,7 @@ impl CurveTreeClient {
                 let prev = &layers[usize::from(layer) - 1];
                 let start = node_idx * width;
                 let end = (start + width).min(prev.len());
-                push_branch(layer, &prev[start..end], &mut c1_layers, &mut c2_layers);
+                push_branch(layer, &prev[start..end], &mut c1_layers, &mut c2_layers)?;
                 child_node_idx = node_idx;
             }
 
