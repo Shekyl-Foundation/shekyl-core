@@ -601,59 +601,56 @@ mod tests {
 
     #[test]
     fn assemble_filters_undrained_and_sorts_by_maturity_then_gindex() {
-        let id = coinbase_output();
-        let leaf = try_build_leaf(&id).expect("no bad point").expect("leaf");
-        let entries = [
+        // Three drained leaves and one that is not, each a distinct leaf.
+        // Slice order is neither maturity nor gindex order.
+        let entry = |gindex: u64, maturity: u64, index: usize| {
+            let identity = crate::client::test_fixtures::output_identity_at(maturity, index);
             LeafEntry {
-                gindex: Gindex::from_raw(5),
-                maturity: BlockHeight::from_raw(70),
-                creation_height: BlockHeight::from_raw(10),
-                leaf,
-                identity: id,
-            },
-            LeafEntry {
-                gindex: Gindex::from_raw(2),
-                maturity: BlockHeight::from_raw(70),
-                creation_height: BlockHeight::from_raw(10),
-                leaf,
-                identity: id,
-            },
-            // Not yet drained at cutoff 70.
-            LeafEntry {
-                gindex: Gindex::from_raw(1),
-                maturity: BlockHeight::from_raw(71),
-                creation_height: BlockHeight::from_raw(11),
-                leaf,
-                identity: id,
-            },
-        ];
+                gindex: Gindex::from_raw(gindex),
+                maturity: BlockHeight::from_raw(maturity),
+                creation_height: BlockHeight::from_raw(maturity - 60),
+                leaf: try_build_leaf(&identity)
+                    .expect("no bad point")
+                    .expect("leaf"),
+                identity,
+            }
+        };
+        let high_gindex = entry(5, 70, 0);
+        let low_gindex = entry(2, 70, 1);
+        let earlier = entry(9, 69, 0);
+        // Not yet drained at cutoff 70.
+        let undrained = entry(1, 71, 0);
+        let entries = [high_gindex, low_gindex, undrained, earlier];
+
         let scalars = assemble_leaf_stream(&entries, BlockHeight::from_raw(70));
-        // Two drained leaves → 8 scalars (the maturity-71 leaf excluded).
-        assert_eq!(scalars.len(), 2 * SCALARS_PER_LEAF);
+        // Maturity first, so the gindex-9 leaf leads. Then gindex within
+        // the maturity-70 pair.
+        let expected: Vec<[u8; 32]> = [earlier, low_gindex, high_gindex]
+            .iter()
+            .flat_map(|e| e.leaf.chunks_exact(32))
+            .map(|limb| limb.try_into().expect("32-byte limb"))
+            .collect();
+        assert_eq!(expected.len(), 3 * SCALARS_PER_LEAF);
+        assert_eq!(scalars, expected);
     }
 
     #[test]
     fn incremental_drain_batches_match_drained_sorted_prefix() {
-        let id = coinbase_output();
-        let leaf = try_build_leaf(&id)
-            .expect("no bad point")
-            .expect("valid leaf");
-        let entries = vec![
+        let entry = |index: usize, maturity: u64| {
+            let identity = crate::client::test_fixtures::output_identity_at(0, index);
             LeafEntry {
-                gindex: Gindex::from_raw(0),
-                maturity: BlockHeight::from_raw(60),
+                gindex: Gindex::from_raw(u64::try_from(index).expect("index fits u64")),
+                maturity: BlockHeight::from_raw(maturity),
                 creation_height: BlockHeight::from_raw(0),
-                leaf,
-                identity: id,
-            },
-            LeafEntry {
-                gindex: Gindex::from_raw(1),
-                maturity: BlockHeight::from_raw(10),
-                creation_height: BlockHeight::from_raw(0),
-                leaf,
-                identity: id,
-            },
-        ];
+                leaf: try_build_leaf(&identity)
+                    .expect("no bad point")
+                    .expect("valid leaf"),
+                identity,
+            }
+        };
+        // Two leaves share maturity 10 and sit in the slice against gindex
+        // order, so the batch at that cutoff has an order to get wrong.
+        let entries = vec![entry(0, 60), entry(2, 10), entry(1, 10)];
         let mut incremental = Vec::new();
         for through in 0..=60u64 {
             incremental.extend(newly_drained_at_cutoff(
