@@ -37,7 +37,8 @@
 
 use shekyl_block_template::Fill;
 use shekyl_economics::{
-    compute_burn_split_at, ClosedShardCount, EconomicParams, PrePenaltyEmission,
+    compute_burn_split_at, penalty_free_weight, ClosedShardCount, EconomicParams,
+    PrePenaltyEmission,
 };
 use shekyl_tx_weight::predict_weight;
 use shekyl_types::SHARD_LENGTH;
@@ -140,8 +141,7 @@ impl<'a> Block<'a> {
             last.honest_tx.fee_atomic,
             last.honest_offered,
         );
-        let room = emission
-            .full_weight(median, economic)
+        let room = penalty_free_weight(median, economic)
             .min(honest.bodies_weight_bound())
             .saturating_sub(honest.bodies_weight());
         Self {

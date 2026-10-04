@@ -35,7 +35,9 @@
 //!   body that lowers the coinbase or refuse one that raises it. This rule
 //!   compares exactly.
 
-use shekyl_economics::{EconomicParams, EmissionError, PrePenaltyEmission, TxVolume};
+use shekyl_economics::{
+    penalty_free_weight, EconomicParams, EmissionError, PrePenaltyEmission, TxVolume,
+};
 use shekyl_wire::transaction::COINBASE_BLOB_RESERVED_SIZE;
 
 /// The bytes a block holds back for its coinbase when bodies are admitted.
@@ -76,6 +78,39 @@ impl<'a> Fill<'a> {
             params,
             bodies_weight: 0,
             fees: 0,
+            reward,
+        })
+    }
+
+    /// A template whose bodies are already listed. `bodies_weight` and
+    /// `fees` are that listing's outcome; the reward is the penalty at the
+    /// weight. A fold that kept the outcome rebuilds the template in one
+    /// pricing, then offers the next body to [`Self::admit`].
+    ///
+    /// # Errors
+    ///
+    /// [`EmissionError::BlockTooBig`] above twice the median;
+    /// [`EmissionError::Overflow`] when the emission overflows or the
+    /// reward and the fees do not fit in one coinbase.
+    pub fn listed(
+        median_weight: u64,
+        already_generated: u64,
+        tx_volume: TxVolume,
+        params: &'a EconomicParams,
+        bodies_weight: u64,
+        fees: u64,
+    ) -> Result<Self, EmissionError> {
+        let emission = PrePenaltyEmission::of(already_generated, tx_volume, params)?;
+        let reward = emission.penalised(median_weight, bodies_weight, params)?;
+        if reward.checked_add(fees).is_none() {
+            return Err(EmissionError::Overflow);
+        }
+        Ok(Self {
+            median_weight,
+            emission,
+            params,
+            bodies_weight,
+            fees,
             reward,
         })
     }
@@ -127,17 +162,14 @@ impl<'a> Fill<'a> {
     /// bodies refused once are refused again, since a refusal changes
     /// nothing.
     ///
-    /// The bodies that keep the block within the emission's full weight
-    /// ([`PrePenaltyEmission::full_weight`]) and the bound leave the reward
-    /// where it is and add a fee each, so every one of them is admitted;
-    /// they are admitted together, and the walk resumes past them. A block
-    /// of millions of transactions below its median costs one step, not
-    /// millions.
+    /// The bodies that keep the block within [`penalty_free_weight`] and the
+    /// bound leave the reward where it is and add a fee each, so every one
+    /// of them is admitted; they are admitted together, and the walk resumes
+    /// past them. A block of millions of transactions below its median costs
+    /// one step, not millions.
     pub fn admit_up_to(&mut self, weight: u64, fee: u64, count: u64) -> u64 {
-        let ceiling = self
-            .emission
-            .full_weight(self.median_weight, self.params)
-            .min(self.bodies_weight_bound());
+        let ceiling =
+            penalty_free_weight(self.median_weight, self.params).min(self.bodies_weight_bound());
         let free = match ceiling.checked_sub(self.bodies_weight) {
             None => 0,
             Some(_) if weight == 0 => count,
@@ -171,6 +203,18 @@ impl<'a> Fill<'a> {
     #[must_use]
     pub fn fees(&self) -> u64 {
         self.fees
+    }
+
+    /// The penalised reward at `bodies_weight` under this template's median.
+    /// The listed bodies stay where they are: a producer asks what one more
+    /// placement would pay.
+    ///
+    /// # Errors
+    ///
+    /// [`Self::admit`]'s reward error at that weight.
+    pub fn reward_at(&self, bodies_weight: u64) -> Result<u64, EmissionError> {
+        self.emission
+            .penalised(self.median_weight, bodies_weight, self.params)
     }
 
     /// The penalised reward at the bodies' weight
@@ -297,5 +341,29 @@ mod tests {
         assert_eq!(covered.coinbase(), before);
         assert_eq!(covered.reward(), after, "the reward at the new weight");
         assert_eq!(covered.fees(), cost);
+    }
+
+    /// Rebuilding a listed template is the fill the offers produced: the
+    /// same weight, fees, reward and coinbase, below the median and past it.
+    #[test]
+    fn listed_is_the_fill_the_offers_built() {
+        let p = params();
+        let v = volume(&p);
+        let median = p.full_reward_zone;
+        for (weight, fee, count) in [(2_000u64, 0u64, 40u64), (20_000, 50_000_000_000, 12)] {
+            let mut offered = Fill::empty(median, 0, v, &p).expect("priced");
+            let admitted = offered.admit_up_to(weight, fee, count);
+            assert!(admitted > 0, "the case lists something");
+            let listed = Fill::listed(median, 0, v, &p, offered.bodies_weight(), offered.fees())
+                .expect("the offers' outcome is a template");
+            assert_eq!(listed.bodies_weight(), offered.bodies_weight());
+            assert_eq!(listed.fees(), offered.fees());
+            assert_eq!(listed.reward(), offered.reward());
+            assert_eq!(listed.coinbase(), offered.coinbase());
+            assert_eq!(
+                listed.reward_at(listed.bodies_weight()).expect("priced"),
+                listed.reward()
+            );
+        }
     }
 }

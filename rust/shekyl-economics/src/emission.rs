@@ -109,6 +109,16 @@ pub fn effective_emission(
     Ok(modulated.max(tail_subsidy_per_block(params)?))
 }
 
+/// The heaviest block [`apply_weight_penalty`] pays in full under
+/// `median_weight`: the median, raised to [`EconomicParams::full_reward_zone`]
+/// when the median sits below it ("make it soft"). The paid amount does not
+/// enter. A caller that has not priced an emission yet asks this, not a
+/// method on one.
+#[must_use]
+pub fn penalty_free_weight(median_weight: u64, params: &EconomicParams) -> u64 {
+    median_weight.max(params.full_reward_zone)
+}
+
 /// The quadratic median-weight penalty applied to an already-composed
 /// PAID amount (FL-R12′'s ordering rule: **floors belong to emission;
 /// penalties apply to the paid quantity**). Applying this before the tail
@@ -117,19 +127,12 @@ pub fn effective_emission(
 /// penalty is the LAST operator, not an emission stage.
 ///
 /// Shape (per the C2a port, arithmetic unchanged): the effective median is
-/// `max(median_weight, params.full_reward_zone)`; at or below it no penalty;
-/// above twice it the block is rejected ([`EmissionError::BlockTooBig`]);
-/// otherwise `amount·(2m − c)·c/m²` in `u128`, fail-closed on overflow.
-/// The zone is read from `params`, never taken from the caller: a
-/// consensus constant a caller could vary per call is a second source
-/// (E6 slice 4 §3.1 S8 — the C++ used to supply it on every call).
-/// The heaviest block [`apply_weight_penalty`] pays in full under
-/// `median_weight`: the median, raised to the penalty-free zone when below
-/// it ("make it soft").
-fn penalty_free_weight(median_weight: u64, params: &EconomicParams) -> u64 {
-    median_weight.max(params.full_reward_zone)
-}
-
+/// [`penalty_free_weight`]; at or below it no penalty; above twice it the
+/// block is rejected ([`EmissionError::BlockTooBig`]); otherwise
+/// `amount·(2m − c)·c/m²` in `u128`, fail-closed on overflow. The zone is
+/// read from `params`, never taken from the caller: a consensus constant a
+/// caller could vary per call is a second source (E6 slice 4 §3.1 S8 — the
+/// C++ used to supply it on every call).
 pub(crate) fn apply_weight_penalty(
     amount: u64,
     median_weight: u64,
@@ -231,14 +234,6 @@ impl PrePenaltyEmission {
         params: &EconomicParams,
     ) -> Result<u64, EmissionError> {
         apply_weight_penalty(self.0, median_weight, current_block_weight, params)
-    }
-
-    /// The heaviest block this emission is paid in full at under
-    /// `median_weight`: [`Self::penalised`] returns the whole amount at any
-    /// weight up to this one.
-    #[must_use]
-    pub fn full_weight(self, median_weight: u64, params: &EconomicParams) -> u64 {
-        penalty_free_weight(median_weight, params)
     }
 
     /// The amount, atomic units.
@@ -879,16 +874,17 @@ mod tests {
     /// "Never panics" — not "always exact". Past the exact domain the
     /// function reports `Overflow`; the last case pins that, and pins that it
     /// is an error rather than a panic or a wrap.
-    /// `full_weight` is the boundary the penalty keys on: paid whole at it,
-    /// less one byte past it — and the zone stands in for a lower median.
+    /// [`penalty_free_weight`] is the boundary the penalty keys on: paid
+    /// whole at it, less one byte past it — and the zone stands in for a
+    /// lower median.
     #[test]
-    fn full_weight_is_the_last_weight_paid_whole() {
+    fn penalty_free_weight_is_the_last_weight_paid_whole() {
         let p = EconomicParams::default();
         let zone = p.full_reward_zone;
         let emission = PrePenaltyEmission::of(0, TxVolume::per_block(p.tx_volume_baseline), &p)
             .expect("genesis emission");
         for median in [0, zone / 2, zone, zone + 12_345, 3 * zone] {
-            let full = emission.full_weight(median, &p);
+            let full = penalty_free_weight(median, &p);
             assert_eq!(full, median.max(zone), "median {median}");
             assert_eq!(
                 emission.penalised(median, full, &p),
