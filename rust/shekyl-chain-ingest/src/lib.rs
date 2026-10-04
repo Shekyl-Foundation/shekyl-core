@@ -66,6 +66,13 @@
 
 #![deny(unsafe_code)]
 
+/// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 2): census 4.J through
+/// the driver before any 4.J rule — the corpus's archival inputs
+/// enumerated, a Reinstate the driver can now build, and today's connects
+/// and refusals on the bond-state and hint rows, each pinned to the row
+/// that flips it.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_admission_tests;
 /// `ARW-Q15`'s consumer: the LMDB slash fixture rebuilt on the Rust stack
 /// under a levered schedule and compared through a role map.
 #[cfg(all(test, feature = "pipeline"))]
