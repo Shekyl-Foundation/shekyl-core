@@ -330,7 +330,7 @@ fn a_zero_ceiling_refuses_inbound() {
         InboundCeiling::Bounded(0),
     )
     .expect_err("ceiling");
-    assert_eq!(err.kind(), CloseKind::AdmissionRefused);
+    assert_eq!(err.kind(), CloseKind::InboundNotAccepted);
     drop(ends);
 }
 
