@@ -147,7 +147,9 @@ fn drained_chunks(register: &[u64]) -> (CurveTreeClient, BlockHeight) {
     let mut client = CurveTreeClient::new();
     for gindex in register {
         assert_eq!(
-            client.register_owned(Gindex::from_raw(*gindex)),
+            client
+                .register_owned(Gindex::from_raw(*gindex))
+                .expect("a live client registers"),
             OwnedRegistration::BeforeDrain,
             "an empty client has drained nothing"
         );
@@ -166,23 +168,33 @@ fn drained_chunks(register: &[u64]) -> (CurveTreeClient, BlockHeight) {
     // The split the capture depends on: the owned chunk's first leaf and its
     // last were drained by different blocks, so its identities came partly
     // from `read_drained_range` and partly from the block in hand.
-    let first = OWNED_POSITION + 1 - SELENE_CHUNK_WIDTH as u64;
-    let block_of = |position: u64| {
-        let mut seen = 0u64;
-        for (block, n) in counts.iter().enumerate() {
-            seen += u64::try_from(*n).expect("a block's count fits u64");
-            if position < seen {
-                return block;
-            }
-        }
-        panic!("position {position} is past the fixture");
-    };
     assert_ne!(
-        block_of(first),
-        block_of(OWNED_POSITION),
+        creation_block_of(chunk_start(OWNED_POSITION)),
+        creation_block_of(OWNED_POSITION),
         "the owned chunk must straddle a block or the store read is untested"
     );
     (client, tip)
+}
+
+/// First leaf position of the layer-0 chunk that `position` sits in.
+fn chunk_start(position: u64) -> u64 {
+    let width = SELENE_CHUNK_WIDTH as u64;
+    position / width * width
+}
+
+/// Creation block of the leaf at `position`, from the fixture's counts.
+///
+/// Position equals gindex here (see [`drained_chunks`]), and gindexes are
+/// handed out in creation order, so the counts are a prefix sum.
+fn creation_block_of(position: u64) -> u64 {
+    let mut seen = 0u64;
+    for (block, n) in counts().iter().enumerate() {
+        seen += u64::try_from(*n).expect("a block's count fits u64");
+        if position < seen {
+            return u64::try_from(block).expect("a block index fits u64");
+        }
+    }
+    panic!("position {position} is past the fixture");
 }
 
 /// Decode a layer-0 capture body into the chunk leaves a path carries.
@@ -351,13 +363,17 @@ fn an_unregistered_fixture_captures_nothing() {
 fn a_registration_after_the_drain_reports_itself() {
     let (mut client, _) = drained_chunks(&[]);
     assert_eq!(
-        client.register_owned(Gindex::from_raw(0)),
+        client
+            .register_owned(Gindex::from_raw(0))
+            .expect("a live client registers"),
         OwnedRegistration::AfterDrain,
         "leaf 0 drained long before this call"
     );
     // A gindex this client has never seen is a future leaf, not an error.
     assert_eq!(
-        client.register_owned(Gindex::from_raw(u64::MAX)),
+        client
+            .register_owned(Gindex::from_raw(u64::MAX))
+            .expect("a live client registers"),
         OwnedRegistration::BeforeDrain,
         "an unseen gindex has not drained"
     );
@@ -450,5 +466,106 @@ fn a_rollback_keeps_the_registry_and_drops_cut_positions() {
             .collect::<Vec<_>>(),
         vec![0, 1],
         "both cascade layers must be captured again after the re-drain"
+    );
+}
+
+/// A leaf row missing under a closing chunk refuses the block.
+///
+/// `prune_frozen` is the only thing that produces this shape — a position
+/// the store still counts whose leaf bytes are gone — and it has no
+/// production caller, so without a standing pass this refusal would be
+/// shown only by mutating the code it guards. Writing a short chunk instead
+/// would be the worse outcome by far: the merge accepts it, and the defect
+/// surfaces at spend time as a path that does not hash to its root.
+#[test]
+fn a_missing_leaf_row_refuses_rather_than_capturing_short() {
+    let counts = counts();
+    let owned_creation = creation_block_of(OWNED_POSITION);
+    // The owned leaf drains at `maturity + 1`, because the root at `h`
+    // drains through `h - 1`. Stop one short of that, so the chunk has not
+    // closed and the rows below this block's drain are committed.
+    let maturity = BlockHeight::from_raw(owned_creation) + lock_count();
+    let mut client = CurveTreeClient::new();
+    client
+        .register_owned(Gindex::from_raw(OWNED_POSITION))
+        .expect("a live client registers");
+    ingest_fixture(&mut client, maturity, &counts);
+    assert!(
+        held_at(&client, OWNED_POSITION).is_empty(),
+        "the chunk must not have closed yet"
+    );
+
+    // Drop the chunk's first sibling — in the half that comes from the store,
+    // and both of its rows, which is what `prune_frozen` removes. Dropping
+    // the leaf row alone is a *different* state: `read_drained_range` refuses
+    // leaf/meta asymmetry as corruption, so that path never reaches the
+    // short-count refusal this pass is about.
+    let start = chunk_start(OWNED_POSITION);
+    let base = client.frontier.leaf_count();
+    assert!(
+        start < base,
+        "the dropped row must be one the store has already committed"
+    );
+    client
+        .store
+        .drop_leaf_rows_for_test(TreePosition::from_raw(start))
+        .expect("the rows drop");
+
+    let closing = maturity + BlockCount::ONE;
+    let txs: Vec<TxLeafInputs<'_>> = Vec::new();
+    let err = client
+        .ingest_block(BlockLeaves {
+            height: closing,
+            txs: &txs,
+        })
+        .expect_err("a chunk whose siblings are short must refuse the block");
+    match err {
+        crate::ClientError::CaptureIdentitiesIncomplete {
+            end_leaf,
+            want,
+            got,
+        } => {
+            assert_eq!(
+                end_leaf, OWNED_POSITION,
+                "the refusal names the chunk's key"
+            );
+            assert_eq!(want, SELENE_CHUNK_WIDTH);
+            // Not `want - 1`, though one position was dropped.
+            // `read_drained_range` cannot tell a hole from the end of the
+            // table, so it stops at the first absent position — the whole
+            // store-side half is lost, and only this block's own leaves
+            // remain. That is the honest reading of a ranged read over a
+            // table with a hole in it, and the reason the refusal is keyed
+            // on the total rather than on a diff.
+            let own_half = usize::try_from(OWNED_POSITION + 1 - base).expect("half fits usize");
+            assert_eq!(
+                got, own_half,
+                "a hole stops the ranged read, so only the block's own leaves counted"
+            );
+        }
+        other => panic!("expected CaptureIdentitiesIncomplete, got {other:?}"),
+    }
+    assert!(
+        held_at(&client, OWNED_POSITION).is_empty(),
+        "the refusal is ahead of the transaction, so nothing was written"
+    );
+}
+
+/// A poisoned client refuses to answer.
+///
+/// The verdict reads `entries`, and a poisoned client's `entries` may
+/// disagree with the store. The wrong answer that matters is `BeforeDrain`
+/// for a leaf that has drained: it reports *nothing owed*, so reconciliation
+/// is never told, and the captures are lost without a trace.
+#[test]
+fn a_poisoned_client_refuses_to_register() {
+    let (mut client, _) = drained_chunks(&[]);
+    client.poisoned = true;
+    assert!(
+        matches!(
+            client.register_owned(Gindex::from_raw(0)),
+            Err(crate::ClientError::Poisoned)
+        ),
+        "registration must fail fast while memory is inconsistent"
     );
 }

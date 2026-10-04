@@ -2283,6 +2283,35 @@ impl LeafStore {
         Ok(())
     }
 
+    /// Remove the leaf **and** meta rows at `position`, leaving
+    /// `leaf_count` alone.
+    ///
+    /// Test-only, and narrow on purpose: it reproduces the exact shape
+    /// [`Self::prune_frozen`] leaves behind — a position the store still
+    /// counts whose rows are gone — without the frozen segment and the
+    /// one-way posture flag that method needs. Both rows, because
+    /// `prune_frozen` removes both; dropping only the leaf row produces a
+    /// *different* refusal, [`Self::read_drained_range`]'s key-set
+    /// asymmetry, which is a corrupt store rather than a pruned one.
+    ///
+    /// The client's refusal `ClientError::CaptureIdentitiesIncomplete` has
+    /// no other reachable producer, since `prune_frozen` has no production
+    /// caller, and a refusal shown only by mutating the code it guards is
+    /// not covered.
+    #[cfg(test)]
+    pub(crate) fn drop_leaf_rows_for_test(&self, position: TreePosition) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        {
+            let key = TreePositionKey::from(position);
+            let mut leaves = txn.open_table(LEAVES_TABLE)?;
+            let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
+            leaves.remove(key)?;
+            drop(leaf_meta.remove(key)?);
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
     /// Add chunks that closed at `end_leaf`, **merging by layer**.
     ///
     /// A fold cascade closes several layers on one leaf, and they share a

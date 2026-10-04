@@ -272,6 +272,28 @@ mod reanchor_classification_tests {
         }
     }
 
+    /// A store missing the leaf bytes capture needs is terminal too.
+    ///
+    /// It shares `PathRootMismatch`'s arm, and an arm shared by two variants
+    /// is one a later edit can move for the wrong reason. The remedy is the
+    /// reason: reselecting inputs cannot help, because no other input is
+    /// served by a store in that state (rule 82).
+    #[test]
+    fn a_short_capture_read_is_not_a_reselection() {
+        let err = CurveTreeHandleError::Client(ClientError::CaptureIdentitiesIncomplete {
+            end_leaf: 683,
+            want: 38,
+            got: 18,
+        });
+        match map_handle_err_to_reanchor(&err) {
+            ReanchorError::Failed(_) => {}
+            other => panic!(
+                "a store missing leaf bytes must be terminal, not a reselection \
+                 request; got {other:?}"
+            ),
+        }
+    }
+
     /// The arm above is specific, not a widening: an unresolvable input still
     /// asks for reselection, which is the case that remedy exists for.
     #[test]

@@ -484,8 +484,9 @@ pub enum OwnedRegistration {
     /// call are **not** captured, and are owed to reconciliation; chunks
     /// that have yet to close are captured as normal.
     ///
-    /// This is the state a [`Self::resume`] leaves every held output in,
-    /// since the registry does not persist.
+    /// This is the state a resumed client leaves every held output in, since
+    /// the registry does not persist
+    /// ([`CurveTreeClient::register_owned`]).
     AfterDrain,
 }
 
@@ -1028,14 +1029,27 @@ impl CurveTreeClient {
     ///
     /// # Nothing calls this in production yet
     ///
-    /// The engine's registration path is owed inside this PR. Until it
-    /// lands, the captures exist for an output nothing registers, and the
-    /// gate on that is `assembly_today_depends_on_every_foreign_leaf`'s
-    /// state 3, which no commit has flipped.
-    pub fn register_owned(&mut self, gindex: Gindex) -> OwnedRegistration {
+    /// The engine's registration path — the curve-tree actor's protocol, and
+    /// the scan that learns a `global_output_index` — is unbuilt, so the
+    /// captures currently exist for an output nothing registers. Whether it
+    /// lands beside this or as its own slice is the round's call, not this
+    /// docstring's. The gate on it either way is
+    /// `assembly_today_depends_on_every_foreign_leaf`'s state 3, which no
+    /// commit has flipped.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Poisoned`] if a partially-applied rollback left memory
+    /// inconsistent with the store. The verdict is read from `entries`, so a
+    /// poisoned client could answer `BeforeDrain` for a leaf that has
+    /// drained — which is the one wrong answer that reports *nothing owed*
+    /// and so silently loses the captures.
+    #[must_use = "a registration after the drain owes captures to                   reconciliation; dropping the verdict hides that"]
+    pub fn register_owned(&mut self, gindex: Gindex) -> Result<OwnedRegistration, ClientError> {
+        self.ensure_live()?;
         self.owned_gindexes.insert(gindex);
         let Some(tip) = self.ingested_tip_height else {
-            return OwnedRegistration::BeforeDrain;
+            return Ok(OwnedRegistration::BeforeDrain);
         };
         let cutoff = Self::drained_through(tip);
         // `entries` is strictly increasing in `gindex` — `rebuild_from_store`
@@ -1048,11 +1062,11 @@ impl CurveTreeClient {
             .entries
             .binary_search_by(|held| held.gindex.cmp(&gindex))
             .is_ok_and(|i| self.entries[i].maturity <= cutoff);
-        if drained {
+        Ok(if drained {
             OwnedRegistration::AfterDrain
         } else {
             OwnedRegistration::BeforeDrain
-        }
+        })
     }
 
     /// Does this chunk's leaf span hold an owned position?

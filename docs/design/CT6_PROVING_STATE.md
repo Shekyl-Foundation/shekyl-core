@@ -1206,6 +1206,16 @@ keeps its position and a removed one re-resolves when it re-drains:
 `owned_positions.retain(|p| p < surviving_leaf_count)`, the same coordinate
 `FoldedChunk::end_leaf` is compared against (§11.8).
 
+One case the registry's survival does **not** cover cleanly: a reorg past the
+owned output's *creation*, not merely its drain. `gindex` is re-derived from
+the replayed block sequence, so on the new chain that number may name a
+different output. The registry keeps it and captures that output's chunks —
+an **over-capture**, not a wrong proof, because assembly still resolves by
+`gindex` and refuses a leaf that does not carry the expected
+`(output_key, commitment)` (`ClientError::IdentityMismatch`). The wallet's own
+rescan is what retracts the registration. The reorg red-bite owes this a
+row.
+
 **The observer is infallible; the read that can fail is outside it.** A node
 chunk is copied as the frontier folded it. A layer-0 chunk is only *recorded
 as a coordinate*, because its children are leaf scalars and a path needs
@@ -1237,7 +1247,19 @@ assertion built on it, however exact the assertion looks.
 
 **What this does not do.** Nothing in the engine calls `register_owned` yet,
 and nothing reads a capture: assembly still rebuilds from `entries`, which is
-why `assembly_today_depends_on_every_foreign_leaf` is still in state 2. Both
-are owed inside this PR — the registration path, and the state-3 flip that
-makes a capture load-bearing — along with reconciliation for what
-`AfterDrain` names.
+why `assembly_today_depends_on_every_foreign_leaf` is still in state 2. Three
+things are owed — the registration path, reconciliation for what `AfterDrain`
+names, and the state-3 flip that makes a capture load-bearing. The
+registration path is the curve-tree actor's protocol plus the scan that learns
+a `global_output_index`, which is a wider slice than the other two; whether it
+lands beside them or as its own is a slice-order call for the round, and rule
+19's producers-and-callers reading is the argument for beside.
+
+Two things the oracle cannot reach yet, named so the next commit does not
+inherit them silently. The fixture's depth puts only layer 1 under a closed
+chunk, so **one parity** is compared; capture is a byte copy, so that is
+sufficient *here*, but the state-3 consumer applies a per-parity conversion
+and a layer-2 chunk needs 25 992 leaves. And `IMPLEMENTATION_INDEX.md`'s `CT`
+row still reads *"path capture's MECHANISM is not built"*, which stays true
+until the three above land — amending it now would be a status claim ahead of
+the status.
