@@ -512,6 +512,24 @@ discharged by `CEN-J15` reading `implemented` with the predicate clause on
 its row text. Falsifier: Slice C's Round 1 minting its own `CEN-` row for
 the predicate — then two rows judge one fact and one must go.
 
+*Confirmed 2026-10-04 (maintainer): one builder, two consumers — the I17
+shape.* One thing is **owed from SO-D8, not inferred here**: the
+predicate's *shape* serves both consumers and only one is in view while
+this slice builds it. J15 asks about a shard at a bond post, at the
+parent's height; Slice C needs it to carry the job J8's freeze clause
+loses — a question about a shard at the height that replaces "the fire
+height" (§8.0 input 3, `:2260–2264`), read strictly above a same-block
+slash as `holds_shard_at` does
+(`shekyl-archival-retention/src/held_at_height.rs:97`). If those are
+different signatures, J15 lands a predicate Slice C cannot call, found at
+Slice C's commit 3 rather than now. **Before PR-b's row 6 lands J15, SO-D8
+names the signature Slice C will call** — a sentence in §8.0, nothing
+more. The shape this slice proposes to offer: `fn closed_and_final(view:
+&ChainView, shard: ShardId, at: BlockHeight) -> bool`, the height a
+parameter and the two call sites passing their own — the parent for J15,
+input 3's height for Slice C — so the predicate itself reads nothing that
+only one caller has.
+
 - **Default: amend CEN-J15's row text** to carry the predicate as its
   first clause, with the three answers above recorded on the row; no new
   `CEN-` id. The census is the registry of consensus rules, and a rule's
