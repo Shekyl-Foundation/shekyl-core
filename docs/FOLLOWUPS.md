@@ -30,10 +30,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`CT2_DRAIN_ORDER.md`](design/CT2_DRAIN_ORDER.md)
   - Target: pre-genesis
 
-- **`recon::newly_drained_at_cutoff` is a test oracle whose gindex sort no test exercises.** It has no production caller; the store path is `CurveTreeClient::newly_drained_from_index`. Its two users, `newly_drained_from_index_matches_oracle` (`client.rs`) and `incremental_drain_batches_match_drained_sorted_prefix` (`recon.rs`), only build maturity buckets of one leaf, so reversing its `sort_by_key` passes the whole `shekyl-curve-tree` suite. What remains is a bucket of two or more leaves in the first test, or deleting the function and comparing against `drained_sorted` directly. Falsify by reversing that sort and a `shekyl-curve-tree` test failing.
-  - Owner: [`CT2_DRAIN_ORDER.md`](design/CT2_DRAIN_ORDER.md)
-  - Target: pre-genesis
-
 - **Name the saturation classes, who assigns one, and their order.** The cutover writer takes a class on each send and serves connections in turn under the operator's bucket while one class exists (`P2P_TRANSPORT_LAYER.md`, "Rate limit is four jobs"). What remains is the class list, the assigner, and the order, including that relay-lane conformance holds under saturation. Falsify by: that section names the three and the writer schedules them. Reopen if adding a class means replacing the bucket.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis

@@ -1470,28 +1470,49 @@ mod tests {
 
     #[test]
     fn newly_drained_from_index_matches_oracle() {
-        let (outs0, blob0) = (raw_outputs_at(0, 1), leaf_blob_at(0, 1));
-        let (outs1, blob1) = (raw_outputs_at(1, 1), leaf_blob_at(1, 1));
-        let txs0 = coinbase_block(&outs0, &blob0);
-        let txs1 = coinbase_block(&outs1, &blob1);
-        let client = CurveTreeClient::from_blocks(&[
-            BlockLeaves {
-                height: BlockHeight::from_raw(0),
-                txs: &txs0,
-            },
-            BlockLeaves {
-                height: BlockHeight::from_raw(1),
-                txs: &txs1,
-            },
-        ])
-        .unwrap();
-        for through in 0..=61u64 {
+        // Two coinbase outputs (m = h+60) and two regular outputs (m = h+10)
+        // per block, so a maturity bucket holds leaves from two blocks and
+        // two leaves from each. A one-leaf bucket has one order, and neither
+        // side's ordering could be wrong on it.
+        let mut client = CurveTreeClient::new();
+        for height in 0..=80u64 {
+            let cb_outs = [raw_output_at(height, 0), raw_output_at(height, 1)];
+            let reg_outs = [raw_output_at(height, 2), raw_output_at(height, 3)];
+            let cb_blob = leaf_blob_at(height, 2);
+            let reg_blob: Vec<u8> = [leaf_entry_at(height, 2), leaf_entry_at(height, 3)].concat();
+            let txs = [
+                TxLeafInputs {
+                    is_miner: true,
+                    leaf_entry_blob: Some(&cb_blob),
+                    outputs: &cb_outs,
+                },
+                TxLeafInputs {
+                    is_miner: false,
+                    leaf_entry_blob: Some(&reg_blob),
+                    outputs: &reg_outs,
+                },
+            ];
+            client
+                .ingest_block(BlockLeaves {
+                    height: BlockHeight::from_raw(height),
+                    txs: &txs,
+                })
+                .unwrap();
+        }
+        let mut widest = 0;
+        for through in 0..=80u64 {
+            let from_index = client.newly_drained_from_index(BlockHeight::from_raw(through));
+            widest = widest.max(from_index.len());
             assert_eq!(
-                client.newly_drained_from_index(BlockHeight::from_raw(through)),
+                from_index,
                 newly_drained_at_cutoff(&client.entries, BlockHeight::from_raw(through)),
                 "through={through}"
             );
         }
+        assert_eq!(
+            widest, 4,
+            "a bucket must hold both blocks' pairs, or no ordering was compared"
+        );
     }
 
     #[test]

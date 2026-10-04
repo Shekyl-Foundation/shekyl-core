@@ -648,7 +648,9 @@ mod tests {
                 identity,
             }
         };
-        let entries = vec![entry(0, 60), entry(1, 10)];
+        // Two leaves share maturity 10 and sit in the slice against gindex
+        // order, so the batch at that cutoff has an order to get wrong.
+        let entries = vec![entry(0, 60), entry(2, 10), entry(1, 10)];
         let mut incremental = Vec::new();
         for through in 0..=60u64 {
             incremental.extend(newly_drained_at_cutoff(
