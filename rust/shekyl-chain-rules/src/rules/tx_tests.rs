@@ -725,7 +725,8 @@ fn a_well_formed_listed_transaction_records_every_landed_row() {
             CenRow::I14,
             CenRow::I16,
             CenRow::I19,
-            CenRow::I20
+            CenRow::I20,
+            CenRow::J2
         ]
     );
 }
@@ -869,9 +870,10 @@ fn h19_a_non_canonical_layout_is_refused_and_the_row_is_not_yet_recorded() {
 
 /// Each departure from the serve-credit-only shape is refused on H20: a fee,
 /// a `pqc_auth`, an output (with its mask), spend material in the prunable
-/// region, a `Null` CT (that one is H15's first — the class is derived from
-/// the inputs, the CT type is H15's). The fixture shape passes and the row
-/// is vacuous on a spend.
+/// region, no prunable region, a `Null` CT (that one is H15's first — the
+/// class is derived from the inputs, the CT type is H15's). The fixture
+/// shape passes and the row is vacuous on a spend. How many records the
+/// region holds is CEN-J2's (`tx_inputs_tests`).
 #[test]
 fn h20_every_departure_from_the_serve_credit_shape_is_refused() {
     use shekyl_wire::{PqcAuth, Prunable};
@@ -944,6 +946,16 @@ fn h20_every_departure_from_the_serve_credit_shape_is_refused() {
     assert!(tx_form(&pass_records, TxSlot::Lone, &RuleSet::GENESIS)
         .expect("pass records are not spend material")
         .contains(CenRow::H20));
+    // No region at all: the pre-`RF-D1` body (`SHT-9`). The live C++ fails
+    // its parse and counts the records it would have held; this row first
+    // admitted it, and the store could not hold what it admitted.
+    let no_region = mutate(&|tx| {
+        if let Ct::Fcmp { prunable, .. } = &mut tx.ct {
+            *prunable = None;
+        }
+    });
+    refused_lone(&no_region, CenRow::H20);
+    refused_listed(&no_region, CenRow::H20);
     // The `Null` CT departure the doc above has named since slice 5 without
     // a fixture asking for it (E6 slice 7 commit 2's sweep, the I14/H18
     // class): the class is derived from the inputs, the CT type is H15's,
