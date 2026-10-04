@@ -140,6 +140,11 @@ Each consumer has one class:
 - **H** — fits none of the three, or its class depends on a ruling or on another
   lane's unbuilt work. **Halted and reported**, not executed.
 
+**Ruled (design owner, 2026-10-04, at `16820f455b`):** the classes stand as
+censused. Class C's names are approved and land as their own PR; class H is not
+re-keyed here and its two replacements are named; class B gains the verifier's
+successor. Each ruling is recorded under its class below.
+
 **Landed since the 2026-09-27 table** (a census delta is a set difference, so each
 missing row is named with what removed it):
 
@@ -161,6 +166,7 @@ missing row is named with what removed it):
 | the KATs and FFI tests | `rust/shekyl-archival-retention/tests/{gate2_serve_credit_kat,gate4_lifecycle_kat,tj_red_challenge_scope,assembled_path_crosscheck}.rs`; `rust/shekyl-ffi/src/archival_ffi/tests.rs:1045`, `:1091` | hold the rows above |
 | the C++ side | `src/cryptonote_core/blockchain.{cpp,h}`, `src/cryptonote_core/cryptonote_tx_utils.{cpp,h}`, `src/blockchain_db/{blockchain_db.{cpp,h},shekyl_types.h,lmdb/db_lmdb.{cpp,h}}`, `src/rpc/archival_shard_coverage.cpp:34`, `src/shekyl/{economics.h,shekyl_ffi.h}`, and their tests under `tests/` | row 3 = (b): not this cutover's |
 | the gates over them | `scripts/ci/check_segment_freeze_sites.sh`, `scripts/ci/check_consensus_invariants.sh:250` | key on these symbol names; a rename would turn them into silent no-ops |
+| **the serve-credit verifier's successor** (ruled 2026-10-04) | the verifier is the serve-credit row above, on both sides of the FFI: the C++ `check_archival_serve_credit_input` and the three exports it calls | **It dies with the engine swap, and it is not ported.** Its successor is SO-D8 Slice C (authorized at `4149c7a4d7`; [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) §8.0). CEN-J8's second clause, *"the shard's frozen segment must exist at `H_fire`"*, is stated on the leaf segment. Slice C's Round 0 must re-base it on the ruled partition (`SHT-Q1`, `SHT-Q2`), with possession proved on transaction bodies, not leaf chunks. The same note sits in Slice C's Round-0 inputs as a cross-reference |
 
 **Class C — kept. The curve tree's own segment.** A level-2 subtree of the tree is a
 unit of *tree* storage: the store freezes it once buried, keeps its sub-root `R_k`,
@@ -179,8 +185,14 @@ no archival market.
 `SCC-1`'s other word, the transaction-body segment, so the proposal is a `tree`
 prefix. The rename touches `shekyl-fcmp`, `shekyl-curve-tree`, the benchmark and
 every importer, and the two gates in the class-B table grep for the current names.
-**It is not made in this round's commits: the names are the design owner's to
-confirm first.**
+
+**Names APPROVED (design owner, 2026-10-04):** `TREE_SEGMENT_LAYER`,
+`leaves_per_tree_segment()`, `TreeSegmentId`; the freeze tier's names follow the
+prefix. `scripts/ci/check_segment_freeze_sites.sh` and
+`scripts/ci/check_consensus_invariants.sh` are updated in the same commit as the
+rename, so neither gate spends a commit matching nothing. **The rename is its own
+PR, not this one.** It lands once the curve-tree worktrees open on 2026-10-04 have
+merged; Rick names the window. Its `FOLLOWUPS.md` row carries that trigger.
 
 **Class H — halted. The wallet-side serving unit.** On this path a frozen segment
 *is* the shard (`rust/shekyl-p-serve/src/provider.rs:261`: *"Shard ids are segment
@@ -196,13 +208,26 @@ executable as class A:
 | the sim's response-size figure | `RESPONSE_BYTES` (`rust/shekyl-economics-sim/src/proxy.rs:66-92`) | it prices the class-B retention proof (leaf chunk and branch layers). Its successor's record layout is not stated anywhere (`SERVE_CREDIT_VERIFIER.md`, `SCV-3`) |
 | the measurement rig's object | `rust/shekyl-sp-t3-spike/src/fixture.rs` (`ShardFixture`, `SHARD_BYTES`), `bins/extract_shard.rs` | the rig serves the leaf-segment unit because the server does. It follows the serving unit |
 
+**Class H is not re-keyed here (design owner, 2026-10-04).** The archival serving
+and fetch stack is built on leaf bodies, the unit `PDM-Q6` retired. It is replaced,
+not converted, and both replacements must target byte-cut shards of transaction
+bodies (`SHT-Q1`, `SHT-Q2`) read whole (`SF-D1`):
+
+| Replacement | Owner | Replaces |
+|---|---|---|
+| the archiver serving-store rebuild | the wallet lane: [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) (`WSS-`; `PDM-Q12`) | the store's pins and served bodies, the provider, the serve set |
+| fetch Sub-PR 2 | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) (`SF-D7` as amended 2026-10-03) | the served frame, the fetch client's body ceiling |
+
+The sim's response-size figure follows the record layout Slice C's Round 0 writes
+(`SCV-3`), and the rig's object follows the serving unit.
+
 **Class A at this pin** is one small item: the rig's two literal copies of the
 segment leaf count (`fixture.rs:70`, `extract_shard.rs:56-58`, both `25_992`) are a
 second home for a number `shekyl_fcmp::tree::leaves_per_segment()` owns. They are
 pointed at it.
 
-**Where the census contradicts this round's brief**, so the rulings can be given
-against the tree as it is:
+**Where the census contradicted this round's brief.** The design owner acknowledged
+each on 2026-10-04 and ruled against the tree as it is:
 
 1. *The challenge leaf-chunk bounds are class B, not A.* The condition was "no live
    caller"; there are two, both in the live serve-credit arm.
