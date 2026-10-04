@@ -33,10 +33,10 @@
 
 use super::*;
 use crate::coverage::RuleCoverage;
-use crate::harness::fixture::{coinbase, coinbase_extra, listed, point};
+use crate::harness::fixture::{coinbase, coinbase_extra, listed, point, serve_credit_only};
 use crate::verdict::TxSlot;
 use shekyl_wire::{
-    carries_archival_good, BondPost, BondPostKind, Ct, Holdings, Input, Prunable, Transaction,
+    carries_archival_good, BondPost, BondPostKind, Ct, Holdings, Input, Transaction,
 };
 
 /// The fixture spend's key image, as `tx_tests` picks it.
@@ -156,37 +156,13 @@ fn emission_body_no_fees() -> Transaction {
     tx
 }
 
-/// `TxClass::ServeCreditOnly` in its **`RF-D1`** shape: empty `pqc_auths`, no
-/// outputs, and a prunable region holding exactly one non-empty pruned pass
-/// record per serve-credit vin and nothing else. The good here is the pass
-/// record — the case that would break a `pqc_auths`-only predicate.
-///
-/// Built here rather than taken from `harness::fixture::serve_credit_only`,
-/// which still carries the **pre-`RF-D1`** shape (`prunable: None`) and is
-/// refused by `Transaction::validate_context_free_pruned` — verified, and
-/// recorded as `SHT-9`.
+/// `TxClass::ServeCreditOnly` in its **`RF-D1`** shape: the shared fixture,
+/// whose prunable region holds one pruned pass record per serve-credit vin
+/// and nothing else (CEN-H20 requires the region, CEN-J2 the count). The
+/// good here is the pass record — the case that would break a
+/// `pqc_auths`-only predicate.
 fn serve_credit_body() -> Transaction {
-    let mut canonical_bytes = vec![shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT];
-    canonical_bytes.extend_from_slice(&[0x11; 32]);
-    let mut tx = listed(KI);
-    tx.prefix.inputs = vec![Input::ServeCredit { canonical_bytes }];
-    tx.prefix.outputs = Vec::new();
-    if let Ct::Fcmp {
-        pqc_auths,
-        prunable,
-        ..
-    } = &mut tx.ct
-    {
-        pqc_auths.clear();
-        *prunable = Some(Prunable {
-            bulletproofs: Vec::new(),
-            tree_depth: 0,
-            fcmp_proof: Vec::new(),
-            pseudo_outs: Vec::new(),
-            serve_credit_pruned: vec![vec![0xAB; 8]],
-        });
-    }
-    tx
+    serve_credit_only([0x11; 32])
 }
 
 // ---- leg 1: the class equivalence, exhaustive at compile time ---------------
