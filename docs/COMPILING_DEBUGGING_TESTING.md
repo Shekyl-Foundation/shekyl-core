@@ -280,8 +280,10 @@ Coinbase transactions also use version 3 (unified with regular txs). Key differe
 - Transaction construction helpers produce v3 with `use_view_tags=true`
 - Coinbase outputs are indexed under `amount=0` for correct RCT spending
 - Balance verification in callbacks uses RCT ecdhInfo decryption
-- Economic constants (`TESTS_DEFAULT_FEE`, `FIRST_BLOCK_REWARD`) are
-  calibrated for Shekyl's `COIN = 10^9` and `EMISSION_SPEED_FACTOR = 21`
+- Economic constants (`TESTS_DEFAULT_FEE`) are calibrated for Shekyl's
+  `COIN = 10^9` and the emission curve's factor of 22 per block
+  (`emission_speed_factor_per_block`; the per-minute convention that ran 21
+  per block was retired 2026-10-04)
 - Several legacy tests incompatible with HF1-from-genesis are disabled
   (see `chaingen_main.cpp` comments)
 

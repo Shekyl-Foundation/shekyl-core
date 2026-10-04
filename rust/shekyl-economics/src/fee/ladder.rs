@@ -238,12 +238,12 @@ mod tests {
         let base = base_block_reward(0, &p).unwrap();
         assert_eq!(
             corrected_fee_ladder(base, zone, 3_000, FeeCorrection::UNITY, &p).priority,
-            13_653_333
+            6_826_666
         );
         assert_eq!(
             corrected_fee_ladder(base, zone, 3_000, FeeCorrection::from_scaled(2 * SCALE), &p)
                 .priority,
-            27_306_666
+            13_653_333
         );
     }
 

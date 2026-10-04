@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Consensus — the emission speed factor is per block, as designed
+
+- The emission curve emits `remaining >> 22` each block, the design's factor
+  (`DESIGN_CONCEPTS.md` §3: 50 % emitted ~year 11, 80 % ~year 25; year-1
+  reward ~970 SKL). Until now `shekyl_economics::emission_speed_factor`
+  applied Monero's per-minute convention, `22 − (2 − 1)`, and ran the curve
+  at 21 per block: twice the design's rate, 2 048 SKL at genesis, half emitted
+  by ~year 5.5. The genesis reward is now 1 024 SKL.
+- `config/economics_params.json`: `emission_speed_factor_per_minute` →
+  `emission_speed_factor_per_block` (value 22). The generated C macro
+  `EMISSION_SPEED_FACTOR_PER_MINUTE`, which nothing read, is deleted.
+- Re-pinned with it: the consensus-constants digest, the economics params
+  digest (format `0x04`: a field redefined at an unchanged value) and
+  `CALIBRATION_GENERATION` (1). Every pin of a curve value is re-derived from
+  the closed form: the C2a′ weight-penalty KAT on both sides of the FFI, the
+  first-values and mid-curve pins in Rust and C++, the genesis ladder
+  anchors, the chain store's slashing-tip snapshot hash, the recorded economics
+  vector and the captured replay chains.
+
 ### Chain rules — CEN-H20 requires the serve credit's pass records (`SHT-9`)
 
 - The Rust validator admitted a serve-credit transaction with no prunable

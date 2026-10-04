@@ -23,21 +23,21 @@ pub enum EmissionError {
     BlockTooBig,
 }
 
-/// Effective emission speed factor for the configured DAA target block time.
+/// The emission speed factor: each block emits `remaining >> esf`.
+///
+/// **Per block, as the design states it** (`DESIGN_CONCEPTS.md` §3: 22,
+/// "50 % emitted ~year 11, 80 % ~year 25"). Until 2026-10-04 this applied
+/// Monero's per-minute convention, `per_minute − (target_minutes − 1)`,
+/// built so a per-minute factor survives a block-time change; Shekyl's block
+/// time is fixed at genesis, and the conversion turned the configured 22
+/// into 21 per block — twice the design's rate, half its timeline.
 ///
 /// Returned as `u64` because its sole consumer is the right-shift in
 /// `base_block_reward` (`remaining >> esf`), and Rust shifts accept a `u64`
-/// shift amount directly. Keeping the value in `u64` avoids a gratuitous
-/// narrowing cast.
+/// shift amount directly.
 #[inline]
 pub fn emission_speed_factor(params: &EconomicParams) -> u64 {
-    debug_assert_eq!(
-        params.daa_target_seconds % 60,
-        0,
-        "DAA target must be a multiple of 60 seconds"
-    );
-    let target_minutes = params.daa_target_seconds / 60;
-    params.emission_speed_factor_per_minute - (target_minutes - 1)
+    params.emission_speed_factor_per_block
 }
 
 /// Tail (minimum) subsidy per block in atomic units.
@@ -280,6 +280,38 @@ pub fn advance_already_generated(already_generated_coins: u64, block_reward: u64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The design's emission curve (`DESIGN_CONCEPTS.md` §3, §13): an
+    /// emission speed factor of **22 per block**, which puts the first
+    /// block at `2³² · 10⁹ >> 22` = 1 024 SKL, half the asymptote emitted
+    /// near year 11 (`2²² · ln 2` ≈ 2 907 300 blocks) and 80 % near year
+    /// 25.7 (`2²² · ln 5` ≈ 6 750 500 blocks). Pinned at the owner so a
+    /// convention that rescales the factor by the block time fails here.
+    #[test]
+    fn the_curve_is_the_designs_esf_22_per_block() {
+        let p = EconomicParams::default();
+        assert_eq!(emission_speed_factor(&p), 22, "the factor is per block");
+        assert_eq!(
+            base_block_reward(0, &p).expect("genesis reward"),
+            p.emission_curve_asymptote >> 22,
+            "the first block pays the asymptote shifted by 22"
+        );
+        assert_eq!(
+            base_block_reward(0, &p).expect("genesis reward"),
+            1_024_000_000_000
+        );
+        let half = p.emission_curve_asymptote / 2;
+        let at = |h| projected_already_generated(h, &p).expect("projected");
+        assert!(
+            at(2_900_000) < half && half < at(2_915_000),
+            "half emitted near year 11"
+        );
+        let eighty = p.emission_curve_asymptote / 5 * 4;
+        assert!(
+            at(6_740_000) < eighty && eighty < at(6_765_000),
+            "80 % near year 25.7"
+        );
+    }
     use crate::params::EconomicParams;
 
     /// A height past tail entry must TERMINATE, not walk the tail one
@@ -313,7 +345,7 @@ mod tests {
         // blocks. Only the crossing's POSITION moves; the recurrence and
         // the stationarity being asserted are the shipped ones.
         let mut p = EconomicParams::default();
-        p.emission_speed_factor_per_minute = (p.daa_target_seconds / 60) + 3;
+        p.emission_speed_factor_per_block = 4;
         let esf = emission_speed_factor(&p);
         let tail = tail_subsidy_per_block(&p).expect("tail");
         p.emission_curve_asymptote = (tail << esf) * 4;
@@ -347,17 +379,21 @@ mod tests {
         }
     }
 
+    /// First values of the curve at ESF 22 per block, minted from the closed
+    /// form `max((asymptote − ag) >> 22, tail)` outside this crate (the same
+    /// script reproduces the ESF-21 pins this test carried before
+    /// 2026-10-04: 2 048 000 000 000, 2 047 999 023 437, 733 629 392 416).
     #[test]
-    fn base_block_reward_matches_cpp_first_values() {
+    fn base_block_reward_first_values_on_the_design_curve() {
         let p = EconomicParams::default();
-        assert_eq!(base_block_reward(0, &p).unwrap(), 2_048_000_000_000_u64);
+        assert_eq!(base_block_reward(0, &p).unwrap(), 1_024_000_000_000_u64);
         assert_eq!(
             base_block_reward(2_048_000_000_000, &p).unwrap(),
-            2_047_999_023_437_u64
+            1_023_999_511_718_u64
         );
         assert_eq!(
             base_block_reward(2_756_434_948_434_199_641, &p).unwrap(),
-            733_629_392_416_u64
+            366_814_696_208_u64
         );
     }
 
@@ -414,7 +450,10 @@ mod tests {
         // loop's projection-fed limb depends on it: the trajectory must
         // actually pass the asymptote for that limb to probe the far
         // side.
-        let past_boundary = 19_200_000;
+        // ≈ 146 y at the design's ESF 22 per block: the curve meets the tail
+        // near 31 M blocks and the trajectory passes the asymptote about 4 M
+        // blocks of tail later. (19.2 M served the ESF-21 curve.)
+        let past_boundary = 38_400_000;
         let ag_proj = projected_already_generated(past_boundary, &p).unwrap();
         assert!(
             ag_proj > s,
@@ -544,7 +583,7 @@ mod tests {
         // `base_block_reward`. A shift/floor regression in the production curve
         // diverges from this oracle, so the assertion is non-tautological.
         let p = EconomicParams::default();
-        let esf = p.emission_speed_factor_per_minute - (p.daa_target_seconds / 60 - 1);
+        let esf = p.emission_speed_factor_per_block;
         let tail = p.final_subsidy_per_minute * (p.daa_target_seconds / 60);
         let grid = [
             0_u64,
@@ -687,85 +726,88 @@ mod tests {
     #[test]
     fn c2a_prime_layer1_weight_penalty_pinned_vectors() {
         // The zone is `p.full_reward_zone` (config/consensus_constants.json);
-        // the vectors were minted at 300 000 and the pin below says so.
+        // the vectors were minted at 300 000 and the pin below says so. The
+        // reward column was re-minted on 2026-10-04 for the per-block ESF 22
+        // by the penalty spec's closed form, run outside this crate; the same
+        // script reproduces all 81 ESF-21 pins it replaced.
         let p = EconomicParams::default();
         assert_eq!(p.full_reward_zone, 300_000, "vectors minted at the V5 zone");
         const VECTORS: &[(u64, u64, u64, bool, u64)] = &[
-            (0, 150000, 0, true, 2048000000000),
-            (0, 150000, 2048000000000, true, 2047999023437),
-            (0, 150000, 2756434948434199641, true, 733629392416),
-            (0, 300000, 0, true, 2048000000000),
-            (0, 300000, 2048000000000, true, 2047999023437),
-            (0, 300000, 2756434948434199641, true, 733629392416),
-            (0, 300001, 0, true, 2047999999977),
-            (0, 300001, 2048000000000, true, 2047999023414),
-            (0, 300001, 2756434948434199641, true, 733629392407),
-            (0, 337500, 0, true, 2016000000000),
-            (0, 337500, 2048000000000, true, 2015999038695),
-            (0, 337500, 2756434948434199641, true, 722166433159),
-            (0, 450000, 0, true, 1536000000000),
-            (0, 450000, 2048000000000, true, 1535999267577),
-            (0, 450000, 2756434948434199641, true, 550222044312),
-            (0, 562500, 0, true, 480000000000),
-            (0, 562500, 2048000000000, true, 479999771118),
-            (0, 562500, 2756434948434199641, true, 171944388847),
-            (0, 599999, 0, true, 13653310),
-            (0, 599999, 2048000000000, true, 13653304),
-            (0, 599999, 2756434948434199641, true, 4890854),
+            (0, 150000, 0, true, 1024000000000),
+            (0, 150000, 2048000000000, true, 1023999511718),
+            (0, 150000, 2756434948434199641, true, 366814696208),
+            (0, 300000, 0, true, 1024000000000),
+            (0, 300000, 2048000000000, true, 1023999511718),
+            (0, 300000, 2756434948434199641, true, 366814696208),
+            (0, 300001, 0, true, 1023999999988),
+            (0, 300001, 2048000000000, true, 1023999511706),
+            (0, 300001, 2756434948434199641, true, 366814696203),
+            (0, 337500, 0, true, 1008000000000),
+            (0, 337500, 2048000000000, true, 1007999519347),
+            (0, 337500, 2756434948434199641, true, 361083216579),
+            (0, 450000, 0, true, 768000000000),
+            (0, 450000, 2048000000000, true, 767999633788),
+            (0, 450000, 2756434948434199641, true, 275111022156),
+            (0, 562500, 0, true, 240000000000),
+            (0, 562500, 2048000000000, true, 239999885558),
+            (0, 562500, 2756434948434199641, true, 85972194423),
+            (0, 599999, 0, true, 6826655),
+            (0, 599999, 2048000000000, true, 6826652),
+            (0, 599999, 2756434948434199641, true, 2445427),
             (0, 600000, 0, true, 0),
             (0, 600000, 2048000000000, true, 0),
             (0, 600000, 2756434948434199641, true, 0),
             (0, 600001, 0, false, 0),
             (0, 600001, 2048000000000, false, 0),
             (0, 600001, 2756434948434199641, false, 0),
-            (300000, 150000, 0, true, 2048000000000),
-            (300000, 150000, 2048000000000, true, 2047999023437),
-            (300000, 150000, 2756434948434199641, true, 733629392416),
-            (300000, 300000, 0, true, 2048000000000),
-            (300000, 300000, 2048000000000, true, 2047999023437),
-            (300000, 300000, 2756434948434199641, true, 733629392416),
-            (300000, 300001, 0, true, 2047999999977),
-            (300000, 300001, 2048000000000, true, 2047999023414),
-            (300000, 300001, 2756434948434199641, true, 733629392407),
-            (300000, 337500, 0, true, 2016000000000),
-            (300000, 337500, 2048000000000, true, 2015999038695),
-            (300000, 337500, 2756434948434199641, true, 722166433159),
-            (300000, 450000, 0, true, 1536000000000),
-            (300000, 450000, 2048000000000, true, 1535999267577),
-            (300000, 450000, 2756434948434199641, true, 550222044312),
-            (300000, 562500, 0, true, 480000000000),
-            (300000, 562500, 2048000000000, true, 479999771118),
-            (300000, 562500, 2756434948434199641, true, 171944388847),
-            (300000, 599999, 0, true, 13653310),
-            (300000, 599999, 2048000000000, true, 13653304),
-            (300000, 599999, 2756434948434199641, true, 4890854),
+            (300000, 150000, 0, true, 1024000000000),
+            (300000, 150000, 2048000000000, true, 1023999511718),
+            (300000, 150000, 2756434948434199641, true, 366814696208),
+            (300000, 300000, 0, true, 1024000000000),
+            (300000, 300000, 2048000000000, true, 1023999511718),
+            (300000, 300000, 2756434948434199641, true, 366814696208),
+            (300000, 300001, 0, true, 1023999999988),
+            (300000, 300001, 2048000000000, true, 1023999511706),
+            (300000, 300001, 2756434948434199641, true, 366814696203),
+            (300000, 337500, 0, true, 1008000000000),
+            (300000, 337500, 2048000000000, true, 1007999519347),
+            (300000, 337500, 2756434948434199641, true, 361083216579),
+            (300000, 450000, 0, true, 768000000000),
+            (300000, 450000, 2048000000000, true, 767999633788),
+            (300000, 450000, 2756434948434199641, true, 275111022156),
+            (300000, 562500, 0, true, 240000000000),
+            (300000, 562500, 2048000000000, true, 239999885558),
+            (300000, 562500, 2756434948434199641, true, 85972194423),
+            (300000, 599999, 0, true, 6826655),
+            (300000, 599999, 2048000000000, true, 6826652),
+            (300000, 599999, 2756434948434199641, true, 2445427),
             (300000, 600000, 0, true, 0),
             (300000, 600000, 2048000000000, true, 0),
             (300000, 600000, 2756434948434199641, true, 0),
             (300000, 600001, 0, false, 0),
             (300000, 600001, 2048000000000, false, 0),
             (300000, 600001, 2756434948434199641, false, 0),
-            (2100000, 1050000, 0, true, 2048000000000),
-            (2100000, 1050000, 2048000000000, true, 2047999023437),
-            (2100000, 1050000, 2756434948434199641, true, 733629392416),
-            (2100000, 2100000, 0, true, 2048000000000),
-            (2100000, 2100000, 2048000000000, true, 2047999023437),
-            (2100000, 2100000, 2756434948434199641, true, 733629392416),
-            (2100000, 2100001, 0, true, 2047999999999),
-            (2100000, 2100001, 2048000000000, true, 2047999023436),
-            (2100000, 2100001, 2756434948434199641, true, 733629392415),
-            (2100000, 2362500, 0, true, 2016000000000),
-            (2100000, 2362500, 2048000000000, true, 2015999038695),
-            (2100000, 2362500, 2756434948434199641, true, 722166433159),
-            (2100000, 3150000, 0, true, 1536000000000),
-            (2100000, 3150000, 2048000000000, true, 1535999267577),
-            (2100000, 3150000, 2756434948434199641, true, 550222044312),
-            (2100000, 3937500, 0, true, 480000000000),
-            (2100000, 3937500, 2048000000000, true, 479999771118),
-            (2100000, 3937500, 2756434948434199641, true, 171944388847),
-            (2100000, 4199999, 0, true, 1950475),
-            (2100000, 4199999, 2048000000000, true, 1950474),
-            (2100000, 4199999, 2756434948434199641, true, 698694),
+            (2100000, 1050000, 0, true, 1024000000000),
+            (2100000, 1050000, 2048000000000, true, 1023999511718),
+            (2100000, 1050000, 2756434948434199641, true, 366814696208),
+            (2100000, 2100000, 0, true, 1024000000000),
+            (2100000, 2100000, 2048000000000, true, 1023999511718),
+            (2100000, 2100000, 2756434948434199641, true, 366814696208),
+            (2100000, 2100001, 0, true, 1023999999999),
+            (2100000, 2100001, 2048000000000, true, 1023999511717),
+            (2100000, 2100001, 2756434948434199641, true, 366814696207),
+            (2100000, 2362500, 0, true, 1008000000000),
+            (2100000, 2362500, 2048000000000, true, 1007999519347),
+            (2100000, 2362500, 2756434948434199641, true, 361083216579),
+            (2100000, 3150000, 0, true, 768000000000),
+            (2100000, 3150000, 2048000000000, true, 767999633788),
+            (2100000, 3150000, 2756434948434199641, true, 275111022156),
+            (2100000, 3937500, 0, true, 240000000000),
+            (2100000, 3937500, 2048000000000, true, 239999885558),
+            (2100000, 3937500, 2756434948434199641, true, 85972194423),
+            (2100000, 4199999, 0, true, 975237),
+            (2100000, 4199999, 2048000000000, true, 975237),
+            (2100000, 4199999, 2756434948434199641, true, 349347),
             (2100000, 4200000, 0, true, 0),
             (2100000, 4200000, 2048000000000, true, 0),
             (2100000, 4200000, 2756434948434199641, true, 0),
@@ -999,12 +1041,12 @@ mod tests {
         let paid = |v: TxVolume| paid_block_reward(0, 1, ag, v, &p).expect("mid-curve reward");
 
         // 40.5 per block, exact.
-        assert_eq!(paid(TxVolume::window(29_160, 720)), 829_440_000_000);
+        assert_eq!(paid(TxVolume::window(29_160, 720)), 414_720_000_000);
         // What the floored operand paid for the same chain state (old).
-        assert_eq!(paid(TxVolume::per_block(40)), 819_200_000_000);
+        assert_eq!(paid(TxVolume::per_block(40)), 409_600_000_000);
         // 49.5 per block, exact / floored.
-        assert_eq!(paid(TxVolume::window(35_640, 720)), 1_013_760_000_000);
-        assert_eq!(paid(TxVolume::per_block(49)), 1_003_520_000_000);
+        assert_eq!(paid(TxVolume::window(35_640, 720)), 506_880_000_000);
+        assert_eq!(paid(TxVolume::per_block(49)), 501_760_000_000);
 
         // The two forms agree exactly when the mean is whole: the window
         // form is a strict superset, not a different curve.
@@ -1014,6 +1056,6 @@ mod tests {
         );
         // The empty window is the 0.8 rail either way (genesis / FAKECHAIN).
         assert_eq!(paid(TxVolume::ZERO), paid(TxVolume::per_block(0)));
-        assert_eq!(paid(TxVolume::ZERO), 819_200_000_000);
+        assert_eq!(paid(TxVolume::ZERO), 409_600_000_000);
     }
 }

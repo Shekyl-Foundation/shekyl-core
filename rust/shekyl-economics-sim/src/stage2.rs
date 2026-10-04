@@ -274,7 +274,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         burn_cap: params.burn_cap,
         staker_pool_share: params.staker_pool_share,
         emission_curve_asymptote: params.emission_curve_asymptote,
-        emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
+        emission_speed_factor_per_block: params.emission_speed_factor_per_block,
         final_subsidy_per_minute: params.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,
         // Escalation numerics come from the shipped config: the sim must never
@@ -1670,7 +1670,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
             burn_cap: params.burn_cap,
             staker_pool_share: params.staker_pool_share,
             emission_curve_asymptote: params.emission_curve_asymptote,
-            emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
+            emission_speed_factor_per_block: params.emission_speed_factor_per_block,
             final_subsidy_per_minute: params.final_subsidy_per_minute,
             daa_target_seconds: EconomicParams::default().daa_target_seconds,
             // Escalation numerics come from the shipped config: the sim must never

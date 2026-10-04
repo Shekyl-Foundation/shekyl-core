@@ -140,7 +140,7 @@ pub(crate) struct CalibrationStamp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // R6: only constructed via `parameters_snapshot`, which has zero V3.0 consumer (§5.5).
 pub(crate) struct EconomicsParametersSnapshot {
-    /// Emission speed factor per minute (locked at 22).
+    /// Emission speed factor per block (locked at 22, the design's).
     pub emission_speed_factor: u8,
 
     /// Total coin supply ceiling in atomic units (`2^32 · 10^9`).

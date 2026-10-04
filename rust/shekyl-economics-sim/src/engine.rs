@@ -117,7 +117,7 @@ pub struct ScenarioConfig {
 
 pub struct SimParams {
     pub emission_curve_asymptote: u64,
-    pub emission_speed_factor_per_minute: u64,
+    pub emission_speed_factor_per_block: u64,
     pub final_subsidy_per_minute: u64,
     pub blocks_per_year: u64,
     pub tx_volume_baseline: u64,
@@ -137,7 +137,7 @@ impl Default for SimParams {
     fn default() -> Self {
         Self {
             emission_curve_asymptote: 4_294_967_296_000_000_000,
-            emission_speed_factor_per_minute: 22,
+            emission_speed_factor_per_block: 22,
             final_subsidy_per_minute: 300_000_000,
             blocks_per_year: 262_800,
             tx_volume_baseline: 50,
@@ -187,7 +187,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         burn_cap: params.burn_cap,
         staker_pool_share: params.staker_pool_share,
         emission_curve_asymptote: params.emission_curve_asymptote,
-        emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
+        emission_speed_factor_per_block: params.emission_speed_factor_per_block,
         final_subsidy_per_minute: params.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,
         // Escalation numerics come from the shipped config: the sim must never
@@ -471,8 +471,8 @@ mod tests {
             cfg_u64(&cfg, "emission_curve_asymptote")
         );
         assert_eq!(
-            p.emission_speed_factor_per_minute,
-            cfg_u64(&cfg, "emission_speed_factor_per_minute")
+            p.emission_speed_factor_per_block,
+            cfg_u64(&cfg, "emission_speed_factor_per_block")
         );
         assert_eq!(
             p.final_subsidy_per_minute,

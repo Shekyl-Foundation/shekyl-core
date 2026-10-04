@@ -80,9 +80,8 @@ const _: () = {
     // not a whole number of minutes would TRUNCATE, understating the tail
     // and therefore OVERSTATING the headroom years this block asserts —
     // the assertion would keep passing while the property it proves
-    // weakened (PR #640 review). `emission_speed_factor` carries the same
-    // invariant as a `debug_assert`, which release builds strip; this one
-    // is const-evaluated and cannot be.
+    // weakened (PR #640 review). This one is const-evaluated, so release
+    // builds keep it.
     assert!(
         GENERATED_DAA_TARGET_SECONDS.is_multiple_of(60),
         "DAA target must be a whole number of minutes, or the tail-per-block division truncates and the FL-R14 headroom proof below is weakened"
@@ -136,7 +135,10 @@ pub const BLOCKS_PER_YEAR: u64 = GENERATED_BLOCKS_PER_YEAR;
 /// (`generation_active_at(height)`); that is a FOLLOWUPS item and would
 /// move the generation out of this build-time constant into engine-held
 /// state. Until then it stays a constant.
-pub const CALIBRATION_GENERATION: u32 = 0;
+/// Generation 1 (2026-10-04): the emission speed factor became per block,
+/// the design's 22, where generation 0 applied Monero's per-minute
+/// conversion and ran the curve at 21.
+pub const CALIBRATION_GENERATION: u32 = 1;
 
 /// A malformed parameter set, refused at the door.
 ///
@@ -172,7 +174,7 @@ struct EconomicParamsWire {
     burn_cap: u64,
     staker_pool_share: u64,
     emission_curve_asymptote: u64,
-    emission_speed_factor_per_minute: u64,
+    emission_speed_factor_per_block: u64,
     final_subsidy_per_minute: u64,
     daa_target_seconds: u64,
     escalation_knee_n: u64,
@@ -192,7 +194,7 @@ impl TryFrom<EconomicParamsWire> for EconomicParams {
             burn_cap: w.burn_cap,
             staker_pool_share: w.staker_pool_share,
             emission_curve_asymptote: w.emission_curve_asymptote,
-            emission_speed_factor_per_minute: w.emission_speed_factor_per_minute,
+            emission_speed_factor_per_block: w.emission_speed_factor_per_block,
             final_subsidy_per_minute: w.final_subsidy_per_minute,
             daa_target_seconds: w.daa_target_seconds,
             escalation_knee_n: w.escalation_knee_n,
@@ -214,7 +216,7 @@ pub struct EconomicParams {
     pub burn_cap: u64,
     pub staker_pool_share: u64,
     pub emission_curve_asymptote: u64,
-    pub emission_speed_factor_per_minute: u64,
+    pub emission_speed_factor_per_block: u64,
     pub final_subsidy_per_minute: u64,
     pub daa_target_seconds: u64,
     /// `closed_shard_count` at which the D2 escalation saturates. Shape frozen,
@@ -252,7 +254,7 @@ impl Default for EconomicParams {
             burn_cap: GENERATED_BURN_CAP,
             staker_pool_share: GENERATED_STAKER_POOL_SHARE,
             emission_curve_asymptote: GENERATED_EMISSION_CURVE_ASYMPTOTE,
-            emission_speed_factor_per_minute: GENERATED_EMISSION_SPEED_FACTOR_PER_MINUTE,
+            emission_speed_factor_per_block: GENERATED_EMISSION_SPEED_FACTOR_PER_BLOCK,
             final_subsidy_per_minute: GENERATED_FINAL_SUBSIDY_PER_MINUTE,
             daa_target_seconds: GENERATED_DAA_TARGET_SECONDS,
             escalation_knee_n: GENERATED_ESCALATION_KNEE_N,
@@ -403,7 +405,7 @@ mod escalation_param_tests {
         format!(
             r#"{{"release_min":1,"release_max":2,"tx_volume_baseline":3,
                 "burn_base_rate":4,"burn_cap":5,"staker_pool_share":{floor},
-                "emission_curve_asymptote":7,"emission_speed_factor_per_minute":8,
+                "emission_curve_asymptote":7,"emission_speed_factor_per_block":8,
                 "final_subsidy_per_minute":9,"daa_target_seconds":10,"full_reward_zone":300000,
                 "escalation_knee_n":100000,"escalation_asymptote_share":{asymptote}}}"#
         )
