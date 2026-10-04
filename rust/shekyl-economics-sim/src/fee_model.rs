@@ -107,28 +107,6 @@ pub struct OrdinaryTx {
     pub weight: u64,
 }
 
-/// What one block of identical ordinary transactions pays.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChargedBlock {
-    /// Atomic units one of those transactions pays.
-    pub per_tx_atomic: u64,
-    /// Atomic units the block pays. Saturated at `u64::MAX`: a block's fees
-    /// are a `u64` everywhere they are burned.
-    pub total_atomic: u64,
-}
-
-impl ChargedBlock {
-    /// `tx_count` transactions at one fee.
-    #[must_use]
-    pub fn of_uniform(per_tx_atomic: u64, tx_count: u64) -> Self {
-        let total = u128::from(per_tx_atomic).saturating_mul(u128::from(tx_count));
-        Self {
-            per_tx_atomic,
-            total_atomic: u64::try_from(total).unwrap_or(u64::MAX),
-        }
-    }
-}
-
 impl FeeModel {
     /// The control arm at the §12.13–§12.14 fee.
     pub const SECTION_12_14_CONTROL: Self = Self::FlatControl {

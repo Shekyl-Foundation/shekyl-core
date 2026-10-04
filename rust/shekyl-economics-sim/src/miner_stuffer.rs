@@ -38,7 +38,6 @@
 use shekyl_block_template::Fill;
 use shekyl_economics::{
     compute_burn_split_at, penalty_free_weight, ClosedShardCount, EconomicParams,
-    PrePenaltyEmission,
 };
 use shekyl_tx_weight::predict_weight;
 use shekyl_types::SHARD_LENGTH;
@@ -110,7 +109,6 @@ struct Block<'a> {
     economic: &'a EconomicParams,
     depth: u8,
     median: u64,
-    emission: PrePenaltyEmission,
     honest: Fill<'a>,
     /// Weight the honest bodies leave under the emission's full weight.
     room: u64,
@@ -132,15 +130,15 @@ impl<'a> Block<'a> {
             params: economic,
         };
         let median = last.medians.effective_median.to_raw();
-        let emission = PrePenaltyEmission::of(last.already_generated, last.volume, economic)
-            .expect("the fold priced this block");
-        let mut honest = Fill::empty(median, last.already_generated, last.volume, economic)
-            .expect("the fold priced this block");
-        honest.admit_up_to(
-            last.honest_tx.weight,
-            last.honest_tx.fee_atomic,
-            last.honest_offered,
-        );
+        let honest = Fill::listed(
+            median,
+            last.already_generated,
+            last.volume,
+            economic,
+            last.bodies_weight,
+            last.fees,
+        )
+        .expect("the fold listed this block");
         let room = penalty_free_weight(median, economic)
             .min(honest.bodies_weight_bound())
             .saturating_sub(honest.bodies_weight());
@@ -149,7 +147,6 @@ impl<'a> Block<'a> {
             economic,
             depth: tree_depth_for_leaves(last.chain_leaves),
             median,
-            emission,
             honest,
             room,
             burn_pct: last.burn_pct_scaled,
@@ -244,8 +241,8 @@ impl<'a> Block<'a> {
         let past = self.honest.bodies_weight() + weight;
         if past <= self.honest.bodies_weight_bound() {
             let after = self
-                .emission
-                .penalised(self.median, past, self.economic)
+                .honest
+                .reward_at(past)
                 .expect("within twice the median");
             out.push((
                 Placement::Penalty,
@@ -410,11 +407,14 @@ pub(crate) fn envelope_at(last: &LastBlock, params: &SimParams) -> Envelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_block_template::Fill;
     use shekyl_chain_rules::medians_from;
     use shekyl_economics::{paid_block_reward, TxVolume};
 
     use crate::fee_model::OrdinaryTx;
 
+    /// A block whose honest demand is `offered` identical transactions, listed
+    /// by the fill rule. The stuffer reads the listing, it does not re-offer.
     fn block_at(offered: u64, params: &SimParams) -> LastBlock {
         let economic = params.economic();
         let zone = economic.full_reward_zone;
@@ -429,6 +429,15 @@ mod tests {
             params: &economic,
         };
         let honest_tx: OrdinaryTx = params.fee.ordinary_tx(&at);
+        let medians = medians_from(zone, zone);
+        let mut fill = Fill::empty(
+            medians.effective_median.to_raw(),
+            at.already_generated,
+            volume,
+            &economic,
+        )
+        .expect("priced");
+        fill.admit_up_to(honest_tx.weight, honest_tx.fee_atomic, offered);
         LastBlock {
             already_generated: at.already_generated,
             volume,
@@ -436,9 +445,10 @@ mod tests {
             burn_pct_scaled: at.burn_pct_scaled,
             chain_leaves: at.chain_leaves,
             closed_shards: 1_000,
-            medians: medians_from(zone, zone),
-            honest_offered: offered,
+            medians,
             honest_tx,
+            bodies_weight: fill.bodies_weight(),
+            fees: fill.fees(),
         }
     }
 

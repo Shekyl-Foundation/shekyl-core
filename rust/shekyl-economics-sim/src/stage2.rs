@@ -22,10 +22,7 @@ use std::io::Write;
 
 use shekyl_chain_rules::EffectiveMedian;
 use shekyl_economics::{
-    burn::{calc_burn_pct_at, compute_burn_split},
-    calc_effective_emission_share,
-    params::SCALE,
-    split_block_emission, ScaledShare, TxVolume,
+    burn::compute_burn_split, params::SCALE, split_block_emission, ScaledShare, TxVolume,
 };
 
 use crate::burden::{
@@ -38,15 +35,14 @@ use crate::calibration::{
     stuffer_txs_per_shard, sustained_stuffer_cost_per_shard_atomic, tree_depth_for_leaves,
     PerByteRate, RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB, RUCKNIUM_SPAM_FEES_XMR,
 };
+use crate::chain_cursor::{ChainCursor, ChainStep};
 use crate::engine::{ScenarioConfig, SimParams};
 use crate::escalation::{family, flat_25, EscalationCurve, KNEE_ARCHIVAL_LEN_BYTES, KNEE_BAND};
-use crate::fee_model::{ChargedBlock, FeePoint, OrdinaryTx};
-use crate::median_window::BlockSpace;
+use crate::fee_model::OrdinaryTx;
 use crate::population::{
     attacker_capped_work_milli, honest_sigma_work_milli, honest_sigma_work_milli_deleted, DQ2H_TAIL,
 };
 use crate::scenarios::all_scenarios;
-use crate::volume_window::VolumeWindow;
 use shekyl_archival_retention::{
     reward_share_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_HOLDINGS_SHARDS,
 };
@@ -233,8 +229,9 @@ pub struct A1YearAgg {
 }
 
 /// One block's state as a fold built it, for pricing what an attacker could
-/// add to it (`miner_stuffer.rs`). Every field is an operand the fold
-/// already held for that block.
+/// add to it (`miner_stuffer.rs`). The operands are what the cursor priced
+/// the block at; `bodies_weight` and `fees` are the fill's outcome, so the
+/// attacker rebuilds that fill instead of offering the transactions again.
 #[derive(Debug, Clone, Copy)]
 pub struct LastBlock {
     pub already_generated: u64,
@@ -244,9 +241,12 @@ pub struct LastBlock {
     pub chain_leaves: u64,
     pub closed_shards: u64,
     pub medians: EffectiveMedian,
-    /// Honest transactions offered to the block, and the one they all are.
-    pub honest_offered: u64,
+    /// The honest transaction, and the bodies the fill listed: their weight
+    /// and their fees. A reader rebuilds that fill with [`shekyl_block_template::Fill::listed`]
+    /// instead of offering the transactions again.
     pub honest_tx: OrdinaryTx,
+    pub bodies_weight: u64,
+    pub fees: u64,
 }
 
 /// The admission rate the honest chain serves when it has closed a given
@@ -318,63 +318,45 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
     let mut year_demand: u128 = 0;
     let mut year_expired: u128 = 0;
     let mut aggs = Vec::with_capacity(config.sim_years as usize);
-    let mut window = VolumeWindow::default();
-    let mut space = BlockSpace::default();
+    let mut chain = ChainCursor::default();
 
     for block in 0..total_blocks {
         let abs_height = block + config.genesis_height_offset;
-        let ag = already_generated.min(u128::from(u64::MAX)) as u64;
-        let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
-        // The validator's operands: CEN-F20's window and CEN-G6's medians
-        // over the blocks before this one (ESR-4, ESR-6). Read before this
-        // block joins them; `tx_volume` is the block's demand, and what it
-        // takes is the fill rule's.
-        let volume = window.operand();
-        let medians = space.medians();
         // The block is built against the tree as it stands. The fee prices
         // that count; archival bytes inside `add_block` read it too, and the
         // outputs accrue after both.
         let leaves_priced = fold.leaves();
-
-        let emission_share = calc_effective_emission_share(
-            abs_height,
-            crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT,
-            params.staker_emission_share,
-            params.staker_emission_decay,
-            params.blocks_per_year,
-        );
-
-        // The circulating supply the burn reads (CEN-F17), net of what the
-        // fold has destroyed, through its owner.
-        let supply = crate::engine::net_supply(already_generated, total_burned);
-        let burn_pct = calc_burn_pct_at(volume, supply, &economic);
-        let fee_point = FeePoint {
-            already_generated: ag,
-            volume,
-            long_term_median: medians.long_term_effective_median.to_raw(),
-            sigma_scaled: emission_share,
-            burn_pct_scaled: burn_pct,
-            chain_leaves: leaves_priced,
-            params: &economic,
-        };
-        let tx = params.fee.ordinary_tx(&fee_point);
         let closed_before = fold.closed_shard_count();
-        let filled = space.fill(block, medians, tx_volume, tx, &fee_point);
+        let demand = (config.volume.get_volume)(block, params.blocks_per_year);
+        let priced = chain.price(
+            ChainStep {
+                fold_height: block,
+                chain_height: abs_height,
+                demand,
+                leaves: leaves_priced,
+                already_generated,
+                total_burned,
+            },
+            params,
+            &economic,
+        );
         let last_block = LastBlock {
-            already_generated: ag,
-            volume,
-            sigma_scaled: emission_share,
-            burn_pct_scaled: burn_pct,
+            already_generated: priced.fee_point.already_generated,
+            volume: priced.volume,
+            sigma_scaled: priced.emission_share,
+            burn_pct_scaled: priced.burn_pct,
             chain_leaves: leaves_priced,
             closed_shards: closed_before,
-            medians,
-            honest_offered: filled.offered,
-            honest_tx: tx,
+            medians: priced.medians,
+            honest_tx: priced.tx,
+            bodies_weight: priced.filled.bodies_weight,
+            fees: priced.filled.fees,
         };
-        window.push(filled.included);
-        let total_fees = ChargedBlock::of_uniform(tx.fee_atomic, filled.included).total_atomic;
-        fold.add_block(filled.included);
-        let effective = filled.paid_reward;
+        let total_fees = priced.filled.fees;
+        fold.add_block(priced.filled.included);
+        let effective = priced.filled.paid_reward;
+        let emission_share = priced.emission_share;
+        let burn_pct = priced.burn_pct;
         let (_miner, staker_emission) = split_block_emission(effective, emission_share);
         // share = SCALE → the whole burn (pre-split); the candidate re-splits it.
         let whole_burn = compute_burn_split(total_fees, burn_pct, ScaledShare::from_raw(SCALE))
@@ -390,9 +372,9 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         year_burn_atomic += u128::from(whole_burn);
         year_fees_atomic += u128::from(total_fees);
         year_total_emission_atomic += u128::from(effective);
-        year_carried += u128::from(filled.included);
-        year_demand += u128::from(tx_volume);
-        year_expired += u128::from(filled.expired);
+        year_carried += u128::from(priced.filled.included);
+        year_demand += u128::from(demand);
+        year_expired += u128::from(priced.filled.expired);
         already_generated += u128::from(effective);
         total_burned += u128::from(flat.actually_destroyed);
 
@@ -408,11 +390,11 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 whole_burn_atomic: year_burn_atomic,
                 whole_fees_atomic: year_fees_atomic,
                 total_emission_atomic: year_total_emission_atomic,
-                admission_rate: params.fee.admission_rate(&fee_point),
+                admission_rate: params.fee.admission_rate(&priced.fee_point),
                 carried_txs: year_carried,
                 demand_txs: year_demand,
                 expired_txs: year_expired,
-                long_term_median: space.medians().long_term_effective_median.to_raw(),
+                long_term_median: chain.medians().long_term_effective_median.to_raw(),
                 last_block,
             });
             year_carried = 0;

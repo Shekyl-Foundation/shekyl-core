@@ -45,7 +45,6 @@ use shekyl_economics::{
 };
 
 use crate::engine::SimParams;
-use crate::fee_model::ChargedBlock;
 use crate::scenarios::scenario_1_baseline;
 
 /// One recorded per-block row (integer observables + integer
@@ -133,16 +132,21 @@ fn sample_heights(blocks_per_year: u64, sim_years: u64) -> Vec<u64> {
 
 /// Record the `baseline_steady_state` scenario into a
 /// [`RecordedChainFixture`] using the canonical `shekyl-economics`
-/// primitives.
+/// primitives the wallet engine replays.
 ///
-/// The per-block accumulation loop mirrors
-/// [`crate::engine::run_scenario`]'s integer reward/emission math (so
-/// `already_generated` tracks identically). The recorded
-/// `circulating_supply` is the quantity the burn reads in consensus:
-/// `coins_generated − total_burned` at parent state (FL-R16c, CEN-F17),
-/// derived by its owner ([`crate::engine::net_supply`]) over the burn this
-/// loop folds. Until ESR-5 it recorded gross `already_generated`, after a
-/// C++ burn site that no longer reads it. Rows are captured at
+/// This loop does not step [`crate::chain_cursor::ChainCursor`]. The
+/// scenario folds price CEN-F20's window and the fill rule's penalised
+/// reward; this fixture's `tx_volume` column is the schedule's per-block
+/// demand, which is the input the differential feeds back in. The two
+/// `already_generated` paths answer different questions, and this one is
+/// the wallet engine's composition (`effective_emission` of that demand,
+/// no weight penalty).
+///
+/// The recorded `circulating_supply` is the quantity the burn reads in
+/// consensus: `coins_generated − total_burned` at parent state (FL-R16c,
+/// CEN-F17), derived by its owner ([`crate::engine::net_supply`]) over the
+/// burn this loop folds. Until ESR-5 it recorded gross `already_generated`,
+/// after a C++ burn site that no longer reads it. Rows are captured at
 /// [`sample_heights`].
 #[must_use]
 pub fn record_baseline_fixture() -> RecordedChainFixture {
@@ -225,7 +229,12 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             circulating,
             &params,
         );
-        let total_fees = ChargedBlock::of_uniform(vector_fee_per_tx, tx_volume).total_atomic;
+        // The fixture's fee is a flat per-transaction input times the
+        // schedule's demand, saturated at the `u64` the burn takes. The
+        // scenario folds charge the fill's own fees instead.
+        let total_fees =
+            u64::try_from(u128::from(vector_fee_per_tx).saturating_mul(u128::from(tx_volume)))
+                .unwrap_or(u64::MAX);
         let fee_split =
             compute_burn_split_at(total_fees, burn_pct, ClosedShardCount::ZERO, &params);
 

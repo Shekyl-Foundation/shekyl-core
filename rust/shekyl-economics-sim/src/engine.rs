@@ -1,16 +1,15 @@
 use serde::Serialize;
 use shekyl_economics::{
-    burn::{calc_burn_pct_at, compute_burn_split_at},
-    calc_effective_emission_share, calc_release_multiplier,
+    burn::compute_burn_split_at,
+    calc_release_multiplier,
     params::{calc_stake_ratio, EconomicParams, SCALE},
     split_block_emission, CirculatingSupply, ClosedShardCount,
 };
 use shekyl_units::AtomicUnits;
 
 use crate::burden::HonestOutputs;
-use crate::fee_model::{ChargedBlock, FeeModel, FeePoint};
-use crate::median_window::BlockSpace;
-use crate::volume_window::VolumeWindow;
+use crate::chain_cursor::{ChainCursor, ChainStep};
+use crate::fee_model::FeeModel;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct YearSnapshot {
@@ -234,8 +233,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
     // is a different counter and stays zero in this engine.
     let mut outputs = HonestOutputs::default();
 
-    let mut window = VolumeWindow::default();
-    let mut space = BlockSpace::default();
+    let mut chain = ChainCursor::default();
     for block in 0..total_blocks {
         let year = block / params.blocks_per_year;
         let block_in_year = block % params.blocks_per_year;
@@ -246,17 +244,21 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             year_start_circulating = already_generated.saturating_sub(total_burned);
         }
 
-        let ag = already_generated.min(u64::MAX as u128) as u64;
-        let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
-        // The validator's operands: CEN-F20's window and CEN-G6's medians
-        // over the blocks before this one (ESR-4, ESR-6). Read before this
-        // block joins them; `tx_volume` is the block's demand, and what it
-        // takes is the fill rule's.
-        let volume = window.operand();
-        let medians = space.medians();
+        let priced = chain.price(
+            ChainStep {
+                fold_height: block,
+                chain_height: block + config.genesis_height_offset,
+                demand: (config.volume.get_volume)(block, params.blocks_per_year),
+                leaves: outputs.leaves(),
+                already_generated,
+                total_burned,
+            },
+            params,
+            &economic,
+        );
         // The circulating supply the burn reads (CEN-F17): net of what the
         // fold has destroyed, at parent state. One operand for both paths.
-        let supply = net_supply(already_generated, total_burned);
+        let supply = priced.supply;
         let circulating = supply.to_raw();
         let (stake_ratio, staked_atomic) = match &config.archival_lock {
             Some(model) => {
@@ -272,37 +274,17 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         };
 
         let multiplier = calc_release_multiplier(
-            volume,
+            priced.volume,
             params.tx_volume_baseline,
             params.release_min,
             params.release_max,
         );
+        let emission_share = priced.emission_share;
+        let burn_pct = priced.burn_pct;
 
-        let emission_share = calc_effective_emission_share(
-            block + config.genesis_height_offset,
-            EMISSION_SPLIT_EPOCH_HEIGHT,
-            params.staker_emission_share,
-            params.staker_emission_decay,
-            params.blocks_per_year,
-        );
-
-        let burn_pct = calc_burn_pct_at(volume, supply, &economic);
-
-        let fee_point = FeePoint {
-            already_generated: ag,
-            volume,
-            long_term_median: medians.long_term_effective_median.to_raw(),
-            sigma_scaled: emission_share,
-            burn_pct_scaled: burn_pct,
-            chain_leaves: outputs.leaves(),
-            params: &economic,
-        };
-        let tx = params.fee.ordinary_tx(&fee_point);
-        let filled = space.fill(block, medians, tx_volume, tx, &fee_point);
-        window.push(filled.included);
-        outputs.accrue(filled.included);
-        let total_fees = ChargedBlock::of_uniform(tx.fee_atomic, filled.included).total_atomic;
-        let effective_reward = filled.paid_reward;
+        outputs.accrue(priced.filled.included);
+        let total_fees = priced.filled.fees;
+        let effective_reward = priced.filled.paid_reward;
         let (miner_emission, staker_emission) =
             split_block_emission(effective_reward, emission_share);
 

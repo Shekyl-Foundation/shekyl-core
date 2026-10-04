@@ -325,8 +325,10 @@ unenforced miner's zero-fee row beside the relay stuffer's.
 
 `shekyl_chain_rules::rules::block_weight::effective_median_at` needs a
 `ChainView`, a store trait the sim has no chain to satisfy. The fold
-beneath it (`medians_over`, `cxx_median`) is pure and crate-private. ESR-6
-makes that fold public rather than writing a second one.
+beneath it is pure. ESR-6 makes the composition public (`medians_from`,
+`medians_over`) rather than writing a second one. The selecting routine
+stays private. Its even-count rule is `even_pair_median`, and `median`
+reads a slice without reordering it.
 
 The test that matters is **not** "the store-backed entry point and the
 pure fold agree": the first is implemented on the second, so that test is
@@ -338,10 +340,10 @@ trace.
 What ESR-6 built, and why it is not the plan above. A sixty-year fold
 cannot select a 100 000-row median per block, so
 `median_window::RollingMedian` keeps the long window as two ordered halves
-and hands the middle value or pair to the validator's own `cxx_median`;
+and hands the middle pair to the validator's own `even_pair_median`;
 `medians_from` composes the result exactly as `medians_over` does. Two
-tests hold it to production: the rolling median equals `cxx_median` over
-the explicit window at every step, across capacities that fill, evict and
+tests hold it to production: the rolling median equals `median` over the
+explicit window at every step, across capacities that fill, evict and
 churn; and the whole of CEN-G6/G6b equals `medians_over` over the same
 recorded weights through a stream past the 100 000-block window's first
 eviction. The C++ relay-floor ring keeps the same median the same way
@@ -349,11 +351,16 @@ eviction. The C++ relay-floor ring keeps the same median the same way
 
 The block's weight is what its transactions weigh, and how many it takes
 is not the schedule's: it is what the producer's fill rule admits
-(`shekyl_block_template::Fill`, §5.6). One type, `median_window::BlockSpace`,
-holds the medians and the waiting transactions for the engine, the budget
-and the stage-2 fold alike; `burden_trajectory` reads the stage-2 fold's
-aggregates instead of folding the schedule a second time, so the burden
-side and the funding side count the same transactions.
+(`shekyl_block_template::Fill`, §5.6). `median_window::BlockSpace` holds
+the medians and the waiting transactions. One cursor,
+`chain_cursor::ChainCursor`, steps that space and CEN-F20's volume window
+together: the engine, the budget and the stage-2 fold each call it once
+per block, and what they accumulate afterwards is their own.
+`burden_trajectory` reads the stage-2 fold's aggregates instead of folding
+the schedule a second time, so the burden side and the funding side count
+the same transactions. The recorder (`record.rs`) does not step the
+cursor: its `tx_volume` column is the schedule's demand, the input the
+wallet-engine differential feeds back in.
 
 ## 4. Declared divergences
 

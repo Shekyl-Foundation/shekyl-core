@@ -223,13 +223,15 @@ pub(crate) struct BlockSpace {
 pub(crate) struct Filled {
     /// Transactions the block lists.
     pub(crate) included: u64,
-    /// Transactions offered to it: those waiting and its own demand.
-    pub(crate) offered: u64,
     /// Transactions dropped unserved before this block, for age.
     pub(crate) expired: u64,
     /// The penalised gross reward at the block's weight
     /// ([`Fill::reward`]), before the split.
     pub(crate) paid_reward: u64,
+    /// The listed bodies' weight.
+    pub(crate) bodies_weight: u64,
+    /// The listed bodies' fees.
+    pub(crate) fees: u64,
 }
 
 impl BlockSpace {
@@ -292,9 +294,10 @@ impl BlockSpace {
         self.medians.push(medians, weight);
         Filled {
             included,
-            offered,
             expired,
             paid_reward: fill.reward(),
+            bodies_weight: fill.bodies_weight(),
+            fees: fill.fees(),
         }
     }
 }

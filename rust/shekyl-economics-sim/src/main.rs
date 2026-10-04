@@ -4,6 +4,7 @@ mod budget_scenarios;
 mod burden;
 mod calibration;
 mod cartel;
+mod chain_cursor;
 mod challenge_coverage;
 mod distribution;
 mod engine;
