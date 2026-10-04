@@ -1,13 +1,12 @@
 # The serve-credit verifier hole (CEN-J8, J9, J10) — Round 0 (`SCV-`)
 
-**Status: ROUND 0 — OPEN; six questions POSED (§8), none ruled.** Ground:
-`dev@e951cd309` (§0). Pre-flight under
-[`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc):
-**no implementation commit cuts against this document until §8 is ruled**
-(rule 26's halt condition). Identifier families **`SCV-`** (findings) and
-**`SCV-Q`** (questions) are registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 (rule 94;
-`check_index_prefix_uniqueness.py` is the check, and CI runs it).
+**Status: CLOSED-as-record 2026-10-04 — all six questions dispositioned
+(§8); the work is SO-D8 Slice C's, authorized the same day
+([`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](../design/ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
+§8.0).** Owns no open residue. Ground at writing: `dev@e951cd309` (§0).
+Identifier families **`SCV-`** (findings) and **`SCV-Q`** (questions) are
+registered in [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2
+(rule 94).
 
 **The short version.** The brief asked how to build CEN-J8–J10 in Rust from
 `PDM-Q6` item 4's re-keyed preimage. The answer is that J8–J10, as censused,
@@ -18,7 +17,7 @@ names its issuing block `h`, membership is `(P, s) ∈ assignment(h)`, the
 deadline is `W₂`, and the witness authenticates against `h`'s coinbase. `P`'s
 countersignature is the landed `SF-D8` transcript, with no shard bounds in
 it. That successor is already specified in full as
-[`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
+[`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](../design/ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
 §8 ("Slice C"). Slice C is **not authorized**. Its second precondition
 waits on a lane that scoped the same work out as waiting on Slice C, and
 that lane has now closed. The central finding is that circular,
@@ -275,6 +274,11 @@ J8–J10 as a unit separate from that surface.
 
 ## 4. The interim — what the Rust validator does until Slice C
 
+*Withdrawn 2026-10-04 (`SCV-Q1`): no interim is built. The `SCV-Q5` gate
+keeps the Rust validator from becoming consensus while the hole exists, so
+the interim guards a window no live chain sees. The section is the record
+of what was weighed.*
+
 Today the Rust validator admits any well-formed credit from a persona that
 has a record. Nothing in Rust signs a real credit, and nothing in Rust
 verifies one. There are three candidate interims; `SCV-Q1` rules among
@@ -367,6 +371,13 @@ them.
 
 ## 6. Commit sequence and the expectation, written before the work
 
+*Disposition 2026-10-04, after §8 was ruled: commit 1 landed as PR #939.
+Commit 2 (census dispositions) and the J8–J10 retirement are transferred to
+SO-D8 Slice C (`SCV-Q6`). Commit 3 (the interim) is withdrawn (`SCV-Q1`).
+Commits 4 and 5 (the `DEL-008` gate and the pointers) land with the
+rulings, in the PR that records them. The table below is the plan as
+written.*
+
 Commit 1 is this Round-0 document, which lands before any ruling: rule 26
 halts implementation, not the pre-flight record. Commits 2–5 cut only
 **after §8 is ruled**. None of them is Slice C's; SO-D8 §8 is Slice C's
@@ -438,60 +449,76 @@ pre-flight, not here.
 
 ---
 
-## 8. Questions for the maintainer (`SCV-Q`), each with a default
+## 8. Questions for the maintainer (`SCV-Q`) — RULED 2026-10-04
 
-- **`SCV-Q1` — the interim.** *Default (a):* fail closed (§4). The Rust
-  validator refuses every serve-credit vin with a typed row until Slice C's
-  rows land. The cost is priced in §4. *Alternatives:* (b) keep admitting
-  and rely on `SCV-Q5`; (c) port J8's first clause (rejected in §4).
-- **`SCV-Q2` — `PDM-Q6` item 4 row 1's bounds term.** *Default:* **struck.**
-  The successor's `P`-signed message is `SF-D8`'s as landed. A constant
-  function of an already-signed `shard_id` binds nothing, and re-keying the
-  landed signer and verifier to add it buys nothing (rule 05). PDM row 1
-  gets a line-local edit pointing here (rule 23). *Alternative:* sign the
-  chain-derived **tx-id range** of shard `k`, which is non-vacuous. This is
-  rejected as the default because the witness already checks membership
-  off-chain, and `P`'s view of the range adds no consensus evidence.
-- **`SCV-Q3` — who owns Slice C, and whether it is authorized.** *Default:*
-  Slice C is **one unit**: the admission rows plus the settlement writer's
-  Rust call site, which `SCV-1` shows each document assigning to the other.
-  It is owned by E6 slice 8, the lane the census already gives 4.J. Its
-  spec is SO-D8 §8, not `ARCHIVAL_SHARD_FETCH.md` alone (`SCV-13`). Its
-  authorization is gated on items 2–5 of §6's sizing paragraph, not on a
-  falsifier that no lane will fire. *Alternative:* a named successor round
-  (an `SO-` continuation) that owns it, with slice 8 consuming its rows.
-- **`SCV-Q4` — the carrier.** *Default:* SO-D8 Q9's `serve_credit_only`
-  carrier. It is later (2026-09-16 against 2026-08-03), more specific
-  (batching, fail-whole, the weight split), and `RF-D10`'s residence is
-  landed. CEN-B4's attestation-witness arm is B4's owner's to re-key. B4's
-  empty-root slice is the only one exercised today, so nothing live moves.
-  *Alternative:* the attestation witness as the carrier, which would make
-  SO-D8 §2.1 item 8's weight arithmetic moot.
-- **`SCV-Q5` — `DEL-008`'s trigger.** *Default:* add the conjunct "and
-  `census.rs` lists the Slice C admission rows as `implemented`". The
-  falsifier is a cutover PR that deletes `check_archival_serve_credit_input`
-  while those rows are `pending`. Without the conjunct, the cutover is the
-  event that opens the hole on the live chain.
-- **`SCV-Q6` — the census rows.** *Default:* J3, J7, J8 and J10 are
-  marked **superseded by ruling** in `CONSENSUS_RULE_CENSUS.md`, and J9
-  **deleted by ruling** (§3), each with a pointer to SO-D8 §8 and to this
-  file (rule 23's grep surface). No new `CEN-` ids are minted here; Slice C
-  mints them (SO-D8 §8). The FOLLOWUPS J8–J10 row (`:21`; falsifier: J8–J10 reading
-  other than `pending`) is re-keyed to the successor rows' ids when they
-  exist.
+Ruled by the maintainer on 2026-10-04, after the review of PR #939; the PR
+that records them is the signature surface. Each line states the ruling,
+then what it changed from the posed default.
+
+- **`SCV-Q1` — the interim. WITHDRAWN as moot.** `SCV-Q5`'s gate keeps the
+  Rust validator from being consensus while the hole exists, so no interim
+  is built (§4). The facts the interim analysis established are not lost
+  with it: zero passes slash every honest archiver, credits accrue for
+  shards the persona does not hold, and a credit on an unclosed shard id
+  counts toward scarcity. All three move to Slice C's evidence plan
+  (SO-D8 §8.0, part 3).
+- **`SCV-Q2` — `PDM-Q6` item 4 row 1's bounds term. STRUCK, as the
+  default.** The successor's `P`-signed message is `SF-D8`'s as landed. A
+  constant function of an already-signed `shard_id` binds nothing. PDM row
+  1 carries a line-local pointer here (rule 23).
+- **`SCV-Q3` — Slice C's owner and authorization. RULED: the SO-D8 round
+  owns it, and Slice C is AUTHORIZED.** Changed from the default (E6 slice
+  8, authorization gated on the design inputs). Slices A and B were the
+  same round's design work; Slice C is its implementation slice and §8 its
+  plan. "Owner" means the document and brief that govern the work. One
+  document now owns both halves `SCV-1` showed handing to each other:
+  - SO-D8 §8's two preconditions stop being waits.
+  - `ARCHIVAL_SETTLEMENT_WRITER.md` §12's rule-22 hold is lifted.
+
+  Authorization does not wait on the design inputs, because those inputs
+  need an owner before anyone produces them. They are Slice C's first
+  increment, its Round 0 (SO-D8 §8.0); *building* waits on them, ownership
+  does not. **Surface split:** Slice C owns the successors of CEN-J1–J3 and
+  J7–J10, the settlement writer's Rust call site, the witness, the `0x0C`
+  writer and the carrier. E6 slice 8 keeps the rest of 4.J and does not
+  wait on Slice C.
+- **`SCV-Q4` — the carrier. RULED as the default:** SO-D8 Q9's
+  `serve_credit_only` carrier. CEN-B4's attestation-witness arm is B4's
+  owner's to re-key.
+- **`SCV-Q5` — the genesis and cutover gate. RULED, in the positive form:
+  no genesis, and no `DEL-008` cutover, until Slice C's admission rows are
+  `implemented` in `census.rs` and J8–J10 are retired.** The posed
+  conjunct named only the new rows; the "or their successors" wording that
+  followed could never open while J8–J10 stayed `pending`. **Falsifier:**
+  a cutover PR that deletes `check_archival_serve_credit_input` while
+  either half is false, read off `census.rs`: the Slice C rows at
+  `implemented`, and J8–J10 at the retired-by-ruling status `SCV-Q6`
+  requires. Recorded on `DEL-008`'s trigger (`DAEMON_REDB_STORE.md` §12).
+- **`SCV-Q6` — the census rows. TRANSFERRED to Slice C, not withdrawn.**
+  Slice C retires J8–J10 by ruling in the same change that mints its own
+  rows; J3 and J7 are superseded by those rows, and J9 is deleted by ruling
+  (§3).
+  - **Requirement:** `census.rs`'s `RowStatus` has no arm for a row retired
+    by ruling. It has only `Pending`, `Implemented`, `EnforcedAt`,
+    `ByConstruction` and `HeldByCxx`. Slice C adds one that carries its
+    ruling's citation, so `SCV-Q5`'s second half is a state a gate reads
+    rather than a word (rule 23: a refused name stays visible as a
+    structured status; the denominator does not shrink silently).
+  - The FOLLOWUPS J8–J10 row (`:21`) points at Slice C, and its falsifier
+    is `SCV-Q5`'s.
 
 ---
 
 ## 9. Documentation owed (rule 91)
 
-The documentation owed is §6's commits: the index rows land in commit 1,
-the census dispositions in commit 2, and the line-local pointers and the
-FOLLOWUPS J8–J10 row's re-key (naming this document as the round that
-answered the "how") in commit 5. When §8 is ruled, this document's status
-and the index rows record the rulings in the same change.
-
-This document then archives to `docs/completed/` when Slice C opens its own
-pre-flight or rules this round's questions in place.
+Discharged 2026-10-04 by the change that records §8: this document's
+status and the index rows; `DEL-008`'s trigger (`SCV-Q5`); SO-D8's banner,
+§8 and §8.0 (`SCV-Q3`); `ARCHIVAL_SETTLEMENT_WRITER.md` §12's hold lifted;
+the line-local pointers in `PDM-Q6` item 4 row 1, the census J8/J10 notes
+and the C++ gate's comment (`SCV-Q2`); the FOLLOWUPS J8–J10 row relabelled
+and pointed at Slice C (`SCV-10`). The census dispositions are Slice C's
+(`SCV-Q6`). This document archives to `docs/completed/` in the same
+change.
 
 ---
 
@@ -504,3 +531,4 @@ pre-flight or rules this round's questions in place.
 | 2026-10-03 | **Cites re-pinned at `dev@6b1eb6ffb`.** #935 added four FOLLOWUPS lines above this round's rows; the four FOLLOWUPS cites move by +4 (`:213`, `:233`, `:235`, `:274`). Nothing else this round cites changed. |
 | 2026-10-03 | **Re-grounded at `dev@61feff8fe`** after PR #937 merged: the `[PR-b]` taxonomy is gone, because everything it marked is on `dev`. On review of #939: the anchor window's operand in §2.2 is the **including** block's predecessor, not R-B's issuing `h` (`pass_anchor.rs:108`); the registered-family count is dropped from the status block, since the gate is the check and the count changed twice in a day; `SCV-2` gains the census J8/J10 notes #937 added. |
 | 2026-10-04 | **Re-grounded at `dev@e951cd309`** (#942 removed the closed `SHT-9` FOLLOWUPS row, so four cites move by −8). On review of #939: J9's disposition is *deleted* in §6 commit 2 and `SCV-Q6`, not grouped with the superseded rows; §6 separates commit 1, which lands before any ruling, from commits 2–5; §9 restates the owed docs by commit instead of re-listing commits' contents; §4's call-line count is dropped for the grep that produces it. |
+| 2026-10-04 | **§8 RULED and the round closed as record** (maintainer, after the #939 review). Q2 and Q4 as defaulted. Q1 withdrawn as moot, with its three evidence facts moved to Slice C. Q3: the SO-D8 round owns Slice C, authorized now, with the design inputs as its Round 0. Q5: the gate in its positive form. Q6: transferred to Slice C with the retired-status requirement. Found while recording Q3: SO-D8 §8's precondition 1 ("`shekyl-chain-rules` is the live validator") would deadlock with `SCV-Q5`, because the cutover now waits on Slice C. It is restated as Slice C's landing rule, not a wait (SO-D8 §8). |
