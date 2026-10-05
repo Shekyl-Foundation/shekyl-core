@@ -462,13 +462,15 @@ sentence of it instructed a reader to build the thing that was rejected.
   by slash, so "did `P` hold `s` at `at_height`" is still not "does `P` hold `s` at tip";
   `archival_bond_holds_shard` reconstructs an ended tenure from the slash log
   (`shekyl-archival-retention/src/held_at_height.rs`). Its *add-epoch* half — "held
-  strictly after the shard's add epoch" — now degenerates: with no add and `Reinstate` at
-  equality (P2B-9 as amended), every held shard's add epoch is `E_join`, and the bound
-  collapses into R1b's `E ≥ E_join + 1`. The per-shard add-epoch substrate
-  (`HeldShard::add_epoch`, the v6 `shard_add_epochs` column) and the production
-  `bond_duration(age)` drop gate are enumerated for deletion at
-  [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2 (rows 7–8) — a
-  record-format change, authorized separately, not swept here.
+  strictly after the shard's add epoch" — degenerates on the production join path:
+  with no add and `Reinstate` at equality (P2B-9 as amended), a shard written there
+  stores `E_join`. The type does not enforce that equality, and the bound still
+  reads the stored field. The per-shard add-epoch substrate (`HeldShard::add_epoch`,
+  the v6 `shard_add_epochs` column) is a collapse-to-record-field candidate at
+  [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2 row 7, not a
+  deletion. Production `bond_duration(age)` (row 8) is enumerated as delete or keep:
+  it has no production caller, and the age-realization invariant stays on
+  `shard_age_milli`. Neither row is ruled, and neither is swept here.
 - **P2B-8 Q1's derivation survives as a primitive.** The per-shard last-served anchor
   (one reverse-cursor seek over `P_id ‖ BE64(shard)`) was derived for the drop cooldown;
   Q2's `Release` anchor is its max over the record's shards and is the consumer that remains.
@@ -483,11 +485,12 @@ sentence of it instructed a reader to build the thing that was rejected.
 
 ## P2B-8 — Verify/connect design questions (pinned pre-impl, 2026-07-12)
 
-**Why.** The bond-FSM verify/connect is **JoinMarket-only** at source (`bond_post.rs`
-`verify_join_market_bond_post`; the wire carries all four `post_kind`s but verify rejects the other
-three at genesis). Building `Reinstate` / `Release` / `HoldingsUpdate` verify+connect was the real
-seal-blocking work at the time (the third of those has since been REJECTED and deleted — P2B-7;
-the round's Q1 and Q3 had it as their subject and are marked below). Four questions the specs left thin are pinned here so the impl lands M1-clean
+**Why.** Three `post_kind`s verify: `JoinMarket`, `Reinstate`, and `Release`
+(`verify_join_market_bond_post`, `verify_reinstate_bond_post`, `verify_release_bond_post`).
+Byte 3 is `InvalidPostKind`. *Records-was, as posed 2026-07-12:* verify was JoinMarket-only
+and the wire's other three kinds were rejected at genesis; building those three verifies
+was the seal-blocking work. `HoldingsUpdate` was then **REJECTED** and deleted (P2B-7,
+2026-09-20); this round's Q1 and Q3 had it as their subject and are marked below. Four questions the specs left thin are pinned here so the impl lands M1-clean
 (arm the trigger before the identifier exists). Verify contract per `post_kind`: gate-4 §3.5 (order),
 §3.2 (credit/debit terms), §4.1 (record shape). Verify/connect logic is **Rust-native**
 (`shekyl-archival-retention`), C++ daemon thin-glue + FFI; every connect path gets a pop twin (§5).
@@ -527,8 +530,8 @@ field with a pop twin only if the O(#shards) `Release`-time seek is ever shown t
 ### Q3 — `bond_duration(age)` is a consensus gate ⇒ genesis-frozen — **RESOLVED 2026-07-12; subject REJECTED 2026-09-20**
 
 *The gate this question was about — drop-eligibility — went with the voluntary drop (P2B-7).
-`bond_duration(age)` has no consensus consumer left; the production function is enumerated for
-deletion at [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2 row 8, and
+`bond_duration(age)` has no consensus consumer left; the production function is enumerated as
+delete or keep at [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2 row 8, and
 the sim keeps its own copy for the age-stratified harm model. The posture ruled here — a value a
 verify decision reads is a genesis constant, its "provisional" window is pre-seal — is general
 and still binds every other consensus constant; the text is kept as the record of that ruling.*
@@ -537,13 +540,16 @@ and still binds every other consensus constant; the text is kept as the record o
 for voluntary drop") is **consensus-visible verify logic**, but `BOND_DURATION_{BASE,AGE_SCALE}` are
 "provisional pending testnet."
 
-**Pin.** Because it gates a consensus verify decision, `bond_duration` is **frozen at genesis like any
-consensus constant**. The "provisional / drift within `scale ∈ [2,8]`" clause
+**Pin.** A value a verify decision reads is **frozen at genesis like any consensus
+constant**. The "provisional / drift within `scale ∈ [2,8]`" clause
 ([`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §1 fn.1) is a **pre-genesis calibration
 window** (testnet `fetch_latency_per_unit` closes it before seal), **not** a post-genesis tunable — a
 post-genesis change is a hard fork. Resolves the "amends this table only" vs "consensus gate" tension:
-the amend window is *pre-seal*. The impl reads the **generated** consensus constant (never a hardcode),
-and the drop-eligibility check is `current_epoch − shard_add_epoch ≥ bond_duration(age)`.
+the amend window is *pre-seal*. *Records-was, the check this pin named:* the impl reads the
+**generated** constant and `current_epoch − shard_add_epoch ≥ bond_duration(age)`. That
+consumer is gone with the drop; `bond_duration` has no production caller
+([`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2 row 8). The freeze
+posture is what still binds every other consensus constant.
 
 ### Q4 — `Reinstate` precondition + recovery path — **RESOLVED**
 
@@ -635,8 +641,11 @@ equation — both fall out of one operating concept, ratified 2026-07-14:
 remove the failed shard, impose a zero-earning bad-standing gap — not a termination. `Reinstate`
 is the primitive that lets a persona pay that penalty and resume **in place**: same
 `P_canonical_id`, same remaining shards, same add-epochs, same backlog. The "it's just
-release + fresh bond" intuition breaks three ways: (1) a **terminal slash has nothing to
-release** (`bonded_total == 0`; the only way out of `Slashed` is topping collateral back up);
+release + fresh bond" intuition breaks three ways: (1) a **terminal slash emptied the
+record** (`bonded_total == 0`, holdings empty). `Reinstate` refuses an empty holding;
+re-entry is a new persona's `JoinMarket`. Topping collateral back up was the
+credit-bearing reinstate the ruling rejected. `Reinstate` remains partial-slash
+recovery: the record stays `Bonded`, the post is zero-money, and `post == current`;
 (2) release+rejoin **annihilates exactly what `Reinstate` preserves** — identity, tenure
 (add-epochs), and the scarce-shard position the market would take during the
 cooldown+exit+rejoin window; (3) **proportionality is what the seal needs** — if every slash
@@ -760,9 +769,11 @@ shard's v6 add-epoch"): a re-specified shard carrying its original add-epoch wou
 answer "held" across the bad-standing gap. Carried (still-held) shards keep their add-epochs —
 and under Pin 1's equality every shard is a carried shard, so `Reinstate` writes no add-epoch
 at all. *Records-was:* shards added at `Reinstate` took `E_reinstate` and re-armed their
-horizons; nothing is added now. With no add anywhere, every add-epoch in a record equals its
-`E_join`, and the column is enumerated for deletion at
-[`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2 row 7.
+horizons; nothing is added now. On the production path an add-epoch equals its
+`E_join`. The column is a collapse-to-record-field candidate at
+[`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2 row 7, not a
+deletion: the type does not enforce the equality, and the slash log still reads
+the stored field.
 
 ### Pin 8 — kind: `ShardSetCompact` only; demoted foundation reinstates as a normal market record
 

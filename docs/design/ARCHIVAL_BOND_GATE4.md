@@ -697,11 +697,14 @@ once called the problem is the designed path. Ruling and reason:
 `BondPostKind::from_u8(3)` is `InvalidPostKind` (PR #808; the slot is held in §3.4's table so the
 name is not re-minted, rule 23); the verify/connect/pop arms and their FFI are deleted (E4
 `ARW-14`); the HU error codes 24–36 are RETIRED in `shekyl-ffi::archival_ffi::codes`. The
-deletion set — what the drop carried with it: Pin 5's add-half, Pin 3's per-shard anti-dodge
-(subsumed by the whole-bond `Release` cooldown), the drop-last-shard rule, the wallet-side
-per-shard absence tracking, the per-shard add-epoch substrate and the production
-`bond_duration(age)` (no consumer left) — is enumerated with status at
-[`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2. The grace-tail text and
+deletion set is enumerated **with per-row status** at
+[`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2, and the statuses
+are not one word. Pin 5's add-half, Pin 3's per-shard anti-dodge (subsumed by the
+whole-bond `Release` cooldown), and the drop-last-shard rule landed as doc-side
+deletions. The wallet-side per-shard absence tracking was **refuted**: a slash still
+removes one shard. The add-epoch substrate is a collapse-to-record-field candidate,
+and production `bond_duration(age)` is delete-or-keep; both are enumerated, not ruled.
+The grace-tail text and
 the retention-horizon freeze are in git history at the commit that wrote this paragraph.
 
 **What survives.** The **age-realization invariant** the freeze rested on — one age,

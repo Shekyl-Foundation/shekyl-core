@@ -2233,12 +2233,15 @@ exceeds the chain's, the excess arity is always an observer's artifact — and a
 
 ## 12. Round 4 — output + bond-funding hygiene: the drain-event firewall (OPEN — drafted 2026-07-11)
 
-**Status:** **Open — drafted; F-D3/F-D4 activation FIRED 2026-07-15.** Scope, adversary, and the
+**Status:** **Open — drafted 2026-07-11.** Scope, adversary, and the
 drain-event findings (F-D1…F-D6) pinned, source-grounded at `dev` `75c3cae1d`. **F-D1** (amount
 channel) is a **complete pre-code pin**, buildable now; **F-D2** (UI-default) buildable now;
-**F-D3/F-D4** (exit-timing) were FSM-gated spec-stubs whose activation criterion **fired 2026-07-15**
-(§12.5 — the cooldown is now an enforced spendability gate, `bond_post.rs:369`/`:627`), so both are
-**open for build**; **F-D5** (quantization) is routed out to ~~§14.4 economics~~ *(dangling —
+**F-D3** fired 2026-07-15 and was **deleted 2026-07-17** (§12.5) — not open for build. The
+cooldown it was anchored to remains, with one verify consumer (`verify_release_bond_post`,
+`bond_post.rs:400`). **F-D4**'s derivation closed with that deletion; the tripwire question
+persona rotation re-opened is a FOLLOWUPS row, not a build (§12.5, 2026-10-04). *Records-was
+of this lead:* both were open for build because two verify paths read the cooldown
+(`bond_post.rs:369`/`:627`). **F-D5** (quantization) is routed out to ~~§14.4 economics~~ *(dangling —
 re-pointed 2026-07-17 to the disposition round chartered at §12.7, which **ran the same day**:
 width does not derive, no grid at genesis, band registered as an R5 S-2 ledger row — §12.7
 OUTCOME)*;
@@ -2475,14 +2478,13 @@ trigger is catastrophic, `16→1.01`."
   2026-09-20 — see the last update below.)*
 - Wallet self-test conformance (the anchor is consumer-side/off-chain, consensus-unenforceable),
   integer golden vector on the aarch64 lane — the `draw_entry_gap` discipline.
-- **FSM gate (rule-21) — FIRED 2026-07-15.** The activation criterion recorded here ("open F-D3
-  build/measurement when a verify path reads `RELEASE_COOLDOWN_EPOCHS` as a spendability gate") is
-  met at source: `release_cooldown_elapsed` is **enforced consensus** with two verify consumers —
-  `bond_post.rs:369` (`HoldingsUpdate`-drop, per-shard last-served anchor) and `bond_post.rs:627`
-  (`Release`, whole-record anchor) — landed with the reinstate/release FSM (PR #303 `HoldingsUpdate` +
-  `Release` verify/connect/pop and the Pin-4/Pin-5 closure, 2026-07-14; PR #307 `Reinstate`). The
-  deterministic cooldown tell this standoff exists to break is now real; F-D3 is **open for build
-  and measurement**.
+- **FSM gate (rule-21) — FIRED 2026-07-15; the mechanism this opened was deleted
+  2026-07-17.** *Records-was of the firing:* the activation criterion ("open F-D3
+  build/measurement when a verify path reads `RELEASE_COOLDOWN_EPOCHS` as a spendability
+  gate") was met by two consumers, a `HoldingsUpdate`-drop and a `Release`. The only
+  consumer now is `verify_release_bond_post` (`bond_post.rs:400`, whole-record anchor).
+  The drop consumer is gone with the kind (**REJECTED 2026-09-20**). F-D3 is not open
+  for build. The tripwire question is the 2026-10-04 update below.
 - **Per-event independence armed with its own negative control (pinned at activation, 2026-07-15).**
   The entry seam's `double_jitter_trap` guards a **two-sided** construction (order coin + inversion)
   that the one-sided exit draw does not have, so it cannot be borrowed. The exit draw's conformance
@@ -3517,9 +3519,10 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
 
 - **2026-07-15 (F-D3/F-D4 activation FIRED — fossil sweep):** The §12.5 rule-21 activation
   criterion ("a verify path reads `RELEASE_COOLDOWN_EPOCHS` as a spendability gate") fired at
-  source: `release_cooldown_elapsed` is enforced consensus with two verify consumers —
-  `bond_post.rs:369` (`HoldingsUpdate`-drop, per-shard last-served anchor) and `:627` (`Release`,
-  whole-record anchor) — landed with the reinstate/release FSM (PR #303 `HoldingsUpdate`/`Release` +
+  source. *Records-was of that firing:* `release_cooldown_elapsed` was read as enforced
+  consensus with two verify consumers — `bond_post.rs:369` (`HoldingsUpdate`-drop, per-shard
+  last-served anchor) and `:627` (`Release`, whole-record anchor) — landed with the
+  reinstate/release FSM (PR #303 `HoldingsUpdate`/`Release` +
   the P2B-7 Pin-4/Pin-5 closure, 2026-07-14; PR #307 `Reinstate`; #309 ShardSet newtype). Statuses
   swept: header summary, §6 R4 cell + scope-note discharge, §12 status header, §12.1 channel
   table, §12.5/§12.6 headings + gate/activation blocks, §12.7 F-D6 (named const half done —

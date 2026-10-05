@@ -521,9 +521,9 @@ the names are not re-minted (rule 23).
 | --- | --- | --- | --- |
 | JoinMarket | `P_pubkey` | `verify_join_market_bond_post` | PR 1 (KAT-validated) |
 | ~~HoldingsUpdate add~~ | — | **REJECTED 2026-09-20** — arm deleted; `from_u8(3)` is `InvalidPostKind` | none — holdings change by persona rotation (lifecycle doc §5.3.1) |
-| ~~HoldingsUpdate drop~~ | — | **REJECTED 2026-09-20** — arm deleted | none — the operator-guide footguns that lived here went with it |
+| ~~HoldingsUpdate drop~~ | — | **REJECTED 2026-09-20** — arm deleted | none — the capital-strand footgun widened to the whole bond ([`STAKER_OPERATOR_GUIDE.md`](../STAKER_OPERATOR_GUIDE.md) Footgun 1) |
 | Reinstate | `P_pubkey` | `verify_reinstate_bond_post` (equality `post == current`, zero-money — PR #808) | provisional — no producer |
-| Release | `bond_spend_pk` | `verify_release_bond_post` | PR-P4 — `build_release_vin` (KAT-validated) + `AssembleRelease` (full tx; auth under `bond_spend_pk`). **Built, not reachable:** no RPC method or CLI verb; slice 3's engine walk has landed and did not lift it |
+| Release | `bond_spend_pk` | `verify_release_bond_post` | PR-P4 — `build_release_vin` (KAT-validated) + `AssembleRelease` (full tx; auth under `bond_spend_pk`). **Reachable (PR-C, 2026-09-03):** `StakeFacade::unstake` and `collect_unstaked`, wallet-RPC and CLI. *Records-was:* "Built, not reachable: no RPC method or CLI verb". |
 
 The `Auth key` column is unchanged and remains correct: `Release` — the one debit
 kind — authorizes under the record's committed `bond_spend_pk`,

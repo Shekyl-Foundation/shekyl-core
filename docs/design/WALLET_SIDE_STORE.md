@@ -251,13 +251,12 @@ design-review material awaiting a ruling, and is marked so.
     **verified**). §5 gate 1 still presents the `GF-4` output-count rule as an
     open design gate with its retirement appended as an `UPDATE`, and the
     `GF-4b` note of 2026-09-11 says outright that it was *"annotated rather
-    than edited"* — the pattern the current-only principle forbids. *(One row
-    checked and **sound**: §5 item 2 is still accurate — reinstate and
+    than edited"* — the pattern the current-only principle forbids. *(Records-was,
+    checked at the round-0 pin: §5 item 2 then said reinstate and
     `HoldingsUpdate` have verify arms at `bond_post.rs:255`, `:324`, `:440`
-    and no builder; `shekyl-archival-bond-builder` has only
-    `build_join_market_vin` and `build_release_vin`.)* *[Records-was, checked
-    at the round-0 pin. The `HoldingsUpdate` arms were deleted 2026-09-20
-    (PR #808, kind REJECTED); only `Reinstate`'s arm remains producerless.]*
+    and no builder. The arms were deleted 2026-09-20 (PR #808, kind
+    **REJECTED**); §5 item 2 now names the three live verifiers, and only
+    `Reinstate`'s producer is owed.)*
 
 ---
 
@@ -523,48 +522,24 @@ to satisfy both storage policies; neither is why the answer is what it is.
 
 ### 6.2 `P`'s serving store — what the disk reveals, and what that justifies (**`WSS-Q8` / `Q12` / `Q13` RULED 2026-09-19**)
 
-**Erasure is per shard, and later than the departure.** Granularity is **per
-shard** — a slash erases one shard from a compact record while the bond
-continues (`SlashedHolding::Shard`, `archival_slash_removed_holding_after`);
-*as ruled the sentence read "a `HoldingsUpdate` drop releases one shard while
-the bond continues" — that cause is REJECTED 2026-09-20, see the 2026-10-04
-update at the end of this subsection*. Timing is the **landed pin-release gate** — the
-second consecutive epoch open at which the shard is absent from the bond record
-(`WSS-Q8`) — and **not** `drop-connect + D_max`, which this round proposed and
-then rejected, because a dropped pair stays **drawable** for the rest of its
-epoch. The reorg reasoning that formula rested on is subsumed rather than lost:
-under [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md)
-Pin 3 (`:488-497`) the slash scheduler challenges **currently-held** shards and
-exit forgiveness applies only once the drop **connects**, and a connected drop
-can be **reorged out**, which puts the obligation back — and two epoch
-boundaries sit far deeper than that. Erasing at *post* time
-would risk a slash for a shard `P` destroyed and was then obligated for again.
-**And the erasure point is later still, and is already implemented:** a dropped
-pair stays in the epoch's drawable set until that epoch closes, and a challenge
-issued in its last drawable block still has to resolve — so the horizon is the
-**second consecutive epoch open at which the shard is absent from the bond
-record** (`EPOCHS_BEFORE_PIN_RELEASE = 2`, `WSS-16`). Two epoch boundaries sit
-far deeper than `ARCHIVAL_REORG_DEPTH_BLOCKS`, so Pin 3's reorg protection is
-subsumed rather than replaced.
+**Erasure is per shard, and later than the departure.** A slash erases one
+shard from a compact record while the bond continues (`SlashedHolding::Shard`;
+`archival_slash_removed_holding_after`). The departure ledger stays per-shard
+(`departure_ledger.rs`, `EPOCHS_BEFORE_PIN_RELEASE = 2`, `WSS-16`): the horizon
+is the second consecutive epoch open at which the shard is absent from the
+bond record (`WSS-Q8`). A reorg can still restore a shard and erase it again.
+Two epoch boundaries sit deeper than `ARCHIVAL_REORG_DEPTH_BLOCKS`. The
+voluntary cause is gone — a `HoldingsUpdate` drop, **REJECTED 2026-09-20** —
+and so is the `drop-connect + D_max` alternative. *Records-was, the lead this
+subsection carried until 2026-10-05:* erasure was justified by Pin 3's
+drop-connect forgiveness, a connected drop the slash scheduler could reorg
+back into obligation. That cause does not post. The two-epoch-open rule and
+its reopening criterion on `W₂` are unchanged.
 
-*(UPDATE 2026-10-04 — the cause changed; the gate did not. The paragraph above
-was reasoned from the voluntary `HoldingsUpdate` drop and from Pin 3's
-drop-connect forgiveness; both are gone — the kind is REJECTED 2026-09-20
-and Pin 3 is subsumed by the whole-bond release cooldown
-([`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2 rows 1
-and 3). The lifecycle doc's row 5 predicted this store's per-shard absence
-tracking would then collapse to "the record exists with `S`, or it does not".
-**Read against code, it does not collapse:** a slash still erases exactly one
-shard from a compact record (`shekyl-types` `SlashedHolding::Shard`;
-`db_lmdb.cpp` `archival_slash_removed_holding_after`), so a shard can be absent
-while its bond continues, and the departure ledger
-(`departure_ledger.rs`, `EPOCHS_BEFORE_PIN_RELEASE = 2`) stays per-shard with
-its reorg hazards intact — a reorg can still restore and re-erase a shard.
-What the ruling removes is the *voluntary* cause of absence and the
-`drop-connect + D_max` alternative's premise, not the dimension. The gate's
-two-epoch-open rule is unchanged, and so is its reopening criterion on `W₂`.
-Row 5's premise is recorded as refuted in the lifecycle doc by the same
-sweep; nothing here is owed deletion.)*
+The lifecycle doc's row 5 predicted this tracking would collapse to "the
+record exists with `S`, or it does not". **Read against code, it does not.**
+Nothing here is owed deletion. Row 5 is recorded as refuted in
+[`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2.
 
 #### 6.2.1 What the disk actually reveals
 
