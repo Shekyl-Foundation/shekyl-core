@@ -91,6 +91,33 @@ text** — and what closes or reopens that finding.
   an unrelated reason — habit, the weakest catch. Run `git status` after
   every `cargo fmt`. The falsifier for the mechanism stands as `wt-e6-s6`
   wrote it.
+- **`wt-e6-s8` (2026-10-04) — two in one turn; the second is the class the
+  mitigations do not reach.** Minutes after PR #953's commit 10 had been
+  pushed and fresh-clone verified, an anchored docs edit refused to match;
+  `git diff` showed **four** tracked files reverted — a plan doc to its
+  pre-edit text, a fixture module to a draft from the commit before, two
+  Rust files to their pre-`cargo fmt` bytes. The known shape, caught by the
+  anchor, restored from `HEAD`, the committed tree untouched. Then the
+  second: the PR body is kept as an **untracked** file under `/tmp`, edited
+  by a script that writes it whole; its row-10 write reverted to the bytes
+  of two minutes earlier, and a later `gh pr edit --body-file` **published
+  the stale body over the correct one on GitHub**. Nothing refused: the
+  file had no `HEAD` to differ from, the script had nothing to anchor the
+  *next* edit against (it failed on a row that was no longer there, which
+  is what surfaced it), and the upload command exited zero because it had
+  sent something. Wrong content was live for minutes. Every prior instance
+  was caught before a commit, so the shipped artifact was always right;
+  this is the first with a consequence outside the repository, and every
+  mitigation above assumes the failure is local and recoverable —
+  `git status` after a write, restore from `HEAD`, an anchor that refuses.
+  None reaches a file with no `HEAD` whose contents are then sent
+  somewhere. So, the fourth mitigation, and it generalises past the case:
+  **any write that leaves the repository — a PR body, a review comment, a
+  gist, an issue — is verified by reading it back, not by the command
+  exiting zero.** Same reasoning as constraint 2: the thing verified and
+  the thing shipped have to be the same object, and a tool reporting
+  success says only that it sent something. (`gh pr view --json body`
+  after `gh pr edit`; `grep` the read-back for the lines the edit added.)
 
 Most of these were caught by a human or an agent reading the diff. That does not
 scale, and it is not the dangerous case. **The dangerous case is a drift
@@ -100,7 +127,7 @@ with nothing to notice. The drift specifically reverts *verified* edits to
 what was wrong before someone checked — so what would be committed is
 exactly the content the verification existed to remove.
 
-## Two constraints, both mechanical
+## Two constraints, both mechanical — and a third for writes that leave the repo
 
 1. **Stage explicit paths. Never `git add -A`, `git add .`, `git add -u`,
    or `git commit -a` in a worktree that has been left open between edits.**
@@ -183,6 +210,15 @@ exactly the content the verification existed to remove.
    tip you are asking to merge**, re-run the clone after any merge that
    resolved a conflict, and state the SHA the run covered rather than the
    one the table happens to end at.
+
+3. **Read back anything you publish.** A PR body, a review comment, an
+   issue, a gist — any write whose destination is outside the repository
+   is verified by reading the destination back and finding the lines the
+   edit added, never by the sending command's exit status. The `wt-e6-s8`
+   entry is why: a body file with no `HEAD` drifted and `gh pr edit`
+   published the drift, exit 0. Constraints 1 and 2 cannot see this class
+   — there is no diff to read and no SHA to clone — so the check has to
+   be at the destination.
 
 ## The edit form that notices
 
