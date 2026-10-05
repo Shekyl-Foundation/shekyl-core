@@ -258,14 +258,14 @@ the revision it was taken at, and the code paths whose cost it budgets
 ([`BENCHMARK_ALIGNMENT.md`](../design/BENCHMARK_ALIGNMENT.md) `BA-Q23`).
 `scripts/ci/check_measurement_ledger.py` reads it in `docs-gates.yml` and
 asks one question of git for each measured row: has any commit touched those
-paths since the capture?
+paths that the row has not accounted for?
 
 Each row states one of three things, and the check fails when the statement
 disagrees with git in either direction:
 
 | Status | Means | Fails when |
 | --- | --- | --- |
-| `current` | Nothing touching the paths is newer than the capture | A newer commit exists; the failure names it |
+| `current` | Every commit touching the paths is in the history of the capture or of a `cleared` note | A commit to the paths is in neither; the failure names it |
 | `stale` | Something is newer; the row names the commit and the carrier of the re-measurement, and lists in `stale_through` every later commit to its paths it has heard | Nothing is newer; or the named commit did not touch the paths; or a commit to the paths is in none of the `stale_through` histories |
 | `unmeasured` | No capture is in the tree; the row names what will measure it | It claims a capture, or names no carrier |
 

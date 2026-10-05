@@ -209,7 +209,7 @@ status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
 stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (the runs PR #968 lands; BA-G1)." },
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
 ]
 capture = "docs/benchmarks/w2_ladder_interleaved_pow_on_20261001.tsv"
@@ -231,7 +231,7 @@ status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
 stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (the runs PR #968 lands; BA-G1)." },
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
 ]
 capture = "docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv"
@@ -253,7 +253,7 @@ status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
 stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (the runs PR #968 lands; BA-G1)." },
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
 ]
 capture = "docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv"
@@ -275,7 +275,7 @@ status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
 stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (the runs PR #968 lands; BA-G1)." },
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
 ]
 capture = "docs/benchmarks/w2_ladder_interleaved_pow_on_20261001.tsv"
@@ -295,9 +295,9 @@ needle = "18,229 pairs"
 measured_by = ["BA-T5"]
 status = "stale"
 stale_since = "2ebb1da607"
-carrier = "BA-T5 (BA-G1). Measured with one read in flight, before PR #954. PR #968 prices the v3 serve path over loopback and does not re-run this reading."
+carrier = "BA-T5 (BA-G1). Measured with one read in flight, before PR #954. The 2026-10-05 serve-cost record prices the v3 serve path over loopback and does not re-run this reading."
 stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (the runs PR #968 lands; BA-G1)." },
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
 ]
 capture = "docs/benchmarks/u1b_floor_device_20261002.tsv"
@@ -461,7 +461,41 @@ stale_through = [
 capture = "docs/benchmarks/fa6_decap_prefilter_pi4_fa6_b_20260608T220614Z.txt"
 capture_rev = "34b2b3c051b037165e423e5a1c526987934029b6"
 rev_source = "not recorded in the capture; the last commit before the archive date, 2026-06-08"
-paths = ["rust/shekyl-crypto-pq/src/output.rs", "rust/shekyl-crypto-pq/src/kem.rs"]
+paths = ["rust/shekyl-crypto-pq/src/output.rs", "rust/shekyl-crypto-pq/src/kem.rs", "rust/shekyl-scanner/src/scan.rs"]
+
+[[constant]]
+name = "fa6_scan_budget_ceiling_b"
+defined_in = "rust/shekyl-crypto-pq/examples/fa6_decap_prefilter_gate.rs"
+needle = "const T_CEIL_B_SECS: f64 = 20.0 * 60.0;"
+measured_by = ["BA-T16"]
+status = "stale"
+stale_since = "a1801d4ca"
+carrier = "BA-T16 (BA-G15). The decapsulation path has changed since June, PL-D3 included, and the capture used non-shipping RUSTFLAGS."
+stale_through = [
+  { through = "20738bf714", note = "PL-D3 touched output.rs and kem.rs. Whether it moved decapsulation cost is not established." },
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
+capture = "docs/benchmarks/fa6_decap_prefilter_pi4_fa6_b_20260608T220614Z.txt"
+capture_rev = "34b2b3c051b037165e423e5a1c526987934029b6"
+rev_source = "not recorded in the capture; the last commit before the archive date, 2026-06-08"
+paths = ["rust/shekyl-crypto-pq/src/output.rs", "rust/shekyl-crypto-pq/src/kem.rs", "rust/shekyl-scanner/src/scan.rs"]
+
+[[constant]]
+name = "fa6_scan_budget_margin"
+defined_in = "rust/shekyl-crypto-pq/examples/fa6_decap_prefilter_gate.rs"
+needle = "const M_MARGIN: f64 = 0.20;"
+measured_by = ["BA-T16"]
+status = "stale"
+stale_since = "a1801d4ca"
+carrier = "BA-T16 (BA-G15). The decapsulation path has changed since June, PL-D3 included, and the capture used non-shipping RUSTFLAGS."
+stale_through = [
+  { through = "20738bf714", note = "PL-D3 touched output.rs and kem.rs. Whether it moved decapsulation cost is not established." },
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
+capture = "docs/benchmarks/fa6_decap_prefilter_pi4_fa6_b_20260608T220614Z.txt"
+capture_rev = "34b2b3c051b037165e423e5a1c526987934029b6"
+rev_source = "not recorded in the capture; the last commit before the archive date, 2026-06-08"
+paths = ["rust/shekyl-crypto-pq/src/output.rs", "rust/shekyl-crypto-pq/src/kem.rs", "rust/shekyl-scanner/src/scan.rs"]
 
 [[constant]]
 name = "wallet_default_kdf_m_log2"
@@ -473,9 +507,34 @@ carrier = "BA-T17 (BA-G12). Sized for a commodity desktop; never timed on the fl
 paths = ["rust/shekyl-crypto-pq/src/wallet_envelope.rs", "rust/shekyl-engine-file/src"]
 
 [[constant]]
+name = "wallet_default_kdf_t"
+defined_in = "rust/shekyl-crypto-pq/src/wallet_envelope.rs"
+needle = "pub const DEFAULT_KDF_T: u8 = 0x03;"
+measured_by = ["BA-T17"]
+status = "unmeasured"
+carrier = "BA-T17 (BA-G12). Sized for a commodity desktop; never timed on the floor."
+paths = ["rust/shekyl-crypto-pq/src/wallet_envelope.rs", "rust/shekyl-engine-file/src"]
+
+[[constant]]
 name = "wss_spend_delta_floor_s"
 defined_in = "rust/shekyl-wss-q1b-bench/src/report.rs"
 needle = "pub const SPEND_DELTA_FLOOR_S: f64 = 2.0;"
+measured_by = ["BA-T19"]
+status = "stale"
+stale_since = "af1f60b1a"
+carrier = "BA-T19 (FOLLOWUPS, WSS-Q1(b) row 2). The curve tree and the prover have changed since the capture; the row is ungraded."
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
+capture = "docs/benchmarks/wss-q1b/spend_edge_20260927T195848Z.json"
+capture_rev = "ece3aa4fb"
+rev_source = "capture header; FOLLOWUPS records that this stamp can lag the built tree, which errs toward stale"
+paths = ["rust/shekyl-curve-tree/src", "rust/shekyl-fcmp/src"]
+
+[[constant]]
+name = "wss_spend_delta_relative"
+defined_in = "rust/shekyl-wss-q1b-bench/src/report.rs"
+needle = "pub const SPEND_DELTA_RELATIVE: f64 = 0.15;"
 measured_by = ["BA-T19"]
 status = "stale"
 stale_since = "af1f60b1a"

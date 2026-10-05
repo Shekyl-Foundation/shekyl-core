@@ -137,7 +137,19 @@ def git(root: str, *args: str) -> tuple[int, str]:
     return r.returncode, r.stdout.strip()
 
 
+COMMIT_ID_RE = re.compile(r"[0-9a-f]{7,40}")
+
+
 def resolve(root: str, rev: str) -> str | None:
+    """A hex commit id, resolved; nothing else.
+
+    An empty string peels to HEAD (`^{commit}` with no name), and a name such
+    as `HEAD` or a branch moves with the tree. Either would let an entry
+    acknowledge whatever is newest, which is the one thing an entry must not
+    be able to do. Only a commit id says which commit was read.
+    """
+    if not COMMIT_ID_RE.fullmatch(rev):
+        return None
     rc, out = git(root, "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
     return out if rc == 0 and out else None
 
@@ -207,6 +219,42 @@ def newer_commits(root: str, heard: list[str], paths: list[str]) -> list[str]:
     return newer
 
 
+# Where a line comment starts, by file kind. A needle that survives only in a
+# comment is a quotation of the old value, not the definition: the commonest
+# way a changed constant keeps its old text is "was N" beside the new one.
+# Documents and JSON have no comments to strip, and a needle there is prose
+# or data by construction.
+LINE_COMMENT = {
+    ".rs": ("//",), ".h": ("//",), ".hpp": ("//",), ".c": ("//",), ".cpp": ("//",),
+    ".cc": ("//",), ".inl": ("//",),
+    ".py": ("#",), ".sh": ("#",), ".toml": ("#",), ".yml": ("#",), ".yaml": ("#",),
+}
+BLOCK_COMMENT_LEADERS = ("/*", "*")
+
+
+def stated(text: str, needle: str, path: str) -> str:
+    """'code' when the needle is on a line outside a comment, else 'comment' or 'absent'."""
+    markers = LINE_COMMENT.get(os.path.splitext(path)[1])
+    seen = "absent"
+    for line in text.splitlines():
+        at = line.find(needle)
+        if at < 0:
+            continue
+        if markers is None:
+            return "code"
+        block = "//" in markers and line.lstrip().startswith(BLOCK_COMMENT_LEADERS)
+        # A `#define` is code in C: `#` opens a comment only where it is the
+        # marker. A marker inside a string literal ahead of the needle reads
+        # as a comment here; that errs toward failing, and the row then needs
+        # a needle that starts earlier on the line.
+        cut = min((i for i in (line.find(m) for m in markers) if i >= 0), default=-1)
+        if block or 0 <= cut < at:
+            seen = "comment"
+            continue
+        return "code"
+    return seen
+
+
 def describe(root: str, sha: str) -> str:
     _, out = git(root, "log", "-1", "--format=%h %ad %s", "--date=short", sha)
     return out
@@ -245,9 +293,13 @@ def check_row(root: str, row: dict, t_rows: set[str], notes: list[str],
         bad(f"defined_in {row['defined_in']} does not exist")
     else:
         with open(defined, encoding="utf-8", errors="replace") as fh:
-            if row["needle"] not in fh.read():
-                bad(f"needle {row['needle']!r} is not in {row['defined_in']} "
-                    "(the constant moved, was renamed, or changed value)")
+            found = stated(fh.read(), str(row["needle"]), row["defined_in"])
+        if found == "absent":
+            bad(f"needle {row['needle']!r} is not in {row['defined_in']} "
+                "(the constant moved, was renamed, or changed value)")
+        elif found == "comment":
+            bad(f"needle {row['needle']!r} appears in {row['defined_in']} only "
+                "inside a comment; the definition itself has changed")
 
     measured_by = row["measured_by"]
     if not isinstance(measured_by, list) or not measured_by:
@@ -531,12 +583,15 @@ def run(root: str) -> int:
 
 # --- selftest ---------------------------------------------------------------
 
-def _sh(root: str, *args: str) -> str:
+def _sh(root: str, *args: str, check: bool = True) -> str:
+    # Every fixture command carries its own identity and no caller config. A
+    # fixture that borrows the developer's git identity passes on their
+    # machine and fails on a runner that has none.
     env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
                GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid",
                GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
     r = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, env=env)
-    if r.returncode != 0:
+    if check and r.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)}: {r.stderr}")
     return r.stdout.strip()
 
@@ -574,8 +629,9 @@ def _heard(*shas: str) -> str:
 
 
 def _row(name: str, status: str, rev: str = "", extra: str = "",
-         paths: str = '["src/hot"]', needle: str = "LIMIT = 4") -> str:
-    out = (f'[[constant]]\nname = "{name}"\ndefined_in = "src/consts.txt"\n'
+         paths: str = '["src/hot"]', needle: str = "LIMIT = 4",
+         defined: str = "src/consts.txt") -> str:
+    out = (f'[[constant]]\nname = "{name}"\ndefined_in = "{defined}"\n'
            f'needle = "{needle}"\nmeasured_by = ["BA-T1"]\nstatus = "{status}"\n'
            f"paths = {paths}\n")
     if status != "unmeasured":
@@ -773,6 +829,36 @@ def selftest() -> int:
                "control: a stale row that has heard every commit to its paths passes")
         expect(tmp, _row("control", "stale", c1, owed), 1,
                "a stale row with no stale_through is refused", "stale_through")
+
+        # An entry names a commit by id. A name that moves with the tree, or
+        # no name at all, would acknowledge whatever is newest.
+        expect(tmp, _row("control", "stale", c1, owed + _heard("HEAD")), 1,
+               "an entry naming HEAD is not a commit id", "not a commit")
+        expect(tmp, _row("control", "stale", c1, owed + _heard("main")), 1,
+               "an entry naming a branch is not a commit id", "not a commit")
+        expect(tmp, _row("control", "stale", c1,
+                         owed + 'stale_through = [{ note = "no commit named at all" }]\n'), 1,
+               "an entry with no commit is not a commit id", "not a commit")
+        expect(tmp, _row("control", "current", c1,
+                         'cleared = [{ through = "HEAD", reason = "names the tip" }]\n'), 1,
+               "a cleared note naming HEAD cannot clear a current row", "not a commit")
+        expect(tmp, _row("control", "stale", c1,
+                         'stale_since = "HEAD"\ncarrier = "BA-T1 floor re-run, owed"\n'
+                         + _heard(cause)), 1,
+               "stale_since naming HEAD is refused", "stale_since is not a commit")
+
+        # The needle must be the definition, not a quotation of the old one.
+        _write(tmp, "src/k.rs", "// pub const K: u8 = 4;\npub const K: u8 = 5; // was: pub const K: u8 = 4;\n")
+        _write(tmp, "src/k.h", "#define K_MAX  8   // bounds the thing\n")
+        _commit(tmp, "constants in source files")
+        held = owed + _heard(cause)
+        expect(tmp, _row("control", "stale", c1, held, needle="pub const K: u8 = 4;", defined="src/k.rs"), 1,
+               "A CHANGED CONSTANT whose old text survives in comments is refused",
+               "only inside a comment")
+        expect(tmp, _row("control", "stale", c1, held, needle="pub const K: u8 = 5;", defined="src/k.rs"), 0,
+               "the live definition is found beside its own trailing comment")
+        expect(tmp, _row("control", "stale", c1, held, needle="#define K_MAX  8", defined="src/k.h"), 0,
+               "a C `#define` is code, not a comment")
         expect(tmp, _row("control", "stale", c1, owed + _heard(c1)), 1,
                "a stale_through entry that does not cover stale_since leaves it unheard",
                "cause: doubles the cost")
@@ -854,8 +940,9 @@ def selftest() -> int:
         y = _commit(tmp, "y: the other side")
         _sh(tmp, "checkout", "-q", "main")
         _sh(tmp, "merge", "-q", "--no-ff", "-m", "Merge pull request #3", "x")
-        subprocess.run(["git", "-C", tmp, "merge", "-q", "--no-ff", "--no-commit", "y"],
-                       capture_output=True, text=True)
+        # Expected to stop on the conflict, so its exit status is not checked;
+        # the identity must still be the fixture's own, never the caller's.
+        _sh(tmp, "merge", "-q", "--no-ff", "--no-commit", "y", check=False)
         _write(tmp, "src/hot/a.rs", "fn a() { /* neither: written in the merge */ }\n")
         resolved = _commit(tmp, "Merge pull request #4, resolved by hand")
         expect(tmp, _row("control", "stale", tip, owed3 + _heard(third, x, y)), 1,
