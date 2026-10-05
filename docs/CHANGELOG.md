@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.1.0-alpha.9] - 2026-10-05
+
 - **CLI scripting.** `shekyl-cli --json` prints one JSON object per command (`ok`, `command`, `result` or `error`). `--script FILE` runs many commands in one wallet session and does not combine with a subcommand. A one-shot is the same prompt words after the global flags (`shekyl-cli --json balance`); the shell's quoting is kept, and `help` is that command (`--help` is the invocation summary). Seeds and passwords are not in the JSON. `--yes` is honored for a script or a one-shot, and ignored on an interactive terminal. Narration stays off a JSON transcript: stderr when a person is there, omitted for a script (including a human `--script` without `--json`). A generated payment or reserve proof's disclosure is not narration: it follows the proof, and under `--json` it goes to stderr, including in a script. `wallet open` and `wallet password` refuse in a script. `create` / `restore` failures use those command names. `version` reports the CLI version even when wallet-RPC is down (`wallet_rpc_error`). `--complete-tree-foundation` is the envelope `complete-tree-foundation`; under `--json` its terms go to stderr.
 - **CLI `stake release`.** The terminal bond exit is `stake release`. `stake exit` and `unstake` are retired spellings that point at it. The wallet-rpc method remains `unstake`. `stake collect` is unchanged.
 

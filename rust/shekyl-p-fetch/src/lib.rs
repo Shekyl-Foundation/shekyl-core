@@ -32,9 +32,12 @@
 //!    exactly that many bytes, and split the fixed-width countersignature
 //!    envelope off the end. `P` sends it last, so holding it means the
 //!    whole frame arrived.
-//! 6. Verify `P`'s [`HybridSignature`](shekyl_crypto_pq::signature::HybridSignature)
-//!    over the decoded header ‖ `shard_id_le` under the bond-record key
-//!    the caller supplied (`SF-D8`, `SF-D13`).
+//! 6. Recompute the delivery digest from the bytes ahead of the envelope,
+//!    under this request's own nonce, and verify `P`'s
+//!    [`HybridSignature`](shekyl_crypto_pq::signature::HybridSignature)
+//!    over `nonce ‖ anchor_height ‖ anchor_hash ‖ shard_id_le ‖ delivery_digest`
+//!    under the bond-record key the caller supplied (`SF-D8`, `SF-D13`).
+//!    The digest is never taken from the response.
 //! 7. Hand the remaining bytes — a `Vec<u8>`, nothing more shaped than that
 //!    — to the caller's [`ContentVerify`] hole.
 //!
