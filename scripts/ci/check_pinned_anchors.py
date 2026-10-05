@@ -116,7 +116,8 @@ def main() -> int:
         return 2
     pinned, fails = 0, []
     for d in docs:
-        text = open(d, encoding="utf-8", errors="replace").read()
+        with open(d, encoding="utf-8", errors="replace") as f:
+            text = f.read()
         if not PIN_RE.search(text):
             continue
         pinned += 1

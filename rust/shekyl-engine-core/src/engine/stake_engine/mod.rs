@@ -111,7 +111,10 @@ mod tests;
 // The open path derives ids via the cache-first identity-only route
 // (`derive_archival_p_identity_pk`); the remaining in-crate consumers of this
 // re-export are the arm-#3 fire harness (production-compiled `__test_helpers`)
-// and the bond-watch producer tests.
+// and the bond-watch producer tests. It is gated on exactly those two
+// configurations, so a build with neither does not carry an import nothing
+// reads, and the gate above still fires if both consumers go.
+#[cfg(any(test, feature = "test-helpers"))]
 pub(crate) use actor::persona_canonical_id;
 pub(crate) use bond::AssembledBondPost;
 pub(crate) use claim::{AssembleEmissionClaim, AssembledEmissionClaim};

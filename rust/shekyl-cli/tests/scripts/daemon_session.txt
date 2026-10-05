@@ -1,0 +1,19 @@
+# Pattern for a daemon-backed CLI session. Open is `--wallet` on the
+# invocation, so the password never sits in this file.
+#
+#   shekyl-cli --json --script tests/scripts/daemon_session.txt \
+#     --network testnet --daemon-address 127.0.0.1:<rpc> \
+#     --wallet-dir <dir> --wallet <name> --password-file <path>
+#
+# The daemon is on the wallet's own network. A `shekyld --regtest` daemon
+# reports `fakechain`, and the wallet refuses it on identity.
+#
+# `send` is expected to refuse, and the envelope's code says why. On a chain
+# still at genesis it is WALLET_NOT_SYNCED, whatever the recipient: the build
+# refuses before it reads one, and the test beside this file runs the line
+# as written. On a chain with blocks, replace `<recipient>` with a full
+# address on that network; the line then pays from a funded wallet.
+balance
+wallet refresh
+chain
+send 0.001 <recipient> --yes
