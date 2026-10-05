@@ -229,6 +229,10 @@ pub const ATTESTATION_WITNESS_NONCE_LEN: usize = 32;
 /// Anchor height on one witness entry.
 pub const ATTESTATION_WITNESS_ANCHOR_LEN: usize = 8;
 
+/// Delivery digest on one witness entry: the digest of the response `P`
+/// signed for, which admission cannot recompute.
+pub const ATTESTATION_WITNESS_DIGEST_LEN: usize = 32;
+
 /// One hybrid signature on a witness entry. Twin of
 /// `HybridSignature::CANONICAL_LEN` and `PQC_HYBRID_SINGLE_SIG_LEN`; both
 /// const-assert equality, so this factor cannot drift from the signature.
@@ -236,7 +240,7 @@ pub const ATTESTATION_WITNESS_SIGNATURE_LEN: usize = 3385;
 
 /// Exact maximum of a canonical attestation witness:
 /// count prefix, then [`MAX_ATTESTATION_RECORDS`] entries of
-/// nonce ‖ anchor height ‖ signature.
+/// nonce ‖ anchor height ‖ delivery digest ‖ signature.
 ///
 /// The retention crate derives the same product from
 /// `HybridSignature::CANONICAL_LEN` and const-asserts equality. The daemon
@@ -246,6 +250,7 @@ pub const MAX_ATTESTATION_WITNESS_BYTES: usize = ATTESTATION_WITNESS_COUNT_LEN
     + MAX_ATTESTATION_RECORDS
         * (ATTESTATION_WITNESS_NONCE_LEN
             + ATTESTATION_WITNESS_ANCHOR_LEN
+            + ATTESTATION_WITNESS_DIGEST_LEN
             + ATTESTATION_WITNESS_SIGNATURE_LEN);
 
 /// A block's attestation witness as it travels beside the block — the

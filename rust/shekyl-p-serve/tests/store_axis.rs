@@ -15,7 +15,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use shekyl_archival_retention::pass_anchor::{pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS};
-use shekyl_archival_retention::verify_pass_transcript;
+use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{
@@ -88,14 +88,16 @@ async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
 }
 
 /// Split a 200 response after its head into (countersignature, framed body).
+/// The countersignature is the response's last bytes.
 fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
     let end = response
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .expect("response has a head");
-    let (sig, body) = response[end + 4..].split_at(SIGNATURE_ENVELOPE_LEN);
+    let after_head = &response[end + 4..];
+    let (body, sig) = after_head.split_at(after_head.len() - SIGNATURE_ENVELOPE_LEN);
     (
-        HybridSignature::from_canonical_bytes(sig).expect("served body leads with a signature"),
+        HybridSignature::from_canonical_bytes(sig).expect("served body ends with a signature"),
         body,
     )
 }
@@ -138,9 +140,10 @@ async fn served_shard_recomputes_to_the_committed_r_k() {
         BlockHeight::from_raw(ANCHOR_HEIGHT),
         &ANCHOR_HASH,
         0,
+        &pass_delivery_digest(&NONCE, body),
         &signature,
     )
-    .expect("the countersignature covers this request's header and shard id");
+    .expect("the countersignature covers this request's header, shard id and delivered bytes");
 
     // Then the frame (`RF-D4`): it says how
     // many leaves the response carries and how many bytes follow them that

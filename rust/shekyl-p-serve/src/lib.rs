@@ -11,8 +11,9 @@
 //! chain-committed sub-root `R_k` (§2) — the response is
 //! **self-authenticating by content** — and, since `SF-D8` (§9.1 step
 //! (a), landed here), **bound to the request** by the persona's
-//! countersignature over the decoded request header
-//! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`
+//! countersignature over the decoded request header and a nonce-salted
+//! digest of the delivered response,
+//! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ delivery_digest[32]`,
 //! under `BondPost.hybrid_public_key`. The signature is produced by the
 //! host's [`PassSigner`]; this crate still holds no key. The verifier the
 //! daemon runs is step (a0)'s,

@@ -30,7 +30,8 @@
 //!    → [`FetchError::Stall`] (`SF-D6`, `RF-R1`).
 //! 5. Bound the body from `content-length` **before** reading it, read
 //!    exactly that many bytes, and split the fixed-width countersignature
-//!    envelope off the front.
+//!    envelope off the end. `P` sends it last, so holding it means the
+//!    whole frame arrived.
 //! 6. Verify `P`'s [`HybridSignature`](shekyl_crypto_pq::signature::HybridSignature)
 //!    over the decoded header ‖ `shard_id_le` under the bond-record key
 //!    the caller supplied (`SF-D8`, `SF-D13`).

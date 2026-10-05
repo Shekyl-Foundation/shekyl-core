@@ -808,8 +808,13 @@ holds. For any signed digest, admission-reconstructibility and
 possession-discrimination are in opposition; the only escape is
 reveal-and-check, which this unit supplies per-tx and which the
 whole-shard topology read ([`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md)
-§9, *"the test IS a read"*) already uses. No signed content
-artifact is added to the wire. Reopens only if the credit wire abandons
+§9, *"the test IS a read"*) already uses. No signed possession
+artifact is added to the wire. *(`SF-D8` as amended 2026-10-04 carries a
+delivery digest `D` in the pass record: salted with the request nonce,
+checked against bytes by the fetch client, and verified at admission
+only through `P`'s signature. It sits on the non-reconstructible side of
+the opposition above and claims delivery, not possession, so the
+argument is unchanged.)* Reopens only if the credit wire abandons
 the topology read for a sampled test — in which case `PC-D3`'s draw
 problem returns with it, and that is the credit wire's round to rule.
 
@@ -1695,6 +1700,8 @@ Named now so they are not discovered later.
   rejection rests on *"admission could never reconstruct the signed
   message"* — true of off-chain shard bytes, not of a digest over
   retained `txs_prunable_hash` rows. Q6 says whether that reopens.
+  *(Since 2026-10-04 the pass record carries `SF-D8`'s delivery digest,
+  which admission does not reconstruct; §3 there states it.)*
   Read §2's deletion surface before citing anything leaf-shaped from
   [`ARCHIVAL_PER_CHALLENGE_RECORD.md`](ARCHIVAL_PER_CHALLENGE_RECORD.md):
   `PC-D1`…`PC-D7` are RULED and the leaf-opening cluster they hardened
