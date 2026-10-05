@@ -72,7 +72,8 @@ use shekyl_chain_rules::{
     SettlementSchedule, TxSlot,
 };
 use shekyl_types::archival::{BadInterval, Holdings};
-use shekyl_types::{BlockCount, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{BondPostKind, Holdings as WireHoldings};
 use shekyl_wire::Input;
 
@@ -681,6 +682,96 @@ async fn a_slashed_persona_reinstates_and_the_fold_agrees_with_the_wallet_side_v
         scenario.mine_listing(vec![early_release]).await,
         CenRow::J16,
         at_post(0),
+    );
+
+    // (e) J16's accept arm over a **served** anchor — the operand the
+    // gather reads (`release_terms_hold`: the kept shard's last pass,
+    // `after_close`), not the vacuous `None` of a persona that never
+    // served. The two serving operands lift at one height: the slash fold
+    // settles `after_close` in the block at its deadline (`scan_slashes`,
+    // count past `slash_deadline_height`), and the next block is the first
+    // of epoch `after_close + RELEASE_COOLDOWN_EPOCHS` — the cooldown's
+    // boundary, inclusive. So the pair is one block apart: at the deadline
+    // the epoch is one short and the watermark pre-block is one behind;
+    // one block later both hold and the Release is the record's `Update`.
+    let anchor = after_close;
+    let boundary = schedule.slash_deadline_height(anchor);
+    assert_eq!(schedule.epoch_at_height(boundary), anchor + 1);
+    assert_eq!(
+        schedule.epoch_at_height(boundary + 1),
+        anchor + RELEASE_COOLDOWN_EPOCHS,
+        "the block after the anchor's deadline opens the cooldown's boundary epoch"
+    );
+    while next(&chain) < boundary {
+        let block = scenario
+            .mine_listing(Vec::new())
+            .await
+            .expect("empty blocks land");
+        assert!(
+            block.archival.slashes().is_empty(),
+            "a persona serving past its closed interval is not slashed again (height {})",
+            block.height
+        );
+        chain.push(block);
+    }
+    // Each release is built over the chain it rides and before the mine
+    // that follows it (the spender borrows the wallet, `mine_listing` the
+    // scenario); the deadline block lands between the two.
+    let full_release = persona.release(stored.bonded_total.to_raw());
+    let at_deadline = Spender::over(&chain).spend_coinbase_posting(
+        scenario.wallet(),
+        2,
+        boundary,
+        FEE,
+        Some(&full_release),
+    );
+    refused_at(
+        scenario.mine_listing(vec![at_deadline]).await,
+        CenRow::J16,
+        at_post(0),
+    );
+    let settling = scenario
+        .mine_listing(Vec::new())
+        .await
+        .expect("the deadline block lands");
+    assert_eq!(settling.height, BlockHeight::from_raw(boundary));
+    assert!(
+        settling.archival.slashes().is_empty(),
+        "nothing to slash at the anchor's deadline"
+    );
+    chain.push(settling);
+    let past_boundary = Spender::over(&chain).spend_coinbase_posting(
+        scenario.wallet(),
+        2,
+        boundary + 1,
+        FEE,
+        Some(&full_release),
+    );
+    let released = scenario
+        .mine_listing(vec![past_boundary])
+        .await
+        .unwrap_or_else(|outcome| {
+            panic!("the release connects at the cooldown's boundary with the anchor settled: {outcome}")
+        });
+    for row in [CenRow::J13, CenRow::J16] {
+        assert!(
+            released.judged_by.contains(&row),
+            "{row} judged the release"
+        );
+    }
+    let write = &released.archival.records()[0];
+    assert_eq!(write.persona(), &persona.id());
+    assert_eq!(write.kind(), RecordWriteKind::Update);
+    assert_eq!(write.record().bonded_total, AtomicUnits::ZERO);
+    assert_eq!(
+        write.record().holdings,
+        Holdings::shard_set(Vec::new()).expect("empty"),
+        "a release empties the holdings"
+    );
+    assert_eq!(
+        record_of(&scenario, &persona).await,
+        write.record().clone(),
+        "the store holds the post-image"
     );
 
     scenario.close().await;

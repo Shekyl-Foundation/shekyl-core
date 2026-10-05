@@ -420,11 +420,15 @@ pub fn verify_release_bond_post(
 /// `(P, E)` pass's sibling,
 /// [`emission_block_claims_unique`](crate::claimed_epochs::emission_block_claims_unique)).
 ///
-/// Per-tx verify runs against pre-block DB state, so every same-`P` same-block
-/// pair — JoinMarket+JoinMarket (double `total_bonded_atomic` credit),
-/// Release+Release (double debit), JoinMarket+Release, Reinstate+Reinstate —
-/// passes per-tx verify independently; each
-/// pair interacts through the per-`P` record and the global counter, and the
+/// Per-tx verify runs against pre-block DB state, so a same-`P` same-block
+/// pair of one kind — JoinMarket+JoinMarket (double `total_bonded_atomic`
+/// credit), Release+Release (double debit), Reinstate+Reinstate — passes
+/// per-tx verify independently. A JoinMarket+Release pair does **not**: the
+/// Release reads no record pre-block and refuses `RecordMissing` before this
+/// pass runs, in the C++ and the Rust validator alike (*every* same-`P` pair
+/// was the claim here until 2026-10-04, when E6 slice 8 row 5 drove the pair
+/// and the per-tx verify refused it first). Each pair that does pass
+/// interacts through the per-`P` record and the global counter, and the
 /// §4.5 conservation audit is **not** a backstop (a double-credit doubles both
 /// sides of `total_bonded == Σ bonded_P` consistently, so it passes on corrupt
 /// state). This pass — run once per block over every bond-post vin's
