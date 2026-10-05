@@ -127,6 +127,64 @@ stays — staking is being built, and the sim leads it — and that ruling gover
 "`total_staked` as bonded principal" is read as giving the field its meaning,
 not as deleting it.
 
+### 3.1 Inherited operands: a search pattern, and its first walk (2026-10-04)
+
+A, G and the fee floor's basis are one pattern, not three findings. Each is
+a Monero constant or convention that was correct at Monero's state — a
+tail-era reward, a 3 KB transaction, a per-minute factor — and went wrong
+here because Shekyl's state differs. The code was faithful and so were the
+documents, which is why no review tripped; the numbers appeared only when
+the sim charged what the chain charges.
+
+**The pattern.** Any inherited formula that takes the block reward, a
+transaction's or coinbase's weight, or the block time as an operand was
+derived at Monero's value of that operand, and is re-derived at ours or
+named as not. The census found the restated constants; this is the layer
+below, constants that are faithful and whose derivation assumed another
+chain. Two of the three operands differ sharply: the reward (0.6 XMR at
+Monero's tail; 1,024 SKL at genesis, falling 1,707× to 0.6) and the weight
+(an ordinary transaction is 12.6–15.3 KB against a 3 KB reference). The
+third does not: both chains run 120-second blocks, so a count of blocks is
+the same duration here, and what remains of that class is a per-minute
+convention (A).
+
+**The walk.** Each row is answered from its record, read at source at
+`e9b41e3115`. "Derived" means a ruling on record used Shekyl's operand.
+
+| Constant | Operand | Answer | Record, and where it goes |
+| --- | --- | --- | --- |
+| Emission speed factor | Block time, via the per-minute convention | **Was not; fixed** | A; #951 |
+| Fee floor's basis, `F = R·C·w_ref/M²` | Reward | **Not derived.** Reward-proportional, so highest at genesis and decaying 1,707× | FL-V11; FL-R13 open; EUP-5 G |
+| `w_ref` = 3,000 | Transaction weight | **Not derived.** No examination record as a choice | CEN-M3; `FOLLOWUPS.md`; EUP-5 G |
+| Zone, 300,000 B | Transaction weight (capacity leg); verification time (cost leg) | **Split.** The cost leg is measured on the device floor. The capacity leg was ratified on an estimate of 4–8 KB a spend; measured, 13.6 KB, so about 22 spends | C2-R2 Q1; `FOLLOWUPS.md`; EUP-5 G |
+| Coinbase reserve, 600 B | Coinbase weight | **Not derived, and ratified on a statement that is false.** C2-R2 Q7 records that a Shekyl coinbase "serializes well under 600 bytes". The minimal one, a single output with no attestation, weighs 1,331 B, of which 1,232 B is `extra` (measured: `shekyl-block-template`, the genesis-era template's `miner_transaction.weight()`) | **New.** `FOLLOWUPS.md`; rule it with the zone |
+| Transaction weight cap, 149,400 = zone/2 − reserve | The two rows above | **Formula derived; its stated guarantee does not hold.** Two maximal transactions and a coinbase are 300,131 B, over the zone | C2-R2 Q7; rides the two rows above |
+| Tail, 0.6 per block | Reward against supply | **Not derived.** The same 0.6 as Monero's, on an asymptote of 2³² SKL: 157,680 SKL a year is 0.0037 % of it, where Monero's is about 0.86 % of its supply. FL-R12′ ruled the tail perpetual; no record sizes it | FL-V11 ("inherited-unexamined"); §4 goal 2 grades the security budget it leaves; EUP-5 |
+| Input cap, 8 | Verifier time per input | **Not derived.** Carried as inherited and unjustified | CEN-I4; `FOLLOWUPS.md` |
+| Coinbase unlock, 60 blocks | Block time | **Not re-derived**; the operand is unchanged | CEN-F6, `pinned-not-re-derived` |
+| Long-term clamp 1.7×, 100,000-block window | Block time; growth rate | **Derived.** Traced on Shekyl's machinery, two-regime rationale countersigned, checked against the retention horizon | C2-R2 Q2 |
+| Surge factor and the 100-block window | Verification time of a surge block | **Derived.** The inherited ×50 was re-derived from the device floor's verification time; the config carries 4 | C2-R2 Q3; GAP-7 |
+| Quadratic penalty and the 2× limit | Reward and weight, both as ratios | **Derived.** Scale-free in both operands; shape examined | C2-R2 Q4 |
+| Serialized-size cap, 1,000,000 B | Transaction weight | **Derived** as a parse bound: the weight cap binds first, and it admits 22 inputs of the measured shape | C2-R2 Q6; CEN-I4's measurement |
+| Pool lifetime, 3 days; pool cap, 648 MB | Block time; the zone | **Derived**, against the FCMP++ reference-age window. The cap is "3 days at the zone" and moves with it | C2-R2 Q11 |
+| `tx_extra` relay cap, 24,576 B | Transaction weight | **Derived**; Shekyl's own value | C2-R2 Q10 |
+| Fee correction `C` and the three rungs | Shekyl's `σ`, `M_r`, `b` | **Derived**, given the floor they multiply | FL-R11, FL-R17, FL-R20 |
+
+**What the walk adds.** One row is new: the coinbase reserve. The fill
+admits bodies up to `2·median − 600`, so a block filled to that bound
+carries a coinbase 731 B past the limit it was reserved for; that is
+arithmetic from the measured weight, not yet a test. Changing the reserve
+moves the transaction weight cap, which is consensus (CEN-H3), so it is a
+ruling and travels with the zone's. One row sharpens an old name: the tail's
+size has never been examined against Shekyl's supply. The rest were already
+on record, and the block-weight governors (the clamps, the surge factor, the
+penalty) come out derived: C2-R2 did that work.
+
+**Not walked.** The difficulty algorithm's constants (`daa_*`), the staking
+and archival constants and the FCMP++ reference ages are Shekyl's own, with
+their own rounds. Peer-to-peer timeouts and sync batch sizes read none of
+the three operands.
+
 ---
 
 ## 4. The assessment set, written before EUP-4 runs

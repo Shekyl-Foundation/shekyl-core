@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Docs: `ECONOMY_UMBRELLA_PLAN.md` §3.1 walks the inherited constants that read the reward, a weight or the block time, and answers each as derived at Shekyl's operands or not; the coinbase reserve (600 B against a measured 1,331 B) is new, with its `FOLLOWUPS.md` row.
 - Docs: the economy's umbrella plan (`ECONOMY_UMBRELLA_PLAN.md`, `EUP-`); `DESIGN_CONCEPTS.md` records F-D, its design home's archival rationale, and its April tables' inputs.
 
 ### Consensus — the emission speed factor is per block, as designed
