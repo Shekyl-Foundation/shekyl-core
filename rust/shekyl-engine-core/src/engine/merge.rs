@@ -363,7 +363,7 @@ impl<
             &self.daemon,
             result,
             &producer_leaves,
-            &owned,
+            &owned.outputs,
         )
         .await
     }
@@ -407,7 +407,7 @@ impl<
             &self.daemon,
             result,
             &producer_leaves,
-            &owned,
+            &owned.outputs,
         )
         .await
     }

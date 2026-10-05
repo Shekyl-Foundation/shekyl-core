@@ -496,6 +496,12 @@ impl EmitState {
                 sink.emit(event);
                 return;
             }
+            RefreshDiagnostic::PersonaSealUnreadable => {
+                // The orchestrator's, at most once per attempt; the
+                // producer never raises it, and it has no class to budget.
+                sink.emit(event);
+                return;
+            }
         };
 
         if per_class.counter < PER_BLOCK_CEILING {

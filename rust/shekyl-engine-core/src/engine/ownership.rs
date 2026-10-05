@@ -54,9 +54,12 @@
 //! to carry them.
 
 use crate::engine::{
-    curve_tree_actor::CurveTreeHandle, local_ledger::LocalLedger,
-    merge::map_curve_tree_handle_error, traits::DaemonEngine, Engine, EngineSignerKind,
-    RefreshError,
+    curve_tree_actor::CurveTreeHandle,
+    diagnostics::{DiagnosticSink, RefreshDiagnostic},
+    local_ledger::LocalLedger,
+    merge::map_curve_tree_handle_error,
+    traits::DaemonEngine,
+    Engine, EngineSignerKind, RefreshError,
 };
 use crate::scan::{DetectedTransfer, ScanResult};
 
@@ -66,6 +69,33 @@ use crate::scan::{DetectedTransfer, ScanResult};
 /// re-derives and `O` is the identity that survives it
 /// (`CT6_PROVING_STATE.md` §11.9).
 pub(crate) type OwnedOutput = (shekyl_curve_tree::Gindex, shekyl_curve_tree::OneTimePubkey);
+
+/// What the refresh offers the curve tree, and whether part of it is missing.
+pub(crate) struct OwnedSet {
+    /// Every pair the wallet could name.
+    pub(crate) outputs: Vec<OwnedOutput>,
+    /// The persona's seal could not be read, so its funding outputs are not
+    /// in [`Self::outputs`]. Carried rather than only logged where it is
+    /// found, so the refresh can raise it as an event
+    /// ([`OwnedSet::report`]).
+    pub(crate) persona_seal_unreadable: bool,
+}
+
+impl OwnedSet {
+    /// Raise [`RefreshDiagnostic::PersonaSealUnreadable`] if the set is
+    /// short of the persona's outputs.
+    ///
+    /// Reading an unreadable seal as empty keeps the principal's refresh
+    /// running, and it also quietly moves the persona back onto the
+    /// spend-time registration this module exists to avoid. That is a
+    /// degraded state someone should be able to see, not only a line in a
+    /// log.
+    pub(crate) fn report(&self, sink: &impl DiagnosticSink) {
+        if self.persona_seal_unreadable {
+            sink.emit(RefreshDiagnostic::PersonaSealUnreadable);
+        }
+    }
+}
 
 /// The registration pair for a ledger transfer — the same wrapping of the
 /// compressed key `transfer::support::assemble_input` uses, so the registry
@@ -192,7 +222,7 @@ impl<
     /// seal is opened: the lock is not re-entrant, and nothing here needs
     /// the two reads to be one instant — a pair missed by a moment is
     /// offered by the next refresh.
-    pub(crate) fn owned_outputs(&self, result: &ScanResult) -> Vec<OwnedOutput> {
+    pub(crate) fn owned_outputs(&self, result: &ScanResult) -> OwnedSet {
         let range_start = result.processed_height_range.start;
         let mut outputs: Vec<OwnedOutput> = {
             let guard = self.ledger.read();
@@ -205,7 +235,9 @@ impl<
                 .map(owned_output)
                 .collect()
         };
-        outputs.extend(self.p_funding_outputs());
+        let persona = self.p_funding_outputs();
+        let persona_seal_unreadable = persona.is_none();
+        outputs.extend(persona.unwrap_or_default());
         outputs.extend(
             result
                 .new_transfers
@@ -218,7 +250,10 @@ impl<
                 })
                 .map(detected_output),
         );
-        outputs
+        OwnedSet {
+            outputs,
+            persona_seal_unreadable,
+        }
     }
 
     /// `P`'s held funding outputs, from its sealed scan state.
@@ -238,9 +273,13 @@ impl<
     /// refresh on the state of `P`'s file, and the principal does not depend
     /// on `P`.
     ///
+    /// `None` is that case, so the caller can say so ([`OwnedSet::report`]);
+    /// the user's own view of it is the staking read, which opens the same
+    /// file the same way and fails closed.
+    ///
     /// Small synchronous file I/O, once per refresh, of the same class as
     /// the staking reads' own opens.
-    fn p_funding_outputs(&self) -> Vec<OwnedOutput> {
+    fn p_funding_outputs(&self) -> Option<Vec<OwnedOutput>> {
         let sealed = self
             .persistence
             .open_pscan_state(self.state_wrap_key().as_bytes())
@@ -253,8 +292,8 @@ impl<
                 .transpose()
             });
         match sealed {
-            Ok(Some(state)) => state.funding_outputs().iter().map(owned_p_output).collect(),
-            Ok(None) => Vec::new(),
+            Ok(Some(state)) => Some(state.funding_outputs().iter().map(owned_p_output).collect()),
+            Ok(None) => Some(Vec::new()),
             Err(detail) => {
                 tracing::warn!(
                     %detail,
@@ -262,7 +301,7 @@ impl<
                      funding outputs are not registered this refresh and will \
                      be when they are spent"
                 );
-                Vec::new()
+                None
             }
         }
     }
@@ -360,7 +399,7 @@ mod tests {
         seal_funding(&engine, vec![record.clone()]);
 
         let pair = owned_p_output(&record);
-        let offered = engine.owned_outputs(&nothing_new());
+        let offered = engine.owned_outputs(&nothing_new()).outputs;
         assert_eq!(
             offered,
             vec![pair],
@@ -431,16 +470,28 @@ mod tests {
     }
 
     /// A persona seal that cannot be decoded costs the persona its early
-    /// registration and costs the principal nothing: the pass reads it as
-    /// empty rather than failing the refresh on the state of another
-    /// identity's file.
+    /// registration and costs the principal nothing: the set is offered
+    /// without it rather than failing the refresh on the state of another
+    /// identity's file — and it says so. The refresh raises a diagnostic for
+    /// exactly that state and no other, and the staking read, which is what
+    /// the user sees, fails closed on the same file.
     #[tokio::test(flavor = "multi_thread")]
-    async fn an_undecodable_persona_seal_is_read_as_empty() {
+    async fn an_undecodable_persona_seal_is_offered_without_and_reported() {
+        use crate::engine::diagnostics::AssertionSink;
+
         let (_tmp, engine) = non_staker_engine(SEED_MULT.wrapping_add(1));
-        assert!(
-            engine.owned_outputs(&nothing_new()).is_empty(),
-            "an absent seal is a wallet that never scanned as the persona"
-        );
+        let reported = |set: &OwnedSet| {
+            let sink = AssertionSink::new();
+            set.report(&sink);
+            sink.recorded()
+        };
+
+        // The control: an absent seal is a wallet that never scanned as the
+        // persona. Nothing is missing, and nothing is reported.
+        let absent = engine.owned_outputs(&nothing_new());
+        assert!(absent.outputs.is_empty());
+        assert!(!absent.persona_seal_unreadable);
+        assert!(reported(&absent).is_empty());
 
         let garbage = [0xffu8; 16];
         assert!(
@@ -451,7 +502,21 @@ mod tests {
             .persistence()
             .save_pscan_state(engine.state_wrap_key().as_bytes(), &garbage)
             .expect("the seal itself is well-formed; its body is not");
-        assert!(engine.owned_outputs(&nothing_new()).is_empty());
+
+        let unreadable = engine.owned_outputs(&nothing_new());
+        assert!(unreadable.outputs.is_empty());
+        assert!(unreadable.persona_seal_unreadable);
+        assert!(
+            matches!(
+                reported(&unreadable).as_slice(),
+                [RefreshDiagnostic::PersonaSealUnreadable]
+            ),
+            "one event, naming the consequence"
+        );
+        assert!(
+            engine.staking_read_view().is_err(),
+            "and the user's staking view fails closed on the same seal"
+        );
     }
 
     // ---- Registration inside the ingest ------------------------------------
@@ -610,7 +675,7 @@ mod tests {
             key_image: *result.new_transfers[0].output.key_image(),
             containing_tx_hash: shekyl_types::TxHash::from_bytes([0x33; 32]),
         });
-        assert!(engine.owned_outputs(&result).is_empty());
+        assert!(engine.owned_outputs(&result).outputs.is_empty());
 
         engine
             .ingest_scan_result_into_curve_tree(&mut result)
@@ -639,7 +704,9 @@ mod tests {
         engine.apply_scan_result(merged).expect("the row merges");
 
         let from = |start: u64| {
-            engine.owned_outputs(&ScanResult::empty_at(BlockHeight::from_raw(start), None))
+            engine
+                .owned_outputs(&ScanResult::empty_at(BlockHeight::from_raw(start), None))
+                .outputs
         };
         assert_eq!(from(2), vec![pair], "a row below the range is held");
         assert!(

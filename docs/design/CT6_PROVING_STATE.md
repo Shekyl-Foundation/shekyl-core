@@ -1572,12 +1572,20 @@ proportionally less. None of it is in the drain any more, and none of it
 grows with how long the persona held the output. The dependency this creates
 on the store's leaf rows is §11.11's third item.
 
-An unreadable persona seal is **logged and read as empty** — the opposite of
-every staking read, deliberately. Those reads decide what the wallet tells
+An unreadable persona seal is **read as empty and reported** — the opposite
+of every staking read, deliberately. Those reads decide what the wallet tells
 its user it holds, so they fail closed. This one decides only when captures
 are written, and the `AssembleTx` handler still registers a spend's inputs;
 failing would stop the principal's refresh on the state of the persona's
-file.
+file. But reading it as empty also puts the persona back on the spend-time
+registration this section exists to remove, silently, so the state is
+carried out of the read (`OwnedSet::persona_seal_unreadable`) and the refresh
+raises `RefreshDiagnostic::PersonaSealUnreadable` for it — the consequence,
+named, on the engine's diagnostic surface. The cause reaches the user
+through the staking read, which opens the same file the same way and fails
+closed on it; the test asserts both on one fixture. The diagnostic surface's
+only production sink today is the tracing projection, so the event is typed
+and testable but is not yet something a wallet UI renders.
 
 One conversion, `ownership::p_assemble_input`, now turns a funding record
 into the tree's types. The four persona spend paths each carried a copy;
@@ -1647,7 +1655,7 @@ each failed by the mutation beside it:
 | `a_detection_spent_within_the_same_result_is_not_registered` | the spent filter removed |
 | `a_ledger_row_the_result_supersedes_is_not_offered_from_the_ledger` | the range filter removed |
 | `a_persona_funding_output_is_registered_by_the_refresh_not_by_its_spend` | the persona's set left out of the offer |
-| `an_undecodable_persona_seal_is_read_as_empty` | the unreadable-seal arm made to fail |
+| `an_undecodable_persona_seal_is_offered_without_and_reported` | the unreadable-seal arm made to fail; the report firing regardless; the unreadable state dropped before it reaches the set |
 
 The persona test is the one that carries the claim above: registered by a
 refresh, the output rebuilds **exactly** its one closed leaf chunk

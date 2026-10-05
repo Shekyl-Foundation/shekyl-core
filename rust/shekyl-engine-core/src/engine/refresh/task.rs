@@ -413,6 +413,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 g.owned_outputs(&result),
             )
         };
+        owned.report(&sink);
         let producer_leaves = match crate::engine::merge::index_block_leaves(std::mem::take(
             &mut result.block_leaves,
         )) {
@@ -427,7 +428,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
             &daemon,
             &result,
             &producer_leaves,
-            &owned,
+            &owned.outputs,
         )
         .await
         {
