@@ -61,14 +61,39 @@ jobs:
       - name: Same-named wallet branch, else dev
         id: pick
         env:
-          # pull_request: the head branch. merge_group: the branch being
-          # queued. push: dev or main, which the case below keeps on
-          # wallet dev — wallet main is expected to lag core dev.
+          # pull_request: the head branch (`github.head_ref`).
+          # push: dev or main, which the case below keeps on wallet dev —
+          # wallet main is expected to lag core dev.
+          # merge_group: `head_ref` is the queue ref
+          # `gh-readonly-queue/<base>/pr-<number>-<sha>`, not the PR branch.
+          # The number is parsed and the branch is read from the pull
+          # request, then matched against the wallet the same way.
+          GH_TOKEN: ${{ github.token }}
           CANDIDATE: ${{ github.head_ref || github.event.merge_group.head_ref || github.ref_name }}
         run: |
           set -euo pipefail
+          CANDIDATE=${CANDIDATE#refs/heads/}
           case "$CANDIDATE" in
-            main|dev|gh-readonly-queue/*|"")
+            gh-readonly-queue/*)
+              tail=${CANDIDATE##*/}
+              pr=${tail#pr-}
+              pr=${pr%%-*}
+              case "$pr" in
+                ''|*[!0-9]*)
+                  echo "merge queue ref has no pull request number: $CANDIDATE" >&2
+                  CANDIDATE=dev
+                  ;;
+                *)
+                  if ! CANDIDATE=$(gh api --jq .head.ref "repos/${GITHUB_REPOSITORY}/pulls/${pr}"); then
+                    echo "could not read pull request ${pr}; using wallet dev" >&2
+                    CANDIDATE=dev
+                  fi
+                  ;;
+              esac
+              ;;
+          esac
+          case "$CANDIDATE" in
+            main|dev|"")
               REF=dev
               ;;
             *)
