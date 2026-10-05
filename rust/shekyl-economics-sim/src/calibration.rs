@@ -388,13 +388,32 @@ mod tests {
     use crate::fee_model::SECTION_12_13_ADMISSION_RATE as CONTROL;
 
     /// The relay floor at the penalty-free zone with `C = 1`, at the tail
-    /// subsidy and at genesis (`FEE_LADDER_DERIVATION.md` FL-V11: 20 and
-    /// 68 266 atomic per byte), with the control arm's 300 between them.
-    const RATES: [PerByteRate; 3] = [
-        PerByteRate::from_atomic(20),
-        CONTROL,
-        PerByteRate::from_atomic(68_266),
-    ];
+    /// subsidy and at genesis, with the control arm's 300 between them. The
+    /// two ends are the floor's owner at the curve's two ends
+    /// (`FEE_LADDER_DERIVATION.md` FL-V11), not figures restated here: 20
+    /// and 34 133 atomic per byte on the shipped curve.
+    fn rates() -> [PerByteRate; 3] {
+        use shekyl_economics::fee::{relay_fee_floor, FeeCorrection};
+        use shekyl_economics::{base_block_reward, tail_subsidy_per_block, EconomicParams};
+
+        let params = EconomicParams::default();
+        let floor_at = |reward: u64| {
+            PerByteRate::from_atomic(relay_fee_floor(
+                reward,
+                params.full_reward_zone,
+                crate::fee_ladder::REF_TX_WEIGHT,
+                FeeCorrection::UNITY,
+                &params,
+            ))
+        };
+        let tail = floor_at(tail_subsidy_per_block(&params).expect("tail"));
+        let genesis = floor_at(base_block_reward(0, &params).expect("genesis reward"));
+        assert!(
+            tail < CONTROL && CONTROL < genesis,
+            "the three rates are ordered"
+        );
+        [tail, CONTROL, genesis]
+    }
 
     #[test]
     fn tree_depth_monotone_and_bounded() {
@@ -426,7 +445,7 @@ mod tests {
         // checked at the tail-era floor, the control arm's figure and the
         // genesis floor, which span the range the chain serves.
         let max_in = InputCount::clamped(usize::MAX).get();
-        for rate in RATES {
+        for rate in rates() {
             for depth in 2..=MAX_TREE_DEPTH {
                 let s = stuffer_shape(depth, rate);
                 assert_eq!(
@@ -607,7 +626,7 @@ mod tests {
         // Pinned as a bound, not a direction, because integer tx-per-shard
         // rounding makes the sign depth-local. A ratio of bytes, so it holds
         // at every rate.
-        for rate in RATES {
+        for rate in rates() {
             let early = stuffer_cost_per_shard_atomic(30_000, rate);
             let late = stuffer_cost_per_shard_atomic(5_000_000_000, rate);
             let (lo, hi) = (early.min(late), early.max(late));
@@ -623,10 +642,11 @@ mod tests {
         // The rate is the whole of the price: the same campaign at two rates
         // costs in their ratio, to within the fee's own varint (a byte or two
         // of each transaction's weight). So a shard is dear to stuff at the
-        // genesis floor and cheap at the tail floor — the 3 413× span of
-        // `FEE_LADDER_DERIVATION.md` FL-V11 is a span of stuffing cost.
+        // genesis floor and cheap at the tail floor — the floor's span from
+        // genesis to the tail (`FEE_LADDER_DERIVATION.md` FL-V11) is a span
+        // of stuffing cost.
         let leaves = 30_000;
-        let [tail, _, genesis] = RATES;
+        let [tail, _, genesis] = rates();
         let at_tail = stuffer_cost_per_shard_atomic(leaves, tail);
         let at_genesis = stuffer_cost_per_shard_atomic(leaves, genesis);
         let cost_ratio = at_genesis as f64 / at_tail as f64;

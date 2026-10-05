@@ -34,6 +34,40 @@ const OWNED_IDENTITIES_TABLE: TableDefinition<TreePositionKey, &[u8; 128]> =
     TableDefinition::new("owned_identities");
 const PINNED_SEGMENTS_TABLE: TableDefinition<SegmentId, u32> =
     TableDefinition::new("pinned_segments");
+/// Captured chunks (`CT-6` increment 5), keyed by the leaf position at which
+/// the chunk **closed** — its finality coordinate.
+///
+/// ## Why the key is `end_leaf` and not `(layer, index)`
+///
+/// A chunk's identity is its layer and index, but keying on that pair buys
+/// nothing and costs two things. It does not fit: at layer 0 the index
+/// reaches ~1.0e17 against the 2^56 a packed `(u8, u56)` leaves, and every
+/// other key in this store is a `u64` newtype. And it would need its own
+/// truncation rule, because the coordinate a rollback speaks in is a
+/// position.
+///
+/// `end_leaf` is **derivable** from what a reader already has — for an owned
+/// leaf at `p` and layer `L`, the chunk is `p / outputs_per_node(L)` and ends
+/// at `(index + 1) * outputs_per_node(L) - 1` — so a spend-time lookup is a
+/// direct key read rather than a scan. And truncation becomes the *same*
+/// `delete_pos_keys_batched(start)` call every other position-keyed table
+/// here uses: captures roll back in the ring's own transaction, by the same
+/// mechanism, rather than by a second rule that has to be kept in step.
+///
+/// Several layers close on one leaf when a fold cascades, so the value holds
+/// every chunk that closed at this position — which is also why they share a
+/// key naturally.
+///
+/// **Plaintext, deliberately, and pre-genesis only.** These rows mark which
+/// leaves are the wallet's. They are here rather than in the sealed ledger so
+/// capture's reorg behaviour can be audited with a redb dump while it is new
+/// — a bug found in a readable table is far cheaper than one found behind a
+/// seal. Nothing but testnet exists to expose. `FOLLOWUPS.md` carries the row
+/// that retires this table for sealed persistence before genesis; it is a
+/// tracked promise, not a mechanism, and it is deleted rather than migrated
+/// when that lands (rule 15).
+const CAPTURED_CHUNKS_TABLE: TableDefinition<TreePositionKey, &[u8]> =
+    TableDefinition::new("captured_chunks");
 // Pending (created but not yet drained) leaves, keyed by global output
 // index. Value = 128-byte leaf || 192-byte leaf-meta payload (the same
 // encoders as `LEAVES_TABLE`/`LEAF_META_TABLE` — one layout, two tables),
@@ -61,7 +95,8 @@ const PENDING_TABLE: TableDefinition<GindexKey, &[u8; 320]> = TableDefinition::n
 // `root_at_count`, and the ring refills as blocks arrive.
 //
 // That is not backward compatibility. A pre-ring (≤5) store is **refused at
-// open** and re-synced; `SCHEMA_VERSION` is 6 precisely so it is, because a
+// open** and re-synced; the ring bumped `SCHEMA_VERSION` to 6 precisely so it
+// would be (the capture table bumped it again, to 7, below), because a
 // pre-ring **writer** cannot see this table and can roll back and replay
 // while leaving rows above the new tip in place, where a stale row can hold
 // the expected leaf count over the abandoned branch's root. A binding
@@ -124,14 +159,23 @@ const META_PRUNE_DISABLED: &str = "prune_disabled";
 /// falls through to `root_at_count`, and the ring refills as blocks arrive. No
 /// row has to be reconstructed from anything.
 ///
-/// The bump exists to stop a ≤5 **writer**: a pre-ring binary does not know
-/// [`FRONTIER_SNAPSHOTS_TABLE`], so it can roll back and replay without
+/// The bump to 6 exists to stop a ≤5 **writer**: a pre-ring binary does not
+/// know [`FRONTIER_SNAPSHOTS_TABLE`], so it can roll back and replay without
 /// truncating it, and a stale row left at a replayed height can carry the
 /// expected leaf count while composing the abandoned branch's root. Nothing
 /// in-band can stop a writer that cannot see the table, so the version cell
 /// is the only mechanism that closes it, and refusing the store is exactly
 /// C8's `refuse-and-resync`.
-const SCHEMA_VERSION: u64 = 6;
+///
+/// **7 is the same hazard, one table along.** A ≤6 writer does not know
+/// [`CAPTURED_CHUNKS_TABLE`], so it can truncate the leaves and the ring
+/// while leaving captures that are no longer final — and a surviving capture
+/// is worse than a stale ring row, because the ring is consulted against an
+/// expected leaf count while a capture is read as a path's branches. The
+/// store is a cache either way, so the bump buys the absence of migration
+/// code rather than compatibility: after the resync the table starts empty
+/// and refills as blocks arrive.
+const SCHEMA_VERSION: u64 = 7;
 
 /// The CT-3a layout version: same byte layout as [`SCHEMA_VERSION`] 3 but
 /// without the maintained-pending-table contract. Test-only — production
@@ -533,6 +577,21 @@ pub enum StoreError {
     /// store's declared posture forbids, and must learn it here rather
     /// than at the first failed challenge.
     PruneDisabledPosture,
+    /// Two different contents were offered for one `(end_leaf, layer)`
+    /// capture (`CT-6` §11.8).
+    ///
+    /// A chunk's contents are fixed by the leaves under it, so one coordinate
+    /// has exactly one correct value. Re-offering the same bytes is fine and
+    /// expected — reconciliation recomputes what is already there. *Different*
+    /// bytes mean two sources disagree about the tree, which is the condition
+    /// a capture exists to be trusted against, so it is refused rather than
+    /// resolved in either direction.
+    ConflictingCapture {
+        /// The coordinate offered twice.
+        end_leaf: u64,
+        /// The layer whose contents disagreed.
+        layer: u8,
+    },
     /// A [`LeafStore::pin_serve_set`] member does not fit the store's `u32`
     /// [`SegmentId`] space, so it cannot name a segment in *any* store — a
     /// construction bug in whatever built the serve-set, not a freeze race.
@@ -678,6 +737,7 @@ impl StoreError {
             | StoreError::FrozenSegmentRecordMissing { .. }
             | StoreError::FrozenSegmentRkMismatch { .. } => StoreOpenFault::Corrupt,
             StoreError::InvalidTruncate { .. }
+            | StoreError::ConflictingCapture { .. }
             | StoreError::LeafCountOutOfBounds { .. }
             | StoreError::TruncatedIntoPrunedRange { .. }
             | StoreError::FrozenSegmentPruned { .. }
@@ -810,6 +870,7 @@ impl LeafStore {
         txn.open_table(PINNED_SEGMENTS_TABLE)?;
         txn.open_table(PENDING_TABLE)?;
         txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+        txn.open_table(CAPTURED_CHUNKS_TABLE)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
             if meta.get(META_LEAF_COUNT)?.is_none() {
@@ -839,6 +900,8 @@ impl LeafStore {
         txn.delete_table(FROZEN_SEGMENTS_TABLE)?;
         txn.delete_table(OWNED_IDENTITIES_TABLE)?;
         txn.delete_table(PINNED_SEGMENTS_TABLE)?;
+        // Captures are derived from the leaves being wiped here.
+        txn.delete_table(CAPTURED_CHUNKS_TABLE)?;
         // A missed table here leaves stale pending rows that would corrupt
         // a subsequent `from_blocks` rebuild — pinned by the clear test.
         txn.delete_table(PENDING_TABLE)?;
@@ -1130,7 +1193,14 @@ impl LeafStore {
         pending_removed: &[Gindex],
         tip_height: BlockHeight,
     ) -> Result<(), StoreError> {
-        self.write_block_deltas(drained, pending_added, pending_removed, tip_height, None)
+        self.write_block_deltas(
+            drained,
+            pending_added,
+            pending_removed,
+            tip_height,
+            None,
+            &[],
+        )
     }
 
     /// [`Self::append_block_deltas`] plus one frontier snapshot, in the same
@@ -1146,6 +1216,12 @@ impl LeafStore {
     /// [`StoreError::SnapshotBelowSyncTip`] when `tip_height` is strictly
     /// below the store's sync tip, plus every error of
     /// [`Self::append_block_deltas`]. The refusal happens before any write.
+    /// `captures` are the chunks that finalized during this block, keyed by
+    /// the position each closed at. They are written **inside this block's
+    /// transaction**, beside the leaves and the ring snapshot, so a crash
+    /// cannot separate a fold from its capture on the normal path. Pass an
+    /// empty slice when nothing was captured, which is every block for a
+    /// wallet that owns nothing in the chunks that closed.
     pub fn append_block_with_snapshot(
         &self,
         drained: &[LeafEntry],
@@ -1153,6 +1229,7 @@ impl LeafStore {
         pending_removed: &[Gindex],
         tip_height: BlockHeight,
         frontier_snapshot: &[u8],
+        captures: &[(TreePosition, Vec<CapturedChunk>)],
     ) -> Result<(), StoreError> {
         self.write_block_deltas(
             drained,
@@ -1160,6 +1237,7 @@ impl LeafStore {
             pending_removed,
             tip_height,
             Some(frontier_snapshot),
+            captures,
         )
     }
 
@@ -1176,6 +1254,7 @@ impl LeafStore {
         pending_removed: &[Gindex],
         tip_height: BlockHeight,
         frontier_snapshot: Option<&[u8]>,
+        captures: &[(TreePosition, Vec<CapturedChunk>)],
     ) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         let mut leaf_count = {
@@ -1239,6 +1318,13 @@ impl LeafStore {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_LEAF_COUNT, &leaf_count)?;
             meta.insert(META_SYNC_TIP, &effective_tip)?;
+        }
+        // Captures ride the block's own transaction, beside the ring. A
+        // crash between the fold and its capture is then not a state the
+        // normal path can reach, which leaves reconciliation a net under the
+        // mechanism rather than the mechanism itself.
+        for (end_leaf, chunks) in captures {
+            merge_captured_chunks(&txn, *end_leaf, chunks)?;
         }
         if let Some(bytes) = frontier_snapshot {
             Self::write_frontier_snapshot_in_txn(&txn, tip_height, bytes)?;
@@ -1664,6 +1750,19 @@ impl LeafStore {
         {
             let mut owned = txn.open_table(OWNED_IDENTITIES_TABLE)?;
             delete_pos_keys_batched(&mut owned, TreePositionKey::from_raw(pos))?;
+        }
+        {
+            // A capture is final only while every leaf under it survives, and
+            // its key IS the position of its last leaf — so the rule is the
+            // same batched delete as above, on the same coordinate, in the
+            // same transaction. A chunk whose `end_leaf >= pos` lost a child
+            // and is dropped; one whose `end_leaf < pos` is untouched.
+            //
+            // Keying on the owned leaf's own position would keep stale
+            // chunks: leaf 100 survives a cut to 150 while its layer-1 chunk
+            // (0..683) does not.
+            let mut captures = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+            delete_pos_keys_batched(&mut captures, TreePositionKey::from_raw(pos))?;
         }
         {
             let mut pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
@@ -2185,6 +2284,227 @@ impl LeafStore {
         Ok(())
     }
 
+    /// Merge several capture rows in **one** transaction.
+    ///
+    /// The batch counterpart to [`Self::put_captured_chunks`], for the
+    /// backfill: reconciliation computes every missing chunk first and then
+    /// commits them together, so a failure part-way through the computation
+    /// leaves the store untouched rather than half-reconciled. Merge
+    /// semantics are [`Self::put_captured_chunks`]'s, because both go
+    /// through `merge_captured_chunks`.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::ConflictingCapture`] if any layer already holds
+    /// different bytes; [`StoreError`] on a read or write failure. Either
+    /// way the whole batch is abandoned.
+    pub fn merge_captured_chunk_rows(
+        &self,
+        rows: &[(TreePosition, Vec<CapturedChunk>)],
+    ) -> Result<(), StoreError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let txn = self.db.begin_write()?;
+        for (end_leaf, chunks) in rows {
+            merge_captured_chunks(&txn, *end_leaf, chunks)?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Remove the leaf **and** meta rows at `position`, leaving
+    /// `leaf_count` alone.
+    ///
+    /// Test-only, and narrow on purpose: it reproduces the exact shape
+    /// [`Self::prune_frozen`] leaves behind — a position the store still
+    /// counts whose rows are gone — without the frozen segment and the
+    /// one-way posture flag that method needs. Both rows, because
+    /// `prune_frozen` removes both; dropping only the leaf row produces a
+    /// *different* refusal, [`Self::read_drained_range`]'s key-set
+    /// asymmetry, which is a corrupt store rather than a pruned one.
+    ///
+    /// The client's refusal `ClientError::CaptureIdentitiesIncomplete` has
+    /// no other reachable producer, since `prune_frozen` has no production
+    /// caller, and a refusal shown only by mutating the code it guards is
+    /// not covered.
+    #[cfg(test)]
+    pub(crate) fn drop_leaf_rows_for_test(
+        &self,
+        start: TreePosition,
+        end: TreePosition,
+    ) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut leaves = txn.open_table(LEAVES_TABLE)?;
+            let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
+            for raw in start.to_raw()..=end.to_raw() {
+                let key = TreePositionKey::from_raw(raw);
+                leaves.remove(key)?;
+                drop(leaf_meta.remove(key)?);
+            }
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Overwrite the capture row at `end_leaf` with `chunks`, verbatim.
+    ///
+    /// Test-only: the merge refuses conflicting bytes and sorts what it
+    /// writes, so a row carrying bytes the reader must refuse — a node that
+    /// is not a curve point, a repeated layer — cannot be produced through
+    /// the production writer. The decoders are graded against rows this
+    /// writes.
+    #[cfg(test)]
+    pub(crate) fn replace_capture_row_for_test(
+        &self,
+        end_leaf: TreePosition,
+        chunks: &[CapturedChunk],
+    ) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+            table.insert(
+                TreePositionKey::from(end_leaf),
+                encode_captured_chunks(chunks).as_slice(),
+            )?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Delete the capture row at `end_leaf`.
+    ///
+    /// Test-only: the one way to produce a closed chunk whose capture is
+    /// absent on a client that resolved the position, which is the state
+    /// `ClientError::CaptureMissing` names. Nothing in production removes a
+    /// row except a truncation, and that also drops the position.
+    #[cfg(test)]
+    pub(crate) fn drop_capture_row_for_test(
+        &self,
+        end_leaf: TreePosition,
+    ) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+            drop(table.remove(TreePositionKey::from(end_leaf))?);
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Add chunks that closed at `end_leaf`, **merging by layer**.
+    ///
+    /// A fold cascade closes several layers on one leaf, and they share a
+    /// finality coordinate: they became final at one instant and a rollback
+    /// un-finalizes them at one instant. But they do not always arrive
+    /// together, and that is why this merges rather than replaces.
+    ///
+    /// # Why replacing would lose data
+    ///
+    /// An earlier revision inserted, on the reasoning that "the set is a
+    /// property of the leaf count, so a second write means the same chunks
+    /// recomputed". That is false: the set is a property of the leaf count
+    /// **and of which outputs are owned**, and ownership can be learned after
+    /// the fold. Cascade coordinates are shared between layers — layer-0
+    /// chunk 17 and layer-1 chunk 0 both end at leaf 683 — so an output
+    /// discovered late, whose layer-0 chunk ends there, would have **silently
+    /// erased** another output's layer-1 chunk already at that key. Latent
+    /// only until the backfill exists, which is exactly what triggers it.
+    ///
+    /// Re-offering identical bytes is a no-op, so reconciliation may recompute
+    /// freely. Offering *different* bytes for one `(end_leaf, layer)` is
+    /// refused: a chunk's contents are fixed by the leaves under it, so two
+    /// sources disagreeing is a defect rather than a merge to resolve.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::ConflictingCapture`] if a layer already holds different
+    /// bytes; [`StoreError`] on a read or write failure.
+    pub fn put_captured_chunks(
+        &self,
+        end_leaf: TreePosition,
+        chunks: &[CapturedChunk],
+    ) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        merge_captured_chunks(&txn, end_leaf, chunks)?;
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Drained entries at positions `start..=end`, in position order.
+    ///
+    /// The ranged counterpart to [`Self::read_drained_entries`], which walks
+    /// every row. Capture needs one layer-0 chunk's worth of identities —
+    /// `SELENE_CHUNK_WIDTH` of them — and reading the whole table to find 38
+    /// adjacent rows would reintroduce, inside the thing meant to remove it,
+    /// the `O(n)` pass capture exists to delete.
+    ///
+    /// Short rows are not an error: a range that runs past the drained tail
+    /// returns what exists, so a caller sizing a chunk against a partial tail
+    /// sees the partial tail.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::CorruptMeta`] if the two position-keyed tables disagree
+    /// about which rows exist, which is the invariant
+    /// [`Self::read_drained_entries`] checks across the whole table and this
+    /// checks across the range it reads.
+    pub fn read_drained_range(
+        &self,
+        start: TreePosition,
+        end: TreePosition,
+    ) -> Result<Vec<LeafEntry>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let leaves = txn.open_table(LEAVES_TABLE)?;
+        let meta = txn.open_table(LEAF_META_TABLE)?;
+        let mut out = Vec::new();
+        for raw in start.to_raw()..=end.to_raw() {
+            let pos = TreePositionKey::from_raw(raw);
+            match (leaves.get(pos)?, meta.get(pos)?) {
+                (Some(leaf), Some(meta_row)) => {
+                    let stored = decode_stored_leaf_meta(meta_row.value())?;
+                    out.push(LeafEntry {
+                        gindex: stored.gindex,
+                        maturity: stored.maturity,
+                        creation_height: stored.creation_height,
+                        leaf: *leaf.value(),
+                        identity: stored.identity,
+                    });
+                }
+                // Absence of BOTH is the end of the drained range, which a
+                // caller sizing a chunk against a partial tail should see.
+                (None, None) => break,
+                // One table holding a position the other does not is the
+                // asymmetry `read_drained_entries` refuses across the whole
+                // table; this refuses it across the range it reads.
+                _ => {
+                    return Err(StoreError::CorruptMeta(
+                        "leaves/leaf_meta key-set asymmetry",
+                    ))
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The chunks that closed at `end_leaf`, empty when none were captured.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::CorruptMeta`] if the stored row does not decode.
+    pub fn captured_chunks(
+        &self,
+        end_leaf: TreePosition,
+    ) -> Result<Vec<CapturedChunk>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+        match table.get(TreePositionKey::from(end_leaf))? {
+            Some(v) => decode_captured_chunks(v.value()),
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// Read frozen segment record, if present.
     pub fn frozen_segment(&self, id: SegmentId) -> Result<Option<FrozenSegmentRecord>, StoreError> {
         let txn = self.db.begin_read()?;
@@ -2289,6 +2609,126 @@ impl LeafStore {
         }
         Ok(())
     }
+}
+
+/// One captured chunk: the layer whose node it is the child set of, and the
+/// chunk's bytes.
+///
+/// Two value shapes share this type, and the layer says which:
+///
+/// - **layer 0** — the leaf chunk, stored as its siblings' *identities*
+///   (`O ‖ C ‖ CM.x`, 96 B each). Not the frontier's scalars: a path needs the
+///   siblings as compressed points, and `O.x` is a one-way projection of `O`.
+///   `I` is **not stored** — it is `Hp(O)`, derived at assembly, because a
+///   stored copy of a recomputable value is a second copy that can disagree.
+/// - **layer >= 1** — the node chunk as the frontier folded it, 32 B per
+///   child.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CapturedChunk {
+    /// Absolute tree layer of the node these children belong to.
+    pub layer: u8,
+    /// The chunk's bytes, in the shape the layer implies.
+    pub bytes: Vec<u8>,
+}
+
+/// Merge `chunks` into the row at `end_leaf`, inside the caller's
+/// transaction.
+///
+/// Factored out of [`LeafStore::put_captured_chunks`] so the ingest can write
+/// captures in the **block's own transaction**, beside the leaves and the
+/// ring snapshot. A crash then cannot separate a fold from its capture on the
+/// normal path, which leaves reconciliation a net under the mechanism rather
+/// than the mechanism itself.
+///
+/// Merge semantics are [`LeafStore::put_captured_chunks`]'s, because they are
+/// this function: identical bytes are a no-op, different bytes for one
+/// `(end_leaf, layer)` are [`StoreError::ConflictingCapture`].
+fn merge_captured_chunks(
+    txn: &redb::WriteTransaction,
+    end_leaf: TreePosition,
+    chunks: &[CapturedChunk],
+) -> Result<(), StoreError> {
+    if chunks.is_empty() {
+        return Ok(());
+    }
+    let key = TreePositionKey::from(end_leaf);
+    let mut table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+    let mut merged = match table.get(key)? {
+        Some(v) => decode_captured_chunks(v.value())?,
+        None => Vec::new(),
+    };
+    for incoming in chunks {
+        match merged.iter().find(|held| held.layer == incoming.layer) {
+            Some(held) if held.bytes == incoming.bytes => {}
+            Some(_) => {
+                return Err(StoreError::ConflictingCapture {
+                    end_leaf: end_leaf.to_raw(),
+                    layer: incoming.layer,
+                })
+            }
+            None => merged.push(incoming.clone()),
+        }
+    }
+    // Deterministic order, so one set of chunks has one encoding however it
+    // arrived.
+    merged.sort_unstable_by_key(|c| c.layer);
+    let encoded = encode_captured_chunks(&merged);
+    table.insert(key, encoded.as_slice())?;
+    Ok(())
+}
+
+/// `layer ‖ len ‖ bytes`, repeated. Self-describing, because a cascade writes
+/// a variable number of chunks of two different shapes under one key and a
+/// reader must be able to walk them without consulting the fold schedule.
+fn encode_captured_chunks(chunks: &[CapturedChunk]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for chunk in chunks {
+        out.push(chunk.layer);
+        let len = u32::try_from(chunk.bytes.len()).expect("a captured chunk fits u32 bytes");
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&chunk.bytes);
+    }
+    out
+}
+
+/// Inverse of [`encode_captured_chunks`], refusing anything it did not write.
+fn decode_captured_chunks(mut raw: &[u8]) -> Result<Vec<CapturedChunk>, StoreError> {
+    const HEADER: usize = 1 + 4;
+    let mut out: Vec<CapturedChunk> = Vec::new();
+    while !raw.is_empty() {
+        if raw.len() < HEADER {
+            return Err(StoreError::CorruptMeta(
+                "captured chunk header is truncated",
+            ));
+        }
+        let layer = raw[0];
+        let mut len_bytes = [0u8; 4];
+        len_bytes.copy_from_slice(&raw[1..HEADER]);
+        let len = usize::try_from(u32::from_le_bytes(len_bytes))
+            .expect("a captured chunk length fits usize");
+        let end = HEADER
+            .checked_add(len)
+            .ok_or(StoreError::CorruptMeta("captured chunk length overflows"))?;
+        if raw.len() < end {
+            return Err(StoreError::CorruptMeta("captured chunk body is truncated"));
+        }
+        // One chunk per `(end_leaf, layer)`, written in ascending layer order
+        // — every writer sorts after merging. A row that repeats a layer or
+        // runs backwards was not written by this code, and a reader that took
+        // the first of two layer-`L` bodies would be choosing between two
+        // conflicting persisted values silently.
+        if out.last().is_some_and(|prev| prev.layer >= layer) {
+            return Err(StoreError::CorruptMeta(
+                "captured chunk layers are not strictly increasing",
+            ));
+        }
+        out.push(CapturedChunk {
+            layer,
+            bytes: raw[HEADER..end].to_vec(),
+        });
+        raw = &raw[end..];
+    }
+    Ok(out)
 }
 
 fn delete_pos_keys_batched<V: redb::Value>(
@@ -2791,7 +3231,7 @@ mod tests {
         let store = LeafStore::open_ephemeral().unwrap();
         let snapshot = b"a frontier's bytes".as_slice();
         store
-            .append_block_with_snapshot(&[], &[], &[], BlockHeight::from_raw(100), snapshot)
+            .append_block_with_snapshot(&[], &[], &[], BlockHeight::from_raw(100), snapshot, &[])
             .unwrap();
         assert_eq!(
             store.frontier_snapshot_span().unwrap(),
@@ -2803,7 +3243,7 @@ mod tests {
         // call would otherwise succeed and insert a row at height 90 —
         // widening the span downward past what the ring's own bound placed.
         let err = store
-            .append_block_with_snapshot(&[], &[], &[], BlockHeight::from_raw(90), snapshot)
+            .append_block_with_snapshot(&[], &[], &[], BlockHeight::from_raw(90), snapshot, &[])
             .expect_err("a snapshot below the sync tip is a caller bug");
         assert!(
             matches!(
@@ -4170,6 +4610,59 @@ mod tests {
         ));
     }
 
+    /// `read_drained_range` returns the positions asked for, in order, and
+    /// stops at the drained tail rather than erring.
+    ///
+    /// Capture needs one chunk's identities — 38 adjacent rows — and the
+    /// whole-table read would reintroduce, inside the mechanism meant to
+    /// remove it, the `O(n)` pass capture exists to delete. So the range read
+    /// is the subject: it must agree with the full read over the same window,
+    /// which is what makes it a narrowing rather than a second reader.
+    #[test]
+    fn a_ranged_read_agrees_with_the_full_read_and_stops_at_the_tail() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        let count = 50_u64;
+        seed_leaves(&store, count);
+
+        let all = store.read_drained_entries().unwrap();
+        assert_eq!(all.len() as u64, count);
+
+        // A window strictly inside the drained range.
+        let got = store
+            .read_drained_range(TreePosition::from_raw(10), TreePosition::from_raw(19))
+            .unwrap();
+        assert_eq!(got.len(), 10, "a ten-position window returns ten rows");
+        assert_eq!(
+            got.iter().map(|e| e.gindex).collect::<Vec<_>>(),
+            all[10..20].iter().map(|e| e.gindex).collect::<Vec<_>>(),
+            "the ranged read must be the full read's slice, in the same order"
+        );
+
+        // A window that runs past the tail returns what exists. A caller
+        // sizing a chunk against a partial tail has to see the partial tail,
+        // which is exactly the last chunk before the frontier.
+        let past = store
+            .read_drained_range(
+                TreePosition::from_raw(count - 3),
+                TreePosition::from_raw(count + 10),
+            )
+            .unwrap();
+        assert_eq!(
+            past.len(),
+            3,
+            "a range past the tail is short, not an error"
+        );
+
+        // A window entirely past the tail is empty, not an error.
+        assert!(store
+            .read_drained_range(
+                TreePosition::from_raw(count + 1),
+                TreePosition::from_raw(count + 5)
+            )
+            .unwrap()
+            .is_empty());
+    }
+
     #[test]
     fn rollback_survives_a_pinned_segment_below_a_pruned_one() {
         // The serving startup sequence makes the present leaves
@@ -4210,6 +4703,237 @@ mod tests {
             leaves_per_segment() * LEAF_BYTES,
             "the pinned shard stays servable across the reorg — the point of the pin"
         );
+    }
+
+    /// A late capture at a cascade key must not erase the chunk already there.
+    ///
+    /// This is the sequence an `insert` would have lost, and it is reachable
+    /// as soon as ownership can be learned after a fold. Cascade coordinates
+    /// are shared between layers: layer-0 chunk 17 and layer-1 chunk 0 both
+    /// end at leaf **683**. So an output owned early contributes the layer-1
+    /// chunk there, and an output discovered *late* in layer-0 chunk 17
+    /// contributes a layer-0 chunk at the same key. Replacing the row would
+    /// have dropped the first silently — no error, no missing key, just a
+    /// path that cannot be built later.
+    #[test]
+    fn a_late_layer_zero_capture_does_not_erase_the_layer_one_chunk() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&store, 8);
+        // 683 is the first coordinate a layer-0 and a layer-1 chunk share.
+        let at = TreePosition::from_raw(683);
+
+        let upper = CapturedChunk {
+            layer: 1,
+            bytes: vec![0xAA; 32 * 18],
+        };
+        let lower = CapturedChunk {
+            layer: 0,
+            bytes: vec![0xBB; 96 * 38],
+        };
+
+        // Owned early: the cascade's upper chunk lands first.
+        store
+            .put_captured_chunks(at, std::slice::from_ref(&upper))
+            .unwrap();
+        // Discovered late: the backfill contributes only layer 0.
+        store
+            .put_captured_chunks(at, std::slice::from_ref(&lower))
+            .unwrap();
+
+        let held = store.captured_chunks(at).unwrap();
+        assert_eq!(
+            held,
+            vec![lower, upper],
+            "both layers must survive, ordered by layer; a replace would leave only the \
+             late one and the loss would be silent"
+        );
+    }
+
+    /// Re-offering identical bytes is a no-op, so reconciliation may
+    /// recompute freely; different bytes for one coordinate are refused.
+    #[test]
+    fn an_identical_recapture_is_idempotent_and_a_conflicting_one_refuses() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&store, 8);
+        let at = TreePosition::from_raw(683);
+        let chunk = CapturedChunk {
+            layer: 1,
+            bytes: vec![0xAA; 32 * 18],
+        };
+
+        store
+            .put_captured_chunks(at, std::slice::from_ref(&chunk))
+            .unwrap();
+        store
+            .put_captured_chunks(at, std::slice::from_ref(&chunk))
+            .unwrap();
+        assert_eq!(
+            store.captured_chunks(at).unwrap(),
+            vec![chunk.clone()],
+            "recomputing the same chunk must not duplicate it"
+        );
+
+        let disagreeing = CapturedChunk {
+            layer: 1,
+            bytes: vec![0xCC; 32 * 18],
+        };
+        match store.put_captured_chunks(at, &[disagreeing]) {
+            Err(StoreError::ConflictingCapture { end_leaf, layer }) => {
+                assert_eq!((end_leaf, layer), (683, 1));
+            }
+            other => panic!(
+                "two contents for one coordinate is a defect, not a merge to resolve; \
+                 got {other:?}"
+            ),
+        }
+        assert_eq!(
+            store.captured_chunks(at).unwrap(),
+            vec![chunk],
+            "a refused write must leave the held chunk untouched"
+        );
+    }
+
+    /// The truncation fencepost, asserted on **both** sides of the edge.
+    ///
+    /// A chunk is final only while every leaf under it survives, and its key
+    /// is the position of its last leaf. So the boundary is exact: a cut
+    /// whose first removed position **is** `end_leaf` takes that leaf away
+    /// and must drop the capture; a cut at `end_leaf + 1` leaves the chunk
+    /// whole and must keep it.
+    ///
+    /// Both sides, because one side alone cannot tell `<` from `<=`. A
+    /// scenario deep inside the region — leaf 100 against a cut to 150 —
+    /// passes under either inequality, which is the flat-region failure this
+    /// round has been bitten by before.
+    #[test]
+    fn a_capture_survives_a_cut_above_its_end_and_not_at_it() {
+        let end = 40_u64;
+        let chunks = vec![CapturedChunk {
+            layer: 1,
+            bytes: vec![7u8; 32],
+        }];
+
+        // Above the edge: the chunk's last leaf survives, so the chunk does.
+        let keep = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&keep, end + 2);
+        keep.put_captured_chunks(TreePosition::from_raw(end), &chunks)
+            .unwrap();
+        keep.truncate_from_tree_position(TreePosition::from_raw(end + 1))
+            .unwrap();
+        assert_eq!(
+            keep.captured_chunks(TreePosition::from_raw(end)).unwrap(),
+            chunks,
+            "a cut whose first removed position is end_leaf + 1 leaves the chunk whole"
+        );
+
+        // At the edge: the chunk's last leaf is removed, so the chunk is not
+        // final any more.
+        let drop = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&drop, end + 2);
+        drop.put_captured_chunks(TreePosition::from_raw(end), &chunks)
+            .unwrap();
+        drop.truncate_from_tree_position(TreePosition::from_raw(end))
+            .unwrap();
+        assert!(
+            drop.captured_chunks(TreePosition::from_raw(end))
+                .unwrap()
+                .is_empty(),
+            "a cut whose first removed position IS end_leaf takes the chunk's last leaf, \
+             so the capture must go"
+        );
+    }
+
+    /// A cascade's chunks share a key, and the codec round-trips both value
+    /// shapes under it.
+    #[test]
+    fn a_cascade_round_trips_both_value_shapes() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&store, 8);
+        // Layer 0 is identities (96 B per sibling); above it, nodes (32 B).
+        let chunks = vec![
+            CapturedChunk {
+                layer: 0,
+                bytes: vec![1u8; 96 * 38],
+            },
+            CapturedChunk {
+                layer: 1,
+                bytes: vec![2u8; 32 * 18],
+            },
+            CapturedChunk {
+                layer: 2,
+                bytes: vec![3u8; 32 * 38],
+            },
+        ];
+        let at = TreePosition::from_raw(5);
+        store.put_captured_chunks(at, &chunks).unwrap();
+        assert_eq!(
+            store.captured_chunks(at).unwrap(),
+            chunks,
+            "the value is self-describing, so a cascade of mixed shapes walks back out"
+        );
+        assert!(
+            store
+                .captured_chunks(TreePosition::from_raw(6))
+                .unwrap()
+                .is_empty(),
+            "a position with no capture reads empty, not an error"
+        );
+    }
+
+    /// A truncated row is refused rather than read as a short chunk.
+    /// A row that repeats a layer, or runs backwards, is refused.
+    ///
+    /// Every writer sorts after merging and holds one chunk per
+    /// `(end_leaf, layer)`, so such a row was not written by this code. A
+    /// reader that took the first of two layer-`L` bodies would be choosing
+    /// between two conflicting persisted values with no refusal — the
+    /// condition `ConflictingCapture` exists to make loud at write time.
+    #[test]
+    fn a_capture_row_with_a_repeated_or_unordered_layer_is_refused() {
+        let chunk = |layer: u8| CapturedChunk {
+            layer,
+            bytes: vec![layer; 32],
+        };
+        assert!(
+            decode_captured_chunks(&encode_captured_chunks(&[chunk(0), chunk(1), chunk(2)]))
+                .is_ok(),
+            "ascending layers decode"
+        );
+        for row in [
+            vec![chunk(1), chunk(1)],
+            vec![chunk(2), chunk(1)],
+            vec![chunk(0), chunk(2), chunk(2)],
+        ] {
+            let layers: Vec<u8> = row.iter().map(|c| c.layer).collect();
+            assert!(
+                decode_captured_chunks(&encode_captured_chunks(&row)).is_err(),
+                "layers {layers:?} must refuse: repeated or out of order"
+            );
+        }
+    }
+
+    #[test]
+    fn a_truncated_capture_row_is_refused() {
+        let full = encode_captured_chunks(&[CapturedChunk {
+            layer: 1,
+            bytes: vec![9u8; 64],
+        }]);
+        for cut in [1_usize, 3, 5, full.len() - 1] {
+            assert!(
+                decode_captured_chunks(&full[..cut]).is_err(),
+                "a row cut at {cut} bytes must refuse, not decode short"
+            );
+        }
+        assert!(decode_captured_chunks(&full).is_ok());
+    }
+
+    /// Leaves so a truncation has something to partition; the capture rows
+    /// are the subject, the leaves are only the setup.
+    fn seed_leaves(store: &LeafStore, count: u64) {
+        let entries: Vec<_> = (0..count).map(|i| sample_entry(i, 0)).collect();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
     }
 
     #[test]

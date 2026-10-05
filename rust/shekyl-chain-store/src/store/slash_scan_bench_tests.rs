@@ -476,13 +476,19 @@ impl SlashedChain {
 /// accrual, and the slash families above. A fingerprint of bytes, not a
 /// domain: the plain hash, so the pin registers nothing in
 /// `CRYPTO_DOMAIN_REGISTRY.tsv` and moves no cSHAKE count-pin. Pinned
-/// 2026-10-02 (`ARW-Q18`); re-pinned 2026-10-04 (E6 slice 8 row 4) when
-/// the fixture personas gained derived keys and recomputed ids — same
-/// byte count, same row count, the bond rows' keys and ids moved, the
-/// codec did not (*records-was:*
-/// `6b1d14e89834bee02ad080ca3e9809ef3bd39e4411513d9ee474c1f2c501f76a`).
+/// 2026-10-02 (`ARW-Q18`). Re-pinned twice on 2026-10-04 with no layout
+/// change, and once more at their merge: the emission speed factor became
+/// per block (22, the design's, where the per-minute convention had run
+/// 21), which halves the emission each closed epoch's budget row records;
+/// and the fixture personas gained derived keys and recomputed ids (E6
+/// slice 8 row 4) — same byte count, same row count, the bond rows' keys
+/// and ids moved, the codec did not. *Records-was:*
+/// `6b1d14e89834bee02ad080ca3e9809ef3bd39e4411513d9ee474c1f2c501f76a`
+/// (ARW-Q18); `2af8d16279df18ccd9dde4d8e889150e68679634d87e71791970cef8167fba11`
+/// (speed factor alone); `283d9d1e126bfed44003d412e2e93b65652e56929038ddb549d56e30db7a1e2d`
+/// (derived keys alone).
 const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
-    "283d9d1e126bfed44003d412e2e93b65652e56929038ddb549d56e30db7a1e2d";
+    "8723491ad1cd242eb2c49a7ebdc6e72fe0d7bf04c6fa569098f7bc86a20effd1";
 
 /// Each family's byte range inside a body, walked by the record framing
 /// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own

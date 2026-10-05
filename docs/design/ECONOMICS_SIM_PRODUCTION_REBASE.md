@@ -20,6 +20,8 @@ fee-share verdict in
 
 ## Reading-pass finding 1: the production default carries 22 of 50 (2026-10-03, ESR-6)
 
+*Relabelled 2026-10-05 (Rick's ruling, [`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2).* "The production block-template fill rule" below is the reward-aware fill, which is the design's. The daemon runs Monero's pre-v5 rule until the fill moves to Rust, so this finding is the design's behaviour once the fill lands, not what the daemon does today. The sim's fill also weighs the bodies without the coinbase (1,331 B a block); the figures are re-run when the owner prices the block's weight ([`FOLLOWUPS.md`](../FOLLOWUPS.md)).
+
 **What the run says.** On the baseline schedule, 50 ordinary transactions a
 block, at the production Standard rung and under the production
 block-template fill rule:
@@ -131,7 +133,7 @@ Production prices a byte as `F = R·C·w_ref/M²`
 block-weight median `M`.
 [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) FL-V11 named the
 consequence on 2026-09-03: the floor decays **3 413×** from genesis to the
-tail. The archival sim's A1, A4 and onset arms never joined that finding.
+tail (1 707× on the design curve, since 2026-10-04). The archival sim's A1, A4 and onset arms never joined that finding.
 They read `fee_per_tx` from the scenario table, and the scenario table
 says `100_000_000` atomic in every row.
 
@@ -1113,7 +1115,7 @@ Status column: **V** = definition and use both read; **I** = inferred.
 | A11 | `proxy.rs:474`; `mn_feasibility.rs:57`; literal 131 in tests `proxy.rs:825-1018`, `mn_feasibility.rs:1065-1067` | 131-epoch reward horizon, reused as "bond life". Production `bond_duration` (`bond_duration.rs:142`) is not consulted. | Silently pinned | I (owner mapping) |
 | A12 | `mn_feasibility.rs:370-375,386-388`; `challenge_coverage.rs:223-225` | False-slash target 1e-3, free-ride 0.80, 40,000 pairs, `p_attempt` 0.30, pair counts 4,096 / 324,000. `k_cap` is 6 in one arm and 30 in the other. | Declared provisional; the `k_cap` disagreement is silent | V |
 | A13 | `calibration.rs:57-61` | Rucknium March-2024 anchors | Declared | V |
-| A14 | `stage2.rs:57,817,1613`; `record.rs:263`; `admission.rs:46`; `fee_ladder.rs:123` | Ramp years 2, response lag 2, reward at asymptote/2, milestone height 5_788_000, safety multiple 2, gap placeholder 5 | Mostly declared | V |
+| A14 | `stage2.rs:57,817,1613`; `record.rs:137,280`; `admission.rs:46`; `fee_ladder.rs:123` | Ramp years 2, response lag 2, reward at asymptote/2, half-emission height from `neutral_height_reaching` (2_907_270 at ESF 22; the removed ESF-23 literal was 5_788_000), safety multiple 2, gap placeholder 5 | Mostly declared | V |
 | A15 | `fee_ladder.rs:1708,2574-2581`; `fee_floor.rs:408` | Demand elasticity model, tier-usage shares | Declared (registered grid) | V |
 
 ### (D) Dead or stale referent
@@ -1166,10 +1168,10 @@ Status column: **V** = definition and use both read; **I** = inferred.
 - **`cartel.rs:81-85`** — `bond_floor_of`, `reinstate_connect`, `BadInterval`, `FAILURE_WINDOW_M/N`, `MAX_HOLDINGS_SHARDS`, `SLASH_GRACE_EPOCHS`.
 - **`challenge_coverage.rs:36`** — `SETTLEMENT_EPOCH_BLOCKS`.
 - **`distribution.rs:43`** — `curve_milli`, `scarcity_micro`, `work_milli_from_micro`.
-- **`engine.rs:2-7,146,166-169`** — the burn, emission and release functions, `calc_stake_ratio`; `staker_pool_share`, DAA target and escalation fields from `EconomicParams::default()`.
+- **`engine.rs:2-7,148,178`** — the burn, emission and release functions, `calc_stake_ratio`. `SimParams::default` incorporates the shipped curve, release, burn, `staker_pool_share`, and `BLOCKS_PER_YEAR`, `STAKER_EMISSION_SHARE`, `STAKER_EMISSION_DECAY`. A run replaces fields to price an alternative; `economic()` writes those knobs onto `EconomicParams::default()` and leaves the DAA target and the escalation fields shipped. An escalation alternative is an `EscalationCurve`.
 - **`escalation.rs:35-38,237`** — `staker_pool_share_at`, `EscalationParams`, `SCALE`, floor from the shipped config, `SHARD_LENGTH`. Nothing computes a ramp locally.
 - **`fee_floor.rs:65-69`** — `TX_VOLUME_WINDOW`, `base_block_reward`, `BLOCKS_PER_YEAR`, `RELAY_ADMISSION_SLACK_BP`, `RELAY_FLOOR_LOOKBACK`.
-- **`fee_ladder.rs:44-56`** — `corrected_fee_ladder`, `relay_fee_floor`, `hysteresis_step/fold/settled`, `paid_block_reward`, `effective_emission`, `projected_already_generated`, `tail_subsidy_per_block`, `emission_speed_factor`, `STAKER_EMISSION_SHARE/DECAY`, `BLOCKS_PER_YEAR`, `FULL_REWARD_ZONE`.
+- **`fee_ladder.rs:44-56`** — `corrected_fee_ladder`, `relay_fee_floor`, `hysteresis_step/fold/settled`, `paid_block_reward`, `effective_emission`, `projected_already_generated`, `tail_subsidy_per_block`, `EconomicParams::emission_speed_factor_per_block`, `STAKER_EMISSION_SHARE/DECAY`, `BLOCKS_PER_YEAR`, `FULL_REWARD_ZONE`.
 - **`main.rs`** — none.
 - **`mn_feasibility.rs:46-48`** — `FAILURE_WINDOW_M/N`, `MAX_HOLDINGS_SHARDS`, `SETTLEMENT_EPOCH_BLOCKS`.
 - **`onset.rs:69-72,584,746`** — `ARCHIVAL_BOND_FLOOR_ATOMIC`, `calc_burn_pct`, `calc_effective_emission_share`, `SHARD_LENGTH`.
@@ -1263,7 +1265,7 @@ The first three rows are structural: every registered run inherits them from `ba
 | # | Sim site | What it models | Production state | Tag |
 |---|---|---|---|---|
 | D1 | `sim/reward.rs:121-132` `curve`, `:135-154` `split_decision`, `:184-199`; `sim/curve.rs:9-39`; defaults `cap: 8.0`, `pseudonym_cost: 0.05` at `sim/scenarios.rs:2068-2069`; cap sweep `:2262-2268` | Per-pseudonym banded plateau on work, plus optimal pseudonym splitting | Plateau deleted from the reward path (D3/R2); credited work is linear and membership-gated: `prod/consensus_state.rs:190-210`, `prod/reward_arithmetic.rs:109-110`, `config/consensus_constants.json` `_comment_archival_reward_path`. The sim's `8.0` restates `ARCHIVAL_PROVISIONAL_CURVE` (`prod/reward_arithmetic.rs:120-121`). `curve_milli` is imported but is sim/counterfactual-only in production. `docs/design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md:1609-1610` lists `shekyl-staking-sim::reward` among the plateau's consumers; the sim still applies it. DOC never mentions D3/R2 (grep empty). | V |
-| D2 | `sim/agent.rs:104-342` (whole portfolio re-chosen in place every epoch); L9 lock `sim/agent.rs:288-295`, `sim/model.rs:670-673`; L18 escrow `sim/model.rs:356-372`, `sim/agent.rs:131-151,333-339`; axis `holdingsupdate_cooldown` `sim/scenarios.rs:3899-4065` | In-place per-shard add/drop (`HoldingsUpdate`) with a per-shard duration lock and per-shard release cooldown | `HoldingsUpdate` rejected 2026-09-20; a bond is fixed at join and holdings change by `Release` + `JoinMarket`: `prod/bond_wire.rs:47-58`, `prod/admission.rs:79-83`. DOC does not record the rejection (grep empty). | V |
+| D2 | `sim/agent.rs:104-342` (whole portfolio re-chosen in place every epoch); L9 lock `sim/agent.rs:288-295`, `sim/model.rs:670-673`; L18 escrow `sim/model.rs:356-372`, `sim/agent.rs:131-151,333-339`; axis `holdingsupdate_cooldown` `sim/scenarios.rs:3899-4065` | In-place per-shard add/drop (`HoldingsUpdate`) with a per-shard duration lock and per-shard release cooldown | `HoldingsUpdate` rejected 2026-09-20; a bond is fixed at join and holdings change by `Release` + `JoinMarket`: `prod/bond_wire.rs:47-58`, `prod/admission.rs:79-83`. DOC did not record the rejection at this row's pin (grep empty); its §L18 heading carries it since 2026-10-04. | V |
 | D3 | `sim/participation.rs:227-233` `foundation_floor`, `:247-263` `foundation_floor_aged`; arms `sim/scenarios.rs:2798-2815,2943-2944,3198-3214,3288-3289,3815-3846` | Foundation floor that decays to zero at `decay_pop` | The sim's own comment at `sim/scenarios.rs:3862-3866` says the ratified design is a permanent complete-tree floor with no `decay_pop` withdrawal. Production: foundation excluded from market, `prod/consensus_state.rs:106-116,699`; single-floor bond `prod/bond_floor.rs:28-30`. | V (sim) / I (ratified design, from the comment) |
 | D4 | `sim/audit.rs:22-49`; defaults `sim/scenarios.rs:2161-2166` | L14 read-credited probabilistic audit cadence | Fixed 3 challenges per pair per epoch (`prod/constants.rs:30`), 2-of-3 threshold (`prod/attestation.rs:71`), m-of-n slash (`prod/failure_window.rs:334-337`). No read credit: `DOC:4904`. | V / I (no read credit) |
 | D5 | `sim/failure_confirmation.rs:269,789,969` | "Production baseline: `H_fire` beacon" | Fire-beacon shape superseded by derived assignment: `prod/constants.rs:67-78`. | V |

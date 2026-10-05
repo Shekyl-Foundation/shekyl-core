@@ -462,23 +462,24 @@ impl RpcSession {
             .ok_or_else(|| RpcError::Transport("response missing 'result'".into()))
     }
 
-    /// Print an RPC failure to stderr.
+    /// Record an RPC failure for the printer.
     ///
-    /// Server messages are stable and secret-free by contract; `--debug`
-    /// additionally shows `error.data`. The returned value is what the
-    /// caller puts in `Err`, so a script stops. Dropping it is a warning.
+    /// Server messages are stable and secret-free by contract. `--debug`
+    /// shows `error.data` when the printer runs in human mode. The returned
+    /// value is what the caller puts in `Err`, so a script stops. Dropping
+    /// it is a warning.
     #[must_use = "reporting an RPC error fails the command"]
     pub fn report(&self, context: &str, err: &RpcError) -> crate::outcome::CommandFailed {
-        eprintln!("{context}: {err}");
-        if self.debug {
-            if let RpcError::Rpc {
-                data: Some(data), ..
-            } = err
-            {
-                eprintln!("[DEBUG] error.data = {data}");
-            }
+        let code = err.code().unwrap_or(crate::outcome::TRANSPORT);
+        let data = match err {
+            RpcError::Rpc { data, .. } => data.clone(),
+            RpcError::Transport(_) => None,
+        };
+        crate::outcome::CommandFailed {
+            code,
+            message: format!("{context}: {err}"),
+            data,
         }
-        crate::outcome::CommandFailed
     }
 
     /// Shut the session down: close any open wallet (best effort) and stop
@@ -878,7 +879,8 @@ mod tests {
     fn no_secret_ever_travels_through_a_json_value() {
         // Every file that sends a secret-bearing request. A new one must be
         // added here; the FOLLOWUPS entry undercounted precisely because no
-        // such list existed.
+        // such list existed. Startup holds the password and hands it to the
+        // command layer; the request is built in the files below.
         let senders = [
             (
                 "commands/lifecycle.rs",
@@ -886,7 +888,6 @@ mod tests {
             ),
             ("commands/staking.rs", include_str!("commands/staking.rs")),
             ("commands/scripted.rs", include_str!("commands/scripted.rs")),
-            ("main.rs", include_str!("main.rs")),
         ];
 
         // `change_password` carries two secrets under two keys, which is why a

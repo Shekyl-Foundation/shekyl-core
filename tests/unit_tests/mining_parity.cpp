@@ -154,19 +154,21 @@ TEST(mining_parity, genesis_paid_reward_and_split_are_pinned)
   //
   // Independent literals, derived from the frozen parameters rather than
   // read back from the owner under test: at genesis `curve(0) =
-  // SHEKYL_EMISSION_CURVE_ASYMPTOTE >> esf` = 2 048 000 000 000; an empty volume window
-  // pins `M_r` at its 0.8 rail and the tail floor does not bind, so the paid
-  // pre-penalty quantity is 1 638 400 000 000; the genesis emission share
-  // is 15%, leaving the miner 1 392 640 000 000. A reward-math change
-  // fails this even though the marshal still agrees with itself.
+  // SHEKYL_EMISSION_CURVE_ASYMPTOTE >> esf` = 1 024 000 000 000 at the design's
+  // ESF 22 per block; an empty volume window pins `M_r` at its 0.8 rail and
+  // the tail floor does not bind, so the paid pre-penalty quantity is
+  // 819 200 000 000; the genesis emission share is 15%, leaving the miner
+  // 696 320 000 000. A reward-math change fails this even though the marshal
+  // still agrees with itself. (Re-derived 2026-10-04; at the per-minute
+  // convention's 21 these were 1 638 400 000 000 and 1 392 640 000 000.)
   uint64_t paid = 0;
   uint64_t limit = 0;
   ASSERT_EQ(SHEKYL_BLOCK_REWARD_OK,
             shekyl_block_reward(0, 1, 0, /*tx_count_sum=*/0, /*window_blocks=*/0, &paid, &limit));
-  ASSERT_EQ(paid, UINT64_C(1638400000000));
+  ASSERT_EQ(paid, UINT64_C(819200000000));
 
   const shekyl::EmissionSplit em = shekyl::compute_emission_split(paid, 0, 0);
-  ASSERT_EQ(em.miner_emission, UINT64_C(1392640000000));
+  ASSERT_EQ(em.miner_emission, UINT64_C(696320000000));
   ASSERT_EQ(em.miner_emission + em.staker_emission, paid);
 }
 

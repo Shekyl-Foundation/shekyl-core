@@ -552,7 +552,9 @@ mod tests {
     #[test]
     fn absolute_cap_is_the_structural_bound() {
         let cap = absolute_fee_rate_cap();
-        // 218,453,333 = 2·R₀·C_max/(Zm·SCALE) with R₀ = 2,048,000,000,000 and
+        // 109,226,666 = 2·R₀·C_max/(Zm·SCALE) with R₀ = 1,024,000,000,000 (the
+        // design's ESF 22 per block; 218,453,333 at the per-minute
+        // convention's R₀ = 2,048,000,000,000 until 2026-10-04) and
         // C_max = 16·SCALE. It was 220,000,000 while the served ladder rounded
         // each rung up to two significant digits; FL-R21 takes
         // `round_money_up_2` off that path, so the bound is now the
@@ -560,7 +562,7 @@ mod tests {
         // below moved down with it, so the soundness margin is unchanged —
         // which is the property that matters, not the value.
         assert_eq!(
-            cap, 218_453_333,
+            cap, 109_226_666,
             "economics params moved the structural fee bound"
         );
     }
@@ -662,10 +664,19 @@ mod tests {
             cap
         );
         // Peak over the swept trajectories, not every reachable history.
-        // Raw C makes F ∝ C·R, so the product peaks on the neutral rail
-        // (C_q used to hide that and put the peak on the dormant rail).
-        assert_eq!(worst.0, 68_531_636, "the swept maximum moved");
-        assert_eq!(worst.3, SCALE, "the swept peak is on the neutral rail");
+        // The rail only sets how much has been emitted: a dormant past keeps
+        // more `remaining`, so a higher `R` at every age, but a lower supply
+        // ratio, so a lower burn fraction and with it a lower `C`. Which
+        // wins depends on the curve. On the design's ESF 22 per block the
+        // preserved reward wins and the peak is on the dormant rail,
+        // 36,904,281. At the per-minute convention's 21 (until 2026-10-04)
+        // the burn term won: 68,531,636 on the neutral rail. Either way it
+        // stays under the structural cap, which is the property.
+        assert_eq!(worst.0, 36_904_281, "the swept maximum moved");
+        assert_eq!(
+            worst.3, p.release_min,
+            "the swept peak is on the dormant rail"
+        );
     }
 
     /// The finding's scenario, pinned end to end: the honest YOUNG-CHAIN
@@ -676,11 +687,14 @@ mod tests {
     #[test]
     fn genesis_condition_snapshots_are_well_formed() {
         // Raw folded-formula tiers at genesis conditions.
-        ValidatedFeeEstimates::try_new(snapshot(68_266, 273_066, 13_653_325))
+        ValidatedFeeEstimates::try_new(snapshot(34_133, 136_533, 6_826_666))
             .expect("raw genesis-condition tiers are honest and must pass");
-        // Historical rounded genesis quotes (round_money_up, 2 digits)
-        // remain well-formed numbers — they sit well under the structural
-        // cap rather than on it.
+        // Historical genesis quotes remain well-formed numbers — they sit
+        // well under the structural cap rather than on it: the raw tiers
+        // of the per-minute curve (a 2 048-SKL genesis, until 2026-10-04),
+        // and their rounded forms (round_money_up, 2 digits).
+        ValidatedFeeEstimates::try_new(snapshot(68_266, 273_066, 13_653_325))
+            .expect("the per-minute curve's raw genesis tiers are honest and must pass");
         ValidatedFeeEstimates::try_new(snapshot(69_000, 280_000, 14_000_000))
             .expect("rounded genesis-condition C_q=1 tiers are honest and must pass");
         ValidatedFeeEstimates::try_new(snapshot(140_000, 550_000, 28_000_000))

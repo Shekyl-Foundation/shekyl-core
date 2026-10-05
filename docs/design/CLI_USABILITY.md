@@ -249,3 +249,51 @@ run. CompleteTree is the hidden startup flag `--complete-tree-foundation`,
 not `stake foundation`. `shard list all` reads `get_archival_shard_coverage`.
 `stake join` names shard ids and does not post until wallet-RPC `stake`
 accepts a shard set.
+
+## 6. Scripting and the release verb (2026-10-04)
+
+`--json` prints one object per command and does not print the human
+lines. A success is `{"ok":true,"command":"...","result":{...}}`. A
+failure is `{"ok":false,"command":"...","error":{"code":N,"message":"..."}}`
+and the process exits 1. `error.data` is present when the server sent
+it. Seeds and passwords are removed at every depth. `shekyl-cli create
+--seed-out` is still the only way a script receives a seed, and the
+JSON result names that path. A failed `create` or `restore` uses that
+same command name and, when the server refused, the wallet-RPC code.
+A failure before any command (the session never started, the script
+file could not be read) is `command` `session` or `script`.
+
+`version` always reports `cli_version`. When wallet-RPC cannot be
+asked, the command still succeeds and `wallet_rpc_error` carries the
+reason. `status` and `balance` remain the checks that stop a script.
+
+`--script FILE` runs the file as one wallet session. A one-shot is the
+same words as the prompt, after the global flags: `shekyl-cli --json
+balance`. The shell's quoting is the token boundary, so
+`address --out "/tmp/my address.txt"` keeps the space. A prompt line
+still splits on whitespace. `--script` does not combine with a
+subcommand. `help` is the prompt command; `--help` is the invocation
+summary.
+
+Both are non-interactive: `--yes` is honored, and a money move without
+it fails without reading the next line. The refusal says that nothing
+was sent. An interactive terminal still ignores `--yes` and prompts.
+Narration (the summary before that prompt, the release warning, progress
+such as `Refreshing...`) is on stdout for a person and on stderr when
+that person asked for JSON. A script omits it, including a human
+`--script` that is not `--json`. A generated payment or reserve proof's
+disclosure is not narration: it prints after the proof on stdout for a
+person, and on stderr whenever stdout is JSON, including for a script.
+Prompt `wallet create` / `wallet restore` refuse under
+`--json`, because the one-time seed is shown on stdout and stdout is
+the JSON transcript. `wallet open` and `wallet password` refuse in a
+script: the password prompt would read the script. Open with
+`--wallet` and `--password-file` instead.
+
+`--complete-tree-foundation` prints its terms on stderr when stdout is
+JSON, and its result is an envelope named `complete-tree-foundation`.
+
+The terminal bond exit is `stake release`. `stake exit` and `unstake`
+are retired spellings that name `stake release` and do not run. The
+wallet-rpc method underneath remains `unstake`. `stake collect` is the
+later sweep of collateral that release already freed.

@@ -2,7 +2,82 @@
 
 ## [Unreleased]
 
+## [3.1.0-alpha.9] - 2026-10-05
+
+- Docs: `V3_ROLLOUT.md` says what the LMDB daemon does today: it keeps every transaction whole. Uniform pruning is the contract (`ARCHIVAL_PRUNED_DAEMON_MODE.md`) and lands with the Rust store (`PDM-Q-S0`), so budget disk for an unpruned chain. The CLI's daemon-session test runs against a `--testnet --offline` daemon, since the shipped wallet refuses a `--regtest` one on identity (PR #963).
+- Docs: the delivery digest (`SF-D8`, PR #954) costs a Pi 4 78 ms of CPU per served shard, 0.5 % of a Tor read; record in `docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md`.
+- Docs: `BENCHMARK_ALIGNMENT.md` (`BA-`) inventories every benchmark, gate script and dated capture, lists the measurements that ruled constants rest on with nothing tracking them, and proposes a tracked set for ruling. No benchmark, workflow or baseline changes.
+
+- **CLI scripting.** `shekyl-cli --json` prints one JSON object per command (`ok`, `command`, `result` or `error`). `--script FILE` runs many commands in one wallet session and does not combine with a subcommand. A one-shot is the same prompt words after the global flags (`shekyl-cli --json balance`); the shell's quoting is kept, and `help` is that command (`--help` is the invocation summary). Seeds and passwords are not in the JSON. `--yes` is honored for a script or a one-shot, and ignored on an interactive terminal. Narration stays off a JSON transcript: stderr when a person is there, omitted for a script (including a human `--script` without `--json`). A generated payment or reserve proof's disclosure is not narration: it follows the proof, and under `--json` it goes to stderr, including in a script. `wallet open` and `wallet password` refuse in a script. `create` / `restore` failures use those command names. `version` reports the CLI version even when wallet-RPC is down (`wallet_rpc_error`). `--complete-tree-foundation` is the envelope `complete-tree-foundation`; under `--json` its terms go to stderr.
+- **CLI `stake release`.** The terminal bond exit is `stake release`. `stake exit` and `unstake` are retired spellings that point at it. The wallet-rpc method remains `unstake`. `stake collect` is unchanged.
+
+- `ECONOMY_UMBRELLA_PLAN.md` §3.1 walks the inherited constants that read the reward, a weight, the block time or the hard-fork version. New: the coinbase reserve (600 B against a measured 1,331 B; two `shekyl-block-template` tests pin the shortfall at the limit and the fill's body-only weight at the zone) and three Monero fork-number gates that never fire at block version 1, among them the daemon's template fill, which runs the pre-v5 rule and not the reward-aware one the sim models. `FOLLOWUPS.md` carries each. Rick's rulings of 2026-10-05 are recorded with them (§3.2): the reward-aware fill is the design and moves to Rust, the reserve is derived, the tail is a criterion, and fees are to be decoupled from the block reward.
 - Docs: the economy's umbrella plan (`ECONOMY_UMBRELLA_PLAN.md`, `EUP-`); `DESIGN_CONCEPTS.md` records F-D, its design home's archival rationale, and its April tables' inputs.
+
+### Archival serving — `P`'s countersignature covers the response it delivered
+
+- `P`'s pass countersignature now signs a digest of the response body as
+  well as the request: the message is
+  `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ D[32]`,
+  with `D = cSHAKE256("shekyl/archival-pass-delivery-digest-v1", nonce ‖ framed)[..32]`
+  over every body byte ahead of the signature. The nonce salts the digest,
+  so it is not a function of the shard alone. The signature says `P`
+  delivered these bytes for this request; it does not say `P` stores them
+  (`ARCHIVAL_SHARD_FETCH.md` `SF-D8`).
+- The signing-scheme domain moves to `shekyl/archival-attestation-scheme-v3`;
+  v2 is retired and no v2 signature verifies.
+- **Consensus wire change.** A pass record and its witness entry carry `D`
+  (entry `nonce ‖ anchor_height ‖ D ‖ signature`, 3,457 B), and
+  `attestation_root` commits to it. The witness maximum is 885,000 B. The
+  empty-set root is unchanged.
+- **Wire change to the serving route** (`ARCHIVAL_SERVING_ROUTE.md`): the
+  signature is the body's last bytes, after the `RF-D4` frame;
+  `content-length` is unchanged. `shekyl-p-serve` reads a shard twice, once
+  to digest and sign and once to send, and appends the signature only if
+  the bytes it sent match the digest it signed. `shekyl-p-fetch` recomputes
+  `D` from the bytes it received and refuses a response that does not
+  verify. A serving persona and a fetching daemon must be on the same side
+  of this change.
+- The pinned vector is regenerated as
+  `attestation_pass_countersignature_v3_pinned.json`, authorised by the
+  decision-log entry of 2026-10-04.
+
+### Consensus — the emission speed factor is per block, as designed
+
+- The emission curve emits `remaining >> 22` each block, the design's factor
+  (`DESIGN_CONCEPTS.md` §3: 50 % emitted ~year 11, 80 % ~year 25; year-1
+  reward ~970 SKL). Until now `shekyl_economics::emission_speed_factor`
+  applied Monero's per-minute convention, `22 − (2 − 1)`, and ran the curve
+  at 21 per block: twice the design's rate, 2 048 SKL at genesis, half emitted
+  by ~year 5.5. The genesis reward is now 1 024 SKL. The conversion
+  function is deleted; the curve shifts by
+  `EconomicParams::emission_speed_factor_per_block`.
+- `config/economics_params.json`: `emission_speed_factor_per_minute` →
+  `emission_speed_factor_per_block` (value 22). The generated C macro
+  `EMISSION_SPEED_FACTOR_PER_MINUTE`, which nothing read, is deleted.
+- Re-pinned with it: the consensus-constants digest, the economics params
+  digest (format `0x04`: a field redefined at an unchanged value) and
+  `CALIBRATION_GENERATION` (1). Every pin of a curve value is re-derived from
+  the closed form: the C2a′ weight-penalty KAT on both sides of the FFI, the
+  first-values and mid-curve pins in Rust and C++, the genesis ladder
+  anchors, the chain store's slashing-tip snapshot hash, the recorded economics
+  vector and the captured replay chains.
+- `shekyl_economics::neutral_height_reaching`: the first height the neutral
+  trajectory reaches a given emission, the inverse of
+  `projected_already_generated` on one shared walk. The recorder's
+  half-emission milestone reads it (2 907 270).
+- A captured replay chain's `built_at_dev_sha` is the SHA the daemon reports,
+  and the capture refuses unless it is the checkout's clean `HEAD`.
+- `ECONOMY_EXPLAINED.md` Loop 1 states the design curve: `remaining >> 22`,
+  1 024 coins at genesis, the emission table recomputed from the owner, the
+  tail near year 119. The live census row `CEN-F13` and slice 4's `F13` name
+  `>> 22`.
+- The realigned economics sim (#936) on the design curve: its 60-year horizon
+  no longer reaches the tail (≈ year 119 neutral, ≈ year 132 in the fold). The
+  two tail-era sim tests start in the tail era and assert it; the escalation
+  knee, above its band's new high, is held at the swept middle
+  (`KNEE_BAND[1]`) while the escalation is flat
+  (`ECONOMY_UMBRELLA_PLAN.md` §4.1, `FOLLOWUPS.md`).
 
 ### Archival shards — `U1b` is read: the floor device does not lower `W`'s ceiling
 

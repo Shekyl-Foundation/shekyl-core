@@ -6,305 +6,95 @@ alwaysApply: true
 # Worktree hygiene — the tested tree is the shipped tree
 
 Concurrent lanes each work in their own `git worktree` (`06-branching.mdc`).
-A worktree left open between edits — by an agent across tool calls, by an
-editor with the file loaded — has been observed to **revert edited files
-to an earlier buffer** with no diff shown to whoever made the edit. This
-rule exists because that has happened in three lanes, eleven times. It was
-first recorded as environmental; the `wt-e6-s6` entry below names the
-mechanism by elimination — **a tracked file rewritten on disk by something
-other than the edit tool while an editor buffer still held its older
-text** — and what closes or reopens that finding.
+A tracked file rewritten on disk while an editor buffer holds it — by
+`cargo fmt`, or by a script that reads the file and writes it back whole —
+reverts to the buffer's older bytes at a later flush. Nothing announces
+the flush. The interval is arbitrary. `git status` after the rewrite is
+what catches it.
 
-## The observed failure
+The dangerous case is a drift followed by `git add -A` or `git commit -a`.
+The stale bytes are committed, and the tree that was tested is not the
+tree that ships. What gets committed is the text the verification existed
+to remove.
 
-- **`wt-schain-r` (2026-09-16):** an uncommitted revert of a rename landed
-  in the working tree after the edit had been made by tool; one of the
-  reverted files would not have compiled.
-- **`wt-stx` (2026-09-19):** the working copy of a plan doc drifted back to
-  its *pre-verification* text — cite corrections that had been checked at
-  source, committed, and pushed were undone in the working tree while the
-  committed version stayed correct.
-- **`wt-stx-inc` (2026-09-20):** the same lane, eight hours after a commit
-  had been pushed and verified from a fresh clone: `git status` before a
-  `dev` merge showed the plan doc modified, and the diff was the deletion
-  of the decision-log row that commit had added. Caught by constraint 1
-  (a file that was not edited showed as modified); restored from `HEAD`.
-- **`wt-scurve` (2026-09-21) — the dangerous case, observed.** Two files
-  drifted within twenty minutes of a commit: an archived plan's six
-  repointed links reverted in the working copy (caught by the links gate,
-  restored from `HEAD`); and two links in `IMPLEMENTATION_INDEX.md` reverted
-  *and were then committed*, because the next commit staged that file whole
-  for an unrelated edit — the stale content passed review as "the index
-  row" and reached the remote. Explicit paths were used; the file was
-  legitimately part of the commit. So constraint 1 is necessary and not
-  sufficient: **before staging a file you edited, diff it against `HEAD`
-  and read every hunk you did not make.** Fixed by a follow-up commit; the
-  pushed tip was wrong for eight minutes.
-- **`wt-e6-s6` (2026-09-24) — the mechanism, by elimination.** Instances
-  nine, ten and eleven in one lane, one day, one signature: after each
-  push, `git status` showed the file most recently **rewritten on disk
-  behind an open editor buffer** — by `cargo fmt`, or by a `python3`
-  heredoc that read a tracked file and wrote it back whole (`sed -i` by
-  another name; the standing rule against `sed -i` on tracked files was
-  being honoured in letter only) — reverted to that buffer's pre-rewrite
-  text. Never a file only the edit tool had touched. All seven instances
-  that had a file named involved a file an editor had open. The
-  in-place rewrites were retired that afternoon; the next pushes were
-  clean. **Recorded as the cause rather than as a coincidence, with the
-  falsifier stated:** a further drift instance on a file no out-of-editor
-  process rewrote reopens "environmental"; several more clean pushes
-  close it. Until then the sentence above — *environmental* — is the
-  hypothesis this one replaces, and constraint 2 (verify from a fresh
-  clone) is a **belt**, kept, not the mitigation for an unknown cause.
-  Operationally: edit tracked files with the edit tool only; let `cargo
-  fmt` be the one out-of-editor writer, and check `git status` after it.
-- **`wt-salt` (2026-09-25) — the first instance caught by a mechanism
-  rather than by vigilance.** Between a pre-flight commit and the ruling
-  edit an hour later, `DRS_E1_SALT.md`'s working copy reverted to the buffer
-  from *before* eleven line-number corrections had been applied and
-  committed. Nobody noticed a modified file. What noticed was the edit
-  itself: the ruling edit was an **anchored** script — replace exactly this
-  text with exactly that — and it refused to run because the text it was
-  written against was not there (`:4354` was `:4353` again). Nothing was
-  written; the file was restored from `HEAD`; the edit was re-run against
-  the restored text and applied cleanly. See "The edit form that notices".
-- **`wt-e7-c3` (2026-09-27/28) — the mechanism, stated as a rule.** Three
-  instances in twenty-six hours on one worktree, one signature, three
-  intervals: `read_tests.rs` **19 seconds** after its commit (sixteen); six
-  files **two hours** after theirs, all with one `mtime` `00:06:14`
-  (seventeen); two chain-ingest files **54 minutes** after theirs, one
-  `mtime` `03:20:03.894` (eighteen). Every file was one `cargo fmt` had
-  reformatted while an editor buffer held it; not one was a file only the
-  edit tool had touched; every working copy held the pre-`fmt` bytes
-  (`rustfmt --check` passes on each `HEAD` blob, fails on each working
-  copy). Sixteen predicted seventeen's shape; seventeen and eighteen
-  confirmed it at intervals that share nothing. So the entry stops
-  counting and states what it has established:
+## Three constraints
 
-  **Any file `cargo fmt` (or any out-of-editor writer) rewrites while a
-  buffer holds it will revert to the buffer's bytes at an unpredictable
-  later moment — the trigger is a single flush event touching every open
-  buffer, and the interval is arbitrary. Nothing in the flush announces
-  itself. Only constraint 1 catches it, and only if `git status` is run
-  after the rewrite, not merely before the next commit.** Sixteen and
-  seventeen were caught by constraint 1; eighteen by a `git status` run for
-  an unrelated reason — habit, the weakest catch. Run `git status` after
-  every `cargo fmt`. The falsifier for the mechanism stands as `wt-e6-s6`
-  wrote it.
-- **`wt-e6-s8` (2026-10-04) — two in one turn; the second is the class the
-  mitigations do not reach.** Minutes after PR #953's commit 10 had been
-  pushed and fresh-clone verified, an anchored docs edit refused to match;
-  `git diff` showed **four** tracked files reverted — a plan doc to its
-  pre-edit text, a fixture module to a draft from the commit before, two
-  Rust files to their pre-`cargo fmt` bytes. The known shape, caught by the
-  anchor, restored from `HEAD`, the committed tree untouched. Then the
-  second: the PR body is kept as an **untracked** file under `/tmp`, edited
-  by a script that writes it whole; its row-10 write reverted to the bytes
-  of two minutes earlier, and a later `gh pr edit --body-file` **published
-  the stale body over the correct one on GitHub**. Nothing refused: the
-  file had no `HEAD` to differ from, the script had nothing to anchor the
-  *next* edit against (it failed on a row that was no longer there, which
-  is what surfaced it), and the upload command exited zero because it had
-  sent something. Wrong content was live for minutes. Every prior instance
-  was caught before a commit, so the shipped artifact was always right;
-  this is the first with a consequence outside the repository, and every
-  mitigation above assumes the failure is local and recoverable —
-  `git status` after a write, restore from `HEAD`, an anchor that refuses.
-  None reaches a file with no `HEAD` whose contents are then sent
-  somewhere. So, the fourth mitigation, and it generalises past the case:
-  **any write that leaves the repository — a PR body, a review comment, a
-  gist, an issue — is verified by reading it back, not by the command
-  exiting zero.** Same reasoning as constraint 2: the thing verified and
-  the thing shipped have to be the same object, and a tool reporting
-  success says only that it sent something. (`gh pr view --json body`
-  after `gh pr edit`; `grep` the read-back for the lines the edit added.)
-
-Most of these were caught by a human or an agent reading the diff. That does not
-scale, and it is not the dangerous case. **The dangerous case is a drift
-followed by `git add -A` or `git commit -a`:** the stale content is
-committed, and the tree that was tested and the tree that ships diverge
-with nothing to notice. The drift specifically reverts *verified* edits to
-what was wrong before someone checked — so what would be committed is
-exactly the content the verification existed to remove.
-
-## Two constraints, both mechanical — and a third for writes that leave the repo
-
-1. **Stage explicit paths. Never `git add -A`, `git add .`, `git add -u`,
-   or `git commit -a` in a worktree that has been left open between edits.**
-   Every commit names the files it carries. If a file you did not edit shows
-   as modified, that is the signal — read the diff before touching it, and
-   restore it from `HEAD` if it is a drift (`git checkout -- <path>`), not a
-   change you made.
+1. **Stage explicit paths.** Never `git add -A`, `git add .`, `git add -u`,
+   or `git commit -a` in a worktree left open between edits. Every commit
+   names the files it carries. If a file you did not edit shows as
+   modified, read the diff. Restore it from `HEAD` (`git checkout -- <path>`)
+   when it is a drift. Before staging a file you did edit, diff it against
+   `HEAD` and read every hunk you did not make. Explicit paths are not
+   enough: a file that is legitimately in the commit can still be carrying
+   a reverted hunk.
 
 2. **Verify from a fresh checkout of the pushed SHA, not from the worktree.**
-   Before reporting a PR head as green — and before resolving review
-   findings against it — run the gates and tests in a checkout that
-   contains only what was pushed:
+   Before reporting a PR head as green, and before resolving review
+   findings against it, run the gates in a checkout that contains only
+   what was pushed. The verified SHA is the tip you are asking to merge.
+   Re-run after any merge that resolved a conflict: a conflict resolution
+   is code neither parent contains, so neither parent's green covers it.
+   State the SHA the run covered.
 
    ```bash
    git clone -q --no-checkout --shared <repo> /tmp/verify-<pr>
    cd /tmp/verify-<pr> && git fetch -q origin <branch> && git checkout -q <sha>
    git submodule update --init --recursive -q
-   # run the same gates CI runs — cargo with ITS OWN target directory —
-   # then delete the clone
    env -u CARGO_TARGET_DIR cargo clippy --workspace --all-targets -- -D warnings
    env -u CARGO_TARGET_DIR cargo test ...
    ```
 
-   The worktree's gates are a fast local loop; they are not the
-   verification. A clone of the pushed commit makes the tested artifact and
-   the shipped artifact **the same object**, and it is the only mitigation
-   here that does not depend on someone noticing.
+   The clone's build must be the clone's. A shared `CARGO_TARGET_DIR`
+   compiles the clone into the worktree's artifacts. `env -u CARGO_TARGET_DIR`
+   on every cargo invocation in the clone is the isolation. Check
+   `echo ${CARGO_TARGET_DIR:-unset}` before trusting a clone result.
 
-   **The clone's build must be the clone's.** Some environments (the agent
-   sandbox is one) export a single `CARGO_TARGET_DIR` for every checkout.
-   Under it, the clone compiles into the worktree's target directory and
-   links against whatever the worktree built last — so the step verifies
-   the clone's *source* against the worktree's *artifacts*, which is the
-   worktree check with a longer name, not a fresh one. Observed 2026-09-25
-   (`wt-e6-rows`): a clone and its worktree building concurrently into one
-   directory produced a `cargo clippy` failure for a type that both trees
-   contained. `env -u CARGO_TARGET_DIR` on every cargo invocation in the
-   clone is the fix; the cold build it costs is the isolation being real.
-   Check `echo ${CARGO_TARGET_DIR:-unset}` before trusting a clone result.
-
-   **A test count quoted in a commit message comes from a run with its own
-   log, or it isn't a count.** Observed 2026-10-01 (`wt-e4`, PR #921): the
-   workspace test lane was launched twice in one worktree, both runs
-   redirecting to one log file; the second overwrote the first mid-run,
-   `grep -c 'test result: ok'` over the interleaved file read **507**, and
-   that figure was written into a commit message where the truth was
-   **322**. Both runs had exited 0, so nothing was red; the count was
-   caught by noticing the two runs shared a log, not by doubting the
-   number. The same shape as *"re-running a broken instrument is not
-   verification"* (`SHEKYL_P2P_PROTOCOL.md`): a figure derived from a
-   corrupted instrument, in the artifact that outlives the run. One run,
-   one log, and the figure in the message is the fresh clone's.
-
-   **A gate that lands between the commits a report covers is named once
-   in that report.** The sibling failure: a figure that travels without
-   its source. Observed 2026-10-02 (`wt-e4b`, the DRS-E4 PR-b branch): the
-   inland-height gate (`scripts/ci/check_inland_height_u64.py`) landed on
-   2026-10-01 as its own commit, and the three reports that followed cited
-   only its ceiling moving — `174 → 172 → 170`. A reader of those reports
-   sees three numbers and no instrument; the figures are meaningless to
-   anyone who does not know a ceiling exists, and nothing in them says
-   where to look. Same shape as the count above — the number outlives the
-   run, the instrument does not travel with it. Cheap habit: when a gate
-   lands within the span a report covers, name it (file and the commit
-   that landed it) the first time its figure is quoted, and from then on
-   the ceiling means something.
-
-   **A merge commit that resolved a real conflict is the commit that needs
-   this most, not least.** A conflict resolution is new code that neither
-   parent contains, so neither parent's green says anything about it — and
-   it is exactly the commit the reflex skips, because "both sides were
-   already verified". Observed 2026-09-29 (`wt-e7-c6`, PR #907): the
-   branch tip had been verified from a fresh clone; `origin/dev` then
-   moved, the merge resolved a generic-versus-non-generic conflict in a
-   test helper by hand (`JoinedConnector<F>` against a `Connector` that had
-   lost its parameter), a one-line docs fix followed, and the report's
-   verified SHA was two commits behind the tip. Worktree-tested only,
-   caught in review by comparing the tip against the reported SHA; closed
-   by re-running the clone against the tip. So: **the verified SHA is the
-   tip you are asking to merge**, re-run the clone after any merge that
-   resolved a conflict, and state the SHA the run covered rather than the
-   one the table happens to end at.
+   A number quoted from a run comes from that run's own log. Two runs
+   writing one log, or a `grep` over an interleaved file, produce a figure
+   that is green and wrong. One run, one log. When a gate's figure is
+   quoted, name the gate and the commit that landed it the first time.
 
 3. **Read back anything you publish.** A PR body, a review comment, an
    issue, a gist — any write whose destination is outside the repository
    is verified by reading the destination back and finding the lines the
-   edit added, never by the sending command's exit status. The `wt-e6-s8`
-   entry is why: a body file with no `HEAD` drifted and `gh pr edit`
-   published the drift, exit 0. Constraints 1 and 2 cannot see this class
-   — there is no diff to read and no SHA to clone — so the check has to
-   be at the destination.
+   edit added, never by the sending command's exit status. An untracked
+   body file drifts like a tracked one and has no `HEAD` to differ from;
+   constraints 1 and 2 cannot see this class — there is no diff to read
+   and no SHA to clone — so the check has to be at the destination
+   (`gh pr view --json body` after `gh pr edit`, and `grep` the read-back
+   for the lines the edit added).
 
 ## The edit form that notices
 
-The fourteenth instance is worth more than the count, because the
-detection did not come from a check designed to detect drift. It came from
-an edit that **could not apply to text it was not written against**.
-
 An anchored edit — `StrReplace` with enough context to be unique, a script
-that asserts its `old` occurs exactly once before writing — is
-self-verifying: it carries a claim about the file's current content, and a
-drifted file falsifies the claim, so the edit fails loudly and writes
-nothing. A **line-number** edit (`sed -i '4354s/…/…/'`) or a **wholesale
-write** (`Write` of a whole file, a heredoc over it) carries no such claim:
-it succeeds against whatever is there, and against a drifted file it
-succeeds *silently* — which is exactly how eleven reverted line numbers
-would have travelled into a commit under a tool that wrote the file whole.
+that asserts its old text occurs once — fails when the file is not the
+text it was written against, and writes nothing. A line-number edit or a
+wholesale write succeeds against whatever is there, including a drifted
+file, and succeeds silently.
 
-So the durable mitigation is not another check. It is the form of the edit:
+- Anchor every edit to the text it expects. Prefer the edit tool over
+  line-addressed or whole-file writes for a file that has been sitting in
+  a worktree. When a wholesale write is unavoidable, diff the result
+  against `HEAD` and read every hunk you did not intend.
+- A script that reads a tracked file and writes it back whole is an
+  out-of-editor rewrite even when the replacement is anchored. Check
+  `git status` after it, as after `cargo fmt`.
+- Untracked files drift the same way and have no `HEAD` to restore from.
+  The reverted text is simply what is there.
+- An anchored edit that fails to match is a finding. Do not widen the
+  anchor or retarget against whatever is there now. Run `git diff` first.
+  If the current text differs from `HEAD` in lines you did not touch this
+  session, restore the file, then edit.
 
-- **Treat the working copy as untrusted.** Not because it is usually wrong,
-  but because when it is wrong nothing tells you.
-- **Anchor every edit to the text it expects.** Prefer `StrReplace` and
-  assert-count-then-replace scripts over line-addressed or whole-file
-  writes for any file that has been sitting in a worktree between edits.
-  When a wholesale write is unavoidable (a new file, a regeneration), diff
-  the result against `HEAD` and read every hunk you did not intend.
-  Two halves, and they compose: the `wt-e6-s6` entry names the **cause**
-  (a tracked file rewritten on disk behind an open editor buffer — by
-  `cargo fmt`, or by a script that reads the file and writes it back
-  whole), and this section names the **form that notices**. An
-  assert-then-replace *script* that writes the whole file back is anchored
-  and still an out-of-editor rewrite: it detects the drift it inherits and
-  can seed the next one. The edit tool is anchored and is not a rewrite.
-  Prefer it; when a script is the tool, check `git status` after it as
-  after `cargo fmt`. **This covers untracked files too, and they are the
-  worse case, not the exempt one:** an untracked file rewritten by a
-  script drifts the same way (the fourteenth instance, 2026-09-26, was a
-  new test file rewritten whole before its first commit), and it has no
-  `HEAD` for `git checkout --` to recover it from — the reverted text is
-  simply what is there. It came back only because the commit had already
-  been made from the correct bytes.
-- **An anchored edit that fails to match is a finding, not a nuisance.**
-  Do not "fix" it by loosening the anchor or by re-reading the file and
-  re-targeting the edit against what is there now. Run `git diff` on the
-  file first: if the current text differs from `HEAD` in lines you did not
-  touch this session, that is the drift, and `git checkout -- <path>` comes
-  before the edit does.
+A green gate is evidence the tree is well-formed. It is not evidence the
+tree is the one you edited. A drifted-but-valid file still compiles.
 
-Constraints 1 and 2 stand; this is the mechanism that makes constraint 1's
-"read every hunk you did not make" happen by construction rather than by
-attention.
-
-**Does this apply to work already done? Yes — and the same day.** The
-commit that landed one hour before this section was written (`1b5023cca`,
-PR #856's neighbour PR #851) used `sed -i 'Ns/…/'` for rustdoc-link edits
-on `pool.rs` and `mod.rs`. Those edits were **safe by circumstance, not by
-form**: the files had been created by the same session minutes earlier, and
-the pushed SHA was verified from a fresh clone. Be precise about what that
-verification did and did not establish — the gates pass **whether or not
-drift was carried**, because a drifted-but-valid file still compiles and
-still resolves its links. A green gate is evidence the tree is
-well-formed; it is not evidence the tree is the one you edited. Only the
-anchor knows that.
-
-**The line to guard hardest is the third.** The instinct on a refused
-match is to widen the anchor until it matches — re-read the file, retarget
-against what is there now, get past it. That converts a drift *detection*
-into a successful write against stale content: the exact failure the form
-prevents, undone by the reflex to finish. `git diff` first is the whole
-defence, and it is the step under pressure to skip.
-
-## What this rule does not change
-
-CI runs on the pushed SHA already, so a drift that reaches a push will
-eventually fail there when it breaks a gate. This rule closes the two gaps
-CI does not: a drift that passes gates while being *wrong* (a reverted
-doc correction, a comment restored to a false claim), and the window
-between "I ran the tests" and "CI is green" during which findings get
-resolved against a tree that was never built.
+CI runs on the pushed SHA, so a drift that breaks a gate fails there.
+This rule covers the drift that passes gates while being wrong, and the
+window between "I ran the tests" and "CI is green."
 
 ## Related rules
 
-- **`06-branching.mdc`** — worktrees, short-lived branches, each push
-  separately authorized. This rule governs what is *in* the push.
-- **`90-commits.mdc`** — scope per commit. Explicit staging is how a
-  commit's scope is enforced, not just described.
-- **`91-documentation-after-plans.mdc`** — the descriptive surface is
-  checked by sweeps, not gates; a drift that restores a stale claim is the
-  failure that rule's sweeps exist to catch, arriving through a new door.
+`06-branching.mdc` (what may be pushed), `90-commits.mdc` (a commit's
+scope is the paths it names), `91-documentation-after-plans.mdc` (a drift
+that restores a stale claim is the failure those sweeps exist to catch).

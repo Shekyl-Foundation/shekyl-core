@@ -808,8 +808,13 @@ holds. For any signed digest, admission-reconstructibility and
 possession-discrimination are in opposition; the only escape is
 reveal-and-check, which this unit supplies per-tx and which the
 whole-shard topology read ([`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md)
-§9, *"the test IS a read"*) already uses. No signed content
-artifact is added to the wire. Reopens only if the credit wire abandons
+§9, *"the test IS a read"*) already uses. No signed possession
+artifact is added to the wire. *(`SF-D8` as amended 2026-10-04 carries a
+delivery digest `D` in the pass record: salted with the request nonce,
+checked against bytes by the fetch client, and verified at admission
+only through `P`'s signature. It sits on the non-reconstructible side of
+the opposition above and claims delivery, not possession, so the
+argument is unchanged.)* Reopens only if the credit wire abandons
 the topology read for a sampled test — in which case `PC-D3`'s draw
 problem returns with it, and that is the credit wire's round to rule.
 
@@ -1695,6 +1700,8 @@ Named now so they are not discovered later.
   rejection rests on *"admission could never reconstruct the signed
   message"* — true of off-chain shard bytes, not of a digest over
   retained `txs_prunable_hash` rows. Q6 says whether that reopens.
+  *(Since 2026-10-04 the pass record carries `SF-D8`'s delivery digest,
+  which admission does not reconstruct; §3 there states it.)*
   Read §2's deletion surface before citing anything leaf-shaped from
   [`ARCHIVAL_PER_CHALLENGE_RECORD.md`](ARCHIVAL_PER_CHALLENGE_RECORD.md):
   `PC-D1`…`PC-D7` are RULED and the leaf-opening cluster they hardened
@@ -1971,7 +1978,7 @@ must keep to *verify new blocks* versus which it may retire.
 | `archival_slash_applied` | SetShaped | slash dedupe | slashes ever | KEEP-C |
 | `archival_serve_credit`, `archival_settlement`, `archival_r_market`, `archival_sigma_work`, `archival_budget`, `archival_budget_accrual`, `archival_attestation_witness` | Small | settlement / epoch close within `W` | **retention prune at `tip − W`** (`db_lmdb.cpp:7704-7739`, un-journaled) | LOCAL-BOUNDED — already retired; nothing owed |
 | `archival_alt_attestation_witness` | Excluded | alt-chain reconnect | alt blocks | LOCAL-BOUNDED (alt) |
-| `archival_bond_unbond_log`, `archival_bond_holdings_update_log`, `archival_bond_reinstate_log`, `archival_emission_claim_log`, `archival_epoch_close_log` | AppendMostly | pop path only (`revert_*_at_height`) | **nothing today** | LOCAL-BOUNDED in principle (reorg window); unbounded on disk (F16) — Q1 |
+| `archival_bond_unbond_log`, `archival_bond_holdings_update_log` *(empty by construction since 2026-09-20 — kind REJECTED; deletion owed, `FOLLOWUPS.md`)*, `archival_bond_reinstate_log`, `archival_emission_claim_log`, `archival_epoch_close_log` | AppendMostly | pop path only (`revert_*_at_height`) | **nothing today** | LOCAL-BOUNDED in principle (reorg window); unbounded on disk (F16) — Q1 |
 | `archival_slash_log` | AppendMostly | pop path + `archival_slash_removed_holding_after` (`:5243`, scans above `at_height`); `at_height = h_fire` on both entry paths, bounded by credit deadline / watermark + window, not by a check (F19) | **nothing today** | LOCAL-BOUNDED — horizon `tip − (CRB + n·SEB + reorg)`, minted with its check (F19) — Q1 |
 
 ### 9.5 Node-local, never chain state

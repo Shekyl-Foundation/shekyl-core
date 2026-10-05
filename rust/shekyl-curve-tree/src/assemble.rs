@@ -5,18 +5,21 @@
 
 //! Membership-path assembly (CT-4).
 //!
-//! Given a drained leaf and the reconstructed tree layers, produce the
-//! [`AssembledPath`] that an FCMP++ membership proof consumes (the full child
-//! chunk of each path node from leaf to root at the reference height). Gated
-//! behind a correct root at the reference height: a path assembled against a
-//! wrong tree is a wrong proof, so assembly applies the integrity gate (§3.3)
-//! before building. The gate uses the store-backed [`CurveTreeClient::root_at`]
-//! hot path (CT-1); branch extraction rebuilds layers from replay-held
-//! `CurveTreeClient::entries` via [`assemble_leaf_stream`] (CT-4), because
-//! pruned frozen segments may not retain a complete drained byte stream.
-//! The gate does not see those branches. `verify_path_against_its_branches`
-//! folds each assembled path onto the root it claims and refuses a path
-//! whose branches came from somewhere else.
+//! Given a drained leaf, produce the [`AssembledPath`] an FCMP++ membership
+//! proof consumes (the full child chunk of each path node from leaf to root
+//! at the reference height). Gated behind a correct root at the reference
+//! height: a path assembled against a wrong tree is a wrong proof, so
+//! assembly applies the integrity gate (§3.3) before building. The gate is
+//! [`CurveTreeClient::root_and_depth_at`]: one reading supplies the root and
+//! the depth both routes stamp. A registered batch reads its branches from
+//! the capture table and the frontier snapshot. An unregistered batch
+//! rebuilds layers from replay-held `CurveTreeClient::entries` via
+//! [`assemble_leaf_stream`] (CT-4). Pruned frozen segments may not retain a
+//! complete drained byte stream, and the engine registrant is not yet the
+//! caller of registration, so that rebuild is the route production batches
+//! take. The gate does not see those branches.
+//! `verify_path_against_its_branches` folds each assembled path onto the
+//! root it claims and refuses a path whose branches came from somewhere else.
 //!
 //! ## Path layout (pinned to the FCMP++ prover at source)
 //!
@@ -42,9 +45,17 @@ use std::collections::HashMap;
 
 use crate::types::Gindex;
 
-use crate::client::{ClientError, CurveTreeClient};
+use crate::client::{
+    ChunkSpan, ClientError, CurveTreeClient, CAPTURED_IDENTITY_BYTES, CAPTURED_IDENTITY_CM_X_AT,
+    CAPTURED_IDENTITY_COMMITMENT_AT, CAPTURED_IDENTITY_OUTPUT_KEY_AT, CURVE_ELEMENT_BYTES,
+    NODE_CHILD_BYTES,
+};
 use crate::recon::{assemble_leaf_stream, drained_sorted};
-use crate::types::{AssembleInput, AssembledPath, ChunkLeaf, ReferenceBlock, TreeContext};
+use crate::store::StoreError;
+use crate::types::{
+    AssembleInput, AssembledPath, ChunkLeaf, CommitmentBytes, LeafEntry, OneTimePubkey,
+    ReferenceBlock, TreeContext, TreePosition,
+};
 use shekyl_fcmp::tree::{
     build_layers, chunk_width, hash_grow_helios, hash_grow_selene, helios_hash_init,
     helios_point_to_selene_scalar, key_image_generator, layer_is_selene, selene_hash_init,
@@ -81,11 +92,12 @@ pub enum PathRootFault {
 
 /// Fold an assembled path's own branches onto the root it claims.
 ///
-/// The store gate compares [`CurveTreeClient::root_at`] with the reference.
-/// The branches come from replay-held `entries`, and
-/// [`TreeContext::tree_root`] is copied from that reference, so the gate
-/// cannot see them. [`CurveTreeClient::root_and_depth_at`] would not either:
-/// both of its answers come from the store. This fold reads the path.
+/// The store gate is [`CurveTreeClient::root_and_depth_at`]: it checks the
+/// reference's root and supplies the depth. The branches come from the route
+/// that assembled the path — the capture table and the frontier snapshot, or
+/// the rebuild of replay-held `entries`. [`TreeContext::tree_root`] is copied
+/// from the reference, so the gate's two answers do not see the branches.
+/// This fold reads the path.
 ///
 /// Hash the leaf chunk to a Selene point. At each layer, convert that point
 /// to the child scalar its parent stores, require the scalar to be present
@@ -158,6 +170,188 @@ pub(crate) fn verify_path_against_its_branches(path: &AssembledPath) -> Result<(
     Ok(())
 }
 
+/// One drained leaf as a path carries it.
+///
+/// The one construction, used by the capture path's open-tail read and by
+/// the rebuild alike, so the two cannot build the tuple differently.
+fn chunk_leaf(entry: &LeafEntry) -> ChunkLeaf {
+    ChunkLeaf {
+        output_key: entry.identity.output_key,
+        key_image_gen: key_image_generator(entry.identity.output_key.as_bytes()),
+        // A drained leaf always has a commitment (try_build_leaf required
+        // `i < outPk.size()`), so this never fires.
+        commitment: entry
+            .identity
+            .commitment
+            .expect("drained leaf has a commitment"),
+        // `CM.x` as the leaf holds it, not the published point.
+        cm_x: entry.cm_x(),
+    }
+}
+
+/// One curve element at a named offset in a capture row.
+///
+/// The encoder in `client::capture` writes the same offsets into a fixed
+/// row. This read is written out beside it, so the two can disagree and a
+/// pass can see it. A swapped offset moves both; a disagreement with
+/// [`chunk_leaf`], which does not use the offsets, still fails the oracle.
+fn curve_element_at(row: &[u8], at: usize) -> [u8; CURVE_ELEMENT_BYTES] {
+    let mut word = [0u8; CURVE_ELEMENT_BYTES];
+    word.copy_from_slice(&row[at..at + CURVE_ELEMENT_BYTES]);
+    word
+}
+
+/// Decode a closed layer-0 capture body into the chunk leaves a path carries,
+/// deriving `I` as `Hp(O)`.
+///
+/// A closed layer-0 chunk is exactly [`SELENE_CHUNK_WIDTH`] siblings of
+/// `O ‖ C ‖ CM.x`. A shorter body is a row the merge should never have
+/// stored: the fold and the backfill both refuse a short read before they
+/// write. Open leaf chunks are not decoded here; they are leaf rows, via
+/// [`chunk_leaf`].
+fn decode_captured_leaf_chunk(body: &[u8]) -> Result<Vec<ChunkLeaf>, ClientError> {
+    let full = SELENE_CHUNK_WIDTH * CAPTURED_IDENTITY_BYTES;
+    if body.len() != full {
+        return Err(StoreError::CorruptMeta("captured leaf chunk is not one full width").into());
+    }
+    Ok(body
+        .chunks_exact(CAPTURED_IDENTITY_BYTES)
+        .map(|row| {
+            let output_key = curve_element_at(row, CAPTURED_IDENTITY_OUTPUT_KEY_AT);
+            let commitment = curve_element_at(row, CAPTURED_IDENTITY_COMMITMENT_AT);
+            let cm_x = curve_element_at(row, CAPTURED_IDENTITY_CM_X_AT);
+            ChunkLeaf {
+                output_key: OneTimePubkey::from_bytes(output_key),
+                key_image_gen: key_image_generator(&output_key),
+                commitment: CommitmentBytes::from_bytes(commitment),
+                cm_x,
+            }
+        })
+        .collect())
+}
+
+/// Convert one layer's children to the scalars its parent's curve takes and
+/// push them on the branch list for that curve.
+///
+/// Even layers are Selene nodes whose children are Helios points → Selene
+/// scalars (C1); odd layers are Helios nodes whose children are Selene
+/// points → Helios scalars (C2). The conversions are total for valid
+/// consensus nodes (`node_conversions_are_total` in shekyl-fcmp) — but the
+/// capture route hands this **persisted** bytes that were only
+/// length-checked, and a 32-byte string that is not a point is a corrupt
+/// row, not a programming error. So this is fallible, and an unconvertible
+/// child is [`StoreError::CorruptMeta`]: a refusal the caller can classify
+/// as a corrupt store, where an `expect` would have taken the wallet down
+/// with it.
+///
+/// # Errors
+///
+/// [`StoreError::CorruptMeta`] if a child does not decode as a point of the
+/// layer's curve.
+fn push_branch(
+    layer: u8,
+    children: &[[u8; 32]],
+    c1_layers: &mut Vec<Vec<[u8; 32]>>,
+    c2_layers: &mut Vec<Vec<[u8; 32]>>,
+) -> Result<(), StoreError> {
+    if layer_is_selene(layer) {
+        let scalars = children
+            .iter()
+            .map(|p| {
+                helios_point_to_selene_scalar(p).ok_or(StoreError::CorruptMeta(
+                    "captured child is not a Helios point",
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        c1_layers.push(scalars);
+    } else {
+        let scalars = children
+            .iter()
+            .map(|p| {
+                selene_point_to_helios_scalar(p).ok_or(StoreError::CorruptMeta(
+                    "captured child is not a Selene point",
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        c2_layers.push(scalars);
+    }
+    Ok(())
+}
+
+/// What [`CurveTreeClient::assemble_from_captures`] decided.
+///
+/// [`Self::Paths`] is a batch whose every input resolved to an owned
+/// position. [`Self::Unregistered`] is a batch the registrant has not named,
+/// and the caller rebuilds it. A hole in a registered batch is an error on
+/// the `Result`, so it cannot fall through into that rebuild.
+enum CaptureAssembly {
+    /// Every input resolved, and each path is sealed.
+    Paths(Vec<AssembledPath>),
+    /// An input has no owned position. Production batches take this arm
+    /// until the engine registrant names what the wallet holds.
+    Unregistered,
+}
+
+/// The X3 check both routes apply after resolving a leaf.
+///
+/// The capture route compares the chunk leaf it decoded. The rebuild
+/// compares the drained entry, after unwrapping the commitment a drained
+/// leaf carries — the same unwrap [`chunk_leaf`] uses — so the two checks
+/// cannot drift into `Option` on one side and a point on the other.
+fn refuse_identity_mismatch(
+    input: &AssembleInput,
+    output_key: OneTimePubkey,
+    commitment: CommitmentBytes,
+) -> Result<(), ClientError> {
+    if output_key != input.output_key || commitment != input.commitment {
+        return Err(ClientError::IdentityMismatch {
+            gindex: input.gindex,
+            expected_output_key: input.output_key,
+            got_output_key: output_key,
+            commitment_matched: commitment == input.commitment,
+        });
+    }
+    Ok(())
+}
+
+/// Stamp the dispatcher's depth, then fold the path onto the root it claims.
+///
+/// One seal for both routes. The artifact check is
+/// [`verify_path_against_its_branches`]; a fault is
+/// [`ClientError::PathRootMismatch`].
+fn seal_path(
+    leaf_chunk: Vec<ChunkLeaf>,
+    c1_layers: Vec<Vec<[u8; 32]>>,
+    c2_layers: Vec<Vec<[u8; 32]>>,
+    reference: &ReferenceBlock,
+    depth: u8,
+) -> Result<AssembledPath, ClientError> {
+    // C3: the leaf layer is the `+1`; the root point is excluded. Holds by
+    // construction of the walk `1..depth`. A violation is a logic bug.
+    debug_assert_eq!(
+        c1_layers.len() + c2_layers.len() + 1,
+        usize::from(depth),
+        "assembled path depth must match the tree depth"
+    );
+    let assembled = AssembledPath {
+        leaf_chunk,
+        c1_layers,
+        c2_layers,
+        tree: TreeContext {
+            reference_block: reference.block_hash,
+            tree_root: reference.curve_tree_root,
+            tree_depth: depth,
+        },
+    };
+    verify_path_against_its_branches(&assembled).map_err(|fault| {
+        ClientError::PathRootMismatch {
+            claimed: assembled.tree.tree_root,
+            fault,
+        }
+    })?;
+    Ok(assembled)
+}
+
 impl CurveTreeClient {
     /// Assemble the FCMP++ membership path for one owned output at a
     /// reference block.
@@ -189,51 +383,57 @@ impl CurveTreeClient {
         Ok(paths.pop().expect("one input yields one path"))
     }
 
-    /// Assemble every membership path for one transaction, reconstructing the
-    /// tree **once** for the batch (`CT-6` increment 3, closeout row (a)).
+    /// Assemble every membership path for one transaction (`CT-6` increment 3,
+    /// closeout row (a), with increment 5's capture route).
     ///
     /// # Why this is the primitive and `assemble_path` the special case
     ///
-    /// Each path needs the same three things: the drained leaves at the
-    /// reference cutoff, the layers built over them, and the position of one
-    /// `gindex` among those leaves. Only the third is per-input. Assembling
-    /// per input therefore paid `build_layers` and `drained_sorted` over the
-    /// **whole** drained stream once per input — `k · n` where `k` is the
-    /// input count and `n` the drained leaf count. Hoisting them makes it
-    /// `n + k`.
+    /// Each path needs the position of one `gindex` and the branch at every
+    /// layer above it. Only the position is per-input, so the batch is one
+    /// gate and then one route. Assembling per input used to pay the rebuild
+    /// once per input — `k · n`, where `k` is the input count and `n` the
+    /// drained leaf count. The rebuild route pays `n` once. The capture
+    /// route pays the chunks the paths actually touch.
     ///
-    /// `n` is every drained leaf since genesis. `entries` only grows (`extend`
-    /// on ingest, replaced wholesale by a rollback's rebuild), and a resume
-    /// from a pruned store is refused ([`ClientError::ResumeFromPrunedStore`],
+    /// # The two routes
+    ///
+    /// [`Self::root_and_depth_at`] runs once, before any input work. It
+    /// supplies the root the reference is checked against
+    /// ([`ClientError::RootMismatch`] returns no paths) and the depth both
+    /// routes stamp on [`TreeContext::tree_depth`].
+    ///
+    /// When every input has a resolved owned position, the batch is assembled
+    /// from the capture table and the frontier snapshot at the reference
+    /// height. A closed chunk is the table row. An open chunk at layer 1 and
+    /// above is the snapshot's open branch. An open layer-0 chunk is a ranged
+    /// read of its own tail, at most `SELENE_CHUNK_WIDTH - 1` rows. Each path
+    /// carries its own branches, and `seal_path` folds them onto the root the
+    /// path claims ([`ClientError::PathRootMismatch`], `CT6_PROVING_STATE.md`
+    /// §11.6).
+    ///
+    /// When any input is unregistered, the batch is rebuilt from replay-held
+    /// `entries`. That is the route
+    /// production spends take until the engine registrant names each owned
+    /// output on open. The state-3 oracle
+    /// `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`
+    /// grades the registered route, and it is green. The rebuild stays until
+    /// that registrant lands: the passes that exercise it
+    /// (`batched_assembly_keeps_each_input_its_own_path`,
+    /// `a_root_mismatch_refuses_the_whole_batch`,
+    /// `a_mutated_leaf_chunk_is_absent_from_its_branch`) move onto registered
+    /// fixtures with it, and the function is deleted then. On this route `n`
+    /// is every drained leaf since genesis. `entries` only grows (`extend` on
+    /// ingest, replaced wholesale by a rollback's rebuild), and a resume from
+    /// a pruned store is refused ([`ClientError::ResumeFromPrunedStore`],
     /// F5). The 725-block replay window is a different quantity. The chain-age
-    /// cost, and why no figure is stated here, is `CT6_PROVING_STATE.md` §11.2.
+    /// cost is `CT6_PROVING_STATE.md` §11.2.
     ///
-    /// Hoisting fixed the `k` factor. Capture removes the `n`, by reading an
-    /// owned output's stored path material. Until that lands, assembly reads
-    /// every drained leaf. The structural pin is
-    /// `ct6_oracle::assembly_today_depends_on_every_foreign_leaf`, in three
-    /// states. State 2, today: foreign leaves removed, the call refuses with
-    /// [`ClientError::PathRootMismatch`] { [`PathRootFault::RootDisagrees`] }.
-    /// State 3, capture: that call succeeds and the path equals the full-tree
-    /// path.
-    ///
-    /// # Integrity
-    ///
-    /// Two checks, in order.
-    ///
-    /// The store gate runs once, before any input work, and a mismatch
-    /// returns no paths. It compares [`Self::root_at`] at `reference.height`
-    /// with `reference.curve_tree_root` ([`ClientError::RootMismatch`]).
-    /// [`Self::root_and_depth_at`] is not consulted.
-    ///
-    /// The branches are rebuilt from replay-held `entries`, and every path
-    /// in the batch shares that one layer stack. That is what makes
-    /// `curve_tree_actor`'s *"every input shares one tree context"* true of
-    /// the values and not merely of the `reference`. The store gate does not
-    /// look at the stack. [`TreeContext::tree_root`] is copied from the
-    /// gated reference. `verify_path_against_its_branches` then folds each
-    /// assembled path onto that root and refuses with
-    /// [`ClientError::PathRootMismatch`] (`CT6_PROVING_STATE.md` §11.6).
+    /// The structural pin is
+    /// `ct6_oracle::capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`:
+    /// with the foreign leaves removed from `entries`, a registered batch
+    /// assembles and the path equals the full-tree path. (Its predecessor,
+    /// which asserted the refusal an unregistered batch meets on that shape,
+    /// was retired when the equality became assertable.)
     ///
     /// # Duplicate inputs are not refused here
     ///
@@ -244,25 +444,28 @@ impl CurveTreeClient {
     ///
     /// # Errors
     ///
-    /// [`ClientError::RootMismatch`] if [`Self::root_at`] at
-    /// `reference.height` does not match `reference.curve_tree_root`.
+    /// [`ClientError::RootMismatch`] if the root at `reference.height` does
+    /// not match `reference.curve_tree_root`.
     /// [`ClientError::PathRootMismatch`] if the assembled path's own branches
-    /// do not commit to the root it claims; [`PathRootFault`] names the step.
-    /// [`ClientError::OutputNotDrained`] if a `gindex` is not a drained leaf
-    /// at the reference height. [`ClientError::IdentityMismatch`] if the leaf
-    /// at a `gindex` does not carry the expected `(output_key, commitment)`.
+    /// do not commit to the root it claims, or if the rebuild's layer count
+    /// disagrees with the dispatcher's depth; [`PathRootFault`] names the
+    /// step. [`ClientError::OutputNotDrained`] if a `gindex` is not a drained
+    /// leaf at the reference height. [`ClientError::IdentityMismatch`] if the
+    /// leaf at a `gindex` does not carry the expected `(output_key, commitment)`.
+    /// The capture route also returns [`ClientError::ReferenceOutsideSnapshotRing`],
+    /// [`ClientError::SnapshotLeafCountMismatch`], [`ClientError::CaptureMissing`],
+    /// and [`ClientError::Frontier`] when the snapshot or the table cannot
+    /// serve the path.
     pub fn assemble_paths(
         &self,
         inputs: &[AssembleInput],
         reference: &ReferenceBlock,
     ) -> Result<Vec<AssembledPath>, ClientError> {
-        let cutoff = Self::drained_through(reference.height);
-
-        // Two mechanisms by design: (1) integrity gate — store-backed `root_at`
-        // (CT-1), no replay-oracle fallback; (2) path branches — replay
-        // `entries` + `build_layers(assemble_leaf_stream(...))` (CT-4), because
-        // `prune_frozen` may drop non-owned leaf bytes from frozen segments.
-        let got = self.root_at(reference.height)?;
+        // The integrity gate and the depth from ONE dispatcher: the ring
+        // snapshot where it covers the height, the count-keyed store path
+        // otherwise. Reading depth beside it from a second derivation would
+        // let the two describe different tree states.
+        let (got, depth) = self.root_and_depth_at(reference.height)?;
         if got != reference.curve_tree_root {
             return Err(ClientError::RootMismatch {
                 height: reference.height,
@@ -271,8 +474,215 @@ impl CurveTreeClient {
             });
         }
 
+        match self.assemble_from_captures(inputs, reference, depth)? {
+            CaptureAssembly::Paths(paths) => Ok(paths),
+            CaptureAssembly::Unregistered => self.assemble_by_rebuild(inputs, reference, depth),
+        }
+    }
+
+    /// Assemble a batch from the **captured** chunks over each input and the
+    /// frontier snapshot at the reference height — reading no drained leaf
+    /// beyond the open leaf chunk's own tail.
+    ///
+    /// Returns [`CaptureAssembly::Unregistered`] when an input has no resolved
+    /// owned position; the caller rebuilds that batch. Every other shortfall
+    /// is a named refusal, because a silent fallback from here would serve
+    /// the spend while hiding a hole in the mechanism it relies on.
+    ///
+    /// # Each layer, from one of two places
+    ///
+    /// A layer-`L` chunk over position `p` is **closed** at the reference
+    /// height iff its end is strictly below the drained count — the one
+    /// comparison the capture key, the rollback and the backfill share — and
+    /// then its contents are fixed and come from the table. Otherwise it is
+    /// the rightmost chunk at its layer, still open, and its children are the
+    /// snapshot's [`Frontier::open_branches`] entry for that layer. Layer 0
+    /// is the exception in the open case: the frontier holds leaf *scalars*
+    /// and a path needs sibling *points*, so the open leaf chunk's identities
+    /// come from a ranged read of its own positions — at most
+    /// `SELENE_CHUNK_WIDTH - 1` rows, the bounded identity tail increment 7
+    /// retires with `entries`.
+    ///
+    /// Positions are permanent once assigned, so `position < drained count`
+    /// is both "drained at this height" and "every closed chunk over it has
+    /// a key below the count".
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::OutputNotDrained`] if a resolved position is at or
+    /// above the drained count at the reference height;
+    /// [`ClientError::ReferenceOutsideSnapshotRing`] if the ring has no row
+    /// there; [`ClientError::SnapshotLeafCountMismatch`] if the row's count
+    /// is not the height's (C3); [`ClientError::CaptureMissing`] if a closed
+    /// chunk's row lacks the layer; [`ClientError::IdentityMismatch`] if the
+    /// leaf at the position does not carry the input's `(O, C)`;
+    /// [`ClientError::PathRootMismatch`] from the artifact check;
+    /// [`ClientError::Store`] on a read failure.
+    fn assemble_from_captures(
+        &self,
+        inputs: &[AssembleInput],
+        reference: &ReferenceBlock,
+        depth: u8,
+    ) -> Result<CaptureAssembly, ClientError> {
+        let mut positions = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            match self
+                .owned_positions
+                .iter()
+                .find(|(_, gindex)| **gindex == input.gindex)
+            {
+                Some((position, _)) => positions.push(*position),
+                None => return Ok(CaptureAssembly::Unregistered),
+            }
+        }
+
+        let cutoff = Self::drained_through(reference.height);
+        let drained_count = self.drained_leaf_count_at(cutoff);
+        for (input, position) in inputs.iter().zip(&positions) {
+            if *position >= drained_count {
+                return Err(ClientError::OutputNotDrained {
+                    gindex: input.gindex,
+                    output_key: input.output_key,
+                });
+            }
+        }
+
+        let snapshot = self.snapshot_at(reference.height)?.ok_or(
+            ClientError::ReferenceOutsideSnapshotRing {
+                height: reference.height,
+            },
+        )?;
+        if snapshot.leaf_count() != drained_count {
+            return Err(ClientError::SnapshotLeafCountMismatch {
+                height: reference.height,
+                snapshot: snapshot.leaf_count(),
+                expected: drained_count,
+            });
+        }
+        let open = snapshot
+            .open_branches()
+            .map_err(|source| ClientError::Frontier {
+                height: reference.height,
+                source,
+            })?;
+
+        let mut paths = Vec::with_capacity(inputs.len());
+        for (input, position) in inputs.iter().zip(positions) {
+            let leaf_span = ChunkSpan::covering(position, 0);
+            let leaf_chunk = self.leaf_chunk_at(leaf_span, drained_count)?;
+            let offset =
+                usize::try_from(position - leaf_span.start()).expect("an offset fits usize");
+            let resolved = leaf_chunk.get(offset).ok_or(ClientError::CaptureMissing {
+                end_leaf: leaf_span.end_leaf(),
+                layer: 0,
+            })?;
+            refuse_identity_mismatch(input, resolved.output_key, resolved.commitment)?;
+
+            let mut c1_layers: Vec<Vec<[u8; 32]>> = Vec::new();
+            let mut c2_layers: Vec<Vec<[u8; 32]>> = Vec::new();
+            for layer in 1..depth {
+                let children = match ChunkSpan::due(position, layer, drained_count) {
+                    Some(span) => self.captured_children(span.end_leaf(), layer)?,
+                    None => open
+                        .get(usize::from(layer) - 1)
+                        .filter(|branch| !branch.is_empty())
+                        .cloned()
+                        // The depth says this layer's chunk over the position
+                        // is open, and the frontier has nothing open there: a
+                        // state the advance cannot produce.
+                        .ok_or(ClientError::Frontier {
+                            height: reference.height,
+                            source: crate::frontier::FrontierError::EmptyWithLeaves,
+                        })?,
+                };
+                push_branch(layer, &children, &mut c1_layers, &mut c2_layers)?;
+            }
+
+            paths.push(seal_path(
+                leaf_chunk, c1_layers, c2_layers, reference, depth,
+            )?);
+        }
+        Ok(CaptureAssembly::Paths(paths))
+    }
+
+    /// The leaf chunk over `span` at a height with `drained_count` leaves:
+    /// from the capture when the span has closed, from the leaf rows' tail
+    /// while it is still open.
+    fn leaf_chunk_at(
+        &self,
+        span: ChunkSpan,
+        drained_count: u64,
+    ) -> Result<Vec<ChunkLeaf>, ClientError> {
+        if span.is_closed(drained_count) {
+            let body = self.captured_body(span.end_leaf(), 0)?;
+            decode_captured_leaf_chunk(&body)
+        } else {
+            // The tail is at most one short of a closed chunk. A hole in
+            // that range is the store's own read, and the artifact check
+            // refuses the path it produces.
+            let entries = self.store.read_drained_range(
+                TreePosition::from_raw(span.start()),
+                TreePosition::from_raw(drained_count - 1),
+            )?;
+            Ok(entries.iter().map(chunk_leaf).collect())
+        }
+    }
+
+    /// The children of the closed layer-`layer` chunk that ended at
+    /// `end_leaf`, from the capture table.
+    fn captured_children(&self, end_leaf: u64, layer: u8) -> Result<Vec<[u8; 32]>, ClientError> {
+        let body = self.captured_body(end_leaf, layer)?;
+        let width = chunk_width(layer);
+        if body.len() != width * NODE_CHILD_BYTES {
+            return Err(
+                StoreError::CorruptMeta("captured node chunk is not one full width").into(),
+            );
+        }
+        Ok(body
+            .chunks_exact(NODE_CHILD_BYTES)
+            .map(|node| curve_element_at(node, 0))
+            .collect())
+    }
+
+    /// The captured body at `(end_leaf, layer)`, or [`ClientError::CaptureMissing`].
+    fn captured_body(&self, end_leaf: u64, layer: u8) -> Result<Vec<u8>, ClientError> {
+        self.store
+            .captured_chunks(TreePosition::from_raw(end_leaf))?
+            .into_iter()
+            .find(|chunk| chunk.layer == layer)
+            .map(|chunk| chunk.bytes)
+            .ok_or(ClientError::CaptureMissing { end_leaf, layer })
+    }
+
+    /// Assemble a batch by rebuilding the layer stack from every drained
+    /// leaf in `entries`.
+    ///
+    /// The route for a batch with an unregistered input. `depth` is the
+    /// value [`Self::root_and_depth_at`] already returned. The walk is
+    /// `1..depth`. A rebuilt stack of a different length is the same fault
+    /// a branch count that is not `tree_depth` already names
+    /// ([`PathRootFault::ShortPath`], [`PathRootFault::LongPath`]), reported
+    /// before the walk so a short stack is not indexed off its end.
+    fn assemble_by_rebuild(
+        &self,
+        inputs: &[AssembleInput],
+        reference: &ReferenceBlock,
+        depth: u8,
+    ) -> Result<Vec<AssembledPath>, ClientError> {
+        let cutoff = Self::drained_through(reference.height);
         let stream = assemble_leaf_stream(&self.entries, cutoff);
         let layers = build_layers(&stream);
+        let built = u8::try_from(layers.len()).expect("curve-tree depth fits u8");
+        if built != depth {
+            return Err(ClientError::PathRootMismatch {
+                claimed: reference.curve_tree_root,
+                fault: if built < depth {
+                    PathRootFault::ShortPath
+                } else {
+                    PathRootFault::LongPath
+                },
+            });
+        }
 
         // One drain-order definition shared with the scalar stream, so a
         // leaf's index here equals its index in `stream` (recon §S2).
@@ -310,18 +720,14 @@ impl CurveTreeClient {
             // assemble a wrong-leaf proof. This is the only runtime guard of that
             // inter-component invariant (no single component owns it).
             let resolved = &drained[leaf_pos];
-            if resolved.identity.output_key != input.output_key
-                || resolved.identity.commitment != Some(input.commitment)
-            {
-                return Err(ClientError::IdentityMismatch {
-                    gindex: input.gindex,
-                    expected_output_key: input.output_key,
-                    got_output_key: resolved.identity.output_key,
-                    commitment_matched: resolved.identity.commitment == Some(input.commitment),
-                });
-            }
-
-            let depth = u8::try_from(layers.len()).expect("curve-tree depth fits u8");
+            // A drained leaf carries a commitment (`try_build_leaf` required
+            // it). Unwrapping here is the same expectation `chunk_leaf`
+            // makes, so the shared check compares two points.
+            let commitment = resolved
+                .identity
+                .commitment
+                .expect("a drained leaf carries a commitment");
+            refuse_identity_mismatch(input, resolved.identity.output_key, commitment)?;
 
             // Leaf chunk: the SELENE_CHUNK_WIDTH outputs of the path's layer-0
             // node, as compressed-point tuples (the prover's `Path.leaves`).
@@ -330,18 +736,7 @@ impl CurveTreeClient {
             let leaf_end = (leaf_start + SELENE_CHUNK_WIDTH).min(drained.len());
             let leaf_chunk: Vec<ChunkLeaf> = drained[leaf_start..leaf_end]
                 .iter()
-                .map(|e| ChunkLeaf {
-                    output_key: e.identity.output_key,
-                    key_image_gen: key_image_generator(e.identity.output_key.as_bytes()),
-                    // A drained leaf always has a commitment (try_build_leaf
-                    // required `i < outPk.size()`), so this never fires.
-                    commitment: e
-                        .identity
-                        .commitment
-                        .expect("drained leaf has a commitment"),
-                    // `CM.x` as the leaf holds it, not the published point.
-                    cm_x: e.cm_x(),
-                })
+                .map(|e| chunk_leaf(e))
                 .collect();
 
             // Branch for each path node at layers 1..=depth-1 (the topmost is the
@@ -357,57 +752,13 @@ impl CurveTreeClient {
                 let prev = &layers[usize::from(layer) - 1];
                 let start = node_idx * width;
                 let end = (start + width).min(prev.len());
-                if layer_is_selene(layer) {
-                    // Even layer (Selene node): children are x-coords of the
-                    // Helios points below → Selene scalars (C1).
-                    let scalars = prev[start..end]
-                        .iter()
-                        .map(|p| helios_point_to_selene_scalar(p).expect("helios->selene"))
-                        .collect();
-                    c1_layers.push(scalars);
-                } else {
-                    // Odd layer (Helios node): children are x-coords of the
-                    // Selene points below → Helios scalars (C2).
-                    let scalars = prev[start..end]
-                        .iter()
-                        .map(|p| selene_point_to_helios_scalar(p).expect("selene->helios"))
-                        .collect();
-                    c2_layers.push(scalars);
-                }
+                push_branch(layer, &prev[start..end], &mut c1_layers, &mut c2_layers)?;
                 child_node_idx = node_idx;
             }
 
-            // C3 self-check (the leaf layer is the `+1`; the root point is
-            // excluded). Holds by construction; a violation is a logic bug.
-            debug_assert_eq!(
-                c1_layers.len() + c2_layers.len() + 1,
-                usize::from(depth),
-                "assembled path depth must match the tree depth"
-            );
-
-            let assembled = AssembledPath {
-                leaf_chunk,
-                c1_layers,
-                c2_layers,
-                tree: TreeContext {
-                    reference_block: reference.block_hash,
-                    // Equals our reconstruction (verify_root just confirmed it);
-                    // carry the consensus value.
-                    tree_root: reference.curve_tree_root,
-                    tree_depth: depth,
-                },
-            };
-
-            // §11.6: the store gate approved a root. This is the step that
-            // looks at the branches the proof is built from.
-            verify_path_against_its_branches(&assembled).map_err(|fault| {
-                ClientError::PathRootMismatch {
-                    claimed: assembled.tree.tree_root,
-                    fault,
-                }
-            })?;
-
-            paths.push(assembled);
+            paths.push(seal_path(
+                leaf_chunk, c1_layers, c2_layers, reference, depth,
+            )?);
         }
 
         Ok(paths)

@@ -1408,6 +1408,14 @@ authorized").
 (grace-tail, P2B-7 Pin 2 — ratified: no drop sub-state, no
 `bond_event_log` row), so it answers not-held for every height."
 
+*(UPDATE 2026-10-04 — the voluntary per-shard drop quoted above is gone:
+`HoldingsUpdate` was REJECTED 2026-09-20 under the immutable-bond ruling.
+The finding survives on the remaining causes — a `Release` clears
+`held_shard_ids` at tip (next list, second bullet) and a slash erases one
+shard — so the point query is still retroactively falsified, by whole-bond
+exit or by slash rather than by drop. The construction below is unchanged;
+one of its sources is now empty by construction, marked where it is listed.)*
+
 The point query is therefore **retroactively falsified by a later drop**.
 Build the drawable set by enumerating at tip and filtering with
 `holds_shard_of(h_open(E))` and a node computing at `h_open + 100` gets a
@@ -1434,7 +1442,9 @@ rows only):
 
 - `archival_bond_holdings_update_log` — stores `pre_shard_ids`,
   `pre_shard_add_epochs`, `pre_bonded_total`, keyed `(block_height, seq)`
-  (`db_lmdb.cpp:6834–6847`).
+  (`db_lmdb.cpp:6834–6847`) *[never written since 2026-09-20 — the kind is
+  REJECTED and its appliers throw; the table is empty by construction and
+  contributes nothing here]*.
 - `archival_bond_unbond_log` — required: on release the record survives
   at tip but `held_shard_ids` is cleared (`db_lmdb.cpp:6626–6627`), so
   tip state no longer says what it held. `bad_intervals` on the record
@@ -2251,8 +2261,10 @@ not wait on them; building does.
 1. **Q9's set-commitment bytes** (§7.6.1, PROPOSED): the customization and
    the four-vector KAT.
 2. **The R-B record layout, written once** (`SCV-3`): kept and pruned
-   fields, including where `SF-D8`'s carried `nonce` and `anchor_height`
-   ride. This is the response-format round's reopen (§2.1 item 1), with its
+   fields, including where `SF-D8`'s carried `nonce`, `anchor_height` and
+   32-byte delivery digest ride. The per-record figures this document
+   computes with (~3,411 B, §7's split arithmetic) predate those carried
+   fields and are re-derived from the layout this item writes. This is the response-format round's reopen (§2.1 item 1), with its
    rule-42 version bump. It includes **the anchor window's operand**: the
    landed `PassAnchorWindow::shape_for_predecessor` keys it on the
    *including* block's predecessor; whether R-B keeps that or moves it to
@@ -2267,6 +2279,13 @@ not wait on them; building does.
    FOLLOWUPS row *Bond admission's shard predicate*): ruled and unbuilt,
    and its listed blocker (the A4 rows, `b_*`) dissolved by `PDM-Q6` item 5
    and `SHT-Q2`. It carries the job of the freeze clause J8 loses.
+   *Cross-reference, not a ruling of this document*
+   ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md) §B
+   family 2, class B, 2026-10-04): CEN-J8's clause *"the shard's frozen
+   segment must exist at `H_fire`"* is stated on the leaf segment, which
+   dies with the engine swap. This round re-bases it on the ruled partition
+   (`SHT-Q1`, `SHT-Q2`), with possession proved on transaction bodies, not
+   leaf chunks.
 
 Also owed with the census change that lands the rows (`SCV-Q6`): a
 `RowStatus` arm for a row retired by ruling, carrying its citation, so the

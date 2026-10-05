@@ -135,8 +135,8 @@ user-facing source of truth for "can I use component X with component Y?"
 
 | Software | Version | Protocol | Notes |
 |----------|---------|----------|-------|
-| shekyl-core | 3.1.0-alpha.1 | 3 | Reference implementation. |
-| shekyl-gui-wallet | 3.1.0-alpha.2 | requires 3 | Bundles `shekyld` sidecar; auto-start/shutdown. |
+| shekyl-core | 3.1.0-alpha.9 | 3 | Reference implementation. |
+| shekyl-gui-wallet | 3.1.0-alpha.9 | requires 3 | Bundles `shekyld` sidecar; auto-start/shutdown. |
 
 Update this table when shipping new versions. Third-party implementations
 should declare their own protocol compatibility.

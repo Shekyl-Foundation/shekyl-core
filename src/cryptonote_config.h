@@ -442,17 +442,20 @@ namespace config
   // record) and the coinbase extra size (256 × 49 B ≈ 12.5 KiB).
   constexpr size_t ARCHIVAL_ATTESTATION_HEADER_BYTES = 49;
   constexpr size_t ARCHIVAL_MAX_ATTESTATION_RECORDS = 256;
-  // Per-pass requester-random nonce and anchor height carried on the prunable
-  // witness alongside the countersignature (ARCHIVAL_SHARD_FETCH.md SF-D8; match
-  // attestation_wire::PASS_NONCE_LEN / PASS_ANCHOR_HEIGHT_LEN). Neither is
-  // recomputable from chain terms, so both ride the wire; the kept header is
-  // unchanged. The anchor HASH is not carried: admission reads it from its own
-  // chain at anchor_height, which is what makes a fabricated hash fail.
+  // Per-pass requester-random nonce, anchor height and delivery digest carried
+  // on the prunable witness alongside the countersignature
+  // (ARCHIVAL_SHARD_FETCH.md SF-D8; match attestation_wire::PASS_NONCE_LEN /
+  // PASS_ANCHOR_HEIGHT_LEN / PASS_DELIVERY_DIGEST_LEN). None is recomputable
+  // from chain terms -- the digest is over a response body that is not on
+  // chain -- so all three ride the wire; the kept header is unchanged. The
+  // anchor HASH is not carried: admission reads it from its own chain at
+  // anchor_height, which is what makes a fabricated hash fail.
   constexpr size_t ARCHIVAL_ATTESTATION_PASS_NONCE_BYTES = 32;
   constexpr size_t ARCHIVAL_ATTESTATION_PASS_ANCHOR_HEIGHT_BYTES = 8;
+  constexpr size_t ARCHIVAL_ATTESTATION_PASS_DELIVERY_DIGEST_BYTES = 32;
   // Archival attestation-witness transport cap (ARCHIVAL_CREDIT_WIRE.md §3,
   // credit-wire CW-2). The block_complete_entry carries the Rust canonical witness
-  // encoding (count ‖ count × (nonce ‖ anchor_height ‖ HybridSignature)) as an opaque blob, stored only
+  // encoding (count ‖ count × (nonce ‖ anchor_height ‖ delivery_digest ‖ HybridSignature)) as an opaque blob, stored only
   // in a prunable side table; the real structural bounds live in
   // shekyl-archival-retention::attestation_wire (BlockAttestationWitness). This is
   // an allocation guard, not a structural check: it bounds every deserializer that
@@ -461,11 +464,12 @@ namespace config
   // job (Phase 2 admission), never this guard.
   //
   // Written as the maximum itself — count(8) + MAX records × (nonce(32) +
-  // anchor_height(8) + one hybrid signature) = 876,808 — rather than a round
-  // number above it. (The leading r(32) is gone: RF-D3 deleted the producer's
+  // anchor_height(8) + delivery_digest(32) + one hybrid signature) = 885,000 —
+  // rather than a round number above it. (The leading r(32) is gone: RF-D3 deleted the producer's
   // revealed randomness from the witness; SF-D8 then put a per-pass 32-byte
-  // requester nonce and 8-byte anchor height on each entry, +40 versus v1, so
-  // the blob is framing plus (nonce, anchor, signature) triples.) A hand-picked slack figure is
+  // requester nonce and 8-byte anchor height on each entry, and v3 the 32-byte
+  // digest of the delivered response, so the blob is framing plus
+  // (nonce, anchor, digest, signature) entries.) A hand-picked slack figure is
   // free padding an attacker may send on every block for no consensus reason, and
   // it silently stops tracking the real bound the moment either operand moves. The
   // FFI gate asserts this equals Rust's own maximum
@@ -473,7 +477,7 @@ namespace config
   constexpr size_t ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES =
     8 + ARCHIVAL_MAX_ATTESTATION_RECORDS
           * (ARCHIVAL_ATTESTATION_PASS_NONCE_BYTES + ARCHIVAL_ATTESTATION_PASS_ANCHOR_HEIGHT_BYTES
-             + PQC_HYBRID_SINGLE_SIG_LEN);
+             + ARCHIVAL_ATTESTATION_PASS_DELIVERY_DIGEST_BYTES + PQC_HYBRID_SINGLE_SIG_LEN);
   // Transport-cap predicate shared by every codec that deserializes an opaque
   // attestation-witness blob (the p2p block_complete_entry KV map, the bootstrap
   // block_package). Enforced AT the codec, not at its callers: a call-site check

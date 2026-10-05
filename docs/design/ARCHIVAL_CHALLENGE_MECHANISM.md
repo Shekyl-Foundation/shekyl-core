@@ -72,7 +72,8 @@ sentence listed was REJECTED 2026-09-13 — see §7 item 2).
 once named as the live remainder has run: response wire (`RF-`), pass-record
 tx carrier + prunable residence (`CR-`), binding artifact and countersignature
 (`SF-D8` / `SF-D13` — the signed message is the requester-random `nonce[32]` ‖
-the requester's chain anchor at `tip − 720` ‖ `shard_id_le[8]`; `block_hash(h−1)`,
+the requester's chain anchor at `tip − 720` ‖ `shard_id_le[8]` ‖ a
+nonce-salted digest of the delivered response; `block_hash(h−1)`,
 `cb_out_key`, `(P, s, E)` and `r` are all out of it — §2 step 3), key tiers
 (§7.2). W₂ is ruled (§9.7 item 6a). **What remains: two derivations** — (m, n)
 (§3) and the `λ_eff` tripwire *response*. Note
@@ -174,7 +175,10 @@ The read itself (unchanged from the TJ round):
    72-byte request header `nonce[32] ‖ anchor_height_le[8] ‖
    anchor_hash[32]` — requester-random nonce plus the requester's chain
    anchor at `tip − 720` — followed by `shard_id_le[8]`, the route id P
-   parsed, under the bond record's hybrid identity key (`SF-D13`; the
+   parsed, and `D[32]`, a cSHAKE256 digest of the response P delivered
+   salted with the nonce (2026-10-04; under
+   `shekyl/archival-attestation-scheme-v3`), all under the bond record's
+   hybrid identity key (`SF-D13`; the
    §7.2(i) anchor-key fork is **closed**). P gates `anchor_height`
    against its own height ±`L` before signing; admission looks the anchor
    hash up on the connecting chain inside `[h − 720 − L, h − 720]`. The
@@ -313,6 +317,20 @@ drawable until E+1, which *is* Pin 5, enforced in the draw-set derivation
 instead of checked at settlement. Evaluation at a fixed pre-challenge height
 also satisfies the WS-1 constraint (no tip-holdings read that would let P
 drop the shard after the fire and escape — `db_lmdb.cpp:5654`).
+
+*(UPDATE 2026-10-04 — Pin 5's add half has no subject. `HoldingsUpdate` was
+**REJECTED 2026-09-20** by the immutable-bond ruling
+([`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2 row 2:
+"bond birth becomes the only activation event"). The drawability rule above —
+*drawable in `E` iff held at `E`'s open* — stands unchanged and is what
+enforces the surviving half: a bond's shards all have one activation epoch,
+the join epoch, so "not drawable until `E+1`" now reads on `JoinMarket`
+alone. The per-shard add-epoch substrate that carried the add half
+(`HeldShard::add_epoch`, the v6 `shard_add_epochs` column,
+`held_at_height.rs`'s add-epoch bound) degenerates to the join epoch for
+every shard and is enumerated for deletion at §5.3.2 row 7 of the lifecycle
+doc; neither the WS-1 constraint nor the drop direction is touched — there
+is no voluntary drop either, and a slash still ends a tenure.)*
 
 With that, the beacon **retires with nothing lost**: leg 1 (`good_through`)
 is subsumed by the drawable-set definition, leg 2 (settledness timing) is
@@ -915,7 +933,7 @@ the round kept trying to add forensics underneath it.
    this fork handed over — nonce = `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)`
    — is **SUPERSEDED (`SF-D8`, 2026-09-13)**: the signed message is the
    requester-random `nonce[32]` ‖ `anchor_height ‖ anchor_hash` at `tip − 720`
-   ‖ `shard_id_le[8]`, with no `block_hash(h−1)`, no `cb_out_key` and no
+   ‖ `shard_id_le[8]` ‖ the delivery digest, with no `block_hash(h−1)`, no `cb_out_key` and no
    `(P, s, E)` in it, because the fetch proves `P` served, not which miner
    asked (§2 step 3). The property this paragraph argued for survives in that
    form — a nonce the requester draws at request time cannot be pre-signed —
@@ -1037,8 +1055,9 @@ the round kept trying to add forensics underneath it.
    design (endpoint rotation REJECTED 2026-09-13, item 2 above), so the
    service index is not a parameter.
    **Carrier — REJECTED (2026-09-13).** There is no `EndpointUpdate`
-   post kind. The bond-post kinds are JoinMarket, Reinstate, Release and
-   HoldingsUpdate; byte 4 is unassigned. The endpoint field is present iff
+   post kind. The bond-post kinds are JoinMarket, Reinstate and Release;
+   byte 3 (`HoldingsUpdate`) is **REJECTED 2026-09-20** and byte 4 is
+   unassigned — `from_u8` refuses both. The endpoint field is present iff
    `JoinMarket`, born at post — a bond without an endpoint was the
    discovery gap — and immutable for the record's life. The text this
    paragraph replaces specified a kind-4 carrier (economics, standing,
@@ -1731,12 +1750,20 @@ against these.
    `SEGMENT_LEAF_COUNT` outputs is retired, `PDM-Q12`), forever;
    `MAX_HOLDINGS_SHARDS = 4096` caps a *bond's* holdings, not the universe.
    Three unpriced consequences: challenge load `λ·D/E` per block rises
-   monotonically with `D`; an archiver must post `HoldingsUpdate`
-   **continuously** to keep covering new shards (only a closed shard is
-   bondable, never the open frontier — `PDM-Q6` item 3; a
-   recurring on-chain cost, with a recurring principal-funding question
-   attached); and the Foundation `CompleteTree` node's holdings grow forever
-   by definition. **The `D ≈ 324k` figure the round sized against is a
+   monotonically with `D`; a newly closed shard is covered only by a **new
+   bond** — a bond's holdings are immutable (ruled 2026-09-20;
+   `HoldingsUpdate` REJECTED), so an operator who wants to cover new shards
+   rotates personas, and coverage of the frontier is **market-pulled**
+   with the Foundation complete-tree floor as backstop (only a closed shard
+   is bondable, never the open frontier — `PDM-Q6` item 3; the pull latency
+   for a fresh shard is the ruling's one open economics-sim row,
+   [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.3);
+   and the Foundation `CompleteTree` node's holdings grow forever by
+   definition. *(As posed: "an archiver must post `HoldingsUpdate`
+   continuously … a recurring on-chain cost with a recurring
+   principal-funding question attached" — that cost class no longer
+   exists; its successor is the per-rotation `JoinMarket`.)*
+   **The `D ≈ 324k` figure the round sized against is a
    snapshot, not a ceiling** — the concurrency inputs (and the
    `max_streams` / `MAX_INFLIGHT` placeholders) must be treated as
    functions of a growing `D`, not constants. *Open for the round; not a
@@ -1882,10 +1909,12 @@ source, and the state of it is worse than "needs reconciliation":
 
 Two directions, and they are not symmetric:
 
-*Gained shard (the direction that slashes).* A reorg — or an ordinary
-`HoldingsUpdate`, which §9.6 item 3 says an archiver must post
-**continuously** to keep covering new shards — puts a shard in the
-connected record that the running host never pinned. A `prune_frozen` in that
+*Gained shard (the direction that slashes).* A reorg puts a shard in the
+connected record that the running host never pinned. *(This clause also
+named "an ordinary `HoldingsUpdate`" as a second way in; that kind is
+REJECTED 2026-09-20 — a connected record's holdings now change only by
+reorg to a different `JoinMarket`, which narrows the direction but does
+not close it.)* A `prune_frozen` in that
 window discards its bytes, `AlreadyPruned` is terminal (the remedy is a chain
 replay, not a retry), and the persona is now obligated to serve a shard it
 provably cannot. Exactly §9.6 item 4's hazard, re-entering through the

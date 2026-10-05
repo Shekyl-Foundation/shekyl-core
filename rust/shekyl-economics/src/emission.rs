@@ -23,28 +23,11 @@ pub enum EmissionError {
     BlockTooBig,
 }
 
-/// Effective emission speed factor for the configured DAA target block time.
-///
-/// Returned as `u64` because its sole consumer is the right-shift in
-/// `base_block_reward` (`remaining >> esf`), and Rust shifts accept a `u64`
-/// shift amount directly. Keeping the value in `u64` avoids a gratuitous
-/// narrowing cast.
-#[inline]
-pub fn emission_speed_factor(params: &EconomicParams) -> u64 {
-    debug_assert_eq!(
-        params.daa_target_seconds % 60,
-        0,
-        "DAA target must be a multiple of 60 seconds"
-    );
-    let target_minutes = params.daa_target_seconds / 60;
-    params.emission_speed_factor_per_minute - (target_minutes - 1)
-}
-
 /// Tail (minimum) subsidy per block in atomic units.
 ///
-/// `pub` (with [`emission_speed_factor`]) since the FL round: the fee-ladder
-/// instrument's degenerate pins consume both, and a local re-derivation
-/// there was a third undeclared drift pair (FL round review round 3).
+/// `pub` since the FL round: the fee-ladder instrument's degenerate pins
+/// consume it, and a local re-derivation there was a third undeclared drift
+/// pair (FL round review round 3).
 #[inline]
 pub fn tail_subsidy_per_block(params: &EconomicParams) -> Result<u64, EmissionError> {
     params
@@ -64,7 +47,7 @@ fn curve_emission(already_generated_coins: u64, params: &EconomicParams) -> u64 
     params
         .emission_curve_asymptote
         .saturating_sub(already_generated_coins)
-        >> emission_speed_factor(params)
+        >> params.emission_speed_factor_per_block
 }
 
 /// The M_r-neutral emission view: `max(curve, TAIL)` (0h).
@@ -242,23 +225,36 @@ impl PrePenaltyEmission {
     }
 }
 
-/// Neutral-trajectory `already_generated` at `height` under interpretation (A) (0h′).
+/// Where [`walk_neutral`] stopped: at the caller's predicate, or at tail
+/// entry with the per-block tail every later block adds.
+enum NeutralWalk {
+    Stopped { height: u64, ag: u64 },
+    Tail { height: u64, ag: u64, tail: u64 },
+}
+
+/// The neutral trajectory under interpretation (A) (0h′): `already_generated`
+/// accrues `base_block_reward` block by block from genesis with no release
+/// multiplier, until `stop(height, ag)` holds or the curve reaches the tail.
 ///
-/// Sum of `base_block_reward` for blocks `0..height` with no release multiplier.
-pub fn projected_already_generated(
-    height: u64,
+/// The one walk both directions of the projection share, so the recurrence
+/// and its stationary arm have one copy.
+fn walk_neutral(
     params: &EconomicParams,
-) -> Result<u64, EmissionError> {
+    stop: impl Fn(u64, u64) -> bool,
+) -> Result<NeutralWalk, EmissionError> {
     let tail = tail_subsidy_per_block(params)?;
-    let mut ag = 0u64;
-    let mut h = 0u64;
-    while h < height {
+    let (mut height, mut ag) = (0u64, 0u64);
+    loop {
+        if stop(height, ag) {
+            return Ok(NeutralWalk::Stopped { height, ag });
+        }
         let base = base_block_reward(ag, params)?;
         if base == tail {
-            // STATIONARY FROM HERE — close the form rather than iterate.
-            // `curve_emission` is non-increasing in `already_generated`
-            // and `ag` only grows, so once the curve has fallen to the
-            // tail floor every remaining block adds exactly `tail`.
+            // STATIONARY FROM HERE — the caller closes the form rather than
+            // iterating. `curve_emission` is non-increasing in
+            // `already_generated` and `ag` only grows, so once the curve has
+            // fallen to the tail floor every remaining block adds exactly
+            // `tail`.
             //
             // This is not tidying a loop that would have finished. The
             // `ag >= emission_curve_asymptote` early return that FL-R12′ retired with
@@ -268,18 +264,63 @@ pub fn projected_already_generated(
             // FL-R14 headroom, ≈ 89 750 years of tail — adding the same
             // number to itself before reporting `Overflow`, which is a
             // hang in a public projection rather than an answer.
-            let added = u64::try_from(u128::from(height - h) * u128::from(tail))
-                .map_err(|_| EmissionError::Overflow)?;
-            return ag.checked_add(added).ok_or(EmissionError::Overflow);
+            return Ok(NeutralWalk::Tail { height, ag, tail });
         }
         // No saturation at the asymptote (FL-R12′): the neutral trajectory
         // keeps accruing the perpetual tail past it, exactly as consensus
         // does. The FL-R14 build assertion in `params.rs` documents why
         // this cannot overflow on any realistic horizon.
         ag = ag.checked_add(base).ok_or(EmissionError::Overflow)?;
-        h += 1;
+        height += 1;
     }
-    Ok(ag)
+}
+
+/// Neutral-trajectory `already_generated` at `height` under interpretation (A) (0h′).
+///
+/// Sum of `base_block_reward` for blocks `0..height` with no release multiplier.
+pub fn projected_already_generated(
+    height: u64,
+    params: &EconomicParams,
+) -> Result<u64, EmissionError> {
+    match walk_neutral(params, |h, _| h >= height)? {
+        NeutralWalk::Stopped { ag, .. } => Ok(ag),
+        NeutralWalk::Tail {
+            height: h,
+            ag,
+            tail,
+        } => {
+            let added = u64::try_from(u128::from(height - h) * u128::from(tail))
+                .map_err(|_| EmissionError::Overflow)?;
+            ag.checked_add(added).ok_or(EmissionError::Overflow)
+        }
+    }
+}
+
+/// The inverse of [`projected_already_generated`]: the first height `h` at
+/// which the neutral trajectory has emitted at least `target`, so
+/// `projected_already_generated(h) >= target` and, for `h > 0`,
+/// `projected_already_generated(h - 1) < target`.
+///
+/// One walk, where bisecting the projection replays it from genesis on
+/// every probe. Past tail entry the answer is closed-form, as the
+/// projection's is. `Overflow` when no height's projection both fits `u64`
+/// and reaches `target`: a zero tail leaves the trajectory short of it
+/// forever, and a tail step can pass `u64::MAX` without landing on it.
+pub fn neutral_height_reaching(target: u64, params: &EconomicParams) -> Result<u64, EmissionError> {
+    match walk_neutral(params, |_, ag| ag >= target)? {
+        NeutralWalk::Stopped { height, .. } => Ok(height),
+        NeutralWalk::Tail { tail: 0, .. } => Err(EmissionError::Overflow),
+        // The walk stopped short of `target`, so `ag < target`. The height
+        // is an answer only if the projection there exists.
+        NeutralWalk::Tail { height, ag, tail } => {
+            let blocks = (target - ag).div_ceil(tail);
+            blocks
+                .checked_mul(tail)
+                .and_then(|added| ag.checked_add(added))
+                .ok_or(EmissionError::Overflow)?;
+            height.checked_add(blocks).ok_or(EmissionError::Overflow)
+        }
+    }
 }
 
 /// Neutral base subsidy at `height`: `base_block_reward(projected_already_generated(h))`.
@@ -334,8 +375,105 @@ pub fn advance_already_generated(already_generated_coins: u64, block_reward: u64
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::params::EconomicParams;
+
+    /// Genesis block on the design curve: `2³² · 10⁹ >> 22` = 1 024 SKL.
+    const GENESIS_BLOCK_REWARD: u64 = 1_024_000_000_000;
+    /// `2²² · ln 2`. First height at which the neutral trajectory has
+    /// emitted half the asymptote.
+    const HALF_EMITTED_HEIGHT: u64 = 2_907_270;
+    /// `2²² · ln 5`. First height at which it has emitted 80 %.
+    const EIGHTY_PCT_EMITTED_HEIGHT: u64 = 6_750_472;
+    /// Bracket around [`HALF_EMITTED_HEIGHT`]. A factor rescaled by the
+    /// block time misses it.
+    const HALF_WINDOW: (u64, u64) = (2_900_000, 2_915_000);
+    /// Bracket around [`EIGHTY_PCT_EMITTED_HEIGHT`].
+    const EIGHTY_WINDOW: (u64, u64) = (6_740_000, 6_765_000);
+
+    /// Plain sum of `base_block_reward` at each probe, one walk from genesis.
+    /// The projection and its inverse are not called: this is their oracle.
+    fn accumulated_supply_at(params: &EconomicParams, probes: &[u64]) -> BTreeMap<u64, u64> {
+        let mut wanted = probes.to_vec();
+        wanted.sort_unstable();
+        wanted.dedup();
+        let mut supply = BTreeMap::new();
+        let mut already_generated = 0u64;
+        let mut next = 0usize;
+        let horizon = *wanted.last().expect("at least one probe");
+        for height in 0..=horizon {
+            if wanted[next] == height {
+                supply.insert(height, already_generated);
+                next += 1;
+                if next == wanted.len() {
+                    break;
+                }
+            }
+            already_generated = already_generated
+                .checked_add(base_block_reward(already_generated, params).expect("base reward"))
+                .expect("neutral supply fits in u64 through the probed horizon");
+        }
+        supply
+    }
+
+    /// The design's emission curve (`DESIGN_CONCEPTS.md` §3, §13): an
+    /// emission speed factor of **22 per block**, which puts the first
+    /// block at `2³² · 10⁹ >> 22` = 1 024 SKL, half the asymptote emitted
+    /// near year 11 (`2²² · ln 2` ≈ 2 907 270 blocks) and 80 % near year
+    /// 25.7 (`2²² · ln 5` ≈ 6 750 472 blocks). Pinned at the owner so a
+    /// convention that rescales the factor by the block time fails here.
+    #[test]
+    fn the_curve_is_the_designs_esf_22_per_block() {
+        let p = EconomicParams::default();
+        assert_eq!(
+            p.emission_speed_factor_per_block, 22,
+            "the factor is per block"
+        );
+        let genesis = base_block_reward(0, &p).expect("genesis reward");
+        assert_eq!(
+            genesis,
+            p.emission_curve_asymptote >> p.emission_speed_factor_per_block,
+            "the first block pays the asymptote shifted by the factor"
+        );
+        assert_eq!(genesis, GENESIS_BLOCK_REWARD);
+        let half = p.emission_curve_asymptote / 2;
+        let eighty = p.emission_curve_asymptote / 5 * 4;
+        let supply = accumulated_supply_at(
+            &p,
+            &[
+                HALF_WINDOW.0,
+                HALF_EMITTED_HEIGHT - 1,
+                HALF_EMITTED_HEIGHT,
+                HALF_WINDOW.1,
+                EIGHTY_WINDOW.0,
+                EIGHTY_PCT_EMITTED_HEIGHT - 1,
+                EIGHTY_PCT_EMITTED_HEIGHT,
+                EIGHTY_WINDOW.1,
+            ],
+        );
+        let at = |height: u64| supply[&height];
+        assert!(
+            at(HALF_WINDOW.0) < half && half < at(HALF_WINDOW.1),
+            "half emitted near year 11"
+        );
+        assert!(
+            at(EIGHTY_WINDOW.0) < eighty && eighty < at(EIGHTY_WINDOW.1),
+            "80 % near year 25.7"
+        );
+        // The inverse lands on the same heights by its own walk. The supply
+        // map is the independent sum, so a shared bug in the walk cannot
+        // satisfy both.
+        for (target, expected) in [
+            (half, HALF_EMITTED_HEIGHT),
+            (eighty, EIGHTY_PCT_EMITTED_HEIGHT),
+        ] {
+            let height = neutral_height_reaching(target, &p).expect("reachable");
+            assert_eq!(height, expected);
+            assert!(at(height - 1) < target && target <= at(height));
+        }
+    }
 
     /// A height past tail entry must TERMINATE, not walk the tail one
     /// block at a time.
@@ -362,14 +500,16 @@ mod tests {
     /// approximation that happens to be close.
     #[test]
     fn the_fast_forward_agrees_with_the_naive_walk_across_tail_entry() {
-        // Canonical parameters put tail entry ~65 years out, where a naive
+        // Canonical parameters put tail entry ~119 years out, where a naive
         // comparison is not runnable, so shrink the emission-speed factor
         // and the supply until the curve crosses within a few dozen
         // blocks. Only the crossing's POSITION moves; the recurrence and
         // the stationarity being asserted are the shipped ones.
-        let mut p = EconomicParams::default();
-        p.emission_speed_factor_per_minute = (p.daa_target_seconds / 60) + 3;
-        let esf = emission_speed_factor(&p);
+        let mut p = EconomicParams {
+            emission_speed_factor_per_block: 4,
+            ..EconomicParams::default()
+        };
+        let esf = p.emission_speed_factor_per_block;
         let tail = tail_subsidy_per_block(&p).expect("tail");
         p.emission_curve_asymptote = (tail << esf) * 4;
 
@@ -402,17 +542,122 @@ mod tests {
         }
     }
 
+    /// The inverse must name the first height the walk reaches a target,
+    /// on both sides of tail entry — the walked arm and the closed form.
     #[test]
-    fn base_block_reward_matches_cpp_first_values() {
+    fn the_inverse_agrees_with_the_naive_search_across_tail_entry() {
+        let mut p = EconomicParams {
+            emission_speed_factor_per_block: 4,
+            ..EconomicParams::default()
+        };
+        let esf = p.emission_speed_factor_per_block;
+        let tail = tail_subsidy_per_block(&p).expect("tail");
+        p.emission_curve_asymptote = (tail << esf) * 4;
+
+        // The oracle is a plain accumulation of `base_block_reward`, not the
+        // projection: the projection shares the walk under test. Targets up
+        // to `at(crossing)` are the walked arm; past it, the closed form.
+        let mut prefix = vec![0u64];
+        let mut crossing: Option<usize> = None;
+        while prefix.len() < 100_000 {
+            let ag = *prefix.last().expect("non-empty");
+            let base = base_block_reward(ag, &p).expect("base");
+            if base == tail && crossing.is_none() {
+                crossing = Some(prefix.len() - 1);
+            }
+            prefix.push(ag + base);
+            if crossing.is_some_and(|c| prefix.len() > c + 64) {
+                break;
+            }
+        }
+        let crossing = crossing.expect("setup reaches the tail");
+        assert!(crossing > 1, "setup must start above the tail, not on it");
+        let at = |h: usize| prefix[h];
+        let naive_first = |target: u64| {
+            let h = prefix
+                .iter()
+                .position(|&ag| ag >= target)
+                .expect("within the prefix");
+            u64::try_from(h).expect("small height")
+        };
+        let at_crossing = at(crossing);
+        for target in [
+            0,
+            1,
+            at(1),
+            at(1) + 1,
+            at_crossing - 1,
+            at_crossing,
+            at_crossing + 1,
+            at_crossing + tail,
+            at_crossing + 37 * tail - 1,
+        ] {
+            assert_eq!(
+                neutral_height_reaching(target, &p).expect("reachable"),
+                naive_first(target),
+                "inverse and naive search must agree at target {target} (crossing at {crossing})"
+            );
+        }
+    }
+
+    /// A height is returned only where the projection exists. A tail whose
+    /// third step passes `u64::MAX` reaches twice itself at height 2 and
+    /// reaches nothing above that: the projection at height 3 overflows.
+    #[test]
+    fn the_inverse_never_names_a_height_the_projection_cannot_represent() {
+        let p = EconomicParams {
+            emission_curve_asymptote: 0,
+            final_subsidy_per_minute: u64::MAX / 4,
+            ..EconomicParams::default()
+        };
+        let tail = tail_subsidy_per_block(&p).expect("tail");
+        assert!(tail.checked_mul(3).is_none() && tail.checked_mul(2).is_some());
+        assert_eq!(neutral_height_reaching(2 * tail, &p), Ok(2));
+        assert_eq!(projected_already_generated(2, &p), Ok(2 * tail));
+        for target in [2 * tail + 1, u64::MAX] {
+            assert!(matches!(
+                neutral_height_reaching(target, &p),
+                Err(EmissionError::Overflow)
+            ));
+        }
+        assert!(matches!(
+            projected_already_generated(3, &p),
+            Err(EmissionError::Overflow)
+        ));
+    }
+
+    /// A target the trajectory never reaches is an error, not a hang or a
+    /// division by zero: a zero tail leaves the curve short of the
+    /// asymptote forever.
+    #[test]
+    fn an_unreachable_target_is_an_error() {
+        let mut zero_tail = EconomicParams {
+            emission_speed_factor_per_block: 4,
+            final_subsidy_per_minute: 0,
+            ..EconomicParams::default()
+        };
+        zero_tail.emission_curve_asymptote = 1 << 12;
+        assert!(matches!(
+            neutral_height_reaching(zero_tail.emission_curve_asymptote, &zero_tail),
+            Err(EmissionError::Overflow)
+        ));
+    }
+
+    /// First values of the curve at ESF 22 per block, minted from the closed
+    /// form `max((asymptote − ag) >> 22, tail)` outside this crate (the same
+    /// script reproduces the ESF-21 pins this test carried before
+    /// 2026-10-04: 2 048 000 000 000, 2 047 999 023 437, 733 629 392 416).
+    #[test]
+    fn base_block_reward_first_values_on_the_design_curve() {
         let p = EconomicParams::default();
-        assert_eq!(base_block_reward(0, &p).unwrap(), 2_048_000_000_000_u64);
+        assert_eq!(base_block_reward(0, &p).unwrap(), 1_024_000_000_000_u64);
         assert_eq!(
             base_block_reward(2_048_000_000_000, &p).unwrap(),
-            2_047_999_023_437_u64
+            1_023_999_511_718_u64
         );
         assert_eq!(
             base_block_reward(2_756_434_948_434_199_641, &p).unwrap(),
-            733_629_392_416_u64
+            366_814_696_208_u64
         );
     }
 
@@ -469,7 +714,10 @@ mod tests {
         // loop's projection-fed limb depends on it: the trajectory must
         // actually pass the asymptote for that limb to probe the far
         // side.
-        let past_boundary = 19_200_000;
+        // ≈ 146 y at the design's ESF 22 per block: the curve meets the tail
+        // near 31 M blocks and the trajectory passes the asymptote about 4 M
+        // blocks of tail later. (19.2 M served the ESF-21 curve.)
+        let past_boundary = 38_400_000;
         let ag_proj = projected_already_generated(past_boundary, &p).unwrap();
         assert!(
             ag_proj > s,
@@ -599,7 +847,7 @@ mod tests {
         // `base_block_reward`. A shift/floor regression in the production curve
         // diverges from this oracle, so the assertion is non-tautological.
         let p = EconomicParams::default();
-        let esf = p.emission_speed_factor_per_minute - (p.daa_target_seconds / 60 - 1);
+        let esf = p.emission_speed_factor_per_block;
         let tail = p.final_subsidy_per_minute * (p.daa_target_seconds / 60);
         let grid = [
             0_u64,
@@ -742,85 +990,88 @@ mod tests {
     #[test]
     fn c2a_prime_layer1_weight_penalty_pinned_vectors() {
         // The zone is `p.full_reward_zone` (config/consensus_constants.json);
-        // the vectors were minted at 300 000 and the pin below says so.
+        // the vectors were minted at 300 000 and the pin below says so. The
+        // reward column was re-minted on 2026-10-04 for the per-block ESF 22
+        // by the penalty spec's closed form, run outside this crate; the same
+        // script reproduces all 81 ESF-21 pins it replaced.
         let p = EconomicParams::default();
         assert_eq!(p.full_reward_zone, 300_000, "vectors minted at the V5 zone");
         const VECTORS: &[(u64, u64, u64, bool, u64)] = &[
-            (0, 150000, 0, true, 2048000000000),
-            (0, 150000, 2048000000000, true, 2047999023437),
-            (0, 150000, 2756434948434199641, true, 733629392416),
-            (0, 300000, 0, true, 2048000000000),
-            (0, 300000, 2048000000000, true, 2047999023437),
-            (0, 300000, 2756434948434199641, true, 733629392416),
-            (0, 300001, 0, true, 2047999999977),
-            (0, 300001, 2048000000000, true, 2047999023414),
-            (0, 300001, 2756434948434199641, true, 733629392407),
-            (0, 337500, 0, true, 2016000000000),
-            (0, 337500, 2048000000000, true, 2015999038695),
-            (0, 337500, 2756434948434199641, true, 722166433159),
-            (0, 450000, 0, true, 1536000000000),
-            (0, 450000, 2048000000000, true, 1535999267577),
-            (0, 450000, 2756434948434199641, true, 550222044312),
-            (0, 562500, 0, true, 480000000000),
-            (0, 562500, 2048000000000, true, 479999771118),
-            (0, 562500, 2756434948434199641, true, 171944388847),
-            (0, 599999, 0, true, 13653310),
-            (0, 599999, 2048000000000, true, 13653304),
-            (0, 599999, 2756434948434199641, true, 4890854),
+            (0, 150000, 0, true, 1024000000000),
+            (0, 150000, 2048000000000, true, 1023999511718),
+            (0, 150000, 2756434948434199641, true, 366814696208),
+            (0, 300000, 0, true, 1024000000000),
+            (0, 300000, 2048000000000, true, 1023999511718),
+            (0, 300000, 2756434948434199641, true, 366814696208),
+            (0, 300001, 0, true, 1023999999988),
+            (0, 300001, 2048000000000, true, 1023999511706),
+            (0, 300001, 2756434948434199641, true, 366814696203),
+            (0, 337500, 0, true, 1008000000000),
+            (0, 337500, 2048000000000, true, 1007999519347),
+            (0, 337500, 2756434948434199641, true, 361083216579),
+            (0, 450000, 0, true, 768000000000),
+            (0, 450000, 2048000000000, true, 767999633788),
+            (0, 450000, 2756434948434199641, true, 275111022156),
+            (0, 562500, 0, true, 240000000000),
+            (0, 562500, 2048000000000, true, 239999885558),
+            (0, 562500, 2756434948434199641, true, 85972194423),
+            (0, 599999, 0, true, 6826655),
+            (0, 599999, 2048000000000, true, 6826652),
+            (0, 599999, 2756434948434199641, true, 2445427),
             (0, 600000, 0, true, 0),
             (0, 600000, 2048000000000, true, 0),
             (0, 600000, 2756434948434199641, true, 0),
             (0, 600001, 0, false, 0),
             (0, 600001, 2048000000000, false, 0),
             (0, 600001, 2756434948434199641, false, 0),
-            (300000, 150000, 0, true, 2048000000000),
-            (300000, 150000, 2048000000000, true, 2047999023437),
-            (300000, 150000, 2756434948434199641, true, 733629392416),
-            (300000, 300000, 0, true, 2048000000000),
-            (300000, 300000, 2048000000000, true, 2047999023437),
-            (300000, 300000, 2756434948434199641, true, 733629392416),
-            (300000, 300001, 0, true, 2047999999977),
-            (300000, 300001, 2048000000000, true, 2047999023414),
-            (300000, 300001, 2756434948434199641, true, 733629392407),
-            (300000, 337500, 0, true, 2016000000000),
-            (300000, 337500, 2048000000000, true, 2015999038695),
-            (300000, 337500, 2756434948434199641, true, 722166433159),
-            (300000, 450000, 0, true, 1536000000000),
-            (300000, 450000, 2048000000000, true, 1535999267577),
-            (300000, 450000, 2756434948434199641, true, 550222044312),
-            (300000, 562500, 0, true, 480000000000),
-            (300000, 562500, 2048000000000, true, 479999771118),
-            (300000, 562500, 2756434948434199641, true, 171944388847),
-            (300000, 599999, 0, true, 13653310),
-            (300000, 599999, 2048000000000, true, 13653304),
-            (300000, 599999, 2756434948434199641, true, 4890854),
+            (300000, 150000, 0, true, 1024000000000),
+            (300000, 150000, 2048000000000, true, 1023999511718),
+            (300000, 150000, 2756434948434199641, true, 366814696208),
+            (300000, 300000, 0, true, 1024000000000),
+            (300000, 300000, 2048000000000, true, 1023999511718),
+            (300000, 300000, 2756434948434199641, true, 366814696208),
+            (300000, 300001, 0, true, 1023999999988),
+            (300000, 300001, 2048000000000, true, 1023999511706),
+            (300000, 300001, 2756434948434199641, true, 366814696203),
+            (300000, 337500, 0, true, 1008000000000),
+            (300000, 337500, 2048000000000, true, 1007999519347),
+            (300000, 337500, 2756434948434199641, true, 361083216579),
+            (300000, 450000, 0, true, 768000000000),
+            (300000, 450000, 2048000000000, true, 767999633788),
+            (300000, 450000, 2756434948434199641, true, 275111022156),
+            (300000, 562500, 0, true, 240000000000),
+            (300000, 562500, 2048000000000, true, 239999885558),
+            (300000, 562500, 2756434948434199641, true, 85972194423),
+            (300000, 599999, 0, true, 6826655),
+            (300000, 599999, 2048000000000, true, 6826652),
+            (300000, 599999, 2756434948434199641, true, 2445427),
             (300000, 600000, 0, true, 0),
             (300000, 600000, 2048000000000, true, 0),
             (300000, 600000, 2756434948434199641, true, 0),
             (300000, 600001, 0, false, 0),
             (300000, 600001, 2048000000000, false, 0),
             (300000, 600001, 2756434948434199641, false, 0),
-            (2100000, 1050000, 0, true, 2048000000000),
-            (2100000, 1050000, 2048000000000, true, 2047999023437),
-            (2100000, 1050000, 2756434948434199641, true, 733629392416),
-            (2100000, 2100000, 0, true, 2048000000000),
-            (2100000, 2100000, 2048000000000, true, 2047999023437),
-            (2100000, 2100000, 2756434948434199641, true, 733629392416),
-            (2100000, 2100001, 0, true, 2047999999999),
-            (2100000, 2100001, 2048000000000, true, 2047999023436),
-            (2100000, 2100001, 2756434948434199641, true, 733629392415),
-            (2100000, 2362500, 0, true, 2016000000000),
-            (2100000, 2362500, 2048000000000, true, 2015999038695),
-            (2100000, 2362500, 2756434948434199641, true, 722166433159),
-            (2100000, 3150000, 0, true, 1536000000000),
-            (2100000, 3150000, 2048000000000, true, 1535999267577),
-            (2100000, 3150000, 2756434948434199641, true, 550222044312),
-            (2100000, 3937500, 0, true, 480000000000),
-            (2100000, 3937500, 2048000000000, true, 479999771118),
-            (2100000, 3937500, 2756434948434199641, true, 171944388847),
-            (2100000, 4199999, 0, true, 1950475),
-            (2100000, 4199999, 2048000000000, true, 1950474),
-            (2100000, 4199999, 2756434948434199641, true, 698694),
+            (2100000, 1050000, 0, true, 1024000000000),
+            (2100000, 1050000, 2048000000000, true, 1023999511718),
+            (2100000, 1050000, 2756434948434199641, true, 366814696208),
+            (2100000, 2100000, 0, true, 1024000000000),
+            (2100000, 2100000, 2048000000000, true, 1023999511718),
+            (2100000, 2100000, 2756434948434199641, true, 366814696208),
+            (2100000, 2100001, 0, true, 1023999999999),
+            (2100000, 2100001, 2048000000000, true, 1023999511717),
+            (2100000, 2100001, 2756434948434199641, true, 366814696207),
+            (2100000, 2362500, 0, true, 1008000000000),
+            (2100000, 2362500, 2048000000000, true, 1007999519347),
+            (2100000, 2362500, 2756434948434199641, true, 361083216579),
+            (2100000, 3150000, 0, true, 768000000000),
+            (2100000, 3150000, 2048000000000, true, 767999633788),
+            (2100000, 3150000, 2756434948434199641, true, 275111022156),
+            (2100000, 3937500, 0, true, 240000000000),
+            (2100000, 3937500, 2048000000000, true, 239999885558),
+            (2100000, 3937500, 2756434948434199641, true, 85972194423),
+            (2100000, 4199999, 0, true, 975237),
+            (2100000, 4199999, 2048000000000, true, 975237),
+            (2100000, 4199999, 2756434948434199641, true, 349347),
             (2100000, 4200000, 0, true, 0),
             (2100000, 4200000, 2048000000000, true, 0),
             (2100000, 4200000, 2756434948434199641, true, 0),
@@ -1081,12 +1332,12 @@ mod tests {
         let paid = |v: TxVolume| paid_block_reward(0, 1, ag, v, &p).expect("mid-curve reward");
 
         // 40.5 per block, exact.
-        assert_eq!(paid(TxVolume::window(29_160, 720)), 829_440_000_000);
+        assert_eq!(paid(TxVolume::window(29_160, 720)), 414_720_000_000);
         // What the floored operand paid for the same chain state (old).
-        assert_eq!(paid(TxVolume::per_block(40)), 819_200_000_000);
+        assert_eq!(paid(TxVolume::per_block(40)), 409_600_000_000);
         // 49.5 per block, exact / floored.
-        assert_eq!(paid(TxVolume::window(35_640, 720)), 1_013_760_000_000);
-        assert_eq!(paid(TxVolume::per_block(49)), 1_003_520_000_000);
+        assert_eq!(paid(TxVolume::window(35_640, 720)), 506_880_000_000);
+        assert_eq!(paid(TxVolume::per_block(49)), 501_760_000_000);
 
         // The two forms agree exactly when the mean is whole: the window
         // form is a strict superset, not a different curve.
@@ -1096,6 +1347,6 @@ mod tests {
         );
         // The empty window is the 0.8 rail either way (genesis / FAKECHAIN).
         assert_eq!(paid(TxVolume::ZERO), paid(TxVolume::per_block(0)));
-        assert_eq!(paid(TxVolume::ZERO), 819_200_000_000);
+        assert_eq!(paid(TxVolume::ZERO), 409_600_000_000);
     }
 }

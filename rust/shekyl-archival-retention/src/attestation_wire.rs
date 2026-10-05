@@ -20,7 +20,7 @@ use crate::hash::cshake256_32;
 use crate::id::p_canonical_id_from_hybrid_pubkey;
 use crate::pass_anchor::{
     pass_countersignature_message, PassAnchorWindow, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN,
-    PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_NONCE_LEN,
+    PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
 };
 
 /// cSHAKE customization for `attestation_root` over the ordered pass-record set.
@@ -36,9 +36,12 @@ pub const MAX_ATTESTATION_RECORDS: usize = 256;
 /// Fixed framing prefix of a canonical witness: `count_le(8)`.
 pub const WITNESS_PREFIX_LEN: usize = 8;
 
-/// One witness entry: `nonce(32) ‖ anchor_height_le(8) ‖ signature_canonical`.
-pub const WITNESS_ENTRY_LEN: usize =
-    PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN + HybridSignature::CANONICAL_LEN;
+/// One witness entry:
+/// `nonce(32) ‖ anchor_height_le(8) ‖ delivery_digest(32) ‖ signature_canonical`.
+pub const WITNESS_ENTRY_LEN: usize = PASS_NONCE_LEN
+    + PASS_ANCHOR_HEIGHT_LEN
+    + PASS_DELIVERY_DIGEST_LEN
+    + HybridSignature::CANONICAL_LEN;
 
 /// Exact maximum canonical byte length of a [`BlockAttestationWitness`].
 /// C++ `config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` must equal this.
@@ -53,6 +56,8 @@ const _: () = assert!(MAX_ATTESTATION_RECORDS == shekyl_types::archival::MAX_ATT
 const _: () = assert!(PASS_NONCE_LEN == shekyl_types::archival::ATTESTATION_WITNESS_NONCE_LEN);
 const _: () =
     assert!(PASS_ANCHOR_HEIGHT_LEN == shekyl_types::archival::ATTESTATION_WITNESS_ANCHOR_LEN);
+const _: () =
+    assert!(PASS_DELIVERY_DIGEST_LEN == shekyl_types::archival::ATTESTATION_WITNESS_DIGEST_LEN);
 const _: () = assert!(
     HybridSignature::CANONICAL_LEN == shekyl_types::archival::ATTESTATION_WITNESS_SIGNATURE_LEN
 );
@@ -118,7 +123,13 @@ impl AttestationHeader {
     }
 }
 
-/// One pass attestation: identity + terms + carried nonce/anchor height + signature.
+/// One pass attestation: identity + terms + carried nonce, anchor height and
+/// delivery digest + signature.
+///
+/// The three carried fields are the transcript terms admission cannot derive:
+/// the nonce is the requester's random, the height its choice inside a
+/// window, and the digest is over a body that is not on chain
+/// ([`pass_delivery_digest`](crate::pass_anchor::pass_delivery_digest)).
 ///
 /// No `kind` field — Pass is the type. Miss records never appear here.
 #[derive(Debug, Clone)]
@@ -128,6 +139,7 @@ pub struct PassRecord {
     pub settlement_epoch: u64,
     pub nonce: [u8; PASS_NONCE_LEN],
     pub anchor_height: BlockHeight,
+    pub delivery_digest: [u8; PASS_DELIVERY_DIGEST_LEN],
     pub signature: HybridSignature,
 }
 
@@ -149,26 +161,35 @@ impl PassRecord {
         &self,
         anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
     ) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
-        pass_countersignature_message(&self.nonce, self.anchor_height, anchor_hash, self.shard_id)
+        pass_countersignature_message(
+            &self.nonce,
+            self.anchor_height,
+            anchor_hash,
+            self.shard_id,
+            &self.delivery_digest,
+        )
     }
 }
 
 /// `attestation_root` over the block's pass-records (§3.2).
 ///
-/// Each record contributes `header ‖ nonce ‖ anchor_height_le ‖ signature`.
+/// Each record contributes
+/// `header ‖ nonce ‖ anchor_height_le ‖ delivery_digest ‖ signature`.
 /// Records are sorted by those canonical bytes before hashing. Empty set is
 /// the customization over the bare count prefix.
 pub fn attestation_root(records: &[PassRecord]) -> Result<[u8; 32], CryptoError> {
     const NONCE_END: usize = ATTESTATION_HEADER_LEN + PASS_NONCE_LEN;
     const ANCHOR_END: usize = NONCE_END + PASS_ANCHOR_HEIGHT_LEN;
-    const RECORD_LEN: usize = ANCHOR_END + HybridSignature::CANONICAL_LEN;
+    const DIGEST_END: usize = ANCHOR_END + PASS_DELIVERY_DIGEST_LEN;
+    const RECORD_LEN: usize = DIGEST_END + HybridSignature::CANONICAL_LEN;
     let mut record_bytes: Vec<[u8; RECORD_LEN]> = Vec::with_capacity(records.len());
     for record in records {
         let mut rec = [0u8; RECORD_LEN];
         rec[..ATTESTATION_HEADER_LEN].copy_from_slice(&record.to_header().to_canonical_bytes());
         rec[ATTESTATION_HEADER_LEN..NONCE_END].copy_from_slice(&record.nonce);
         rec[NONCE_END..ANCHOR_END].copy_from_slice(&record.anchor_height.to_raw().to_le_bytes());
-        rec[ANCHOR_END..].copy_from_slice(&record.signature.to_canonical_bytes()?);
+        rec[ANCHOR_END..DIGEST_END].copy_from_slice(&record.delivery_digest);
+        rec[DIGEST_END..].copy_from_slice(&record.signature.to_canonical_bytes()?);
         record_bytes.push(rec);
     }
     record_bytes.sort_unstable();
@@ -187,11 +208,13 @@ pub fn empty_attestation_root() -> [u8; 32] {
     attestation_root(&[]).expect("empty attestation_root is infallible")
 }
 
-/// One witness entry: carried nonce, anchor height, and signature.
+/// One witness entry: carried nonce, anchor height, delivery digest, and
+/// signature.
 #[derive(Debug, Clone)]
 pub struct PassWitness {
     pub nonce: [u8; PASS_NONCE_LEN],
     pub anchor_height: BlockHeight,
+    pub delivery_digest: [u8; PASS_DELIVERY_DIGEST_LEN],
     pub signature: HybridSignature,
 }
 
@@ -199,6 +222,7 @@ impl PassWitness {
     fn canonical_bytes_eq(&self, other: &Self) -> bool {
         self.nonce == other.nonce
             && self.anchor_height == other.anchor_height
+            && self.delivery_digest == other.delivery_digest
             && self.signature.ed25519 == other.signature.ed25519
             && self.signature.ml_dsa == other.signature.ml_dsa
     }
@@ -247,7 +271,8 @@ pub enum WitnessError {
 }
 
 impl BlockAttestationWitness {
-    /// Canonical bytes: `count_le(8) ‖ (nonce ‖ anchor_height_le ‖ signature)[0..count]`.
+    /// Canonical bytes:
+    /// `count_le(8) ‖ (nonce ‖ anchor_height_le ‖ delivery_digest ‖ signature)[0..count]`.
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, WitnessError> {
         let count = self.passes.len();
         if count > MAX_ATTESTATION_RECORDS {
@@ -263,6 +288,7 @@ impl BlockAttestationWitness {
             debug_assert_eq!(sig.len(), HybridSignature::CANONICAL_LEN);
             out.extend_from_slice(&entry.nonce);
             out.extend_from_slice(&entry.anchor_height.to_raw().to_le_bytes());
+            out.extend_from_slice(&entry.delivery_digest);
             out.extend_from_slice(&sig);
         }
         Ok(out)
@@ -292,17 +318,21 @@ impl BlockAttestationWitness {
             let start = WITNESS_PREFIX_LEN + index * WITNESS_ENTRY_LEN;
             let nonce_end = start + PASS_NONCE_LEN;
             let anchor_end = nonce_end + PASS_ANCHOR_HEIGHT_LEN;
+            let digest_end = anchor_end + PASS_DELIVERY_DIGEST_LEN;
             let end = start + WITNESS_ENTRY_LEN;
             let mut nonce = [0u8; PASS_NONCE_LEN];
             nonce.copy_from_slice(&bytes[start..nonce_end]);
             let anchor_height = BlockHeight::from_raw(u64::from_le_bytes(
                 bytes[nonce_end..anchor_end].try_into().expect("8 bytes"),
             ));
-            let signature = HybridSignature::from_canonical_bytes(&bytes[anchor_end..end])
+            let mut delivery_digest = [0u8; PASS_DELIVERY_DIGEST_LEN];
+            delivery_digest.copy_from_slice(&bytes[anchor_end..digest_end]);
+            let signature = HybridSignature::from_canonical_bytes(&bytes[digest_end..end])
                 .map_err(|source| WitnessError::Signature { index, source })?;
             passes.push(PassWitness {
                 nonce,
                 anchor_height,
+                delivery_digest,
                 signature,
             });
         }
@@ -342,6 +372,7 @@ pub fn pass_records_from_headers_and_witness(
             settlement_epoch: h.settlement_epoch,
             nonce: entry.nonce,
             anchor_height: entry.anchor_height,
+            delivery_digest: entry.delivery_digest,
             signature: entry.signature.clone(),
         })
         .collect())
@@ -367,7 +398,12 @@ pub enum PassCountersignatureError {
 /// 1. `record.p_id` is this pubkey's canonical id.
 /// 2. `record.anchor_height` is inside `window`.
 /// 3. The hybrid signature covers the transcript built from the carried nonce
-///    and height, the connecting chain's hash at that height, and `shard_id`.
+///    and height, the connecting chain's hash at that height, `shard_id`, and
+///    the carried delivery digest.
+///
+/// Admission verifies that `P` signed the carried digest. It cannot check the
+/// digest against the body, which is off chain; the requester did that
+/// before filing the record.
 pub fn verify_pass_countersignature(
     window: &PassAnchorWindow,
     p_pubkey: &HybridPublicKey,
@@ -392,6 +428,7 @@ pub fn verify_pass_countersignature(
         record.anchor_height,
         anchor_hash,
         record.shard_id,
+        &record.delivery_digest,
         &record.signature,
     )
 }
@@ -405,15 +442,23 @@ pub fn verify_pass_countersignature(
 /// (`SF-D8`): it holds the requester-side nonce, anchor, and the `P`
 /// pubkey from the bond record, and has no admission window to consult.
 /// Keeping the domain pairing here means admission and fetch cannot drift.
+///
+/// `delivery_digest` is the caller's: the fetch client **recomputes** it
+/// from the body it received
+/// ([`pass_delivery_digest`](crate::pass_anchor::pass_delivery_digest)), so a
+/// signature over other bytes fails here; admission passes the record's
+/// carried one.
 pub fn verify_pass_transcript(
     p_pubkey: &HybridPublicKey,
     nonce: &[u8; PASS_NONCE_LEN],
     anchor_height: BlockHeight,
     anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
     shard_id: u64,
+    delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
     signature: &HybridSignature,
 ) -> Result<(), PassCountersignatureError> {
-    let message = pass_countersignature_message(nonce, anchor_height, anchor_hash, shard_id);
+    let message =
+        pass_countersignature_message(nonce, anchor_height, anchor_hash, shard_id, delivery_digest);
     HybridEd25519MlDsa
         .verify(
             p_pubkey,
