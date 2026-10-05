@@ -687,11 +687,14 @@ mod tests {
     #[test]
     fn genesis_condition_snapshots_are_well_formed() {
         // Raw folded-formula tiers at genesis conditions.
-        ValidatedFeeEstimates::try_new(snapshot(68_266, 273_066, 13_653_325))
+        ValidatedFeeEstimates::try_new(snapshot(34_133, 136_533, 6_826_666))
             .expect("raw genesis-condition tiers are honest and must pass");
-        // Historical rounded genesis quotes (round_money_up, 2 digits)
-        // remain well-formed numbers — they sit well under the structural
-        // cap rather than on it.
+        // Historical genesis quotes remain well-formed numbers — they sit
+        // well under the structural cap rather than on it: the raw tiers
+        // of the per-minute curve (a 2 048-SKL genesis, until 2026-10-04),
+        // and their rounded forms (round_money_up, 2 digits).
+        ValidatedFeeEstimates::try_new(snapshot(68_266, 273_066, 13_653_325))
+            .expect("the per-minute curve's raw genesis tiers are honest and must pass");
         ValidatedFeeEstimates::try_new(snapshot(69_000, 280_000, 14_000_000))
             .expect("rounded genesis-condition C_q=1 tiers are honest and must pass");
         ValidatedFeeEstimates::try_new(snapshot(140_000, 550_000, 28_000_000))

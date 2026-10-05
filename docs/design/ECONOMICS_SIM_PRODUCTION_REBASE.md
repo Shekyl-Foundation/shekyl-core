@@ -20,6 +20,8 @@ fee-share verdict in
 
 ## Reading-pass finding 1: the production default carries 22 of 50 (2026-10-03, ESR-6)
 
+*Relabelled 2026-10-05 (Rick's ruling, [`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2).* "The production block-template fill rule" below is the reward-aware fill, which is the design's. The daemon runs Monero's pre-v5 rule until the fill moves to Rust, so this finding is the design's behaviour once the fill lands, not what the daemon does today. The sim's fill also weighs the bodies without the coinbase (1,331 B a block); the figures are re-run when the owner prices the block's weight ([`FOLLOWUPS.md`](../FOLLOWUPS.md)).
+
 **What the run says.** On the baseline schedule, 50 ordinary transactions a
 block, at the production Standard rung and under the production
 block-template fill rule:
@@ -131,7 +133,7 @@ Production prices a byte as `F = R·C·w_ref/M²`
 block-weight median `M`.
 [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) FL-V11 named the
 consequence on 2026-09-03: the floor decays **3 413×** from genesis to the
-tail. The archival sim's A1, A4 and onset arms never joined that finding.
+tail (1 707× on the design curve, since 2026-10-04). The archival sim's A1, A4 and onset arms never joined that finding.
 They read `fee_per_tx` from the scenario table, and the scenario table
 says `100_000_000` atomic in every row.
 

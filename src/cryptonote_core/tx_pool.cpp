@@ -2110,6 +2110,13 @@ namespace cryptonote
 
       // start using the optimal filling algorithm from v5
       //
+      // NOT LIVE: Shekyl's block version is 1 (src/hardforks/hardforks.cpp),
+      // so this arm never runs and the else arm below is the shipped fill.
+      // RULED 2026-10-05: this reward-aware fill is the design. It goes live
+      // by the fill moving to its Rust owner, with this function and its
+      // gate deleted, not by flipping the gate; and not before the coinbase
+      // reserve is derived (docs/FOLLOWUPS.md).
+      //
       // This comparison has a Rust owner: shekyl_block_template::Fill::admit
       // (rust/shekyl-block-template/src/fill.rs), which the economics sim
       // calls. This copy is deleted when the pool's template fill moves to

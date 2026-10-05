@@ -2067,17 +2067,18 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 ///
 /// **What the first run found (2026-09-28), and what this therefore
 /// captures.** The premise was a block *at the limit*. The C++ producer
-/// does not build one: `tx_pool::fill_block_template` admits a transaction
-/// past the median only if its fee outweighs the coinbase penalty it
-/// causes (*"would decrease coinbase"*, `tx_pool.cpp:2135–2146`), so at
-/// standard fees the template stops one transaction past the **median**
+/// does not build one: `tx_pool::fill_block_template` stops listing once
+/// the bodies pass the median (*"would exceed median block weight"*, the
+/// arm a block version below 5 takes, and Shekyl's is 1; the reward-aware
+/// comparison beside it, *"would decrease coinbase"*, never runs), so
+/// the template stops one transaction past the **median**
 /// — 305 738 bytes, 23 spends, 27 left in the pool, against a limit of
 /// 600 000. The 2 × median bound is the *validator's* refusal (CEN-F14); no
 /// C++ producer reaches it, and a block at it is a Rust-producer-built
 /// object for F14's own live-lane test (slice 7 row 5). What the C++ does
 /// build is sharper for G6 than the limit would have been: a block whose
-/// weight sits at the C++'s **median** — the fee/penalty equilibrium is
-/// a function of `M` — so a Rust median that differed would price a
+/// weight sits at the C++'s **median** — the stopping rule is a function
+/// of `M` — so a Rust median that differed would price a
 /// different penalty on this very block (F14b, F18). Held here by the
 /// daemon's own account: the weight is under the limit, the pool is not
 /// dry (the template was bounded by its policy, not by the pool), and the
