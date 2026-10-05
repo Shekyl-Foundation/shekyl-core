@@ -107,22 +107,37 @@ Worked instances, all verified at source:
   true. The reviewer's own account: *"I confirmed the parts of the claim
   that were convenient to confirm and inherited the part that carried the
   verdict."*
-- **`CHAIN_RULES_SLICE_6.md` §5.3.3** (E6 slice 6, 2026-09-24). The 1b
-  pre-measurement enumerated what a scenario driver would need from the
-  production stack and found two gaps — a block template and the
-  composition of connect facts. Writing the driver surfaced a third, and it
-  was production: the **producer's read path** — what the chain *is*, read
-  on the view the validator judges against and through the validator's own
-  definitions (F20's window, C3's median, F21's epoch). The measurement had
-  counted the validator's *inputs* and never asked what a producer needs to
-  read back *out of* it. This is the family's **direction** variant: the
-  earlier instances mistook a site, a figure, a mood, a guard; this one ran
-  the sweep along one dependency direction and reported the total as if it
-  covered both. It is the fourth time an enumeration's subject turned out
-  narrower than the claim built on it, so *which direction did the sweep
-  run* joins the questions asked of every sweep — and an enumeration of
-  what a component consumes says nothing about what its consumers consume
-  from it.
+- **A sweep's subject has a direction.** Between a producer and a
+  consumer there are two enumerations — what the producer *emits* and
+  what the consumer *reads against* — and a sweep runs along one of them.
+  The total it reports covers that heading only, and nothing in the total
+  says so. This is the family's **direction** variant: the earlier
+  instances mistook a site, a figure, a mood, a guard; this one ran along
+  one heading and reported as if it covered both. **Every sweep states
+  which way it ran and what the other heading would have enumerated.** A
+  measurement that cannot say what the reverse sweep would have found has
+  not measured; it has counted one side. The question has been failed from
+  both ends:
+  - **Consumer-ward** — `CHAIN_RULES_SLICE_6.md` §5.3.3 (E6 slice 6,
+    2026-09-24). The 1b pre-measurement enumerated what a scenario driver
+    would need from the production stack — the validator's *inputs* — and
+    found two gaps. Writing the driver surfaced a third, and it was
+    production: the **producer's read path**, what the chain *is*, read on
+    the view the validator judges against and through the validator's own
+    definitions (F20's window, C3's median, F21's epoch). Nothing had asked
+    what a producer reads back *out of* the thing whose inputs were counted.
+  - **Producer-ward** — `CHAIN_RULES_SLICE_8.md` §5 row 2 (E6 slice 8,
+    2026-10-04), one slice after the entry above named the variant.
+    The measurement enumerated what the driver *produces* — joins, credits,
+    the Reinstate — and pinned each against the validator's current
+    answer. It never asked what the validator **reads against**: the C++
+    judges a serve credit's bond state off the DB before the block, and
+    the fixtures in three crates had been built on the fold's same-block
+    admission that CEN-J4 refutes. Same axis, opposite heading. The
+    variant was named and still ran, because the entry described the
+    slice-6 instance rather than the axis — a reader with the mirror case
+    in hand had no question to fail. Hence this entry's shape: the axis
+    first, each heading an instance under it.
 - **`DRS_E3_CURVE_WRITER.md` §3.9** (E3 pre-flight, 2026-09-26). The S-PRUNE
   review's item 6 paired `D_MAX` and `T` — *"two consensus numerics on one
   re-pin gate, in two idioms"* — and the ruling on that item was a ruling on
