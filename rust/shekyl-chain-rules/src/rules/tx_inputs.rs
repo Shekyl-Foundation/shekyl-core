@@ -398,7 +398,7 @@ fn the_bond_post<'tx>(cx: &TxContext<'tx>) -> Option<&'tx shekyl_wire::BondPost>
 /// J13's record read, G10's block uniqueness — so a post whose hint names
 /// another persona would insert the poster's key under the other's id;
 /// until this row the Rust validator connected one (slice 8 row 2's pin,
-/// `archival_admission_tests.rs`, the hint chain).
+/// `archival_hint_tests.rs`).
 pub(crate) struct J11;
 
 impl Rule for J11 {

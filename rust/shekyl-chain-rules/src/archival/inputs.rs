@@ -8,15 +8,13 @@
 //! is [`Corrupt`](crate::Corrupt) — bytes no conforming store holds.
 
 use shekyl_archival_retention::{
-    claimed_epochs_check_and_set, reinstate_connect, release_connect, BondPostKind as PostKind,
-    ReinstateConnectError, ReleaseConnectError,
+    claimed_epochs_check_and_set, reinstate_connect, release_connect, ReinstateConnectError,
+    ReleaseConnectError,
 };
 use shekyl_types::archival::{BondRecord, FirstPayingHeight, HeldShard, Holdings};
 use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::transaction::{
-    BondPost, BondPostKind as WireKind, Holdings as WireHoldings, Input,
-};
+use shekyl_wire::transaction::{BondPost, Holdings as WireHoldings, Input};
 
 use crate::fault::{RecordInvariant, ViewRead};
 use crate::rules::body::ArchivalKey;
@@ -24,7 +22,7 @@ use crate::rules::Rule;
 use crate::verdict::{refused, Locus, Verdict};
 use crate::view::ChainView;
 
-use super::{emptied, record_invariant, Post, RecordWriteKind, ServeCreditKey, L7};
+use super::{emptied, record_invariant, BondArm, Post, RecordWriteKind, ServeCreditKey, L7};
 
 impl super::Transition {
     // ---- phase 2: the transactions' arms ---------------------------------
@@ -60,19 +58,19 @@ impl super::Transition {
                 });
                 Ok(Ok(()))
             }
-            Input::BondPost(post) => match &post.kind {
-                WireKind::JoinMarket {
+            // [`BondArm::of`] is the classifier `judge_bond_post` uses too,
+            // so the sequence and the fold cannot disagree about the arm.
+            // `None` is a post no arm names. The sequence refuses it under
+            // L7 before the fold; this arm is the belt beneath that.
+            Input::BondPost(post) => match BondArm::of(post) {
+                Some(BondArm::JoinMarket {
+                    post,
                     bond_spend_pk,
                     endpoint,
-                } => self.join(view, post, bond_spend_pk, *endpoint, locus),
-                WireKind::Other(kind) => match PostKind::from_u8(*kind) {
-                    Ok(PostKind::Release) => self.release(view, post, locus),
-                    Ok(PostKind::Reinstate) => self.reinstate(view, post, locus),
-                    // `Other(0)` cannot come off the wire (the decoder
-                    // reads 0 as `JoinMarket`); an unknown kind is a post
-                    // no fold applies.
-                    Ok(PostKind::JoinMarket) | Err(_) => refused(L7::ROW, locus),
-                },
+                }) => self.join(view, post, bond_spend_pk, endpoint, locus),
+                Some(BondArm::Release { post }) => self.release(view, post, locus),
+                Some(BondArm::Reinstate { post }) => self.reinstate(view, post, locus),
+                None => refused(L7::ROW, locus),
             },
             Input::ArchivalRewardEmission { .. } => {
                 let Some(ArchivalKey::Claims { p, epochs }) = ArchivalKey::of(input) else {

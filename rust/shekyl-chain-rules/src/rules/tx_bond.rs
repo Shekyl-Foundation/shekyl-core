@@ -57,8 +57,9 @@ use shekyl_archival_retention::{
 use shekyl_types::archival::{BondRecord, Holdings};
 use shekyl_types::{PCanonicalId, SettlementEpoch};
 use shekyl_wire::transaction::{BondPost, Holdings as WireHoldings, PqcAuth};
-use shekyl_wire::{BondPostKind, Ct, Input};
+use shekyl_wire::{Ct, Input};
 
+use crate::archival::{BondArm, L7};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::rule_set::RuleSet;
@@ -168,7 +169,7 @@ pub(crate) fn judge_serve_credit_bond<'id, V: ChainView<'id>>(
 /// — another persona's Release of a bonded record, signed by the poster's
 /// own identity key, connected and H21 paid the record's collateral to the
 /// poster (slice 8 row 2's finding, the hint finding's money form; the pin
-/// at `archival_admission_tests.rs` flips with this rule). The pool
+/// at `archival_hint_tests.rs` flips with this rule). The pool
 /// refused the relayed form through the submit verifier; a block carrying
 /// one did not meet this pin anywhere in `shekyl-chain-rules`.
 ///
@@ -178,9 +179,12 @@ pub(crate) fn judge_serve_credit_bond<'id, V: ChainView<'id>>(
 /// (`blockchain.cpp:4509–4515`), so the pin passes and the semantic
 /// verify's `RECORD_MISSING` refuses, which is [`J16`]'s. (Row 4 wrote
 /// *"which here is the fold's L7"*; true until row 5 landed J16 ahead of
-/// the fold — records-was.) A kind no arm names (`Other(k)`, neither
-/// Release nor Reinstate) is L7's; the row judges the three kinds the C++
-/// function has arms for.
+/// the fold — records-was.) A kind no arm names is [`L7`]'s, in this
+/// sequence and at the fold; this row judges the three kinds the C++
+/// function has arms for. A bond post whose `pqc_auths` has no slot at the
+/// vin is this row too, at the point the arm reads the slot — after that
+/// arm's non-slot check, so a JoinMarket whose statics fail is still
+/// [`J14`]'s and a Reinstate whose terms fail is still [`J18`]'s.
 pub(crate) struct J13;
 
 impl Rule for J13 {
@@ -275,6 +279,19 @@ const POST_ROWS: [CenRow; 4] = [J13::ROW, J14::ROW, J16::ROW, J18::ROW];
 /// One record read per post, shared by the rows that need it, as the C++
 /// reads `get_archival_bond_value` once per arm.
 ///
+/// The arm is [`BondArm::of`], the classifier the fold uses. A kind it
+/// does not name is [`L7`] at the post's vin, and the four post rows are
+/// not recorded: the post was not judged. The fold's L7 arm stays the belt
+/// for a transition caller that skipped this sequence.
+///
+/// The slot H21 pairs with the vin is read by position. A transaction whose
+/// `pqc_auths` is shorter than its inputs is H21's when `tx_form` ran; this
+/// sequence still fails closed, on J13, at the arm that reads the slot —
+/// after that arm's non-slot check, in the C++'s order — so a caller that
+/// has not run H21 does not record the post rows over a post it did not pin.
+/// A Release with no record never reads the slot: J13 is gated on the
+/// record, and J16 refuses `RecordMissing`.
+///
 /// A post the retention vin cannot be built from ([`retention_vin`]: a
 /// compact set that is not a [`ShardSet`]) is refused under the row that
 /// would have read the vin — the wire parse already refuses a duplicate or
@@ -299,66 +316,24 @@ pub(crate) fn judge_bond_post<'id, V: ChainView<'id>>(
             let Input::BondPost(post) = item else {
                 continue;
             };
-            let Some(auth) = pqc_auths.get(input) else {
-                continue;
-            };
             let locus = Locus::Input {
                 slot: cx.slot,
                 input,
             };
-            let identity_signs = auth.hybrid_public_key == post.hybrid_public_key;
-            match post.kind {
-                BondPostKind::JoinMarket { .. } => {
-                    // J14 then J13 (`:4619`, `:4695`).
-                    let Some(vin) = retention_vin(post) else {
-                        return Ok(Err(InvalidBlock::new(J14::ROW, locus)));
-                    };
-                    let record_exists = view.bond_record(&post.p_canonical_id)?.is_some();
-                    if verify_join_market_bond_post(&vin, record_exists).is_err() {
-                        return Ok(Err(InvalidBlock::new(J14::ROW, locus)));
-                    }
-                    if !identity_signs {
-                        return Ok(Err(InvalidBlock::new(J13::ROW, locus)));
-                    }
+            let Some(arm) = BondArm::of(post) else {
+                return Ok(Err(InvalidBlock::new(L7::ROW, locus)));
+            };
+            let verdict = match &arm {
+                BondArm::JoinMarket { .. } => {
+                    judge_join_market(view, &arm, pqc_auths, input, locus)?
                 }
-                BondPostKind::Other(kind) if kind == RELEASE_KIND => {
-                    // J13 then J16 (`:4515`, `:4542`); the pin gated on the
-                    // record's presence as the C++ gates it.
-                    let record = view.bond_record(&post.p_canonical_id)?;
-                    if let Some(record) = &record {
-                        if cold_authority_pin(
-                            RetentionKind::Release,
-                            post.bond_debit,
-                            &record.bond_spend_pk,
-                            &auth.hybrid_public_key,
-                        )
-                        .is_err()
-                        {
-                            return Ok(Err(InvalidBlock::new(J13::ROW, locus)));
-                        }
-                    }
-                    let Some(vin) = retention_vin(post) else {
-                        return Ok(Err(InvalidBlock::new(J16::ROW, locus)));
-                    };
-                    if !release_terms_hold(view, rule_set, &vin, record.as_ref())? {
-                        return Ok(Err(InvalidBlock::new(J16::ROW, locus)));
-                    }
+                BondArm::Release { .. } => {
+                    judge_release(view, rule_set, &arm, pqc_auths, input, locus)?
                 }
-                BondPostKind::Other(kind) if kind == REINSTATE_KIND => {
-                    // J18 then J13 (`:4581`, `:4607`).
-                    let Some(vin) = retention_vin(post) else {
-                        return Ok(Err(InvalidBlock::new(J18::ROW, locus)));
-                    };
-                    let record = view.bond_record(&post.p_canonical_id)?;
-                    if !reinstate_terms_hold(&vin, record.as_ref()) {
-                        return Ok(Err(InvalidBlock::new(J18::ROW, locus)));
-                    }
-                    if !identity_signs {
-                        return Ok(Err(InvalidBlock::new(J13::ROW, locus)));
-                    }
-                }
-                // No arm names the kind; L7 refuses it at the fold.
-                BondPostKind::Other(_) => {}
+                BondArm::Reinstate { .. } => judge_reinstate(view, &arm, pqc_auths, input, locus)?,
+            };
+            if verdict.is_err() {
+                return Ok(verdict);
             }
         }
     }
@@ -366,6 +341,100 @@ pub(crate) fn judge_bond_post<'id, V: ChainView<'id>>(
         coverage.insert(row);
     }
     Ok(Ok(()))
+}
+
+/// JoinMarket, J14 then J13 (`blockchain.cpp:4619`, `:4695`). The statics
+/// do not read the slot, so a join that fails them refuses on J14 even when
+/// the slot is missing or carries the wrong key.
+fn judge_join_market<'id, V: ChainView<'id>>(
+    view: &V,
+    arm: &BondArm<'_>,
+    pqc_auths: &[PqcAuth],
+    input: usize,
+    locus: Locus,
+) -> Result<Verdict<()>, V::Fault> {
+    let post = arm.post();
+    let Some(vin) = retention_vin(arm) else {
+        return Ok(Err(InvalidBlock::new(J14::ROW, locus)));
+    };
+    let record_exists = view.bond_record(&post.p_canonical_id)?.is_some();
+    if verify_join_market_bond_post(&vin, record_exists).is_err() {
+        return Ok(Err(InvalidBlock::new(J14::ROW, locus)));
+    }
+    if !identity_signs(pqc_auths, input, post) {
+        return Ok(Err(InvalidBlock::new(J13::ROW, locus)));
+    }
+    Ok(Ok(()))
+}
+
+/// Release, J13 then J16 (`blockchain.cpp:4515`, `:4542`). The pin is gated
+/// on the record, as the C++ gates it on `have_record`: with no record J13
+/// does not run, missing slot included, and J16 refuses `RecordMissing`.
+fn judge_release<'id, V: ChainView<'id>>(
+    view: &V,
+    rule_set: &RuleSet,
+    arm: &BondArm<'_>,
+    pqc_auths: &[PqcAuth],
+    input: usize,
+    locus: Locus,
+) -> Result<Verdict<()>, V::Fault> {
+    let post = arm.post();
+    let record = view.bond_record(&post.p_canonical_id)?;
+    if let Some(record) = &record {
+        let Some(auth) = pqc_auths.get(input) else {
+            return Ok(Err(InvalidBlock::new(J13::ROW, locus)));
+        };
+        if cold_authority_pin(
+            RetentionKind::Release,
+            post.bond_debit,
+            &record.bond_spend_pk,
+            &auth.hybrid_public_key,
+        )
+        .is_err()
+        {
+            return Ok(Err(InvalidBlock::new(J13::ROW, locus)));
+        }
+    }
+    let Some(vin) = retention_vin(arm) else {
+        return Ok(Err(InvalidBlock::new(J16::ROW, locus)));
+    };
+    if !release_terms_hold(view, rule_set, &vin, record.as_ref())? {
+        return Ok(Err(InvalidBlock::new(J16::ROW, locus)));
+    }
+    Ok(Ok(()))
+}
+
+/// Reinstate, J18 then J13 (`blockchain.cpp:4581`, `:4607`). The terms do
+/// not read the slot, so a reinstate that fails them refuses on J18 even
+/// when the slot is missing or carries the wrong key.
+fn judge_reinstate<'id, V: ChainView<'id>>(
+    view: &V,
+    arm: &BondArm<'_>,
+    pqc_auths: &[PqcAuth],
+    input: usize,
+    locus: Locus,
+) -> Result<Verdict<()>, V::Fault> {
+    let post = arm.post();
+    let Some(vin) = retention_vin(arm) else {
+        return Ok(Err(InvalidBlock::new(J18::ROW, locus)));
+    };
+    let record = view.bond_record(&post.p_canonical_id)?;
+    if !reinstate_terms_hold(&vin, record.as_ref()) {
+        return Ok(Err(InvalidBlock::new(J18::ROW, locus)));
+    }
+    if !identity_signs(pqc_auths, input, post) {
+        return Ok(Err(InvalidBlock::new(J13::ROW, locus)));
+    }
+    Ok(Ok(()))
+}
+
+/// The credit arms sign with the post's identity key. A missing slot is the
+/// same refusal as the wrong key: the arm that reads the slot did not find
+/// the key it selects.
+fn identity_signs(pqc_auths: &[PqcAuth], input: usize, post: &BondPost) -> bool {
+    pqc_auths
+        .get(input)
+        .is_some_and(|auth| auth.hybrid_public_key == post.hybrid_public_key)
 }
 
 /// J16's body: [`verify_release_bond_post`] over the record's facts and
@@ -444,51 +513,54 @@ fn reinstate_terms_hold(vin: &ArchivalBondPostVin, record: Option<&BondRecord>) 
     .is_ok()
 }
 
-/// The wire post as the retention crate's vin — the marshal the three
-/// `verify_*` functions read, built from the parsed [`BondPost`] alone. A
-/// `JoinMarket` carries its own `bond_spend_pk` and endpoint; a unit kind
-/// is [`RetentionKind::unit_kind`]; a kind the retention crate does not
-/// name has no vin, and no row here reads one (L7's). `None` also for a
-/// compact set that is not a [`ShardSet`] (duplicate, over cap) — the wire
-/// parse refuses those before any rule runs.
+/// The classified arm as the retention crate's vin — the marshal the three
+/// `verify_*` functions read. The kind is the arm's, so a kind no arm names
+/// never reaches here ([`L7`] refused it). The holdings and the amounts are
+/// the post's. `None` is a compact set that is not a [`ShardSet`]
+/// (duplicate, over cap) — the wire parse refuses those before any rule
+/// runs, so the arm is unreachable from bytes and fails closed.
 ///
-/// The submit verifier carries the same marshal over its wire shape
-/// (`shekyl-daemon-rpc`, `submit/verifier.rs`, `retention_vin`); that copy
-/// is the one that deletes when the pool judges through [`crate::tx_against`]
-/// (`CHAIN_RULES_SLICE_8.md` §5.1 row 5, the second-site disclosure).
-pub(crate) fn retention_vin(post: &BondPost) -> Option<ArchivalBondPostVin> {
-    let (kind, shard_ids) = match &post.holdings {
+/// The submit pool's `retention_vin` (`shekyl-daemon-rpc`,
+/// `submit/verifier.rs`) is a different function. It takes a caller-supplied
+/// retention kind and a separate `bond_spend_pk`, and it does not classify
+/// the post. The two are not interchangeable, and neither is a copy of the
+/// other. The pool's deletes when pool admission calls [`crate::tx_against`]
+/// (DRS-E5); until that caller lands, the pool's stays. The follow-up names
+/// both shapes (`docs/FOLLOWUPS.md`).
+pub(crate) fn retention_vin(arm: &BondArm<'_>) -> Option<ArchivalBondPostVin> {
+    let post = arm.post();
+    let (holdings_kind, shard_ids) = match &post.holdings {
         WireHoldings::ShardSetCompact(ids) => (
             HoldingsKind::ShardSetCompact,
             ShardSet::new(ids.clone()).ok()?,
         ),
         WireHoldings::CompleteTree => (HoldingsKind::CompleteTree, ShardSet::empty()),
     };
-    let kind_of_post = match &post.kind {
-        BondPostKind::JoinMarket {
+    let kind = match arm {
+        BondArm::JoinMarket {
             bond_spend_pk,
             endpoint,
+            ..
         } => BondKind::JoinMarket {
-            bond_spend_pk: bond_spend_pk.clone(),
+            bond_spend_pk: bond_spend_pk.to_vec(),
             endpoint: *endpoint,
         },
-        BondPostKind::Other(k) => RetentionKind::from_u8(*k).ok()?.unit_kind()?,
+        BondArm::Release { .. } => BondKind::Release,
+        BondArm::Reinstate { .. } => BondKind::Reinstate,
     };
     Some(ArchivalBondPostVin {
         hybrid_public_key: post.hybrid_public_key.clone(),
         p_canonical_id: post.p_canonical_id.to_bytes(),
-        kind: kind_of_post,
-        holdings: HoldingsDescriptor { kind, shard_ids },
+        kind,
+        holdings: HoldingsDescriptor {
+            kind: holdings_kind,
+            shard_ids,
+        },
         bonded_total_atomic: post.bonded_total_atomic,
         bond_credit: post.bond_credit,
         bond_debit: post.bond_debit,
     })
 }
-
-/// The retention crate's tags for the two `Other` kinds the sequence has
-/// arms for, as the wire carries them.
-const RELEASE_KIND: u8 = RetentionKind::Release as u8;
-const REINSTATE_KIND: u8 = RetentionKind::Reinstate as u8;
 
 #[cfg(test)]
 #[path = "tx_bond_tests.rs"]

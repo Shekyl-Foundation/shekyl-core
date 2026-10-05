@@ -11,7 +11,7 @@
 //! for a persona with no record. J5 and J6 need a record to read a join
 //! epoch and an interval log from, so their negatives are the ingest
 //! driver's — a real chain that posted the bond, through `connect`
-//! (`archival_admission_tests.rs`, the J5 and J6 pins) — never a record
+//! (`archival_slash_tests.rs`, the J5 and J6 pins) — never a record
 //! constructed here. The three rows' vacuity on every other class is also
 //! this file's.
 
@@ -156,7 +156,7 @@ fn j4_j5_j6_are_vacuous_off_the_serve_credit_class() {
 // `bond_spend_pk`, J14's `RecordExists`, J16's full exit, cooldown and
 // settlement, J18's open interval and holdings, J13's Reinstate arm (J18
 // runs first and refuses the missing record) — is the ingest driver's,
-// over a chain that posted the bond (`archival_admission_tests.rs`,
+// over a chain that posted the bond (`archival_slash_tests.rs`,
 // `scenario_archival_tests.rs`), by the same policy as J5 and J6.
 
 const BOND_KI: [u8; 32] = point(11);
@@ -465,18 +465,93 @@ fn j18_a_reinstate_with_no_record_is_refused_on_the_missing_record() {
     });
 }
 
-/// A kind no arm names is none of the four rows': the sequence records
-/// them evaluated and the fold's L7 refuses the body at connect
-/// (`scenario_archival_tests`, the unknown-kind pin).
+/// A kind no arm names is CEN-L7 at the post's vin, inside `judge_bond_post`
+/// and through `tx_against`. The four post rows are not recorded: the post
+/// was not judged. The fold's L7 arm stays the belt beneath
+/// (`scenario_archival_tests`, the unknown-kind pin, the same row and locus).
 #[test]
-fn an_unnamed_kind_passes_the_sequence_to_the_fold() {
+fn an_unnamed_kind_is_l7_in_the_sequence() {
     let chain = spendable_chain();
     chain.with_view(|view| {
         let tx = unit_kind_post(&chain, 9, 0);
         let (verdict, coverage) = judged_post(&tx, &view);
-        verdict.unwrap_or_else(|r| panic!("no arm names kind 9, but {r}"));
+        assert_refused(verdict, CenRow::L7, POST_VIN);
         for row in POST_ROWS {
-            assert!(coverage.contains(row), "{row} recorded");
+            assert!(
+                !coverage.contains(row),
+                "{row} not recorded for an unnamed kind"
+            );
+        }
+        assert_refused(
+            defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+            CenRow::L7,
+            POST_VIN,
+        );
+    });
+}
+
+/// `tx` with the bond post's auth slot removed, after [`anchored_on`] signed
+/// it. `tx_form`'s H21 would refuse the short list; these pins call
+/// `judge_bond_post` directly, which is the caller a pool migration must
+/// stay safe under if it ever reaches the sequence without that check.
+fn without_the_post_slot(mut tx: Transaction) -> Transaction {
+    let slot = tx
+        .prefix
+        .inputs
+        .iter()
+        .position(|item| matches!(item, Input::BondPost(_)))
+        .expect("a bond post");
+    if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
+        pqc_auths.remove(slot);
+    }
+    tx
+}
+
+/// A missing auth slot refuses at the point that arm reads the slot, and
+/// records none of the post rows. The C++ order still holds: a JoinMarket
+/// whose statics fail is J14's before the slot is read; a Release or a
+/// Reinstate with no record never reaches the slot (J16, J18).
+#[test]
+fn a_missing_slot_refuses_at_the_arm_that_reads_it() {
+    let chain = spendable_chain();
+    chain.with_view(|view| {
+        let cases = [
+            (
+                "a join with no slot",
+                without_the_post_slot(anchored_on(&chain, join_market(BOND_KI, WHO))),
+                CenRow::J13,
+            ),
+            (
+                "an under-bonded join with no slot — J14 before the slot",
+                without_the_post_slot(join_edited(&chain, |post| {
+                    post.holdings = Holdings::ShardSetCompact(vec![3, 4]);
+                })),
+                CenRow::J14,
+            ),
+            (
+                "a release with no record and no slot — J16, the pin is gated",
+                without_the_post_slot(unit_kind_post(
+                    &chain,
+                    RetentionKind::Release as u8,
+                    BOND_FLOOR,
+                )),
+                CenRow::J16,
+            ),
+            (
+                "a reinstate with no record and no slot — J18 before the slot",
+                without_the_post_slot(unit_kind_post(&chain, RetentionKind::Reinstate as u8, 0)),
+                CenRow::J18,
+            ),
+        ];
+        for (name, tx, row) in cases {
+            let (verdict, coverage) = judged_post(&tx, &view);
+            assert_refused(verdict, row, POST_VIN);
+            for recorded in POST_ROWS {
+                assert!(
+                    !coverage.contains(recorded),
+                    "{name}: {recorded} not recorded"
+                );
+            }
         }
     });
 }
