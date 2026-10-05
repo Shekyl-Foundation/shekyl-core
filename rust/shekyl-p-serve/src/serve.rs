@@ -334,35 +334,38 @@ impl PServeEndpoint {
         self.refused.load(Ordering::Relaxed)
     }
 
-    /// Store faults on a request that had already passed the anchor gate.
+    /// Store faults while answering a parsed shard read.
+    ///
     /// Nothing here is a distinct wire outcome: the cases that fail before
     /// a byte is written are the shared 404, and the cases that fail after
     /// the head is out are a closed connection with no countersignature.
     ///
     /// Counted:
     ///
-    /// * the host could not read its tip height, or could not read the shard
-    ///   (I/O, or bytes pruned out from under a serve-set that was not pinned);
+    /// * the tip the anchor gate needs could not be read, so the gate never
+    ///   ran, or the shard itself could not be read (I/O, or bytes pruned
+    ///   out from under a serve-set that was not pinned);
     /// * the signed read's body is not the length its frame declares;
     /// * the shard vanished, or its frame changed, between the signed read
     ///   and the send — still the shared 404, because nothing was written;
     /// * the send read failed part-way, ran past the frame, or did not digest
     ///   to the digest that was signed, so the signature was withheld.
     ///
-    /// An ordinary miss (unknown id, unfrozen segment, anchor out of window)
-    /// is the deliberate 404 and is **not** counted. A signer that refuses is
-    /// [`Self::sign_failure_count`], not this one: a rising sign count with
-    /// this count still at zero is a key that is not resident.
+    /// An anchor the gate refuses, and every other ordinary miss (unknown
+    /// id, unfrozen segment), is the deliberate 404 and is **not** counted.
+    /// A signer that refuses is [`Self::sign_failure_count`].
     #[must_use]
     pub fn lookup_failure_count(&self) -> u64 {
         self.lookup_failures.load(Ordering::Relaxed)
     }
 
-    /// Servable requests the host's [`PassSigner`] refused to sign. On the
-    /// wire the identical 404; here, distinguishable from a store fault so
-    /// an operator can tell "key not resident" from "store not readable". A
-    /// nonzero value on a bonded persona means passes are being lost to a
-    /// signer that is down, not to a store that is short.
+    /// Servable requests that did not produce a canonical
+    /// [`SIGNATURE_ENVELOPE_LEN`]-byte signature. On the wire the identical
+    /// 404; here, apart from [`Self::lookup_failure_count`]. The digest read
+    /// succeeded and the anchor was inside the gate. The signer then refused
+    /// — key not resident, signer offline, or a host-side refusal — or
+    /// returned an envelope of the wrong length. An unheld shard never
+    /// reaches this counter.
     #[must_use]
     pub fn sign_failure_count(&self) -> u64 {
         self.sign_failures.load(Ordering::Relaxed)
