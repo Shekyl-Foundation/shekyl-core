@@ -479,7 +479,7 @@ carried; R2 the same).
 | **1** | HKDF/`P_id` wire + crypto layer hooks | **Closed (2026-06-13)** — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off (§9.8). **Carry discharged (2026-07-11 reconciliation):** `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152; `archival_p.rs` + `kat_archival_p_derive_v1.rs`, eight §9.3 labels incl. `bond_spend_*` and the GF-9 `hs_id` label (SPIKE-F-4) verified at source). C-1 emission vin ML-DSA equality check **landed** (#277). §7 checklist reconciled to landed state. |
 | **2** | Network + transport (L16 → production shape) | **Closed (2026-07-11) — §10; closure disposition §10.13.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (all dispositioned):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport (GF-5, §10.5); ~~Arti HS-hosting capability confirmed, at-source pin carried (GF-12, §10.3)~~ **— RETIRED 2026-08-03 (maintainer ruling): Arti is not the path; the Tor Expert Bundle is consumed as an external hash-pinned process, so the at-source Arti pin has no consumer**; `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); HS key lifecycle `p_slot`-bound + seed-derived (GF-9, §10.7). **Exit dispositions (§10.11, passes 1–4):** bonded-verifier challenges, broadcast announce, `P`↔principal circuit/guard isolation (§10.9), pure-rendezvous + I2P-closed. **Carries (§10.13, rule-21):** at-source Arti pin → transport PR; dummy/frag tuned ratio → testnet; ~~GF-9 HS-id HKDF label → §9.3 amendment (armed: not yet in derivation; dot-vs-hyphen format flag)~~ **— LANDED 2026-08-05 (SPIKE-F-4): `shekyl-archival-p-hs-id-ed25519-v1` in the §9.3 table + KAT**; announce↔anchor + cadence timing → R3. Transport code partial-landed (2d-2: SP-T1 #204/#209, SP-T4a #254 — inert). |
 | **3** | Timing + rotation + `W` / epoch-length joint pin | **Designed + adversarial pass run (2026-07-11) — §11; closes on the R4/GF-4 joint grade (§11.7).** **GF-10** pinned as *mechanism + structural window* (uniform-independent claim-broadcast-height draw via audited `bounded_uniform`; floor = `h_close + reorg_depth(720)`, ceiling = `(E_oldest+W)·SEB − submit_guard`; a-priori `S_min ≥ SEB`); **numeric width routed to R4/GF-4 CB-3 joint grade** (not standalone — per-axis error avoided). Draw + scheduler **unbuilt** (verified) → pinned pre-code, M1-armed. Rotation leg ratified (T-A1 timeline non-channel; network leg §10.7/§10.9); R2 timing hand-forwards resolved (announce↔anchor = entry standoff; emission-cadence = GF-10). Adversarial pass (§11.8) found no break — four findings folded as re-pins, one retraction (max-age misread). Two frame/pass assumptions overturned at source (epoch-crossing §11.4; max-age semantics §11.8). UPDATE 2026-07-16 (§12.9 decision 3): the R4 joint grade **dissolved by axis attrition** — GF-10's width now grades **standalone** against the §11.5 pre-committed advantage claim (mechanism-class, method note 3); R3 closes when that grade runs. |
-| **4** | Output + bond-funding hygiene (**recurring** — reinstate/release at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built; verdict ⛔ WITHDRAWN in full 2026-07-23** (was: graded PROVISIONAL-PASS, `r = 1.86`, local-daemon — the entry-seam channel graded was never on the chain; the instrument is fail-closed (`GF7_FAIL_CLOSED`) and the surviving entry-seam channel is GF4b-2's funding-input count; WI-4 §13.1 banner) (standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) sealing form: first PASS withdrawn 2026-07-18 (§19.9.1), hardened re-run graded PASS 2026-07-19 (§19.9.2), seal-input status withdrawn same day on scope review (WI-4 §19.10 — premise design-foreclosed; instrument retained as dispersal tripwire)) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM gate FIRED 2026-07-15** (§12.5–12.6; `bond_post.rs:369`/`:627`); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. UPDATE 2026-07-15: both former blockers discharged — the reinstate/release FSM landed (PR #303 `HoldingsUpdate`/`Release` + Pin-4/Pin-5 closure 2026-07-14; PR #307 `Reinstate`) and the age-stratified sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). F-D3/F-D4 open for build: F-D4 a-priori window derivation first (committed before any sweep runs, §12.6), then `draw_exit_gap` (§12.5) with the F-D6 derived anchor. UPDATE 2026-07-16: derivation committed + reviewed (rounds 1–3, sentinel + frozen rule); **`draw_exit_gap` BUILT** against the sentinel with the F-D6 anchor derived (`release_cooldown_anchor_height`) — F-W5 `N_t` re-derivation, sweep, and Phase 7.7 seal remain. UPDATE 2026-07-16 (later): round-4 premise audit RATIFIED deletion-with-tripwire (F-D4 §15.4 — the timing channel's observable is phantom, F-W7/F-W8; the seal obligation is removed, the sentinel never shipped a value); F-W9 bounded the repetition premise (F-D4 §16). **R4 decision round run + RATIFIED (§12.9):** exit seam **re-homed** to the principal↔user crossing (WI-4 §18.13); joint grade **dissolved by four-axis attrition** (ratification added the fourth row: **F-W10 — output-count phantom**, the drain is not an identifiable transaction under FCMP++; §2.4's CryptoNote-lineage pin retired, method note 5); §16.4 funding default **accepted** (F-D2-class); deletion PR scoped (`exit.rs` wholesale; F-D6 + consensus predicate out of scope). Re-formed close: F-D1 + F-D2 (incl. funding default) + deletion PR + F-D5 §14.4 disposition. UPDATE 2026-07-17: the **deletion PR landed** at decision 5's scope — close condition (iii) satisfied; remaining: F-D1, F-D2 (incl. funding default), F-D5 §14.4 disposition. UPDATE 2026-07-17 (later): **F-D5's "→ §14.4" was dangling** (WI-4 §14.4 is the closed partition arm, no economics agenda) — close condition (iv) re-worded by dated amendment (§12.9): the **F-D5 disposition round** (charter at §12.7) runs a **structural-derivation attempt first** (grid width from reward-curve structure, X-3-shaped, mechanism-class) — width derives ⇒ grid ships at genesis + S-2 grades the residual; width doesn't ⇒ **no grid at genesis** (genesis-frozen consequence named, pass-4 banding rejection reconciled); the lifetime-aggregate band registers as an R5 S-2 ledger row either way. UPDATE 2026-07-17 (same day): **the F-D5 disposition round RAN — width does not derive, NO GRID at genesis** (harm survives F-D1 — the grid targeted §18.12's drain-all floor — but the derivation fails at three source-anchored population entry points: `r_market` inside `scarcity_milli`, the `budget(E)/Σwork(E)` value spacing, and reachable-collision ≠ delivered cover; the grid's cost side is derivable, its benefit side is not; §12.7 OUTCOME). Close condition (iv) **discharged**; R4 open on **F-D1 + F-D2 only**. UPDATE 2026-07-17 (later): **F-D1 BUILT** (`drain_orchestrator`/`drain_amount`/`drain_select`; (a)+strip; M1 arm proven-to-bite then armed as `fd1_arm_*` tests; §12.3 build note) and **F-D2 core-side surface LANDED** (aggregate-only `DrainBalance`/`drain_balance`, scalar-only `plan_drain`; §12.4 build note) — `plan_drain` lands as a correctly-carved planner with **no data source and no consumer yet**. **F-D2's remaining half is NOT a pending UI default and NOT gated on RPC** (the GUI links the engine in-process, not via a wallet-RPC server): it is a whole **unbuilt `P`-value-out (drain-send) subsystem** in `shekyl-gui-wallet` — a `P`-scan data source feeding the planner + a drain tx assemble→sign→broadcast path + the round-number/random-split default (incl. the §16.4 funding default; §12.4 reconciliation amendment 2026-07-19) on top (§12.4 build note). **R4 open on that subsystem.** |
+| **4** | Output + bond-funding hygiene (**recurring** — reinstate/release at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built; verdict ⛔ WITHDRAWN in full 2026-07-23** (was: graded PROVISIONAL-PASS, `r = 1.86`, local-daemon — the entry-seam channel graded was never on the chain; the instrument is fail-closed (`GF7_FAIL_CLOSED`) and the surviving entry-seam channel is GF4b-2's funding-input count; WI-4 §13.1 banner) (standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) sealing form: first PASS withdrawn 2026-07-18 (§19.9.1), hardened re-run graded PASS 2026-07-19 (§19.9.2), seal-input status withdrawn same day on scope review (WI-4 §19.10 — premise design-foreclosed; instrument retained as dispersal tripwire)) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM gate FIRED 2026-07-15** (§12.5–12.6; `bond_post.rs:369`/`:627`); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. UPDATE 2026-07-15: both former blockers discharged — the reinstate/release FSM landed (PR #303 `HoldingsUpdate`/`Release` + Pin-4/Pin-5 closure 2026-07-14; PR #307 `Reinstate`) and the age-stratified sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). F-D3/F-D4 open for build: F-D4 a-priori window derivation first (committed before any sweep runs, §12.6), then `draw_exit_gap` (§12.5) with the F-D6 derived anchor. UPDATE 2026-07-16: derivation committed + reviewed (rounds 1–3, sentinel + frozen rule); **`draw_exit_gap` BUILT** against the sentinel with the F-D6 anchor derived (`release_cooldown_anchor_height`) — F-W5 `N_t` re-derivation, sweep, and Phase 7.7 seal remain. UPDATE 2026-07-16 (later): round-4 premise audit RATIFIED deletion-with-tripwire (F-D4 §15.4 — the timing channel's observable is phantom, F-W7/F-W8; the seal obligation is removed, the sentinel never shipped a value); F-W9 bounded the repetition premise (F-D4 §16). **R4 decision round run + RATIFIED (§12.9):** exit seam **re-homed** to the principal↔user crossing (WI-4 §18.13); joint grade **dissolved by four-axis attrition** (ratification added the fourth row: **F-W10 — output-count phantom**, the drain is not an identifiable transaction under FCMP++; §2.4's CryptoNote-lineage pin retired, method note 5); §16.4 funding default **accepted** (F-D2-class); deletion PR scoped (`exit.rs` wholesale; F-D6 + consensus predicate out of scope). Re-formed close: F-D1 + F-D2 (incl. funding default) + deletion PR + F-D5 §14.4 disposition. UPDATE 2026-07-17: the **deletion PR landed** at decision 5's scope — close condition (iii) satisfied; remaining: F-D1, F-D2 (incl. funding default), F-D5 §14.4 disposition. UPDATE 2026-07-17 (later): **F-D5's "→ §14.4" was dangling** (WI-4 §14.4 is the closed partition arm, no economics agenda) — close condition (iv) re-worded by dated amendment (§12.9): the **F-D5 disposition round** (charter at §12.7) runs a **structural-derivation attempt first** (grid width from reward-curve structure, X-3-shaped, mechanism-class) — width derives ⇒ grid ships at genesis + S-2 grades the residual; width doesn't ⇒ **no grid at genesis** (genesis-frozen consequence named, pass-4 banding rejection reconciled); the lifetime-aggregate band registers as an R5 S-2 ledger row either way. UPDATE 2026-07-17 (same day): **the F-D5 disposition round RAN — width does not derive, NO GRID at genesis** (harm survives F-D1 — the grid targeted §18.12's drain-all floor — but the derivation fails at three source-anchored population entry points: `r_market` inside `scarcity_milli`, the `budget(E)/Σwork(E)` value spacing, and reachable-collision ≠ delivered cover; the grid's cost side is derivable, its benefit side is not; §12.7 OUTCOME). Close condition (iv) **discharged**; R4 open on **F-D1 + F-D2 only**. UPDATE 2026-07-17 (later): **F-D1 BUILT** (`drain_orchestrator`/`drain_amount`/`drain_select`; (a)+strip; M1 arm proven-to-bite then armed as `fd1_arm_*` tests; §12.3 build note) and **F-D2 core-side surface LANDED** (aggregate-only `DrainBalance`/`drain_balance`, scalar-only `plan_drain`; §12.4 build note) — `plan_drain` lands as a correctly-carved planner with **no data source and no consumer yet**. **F-D2's remaining half is NOT a pending UI default and NOT gated on RPC** (the GUI links the engine in-process, not via a wallet-RPC server): it is a whole **unbuilt `P`-value-out (drain-send) subsystem** in `shekyl-gui-wallet` — a `P`-scan data source feeding the planner + a drain tx assemble→sign→broadcast path + the round-number/random-split default (incl. the §16.4 funding default; §12.4 reconciliation amendment 2026-07-19) on top (§12.4 build note). **R4 open on that subsystem.** UPDATE 2026-10-04: the row's **"recurring"** premise is gone — `HoldingsUpdate` **REJECTED 2026-09-20** (immutable bond, `PRINCIPAL_STAKE_LIFECYCLE.md` §5.3; wire `InvalidPostKind`, PR #808), `Reinstate` zero-money; a persona has one funding crossing and one exit, and holdings change by persona rotation (§6 scope-note update; §12.5 note on F-D4 §15.4 (a)). |
 | **5** | Cross-layer adversarial pass | **Planned.** Soundness-depth sign-off for Stage 3. Build the S-2 fused exposure ledger (first) + the S-3 exit/value-seam adversary sim (§10.12), then sign off. **Registered S-2 ledger rows so far:** the lifetime-aggregate (drain-all) band at the §18.13 crossing (from the F-D5 disposition round, 2026-07-17 — per-observer, off-chain, graded against measured post-genesis exposure; §12.7 OUTCOME); R5 also inherits F-W9's finite domain and the §16.3 re-formed cross-persona job (linking-key search, pre-registered as code). |
 
 **Parallel (not gated on gate-6 closure):** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
@@ -522,6 +522,21 @@ shipping an optimistic sealed floor on top of the very +1 margin it is meant to 
 PR #307 `Reinstate`), and the age-stratified reconciliation (c) is DONE, seal cleared —
 `STAKER_ARCHIVAL_SIM.md` §L18, adversarially confirmed to clear the "age-stratified, not a re-tuned
 flat scalar" bar 2026-07-12. The paragraph above stands as the reasoning record.)*
+
+*(UPDATE 2026-10-04 — the scope expansion's subject changed under it. `HoldingsUpdate` was
+**REJECTED 2026-09-20** by the immutable-bond ruling
+([`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3; wire discriminant
+`InvalidPostKind`, PR #808; arms deleted, E4 `ARW-14`), and with it the `bond_duration(age)`
+retention horizon, the per-shard cooldown and the §L18 friction model it sealed. Genesis carries
+`JoinMarket` / zero-money `Reinstate` / whole-bond `Release`; holdings change by **persona
+rotation** under the two-active overlap (lifecycle doc §5.3.1). The "one-time → recurring" argument above therefore
+inverts in form: within one persona the lifecycle is back to **one** funding crossing
+(`JoinMarket`) and **one** exit (`Release`) — the recurrence this round priced moves to the
+**cross-persona** seam, where a holdings change is by design an old persona's `Release` and a
+new persona's `JoinMarket` inside one overlap. That is the population F-D4 §2.1 T-1 found
+empty *"by design"*, and F-D4 §15.4 item 2 **(a)** is the tripwire it armed for exactly this.
+**Not ruled here** — the sweep records that the tripwire's question is open and carries it in
+`FOLLOWUPS.md`; see the 2026-10-04 note at §12.5.)*
 
 ---
 
@@ -733,8 +748,9 @@ inside `hybrid_sign_sk` signs bond-record / emission-identity material, not indi
 
 **`bond_spend_pk` is the GF-1 bond-debit authorizer (distinct from identity).** Derived under
 the §9.3 `shekyl-archival-p-bond-spend-*` labels, it is committed into the `ArchivalBondRecord`
-at `JoinMarket` (gate-4 §4.1) and signs the bond vin on **debit** paths (`Release`,
-`HoldingsUpdate` drop). It exists so that authorizing a *value-out* never requires the identity
+at `JoinMarket` (gate-4 §4.1) and signs the bond vin on the one **debit** path, `Release`
+(`HoldingsUpdate` drop was the other until it was **REJECTED 2026-09-20** with the immutable-bond
+ruling). It exists so that authorizing a *value-out* never requires the identity
 key, keeping `hybrid_bond_id`'s compromise surface "reveals nothing spendable." Same
 not-persisted-at-rest discipline as the other secrets: `bond_spend_sk` re-derives from
 `master_seed_64` + `p_slot` on wallet open.
@@ -781,23 +797,27 @@ checks each against a different key.
 
 | `P` tx type | Account `hybrid_sign_pk` role | Per-input `pqc_auths.hybrid_public_key` | Verifier |
 |-------------|-------------------------------|------------------------------------------|----------|
-| **bond-post, collateral-in** (gate 4 `txin_archival_bond_post`: `JoinMarket` / `Reinstate` / **top-up**) | `P_pubkey` **identity** — creates/keys the bond record by `P_canonical_id` | **per-output** (funding inputs; key image present) | create/lookup `ArchivalBondRecord`; funding inputs via standard key-image path; `bond_credit` term-rigidity + floor-equality ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5) |
-| **bond-post, collateral-out** (gate 4 `txin_archival_bond_post`: full **`Release`** / **`HoldingsUpdate`** partial-release) | `P_pubkey` **identity** on the bond vin — record lookup + mutation keying (**never** the debit authorizer) | **single bond vin** authorizes the `bond_debit` against the record's committed **`bond_spend_pk`** (dedicated debit key, §9.3 labels; gate-4 §3.5 step 5 + §4.1). **GF-1-carve RESOLVED (2026-06-16):** gate-4 §3.5 step 5 re-worded to verify debit paths against `bond_spend_pk`, not `P_pubkey` — identity stays identity-only, bond-debit authority compromise-isolated. `bond_debit == bonded_total` (full) or partial; **P-attributed refund output(s)** | §3.5 verify order; bond-debit auth = committed `bond_spend_pk` (resolved at gate-4 source before the verifier lands) |
+| **bond-post, collateral-in** (gate 4 `txin_archival_bond_post`: `JoinMarket` — the only credit-bearing kind since 2026-09-20; `Reinstate` is zero-money and ~~**top-up**~~ is REJECTED with `HoldingsUpdate`) | `P_pubkey` **identity** — creates/keys the bond record by `P_canonical_id` | **per-output** (funding inputs; key image present) | create/lookup `ArchivalBondRecord`; funding inputs via standard key-image path; `bond_credit` term-rigidity + floor-equality ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5) |
+| **bond-post, collateral-out** (gate 4 `txin_archival_bond_post`: full **`Release`** — the only debit kind; ~~**`HoldingsUpdate`** partial-release~~ REJECTED 2026-09-20) | `P_pubkey` **identity** on the bond vin — record lookup + mutation keying (**never** the debit authorizer) | **single bond vin** authorizes the `bond_debit` against the record's committed **`bond_spend_pk`** (dedicated debit key, §9.3 labels; gate-4 §3.5 step 5 + §4.1). **GF-1-carve RESOLVED (2026-06-16):** gate-4 §3.5 step 5 re-worded to verify debit paths against `bond_spend_pk`, not `P_pubkey` — identity stays identity-only, bond-debit authority compromise-isolated. `bond_debit == bonded_total` (whole bond; the partial case left with `HoldingsUpdate`); **P-attributed refund output(s)** | §3.5 verify order; bond-debit auth = committed `bond_spend_pk` (resolved at gate-4 source before the verifier lands) |
 | **reward emission** ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §5.3) | `P_pubkey` **identity** on the emission vin — bond lookup + dedup keying | **backing inputs:** ML-DSA verifies against the **`pqc_pk` committed in the *same proven leaf, at the same input index*** — the membership proof commits `H(pqc_pk)` as an in-circuit extra leaf scalar (`with_extra_scalars`, index-bound), and the vin recomputes `H(pqc_pk)` from the supplied key and demands equality with **that** leaf's committed scalar ([`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7), **no key image**. **fee inputs** (`txin_to_key`): **per-output**, key image present | §7.1 emission order; backing auth is membership-only + the vin-layer ML-DSA equality check (**C-1 carried dependency, §9.8 — DISCHARGED #277**, landed at `emission_verify.rs::emission_vin_verify_auth`); fee inputs standard |
 | **ordinary transfer / terminal drain / reward-output spend** | **none on wire** | **per-output**, key image present | standard FCMP++ path — **no `P`-typing** |
 
-**Bond-post is the recurring self-identifying class (Round-2 scope; reinstate/release at genesis).**
-All four bond mutations are one `txin_archival_bond_post` discriminated by `post_kind`
-(`0=JoinMarket, 1=Reinstate, 2=Release, 3=HoldingsUpdate` — [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)
-§3.2). Genesis already carries `JoinMarket`, `Reinstate`-after-slash, and full `Release`;
-**voluntary partial-release (`HoldingsUpdate`) is promoted to genesis scope (V3.0, decided
-2026-06-15)** (gate-4 §3.2 / §4.4 G4-6), with the add-shard credit path covering the voluntary
-holdings-*increase* / top-up direction. The **full** lifecycle ships at genesis (create /
-reinstate-topup / partial-release / full-release) — so completing the consensus FSM later is not a
-hard fork. **That promotion is a gate-4 / FSM-retool call** (recorded here, not executed in this
-doc); its Gate-6 consequence is that the previously **one-time** firewall
-events become **recurring** (§6 Round-2 scope note: GF-7 funding-linkage, GF-4 decorrelated
-drain, GF-10 within-epoch timing).
+**Bond-post is the self-identifying class, and per persona it is not recurring (re-derived
+2026-10-04).** The three bond mutations are one `txin_archival_bond_post` discriminated by
+`post_kind` (`0=JoinMarket, 1=Reinstate, 2=Release`; slot `3` is **REJECTED** — `from_u8(3)` is
+`InvalidPostKind`, PR #808 — [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.2). Genesis
+carries `JoinMarket` (the one credit), zero-money `Reinstate`-after-slash, and whole-bond
+`Release` (the one debit). Holdings change by **persona rotation**
+([`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.1), never in place.
+
+*Records-was (2026-06-15 → 2026-09-20):* voluntary partial-release (`HoldingsUpdate`) had been
+promoted to genesis scope (gate-4 §4.4 G4-6, since REJECTED), with an add-shard credit path for
+top-up, and this paragraph read that as the **full** lifecycle shipping at genesis — the
+Gate-6 consequence being that the one-time firewall events became **recurring** (§6 Round-2
+scope note: GF-7 funding-linkage, GF-4 decorrelated-drain, GF-10 within-epoch timing). The
+immutable-bond ruling (`V3_STAKER_ARCHIVAL.md` §"A bond is immutable for its life") rests on
+the opposite property — **one event per class per persona lifetime** — and REJECTED the
+in-place kind; where the recurrence went is the §6 note's subject.
 
 **GF-1 fast-path belt (CEN-G8) — RETIRED 2026-09-02 (C2-R1a, ratified by Rick).** The
 block-level re-pin that re-ran this section's debit authorization under the per-block-checkpoint
@@ -1416,10 +1436,15 @@ carry rides it (GF-9 label). No box is `[ ]` at close.
   gate-4 §3.5 step 5 / §4.1 / §3.4.1). The account `P_pubkey` never authorizes a value-out;
   identity-only invariant preserved. Custody model (§3.2) not reopened; the receipt-UTXO
   alternative was declined and given a reopen criterion (§9.6).
-- **Reinstate/release FSM** — `HoldingsUpdate` promoted V3.1→genesis (V3.0, decided 2026-06-15); the
+- **Reinstate/release FSM** — `HoldingsUpdate` promoted V3.1→genesis (V3.0, decided 2026-06-15)
+  *[and REJECTED 2026-09-20 under the immutable-bond ruling; there is no top-up path — a bond's
+  set is fixed at post and changes by persona rotation, lifecycle doc §5.3]*; the
   add-shard credit path covers top-up (gate-4 §4.4 / FSM retool); **blocks the R-3 sim
   reconciliation and thus the genesis seal** (§6 scope note); the reconciliation must be
-  **age-stratified, not a re-tuned flat cost**.
+  **age-stratified, not a re-tuned flat cost**. *(Records-was. Discharged 2026-07-15; then
+  `HoldingsUpdate` **REJECTED 2026-09-20** by the immutable-bond ruling — the FSM at genesis is
+  `JoinMarket` / zero-money `Reinstate` / `Release`, and holdings change by persona rotation;
+  `PRINCIPAL_STAKE_LIFECYCLE.md` §5.3.)*
 
 **Critical path out of Round 2 (these two, not the transport tuning):** (1) the GF-1-carve
 resolves at gate-4 source — **done 2026-06-16** (dedicated `bond_spend_pk`; gate-4 §3.5 step 5 /
@@ -2208,12 +2233,15 @@ exceeds the chain's, the excess arity is always an observer's artifact — and a
 
 ## 12. Round 4 — output + bond-funding hygiene: the drain-event firewall (OPEN — drafted 2026-07-11)
 
-**Status:** **Open — drafted; F-D3/F-D4 activation FIRED 2026-07-15.** Scope, adversary, and the
+**Status:** **Open — drafted 2026-07-11.** Scope, adversary, and the
 drain-event findings (F-D1…F-D6) pinned, source-grounded at `dev` `75c3cae1d`. **F-D1** (amount
 channel) is a **complete pre-code pin**, buildable now; **F-D2** (UI-default) buildable now;
-**F-D3/F-D4** (exit-timing) were FSM-gated spec-stubs whose activation criterion **fired 2026-07-15**
-(§12.5 — the cooldown is now an enforced spendability gate, `bond_post.rs:369`/`:627`), so both are
-**open for build**; **F-D5** (quantization) is routed out to ~~§14.4 economics~~ *(dangling —
+**F-D3** fired 2026-07-15 and was **deleted 2026-07-17** (§12.5) — not open for build. The
+cooldown it was anchored to remains, with one verify consumer (`verify_release_bond_post`,
+`bond_post.rs:400`). **F-D4**'s derivation closed with that deletion; the tripwire question
+persona rotation re-opened is a FOLLOWUPS row, not a build (§12.5, 2026-10-04). *Records-was
+of this lead:* both were open for build because two verify paths read the cooldown
+(`bond_post.rs:369`/`:627`). **F-D5** (quantization) is routed out to ~~§14.4 economics~~ *(dangling —
 re-pointed 2026-07-17 to the disposition round chartered at §12.7, which **ran the same day**:
 width does not derive, no grid at genesis, band registered as an R5 S-2 ledger row — §12.7
 OUTCOME)*;
@@ -2446,17 +2474,17 @@ trigger is catastrophic, `16→1.01`."
   random one-sided latency *after* that point, breaking the deterministic fixed-offset cooldown tell.
 - **Per-event independent**, applied to **both terminal drain and recurring partial-release
   (`HoldingsUpdate`)** — each its own draw (the shared-trigger lesson; correlated releasing is the
-  adversary).
+  adversary). *(Design-era; the mechanism was deleted 2026-07-17 and `HoldingsUpdate` REJECTED
+  2026-09-20 — see the last update below.)*
 - Wallet self-test conformance (the anchor is consumer-side/off-chain, consensus-unenforceable),
   integer golden vector on the aarch64 lane — the `draw_entry_gap` discipline.
-- **FSM gate (rule-21) — FIRED 2026-07-15.** The activation criterion recorded here ("open F-D3
-  build/measurement when a verify path reads `RELEASE_COOLDOWN_EPOCHS` as a spendability gate") is
-  met at source: `release_cooldown_elapsed` is **enforced consensus** with two verify consumers —
-  `bond_post.rs:369` (`HoldingsUpdate`-drop, per-shard last-served anchor) and `bond_post.rs:627`
-  (`Release`, whole-record anchor) — landed with the reinstate/release FSM (PR #303 `HoldingsUpdate` +
-  `Release` verify/connect/pop and the Pin-4/Pin-5 closure, 2026-07-14; PR #307 `Reinstate`). The
-  deterministic cooldown tell this standoff exists to break is now real; F-D3 is **open for build
-  and measurement**.
+- **FSM gate (rule-21) — FIRED 2026-07-15; the mechanism this opened was deleted
+  2026-07-17.** *Records-was of the firing:* the activation criterion ("open F-D3
+  build/measurement when a verify path reads `RELEASE_COOLDOWN_EPOCHS` as a spendability
+  gate") was met by two consumers, a `HoldingsUpdate`-drop and a `Release`. The only
+  consumer now is `verify_release_bond_post` (`bond_post.rs:400`, whole-record anchor).
+  The drop consumer is gone with the kind (**REJECTED 2026-09-20**). F-D3 is not open
+  for build. The tripwire question is the 2026-10-04 update below.
 - **Per-event independence armed with its own negative control (pinned at activation, 2026-07-15).**
   The entry seam's `double_jitter_trap` guards a **two-sided** construction (order coin + inversion)
   that the one-sided exit draw does not have, so it cannot be borrowed. The exit draw's conformance
@@ -2481,7 +2509,9 @@ trigger is catastrophic, `16→1.01`."
   re-appearance" every channel above quantifies over — has **no population within this seam**:
   the refund leaves as hidden outputs inside the posting tx itself (structural,
   `bond_connect.rs`); rotation is dead by S-5/T-A1 + in-place `HoldingsUpdate` (policy +
-  economics); network is spent as §10.9 conditioning; the off-chain crossing is §18.13's seam.
+  economics) *[the `HoldingsUpdate` leg of this premise was REJECTED 2026-09-20 — see the
+  2026-10-04 update below]*; network is spent as §10.9 conditioning; the off-chain crossing is
+  §18.13's seam.
   Disposition ratified: **delete the mechanism, keep the tripwire** (reopen criteria at F-D4
   §15.4 — rotation in scope, refund moved out of the posting tx, new public principal-keyed
   term, isolation weakened). The mechanism-deletion PR's reviewer-map is F-D4 §15.4 item 1;
@@ -2498,6 +2528,23 @@ trigger is catastrophic, `16→1.01`."
   survive the landing — the deletion removed its only production consumer, and it was deleted
   by its own decision per rule 15; §12.7 and §12.9 decision 5's landing update carry the
   disposition. `release_cooldown_elapsed` stands.)*
+- **UPDATE 2026-10-04 — a premise of the deletion changed; the tripwire's question is open,
+  not answered.** `HoldingsUpdate` was **REJECTED 2026-09-20** by the immutable-bond ruling
+  ([`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3; `from_u8(3)` is
+  `InvalidPostKind`, PR #808). Two consequences for this section's record. **(i)**
+  `release_cooldown_elapsed` has **one** verify consumer, `Release` (`bond_post.rs:400`,
+  whole-record anchor); the `HoldingsUpdate`-drop consumer and its per-shard last-served
+  anchor are gone with the kind. **(ii)** F-D4 §2.1 T-1 found the "subsequent public bond post
+  after an exit" population empty *by design* on two legs — identity rotation out of scope
+  (S-5/T-A1) and *"shard changes never exit (`HoldingsUpdate` swaps in place, bonded
+  throughout)"*. The second leg is now false in the opposite direction: under the ruling a
+  holdings change **is** an old persona's `Release` followed by a new persona's `JoinMarket`,
+  inside §5.3.1's two-active overlap, by design and at whatever cadence operators re-size.
+  That is the shape F-D4 §15.4 item 2 **(a)** armed its tripwire for. **This sweep does not
+  rule on it** — the ruling's own answer is that the two events belong to two pseudonyms
+  (`V3_WALLET_DECISION_LOG.md` 2026-09-20), and whether the overlap's timing re-links them is
+  F-D4 §15.4 item 3's re-evaluation shape (re-run the §2.1 population audit for the minted
+  event, observer pre-registered). Carried in [`FOLLOWUPS.md`](../FOLLOWUPS.md).
 
 ### 12.6 F-D4 — a-priori exit window (activation FIRED with F-D3, 2026-07-15)
 
@@ -2837,7 +2884,9 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   §13.3's repetition premise is corrected before R4 takes the question: `m` is a bounded
   lifecycle count (one mandatory observable crossing — `JoinMarket`, GF-7's seam; two
   wallet-default-closeable optional classes — `HoldingsUpdate`-add and credit-bearing
-  `Reinstate`; zero observable exits on either branch), so the on-chain composition a
+  `Reinstate` *[both without subject since 2026-09-20: `HoldingsUpdate` REJECTED,
+  `Reinstate` zero-money by consensus — `m = 1` is now the only enumeration, not the
+  default-path one]*; zero observable exits on either branch), so the on-chain composition a
   re-homed grade would inherit is **finite and GF-7-shaped**, not an open-ended
   intersection — at the mandatory `m = 1`, GF-7's per-event grade *is* the on-chain
   lifetime grade per persona per observer class, at nominal cover. Cross-persona
@@ -2982,7 +3031,10 @@ closes when the GF-10 single-axis grade runs and clears the advantage claim.
 **Decision 4 — the F-D4 §16.4 proposal is ACCEPTED as an F-D2-class wallet default.**
 The honest-wallet builder self-funds `HoldingsUpdate`-add and credit-bearing `Reinstate`
 from reward-lineage outputs — the GF-4b `BackingSet` machinery already classifies exactly
-this. External funding for growth is never silently built: it is an explicit, **loud**
+this. *[Both classes are without subject since 2026-09-20: `HoldingsUpdate` is REJECTED
+and `Reinstate` is zero-money by consensus (PR #808). The default stands as ruled for any
+growth-funding crossing a future design mints; today none exists to self-fund.]*
+External funding for growth is never silently built: it is an explicit, **loud**
 override treated as what it is — a `JoinMarket`-class principal crossing — and routed
 through the entry-standoff draw (`draw_entry_gap`), inheriting GF-7's per-event
 treatment. Cost accepted with eyes open (F-D4 §16.4 constraint 2): default-path portfolio
@@ -2993,6 +3045,20 @@ standoff-treated — F-D2's "default safe, opt-out explicit and loud" pattern ap
 funding lineage. (Consensus-layer enforcement remains rejected per §16.4 constraint 1:
 consensus cannot classify FCMP++-hidden funding inputs, and in-circuit lineage is the
 opposite of F-D1's strip direction.)
+
+*(UPDATE 2026-10-04 — decision 4's subject is gone; the decision stands as record. Both
+optional crossing classes it governs were removed from the protocol by the immutable-bond
+ruling: `HoldingsUpdate`-add is **REJECTED 2026-09-20** (`InvalidPostKind`, PR #808) and
+`Reinstate` is zero-money by consensus (`bond_credit == bond_debit == 0`, `BondTerm::Unmoved`
+in `bond_ct_balance.rs`). There is no funding path for the honest-wallet default to self-fund:
+portfolio growth is a **new persona's `JoinMarket`** under `PRINCIPAL_STAKE_LIFECYCLE.md`
+§5.3.1's two-active overlap, which is already the "`JoinMarket`-class principal crossing"
+decision 4 routed the loud override through — so the honest-path enumeration `m = 1` per
+persona holds by construction rather than by wallet default, and nothing of decision 4
+remains to build. The GF-4b `BackingSet` lineage machinery it would have reused is untouched;
+it serves the emission claim's backing (`backing_set.rs`), not the bond. The fund-from-earnings
+question for the *new* persona's bond is GF-7's existing seam, graded at WI-4, not this
+decision's.)*
 
 **Decision 5 — the harness is deleted, not re-parameterized; the deletion PR's scope is
 pinned here.** §15.4 item 1's fork read "if re-homed, it re-parameterizes on the crossing
@@ -3453,9 +3519,10 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
 
 - **2026-07-15 (F-D3/F-D4 activation FIRED — fossil sweep):** The §12.5 rule-21 activation
   criterion ("a verify path reads `RELEASE_COOLDOWN_EPOCHS` as a spendability gate") fired at
-  source: `release_cooldown_elapsed` is enforced consensus with two verify consumers —
-  `bond_post.rs:369` (`HoldingsUpdate`-drop, per-shard last-served anchor) and `:627` (`Release`,
-  whole-record anchor) — landed with the reinstate/release FSM (PR #303 `HoldingsUpdate`/`Release` +
+  source. *Records-was of that firing:* `release_cooldown_elapsed` was read as enforced
+  consensus with two verify consumers — `bond_post.rs:369` (`HoldingsUpdate`-drop, per-shard
+  last-served anchor) and `:627` (`Release`, whole-record anchor) — landed with the
+  reinstate/release FSM (PR #303 `HoldingsUpdate`/`Release` +
   the P2B-7 Pin-4/Pin-5 closure, 2026-07-14; PR #307 `Reinstate`; #309 ShardSet newtype). Statuses
   swept: header summary, §6 R4 cell + scope-note discharge, §12 status header, §12.1 channel
   table, §12.5/§12.6 headings + gate/activation blocks, §12.7 F-D6 (named const half done —

@@ -1384,17 +1384,22 @@ the internal order is otherwise verdict-invisible. Semantic legs are the **same
 `check_archival_bond_post_input` dispatches to over FFI, so the two paths
 share the verifying code.
 
-**Non-JoinMarket kinds — Release is now covered; HoldingsUpdate / Reinstate are
-not.** The block path verifies all three today (`archival_bond_post_kind`
-dispatch, all Rust-backed). **Release's reopening criterion (rule 21) fired at
+**Non-JoinMarket kinds — Release is now covered; Reinstate is not; and
+`HoldingsUpdate` is REJECTED (2026-09-20), so there is nothing left to
+cover.** The block path verifies Release and Reinstate today
+(`archival_bond_post_kind` dispatch, all Rust-backed); `from_u8(3)` is
+`InvalidPostKind`. *(As written: "all three … HoldingsUpdate / Reinstate are
+not".)* **Release's reopening criterion (rule 21) fired at
 PR-P4** — `build_release_vin` / `AssembleRelease` are the construction leg — and
 this section's §8.7.1.1 UB rows discharge it: `SubmitFacts` carries the Release
 fact set and the battery dispatches `verify_release_bond_post`, the same
-function the block path calls. **HoldingsUpdate / Reinstate have no producer**,
-so their fact sets are deliberately *not* built: a fact bundle with no
+function the block path calls. **Reinstate has no producer** (and
+`HoldingsUpdate` no longer has a kind), so its fact set is deliberately *not*
+built: a fact bundle with no
 submitter is pre-provisioned flexibility (rule 21), and its Phase-D race
-classification would be unverifiable guesswork. The battery still refuses them
-`Malformed` (loud, logged) under their own reopening criterion — a producer.
+classification would be unverifiable guesswork. The battery still refuses it
+`Malformed` (loud, logged) under its own reopening criterion — a producer; a
+kind-3 vin is refused one layer earlier, at decode.
 
 #### 8.7.1.1 Release rows (the debit arm; `check_archival_bond_post_input`, the `archival_bond_post_kind::Release` arm)
 
@@ -1558,11 +1563,15 @@ UB2 therefore carries two facts and re-checks the second. At Phase B/C a record
 **never present** is a submitter error (`Malformed` — these bytes can never
 connect). At Phase D the test is the record's balance against the submitted
 vin's own `bond_debit`, which the Phase-C battery required it to equal: gone,
-zeroed by a competing exit, **or raised** by a `Reinstate` / `HoldingsUpdate`-add
-that connected during Phase C — each leaves the full-exit equality
+or zeroed by a competing exit — either leaves the full-exit equality
 unsatisfiable for these bytes, so each classifies `DoubleSpendConflict`. Keying
-on the balance rather than on "exited" catches the credit-side direction for
-free.
+on the balance rather than on "exited" also catches a credit-side direction
+for free, should one ever exist. *(As written this listed a third case — "or
+**raised** by a `Reinstate` / `HoldingsUpdate`-add that connected during
+Phase C". Neither can raise a balance now: `HoldingsUpdate` is REJECTED
+2026-09-20 and `Reinstate` is zero-money by consensus (`post == current`,
+`BondTerm::Unmoved`, PR #808). The balance key is unchanged; the case it
+would have caught is unreachable.)*
 
 The time asymmetry survives — one fact, two verdicts by observation time, the
 `reference` field's shape (`ReferenceNotFound` at C vs `StaleRoot` at a D
