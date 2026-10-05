@@ -227,6 +227,14 @@ public:
   struct anvoke_handler: invoke_response_handler_base,
                         public boost::enable_shared_from_this<anvoke_handler<callback_t>>
   {
+    /// What a fired timer reports. Close sets `destroyed`. A response
+    /// that loses `cancel_timer` leaves `timed_out`.
+    enum class timeout_report
+    {
+      timed_out,
+      destroyed,
+    };
+
     anvoke_handler(const callback_t& cb, const std::chrono::milliseconds timeout,  async_protocol_handler& con, int command)
       :m_cb(cb), m_timeout(timeout), m_con(con), m_timer(con.m_pservice_endpoint->get_io_context()), m_timer_started(false),
       m_cancel_timer_called(false), m_timer_cancelled(false), m_outer_finished(false), m_command(command)
@@ -244,10 +252,14 @@ public:
     boost::asio::steady_timer m_timer;
     bool m_timer_started;
     bool m_cancel_timer_called;
+    /// `cancel()` aborted the wait, so `handle` or `cancel` delivers.
     bool m_timer_cancelled;
-    // start_outer_call's ref is released once, from whichever of
-    // handle, cancel, or the timeout completion runs.
+    /// `start_outer_call`'s ref is released once, from `handle`, `cancel`,
+    /// or the timeout completion.
     std::atomic<bool> m_outer_finished;
+    /// Close sets this before `cancel_timer`. The completion reads it
+    /// on the connection strand.
+    timeout_report m_timeout_report = timeout_report::timed_out;
     const std::chrono::milliseconds m_timeout;
     int m_command;
     virtual bool handle(int res, const epee::span<const uint8_t> buff, typename async_protocol_handler::connection_context& context)
@@ -264,6 +276,7 @@ public:
     }
     virtual void cancel()
     {
+      m_timeout_report = timeout_report::destroyed;
       if(cancel_timer())
       {
         epee::span<const uint8_t> fake;
@@ -285,33 +298,37 @@ public:
       if (!m_cancel_timer_called && m_timer.cancel() > 0)
       {
         m_timer.expires_after(m_timeout);
-        arm_timeout(m_command, m_cb, m_timeout);
+        arm_timeout();
       }
     }
 
-    void arm_timeout(int command, callback_t cb, const std::chrono::milliseconds timeout)
+    /// Register the wait. The handler must already be owned by a
+    /// `shared_ptr`: `shared_from_this` throws `bad_weak_ptr` until then.
+    /// The wait callback holds that owner, so `release_protocol` dropping
+    /// the handler list cannot destroy it before the completion runs.
+    void arm_timeout()
     {
-      m_timer.async_wait([this, command, cb, timeout](const boost::system::error_code& ec)
+      // `this->` is required. The base depends on `callback_t`, so an
+      // unqualified `shared_from_this` is not found by two-phase lookup.
+      boost::shared_ptr<anvoke_handler> self = this->shared_from_this();
+      m_timer.async_wait([self](const boost::system::error_code& ec)
       {
         if(ec == boost::asio::error::operation_aborted)
           return;
-        // start_outer_call's ref is still held, so begin_closed cannot
+        // `start_outer_call`'s ref is still held, so `begin_closed` cannot
         // post destruction yet. Releasing it at the end of the closure
         // posts destruction behind this completion when it is the last.
-        auto self = this->shared_from_this();
-        self->m_con.m_pservice_endpoint->post([self, command, cb, timeout] {
-          // m_timer_cancelled is who delivers. m_cancel_timer_called is
-          // only that cancel_timer ran; a close that lost the timer
-          // still leaves delivery to this closure.
+        self->m_con.m_pservice_endpoint->post([self] {
           if(!self->m_timer_cancelled)
           {
-            const int code = self->m_cancel_timer_called
+            const bool destroyed = self->m_timeout_report == timeout_report::destroyed;
+            const int code = destroyed
                 ? LEVIN_ERROR_CONNECTION_DESTROYED
                 : LEVIN_ERROR_CONNECTION_TIMEDOUT;
-            if(code == LEVIN_ERROR_CONNECTION_TIMEDOUT)
-              MINFO(self->m_con.get_context_ref() << "Timeout on invoke operation happened, command: " << command << " timeout: " << timeout.count());
+            if(!destroyed)
+              MINFO(self->m_con.get_context_ref() << "Timeout on invoke operation happened, command: " << self->m_command << " timeout: " << self->m_timeout.count());
             epee::span<const uint8_t> fake;
-            cb(code, fake, self->m_con.get_context_ref());
+            self->m_cb(code, fake, self->m_con.get_context_ref());
             self->m_con.close();
           }
           self->finish_outer_call_once();
@@ -342,7 +359,7 @@ public:
     // running io_context can fire a zero timeout during construction.
     auto handler = boost::make_shared<anvoke_handler<callback_t>>(cb, timeout, con, command);
     if(handler->is_timer_started())
-      handler->arm_timeout(command, cb, timeout);
+      handler->arm_timeout();
     m_invoke_response_handlers.push_back(handler);
     return handler->is_timer_started();
   }

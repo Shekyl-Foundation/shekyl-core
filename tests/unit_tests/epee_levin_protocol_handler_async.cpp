@@ -858,3 +858,114 @@ TEST(epee_levin_protocol_handler_async, timer_fired_then_close_delivers_destroye
   EXPECT_TRUE(alive_in_callback.load(std::memory_order_relaxed));
   EXPECT_FALSE(delivered_during_close.load(std::memory_order_relaxed));
 }
+
+namespace
+{
+  struct quiet_commands : public epee::levin::levin_commands_handler<close_count_context>
+  {
+    int invoke(int, const epee::span<const uint8_t>, epee::byte_stream&, close_count_context&) override
+    {
+      return LEVIN_OK;
+    }
+    int notify(int, const epee::span<const uint8_t>, close_count_context&) override
+    {
+      return LEVIN_OK;
+    }
+  };
+
+  // One response. The header's version makes `handle_recv` take the async
+  // path; the body is not delivered when the timer has already been posted.
+  std::string response_packet()
+  {
+    const std::string body(4, 'r');
+    epee::levin::bucket_head2 head{};
+    head.m_signature = SWAP64LE(LEVIN_SIGNATURE);
+    head.m_cb = SWAP64LE(body.size());
+    head.m_have_to_return_data = 0;
+    head.m_command = SWAP32LE(1);
+    head.m_flags = SWAP32LE(LEVIN_PACKET_RESPONSE);
+    head.m_protocol_version = SWAP32LE(LEVIN_PROTOCOL_VER_1);
+    std::string packet(reinterpret_cast<const char*>(&head), sizeof(head));
+    packet += body;
+    return packet;
+  }
+}
+
+TEST(epee_levin_protocol_handler_async, response_that_loses_a_fired_timer_reports_timedout)
+{
+  boost::asio::io_context io;
+  boost::asio::io_context::strand strand(io);
+  close_count_endpoint::config_t config;
+  quiet_commands commands;
+  config.set_handler(&commands, nullptr);
+  close_count_endpoint endpoint(io, strand, config);
+  const std::string packet = response_packet();
+
+  std::atomic<int> calls{0};
+  std::atomic<int> code{-1};
+  std::atomic<bool> recv_ok{false};
+
+  std::promise<void> held;
+  std::promise<void> release_hold;
+  boost::asio::post(strand, [&] {
+    held.set_value();
+    release_hold.get_future().wait();
+    // The timer completion is already queued behind this task. The response
+    // runs first, loses cancel_timer, and must not be reported as destroyed.
+    const bool accepted = endpoint.handler->handle_recv(packet.data(), packet.size());
+    recv_ok.store(accepted, std::memory_order_release);
+  });
+
+  boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work(io.get_executor());
+  std::thread runner_a([&io] { io.run(); });
+  std::thread runner_b([&io] { io.run(); });
+  struct stop_io
+  {
+    boost::asio::io_context& io;
+    std::thread& a;
+    std::thread& b;
+    std::promise<void>& release;
+    boost::asio::executor_work_guard<boost::asio::io_context::executor_type>& work;
+    bool released = false;
+    void unblock()
+    {
+      if (released)
+        return;
+      released = true;
+      try { release.set_value(); } catch (const std::future_error&) {}
+    }
+    ~stop_io()
+    {
+      unblock();
+      work.reset();
+      io.stop();
+      if (a.joinable())
+        a.join();
+      if (b.joinable())
+        b.join();
+    }
+  } guard{io, runner_a, runner_b, release_hold, work};
+
+  held.get_future().wait();
+  ASSERT_TRUE(endpoint.handler->start_outer_call());
+  ASSERT_TRUE(endpoint.handler->async_invoke(1, epee::levin::message_writer{},
+      [&](int result, const epee::span<const uint8_t>, close_count_context&) {
+        calls.fetch_add(1, std::memory_order_relaxed);
+        code.store(result, std::memory_order_relaxed);
+      },
+      std::chrono::milliseconds(50)));
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (endpoint.posts.load(std::memory_order_acquire) == 0 && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  ASSERT_EQ(endpoint.posts.load(std::memory_order_acquire), 1);
+  guard.unblock();
+
+  const auto done_by = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (calls.load(std::memory_order_relaxed) == 0 && std::chrono::steady_clock::now() < done_by)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+  EXPECT_TRUE(recv_ok.load(std::memory_order_acquire));
+  EXPECT_EQ(calls.load(std::memory_order_relaxed), 1);
+  EXPECT_EQ(code.load(std::memory_order_relaxed), LEVIN_ERROR_CONNECTION_TIMEDOUT);
+}
