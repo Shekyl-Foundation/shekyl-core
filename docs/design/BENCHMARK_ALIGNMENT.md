@@ -288,7 +288,7 @@ capture counts as a gap until a tracked T3 run reproduces it.
 
 | Id | What is not measured | The decision it feeds | Code path | State of the evidence |
 | --- | --- | --- | --- | --- |
-| **BA-G1** | Serve cost per response on the v3 path: CPU and wall-clock, by shard size and by responses in flight | Serve-side `MAX_INFLIGHT` (`rust/shekyl-p-serve/src/serve.rs:122`); the read capacity one device sustains per epoch (`docs/FOLLOWUPS.md:109`); the inputs to `W` and `L` | `digest_body`, `resolve_body`, `write_response` (`rust/shekyl-p-serve/src/serve.rs:505`, `:542`, `:642`) | One floor A/B, run 2026-10-05 across PR #954: serve CPU per response about 22.9 ms before and 103.5 ms after, and throughput at 8 in flight about halved. **These figures are relayed from the brief that commissioned this document. The run's observations are not in the tree at the pin** (BA-Q2). No bench of the serve path exists in `rust/shekyl-p-serve`, `shekyl-p-fetch` or `shekyl-p-host`. `ci/benchmarks` ran on #954's head and passed |
+| **BA-G1** | Serve cost per response on the v3 path: CPU and wall-clock, by shard size and by responses in flight | Serve-side `MAX_INFLIGHT` (`rust/shekyl-p-serve/src/serve.rs:122`); the read capacity one device sustains per epoch (`docs/FOLLOWUPS.md:109`); the inputs to `W` and `L` | `digest_body`, `resolve_body`, `write_response` (`rust/shekyl-p-serve/src/serve.rs:505`, `:542`, `:642`) | One floor A/B, run 2026-10-05 across PR #954: serve CPU per response about 22.9 ms before and 103.5 ms after, and throughput at 8 in flight about halved. **These figures are relayed from the brief that commissioned this document. The run's observations are not in the tree at the pin** (BA-Q2). No bench of the serve path exists in `rust/shekyl-p-serve`, `shekyl-p-fetch` or `shekyl-p-host`. `ci/benchmarks` ran on #954's head and passed. At the pin every production response pays this cost and is then refused: the persona key is not yet wired (BA-Q3) |
 | **BA-G2** | Client verify cost per fetched shard: the delivery digest, the hybrid countersignature check, and content verification | Fetch-side `MAX_INFLIGHT = 8` (`rust/shekyl-p-fetch/src/client.rs:60`); the cost every witness pays per assigned pair | `rust/shekyl-p-fetch/src/client.rs:297`, `:298`, `:308`; the `ContentVerify` trait (`rust/shekyl-p-fetch/src/target.rs:96`) | Never measured. No production `ContentVerify` exists; the only implementation accepts everything (`rust/shekyl-sp-t3-spike/src/harness.rs:460`), so no archival latency figure includes it. The digest pass is new in #954. The cap's memory argument compares against the floor by arithmetic (`rust/shekyl-p-fetch/src/client.rs:45`), and its design has since changed to a streaming verify that is not built (`docs/design/ARCHIVAL_SHARD_FETCH.md:850`) |
 | **BA-G3** | Whole-shard fetch time and miss rate over Tor on the v3 serve path | `archival_shard_length_bytes = 3 000 000` and `archival_attestation_anchor_lag_blocks = 4` (`config/consensus_constants.json:40`, `:37`); the two-retry budget (`docs/completed/ARCHIVAL_SHARD_T_DERIVATION.md:2110`); `p_attempt = 0.30`; the 18 229-pair capacity | BA-G1's serve path and `PFetchClient::fetch` (`rust/shekyl-p-fetch/src/client.rs:225`) | BA-I91 to BA-I95, all before #954. The ladder ran on an internal node, not the floor. A re-measurement "at the gate" is named as a reopen condition (`docs/design/CLIENT_VERSION_CONSTANTS_VALIDATION.md:947`) with no date, rig or owner |
 | **BA-G4** | Transaction and block verify cost on the floor after `PL-D3` | The surge factor 4 and the 300 000-byte zone (`config/consensus_constants.json:16`, `:17`); `SPEC_VERIFY_COST`, the hop and the embargo (`rust/shekyl-relay-privacy/src/verify_cost.rs:349`); the input cap (`src/cryptonote_config.h:316`) | `shekyl_fcmp_verify` (`rust/shekyl-ffi/src/legacy_fcmp.rs:390`), called at `src/cryptonote_core/blockchain.cpp:4224` | BA-I77 was captured at `8af70a60a`, 2026-09-05; `PL-D3` (`20738bf714`, 2026-09-14) is not an ancestor of it and "moved every shape" (`rust/shekyl-relay-privacy/src/verify_cost.rs:346`). The depth-24 cost `S = 4` is signed on is composed from per-layer slopes, not measured. Carriers already open: `docs/FOLLOWUPS.md:65`, `:917`, `:964` |
@@ -397,7 +397,7 @@ a live node.
 | **BA-T2** | Block-connect verify terms: admission pair, hybrid signature, Bulletproofs+, parse, at the modal and the cost-densest shape | T1, CI runner | gungraun over the pinned fixtures | new; subject of BA-I20 | chain rules |
 | **BA-T3** | Serve one response: digest pass, send pass, countersignature, at three shard sizes from an in-memory store | T1, CI runner | gungraun | new (BA-G1) | archival serve |
 | **BA-T4** | Verify one fetched shard: delivery digest, hybrid check, content verification once it exists | T1, CI runner | gungraun | new (BA-G2) | archival fetch |
-| **BA-T5** | Serve cost per response: CPU and wall-clock by shard size (smallest, `W`, heaviest) and by responses in flight (1, 8, 32, 64) | T3, floor | Loopback, on-disk store, no Tor and no daemon; cold and warm; n ≥ 100 per cell | new (BA-G1) | archival serve |
+| **BA-T5** | Serve cost per response, **split by phase: read, hash, sign**; CPU and wall-clock by shard size (smallest, `W`, heaviest) and by responses in flight (1, 8, 32, 64) | T3, floor | Loopback, on-disk store, no Tor and no daemon; cold and warm; n ≥ 100 per cell. Two arms in one session, alternating: the two-pass path at `b5e7dbfed5` and option S (BA-Q3). Falsifier for S's prediction: the hash phase is under half of the cost #954 added | new (BA-G1) | archival serve |
 | **BA-T6** | Client verify per shard, by shard size | T3, floor | n ≥ 100 per size | new (BA-G2) | archival fetch |
 | **BA-T7** | Whole-shard fetch over Tor on the production serve and fetch path: time and miss rate by object size, with and without mining | T3, floor serving and an internal node reading | The size-ladder and one-device protocols already written in [`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §10 | BA-I35, BA-I91 to BA-I95 | archival serve |
 | **BA-T8** | P2P span distributions: clearnet dial, handshake, gap on a LAN and a long path; Tor dial; Tor inbound; write-stall samples | T3, floor | n = 100 per leg; each reopen rule evaluated and its verdict recorded | BA-I80 to BA-I88 | P2P transport |
@@ -457,35 +457,113 @@ observations exist only where the run left them. Default: land them under
 figures in BA-G1 with a citation of that file. Until then BA-G1's numbers
 are hearsay.
 
-**BA-Q3 — Single pass or two passes on the serve path.** As ruled on
-2026-10-04 (`SF-D8`, `docs/design/ARCHIVAL_SHARD_FETCH.md:1292`), the
-persona reads the shard once to compute the delivery digest, signs, then
-reads it again to send, holding no more than a chunk; PR #961 keeps both
-reads. The alternative is one read with the shard held in memory, which
-makes `MAX_INFLIGHT` a whole-shard memory budget
-(`rust/shekyl-p-serve/src/serve.rs:531`). The digest is salted by the
-request nonce, so it cannot be cached per shard; signing after the send is
-excluded because a signing refusal must be the same 404 as a missing shard.
-Neither the ruling nor the documents that record it state what the second
-read and the digest cost.
+**BA-Q3 — The order of read, digest and sign on the serve path.** As ruled
+on 2026-10-04 (`SF-D8`, `docs/design/ARCHIVAL_SHARD_FETCH.md:1292`), the
+persona reads the shard once to compute the delivery digest `D`, signs, then
+reads it again to send, holding no more than a chunk. Neither the ruling nor
+the documents that record it state what the second read and the digest cost.
 
-A third form, raised on review of PR #964 and not evaluated here: compute
-the digest over a root of chunk hashes. The store computes a
-domain-separated, length-bound root over the shard's chunks when it fills
-the shard and keeps it beside it; per request the persona signs
-`H(nonce ‖ root)` without reading the body, then streams the body once; the
-client recomputes the root from the bytes it received, so the signature
-still binds what was delivered. One read, no whole-shard memory. Two things
-must be settled before it is a candidate. First, where the added serve cost
-goes: that it is mostly the digest pass is a hypothesis until BA-T5 splits
-read, digest and sign. Second, what salting the whole body with the nonce
-buys that `H(nonce ‖ root)` does not; if it serves a property beyond
-binding the delivered bytes, the tree form fails. It changes `D` on the
-consensus wire, so it is a design ruling and not a benchmark result.
+*What the digest provides,* since any change is judged against it:
 
-Default: two passes stand
-until BA-T5 reports capacity per epoch on the v3 path at the ruled cap; the
-question is then decided against that figure and the 4 096-pair list bound.
+1. `D` cannot be precomputed for a shard, published, or lifted from one read
+   into another: the requester's nonce leads a hash over the whole framed
+   body (`docs/design/ARCHIVAL_SHARD_FETCH.md:1101`).
+2. The signature binds the bytes delivered. The requester recomputes `D`
+   from what it received and never reads it back from the response.
+3. A refusal is the shared 404 and never a truncated 200, because the
+   persona signs before the first byte goes out
+   (`rust/shekyl-p-serve/src/serve.rs:529`).
+4. No pass holds more than a chunk of the shard.
+5. *Audit, which follows from 1 and is stated nowhere.* A pass record
+   carries the nonce and `D`, so anyone who later holds the shard can
+   recompute `D` and check a historical pass. A pass signed for bytes that
+   were not the shard is permanent evidence against its signer. This holds
+   while the frame is a function of the shard, which the write-zero padding
+   rule makes it today (`rust/shekyl-curve-tree/src/served_frame.rs:162`);
+   a padding scheme keeps it only if the padded frame stays recomputable.
+
+`D` does not show that the persona stores the shard; that is unchanged in
+every option below.
+
+*Option T, a digest over a root of chunk hashes — withdrawn by its proposer,
+2026-10-05.* With `D = H(nonce ‖ root)`, a persona that has discarded a shard
+and kept its 32-byte root can stream junk and sign a `D` that is consistent
+with the real shard. An honest requester still catches the bytes (property
+2), but a witness that skips the check, by collusion or by modified
+software, files a pass that audits clean forever, where under the flat hash
+it is provably fraudulent to anyone holding the shard. T loses property 5.
+It is also not what was ruled: a salted digest of a digest is not a
+nonce-salted digest of the whole response.
+
+*Option S, the candidate: hash while streaming, sign at the end.* The
+signature is already the last bytes on the wire. The persona runs the anchor
+gate before touching the store, as now; confirms before the head goes out
+that it can sign; streams the body once, folding exactly the bytes it writes
+into the same flat salted digest; then signs and appends the signature.
+
+- **Unchanged:** `D`'s definition, byte for byte. No wire, consensus or
+  domain-registry change. Properties 1, 2, 4 and 5 hold.
+- **Gained:** one read and one hash per response where there are two of
+  each. The signature covers the bytes on the wire by construction, so the
+  second fold and its comparison (PR #961) are not needed.
+- **Cost 1, property 3 weakens.** A signer that fails after the body has
+  streamed produces a truncated 200, a class the serve loop names as a
+  probe surface that must not widen for ordinary misses
+  (`rust/shekyl-p-serve/src/serve.rs:404`). The exposure: holdings are
+  public through the bond, so a 404 on a bonded shard already means "store
+  fault or signer refusal"; S would let any requester tell those two apart.
+  If the key can be absent while the store serves, signer state becomes an
+  oracle for whatever makes it absent.
+- **The mitigation is a pre-flight check, and it is a new trait method.**
+  `PassKey` has one operation today, `sign_pass`
+  (`rust/shekyl-p-serve/src/countersign.rs:81`). S needs a second that
+  answers "can this key sign" before the head, costs the same whichever way
+  it answers, and turns key absence into the shared 404. A refusal after
+  the body is then a cryptographic fault only: rare, counted, and of the
+  same class as a store fault mid-body, which truncates today.
+- **Cost 2, a store fault mid-body is signed, not truncated.** Today the
+  signature is released only when the sent fold equals the signed one, so a
+  shard that changes between the reads is cut short and counted
+  (`rust/shekyl-p-serve/src/serve.rs:413`). Under S there is one fold, and
+  the persona signs what it read. Detection moves to the requester's
+  content verification, which has no production implementation (BA-G2). An
+  honest witness still refuses to file, and a dishonest one now holds
+  signed evidence, which strengthens property 5; but the operator's own
+  signal is gone.
+
+*The prerequisite: can the key be absent while the store serves?* Read at
+the pin:
+
+- **Today it always is.** Production binds a placeholder key that refuses
+  every transcript
+  (`rust/shekyl-engine-core/src/engine/stake_engine/serving/start.rs:246`).
+  Every servable request is read and hashed in full, then answered 404
+  (`rust/shekyl-p-host/src/signer.rs:68`). The pre-flight would retire that
+  work as well.
+- **The design intends residency for as long as the host serves**
+  (`docs/design/ARCHIVAL_SHARD_FETCH.md:945`), and the key bundles are
+  derived when the wallet opens and held for the session
+  ([`ARCHIVAL_BOND_CONSTRUCTION.md`](ARCHIVAL_BOND_CONSTRUCTION.md) §10.2).
+  The engine has no locked-while-open state at the pin.
+- **The contract still allows absence at sign time**: "key not resident,
+  signer offline, or a host-side policy refusal"
+  (`rust/shekyl-p-serve/src/countersign.rs:74`). Whether the signing
+  capability can go away while the listener stays up is the unwired
+  remainder of `SH-2`, and no document settles it.
+
+So the pre-flight is mandatory under S unless `SH-2` makes the serving
+task's life a subset of the key's by construction.
+
+*What S is expected to buy* is a prediction until BA-T5 runs. If the added
+serve cost is mostly two Keccak passes over the shard, S removes about half
+of it; one pass remains. A faster digest (TurboSHAKE or KangarooTwelve) is a
+separate change to the wire and the domain registry and is not part of S.
+
+S changes the order the 2026-10-04 ruling set (sign before the first byte)
+and leaves the digest alone. It is the maintainer's to rule and is **not
+ruled**. Default: S, with the pre-flight method, once BA-T5 has reported the
+cost by phase for both arms and the `SH-2` question above is answered;
+until then two passes stand. T is not an option.
 
 **BA-Q4 — Derive serve-side `MAX_INFLIGHT`.** Default: derive it from BA-T5
 on the floor, as the constant's own comment promises (BA-D15), and state
