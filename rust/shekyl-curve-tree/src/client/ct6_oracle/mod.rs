@@ -714,127 +714,21 @@ fn a_root_mismatch_refuses_the_whole_batch() {
 // that its three verdicts fire.
 mod ring;
 
+// Capture's own passes: what the fold wrote, graded against what assembly
+// builds from the whole tree.
+mod capture;
+
 // ---------------------------------------------------------------------------
-// CT-6 increment 5 — capture's red-bite: assembly must not read foreign leaves
+// CT-6 increment 5 — capture's red-bite lives in `capture`
 // ---------------------------------------------------------------------------
-
-/// With every foreign leaf removed, assembly refuses.
-///
-/// # Three states
-///
-/// Capture's claim is one comparison: a path assembled with every foreign
-/// leaf absent equals the path assembled with the whole tree present.
-///
-/// | | with foreign leaves absent |
-/// | --- | --- |
-/// | before the §11.6 gate | succeeded, returning a wrong path under the real root |
-/// | now (gate landed) | refuses with [`PathRootFault::RootDisagrees`] |
-/// | after capture | succeeds, and the path equals `full` |
-///
-/// State 3 replaces the refusal with `assert_eq!(full, sparse)`.
-///
-/// This is not a timing test. A cost curve across populations only estimates
-/// the property. A slower implementation cannot pass the inverted comparison,
-/// and neither can one that keeps a fallback rebuild, because the fallback
-/// has nothing to rebuild from.
-///
-/// # What this refusal is
-///
-/// The store gate reads `root_at` and still passes: the store is left
-/// untouched. The branches are rebuilt from the one remaining entry.
-/// [`verify_path_against_its_branches`] hashes those branches and they are
-/// not the oracle root, so the fault is [`PathRootFault::RootDisagrees`].
-/// Membership holds on this shape — the one leaf's scalar is in the branch
-/// built from it. [`a_mutated_leaf_chunk_is_absent_from_its_branch`] pins
-/// the membership link.
-#[test]
-fn assembly_today_depends_on_every_foreign_leaf() {
-    let tip = varying_tip();
-    let mut client = CurveTreeClient::new();
-    ingest_through(&mut client, tip, scheduled_outputs);
-    let height = tip;
-    let cutoff = height - BlockCount::ONE;
-
-    let (inputs, _, _) = two_inputs_in_different_chunks(&client, cutoff);
-    let owned = inputs[0];
-
-    // The anchor is an INDEPENDENT root: a replay oracle over the full entry
-    // set, not the client's own `root_at`. Taken before anything is removed,
-    // and asserted to agree with the store tier, so the reference this test
-    // assembles against is the real consensus anchor rather than one the
-    // subject chose for itself.
-    let (oracle_root, oracle_leaves) = oracle_at(&client.entries, cutoff);
-    assert!(
-        oracle_leaves > 1,
-        "the tree must hold more than the owned leaf, or removing the others proves nothing"
-    );
-    assert_eq!(
-        client.root_at(height).expect("store root reads"),
-        oracle_root,
-        "the store tier must agree with the replay oracle before this test \
-         removes anything, or the anchor is not the real one"
-    );
-    let reference = reference_at(&client, height);
-    assert_eq!(reference.curve_tree_root, oracle_root);
-
-    let full = client
-        .assemble_paths(&[owned], &reference)
-        .expect("assembly with the whole tree present")
-        .pop()
-        .expect("one input yields one path");
-
-    // The positive half, and it is not incidental: `full` came back at all,
-    // which means the §11.6 gate hashed its branches and accepted them. A
-    // gate that refused *everything* would satisfy the negative assertion
-    // below while being worthless, so the passing case is asserted here in
-    // the same test rather than left to the suite at large.
-    assert!(
-        full.leaf_chunk.len() > 1,
-        "the owned leaf's real chunk holds its siblings; a one-leaf chunk here would mean \
-         the fixture, not the gate, is doing the work"
-    );
-
-    // Remove every leaf that is not the owned output's. The store is left
-    // untouched, which is what keeps the integrity gate green below.
-    let before = client.entries.len();
-    client.entries.retain(|entry| entry.gindex == owned.gindex);
-    assert_eq!(client.entries.len(), 1, "exactly the owned leaf remains");
-    assert!(
-        before > 1,
-        "the fixture must hold foreign leaves for their absence to mean anything"
-    );
-
-    // STATE 2 of 3. Before the §11.6 gate this SUCCEEDED, returning a path
-    // whose `tree_root` was the real consensus root over a one-leaf tree.
-    // The gate now recomputes the root from the path's own branches, so the
-    // same call refuses. Capture is state 3: it will succeed again, with the
-    // branches the owned leaf actually has.
-    let refusal = client
-        .assemble_paths(&[owned], &reference)
-        .expect_err("the §11.6 gate must refuse a path whose branches are not the tree's");
-
-    match refusal {
-        ClientError::PathRootMismatch { claimed, fault } => {
-            assert_eq!(
-                claimed, oracle_root,
-                "the refusal must name the root the path claimed, which is the real one: \
-                 that is what makes the store gate above it blind to this"
-            );
-            assert_eq!(
-                fault,
-                PathRootFault::RootDisagrees,
-                "the one-leaf branch contains its own leaf; the refusal is the root. \
-                 ChildAbsent here would mean the fixture stopped building that branch \
-                 from the remaining leaf"
-            );
-        }
-        other => panic!(
-            "expected PathRootMismatch from the artifact check; got {other:?}. If capture \
-             landed, this is state 3 — assert the path EQUALS `full` instead of asserting a \
-             refusal, and see the header"
-        ),
-    }
-}
+//
+// `assembly_today_depends_on_every_foreign_leaf` stood here through states 1
+// and 2: it asserted a wrong path, then the §11.6 refusal. State 3 asserts
+// equality with the rebuilt path, which needs distinct leaves and a
+// registered output, so it is
+// `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`.
+// The passes below that assemble on THIS fixture register nothing and so
+// exercise the rebuild — the fallback the registrant PR retires.
 
 /// Membership binds the leaf chunk to the branches.
 ///

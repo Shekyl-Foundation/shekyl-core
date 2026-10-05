@@ -11,6 +11,18 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **Retire the plaintext `captured_chunks` table for sealed persistence on the wallet's own ledger (`CT-6` Q3), deleting it rather than migrating it** (why it is plaintext now, and why no nettype branch may stand in: `CT6_PROVING_STATE.md` §11.8). Falsify by `captured_chunks` being absent from `redb_backend.rs` with the path set riding the sealed ledger.
+  - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
+  - Target: pre-genesis
+
+- **Read off the FCMP++ first-layer gadget whether it consumes anything from a sibling beyond its x-coordinate** (what each answer means for capture's layer-0 shape and the identity tail: `CT6_PROVING_STATE.md` §11.11). Falsify by the gadget's own source naming what it reads from a sibling.
+  - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
+  - Target: pre-genesis
+
+- **Account for the identities the wallet still owes itself before `CT-6` increment 7 retires in-memory `entries`** (the open-leaf-chunk tail and the owned positions `drained_sorted` still supplies: `CT6_PROVING_STATE.md` §11.11). Falsify by that account existing with each case either supplied or refused.
+  - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
+  - Target: pre-genesis
+
 - **Stamp the revision when cross-building a bench binary for a remote rig.** `shekyl-wss-q1b-bench`'s `build.rs` watches `HEAD`, `packed-refs` and the branch ref, but a `.rs` edit is none of those, so Cargo reuses the cached script output: the stamp goes stale **and** loses its `-dirty` suffix, reporting a clean build of a dirty tree. `AssembleEdgeRecord` carries only that build-time stamp, and runtime capture (`report::ProverPin::capture`) cannot help on a rig with no repo — the case the cross-build exists for. `assemble_edge_20261002T052942Z.json` reads `1ab4664cb` for a binary built from `11a0c8451`. `build.rs` already honours a `SHEKYL_GIT_REVISION` override, so the remedy is to set it in the cross-build recipe rather than to add a rerun trigger Cargo does not offer. Falsify by a record from a copied binary naming the revision it was built from.
   - Owner: [`WSS_Q1B_BENCH_SPEC.md`](design/WSS_Q1B_BENCH_SPEC.md)
   - Target: pre-genesis
