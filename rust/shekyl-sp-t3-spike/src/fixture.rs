@@ -60,14 +60,10 @@ use shekyl_p_serve::{ProviderError, ShardBody, ShardProvider};
 
 /// Leaves in one frozen level-2 segment (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`
 /// §5.2: `SELENE_CHUNK_WIDTH · HELIOS_CHUNK_WIDTH · SELENE_CHUNK_WIDTH`
-/// = 38 · 18 · 38).
-///
-/// Duplicated as a literal rather than imported: this crate is disposable and
-/// must not become a consumer that a future constants change has to sweep. The
-/// authoritative value is `shekyl_archival_retention::segment_freeze`'s
-/// `SEGMENT_LEAF_COUNT`, and [`ShardFixture::load`]'s size check is what catches a
-/// drift between them.
-pub const SEGMENT_LEAF_COUNT: usize = 25_992;
+/// = 38 · 18 · 38), read from its one owner. `shekyl-archival-retention`'s
+/// consensus `SEGMENT_LEAF_COUNT` is const-asserted equal to the same function,
+/// so the fixture's size and the server's unit cannot drift apart.
+pub const SEGMENT_LEAF_COUNT: usize = shekyl_fcmp::tree::leaves_per_segment();
 
 /// Bytes per curve-tree leaf (`construct_leaf`: four 32-byte fields).
 pub const LEAF_BYTES: usize = 128;
@@ -86,7 +82,7 @@ pub enum FixtureError {
         path: String,
     },
     /// The file exists but is not a whole shard. Either the extraction stopped
-    /// early or `SEGMENT_LEAF_COUNT` has drifted from the consensus constant.
+    /// early or the file was extracted under another segment size.
     WrongSize {
         /// Bytes actually read.
         got: usize,
@@ -110,7 +106,7 @@ impl std::fmt::Display for FixtureError {
             Self::WrongSize { got, want } => write!(
                 f,
                 "shard fixture is {got} bytes, not {want}: extraction stopped early, or \
-                 SEGMENT_LEAF_COUNT drifted from the consensus constant"
+                 the file was extracted under another segment size"
             ),
             Self::Io(e) => write!(f, "shard fixture read failed: {e}"),
         }
