@@ -3,11 +3,15 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The sessions a reader may see.
+//! The rows a reader may see.
 //!
-//! The hub is the only writer. It publishes a new [`Board`] when a session
+//! The hub is the only writer. It publishes a new [`Board`] when a row
 //! arrives, finishes its handshake, or closes. A reader holds one board.
 //! A later publish does not change that board.
+//!
+//! The live table is a hash map, keyed by admission id. Publish copies
+//! the open rows and sorts that copy. The sort is the admission order a
+//! reader sees. The hash map is the lookup.
 //!
 //! This is not the C++ connection context. A walker that needs a fact asks
 //! the board. It does not borrow the row the strand is writing. Support
@@ -20,84 +24,48 @@
 //! is that cost. D5's thread-budget flood leg is what measures it; that
 //! measurement is the reopen, not a reason to publish a mutable row.
 
-use std::net::IpAddr;
 use std::sync::Arc;
 
 use shekyl_transport_layer::{ConnectorId, Direction, SocketId};
 
 use crate::endpoint::Endpoint;
 
-/// The peer address this node observed, written once when the row is created.
-///
-/// An onion is the 32-byte service key, not the hostname. Tor inbound has
-/// no peer address.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PeerEnd {
-    /// A clearnet host and the port of this socket.
-    ///
-    /// The port is the one the socket connected on. On an accept that is
-    /// the peer's ephemeral source port, not the port the peer advertised.
-    /// The advertised port is a claim, and it is not this field.
-    Host {
-        /// The address the socket connected.
-        ip: IpAddr,
-        /// The socket's port.
-        port: u16,
-    },
-    /// A v3 onion that was dialed.
-    Onion {
-        /// The service key.
-        key: [u8; 32],
-        /// The port that was dialed.
-        port: u16,
-    },
-    /// Tor inbound. The zone has no peer address.
-    Unaddressed,
-}
-
-impl PeerEnd {
-    pub(crate) fn from_endpoint(endpoint: &Endpoint) -> Self {
-        match endpoint {
-            Endpoint::Clearnet { ip, port, .. } => Self::Host {
-                ip: *ip,
-                port: *port,
-            },
-            Endpoint::TorInbound => Self::Unaddressed,
-            Endpoint::Tor { key, port } => Self::Onion {
-                key: *key,
-                port: *port,
-            },
-        }
-    }
-}
-
 /// One session on a [`Board`].
+///
+/// The endpoint is the address, the connector, and the direction. Those
+/// three are one fact, observed when the row was admitted, and they do
+/// not change. `established` is the handshake, and it is a different fact:
+/// a dial occupies its direction before the handshake finishes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Session {
+pub struct Row {
     id: SocketId,
-    connector: ConnectorId,
-    direction: Direction,
+    endpoint: Endpoint,
     established: bool,
-    end: PeerEnd,
 }
 
-impl Session {
+impl Row {
     /// The admission id.
     #[must_use]
     pub const fn id(self) -> SocketId {
         self.id
     }
 
+    /// The endpoint observed when the row was admitted.
+    #[must_use]
+    pub const fn endpoint(self) -> Endpoint {
+        self.endpoint
+    }
+
     /// The connector that carried this session.
     #[must_use]
     pub const fn connector(self) -> ConnectorId {
-        self.connector
+        self.endpoint.connector()
     }
 
     /// Accepted or dialed.
     #[must_use]
     pub const fn direction(self) -> Direction {
-        self.direction
+        self.endpoint.direction()
     }
 
     /// The Levin handshake has finished.
@@ -106,89 +74,81 @@ impl Session {
         self.established
     }
 
-    /// The peer address observed when the row was created. It does not change.
-    #[must_use]
-    pub const fn end(self) -> PeerEnd {
-        self.end
-    }
-
-    pub(crate) const fn new(
-        id: SocketId,
-        connector: ConnectorId,
-        direction: Direction,
-        established: bool,
-        end: PeerEnd,
-    ) -> Self {
+    pub(crate) const fn new(id: SocketId, endpoint: Endpoint, established: bool) -> Self {
         Self {
             id,
-            connector,
-            direction,
+            endpoint,
             established,
-            end,
         }
     }
 }
 
-/// Sessions at one moment, ordered by admission id.
+/// Rows at one moment, ordered by admission id.
 ///
 /// Cloning clones the `Arc`. The slice does not change.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Board {
-    sessions: Arc<[Session]>,
+    rows: Arc<[Row]>,
 }
 
 impl Board {
-    /// `sessions` is already in admission-id order. The hub's table is a
-    /// `BTreeMap` keyed by that id, so the order is the table's.
-    pub(crate) fn from_sessions(sessions: Vec<Session>) -> Self {
-        debug_assert!(sessions.is_sorted_by_key(|session| session.id.get()));
+    /// Sort `rows` by admission id. The hub's table is a hash map, so the
+    /// order is applied here, on the copy a reader holds.
+    pub(crate) fn from_rows(mut rows: Vec<Row>) -> Self {
+        rows.sort_by_key(|row| row.id.get());
+        debug_assert!(rows.is_sorted_by_key(|row| row.id.get()));
         Self {
-            sessions: Arc::from(sessions),
+            rows: Arc::from(rows),
         }
     }
 
-    /// No sessions.
+    /// No rows.
     #[must_use]
     pub fn empty() -> Self {
         Self {
-            sessions: Arc::from([]),
+            rows: Arc::from([]),
         }
     }
 
-    /// Every session, in admission-id order.
+    /// Every open row, in admission-id order.
     #[must_use]
-    pub fn sessions(&self) -> &[Session] {
-        &self.sessions
+    pub fn rows(&self) -> &[Row] {
+        &self.rows
     }
 
-    /// The session with this id, if it was on this board.
+    /// The row with this id, if it was on this board.
     #[must_use]
-    pub fn get(&self, id: SocketId) -> Option<&Session> {
-        self.sessions
-            .binary_search_by_key(&id.get(), |session| session.id.get())
+    pub fn get(&self, id: SocketId) -> Option<&Row> {
+        self.rows
+            .binary_search_by_key(&id.get(), |row| row.id.get())
             .ok()
-            .map(|index| &self.sessions[index])
+            .map(|index| &self.rows[index])
     }
 
-    /// How many sessions this board carries.
+    /// How many rows this board carries.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.sessions.len()
+        self.rows.len()
     }
 
-    /// Whether this board carries no session.
+    /// Whether this board carries no row.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.sessions.is_empty()
+        self.rows.is_empty()
     }
 
-    /// Inbound sessions. This is the board's count, not a cache refreshed
-    /// on a timer.
+    /// Rows in `direction`, handshake or not.
+    ///
+    /// The handshake flag is not part of this count. A dial in flight
+    /// still occupies an outbound slot, so the dial cap's predicate is
+    /// [`Direction::Outbound`]. `established` is a separate fact on the
+    /// row, and a count of established rows would let the node dial past
+    /// the cap while handshakes are outstanding.
     #[must_use]
-    pub fn inbound(&self) -> usize {
-        self.sessions
+    pub fn direction_count(&self, direction: Direction) -> usize {
+        self.rows
             .iter()
-            .filter(|session| session.direction == Direction::Inbound)
+            .filter(|row| row.direction() == direction)
             .count()
     }
 }

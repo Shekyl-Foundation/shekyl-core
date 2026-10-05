@@ -28,7 +28,11 @@ pub enum Endpoint {
     Clearnet {
         /// The peer address.
         ip: IpAddr,
-        /// The port the union carries.
+        /// The port of this socket.
+        ///
+        /// On an accept, this is the peer's ephemeral source port, not
+        /// the port the peer advertised. The advertised port is a claim,
+        /// and it is not this field.
         port: u16,
         /// Accepted or dialed.
         direction: Direction,

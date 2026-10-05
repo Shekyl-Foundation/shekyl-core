@@ -11,7 +11,7 @@
 //! the strand returns. The first [`CloseCause`] wins. [`Hub::reap`] drops
 //! the row when the executor drops the link.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock};
 
@@ -28,7 +28,7 @@ use shekyl_transport_layer::{
 use crate::dial::Dial;
 use crate::endpoint::Endpoint;
 use crate::loopback::Loopback;
-use crate::registry::{Board, Session as Listed};
+use crate::registry::{Board, Row};
 
 /// What the strand is asked to run. The post returns before the strand does.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,12 +100,9 @@ struct Conn {
     send: Option<SendHalf>,
     cause: Option<CloseCause>,
     phase: Phase,
-    /// The connector of the endpoint this row was adopted with. Every post
-    /// for the row names it.
-    connector: ConnectorId,
-    direction: Direction,
-    /// The peer address observed at adopt. Not rewritten.
-    end: crate::registry::PeerEnd,
+    /// The endpoint this row was adopted with. Posts name its connector.
+    /// The address is the one observed at adopt and is not rewritten.
+    endpoint: Endpoint,
     /// The Levin handshake has finished. Distinct from [`Phase`]: a row can
     /// be open to frames before the handshake, and closed after it.
     established: bool,
@@ -128,7 +125,7 @@ struct Conn {
 
 struct Inner {
     sockets: Sockets,
-    conns: BTreeMap<SocketId, Conn>,
+    conns: HashMap<SocketId, Conn>,
     ceiling: InboundCeiling,
     /// The last board published. Readers clone this. They do not lock the table.
     board: Board,
@@ -176,7 +173,7 @@ impl Hub {
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 sockets,
-                conns: BTreeMap::new(),
+                conns: HashMap::new(),
                 ceiling,
                 board: Board::empty(),
             })),
@@ -298,9 +295,7 @@ impl Hub {
                 send: Some(send),
                 cause: None,
                 phase: Phase::Arming,
-                connector: endpoint.connector(),
-                direction: endpoint.direction(),
-                end: crate::registry::PeerEnd::from_endpoint(&endpoint),
+                endpoint,
                 established: false,
                 notify: Arc::new(tokio::sync::Notify::new()),
                 posted_deliveries: 0,
@@ -322,27 +317,20 @@ impl Hub {
 
     /// Rebuild the published board from rows that are still connected.
     ///
-    /// The table is a `BTreeMap` keyed by admission id, so iteration is
-    /// that order. This copies the slice. Under an accept flood that is
-    /// O(N) per accept. D5's thread-budget flood leg measures that cost;
-    /// it is not a reason to hand a reader the live row. A closed row
-    /// stays in the table until [`Self::reap`] and is not on the board.
+    /// The live table is a hash map, keyed for lookup by admission id.
+    /// Publish sorts the copy. This is O(N) per accept. Under an accept
+    /// flood that is O(N²) across the flood. D5's thread-budget flood leg
+    /// measures that cost; it is not a reason to hand a reader the live
+    /// row. A closed row stays in the table until [`Self::reap`] and is
+    /// not on the board.
     fn republish(inner: &mut Inner) {
-        let sessions = inner
+        let rows = inner
             .conns
             .iter()
             .filter(|(_, conn)| !matches!(conn.phase, Phase::Closed))
-            .map(|(&id, conn)| {
-                Listed::new(
-                    id,
-                    conn.connector,
-                    conn.direction,
-                    conn.established,
-                    conn.end,
-                )
-            })
+            .map(|(&id, conn)| Row::new(id, conn.endpoint, conn.established))
             .collect();
-        inner.board = Board::from_sessions(sessions);
+        inner.board = Board::from_rows(rows);
     }
 
     /// Block until the handler is armed, or until the id has closed.
@@ -488,7 +476,7 @@ impl Hub {
                 }
                 conn.phase = Phase::Delivering;
                 conn.posted_deliveries = conn.posted_deliveries.saturating_add(1);
-                let connector = conn.connector;
+                let connector = conn.endpoint.connector();
                 let frame = bytes.take().expect("checked above");
                 (self.post)(Post::Deliver {
                     id,
@@ -603,18 +591,27 @@ impl Hub {
     }
 
     /// The Levin handshake finished. Fires this row's gap sender, if it
-    /// still has one. A row that already closed has nothing to fire.
+    /// still has one.
+    ///
+    /// A missing row, and a row already in [`Phase::Closed`], are left
+    /// alone. A close is not a handshake, and the closed row stays until
+    /// [`Self::reap`].
     pub fn session_established(&self, id: SocketId) {
         let sender = {
             let mut inner = self.lock();
-            let sender = inner.conns.get_mut(&id).map(|conn| {
-                conn.established = true;
-                conn.gap.take()
-            });
-            if sender.is_some() {
+            let mut sender = None;
+            let mut publish = false;
+            if let Some(conn) = inner.conns.get_mut(&id) {
+                if !matches!(conn.phase, Phase::Closed) {
+                    conn.established = true;
+                    sender = conn.gap.take();
+                    publish = true;
+                }
+            }
+            if publish {
                 Self::republish(&mut inner);
             }
-            sender.flatten()
+            sender
         };
         if let Some(sender) = sender {
             match sender.send(()) {
@@ -736,7 +733,7 @@ impl Hub {
             let open = conn.open.take();
             let send = conn.send.take();
             let gap = conn.gap.take();
-            let connector = conn.connector;
+            let connector = conn.endpoint.connector();
             poster(Post::Closed {
                 id,
                 connector,

@@ -17,7 +17,6 @@ use shekyl_transport_layer::{CloseCause, CloseKind, CloseResult, ConnectorId, Di
 use super::{Hub, Phase, Post};
 use crate::drive_inbound;
 use crate::endpoint::{admit, Endpoint};
-use crate::PeerEnd;
 
 fn endpoint(ip: Ipv4Addr, direction: Direction) -> Endpoint {
     Endpoint::Clearnet {
@@ -509,29 +508,51 @@ fn the_board_is_the_sessions_and_a_held_board_does_not_move() {
     let outbound = adopt(&rig, Direction::Outbound, 32);
     let held = rig.hub.board();
     assert_eq!(held.len(), 2);
-    assert_eq!(held.inbound(), 1);
+    assert_eq!(held.direction_count(Direction::Inbound), 1);
+    assert_eq!(held.direction_count(Direction::Outbound), 1);
     let inbound_row = held.get(inbound.id).expect("inbound");
     assert_eq!(inbound_row.connector(), ConnectorId::Clearnet);
     assert_eq!(inbound_row.direction(), Direction::Inbound);
     assert!(!inbound_row.established());
     assert_eq!(
-        inbound_row.end(),
-        PeerEnd::Host {
-            ip: IpAddr::V4(doc_ip()),
-            port: 18080,
-        }
+        inbound_row.endpoint(),
+        endpoint(doc_ip(), Direction::Inbound)
     );
 
     rig.hub.session_established(inbound.id);
     assert!(!held.get(inbound.id).expect("held").established());
-    assert!(rig.hub.board().get(inbound.id).expect("live").established());
+    let live = rig.hub.board();
+    assert!(live.get(inbound.id).expect("live").established());
+    // The handshake flag is not the dial-cap count.
+    assert_eq!(live.direction_count(Direction::Inbound), 1);
 
     rig.hub.close(inbound.id);
     assert!(rig.hub.board().get(inbound.id).is_none());
     assert_eq!(rig.hub.board().len(), 1);
+    assert_eq!(rig.hub.board().direction_count(Direction::Inbound), 0);
+    assert_eq!(rig.hub.board().direction_count(Direction::Outbound), 1);
     assert_eq!(
         rig.hub.board().get(outbound.id).map(|row| row.id()),
         Some(outbound.id)
     );
     assert_eq!(held.len(), 2);
+
+    rig.hub.session_established(inbound.id);
+    assert!(rig.hub.board().get(inbound.id).is_none());
+    assert_eq!(rig.hub.board().len(), 1);
+}
+
+#[test]
+fn published_rows_follow_admission_order() {
+    let rig = rig();
+    let opened: Vec<_> = (0..8)
+        .map(|_| adopt(&rig, Direction::Outbound, 32))
+        .collect();
+    let board = rig.hub.board();
+    let published: Vec<_> = board.rows().iter().map(|row| row.id().get()).collect();
+    let admitted: Vec<_> = opened.iter().map(|row| row.id.get()).collect();
+    assert_eq!(published, admitted);
+    assert!(published.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(board.direction_count(Direction::Outbound), 8);
+    assert_eq!(board.direction_count(Direction::Inbound), 0);
 }

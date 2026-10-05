@@ -68,9 +68,10 @@ pub enum ObservedEndpoint {
 
 /// One live socket. There is no public constructor: the table mints it.
 ///
-/// `Ord` is the minted id. The table starts at 1 and increments, and it
-/// never reuses an id, so that order is admission order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// The table starts at 1 and increments, and it never reuses an id.
+/// Admission order is that sequence. This type does not order itself:
+/// a reader that needs the sequence sorts the copy it publishes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SocketId(u64);
 
 impl SocketId {
