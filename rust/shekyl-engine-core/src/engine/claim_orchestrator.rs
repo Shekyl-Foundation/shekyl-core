@@ -73,7 +73,7 @@
 use std::collections::BTreeSet;
 
 use shekyl_curve_tree::{
-    two_sided_reference_height, AssembleInput, BlockHash, CurveTreeRoot, Gindex, ReferenceBlock,
+    two_sided_reference_height, AssembleInput, BlockHash, CurveTreeRoot, ReferenceBlock,
     TwoSidedRefusal,
 };
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
@@ -339,11 +339,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     };
     let assemble_inputs: Vec<AssembleInput> = swept
         .path_records()
-        .map(|r| AssembleInput {
-            gindex: Gindex::from_raw(r.gindex.to_raw()),
-            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(r.output_key),
-            commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(r.commitment),
-        })
+        .map(crate::engine::ownership::p_assemble_input)
         .collect();
     let paths = ctx
         .tree
