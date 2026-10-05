@@ -110,14 +110,17 @@ pub(crate) fn take_built_pending_tx(
 }
 
 /// Release a reservation the user declined, with a "nothing was sent" line.
-pub(crate) fn discard_declined(rpc: &RpcSession, built: &BuiltPendingTx) -> CommandResult {
+/// Release a reservation the operator declined.
+///
+/// The caller's refusal already says nothing was sent. This does not return
+/// a success value: the command's result is that refusal. A discard that
+/// itself fails is the result instead, because the funds are still reserved.
+pub(crate) fn discard_declined(
+    rpc: &RpcSession,
+    built: &BuiltPendingTx,
+) -> Result<(), crate::outcome::CommandFailed> {
     match rpc.call("discard_pending_tx", json!({ "pending_tx_id": built.id })) {
-        Ok(_) => {
-            if !crate::outcome::json_mode() {
-                println!("Transaction discarded.");
-            }
-            Ok(json!({"discarded": true}))
-        }
+        Ok(_) => Ok(()),
         Err(e) => Err(rpc.report("Failed to discard pending transaction", &e)),
     }
 }
@@ -147,6 +150,7 @@ pub(crate) fn submit_pending(rpc: &RpcSession, built: &BuiltPendingTx) -> Comman
 
 pub fn cmd_transfer(
     rpc: &RpcSession,
+    presentation: &crate::outcome::Presentation,
     amount: u64,
     dest: &str,
     priority: crate::resolve::FeePriority,
@@ -168,14 +172,12 @@ pub fn cmd_transfer(
     };
     let built = take_built_pending_tx(rpc, &response)?;
 
-    if !crate::outcome::json_mode() {
-        println!("Transaction summary:");
-        println!("  To:     {dest}");
-        println!("  Amount: {} SKL", format_amount(amount));
-        println!("  Fee:    {} SKL", built.fee_skl);
-    }
+    presentation.say("Transaction summary:");
+    presentation.say(format!("  To:     {dest}"));
+    presentation.say(format!("  Amount: {} SKL", format_amount(amount)));
+    presentation.say(format!("  Fee:    {} SKL", built.fee_skl));
 
-    if let Err(error) = super::confirm_money("Send this transaction?", "send", yes) {
+    if let Err(error) = super::confirm_money(presentation, "Send this transaction?", "send", yes) {
         discard_declined(rpc, &built)?;
         return Err(error);
     }

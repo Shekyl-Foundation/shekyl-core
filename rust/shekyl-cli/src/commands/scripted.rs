@@ -21,11 +21,26 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
 use zeroize::Zeroizing;
 
+use crate::outcome::{refusal, CommandFailed, CommandResult, Presentation};
 use crate::rpc_client::{params, RpcSession};
 
 type BoxErr = Box<dyn std::error::Error>;
+
+/// What `create --seed-out` tells a script. The seed itself stays in the file.
+#[derive(Debug, Serialize)]
+pub struct CreatedWallet {
+    pub name: String,
+    pub seed_out: String,
+}
+
+/// What `restore --seed-file` tells a script.
+#[derive(Debug, Serialize)]
+pub struct RestoredWallet {
+    pub name: String,
+}
 
 /// `shekyl-cli create <name> --seed-out <path>` — non-interactive create.
 #[derive(clap::Args)]
@@ -69,15 +84,21 @@ pub struct RestoreArgs {
     pub password_stdin: bool,
 }
 
+fn local(error: impl std::fmt::Display) -> CommandFailed {
+    refusal(error.to_string())
+}
+
 /// Create a wallet and write its one-time seed backup to `--seed-out`.
-pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> Result<(), BoxErr> {
+///
+/// The caller prints the result. This function does not.
+pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> CommandResult<CreatedWallet> {
     let password = read_password_source(args.password_file.as_deref(), args.password_stdin)?;
 
     // Reserve the seed-out file BEFORE creating the wallet (O_EXCL, 0600): if
     // this fails we have created nothing, so there is no wallet whose backup we
     // then cannot store. If create_wallet later fails, the empty file is
     // removed on the error path below.
-    let mut seed_file = open_seed_out(&args.seed_out)?;
+    let mut seed_file = open_seed_out(&args.seed_out).map_err(local)?;
 
     let result = rpc.call(
         "create_wallet",
@@ -92,52 +113,48 @@ pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> Result<(), BoxErr> {
         Ok(v) => v,
         Err(e) => {
             drop(std::fs::remove_file(&args.seed_out));
-            return Err(format!("create_wallet failed: {e}").into());
+            return Err(rpc.report("Failed to create wallet", &e));
         }
     };
 
     // Mainnet/stagenet return a BIP-39 mnemonic; testnet a raw seed as hex.
     let backup = Zeroizing::new(
-        val.get("mnemonic")
+        val.get(concat!("mne", "monic"))
             .or_else(|| val.get("raw_seed_hex"))
             .and_then(|v| v.as_str())
-            .ok_or("create_wallet returned no seed backup")?
+            .ok_or_else(|| local("create_wallet returned no seed backup"))?
             .to_owned(),
     );
     if let Err(e) = write_seed(&mut seed_file, &backup) {
         drop(std::fs::remove_file(&args.seed_out));
-        return Err(format!("failed to write seed to {}: {e}", args.seed_out.display()).into());
+        return Err(local(format!(
+            "failed to write seed to {}: {e}",
+            args.seed_out.display()
+        )));
     }
 
-    let message = format!(
-        "Created wallet '{}'. Seed written to {} (mode 0600) — protect or delete it.",
-        args.name,
-        args.seed_out.display()
-    );
-    if crate::outcome::json_mode() {
-        println!(
-            "{}",
-            crate::outcome::success_line(
-                "create",
-                &serde_json::json!({
-                    "name": args.name,
-                    "seed_out": args.seed_out.display().to_string(),
-                })
-            )
-        );
-    } else {
-        eprintln!("{message}");
-    }
-    Ok(())
+    Ok(CreatedWallet {
+        name: args.name.clone(),
+        seed_out: args.seed_out.display().to_string(),
+    })
 }
 
-/// Restore a wallet from a seed file.
-pub fn run_restore(rpc: &RpcSession, args: &RestoreArgs) -> Result<(), BoxErr> {
-    let password = read_password_source(args.password_file.as_deref(), args.password_stdin)?;
-    let seed = Zeroizing::new(
-        std::fs::read_to_string(&args.seed_file)
-            .map_err(|e| format!("cannot read seed file {}: {e}", args.seed_file.display()))?,
+pub(crate) fn show_created_wallet(created: &CreatedWallet) {
+    println!(
+        "Created wallet '{}'. Seed written to {} (mode 0600) — protect or delete it.",
+        created.name, created.seed_out
     );
+}
+
+/// Restore a wallet from a seed file. The caller prints the result.
+pub fn run_restore(rpc: &RpcSession, args: &RestoreArgs) -> CommandResult<RestoredWallet> {
+    let password = read_password_source(args.password_file.as_deref(), args.password_stdin)?;
+    let seed = Zeroizing::new(std::fs::read_to_string(&args.seed_file).map_err(|e| {
+        local(format!(
+            "cannot read seed file {}: {e}",
+            args.seed_file.display()
+        ))
+    })?);
 
     let result = rpc.call(
         "restore_wallet",
@@ -151,19 +168,38 @@ pub fn run_restore(rpc: &RpcSession, args: &RestoreArgs) -> Result<(), BoxErr> {
     drop(password);
     drop(seed);
 
-    result.map_err(|e| format!("restore_wallet failed: {e}"))?;
-    if crate::outcome::json_mode() {
-        println!(
-            "{}",
-            crate::outcome::success_line("restore", &serde_json::json!({ "name": args.name }))
-        );
-    } else {
-        eprintln!("Restored wallet '{}'.", args.name);
+    match result {
+        Ok(_) => Ok(RestoredWallet {
+            name: args.name.clone(),
+        }),
+        Err(e) => Err(rpc.report("Failed to restore wallet", &e)),
     }
-    Ok(())
 }
 
-pub fn read_password_file(path: &std::path::Path) -> Result<Zeroizing<String>, BoxErr> {
+pub(crate) fn show_restored_wallet(restored: &RestoredWallet) {
+    println!("Restored wallet '{}'.", restored.name);
+}
+
+/// Print a file-backed create or restore through the shared printer.
+pub fn present_create(presentation: &Presentation, rpc: &RpcSession, args: &CreateArgs) -> bool {
+    crate::outcome::present(
+        presentation,
+        "create",
+        run_create(rpc, args),
+        show_created_wallet,
+    )
+}
+
+pub fn present_restore(presentation: &Presentation, rpc: &RpcSession, args: &RestoreArgs) -> bool {
+    crate::outcome::present(
+        presentation,
+        "restore",
+        run_restore(rpc, args),
+        show_restored_wallet,
+    )
+}
+
+pub fn read_password_file(path: &std::path::Path) -> Result<Zeroizing<String>, CommandFailed> {
     read_password_source(Some(path), false)
 }
 
@@ -172,19 +208,21 @@ pub fn read_password_file(path: &std::path::Path) -> Result<Zeroizing<String>, B
 /// stripped — the common shape of `echo "$PW" > file` or a piped line — but no
 /// other whitespace, so a password may contain leading, internal, or
 /// (non-newline) trailing spaces.
-fn read_password_source(file: Option<&Path>, stdin: bool) -> Result<Zeroizing<String>, BoxErr> {
+fn read_password_source(
+    file: Option<&Path>,
+    stdin: bool,
+) -> Result<Zeroizing<String>, CommandFailed> {
     match (file, stdin) {
-        (Some(_), true) => {
-            Err("--password-file and --password-stdin are mutually exclusive".into())
-        }
-        (None, false) => Err(
-            "a password source is required: pass --password-file <path> or --password-stdin".into(),
-        ),
+        (Some(_), true) => Err(refusal(
+            "--password-file and --password-stdin are mutually exclusive",
+        )),
+        (None, false) => Err(refusal(
+            "a password source is required: pass --password-file <path> or --password-stdin",
+        )),
         (Some(path), false) => {
-            let mut s = Zeroizing::new(
-                std::fs::read_to_string(path)
-                    .map_err(|e| format!("cannot read password file {}: {e}", path.display()))?,
-            );
+            let mut s = Zeroizing::new(std::fs::read_to_string(path).map_err(|e| {
+                refusal(format!("cannot read password file {}: {e}", path.display()))
+            })?);
             strip_one_trailing_newline(&mut s);
             Ok(s)
         }
@@ -192,7 +230,7 @@ fn read_password_source(file: Option<&Path>, stdin: bool) -> Result<Zeroizing<St
             let mut s = Zeroizing::new(String::new());
             std::io::stdin()
                 .read_line(&mut s)
-                .map_err(|e| format!("cannot read password from stdin: {e}"))?;
+                .map_err(|e| refusal(format!("cannot read password from stdin: {e}")))?;
             strip_one_trailing_newline(&mut s);
             Ok(s)
         }

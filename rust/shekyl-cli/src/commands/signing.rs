@@ -34,9 +34,13 @@ use crate::rpc_client::{RpcError, RpcSession};
 /// read to EOF and shipped to the server just to bounce.
 const SIG_FILE_MAX_BYTES: usize = 2 * shekyl_crypto_pq::message_signing::MSG_SIG_MAX_ENCODED_LEN;
 
-pub fn cmd_sign(rpc: &RpcSession, message: &str) -> CommandResult {
+pub fn cmd_sign(
+    rpc: &RpcSession,
+    presentation: &crate::outcome::Presentation,
+    message: &str,
+) -> CommandResult {
     require_open(rpc)?;
-    if !crate::outcome::json_mode() {
+    if presentation.human() {
         eprintln!("Signing — this takes a few seconds by design; please wait...");
     }
     match rpc.call("sign_message", json!({ "message": message })) {

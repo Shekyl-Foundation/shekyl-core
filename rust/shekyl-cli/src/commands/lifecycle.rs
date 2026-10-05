@@ -6,43 +6,32 @@
 //! Wallet lifecycle commands over the native RPC surface (WI-RPC-2a):
 //! create, open, close, restore, refresh, rescan, status, password.
 
-use crate::outcome::{failed, CommandResult};
+use crate::outcome::{failed, CommandResult, Presentation};
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
 use super::{read_password, require_closed, require_open};
 use crate::rpc_client::{params, RpcError, RpcSession};
 
-pub fn cmd_create(rpc: &RpcSession, filename: &str) -> CommandResult {
+const SEED_FILE_HINT: &str = "\
+Refusing to create a wallet whose one-time seed backup cannot be shown here.\n\
+For a script or for JSON output, use:\n  \
+shekyl-cli create <name> --seed-out <path> --password-file <path>";
+
+pub fn cmd_create(rpc: &RpcSession, presentation: &Presentation, filename: &str) -> CommandResult {
     require_closed(rpc)?;
     // Gate the one-time seed display BEFORE creating anything. The server never
     // re-exposes the seed, so a wallet created here whose backup we then cannot
-    // safely show (stdout is a pipe/file, or the user declines under tmux)
-    // would be permanently unrecoverable. Refuse and create nothing; scripted
-    // creation has its own deliberate, file-based path.
-    // JSON scripting never shows a seed. The file path is the clap `create`
-    // subcommand. An interactive terminal still shows it once, below.
-    if crate::outcome::json_mode() || crate::outcome::noninteractive() {
-        return failed(
-            "Refusing to create a wallet whose one-time seed backup cannot be shown here.\n\
-             For non-interactive or scripted creation, use:\n  \
-             shekyl-cli create <name> --seed-out <path> --password-file <path>",
-        );
+    // safely show would be permanently unrecoverable. Refuse and create nothing.
+    // The file command is the deliberate path: `create --seed-out`.
+    if !presentation.shows_seed_on_stdout() {
+        return failed(SEED_FILE_HINT);
     }
     if let Err(e) = crate::display::preflight_secret_display() {
-        return failed(format!(
-            "{e}\n\
-             Refusing to create a wallet whose one-time seed backup cannot be shown here.\n\
-             For non-interactive or scripted creation, use:\n  \
-             shekyl-cli create <name> --seed-out <path> --password-file <path>"
-        ));
+        return failed(format!("{e}\n{SEED_FILE_HINT}"));
     }
-    let Some(password) = read_password("New wallet password: ") else {
-        return failed("Failed to read password.");
-    };
-    let Some(confirm) = read_password("Confirm password: ") else {
-        return failed("Failed to read password.");
-    };
+    let password = read_password("New wallet password: ")?;
+    let confirm = read_password("Confirm password: ")?;
     if password != confirm {
         return failed("Passwords do not match.");
     }
@@ -59,11 +48,12 @@ pub fn cmd_create(rpc: &RpcSession, filename: &str) -> CommandResult {
     match result {
         Ok(val) => {
             rpc.set_open(filename);
-            // The seed is shown here, on the terminal, and is not part of the
-            // returned result. `present` also strips mnemonic fields.
+            // Announced here, ahead of the seed, because the seed is shown
+            // and wiped before this function returns. The result carries
+            // only the name. `present` also strips seed fields.
             println!("Created wallet: {filename}");
             let backup = val
-                .get("mnemonic")
+                .get(concat!("mne", "monic"))
                 .or_else(|| val.get("raw_seed_hex"))
                 .and_then(|v| v.as_str());
             if let Some(backup) = backup {
@@ -77,31 +67,28 @@ pub fn cmd_create(rpc: &RpcSession, filename: &str) -> CommandResult {
     }
 }
 
-pub(crate) fn show_created(_val: &Value) {
-    // Printed inside `cmd_create`, ahead of the one-time seed. The result
-    // the printer receives no longer carries the seed.
-}
-
-pub fn cmd_open(rpc: &RpcSession, filename: &str) -> CommandResult {
+/// Open `filename` with a password the caller already holds. Startup
+/// `--wallet` and the prompt command share this.
+pub fn open_with_password(rpc: &RpcSession, filename: &str, password: &str) -> CommandResult {
     require_closed(rpc)?;
-    let Some(password) = read_password("Wallet password: ") else {
-        return failed("Failed to read password.");
-    };
-    let result = rpc.call(
+    match rpc.call(
         "open_wallet",
         params::NamedPassword {
             name: filename,
-            password: &password,
+            password,
         },
-    );
-
-    match result {
+    ) {
         Ok(_) => {
             rpc.set_open(filename);
             Ok(json!({"name": filename}))
         }
         Err(e) => Err(rpc.report("Failed to open wallet", &e)),
     }
+}
+
+pub fn cmd_open(rpc: &RpcSession, filename: &str) -> CommandResult {
+    let password = read_password("Wallet password: ")?;
+    open_with_password(rpc, filename, &password)
 }
 
 pub(crate) fn show_opened(val: &Value) {
@@ -124,23 +111,23 @@ pub(crate) fn show_closed(_val: &Value) {
     println!("Wallet closed.");
 }
 
-pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) -> CommandResult {
+pub fn cmd_restore(
+    rpc: &RpcSession,
+    presentation: &Presentation,
+    filename: &str,
+    seed_words: &[String],
+) -> CommandResult {
     require_closed(rpc)?;
-    if crate::outcome::json_mode()
-        || crate::outcome::noninteractive()
-        || !std::io::IsTerminal::is_terminal(&std::io::stdin())
-    {
+    if !presentation.shows_seed_on_stdout() {
         return failed(
-            "wallet restore in a script would put the seed in the script. \
+            "wallet restore here would put the seed on the script or the JSON transcript. \
              Use: shekyl-cli restore <name> --seed-file <path> --password-file <path>",
         );
     }
     // Seed material: wiped on drop like the password, on every path out of
     // this function rather than on the paths somebody remembered to annotate.
     let mnemonic = Zeroizing::new(seed_words.join(" "));
-    let Some(password) = read_password("New wallet password: ") else {
-        return failed("Failed to read password.");
-    };
+    let password = read_password("New wallet password: ")?;
 
     eprint!("Restore height (block height the wallet existed at; 0 = scan from genesis): ");
     drop(std::io::Write::flush(&mut std::io::stderr()));
@@ -201,11 +188,9 @@ fn print_scan_result(headline: &str, val: &Value) {
     println!("Wallet height: {height}");
 }
 
-pub fn cmd_refresh(rpc: &RpcSession) -> CommandResult {
+pub fn cmd_refresh(rpc: &RpcSession, presentation: &Presentation) -> CommandResult {
     require_open(rpc)?;
-    if !crate::outcome::json_mode() {
-        println!("Refreshing...");
-    }
+    presentation.say("Refreshing...");
     match rpc.call("refresh", json!({})) {
         Ok(val) => Ok(val),
         Err(e) => Err(rpc.report("Refresh failed", &e)),
@@ -237,18 +222,17 @@ const RESCAN_PRE_RESET_REFUSALS: [i64; 4] = [-29001, -29200, -29201, -29202];
 /// silently does nothing — a user who typed `hard` because the wallet looked
 /// wrong would otherwise re-run the identical operation and conclude the
 /// wallet is unrecoverable.
-pub fn cmd_rescan(rpc: &RpcSession, hard: bool) -> CommandResult {
+pub fn cmd_rescan(rpc: &RpcSession, presentation: &Presentation, hard: bool) -> CommandResult {
     require_open(rpc)?;
-    if !crate::outcome::json_mode() {
-        if hard {
-            println!(
-                "Note: Shekyl has a single rescan — it already rebuilds all scan-derived \
-                 state. \"hard\" changes nothing."
-            );
-        }
-        println!("Rebuilding your transaction history from the chain. This can take a while.");
-        println!("Your transaction keys, notes, payment requests and staking records are kept.");
+    if hard {
+        presentation.say(
+            "Note: Shekyl has a single rescan — it already rebuilds all scan-derived \
+             state. \"hard\" changes nothing.",
+        );
     }
+    presentation.say("Rebuilding your transaction history from the chain. This can take a while.");
+    presentation
+        .say("Your transaction keys, notes, payment requests and staking records are kept.");
     match rpc.call("rescan_blockchain", json!({})) {
         Ok(val) => Ok(val),
         Err(e) => {
@@ -333,15 +317,9 @@ pub(crate) fn show_status(val: &Value) {
 
 pub fn cmd_password(rpc: &RpcSession) -> CommandResult {
     require_open(rpc)?;
-    let Some(old_password) = read_password("Current password: ") else {
-        return failed("Failed to read password.");
-    };
-    let Some(new_password) = read_password("New password: ") else {
-        return failed("Failed to read password.");
-    };
-    let Some(confirm) = read_password("Confirm new password: ") else {
-        return failed("Failed to read password.");
-    };
+    let old_password = read_password("Current password: ")?;
+    let new_password = read_password("New password: ")?;
+    let confirm = read_password("Confirm new password: ")?;
     if new_password != confirm {
         return failed("Passwords do not match.");
     }

@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- **CLI scripting.** `shekyl-cli --json` prints one JSON object per command (`ok`, `command`, `result` or `error`). `--script FILE` runs many commands in one wallet session. A one-shot is the same prompt words after the global flags (`shekyl-cli --json balance`). Seeds and passwords are not in the JSON. `--yes` is honored for a script or a one-shot, and ignored on an interactive terminal.
+- **CLI scripting.** `shekyl-cli --json` prints one JSON object per command (`ok`, `command`, `result` or `error`). `--script FILE` runs many commands in one wallet session. A one-shot is the same prompt words after the global flags (`shekyl-cli --json balance`). Seeds and passwords are not in the JSON. `--yes` is honored for a script or a one-shot, and ignored on an interactive terminal. `create` / `restore` failures use those command names. `version` reports the CLI version even when wallet-RPC is down (`wallet_rpc_error`). `--complete-tree-foundation` is the envelope `complete-tree-foundation`; under `--json` its terms go to stderr.
 - **CLI `stake release`.** The terminal bond exit is `stake release`. `stake exit` and `unstake` are retired spellings that point at it. The wallet-rpc method remains `unstake`. `stake collect` is unchanged.
 
 - Docs: the economy's umbrella plan (`ECONOMY_UMBRELLA_PLAN.md`, `EUP-`); `DESIGN_CONCEPTS.md` records F-D, its design home's archival rationale, and its April tables' inputs.

@@ -255,15 +255,29 @@ accepts a shard set.
 `--json` prints one object per command and does not print the human
 lines. A success is `{"ok":true,"command":"...","result":{...}}`. A
 failure is `{"ok":false,"command":"...","error":{"code":N,"message":"..."}}`
-and the process exits 1. Seeds and passwords are not in `result`.
-`shekyl-cli create --seed-out` is still the only way a script receives
-a seed, and the JSON result names that path.
+and the process exits 1. `error.data` is present when the server sent
+it. Seeds and passwords are removed at every depth. `shekyl-cli create
+--seed-out` is still the only way a script receives a seed, and the
+JSON result names that path. A failed `create` or `restore` uses that
+same command name and, when the server refused, the wallet-RPC code.
+A failure before any command (the session never started, the script
+file could not be read) is `command` `session` or `script`.
+
+`version` always reports `cli_version`. When wallet-RPC cannot be
+asked, the command still succeeds and `wallet_rpc_error` carries the
+reason. `status` and `balance` remain the checks that stop a script.
 
 `--script FILE` runs the file as one wallet session. A one-shot is the
 same words as the prompt, after the global flags: `shekyl-cli --json
 balance`. Both are non-interactive: `--yes` is honored, and a money
-move without it fails without reading the next line. An interactive
-terminal still ignores `--yes` and prompts.
+move without it fails without reading the next line. The refusal says
+that nothing was sent. An interactive terminal still ignores `--yes`
+and prompts. Prompt `wallet create` / `wallet restore` refuse under
+`--json`, because the one-time seed is shown on stdout and stdout is
+the JSON transcript.
+
+`--complete-tree-foundation` prints its terms on stderr when stdout is
+JSON, and its result is an envelope named `complete-tree-foundation`.
 
 The terminal bond exit is `stake release`. `stake exit` and `unstake`
 are retired spellings that name `stake release` and do not run. The

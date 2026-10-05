@@ -114,6 +114,35 @@ fn a_script_session_emits_one_json_line_per_command() {
     assert!(!refused["error"]["message"].as_str().unwrap().is_empty());
 }
 
+/// A create that never reaches the server still names `create`, not a
+/// shared "scripted" bucket, and keeps the local refusal code.
+#[test]
+fn a_failed_create_names_create() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let seed = dir.path().join("seed");
+    let wallets = dir.path().join("wallets");
+    let (code, stdout, stderr) = run(&[
+        "--json",
+        "--network",
+        "stagenet",
+        "--wallet-dir",
+        wallets.to_str().unwrap(),
+        "--daemon-address",
+        "127.0.0.1:1",
+        "create",
+        "no-password",
+        "--seed-out",
+        seed.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1, "stderr:\n{stderr}\nstdout:\n{stdout}");
+    let rows = lines(&stdout);
+    assert_eq!(rows.len(), 1, "{stdout}");
+    assert_eq!(rows[0]["command"], "create");
+    assert_eq!(rows[0]["ok"], false);
+    assert_eq!(rows[0]["error"]["code"], 1);
+    assert!(!rows[0]["error"]["message"].as_str().unwrap().is_empty());
+}
+
 /// The same words, one command, then exit.
 #[test]
 fn a_one_shot_uses_the_prompt_grammar_and_exits() {
