@@ -32,7 +32,12 @@
 #               names the carrier of the re-measurement. A `stale` row with
 #               nothing newer is a FAIL too: a ledger that cries stale about
 #               a current capture is as wrong as the reverse, and the next
-#               reader stops believing the word.
+#               reader stops believing the word. A stale row KEEPS LISTENING:
+#               `stale_through` lists the commits to its paths it has heard,
+#               each with a note on the cost, and a commit newer than the
+#               last of them is a FAIL. Staleness excuses the row from a
+#               fresh capture. It does not excuse the next change that
+#               doubles the cost from saying so.
 #   unmeasured  no capture exists in the tree. The row is there so the
 #               ledger's completeness can be read, and it names its carrier.
 #
@@ -43,16 +48,44 @@
 # CLEARING A FAIL is an edit to the ledger, reviewed in the diff like any
 # other line: land a newer capture; or add a `cleared` note saying every
 # commit through a named one is cost-neutral, and why; or mark the row stale
-# with its carrier. A commit trailer was considered and refused: the judgement
-# "this did not move the cost" belongs next to the constant it is about, where
-# the next reader of the constant finds it.
+# with its carrier; or, on a row already stale, add a `stale_through` entry
+# saying what the change does to the cost. A commit trailer was considered
+# and refused: the judgement "this did not move the cost" belongs next to
+# the constant it is about, where the next reader of the constant finds it.
 #
-# WHAT "NEWER" MEANS. `git log <base>..HEAD -- <paths>` with git's default
-# history simplification, where <base> is the review point when it is an
-# ancestor of HEAD and otherwise the merge-base of the two (reported, since a
-# capture built from a commit that never merged cannot be compared exactly).
-# The review point is the last `cleared` note's commit, or the capture's
-# revision when there is none.
+# ONLY A NEWER CAPTURE RETIRES STALENESS, and two rules hold that. A
+# `cleared` note on a stale row may not reach `stale_since`: otherwise a note
+# written about today's change would cover the change that made the row
+# stale, and the row would read current with that change declared
+# cost-neutral by a sentence about something else. And a row that was stale
+# at HEAD's first parent and is current now must sit on a capture that
+# includes its old `stale_since`. In CI the first parent is the base branch,
+# so the comparison covers the whole pull request; on a local branch it
+# covers the last commit only.
+#
+# THE TOOLCHAIN is on no row's paths and moves every wall-clock figure. Each
+# change to `toolchain_file` newer than a current row's review point needs
+# one `[[toolchain]]` acknowledgment for the whole ledger, saying what it
+# does to measured cost.
+#
+# THIS GATE DEPENDS ON MERGE COMMITS. `cleared.through`, `stale_through`,
+# `stale_since` and `[[toolchain]].commit` are commit ids that must stay
+# ancestors of the branch they were written on. Squash-merge or
+# rebase-and-merge would mint new ids and orphan every one of them; the gate
+# fails loudly when that happens (an id that is not an ancestor of HEAD),
+# but it cannot repair it. `06-branching.mdc` forbids both strategies; this
+# is one more thing that rests on that.
+#
+# WHAT "NEWER" MEANS. `git log HEAD --not <heard> -- <paths>` with git's
+# default history simplification: the commits touching the paths that are in
+# HEAD's history and in the history of nothing the row has heard. What a row
+# has heard is its capture's revision and every commit a `cleared` or
+# `stale_through` entry names. Those are a SET, not a chain: two pull
+# requests that each acknowledge their own commit name tips on parallel
+# branches, and after both merge the row has heard everything. (Git may still
+# ask for the two appended lines to be kept by hand; that conflict is the
+# mechanism working.) A capture built from a commit that never merged is
+# compared from its merge-base with HEAD, and the run says so.
 #
 # THE REVISION IS A LEDGER FIELD, NOT PARSED FROM THE CAPTURE. Several
 # captures carry no revision (the P2P span files have no header at all), and
@@ -86,7 +119,7 @@ LEDGER = "docs/benchmarks/measurement_ledger.toml"
 STATUSES = ("current", "stale", "unmeasured")
 COMMON_KEYS = {"name", "defined_in", "needle", "measured_by", "status", "paths"}
 MEASURED_KEYS = {"capture", "capture_rev", "rev_source", "cleared"}
-STALE_KEYS = {"stale_since", "carrier"}
+STALE_KEYS = {"stale_since", "carrier", "stale_through"}
 UNMEASURED_KEYS = {"carrier"}
 HEADER_REV = "capture header"
 # A revision a capture file records about itself.
@@ -138,19 +171,40 @@ def is_exclude(spec: str) -> bool:
     )
 
 
-def newer_commits(root: str, base: str, paths: list[str]) -> list[str]:
+def newer_commits(root: str, heard: list[str], paths: list[str]) -> list[str]:
+    """Commits touching `paths` that are in HEAD's history and in none of `heard`'s.
+
+    `heard` is a set, not a chain. Two pull requests that each acknowledge
+    their own commit name tips on parallel branches; neither is an ancestor
+    of the other, and after both merge every commit is reachable from one of
+    them. A chain would fail on the merge that makes it true.
+    """
     # A shallow repository answers this question honestly only when no cut
-    # lies between the review point and HEAD. A cut deeper than the review
-    # point hides nothing the row asks about.
+    # lies between what was heard and HEAD. A deeper cut hides nothing the
+    # row asks about.
     cut = shallow_boundary(root)
     if cut:
-        rc, span = git(root, "rev-list", f"{base}..HEAD")
+        rc, span = git(root, "rev-list", "HEAD", "--not", *heard)
         if rc != 0 or cut & set(span.splitlines()):
             raise GateError(SHALLOW_MSG)
-    rc, out = git(root, "log", "--format=%H", f"{base}..HEAD", "--", *paths)
+    rc, out = git(root, "log", "--format=%H %P", "HEAD", "--not", *heard, "--", *paths)
     if rc != 0:
-        raise GateError(f"git log {base[:10]}..HEAD failed")
-    return [ln for ln in out.splitlines() if ln]
+        raise GateError("git log HEAD --not <heard> failed")
+    newer: list[str] = []
+    for ln in out.splitlines():
+        sha, *parents = ln.split()
+        # A merge that joins two branches touching the paths differs from each
+        # parent there, so git lists it, though it changed nothing a person
+        # wrote. It counts only when it carries a change of its own: a
+        # conflict resolved by hand, or an edit made in the merge. That is
+        # exactly what `--remerge-diff` shows, and it is empty for a clean
+        # merge. If this git cannot answer, the merge is kept.
+        if len(parents) > 1:
+            rc, own = git(root, "show", "--remerge-diff", "--format=", sha, "--", *paths)
+            if rc == 0 and not own:
+                continue
+        newer.append(sha)
+    return newer
 
 
 def describe(root: str, sha: str) -> str:
@@ -158,7 +212,8 @@ def describe(root: str, sha: str) -> str:
     return out
 
 
-def check_row(root: str, row: dict, t_rows: set[str], notes: list[str]) -> list[str]:
+def check_row(root: str, row: dict, t_rows: set[str], notes: list[str],
+              bases: dict[str, str]) -> list[str]:
     """Every way one row can be untrue. An empty list means it tells the truth."""
     name = row.get("name", "<unnamed>")
     fails: list[str] = []
@@ -249,43 +304,47 @@ def check_row(root: str, row: dict, t_rows: set[str], notes: list[str]) -> list[
     if fails:
         return fails
 
-    # The review point: the capture, moved forward by each cleared note.
-    review = rev
+    since = resolve(root, str(row.get("stale_since", ""))) if status == "stale" else None
+
+    # What the row has reviewed: the capture's history, plus the history of
+    # each commit a `cleared` note names.
+    base = rev
+    if not is_ancestor(root, rev, "HEAD"):
+        rc, mb = git(root, "merge-base", rev, "HEAD")
+        if rc != 0 or not mb:
+            bad(f"capture_rev {rev[:10]} shares no history with HEAD")
+            return fails
+        base = mb
+        notes.append(f"{name}: capture_rev {rev[:10]} is not an ancestor of "
+                     f"HEAD; compared from their merge-base {mb[:10]}")
+    heard = [base]
     for i, note in enumerate(row.get("cleared", [])):
         through = resolve(root, str(note.get("through", "")))
         if through is None:
             bad(f"cleared[{i}].through is not a commit in this repository")
+            return fails
+        if since is not None and is_ancestor(root, since, through):
+            bad(f"cleared[{i}] reaches stale_since {since[:10]}: a note written about "
+                "one change cannot declare the cause of staleness cost-neutral. "
+                "Only a newer capture retires a stale row")
             return fails
         if len(str(note.get("reason", "")).strip()) < MIN_REASON:
             bad(f"cleared[{i}] gives no reason")
         if not is_ancestor(root, through, "HEAD"):
             bad(f"cleared[{i}].through {through[:10]} is not an ancestor of HEAD")
             return fails
-        if is_ancestor(root, review, "HEAD") and not is_ancestor(root, review, through):
-            bad(f"cleared[{i}].through {through[:10]} is not newer than the "
-                f"review point before it ({review[:10]})")
-            return fails
-        review = through
+        heard.append(through)
     if fails:
         return fails
 
-    base = review
-    if not is_ancestor(root, review, "HEAD"):
-        rc, mb = git(root, "merge-base", review, "HEAD")
-        if rc != 0 or not mb:
-            bad(f"review point {review[:10]} shares no history with HEAD")
-            return fails
-        base = mb
-        notes.append(f"{name}: review point {review[:10]} is not an ancestor of "
-                     f"HEAD; compared from their merge-base {mb[:10]}")
-
-    newer = newer_commits(root, base, paths)
+    newer = newer_commits(root, heard, paths)
     if status == "current":
+        bases[name] = base
         if newer:
             shown = "; ".join(describe(root, c) for c in newer[-3:][::-1])
             more = f" (and {len(newer) - 3} more)" if len(newer) > 3 else ""
             bad(f"says current, but {len(newer)} commit(s) touching its paths are "
-                f"newer than {base[:10]}: {shown}{more}. Land a newer capture, "
+                f"newer than its capture and notes: {shown}{more}. Land a newer capture, "
                 "add a `cleared` note with the reason they are cost-neutral, or "
                 "mark the row stale with its carrier")
         return fails
@@ -293,19 +352,118 @@ def check_row(root: str, row: dict, t_rows: set[str], notes: list[str]) -> list[
     # stale
     if len(str(row.get("carrier", "")).strip()) < MIN_REASON:
         bad("a stale row names the carrier of its re-measurement")
-    since = resolve(root, str(row.get("stale_since", "")))
     if since is None:
         bad("stale_since is not a commit in this repository")
-    elif not newer:
-        bad(f"says stale, but nothing touching its paths is newer than "
-            f"{base[:10]}; mark it current")
-    elif since not in newer:
+        return fails
+    if not newer:
+        bad("says stale, but nothing touching its paths is newer than its "
+            "capture; mark it current")
+        return fails
+    if since not in newer:
         bad(f"stale_since {since[:10]} is not among the {len(newer)} commit(s) "
-            f"touching its paths after {base[:10]}")
+            "touching its paths after its capture")
+        return fails
+
+    # A stale row keeps listening. Being stale excuses the row from a fresh
+    # capture; it does not excuse the next change to its paths from a word
+    # about what that change does to the cost.
+    acks = row.get("stale_through", [])
+    if not isinstance(acks, list) or not acks:
+        bad("a stale row carries `stale_through`: the commits touching its paths "
+            "that it has acknowledged, each with a note on the cost")
+        return fails
+    for i, ack in enumerate(acks):
+        through = resolve(root, str(ack.get("through", "")))
+        if through is None:
+            bad(f"stale_through[{i}].through is not a commit in this repository")
+            return fails
+        if len(str(ack.get("note", "")).strip()) < MIN_REASON:
+            bad(f"stale_through[{i}] says nothing about the cost")
+        if not is_ancestor(root, through, "HEAD"):
+            bad(f"stale_through[{i}].through {through[:10]} is not an ancestor of HEAD")
+            return fails
+        heard.append(through)
+    if fails:
+        return fails
+    unheard = newer_commits(root, heard, paths)
+    if unheard:
+        shown = "; ".join(describe(root, c) for c in unheard[-3:][::-1])
+        more = f" (and {len(unheard) - 3} more)" if len(unheard) > 3 else ""
+        bad(f"is stale, and {len(unheard)} commit(s) touching its paths have not "
+            f"been heard: {shown}{more}. Add a `stale_through` entry saying what "
+            "the change does to the cost")
     return fails
 
 
-def load(root: str) -> tuple[list[dict], set[str]]:
+def check_toolchain(root: str, data: dict, bases: dict[str, str]) -> list[str]:
+    """A toolchain change moves every wall-clock figure and is on no row's paths.
+
+    One acknowledgment per change to the pinned toolchain, at the ledger's
+    level, owed for as long as any row is current across it.
+    """
+    fails: list[str] = []
+    tc = str(data.get("toolchain_file", ""))
+    rc, tracked = git(root, "ls-files", "--", tc) if tc else (1, "")
+    if rc != 0 or not tracked:
+        return [f"toolchain_file {tc!r} matches no tracked file"]
+    acked: set[str] = set()
+    for i, ack in enumerate(data.get("toolchain", [])):
+        sha = resolve(root, str(ack.get("commit", "")))
+        if sha is None:
+            fails.append(f"toolchain[{i}].commit is not a commit in this repository")
+            continue
+        if len(str(ack.get("note", "")).strip()) < MIN_REASON:
+            fails.append(f"toolchain[{i}] says nothing about the cost")
+        rc, touched = git(root, "log", "-1", "--format=%H", sha, "--", tc)
+        if rc != 0 or touched != sha:
+            fails.append(f"toolchain[{i}].commit {sha[:10]} does not change {tc}")
+            continue
+        acked.add(sha)
+    owed: dict[str, list[str]] = {}
+    for name, base in sorted(bases.items()):
+        for c in newer_commits(root, [base], [tc]):
+            owed.setdefault(c, []).append(name)
+    for c, names in owed.items():
+        if c not in acked:
+            fails.append(f"toolchain: {describe(root, c)} changed {tc} after the "
+                         f"review point of current row(s) {', '.join(names)}. Add a "
+                         "`[[toolchain]]` entry saying what it does to measured cost")
+    return fails
+
+
+def check_transitions(root: str, rows: list[dict]) -> list[str]:
+    """Only a capture that includes the cause retires a stale row.
+
+    Compared against the ledger at HEAD's first parent, which in CI is the
+    base branch a pull request merges into, so the comparison covers the
+    whole pull request. A row that was stale there and is current here must
+    have a capture taken at or after its `stale_since`.
+    """
+    rc, text = git(root, "show", f"HEAD^1:{LEDGER}")
+    if rc != 0 or not text:
+        return []
+    try:
+        before = {r.get("name"): r for r in tomllib.loads(text).get("constant", [])}
+    except tomllib.TOMLDecodeError:
+        return []
+    fails: list[str] = []
+    for row in rows:
+        was = before.get(row.get("name"))
+        if not was or was.get("status") != "stale" or row.get("status") != "current":
+            continue
+        since = resolve(root, str(was.get("stale_since", "")))
+        now = resolve(root, str(row.get("capture_rev", "")))
+        if since is None or now is None:
+            continue
+        if not is_ancestor(root, since, now):
+            fails.append(f"{row['name']}: was stale since {since[:10]} and is now "
+                         f"current on a capture at {now[:10]}, which does not include "
+                         "that commit. Only a newer capture retires a stale row")
+    return fails
+
+
+
+def load(root: str) -> tuple[dict, list[dict], set[str]]:
     rc, _ = git(root, "rev-parse", "--git-dir")
     if rc != 0:
         raise GateError("not a git repository")
@@ -332,21 +490,24 @@ def load(root: str) -> tuple[list[dict], set[str]]:
         t_rows = set(re.findall(r"^\| \*\*(BA-T\d+)\*\* \|", fh.read(), re.M))
     if not t_rows:
         raise GateError(f"{tracked} defines no BA-T rows")
-    return rows, t_rows
+    return data, rows, t_rows
 
 
 def run(root: str) -> int:
     try:
-        rows, t_rows = load(root)
+        data, rows, t_rows = load(root)
         notes: list[str] = []
         fails: list[str] = []
         seen: set[str] = set()
+        bases: dict[str, str] = {}
         for row in rows:
             name = row.get("name", "")
             if name in seen:
                 fails.append(f"{name}: duplicate row name")
             seen.add(name)
-            fails += check_row(root, row, t_rows, notes)
+            fails += check_row(root, row, t_rows, notes, bases)
+        fails += check_toolchain(root, data, bases)
+        fails += check_transitions(root, rows)
     except GateError as e:
         print(f"FAIL: {e}")
         return 2
@@ -387,8 +548,14 @@ def _write(root: str, rel: str, text: str) -> None:
         fh.write(text)
 
 
-def _commit(root: str, msg: str) -> str:
-    _sh(root, "add", "-A")
+def _commit(root: str, msg: str, ledger: bool = False) -> str:
+    # The ledger a case writes is working-tree state. It is committed only
+    # when a case asks, so that HEAD's first parent holds a ledger exactly
+    # where a case put one (the stale-to-current comparison reads it).
+    if ledger:
+        _sh(root, "add", "-A")
+    else:
+        _sh(root, "add", "-A", "--", ".", f":(exclude){LEDGER}")
     _sh(root, "commit", "-q", "-m", msg, "--allow-empty")
     return _sh(root, "rev-parse", "HEAD")
 
@@ -396,8 +563,14 @@ def _commit(root: str, msg: str) -> str:
 TRACKED = "| Id | Benchmark |\n| --- | --- |\n| **BA-T1** | a |\n| **BA-T2** | b |\n"
 
 
-def _ledger(rows: str) -> str:
-    return 'tracked_set = "docs/design/TRACKED.md"\n\n' + rows
+def _ledger(rows: str, toolchain: str = "", tc_file: str = "toolchain.toml") -> str:
+    return (f'tracked_set = "docs/design/TRACKED.md"\ntoolchain_file = "{tc_file}"\n\n'
+            + toolchain + rows)
+
+
+def _heard(*shas: str) -> str:
+    entries = ", ".join(f'{{ through = "{s}", note = "selftest: cost effect noted" }}' for s in shas)
+    return f"stale_through = [{entries}]\n"
 
 
 def _row(name: str, status: str, rev: str = "", extra: str = "",
@@ -417,6 +590,7 @@ def _fixture(tmp: str) -> dict[str, str]:
     _write(tmp, "src/consts.txt", "LIMIT = 4\n")
     _write(tmp, "src/hot/a.rs", "fn a() {}\n")
     _write(tmp, "src/cold/b.rs", "fn b() {}\n")
+    _write(tmp, "toolchain.toml", 'channel = "1.0"\n')
     _write(tmp, "docs/design/TRACKED.md", TRACKED)
     c1 = _commit(tmp, "c1: the measured tree")
     _write(tmp, "docs/benchmarks/cap.txt", f"# git_rev={c1}\nvalue=1\n")
@@ -426,8 +600,9 @@ def _fixture(tmp: str) -> dict[str, str]:
     return {"c1": c1, "c1b": c1b, "c2": c2}
 
 
-def _verdict(tmp: str, rows: str) -> tuple[int, str]:
-    _write(tmp, LEDGER, _ledger(rows))
+def _verdict(tmp: str, rows: str, toolchain: str = "",
+             tc_file: str = "toolchain.toml") -> tuple[int, str]:
+    _write(tmp, LEDGER, _ledger(rows, toolchain, tc_file))
     old = sys.stdout
     sys.stdout = buf = __import__("io").StringIO()
     try:
@@ -441,9 +616,10 @@ def selftest() -> int:
     failures: list[str] = []
     passed = 0
 
-    def expect(tmp: str, rows: str, want: int, why: str, says: str = "") -> None:
+    def expect(tmp: str, rows: str, want: int, why: str, says: str = "",
+               toolchain: str = "", tc_file: str = "toolchain.toml") -> None:
         nonlocal passed
-        rc, out = _verdict(tmp, rows)
+        rc, out = _verdict(tmp, rows, toolchain, tc_file)
         if rc != want or (says and says not in out):
             failures.append(f"{why}: wanted exit {want}"
                             + (f" naming {says!r}" if says else "")
@@ -479,11 +655,10 @@ def selftest() -> int:
         backwards = _row("control", "current", c["c1"],
                          f'cleared = [{{ through = "{c3}", reason = "comment only; no code path changed" }}, '
                          f'{{ through = "{c["c2"]}", reason = "moves the review point backwards" }}]\n')
-        expect(tmp, backwards, 1, "a cleared note older than the one before it is refused",
-               "not newer than")
+        expect(tmp, backwards, 0, "cleared notes are a set: an older one after a newer one is harmless")
 
         stale = _row("control", "stale", c["c1"],
-                     f'stale_since = "{c3}"\ncarrier = "BA-T1 floor re-run, owed"\n')
+                     f'stale_since = "{c3}"\ncarrier = "BA-T1 floor re-run, owed"\n' + _heard(c3))
         expect(tmp, stale, 0, "a stale row naming the commit and a carrier passes", "stale: control")
         stale_wrong = _row("control", "stale", c["c1"],
                            f'stale_since = "{c["c2"]}"\ncarrier = "BA-T1 floor re-run, owed"\n')
@@ -547,7 +722,8 @@ def selftest() -> int:
         _write(tmp, "docs/benchmarks/cap.txt", "value=3\n")
         _commit(tmp, "a capture with no header revision")
         off = _row("control", "stale", side,
-                   f'stale_since = "{c3}"\ncarrier = "BA-T1 floor re-run, owed"\n').replace(
+                   f'stale_since = "{c3}"\ncarrier = "BA-T1 floor re-run, owed"\n'
+                   + _heard(c3)).replace(
                        f'rev_source = "{HEADER_REV}"', 'rev_source = "the run record names it"')
         expect(tmp, off, 0, "a non-ancestor revision is compared from the merge-base",
                "not an ancestor of HEAD")
@@ -559,7 +735,7 @@ def selftest() -> int:
         # A shallow clone whose cut lies inside a row's range cannot answer
         # and must say so; one whose cut is older than the review point can.
         _write(tmp, LEDGER, _ledger(off))
-        _commit(tmp, "ledger")
+        _commit(tmp, "ledger", ledger=True)
         recent = _sh(tmp, "rev-parse", "HEAD~1")
         inside = _row("control", "current", recent).replace(
             f'rev_source = "{HEADER_REV}"', 'rev_source = "the run record names it"')
@@ -578,6 +754,115 @@ def selftest() -> int:
                 failures.append("a shallow clone cut OLDER than the review point was refused")
             else:
                 passed += 1
+
+    # --- a stale row keeps listening; only a capture retires it; toolchain ---
+    with tempfile.TemporaryDirectory() as tmp:
+        _sh(tmp, "init", "-q", "-b", "main")
+        _write(tmp, "src/consts.txt", "LIMIT = 4\n")
+        _write(tmp, "src/hot/a.rs", "fn a() {}\n")
+        _write(tmp, "toolchain.toml", 'channel = "1.0"\n')
+        _write(tmp, "docs/design/TRACKED.md", TRACKED)
+        c1 = _commit(tmp, "c1: the measured tree")
+        _write(tmp, "docs/benchmarks/cap.txt", f"# git_rev={c1}\nvalue=1\n")
+        _commit(tmp, "capture lands")
+        _write(tmp, "src/hot/a.rs", "fn a() { /* twice the work */ }\n")
+        cause = _commit(tmp, "cause: doubles the cost")
+        owed = f'stale_since = "{cause}"\ncarrier = "BA-T1 floor re-run, owed"\n'
+
+        expect(tmp, _row("control", "stale", c1, owed + _heard(cause)), 0,
+               "control: a stale row that has heard every commit to its paths passes")
+        expect(tmp, _row("control", "stale", c1, owed), 1,
+               "a stale row with no stale_through is refused", "stale_through")
+        expect(tmp, _row("control", "stale", c1, owed + _heard(c1)), 1,
+               "a stale_through entry that does not cover stale_since leaves it unheard",
+               "cause: doubles the cost")
+
+        _write(tmp, "src/hot/a.rs", "fn a() { /* four times the work */ }\n")
+        again = _commit(tmp, "again: doubles it once more")
+        expect(tmp, _row("control", "stale", c1, owed + _heard(cause)), 1,
+               "A STALE ROW KEEPS LISTENING: a later commit to its paths fails it",
+               "again: doubles it once more")
+        expect(tmp, _row("control", "stale", c1, owed + _heard(cause, again)), 0,
+               "advancing stale_through with a note clears it")
+        expect(tmp, _row("control", "stale", c1, owed + _heard(again, cause)), 0,
+               "stale_through entries are a set: their order does not matter")
+
+        # Two pull requests touch the path on parallel branches and each
+        # acknowledges its own commit. Neither tip is an ancestor of the other.
+        _sh(tmp, "checkout", "-q", "-b", "left")
+        _write(tmp, "src/hot/left.rs", "fn left() {}\n")
+        left = _commit(tmp, "left: one pull request")
+        _sh(tmp, "checkout", "-q", "-b", "right", again)
+        _write(tmp, "src/hot/right.rs", "fn right() {}\n")
+        right = _commit(tmp, "right: another pull request")
+        _sh(tmp, "checkout", "-q", "main")
+        _sh(tmp, "merge", "-q", "--no-ff", "-m", "Merge pull request #1", "left")
+        _sh(tmp, "merge", "-q", "--no-ff", "-m", "Merge pull request #2", "right")
+        expect(tmp, _row("control", "stale", c1, owed + _heard(cause, again, left)), 1,
+               "PARALLEL BRANCHES: acknowledging one tip leaves the other unheard",
+               "right: another pull request")
+        expect(tmp, _row("control", "stale", c1, owed + _heard(cause, again, left, right)), 0,
+               "PARALLEL BRANCHES: both tips acknowledged, in either order, passes")
+        expect(tmp, _row("control", "stale", c1, owed + _heard(right, left)), 0,
+               "the two tips alone cover everything behind them")
+
+        tip = _sh(tmp, "rev-parse", "HEAD")
+        absorb = (f'cleared = [{{ through = "{tip}", reason = "my change is a comment only" }}]\n')
+        expect(tmp, _row("control", "stale", c1, owed + _heard(left, right) + absorb), 1,
+               "A CLEARED NOTE MAY NOT REACH stale_since", "Only a newer capture")
+
+        # The same absorption attempted the long way: drop the stale fields and
+        # call the row current. The base branch remembers.
+        _write(tmp, LEDGER, _ledger(_row("control", "stale", c1, owed + _heard(left, right))))
+        _commit(tmp, "the ledger as the base branch holds it", ledger=True)
+        _commit(tmp, "the pull request's commit")
+        expect(tmp, _row("control", "current", c1, absorb), 1,
+               "STALE TO CURRENT WITHOUT A CAPTURE is refused against the first parent",
+               "does not include")
+        _write(tmp, "docs/benchmarks/cap.txt", f"# git_rev={tip}\nvalue=4\n")
+        _commit(tmp, "a capture taken after the cause")
+        fresh = _row("control", "current", tip)
+        expect(tmp, fresh, 0, "a capture that includes the cause retires the stale row")
+
+        # Toolchain: on no row's paths, acknowledged once for the ledger.
+        _write(tmp, "toolchain.toml", 'channel = "2.0"\n')
+        bump = _commit(tmp, "bump: the pinned toolchain moves")
+        expect(tmp, fresh, 1, "a toolchain change after a current row's review point fails",
+               "bump: the pinned toolchain moves")
+        ack = f'[[toolchain]]\ncommit = "{bump}"\nnote = "codegen may differ; allocation path re-read"\n\n'
+        expect(tmp, fresh, 0, "one ledger-level acknowledgment clears it", toolchain=ack)
+        wrong = f'[[toolchain]]\ncommit = "{again}"\nnote = "acknowledges the wrong commit"\n\n'
+        expect(tmp, fresh, 1, "an acknowledgment naming a commit that did not change it is refused",
+               "does not change", toolchain=wrong)
+        expect(tmp, fresh, 1, "a toolchain_file that matches no tracked file is refused",
+               "matches no tracked file", toolchain=ack, tc_file="nope.toml")
+        _write(tmp, "src/hot/a.rs", "fn a() { /* and again */ }\n")
+        third = _commit(tmp, "third: the hot path moves under the new capture")
+        expect(tmp, _row("control", "stale", tip,
+                         f'stale_since = "{third}"\ncarrier = "BA-T1 floor re-run, owed"\n'
+                         + _heard(third)), 0,
+               "a ledger with no current row owes no toolchain acknowledgment")
+
+        # A merge is heard for free only when it is clean. One that resolves
+        # a conflict on the path carries a change nobody acknowledged.
+        owed3 = f'stale_since = "{third}"\ncarrier = "BA-T1 floor re-run, owed"\n'
+        _sh(tmp, "checkout", "-q", "-b", "x")
+        _write(tmp, "src/hot/a.rs", "fn a() { /* x */ }\n")
+        x = _commit(tmp, "x: one side")
+        _sh(tmp, "checkout", "-q", "-b", "y", third)
+        _write(tmp, "src/hot/a.rs", "fn a() { /* y */ }\n")
+        y = _commit(tmp, "y: the other side")
+        _sh(tmp, "checkout", "-q", "main")
+        _sh(tmp, "merge", "-q", "--no-ff", "-m", "Merge pull request #3", "x")
+        subprocess.run(["git", "-C", tmp, "merge", "-q", "--no-ff", "--no-commit", "y"],
+                       capture_output=True, text=True)
+        _write(tmp, "src/hot/a.rs", "fn a() { /* neither: written in the merge */ }\n")
+        resolved = _commit(tmp, "Merge pull request #4, resolved by hand")
+        expect(tmp, _row("control", "stale", tip, owed3 + _heard(third, x, y)), 1,
+               "a merge that resolves a conflict on the path is a change of its own",
+               "resolved by hand")
+        expect(tmp, _row("control", "stale", tip, owed3 + _heard(resolved)), 0,
+               "acknowledging the hand-resolved merge clears it")
 
     if failures:
         print("SELFTEST FAIL:")

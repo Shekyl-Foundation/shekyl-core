@@ -20,8 +20,17 @@
 #                         revision comes from when the capture does not
 #                         record one.
 #   paths                 git pathspecs for the code whose cost the constant
-#                         budgets. A commit touching them after the review
-#                         point makes the row stale.
+#                         budgets. A commit touching them that the row has
+#                         not heard fails the check.
+#
+# A stale row keeps listening. `stale_through` lists the commits to its paths
+# it has heard, each with a note on what the change does to the cost; a
+# commit that is in none of their histories fails the row until its author
+# adds an entry. Entries are a set: name your own commit, in any order.
+#
+# `[[toolchain]]` holds one acknowledgment per change to `toolchain_file`,
+# for the whole ledger. It is owed while any row is current across the
+# change, because a compiler bump is on no row's paths and moves them all.
 #
 # NOT IN THIS LEDGER, by class, so that an absent constant can be told from a
 # forgotten one (the register is section 4 of the tracked-set document):
@@ -49,6 +58,15 @@
 # direction that gets looked at.
 
 tracked_set = "docs/design/BENCHMARK_ALIGNMENT.md"
+toolchain_file = "rust/rust-toolchain.toml"
+
+[[toolchain]]
+commit = "a4e092392"
+note = "Pins rustc at 1.94.0. The RandomX allocation record names only the workspace MSRV of its day (1.85), so its compiler is not the pinned one. Not re-measured; the 47.75 us figure sits at about half its 100 us target."
+
+[[toolchain]]
+commit = "5aac523ad"
+note = "Comment only: the bump policy gains the gitian descriptors. The channel does not move."
 
 # --- consensus: block weight ------------------------------------------------
 
@@ -60,6 +78,10 @@ measured_by = ["BA-T2", "BA-T10"]
 status = "stale"
 stale_since = "20738bf714"
 carrier = "BA-T10 (BA-G4, BA-Q10). PL-D3 changed the FCMP++ proof nine days after the capture."
+stale_through = [
+  { through = "20738bf714", note = "PL-D3: the leaf's fourth scalar becomes a Pedersen commitment opened in-circuit. The proof changed for every shape; its verify cost has not been re-measured on the floor." },
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
 capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
 rev_source = "capture header"
@@ -83,6 +105,10 @@ measured_by = ["BA-T10"]
 status = "stale"
 stale_since = "20738bf714"
 carrier = "BA-T10 (BA-G4, BA-Q10). PL-D3 changed the FCMP++ proof nine days after the capture."
+stale_through = [
+  { through = "20738bf714", note = "PL-D3: the leaf's fourth scalar becomes a Pedersen commitment opened in-circuit. The proof changed for every shape; its verify cost has not been re-measured on the floor." },
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
 capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
 rev_source = "capture header"
@@ -182,6 +208,10 @@ measured_by = ["BA-T7"]
 status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
+stale_through = [
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose; the one floor A/B of it is not in the tree (BA-G1, BA-Q2)." },
+  { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
+]
 capture = "docs/benchmarks/w2_ladder_interleaved_pow_on_20261001.tsv"
 capture_rev = "006258d58b9db2e261c2759363e6e7671c08f0de"
 rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-10-01"
@@ -200,6 +230,10 @@ measured_by = ["BA-T7"]
 status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
+stale_through = [
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose; the one floor A/B of it is not in the tree (BA-G1, BA-Q2)." },
+  { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
+]
 capture = "docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv"
 capture_rev = "5ade4952fb9125c3e4147fa887c8e36d9a3cfd81"
 rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-09-30"
@@ -218,6 +252,10 @@ measured_by = ["BA-T7"]
 status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
+stale_through = [
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose; the one floor A/B of it is not in the tree (BA-G1, BA-Q2)." },
+  { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
+]
 capture = "docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv"
 capture_rev = "5ade4952fb9125c3e4147fa887c8e36d9a3cfd81"
 rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-09-30"
@@ -236,6 +274,10 @@ measured_by = ["BA-T7"]
 status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
+stale_through = [
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose; the one floor A/B of it is not in the tree (BA-G1, BA-Q2)." },
+  { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
+]
 capture = "docs/benchmarks/w2_ladder_interleaved_pow_on_20261001.tsv"
 capture_rev = "006258d58b9db2e261c2759363e6e7671c08f0de"
 rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-10-01"
@@ -254,6 +296,10 @@ measured_by = ["BA-T5"]
 status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T5 (BA-G1). Measured with one read in flight, before PR #954; the first v3 measurement is not in the tree (BA-Q2)."
+stale_through = [
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose; the one floor A/B of it is not in the tree (BA-G1, BA-Q2)." },
+  { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
+]
 capture = "docs/benchmarks/u1b_floor_device_20261002.tsv"
 capture_rev = "ecdcbffecc1894dbe2a8d26ec4d64f50c2aba270"
 rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-10-02"
@@ -292,6 +338,9 @@ measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "d25731a18"
 carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 capture = "docs/benchmarks/p2p_clearnet_nyc_floor_initiator_20260930.tsv"
 capture_rev = "2f9565f71"
 rev_source = "not recorded for this leg; the same day's long-path leg ran the dialer at this revision (p2p_cutover_crossbuild_20260929.md)"
@@ -305,6 +354,9 @@ measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "d25731a18"
 carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 capture = "docs/benchmarks/p2p_clearnet_wan_floor_initiator_20260930.tsv"
 capture_rev = "2f9565f71"
 rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
@@ -318,6 +370,9 @@ measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "d25731a18"
 carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 capture = "docs/benchmarks/p2p_clearnet_nyc_floor_initiator_20260930.tsv"
 capture_rev = "2f9565f71"
 rev_source = "not recorded for this leg; the same day's long-path leg ran the dialer at this revision (p2p_cutover_crossbuild_20260929.md)"
@@ -331,6 +386,9 @@ measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "57d756bca"
 carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 capture = "docs/benchmarks/p2p_tor_dial_floor_20260929.tsv"
 capture_rev = "572ed17c3"
 rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
@@ -344,6 +402,9 @@ measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "57d756bca"
 carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 capture = "docs/benchmarks/p2p_tor_dial_floor_20260929.tsv"
 capture_rev = "572ed17c3"
 rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
@@ -357,6 +418,9 @@ measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "57d756bca"
 carrier = "BA-T8 (BA-G7). Takes the Tor dial figure; the connector and transport have changed since the capture, and no change has been reviewed for cost."
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 capture = "docs/benchmarks/p2p_tor_dial_floor_20260929.tsv"
 capture_rev = "572ed17c3"
 rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
@@ -390,6 +454,10 @@ measured_by = ["BA-T16"]
 status = "stale"
 stale_since = "a1801d4ca"
 carrier = "BA-T16 (BA-G15). The decapsulation path has changed since June, PL-D3 included, and the capture used non-shipping RUSTFLAGS."
+stale_through = [
+  { through = "20738bf714", note = "PL-D3 touched output.rs and kem.rs. Whether it moved decapsulation cost is not established." },
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 capture = "docs/benchmarks/fa6_decap_prefilter_pi4_fa6_b_20260608T220614Z.txt"
 capture_rev = "34b2b3c051b037165e423e5a1c526987934029b6"
 rev_source = "not recorded in the capture; the last commit before the archive date, 2026-06-08"
@@ -412,6 +480,9 @@ measured_by = ["BA-T19"]
 status = "stale"
 stale_since = "af1f60b1a"
 carrier = "BA-T19 (FOLLOWUPS, WSS-Q1(b) row 2). The curve tree and the prover have changed since the capture; the row is ungraded."
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 capture = "docs/benchmarks/wss-q1b/spend_edge_20260927T195848Z.json"
 capture_rev = "ece3aa4fb"
 rev_source = "capture header; FOLLOWUPS records that this stamp can lag the built tree, which errs toward stale"
@@ -447,6 +518,9 @@ measured_by = ["BA-T14"]
 status = "stale"
 stale_since = "bd7cea464"
 carrier = "BA-T14 (BA-G9, BA-Q19). The record predates the real dispatch core; 341 ms on x86 against the 200 ms target, never run on the floor."
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. Covers the Phase 2d dispatch core and everything after it; the 341 ms record predates them all." },
+]
 capture = "rust/shekyl-pow-randomx/BENCH_RESULTS.md"
 capture_rev = "f237aad327aba71cb2c59518c887e5bd44b5df8e"
 rev_source = "not recorded in the record; the last commit touching the crate's sources on the run date, 2026-05-22"

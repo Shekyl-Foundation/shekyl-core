@@ -266,7 +266,7 @@ disagrees with git in either direction:
 | Status | Means | Fails when |
 | --- | --- | --- |
 | `current` | Nothing touching the paths is newer than the capture | A newer commit exists; the failure names it |
-| `stale` | Something is newer; the row names the commit and the carrier of the re-measurement | Nothing is newer, or the named commit did not touch the paths |
+| `stale` | Something is newer; the row names the commit and the carrier of the re-measurement, and lists in `stale_through` every later commit to its paths it has heard | Nothing is newer; or the named commit did not touch the paths; or a commit to the paths is in none of the `stale_through` histories |
 | `unmeasured` | No capture is in the tree; the row names what will measure it | It claims a capture, or names no carrier |
 
 A green run means the ledger tells the truth. It does not mean every capture
@@ -274,14 +274,36 @@ is fresh: the stale rows are printed on every run, and each is a
 re-measurement somebody owes.
 
 **When your PR fails it.** You changed a path a constant budgets. Edit the
-row in the same PR, one of three ways:
+row in the same PR.
+
+If the row is `current`, one of three:
 
 - Land a newer capture and set `capture` and `capture_rev` to it.
 - Add a `cleared` note: `{ through = "<commit>", reason = "..." }`. It says
-  every commit touching the paths up to that one is cost-neutral, and why.
-  The reason is reviewed with the diff.
-- Set `status = "stale"`, `stale_since` to the commit, and `carrier` to the
-  benchmark run that will re-measure it.
+  every commit to the paths in that commit's history is cost-neutral, and
+  why. The reason is reviewed with the diff.
+- Set `status = "stale"`, `stale_since` to the commit, `carrier` to the
+  benchmark run that will re-measure it, and start `stale_through` with that
+  commit.
+
+If the row is already `stale`, add a `stale_through` entry:
+`{ through = "<your commit>", note = "what this does to the cost" }`. A
+stale row does not ask you for a capture. It does ask every change to its
+paths for a sentence, so that a second regression on an already-stale path
+is not silent.
+
+**Only a newer capture makes a stale row current.** A `cleared` note on a
+stale row may not reach `stale_since`, and a row that was stale on the base
+branch and is current in your PR must sit on a capture that includes the
+commit that made it stale.
+
+**When you change `rust/rust-toolchain.toml`,** add a `[[toolchain]]` entry
+naming your commit and what it does to measured cost. One entry covers the
+whole ledger; it is owed while any row is current across the change.
+
+Entries name commits, and they are a set: name your own commit and do not
+reorder anyone else's. If two PRs append to the same row, git will ask you
+to keep both lines.
 
 **When you add a constant that rests on a measurement,** add its row. A
 constant with a number behind it and no row is the gap this file closes.
@@ -289,10 +311,15 @@ constant with a number behind it and no row is the gap this file closes.
 The check needs full history. A shallow clone whose cut lies inside a row's
 range is refused with exit 2, not passed.
 
-What it does not see: a row lists source paths, so a toolchain bump, a
-dependency upgrade in `Cargo.lock` or a change in a crate the row does not
-list moves no row. The paths are a reviewed judgement about where the cost
-lives, not a dependency closure.
+What it does not see: a row lists source paths, so a dependency upgrade in
+`Cargo.lock` or a change in a crate the row does not list moves no row. The
+paths are a reviewed judgement about where the cost lives, not a dependency
+closure.
+
+It depends on merge commits. Every entry is a commit id that must stay in
+the branch's history; squash-merge or rebase-and-merge would mint new ids
+and orphan them all. The check fails loudly if that happens and cannot
+repair it.
 
 ## Baseline-update policy
 
