@@ -84,28 +84,37 @@ impl TxShape {
         }
     }
 
-    /// The bodies that must be listed **before** this shape in the block
-    /// that connects it — the archival state it reads, which only an
-    /// earlier body in the same block can create on a chain that holds
-    /// none. A serve credit names a persona with a record (CEN-L7), so it
-    /// lists behind that persona's [`join_market`]; every other shape
-    /// stands alone. The listed slot in [`valid_at`](Self::valid_at) is
-    /// the one behind these.
-    pub fn precedents(self) -> Vec<Transaction> {
+    /// Whether the shape's view-bound stage reads **bond state** — a
+    /// persona's record on the view the block is judged against (CEN-J4,
+    /// then J5 and J6 over it). `MockChain` holds no records by policy
+    /// (`harness.rs`, `archival_reads!(empty)`; DRS-E4 §5.2), so the
+    /// sanity gate judges such a shape through `tx_form` only: its
+    /// `validate` witness is a driven chain that posted the bond
+    /// (`shekyl-chain-ingest`'s driver), the one place that record can
+    /// honestly exist.
+    ///
+    /// *Records-was:* until E6 slice 8 row 3 this was `precedents()`, which
+    /// listed the persona's [`join_market`] in the **same block** ahead of
+    /// the credit — a premise the rule refuted: the C++ reads the record
+    /// before the block (`check_tx_inputs` before `add_block`), so a
+    /// same-block join opens nothing the credit can be judged against, and
+    /// J4 says so. The archival fold's in-block sequencing had admitted it.
+    pub const fn reads_bond_state(self) -> bool {
         match self {
-            Self::Coinbase | Self::Listed | Self::JoinMarket => Vec::new(),
-            Self::ServeCreditOnly => vec![Self::JoinMarket.build()],
+            Self::Coinbase | Self::Listed | Self::JoinMarket => false,
+            Self::ServeCreditOnly => true,
         }
     }
 
     /// The slots at which the shape is a valid transaction. The coinbase
     /// is valid at the miner slot only; every other shape at the pool's
-    /// slot and listed — behind its [`precedents`](Self::precedents).
+    /// slot and listed first.
     pub const fn valid_at(self) -> &'static [TxSlot] {
         match self {
             Self::Coinbase => &[TxSlot::Miner],
-            Self::Listed | Self::JoinMarket => &[TxSlot::Lone, TxSlot::Listed(0)],
-            Self::ServeCreditOnly => &[TxSlot::Lone, TxSlot::Listed(1)],
+            Self::Listed | Self::JoinMarket | Self::ServeCreditOnly => {
+                &[TxSlot::Lone, TxSlot::Listed(0)]
+            }
         }
     }
 

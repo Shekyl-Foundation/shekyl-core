@@ -62,7 +62,11 @@
 //! `ArchivalFamily::BudgetAccrual` (`ARW-Q3`). The belts that read across
 //! families — SI-15 reads `archival_bond` for a credit — run only when
 //! both families apply: a stubbed `Bond` leaves no records, and a credit
-//! written against that absence is the stub, not a fault.
+//! written against that absence is the stub, not a fault. Since E6 slice
+//! 8 row 3 that arm is a belt with nothing above it to let through: CEN-J4
+//! reads the record off the view before the block, so a `Bond`-stubbed
+//! session's credits are refused at `validate` and never reach this
+//! writer (`archival_write_tests`, ARW-9).
 //!
 //! # What the slash burns into (`ARW-6`)
 //!

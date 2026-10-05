@@ -61,6 +61,7 @@ use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
 use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
+use crate::rules::tx_bond::judge_serve_credit_bond;
 use crate::rules::tx_extra::{I19, I20};
 use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9, J2};
 use crate::rules::{self, BlockContext, FormContext};
@@ -642,6 +643,14 @@ pub fn tx_against<'id, V: ChainView<'id>>(
         Err(refused) => return Ok(Err(refused)),
     }
     match judge_reference(&cx, view, &mut coverage)? {
+        Ok(()) => {}
+        Err(refused) => return Ok(Err(refused)),
+    }
+    // The serve-credit arm of `check_tx_inputs`: the bond record read off
+    // the view before the block (J4), its join epoch against the credited
+    // one (J5), `good_through` (J6) — one read per vin, in that order. J7's
+    // window joins the sequence in `judge_serve_credit_bond` (Slice C).
+    match judge_serve_credit_bond(&cx, view, &mut coverage).map_err(ViewRead::View)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }

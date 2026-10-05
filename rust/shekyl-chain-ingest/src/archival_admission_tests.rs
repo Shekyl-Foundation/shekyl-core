@@ -32,15 +32,21 @@
 //! (`scenario_archival_tests.rs`, the `whole` persona's release). What
 //! the driver had never made was the Reinstate, and that is what lands.
 //!
-//! **(c) The bond-state rows J4–J6 on a serve-credit vin.** Three credits,
-//! three pins: a credit for a persona with **no record** is refused today
-//! — by L7's fold (`inputs.rs:49–53`), not by J4; the row text's *"connects
-//! today"* was wrong for this one and is corrected here. A credit at the
-//! **join epoch** connects today (`serve_credit_epoch_ok` is in the
-//! retention crate and nothing in the validator calls it) — J5's flip. A
-//! credit from a persona **past its `good_through`** — the slashed persona
-//! of (b), inside its open interval — connects today; J6's flip. All three
-//! flip at §5 row 3.
+//! **(c) The bond-state rows J4–J6 on a serve-credit vin — landed at §5
+//! row 3.** Three credits, each refused at its own input by its own row:
+//! a credit for a persona with **no record** is J4's
+//! (`scenario_archival_tests`; row 2 had found it refused by L7's fold,
+//! `inputs.rs:49–53`, so the flip there was `L7 → J4`, not a first
+//! refusal); a credit at the **join epoch** is J5's
+//! (`serve_credit_epoch_ok`, which row 2 found nothing in the validator
+//! calling); a credit from a persona **past its `good_through`** — the
+//! slashed persona of (b), inside its open interval — is J6's, whether or
+//! not it still holds the shard. Whether it *holds* the shard is CEN-J8's
+//! question (E6 slice C), not J6's: the credit for the shard it lost is
+//! refused here on the interval, and that pin is carried in the test
+//! body. *Records-was (row 2's pins, 2026-10-04):* J5's and J6's credits
+//! both connected, the fold reading *a record exists* and nothing of its
+//! state.
 //!
 //! **(d) The hint, trusted.** §2's finding made concrete: the transition
 //! keys a post's record on the vin's `p_canonical_id` **as decoded**, never
@@ -57,8 +63,9 @@
 use std::path::Path;
 
 use shekyl_archival_retention::{
-    p_canonical_id_from_hybrid_pubkey, serve_credit_epoch_ok, verify_reinstate_bond_post,
-    BondPostKind as RetentionKind, HoldingsKind, ARCHIVAL_BOND_FLOOR_ATOMIC,
+    good_through, p_canonical_id_from_hybrid_pubkey, serve_credit_epoch_ok,
+    verify_reinstate_bond_post, BondPostKind as RetentionKind, HoldingsKind,
+    ARCHIVAL_BOND_FLOOR_ATOMIC,
 };
 use shekyl_chain_rules::{
     ArchivalKey, CenRow, FakechainSchedule, Locus, RecordWriteKind, RuleSet, SettlementEpochBlocks,
@@ -405,13 +412,16 @@ async fn record_of(
 /// the record keeps the served shard, carries one open interval, and is
 /// down one floor. Then:
 ///
-/// - **(c) J5, pinned:** its credit at the join epoch connected — the
-///   block after the join — while `serve_credit_epoch_ok` says it should
-///   not have. Flips at §5 row 3.
-/// - **(c) J6, pinned:** inside the open interval, a credit for the kept
-///   shard connects, and so does one for the shard it **no longer holds**
-///   — the fold reads *a record exists* and nothing of its state. Flips at
-///   §5 row 3 (`good_through`; `holds_shard_at`).
+/// - **(c) J5:** its credit at the join epoch — the block after the join —
+///   is refused at the credit's input; the credit for `E_join + 1` on the
+///   same chain connects (the positive control, and the first pass the
+///   slash below counts against). *Was pinned* (row 2) as connecting.
+/// - **(c) J6:** inside the open interval, a credit for the kept shard is
+///   refused at the credit's input, and so is one for the shard it **no
+///   longer holds** — on the interval, which is J6's reading; the holding
+///   itself is J8's (slice C), and a credit for the lost shard **after**
+///   the reinstate closes the interval is pinned below as connecting
+///   today. *Was pinned* (row 2) as both connecting.
 /// - **(b) Reinstate, positive witness:** the driver's Reinstate over the
 ///   record as it stands connects; the wallet-side
 ///   `verify_reinstate_bond_post` agrees with the fold on the same vin;
@@ -451,20 +461,33 @@ async fn a_slashed_persona_reinstates_and_the_fold_agrees_with_the_wallet_side_v
         chain.push(block);
     }
 
-    // (c) J5: a credit at the join epoch, the block after the join.
+    // (c) J5: a credit at the join epoch, the block after the join, is
+    // refused at its input; the same credit for `E_join + 1` connects.
+    let at_credit = Locus::Input {
+        slot: TxSlot::Listed(0),
+        input: 0,
+    };
     assert!(
         !serve_credit_epoch_ok(join_epoch, join_epoch),
         "the retention crate refuses a credit at E_join"
     );
-    let at_join_epoch = scenario
-        .mine_listing(vec![persona.serve_credit(served, join_epoch)])
+    refused_at(
+        scenario
+            .mine_listing(vec![persona.serve_credit(served, join_epoch)])
+            .await,
+        CenRow::J5,
+        at_credit,
+    );
+    let first_serving = scenario
+        .mine_listing(vec![persona.serve_credit(served, join_epoch + 1)])
         .await
-        .expect("PIN (J5, flips at §5 row 3): a credit at E_join connects today");
-    assert_eq!(at_join_epoch.archival.serve_credits().len(), 1);
-    chain.push(at_join_epoch);
+        .expect("the credit for E_join + 1 connects (J4, J5, J6 over the record)");
+    assert_eq!(first_serving.archival.serve_credits().len(), 1);
+    chain.push(first_serving);
 
-    // Eleven passes on the served shard, none on the other.
-    for epoch in (join_epoch + 1)..=(join_epoch + 11) {
+    // Eleven passes on the served shard, none on the other: the mined
+    // credit above is the first; the injector writes the other ten.
+    for epoch in (join_epoch + 2)..=(join_epoch + 11) {
         let Injected { .. } = scenario
             .connector()
             .ask(Inject(ServeCredit {
@@ -521,21 +544,23 @@ async fn a_slashed_persona_reinstates_and_the_fold_agrees_with_the_wallet_side_v
         }]
     );
 
-    // (c) J6: inside the open interval, credits for the kept shard and for
-    // the slashed one both connect.
+    // (c) J6: inside the open interval, a credit for the kept shard and one
+    // for the slashed shard are each refused at the credit's input — both
+    // on the interval (`good_through`), which is all J6 reads.
     let inside = slash_epoch + 1;
-    let credits = scenario
-        .mine_listing(vec![
-            persona.serve_credit(served, inside),
-            persona.serve_credit(unserved, inside),
-        ])
-        .await
-        .expect(
-            "PIN (J6, flips at §5 row 3): credits inside an open bad interval, \
-             one for a shard no longer held, connect today",
+    assert!(
+        !good_through(join_epoch, inside, &record.bad_intervals),
+        "the retention crate says the persona is not good through `inside`"
+    );
+    for shard in [served, unserved] {
+        refused_at(
+            scenario
+                .mine_listing(vec![persona.serve_credit(shard, inside)])
+                .await,
+            CenRow::J6,
+            at_credit,
         );
-    assert_eq!(credits.archival.serve_credits().len(), 2);
-    chain.push(credits);
+    }
 
     // (b) The Reinstate. The wallet-side verify and the fold read the same
     // vin; both say yes.
@@ -588,6 +613,23 @@ async fn a_slashed_persona_reinstates_and_the_fold_agrees_with_the_wallet_side_v
     chain.push(reinstated);
     let stored = record_of(&scenario, &persona).await;
     assert_eq!(stored, written, "the store holds the post-image");
+
+    // Past the closed interval the persona is good through again: a credit
+    // for the kept shard connects. So does one for the shard it **lost**
+    // — J6 reads the interval and nothing of the holdings. PIN (J8,
+    // `holds_shard_at`, E6 slice C): a credit for an unheld shard connects
+    // today.
+    let after_close = reinstate_epoch + 1;
+    assert!(good_through(join_epoch, after_close, &stored.bad_intervals));
+    let past_interval = scenario
+        .mine_listing(vec![
+            persona.serve_credit(served, after_close),
+            persona.serve_credit(unserved, after_close),
+        ])
+        .await
+        .expect("PIN (J8, slice C): a credit for a shard no longer held connects today");
+    assert_eq!(past_interval.archival.serve_credits().len(), 2);
+    chain.push(past_interval);
 
     // (b) The belts, as L7 today. Every post below rides coinbase 2 at the
     // same height; a refused block leaves the chain where it was.

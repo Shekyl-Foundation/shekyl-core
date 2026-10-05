@@ -15,15 +15,19 @@
 //!
 //! The archival transition has two kinds of arm. **Single-block arms**
 //! judge the block in hand over a view that holds no bond — a join (the
-//! record it inserts), a serve credit for a persona whose join is in the
-//! same block, the refusals of a post for a persona with no record.
-//! **Multi-block arms** read a record a previous block wrote — a release,
-//! a reinstate, a second join, a credit for a persona who joined earlier.
-//! Commit 4 witnessed the first kind and pinned the second as unreachable
-//! (nothing wrote a record); commit 5's writer turned that pin, and
-//! [`a_join_is_written_and_the_blocks_after_it_read_the_record`] is the
-//! same test with the two assertions inverted: the record is `Some` after
-//! the join, and the next block's credit for it connects. The multi-block
+//! record it inserts), the refusals of a post for a persona with no
+//! record. **Multi-block arms** read a record a previous block wrote — a
+//! release, a reinstate, a second join, a credit for a persona who joined
+//! earlier. Commit 4 witnessed the first kind and pinned the second as
+//! unreachable (nothing wrote a record); commit 5's writer turned that
+//! pin, and [`a_join_is_written_and_the_blocks_after_it_read_the_record`]
+//! is the same test with the two assertions inverted: the record is `Some`
+//! after the join, and the next block's credit for it connects. (*Was*,
+//! until E6 slice 8 row 3: "a serve credit for a persona whose join is in
+//! the same block" stood among the single-block arms. It is no arm at all
+//! — CEN-J4 reads the record off the view before the block, so that
+//! credit is refused on the record's absence; the credit's one witness is
+//! multi-block.) The multi-block
 //! arms follow on the same chain: a release of the persisted record (its
 //! post-image read back), a release whose debit is not that record's total
 //! refused at L7 before the valid one connects, a second join for a bonded
@@ -55,7 +59,7 @@
 //! # What is fixture here
 //!
 //! The serve credit's Ed25519 countersignature (no Rust countersigner
-//! exists; CEN-J1/J4/J10 pending), and the FCMP proof's consensus-side
+//! exists; CEN-J1/J10 pending), and the FCMP proof's consensus-side
 //! verification (CEN-I15 pending; the driver self-verifies it against the
 //! wallet-side root). Neither is what L7 judges. Everything L7 reads — the
 //! post's fields, the persona's standing, the block's own posts — is the
@@ -117,15 +121,22 @@ fn refused_at(outcome: Result<crate::scenario::Mined, StepOutcome>, row: CenRow,
 
 /// A JoinMarket through `build_join_market_vin`, signed by the persona,
 /// riding a real spend: the verdict's transition is that persona's
-/// `Insert`, field for field from the post and the open epoch; a serve
-/// credit in the same block is keyed to the post; the accrual is the open
-/// epoch's row plus the block's leg. Then the store: the record is there,
-/// the accrual row is the post-image, and the blocks after read them — a
-/// credit for the persona connects, a release whose debit is not the
-/// persisted total is L7 before any connect, a release of that total
+/// `Insert`, field for field from the post and the open epoch; the accrual
+/// is the open epoch's row plus the block's leg. Then the store: the
+/// record is there, the accrual row is the post-image, and the blocks
+/// after read them — a credit for the persona, for the first epoch it may
+/// serve (`E_join + 1`, CEN-J5), connects, a release whose debit is not
+/// the persisted total is L7 before any connect, a release of that total
 /// empties the record and its post-image is what the store holds, a
 /// second join and a reinstate over a clean close are L7's refusals at
 /// their input.
+///
+/// *Records-was:* until E6 slice 8 row 3 this block also listed a credit
+/// **beside** the join, for the join's own epoch, and it connected: the
+/// fold sequenced the post before the credit within the block. CEN-J4
+/// reads the record off the view before the block and CEN-J5 refuses the
+/// join epoch, as the C++'s `check_tx_inputs` does; the credit now lists
+/// in the block after, for the epoch after.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     let connecting = first_spending_height();
@@ -140,9 +151,10 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     let listed = vec![
         spender.spend_coinbase_posting(scenario.wallet(), 0, connecting, FEE, Some(&join_compact)),
         spender.spend_coinbase_posting(scenario.wallet(), 1, connecting, FEE, Some(&join_whole)),
-        compact.serve_credit(7, epoch_at(connecting).to_raw()),
     ];
     let epoch = epoch_at(connecting);
+    // The first epoch a persona joining in `epoch` may serve (CEN-J5).
+    let serving = SettlementEpoch::from_raw(epoch.to_raw() + 1);
     // The epoch's row before this block: what the blocks before it accrued.
     let accrued_before = scenario
         .budget_accruing(epoch)
@@ -152,13 +164,13 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     let block = scenario
         .mine_listing(listed)
         .await
-        .unwrap_or_else(|outcome| panic!("two joins and a credit connect: {outcome}"));
+        .unwrap_or_else(|outcome| panic!("two joins connect: {outcome}"));
     assert_eq!(block.height, BlockHeight::from_raw(connecting));
     for row in [
         CenRow::H21,
-        CenRow::H20,
         CenRow::I18,
         CenRow::G10,
+        CenRow::J4,
         CenRow::L7,
     ] {
         assert!(block.judged_by.contains(&row), "{row} judged the block");
@@ -205,12 +217,10 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         "a complete tree is one holding at the floor"
     );
 
-    // The credit, keyed to the same-block post.
-    let credits = block.archival.serve_credits();
-    assert_eq!(credits.len(), 1);
-    assert_eq!(credits[0].persona, compact.id());
-    assert_eq!(credits[0].shard, ShardId::from_raw(7));
-    assert_eq!(credits[0].epoch, epoch);
+    assert!(
+        block.archival.serve_credits().is_empty(),
+        "no credit can list beside the join it needs (J4 reads the view before the block)"
+    );
 
     // The accrual is the open epoch's post-image: the row the store held
     // before this block plus the block's archival emission leg (the
@@ -251,9 +261,10 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     spender.push(&block);
 
     // The next block reads the records: the credit for a persona who
-    // joined earlier connects (SI-15's row keyed to it), and a release of
-    // the other persisted record is its `Update` — bonded to zero, holding
-    // nothing, one clean interval close at the open epoch.
+    // joined earlier — for the first epoch it may serve — connects through
+    // J4, J5 and J6 over the persisted record (SI-15's row keyed to it),
+    // and a release of the other persisted record is its `Update` — bonded
+    // to zero, holding nothing, one clean interval close at the open epoch.
     let next = connecting + 1;
     // A debit that is not the persisted total is L7
     // (`DebitNotRecordTotal`) at the post input. The block does not
@@ -279,17 +290,20 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     let release_whole = whole.release(whole_record.bonded_total.to_raw());
     let block = scenario
         .mine_listing(vec![
-            compact.serve_credit(42, epoch.to_raw()),
+            compact.serve_credit(7, serving.to_raw()),
             spender.spend_coinbase_posting(scenario.wallet(), 2, next, FEE, Some(&release_whole)),
         ])
         .await
         .unwrap_or_else(|outcome| panic!("a credit and a release connect: {outcome}"));
     assert_eq!(block.height, BlockHeight::from_raw(next));
+    for row in [CenRow::H20, CenRow::J4, CenRow::J5, CenRow::J6] {
+        assert!(block.judged_by.contains(&row), "{row} judged the credit");
+    }
     let credits = block.archival.serve_credits();
     assert_eq!(credits.len(), 1);
     assert_eq!(credits[0].persona, compact.id());
-    assert_eq!(credits[0].shard, ShardId::from_raw(42));
-    assert_eq!(credits[0].epoch, epoch);
+    assert_eq!(credits[0].shard, ShardId::from_raw(7));
+    assert_eq!(credits[0].epoch, serving);
     let records = block.archival.records();
     assert_eq!(records.len(), 1, "the release is the block's one write");
     assert_eq!(records[0].persona(), &whole.id());
@@ -384,9 +398,12 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
 /// stack: a post is assembled and signed as a wallet would (so CEN-H21 and
 /// I18 pass and L7 is the row that fires), listed at the same height — a
 /// refused block leaves the chain where it was — and refused at the post's
-/// own input. The last case is G10's, not L7's (module docs).
+/// own input. The last case is G10's, not L7's (module docs). The serve
+/// credit is **CEN-J4**'s (E6 slice 8 row 3): the one bond-state read the
+/// transaction pass makes, ahead of the fold — *was* L7's until row 3
+/// landed, the pin slice 8's row 2 held.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn posts_for_a_persona_with_no_record_are_refused_at_l7_on_the_store() {
+async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
     let connecting = first_spending_height();
     let mut scenario = Scenario::open("scenario-archival-refusals");
     let mined = scenario.mine(connecting).await;
@@ -425,12 +442,13 @@ async fn posts_for_a_persona_with_no_record_are_refused_at_l7_on_the_store() {
     // The positive control.
     let honest = riding(persona.join(shard_set(vec![7]), ENDPOINT));
 
-    // A serve credit for a persona with no record: the credit's own input.
+    // A serve credit for a persona with no record: J4 at the credit's own
+    // input, before the fold's L7 is reached.
     refused_at(
         scenario
-            .mine_listing(vec![persona.serve_credit(7, epoch.to_raw())])
+            .mine_listing(vec![persona.serve_credit(7, epoch.to_raw() + 1)])
             .await,
-        CenRow::L7,
+        CenRow::J4,
         Locus::Input {
             slot: TxSlot::Listed(0),
             input: 0,

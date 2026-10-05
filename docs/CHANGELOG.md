@@ -21,6 +21,17 @@
   `CLIENT_VERSION_CONSTANTS_VALIDATION.md`, and reading B is the gate 4/5
   owner's participation-floor input.
 
+### Chain rules — the serve credit's bond state is judged before the block (CEN-J4, J5, J6)
+
+- The Rust validator now refuses a serve-credit input whose persona has no
+  bond record, whose epoch is not past the join epoch, or whose persona is
+  not `good_through` the epoch — read off the chain view **before** the
+  block, as live consensus reads its database. Until this change the fold
+  that applied the credit saw the block's own joins, so a join and a credit
+  for the same persona in one block, or a credit for the join's own epoch,
+  connected on the Rust side and would not have on the C++; no corpus block
+  carries either (`CHAIN_RULES_SLICE_8.md` §5 row 3).
+
 ### Chain rules — CEN-H20 requires the serve credit's pass records (`SHT-9`)
 
 - The Rust validator admitted a serve-credit transaction with no prunable

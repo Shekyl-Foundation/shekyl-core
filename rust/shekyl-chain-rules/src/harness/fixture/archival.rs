@@ -134,10 +134,13 @@ pub const PRUNED_PASS_RECORD: [u8; 8] = [0xA5; 8];
 /// question (E6 slice C), not this body's. The one
 /// legal non-coinbase shape with **no key image** — what a test needs
 /// when it must list the same body twice (SI-3) without tripping the
-/// spent-key-image set. It connects only behind [`join_market`] for `p`
-/// (CEN-L7 / SI-15: a credit names a persona with a record), which is why
-/// [`TxShape::ServeCreditOnly`] lists at `Listed(1)` with the join as its
-/// precedent; alone it is a body for `tx_form`, not for `validate`.
+/// spent-key-image set. It is judged against `p`'s record **on the view**
+/// (CEN-J4; L7 at the fold and SI-15 at the store are the belts beneath),
+/// which a [`join_market`] for `p` writes only once its own block has
+/// connected — so over a chain holding no record (every `MockChain`) this
+/// body is for `tx_form`, not for `validate`
+/// ([`TxShape::reads_bond_state`]); its `validate` witness is a driven
+/// chain that posted the join a block earlier.
 pub fn serve_credit_only(p: [u8; 32]) -> Transaction {
     Transaction {
         prefix: TxPrefix {

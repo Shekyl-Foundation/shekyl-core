@@ -527,14 +527,21 @@ fn the_injector_is_refused_when_serve_credits_are_stubbed() {
 // ------------------------------------------------------------- ARW-9
 
 /// Skip-and-widen: a session stubbing `Bond` connects the join without
-/// writing its record, writes the credit behind it without the
-/// record-exists belt (the belt reads a table this session does not
-/// write), and the file's provenance names the family — the block is
-/// accepted, and the file is no longer parity evidence. The reads say so
-/// too, in their own voice: the production `pass_count` over that credit
-/// is SI-15 (`ServeCreditWithoutBond`), because the read belt knows the
-/// tables and not the session's policy. The credit's row is witnessed at
-/// the table, beneath the belt.
+/// writing its record, and the file's provenance names the family — the
+/// block is accepted, and the file is no longer parity evidence. The
+/// credit behind that join, in the next block, is **refused at CEN-J4**
+/// (E6 slice 8 row 3): the validator reads the record off the tables, not
+/// the session's policy, and this session wrote none. So a `Bond`-stubbed
+/// session cannot connect a serve credit at all, which is the honest
+/// consequence — the stub is a measurement lever, and a credit it let
+/// through would be SI-15 (`ServeCreditWithoutBond`) at the next read.
+///
+/// *Records-was:* until row 3 this test listed the credit in the **same
+/// block** as the join and witnessed its row written behind a record the
+/// session did not hold, with SI-15 at the read; the fold's in-block
+/// sequencing admitted the pair. The rule refuted that arrangement
+/// (`connect_fixtures::credited`); SI-15's read witness is
+/// `archival_read_tests`' own.
 #[test]
 fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
     let path = tmp("aw-arw9");
@@ -544,7 +551,7 @@ fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
     let [join, credit] = credited(13, P);
     let listing: Vec<Vec<Transaction>> = (0..FIRST_SPEND_HEIGHT)
         .map(|_| Vec::new())
-        .chain(core::iter::once(vec![join, credit]))
+        .chain(core::iter::once(vec![join]))
         .collect();
     let hashes = connect_chain(&store, &listing);
     assert_eq!(
@@ -558,36 +565,40 @@ fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
         None,
         "the record was skipped, not written"
     );
-    let row = snap
-        .open_table(ARCHIVAL_SERVE_CREDIT)
-        .expect("table")
-        .get(
-            ServeCreditKey::new(
-                p,
-                shard(0),
-                epoch(1),
-                BlockHeight::from_raw(FIRST_SPEND_HEIGHT),
-            )
-            .key(),
-        )
-        .expect("get")
-        .is_some();
-    assert!(
-        row,
-        "the credit was written behind a record this session does not hold"
-    );
-    let read = snap.pass_count(&p, shard(0), epoch(1)).unwrap_err();
-    assert!(
-        matches!(
-            read,
-            StoreError::InvariantViolated(StoreInvariant::ServeCreditWithoutBond { persona }) if persona == p
-        ),
-        "the read belt does not know the policy: {read:?}"
-    );
     drop(snap);
     let provenance = store.provenance();
     assert!(provenance.stubbed().contains(ArchivalFamily::Bond));
     assert!(!provenance.is_parity_evidence());
+
+    // The credit, one block above the join it names: J4 reads the table
+    // the policy skipped.
+    let height = FIRST_SPEND_HEIGHT + 1;
+    let credit = anchor(&hashes, height, credit);
+    let previous = *hashes.last().expect("a chain");
+    let out: Result<Verdict<()>, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let root = batch_root_going_into(&view, height)?;
+        let cand = candidate_over(root, height, previous, vec![credit]);
+        Ok(verdict_under(&view, cand, &RuleSet::GENESIS)?)
+    });
+    assert_refused(
+        out.expect("judging only reads"),
+        CenRow::J4,
+        Locus::Input {
+            slot: TxSlot::Listed(0),
+            input: 0,
+        },
+    );
+    let snap = store.begin_read().expect("read");
+    assert!(
+        snap.open_table(ARCHIVAL_SERVE_CREDIT)
+            .expect("table")
+            .get(ServeCreditKey::new(p, shard(0), epoch(1), BlockHeight::from_raw(height)).key())
+            .expect("get")
+            .is_none(),
+        "nothing reached the writer"
+    );
+    drop(snap);
     drop(store);
     cleanup(&path);
 }

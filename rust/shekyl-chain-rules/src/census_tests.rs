@@ -189,6 +189,10 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             // `SHT-9`'s conformance correction (2026-10-03): the serve
             // credit's pass records against its vins.
             CenRow::J2,
+            // Slice 8 row 3: the bond-state rows on a serve-credit vin.
+            CenRow::J4,
+            CenRow::J5,
+            CenRow::J6,
             CenRow::L1,
             // DRS-E4 commit 4: the archival transition on the verdict
             // (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 4); L8 and L9 below.

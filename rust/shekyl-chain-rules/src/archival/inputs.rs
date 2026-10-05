@@ -46,8 +46,10 @@ impl super::Transition {
                     return refused(L7::ROW, locus);
                 };
                 let persona = PCanonicalId::from_bytes(p);
-                // The persona must have a record (CEN-J4's rule; SI-15 is
-                // the store's belt beneath it).
+                // The persona must have a record. CEN-J4 refuses this at
+                // `tx_against`, before the fold, against the view alone;
+                // this arm is the fold's belt beneath it (it also sees the
+                // block's own joins), and SI-15 is the store's beneath both.
                 if self.post(view, persona)?.is_none() {
                     return refused(L7::ROW, locus);
                 }
