@@ -109,11 +109,25 @@ pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> Result<(), BoxErr> {
         return Err(format!("failed to write seed to {}: {e}", args.seed_out.display()).into());
     }
 
-    eprintln!(
+    let message = format!(
         "Created wallet '{}'. Seed written to {} (mode 0600) — protect or delete it.",
         args.name,
         args.seed_out.display()
     );
+    if crate::outcome::json_mode() {
+        println!(
+            "{}",
+            crate::outcome::success_line(
+                "create",
+                &serde_json::json!({
+                    "name": args.name,
+                    "seed_out": args.seed_out.display().to_string(),
+                })
+            )
+        );
+    } else {
+        eprintln!("{message}");
+    }
     Ok(())
 }
 
@@ -138,7 +152,14 @@ pub fn run_restore(rpc: &RpcSession, args: &RestoreArgs) -> Result<(), BoxErr> {
     drop(seed);
 
     result.map_err(|e| format!("restore_wallet failed: {e}"))?;
-    eprintln!("Restored wallet '{}'.", args.name);
+    if crate::outcome::json_mode() {
+        println!(
+            "{}",
+            crate::outcome::success_line("restore", &serde_json::json!({ "name": args.name }))
+        );
+    } else {
+        eprintln!("Restored wallet '{}'.", args.name);
+    }
     Ok(())
 }
 

@@ -44,32 +44,33 @@ pub fn cmd_get_tx_proof(
         }),
     );
     match result {
-        Ok(val) => {
-            let direction = val.get("direction").and_then(|v| v.as_str()).unwrap_or("?");
-            let proof = val.get("proof").and_then(|v| v.as_str()).unwrap_or("");
-            println!("Direction: {direction}");
-            println!("{proof}");
-            match direction {
-                "OUTBOUND" => {
-                    println!(
-                        "Warning: an OUTBOUND proof reveals this transaction's key. Any \
-                         holder of the string can verify every output of the transaction \
-                         and re-sign a proof for it under a new message. Share it only \
-                         with the intended verifier."
-                    );
-                }
-                "INBOUND" => {
-                    println!(
-                        "Note: an INBOUND proof reveals the amounts of your received \
-                         outputs in this transaction to whoever holds the string."
-                    );
-                }
-                _ => {}
-            }
+        Ok(val) => Ok(val),
+        Err(e) => Err(rpc.report("Failed to generate tx proof", &e)),
+    }
+}
+
+pub(crate) fn show_tx_proof(val: &Value) {
+    let direction = val.get("direction").and_then(|v| v.as_str()).unwrap_or("?");
+    let proof = val.get("proof").and_then(|v| v.as_str()).unwrap_or("");
+    println!("Direction: {direction}");
+    println!("{proof}");
+    match direction {
+        "OUTBOUND" => {
+            println!(
+                "Warning: an OUTBOUND proof reveals this transaction's key. Any \
+                 holder of the string can verify every output of the transaction \
+                 and re-sign a proof for it under a new message. Share it only \
+                 with the intended verifier."
+            );
         }
-        Err(e) => return Err(rpc.report("Failed to generate tx proof", &e)),
-    };
-    Ok(())
+        "INBOUND" => {
+            println!(
+                "Note: an INBOUND proof reveals the amounts of your received \
+                 outputs in this transaction to whoever holds the string."
+            );
+        }
+        _ => {}
+    }
 }
 
 pub fn cmd_get_reserve_proof(
@@ -86,32 +87,38 @@ pub fn cmd_get_reserve_proof(
     // challenge message here makes a misbind visible at generation time; at
     // check time it would only surface as an inexplicable BAD proof
     // (rule 82).
-    println!("{}", describe_reserve_binding(amount, message));
+    let binding = describe_reserve_binding(amount, message);
     let mut params = json!({ "message": message.unwrap_or("") });
     if let Some(a) = amount {
         params["amount"] = Value::String(a.to_string());
     }
     match rpc.call("get_reserve_proof", params) {
-        Ok(val) => {
-            let proof = val.get("proof").and_then(|v| v.as_str()).unwrap_or("");
-            let total = opt_amount(&val, "total");
-            let count = val
-                .get("output_count")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            println!("Proved reserve: {total} SKL across {count} output(s)");
-            println!("{proof}");
-            println!(
-                "Warning: a reserve proof reveals the amounts AND key images of the \
-                 proven outputs. Anyone who ever sees this string can detect the exact \
-                 moment each proven output is spent, forever. Share it only with the \
-                 intended verifier, and prefer an amount-bounded proof \
-                 (\"get_reserve_proof <amount>\") over proving the full balance."
-            );
+        Ok(mut val) => {
+            if let Some(object) = val.as_object_mut() {
+                object.insert("binding".to_owned(), json!(binding));
+            }
+            Ok(val)
         }
-        Err(e) => return Err(rpc.report("Failed to generate reserve proof", &e)),
-    };
-    Ok(())
+        Err(e) => Err(rpc.report("Failed to generate reserve proof", &e)),
+    }
+}
+
+pub(crate) fn show_reserve_proof(val: &Value) {
+    if let Some(binding) = val.get("binding").and_then(|v| v.as_str()) {
+        println!("{binding}");
+    }
+    let proof = val.get("proof").and_then(|v| v.as_str()).unwrap_or("");
+    let total = opt_amount(val, "total");
+    let count = val.get("output_count").and_then(Value::as_u64).unwrap_or(0);
+    println!("Proved reserve: {total} SKL across {count} output(s)");
+    println!("{proof}");
+    println!(
+        "Warning: a reserve proof reveals the amounts AND key images of the \
+         proven outputs. Anyone who ever sees this string can detect the exact \
+         moment each proven output is spent, forever. Share it only with the \
+         intended verifier, and prefer an amount-bounded proof \
+         (\"prove reserve <amount>\") over proving the full balance."
+    );
 }
 
 // ── Verification (wallet-less) ───────────────────────────────────────
@@ -133,35 +140,30 @@ pub fn cmd_check_tx_proof(
         }),
     );
     match result {
-        Ok(val) => {
-            let valid = val
-                .get("valid")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            if !valid {
-                println!("BAD proof: the proof does NOT verify for this txid/address/message.");
-                return Ok(());
-            }
-            let direction = val.get("direction").and_then(|v| v.as_str()).unwrap_or("?");
-            println!("Good proof ({direction}).");
-            println!(
-                "Received by the address: {} SKL",
-                opt_amount(&val, "received")
-            );
-            if let Some(outputs) = val.get("outputs").and_then(|v| v.as_array()) {
-                for out in outputs {
-                    let idx = out
-                        .get("output_index")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0);
-                    println!("  output {idx}: {} SKL", opt_amount(out, "amount"));
-                }
-            }
-            print_confirmations(&val);
+        Ok(val) => Ok(val),
+        Err(e) => Err(rpc.report("Failed to check tx proof", &e)),
+    }
+}
+
+pub(crate) fn show_tx_check(val: &Value) {
+    let valid = val.get("valid").and_then(Value::as_bool).unwrap_or(false);
+    if !valid {
+        println!("BAD proof: the proof does NOT verify for this txid/address/message.");
+        return;
+    }
+    let direction = val.get("direction").and_then(|v| v.as_str()).unwrap_or("?");
+    println!("Good proof ({direction}).");
+    println!(
+        "Received by the address: {} SKL",
+        opt_amount(val, "received")
+    );
+    if let Some(outputs) = val.get("outputs").and_then(|v| v.as_array()) {
+        for out in outputs {
+            let idx = out.get("output_index").and_then(Value::as_u64).unwrap_or(0);
+            println!("  output {idx}: {} SKL", opt_amount(out, "amount"));
         }
-        Err(e) => return Err(rpc.report("Failed to check tx proof", &e)),
-    };
-    Ok(())
+    }
+    print_confirmations(val);
 }
 
 pub fn cmd_check_reserve_proof(
@@ -179,36 +181,29 @@ pub fn cmd_check_reserve_proof(
         }),
     );
     match result {
-        Ok(val) => {
-            let valid = val
-                .get("valid")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            if !valid {
-                println!("BAD proof: the proof does NOT verify for this address/message.");
-                return Ok(());
-            }
-            let count = val
-                .get("output_count")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            println!("Good proof ({count} output(s)).");
-            println!("Total proven:  {} SKL", opt_amount(&val, "total"));
-            println!("Since spent:   {} SKL", opt_amount(&val, "spent"));
-            if let (Some(total), Some(spent)) =
-                (raw_amount(&val, "total"), raw_amount(&val, "spent"))
-            {
-                if let Some(live) = total.checked_sub(spent) {
-                    println!(
-                        "Live reserve:  {} SKL",
-                        format_amount_str(&live.to_string())
-                    );
-                }
-            }
+        Ok(val) => Ok(val),
+        Err(e) => Err(rpc.report("Failed to check reserve proof", &e)),
+    }
+}
+
+pub(crate) fn show_reserve_check(val: &Value) {
+    let valid = val.get("valid").and_then(Value::as_bool).unwrap_or(false);
+    if !valid {
+        println!("BAD proof: the proof does NOT verify for this address/message.");
+        return;
+    }
+    let count = val.get("output_count").and_then(Value::as_u64).unwrap_or(0);
+    println!("Good proof ({count} output(s)).");
+    println!("Total proven:  {} SKL", opt_amount(val, "total"));
+    println!("Since spent:   {} SKL", opt_amount(val, "spent"));
+    if let (Some(total), Some(spent)) = (raw_amount(val, "total"), raw_amount(val, "spent")) {
+        if let Some(live) = total.checked_sub(spent) {
+            println!(
+                "Live reserve:  {} SKL",
+                format_amount_str(&live.to_string())
+            );
         }
-        Err(e) => return Err(rpc.report("Failed to check reserve proof", &e)),
-    };
-    Ok(())
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

@@ -249,3 +249,23 @@ run. CompleteTree is the hidden startup flag `--complete-tree-foundation`,
 not `stake foundation`. `shard list all` reads `get_archival_shard_coverage`.
 `stake join` names shard ids and does not post until wallet-RPC `stake`
 accepts a shard set.
+
+## 6. Scripting and the release verb (2026-10-04)
+
+`--json` prints one object per command and does not print the human
+lines. A success is `{"ok":true,"command":"...","result":{...}}`. A
+failure is `{"ok":false,"command":"...","error":{"code":N,"message":"..."}}`
+and the process exits 1. Seeds and passwords are not in `result`.
+`shekyl-cli create --seed-out` is still the only way a script receives
+a seed, and the JSON result names that path.
+
+`--script FILE` runs the file as one wallet session. A one-shot is the
+same words as the prompt, after the global flags: `shekyl-cli --json
+balance`. Both are non-interactive: `--yes` is honored, and a money
+move without it fails without reading the next line. An interactive
+terminal still ignores `--yes` and prompts.
+
+The terminal bond exit is `stake release`. `stake exit` and `unstake`
+are retired spellings that name `stake release` and do not run. The
+wallet-rpc method underneath remains `unstake`. `stake collect` is the
+later sweep of collateral that release already freed.

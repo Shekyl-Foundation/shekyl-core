@@ -114,7 +114,7 @@ fn parse_ready(id: CommandId, input: &str, args: &[&str]) -> ResolvedCommand {
             amount,
             yes,
         }),
-        StakeExit => parse_yes_only(id, args, |yes| ResolvedCommand::Unstake { yes }),
+        StakeRelease => parse_yes_only(id, args, |yes| ResolvedCommand::Unstake { yes }),
         StakeCollect => parse_yes_only(id, args, |yes| ResolvedCommand::CollectUnstaked { yes }),
         StakeJoin => parse_stake_join(args),
         ShardListAll => bare(id, args, ResolvedCommand::ShardListAll),
@@ -638,6 +638,22 @@ mod tests {
             parse("stake join 4 --yes"),
             ResolvedCommand::Diagnostic { .. }
         ));
+        assert!(matches!(
+            parse("stake release --yes"),
+            ResolvedCommand::Unstake { yes: true }
+        ));
+        match parse("stake exit") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("stake release"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse("unstake") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("stake release"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
         match parse("stake foundation") {
             ResolvedCommand::Diagnostic { message } => {
                 assert!(message.contains("startup flag"), "{message}");

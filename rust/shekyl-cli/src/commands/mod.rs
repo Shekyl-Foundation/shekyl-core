@@ -26,7 +26,7 @@ pub use staking::{accept_foundation_terms, post_foundation_stake, FOUNDATION_PHR
 mod transfers;
 
 use crate::daemon::DaemonClient;
-use crate::outcome::{failed, CommandResult};
+use crate::outcome::{failed, present, CommandResult};
 use crate::rpc_client::RpcSession;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
@@ -76,10 +76,53 @@ pub fn repl(
     daemon_client: Option<&DaemonClient>,
     network: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    repl_lines(rpc, daemon_client, network, None, false, None)
+}
+
+/// Run one already-parsed command line and stop. Used by one-shot argv.
+pub fn run_one(
+    rpc: RpcSession,
+    daemon_client: Option<&DaemonClient>,
+    network: &str,
+    line: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    repl_lines(
+        rpc,
+        daemon_client,
+        network,
+        Some(line.to_owned()),
+        true,
+        None,
+    )
+}
+
+/// Run every line of a script file against one wallet session.
+pub fn run_file(
+    rpc: RpcSession,
+    daemon_client: Option<&DaemonClient>,
+    network: &str,
+    lines: Vec<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    repl_lines(rpc, daemon_client, network, None, false, Some(lines))
+}
+
+/// `script_file` replaces stdin. `oneshot` runs a single line and stops.
+fn repl_lines(
+    rpc: RpcSession,
+    daemon_client: Option<&DaemonClient>,
+    network: &str,
+    mut oneshot_line: Option<String>,
+    oneshot: bool,
+    file_lines: Option<Vec<String>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     use crate::grammar::parse;
     use crate::resolve::ResolvedCommand;
 
-    let script = !std::io::IsTerminal::is_terminal(&std::io::stdin());
+    let mut file_lines = file_lines.map(Vec::into_iter);
+    let script = oneshot
+        || file_lines.is_some()
+        || crate::outcome::noninteractive()
+        || !std::io::IsTerminal::is_terminal(&std::io::stdin());
     let mut rl = if script {
         None
     } else {
@@ -92,7 +135,7 @@ pub fn repl(
         Some((editor, hist))
     };
 
-    if !script {
+    if !script && !crate::outcome::json_mode() {
         println!("Welcome to shekyl-cli. Type \"help\" for commands.");
     }
 
@@ -100,7 +143,17 @@ pub fn repl(
     let mut script_lines = stdin.lines();
     loop {
         let prompt = crate::session::prompt(network, rpc.open_wallet_name().as_deref());
-        let raw = if script {
+        let raw = if oneshot {
+            match oneshot_line.take() {
+                Some(line) => line,
+                None => break,
+            }
+        } else if let Some(lines) = file_lines.as_mut() {
+            match lines.next() {
+                Some(line) => line,
+                None => break,
+            }
+        } else if script {
             match script_lines.next() {
                 Some(Ok(line)) => line,
                 Some(Err(e)) => return Err(e.into()),
@@ -108,12 +161,14 @@ pub fn repl(
             }
         } else {
             let (editor, _) = rl.as_mut().expect("tty editor");
-            let view = sync_view(&rpc);
-            crate::status::print_above_prompt(&crate::status::format_line(
-                env!("CARGO_PKG_VERSION"),
-                &crate::status::local_clock(),
-                &view,
-            ));
+            if !crate::outcome::json_mode() {
+                let view = sync_view(&rpc);
+                crate::status::print_above_prompt(&crate::status::format_line(
+                    env!("CARGO_PKG_VERSION"),
+                    &crate::status::local_clock(),
+                    &view,
+                ));
+            }
             match editor.readline(&prompt) {
                 Ok(line) => line,
                 Err(ReadlineError::Interrupted) => continue,
@@ -135,145 +190,310 @@ pub fn repl(
             }
         }
 
-        let outcome = match parse(line) {
+        let ok = match parse(line) {
             ResolvedCommand::Help => {
-                print!("{}", crate::catalog::help_listing());
-                Ok(())
+                let text = crate::catalog::help_listing();
+                present("help", Ok(serde_json::json!({ "text": text })), |val| {
+                    print!("{}", val.get("text").and_then(|v| v.as_str()).unwrap_or(""));
+                })
             }
             ResolvedCommand::HelpCommand { topic } => match crate::catalog::help_for(&topic) {
-                Some(block) => {
-                    println!("{block}");
-                    Ok(())
-                }
-                None => {
-                    eprintln!("No help for {topic:?}. Type \"help\" for the command list.");
-                    failed()
-                }
+                Some(block) => present("help", Ok(serde_json::json!({ "text": block })), |val| {
+                    println!("{}", val.get("text").and_then(|v| v.as_str()).unwrap_or(""));
+                }),
+                None => present(
+                    "help",
+                    failed(format!(
+                        "No help for {topic:?}. Type \"help\" for the command list."
+                    )),
+                    |_| {},
+                ),
             },
             ResolvedCommand::Exit => break,
 
-            ResolvedCommand::Create { filename } => lifecycle::cmd_create(&rpc, &filename),
-            ResolvedCommand::Open { filename } => lifecycle::cmd_open(&rpc, &filename),
-            ResolvedCommand::Close => lifecycle::cmd_close(&rpc),
+            ResolvedCommand::Create { filename } => present(
+                "wallet create",
+                lifecycle::cmd_create(&rpc, &filename),
+                lifecycle::show_created,
+            ),
+            ResolvedCommand::Open { filename } => present(
+                "wallet open",
+                lifecycle::cmd_open(&rpc, &filename),
+                lifecycle::show_opened,
+            ),
+            ResolvedCommand::Close => present(
+                "wallet close",
+                lifecycle::cmd_close(&rpc),
+                lifecycle::show_closed,
+            ),
             ResolvedCommand::Restore {
                 filename,
                 seed_words,
-            } => lifecycle::cmd_restore(&rpc, &filename, &seed_words),
-            ResolvedCommand::Refresh => lifecycle::cmd_refresh(&rpc),
-            ResolvedCommand::Status => {
-                lifecycle::cmd_status(&rpc, daemon_client.and_then(DaemonClient::down_hint))
-            }
-            ResolvedCommand::Password => lifecycle::cmd_password(&rpc),
-            ResolvedCommand::Rescan { hard } => lifecycle::cmd_rescan(&rpc, hard),
+            } => present(
+                "wallet restore",
+                lifecycle::cmd_restore(&rpc, &filename, &seed_words),
+                lifecycle::show_restored,
+            ),
+            ResolvedCommand::Refresh => present(
+                "wallet refresh",
+                lifecycle::cmd_refresh(&rpc),
+                lifecycle::show_refresh,
+            ),
+            ResolvedCommand::Status => present(
+                "status",
+                lifecycle::cmd_status(&rpc, daemon_client.and_then(DaemonClient::down_hint)),
+                lifecycle::show_status,
+            ),
+            ResolvedCommand::Password => present(
+                "wallet password",
+                lifecycle::cmd_password(&rpc),
+                lifecycle::show_password,
+            ),
+            ResolvedCommand::Rescan { hard } => present(
+                "wallet rescan",
+                lifecycle::cmd_rescan(&rpc, hard),
+                lifecycle::show_rescan,
+            ),
 
-            ResolvedCommand::Balance => balance::cmd_balance(&rpc),
-            ResolvedCommand::Address { full, out } => {
-                balance::cmd_address(&rpc, full, out.as_deref())
+            ResolvedCommand::Balance => {
+                present("balance", balance::cmd_balance(&rpc), balance::show_balance)
             }
+            ResolvedCommand::Address { full, out } => present(
+                "address",
+                balance::cmd_address(&rpc, full, out.as_deref()),
+                balance::show_address,
+            ),
 
             ResolvedCommand::Transfer {
                 dest,
                 amount,
                 priority,
                 yes,
-            } => transfers::cmd_transfer(&rpc, amount, &dest, priority, yes),
+            } => present(
+                "send",
+                transfers::cmd_transfer(&rpc, amount, &dest, priority, yes),
+                transfers::show_submit,
+            ),
             ResolvedCommand::Transfers {
                 incoming,
                 outgoing,
                 unmatched,
-            } => transfers::cmd_transfers(&rpc, incoming, outgoing, unmatched),
-            ResolvedCommand::ShowTransfer { txid } => transfers::cmd_show_transfer(&rpc, &txid),
-            ResolvedCommand::GetTxNote { txid } => transfers::cmd_get_tx_note(&rpc, &txid),
-            ResolvedCommand::SetTxNote { txid, note } => {
-                transfers::cmd_set_tx_note(&rpc, &txid, &note)
-            }
-            ResolvedCommand::Abandon { txid } => transfers::cmd_abandon(&rpc, &txid),
+            } => present(
+                "tx list",
+                transfers::cmd_transfers(&rpc, incoming, outgoing, unmatched),
+                transfers::show_transfers,
+            ),
+            ResolvedCommand::ShowTransfer { txid } => present(
+                "tx show",
+                transfers::cmd_show_transfer(&rpc, &txid),
+                transfers::show_transfer,
+            ),
+            ResolvedCommand::GetTxNote { txid } => present(
+                "tx note",
+                transfers::cmd_get_tx_note(&rpc, &txid),
+                transfers::show_note,
+            ),
+            ResolvedCommand::SetTxNote { txid, note } => present(
+                "tx note",
+                transfers::cmd_set_tx_note(&rpc, &txid, &note),
+                transfers::show_note_stored,
+            ),
+            ResolvedCommand::Abandon { txid } => present(
+                "tx abandon",
+                transfers::cmd_abandon(&rpc, &txid),
+                transfers::show_abandoned,
+            ),
 
             ResolvedCommand::RequestNew {
                 amount,
                 label,
                 expiry,
-            } => receiving::cmd_request_new(&rpc, amount, &label, expiry),
-            ResolvedCommand::RequestsList { filter } => receiving::cmd_requests_list(&rpc, filter),
+            } => present(
+                "request new",
+                receiving::cmd_request_new(&rpc, amount, &label, expiry),
+                receiving::show_request_new,
+            ),
+            ResolvedCommand::RequestsList { filter } => present(
+                "request list",
+                receiving::cmd_requests_list(&rpc, filter),
+                receiving::show_requests,
+            ),
             ResolvedCommand::MakeUri {
                 address,
                 amount,
                 label,
-            } => receiving::cmd_make_uri(&rpc, address.as_deref(), amount, label.as_deref()),
-            ResolvedCommand::ParseUri { uri } => receiving::cmd_parse_uri(&rpc, &uri),
+            } => present(
+                "uri make",
+                receiving::cmd_make_uri(&rpc, address.as_deref(), amount, label.as_deref()),
+                receiving::show_uri,
+            ),
+            ResolvedCommand::ParseUri { uri } => present(
+                "uri read",
+                receiving::cmd_parse_uri(&rpc, &uri),
+                receiving::show_parsed_uri,
+            ),
 
-            ResolvedCommand::Stake => staking::cmd_stake_read(&rpc),
-            ResolvedCommand::StakeJoin { shard_ids } => staking::cmd_stake_join(&rpc, &shard_ids),
-            ResolvedCommand::StakedBalance => staking::cmd_staked_balance(&rpc),
-            ResolvedCommand::StakedOutputs => staking::cmd_staked_outputs(&rpc),
-            ResolvedCommand::StakeIn { amount, yes } => staking::cmd_stake_in(&rpc, amount, yes),
-            ResolvedCommand::DrainBalance => staking::cmd_drain_balance(&rpc),
-            ResolvedCommand::Drain { amount, yes } => staking::cmd_drain(&rpc, amount, yes),
-            ResolvedCommand::Unstake { yes } => staking::cmd_unstake(&rpc, yes),
-            ResolvedCommand::CollectUnstaked { yes } => staking::cmd_collect_unstaked(&rpc, yes),
-            ResolvedCommand::ShardListAll => chain::cmd_shard_list_all(daemon_client),
-            ResolvedCommand::ShardListMine => chain::cmd_shard_list_mine(&rpc),
-            ResolvedCommand::ShardShow { shard_id } => {
-                chain::cmd_shard_show(daemon_client, shard_id)
+            ResolvedCommand::Stake => {
+                present("stake", staking::cmd_stake_read(&rpc), staking::show_stake)
             }
-            ResolvedCommand::ShardFetch { shard_id } => {
-                chain::cmd_shard_fetch(daemon_client, shard_id)
+            ResolvedCommand::StakeJoin { shard_ids } => present(
+                "stake join",
+                staking::cmd_stake_join(&rpc, &shard_ids),
+                |_| {},
+            ),
+            ResolvedCommand::StakedBalance => present(
+                "stake balance",
+                staking::cmd_staked_balance(&rpc),
+                staking::show_staked_balance,
+            ),
+            ResolvedCommand::StakedOutputs => present(
+                "stake outputs",
+                staking::cmd_staked_outputs(&rpc),
+                staking::show_staked_outputs,
+            ),
+            ResolvedCommand::StakeIn { amount, yes } => present(
+                "stake add",
+                staking::cmd_stake_in(&rpc, amount, yes),
+                transfers::show_submit,
+            ),
+            ResolvedCommand::DrainBalance => present(
+                "stake available",
+                staking::cmd_drain_balance(&rpc),
+                staking::show_drain_balance,
+            ),
+            ResolvedCommand::Drain { amount, yes } => present(
+                "stake return",
+                staking::cmd_drain(&rpc, amount, yes),
+                staking::show_drain,
+            ),
+            ResolvedCommand::Unstake { yes } => present(
+                "release",
+                staking::cmd_unstake(&rpc, yes),
+                staking::show_release,
+            ),
+            ResolvedCommand::CollectUnstaked { yes } => present(
+                "stake collect",
+                staking::cmd_collect_unstaked(&rpc, yes),
+                staking::show_collect,
+            ),
+            ResolvedCommand::ShardListAll => present(
+                "shard list all",
+                chain::cmd_shard_list_all(daemon_client),
+                chain::show_coverage,
+            ),
+            ResolvedCommand::ShardListMine => {
+                present("shard list mine", chain::cmd_shard_list_mine(&rpc), |_| {})
             }
+            ResolvedCommand::ShardShow { shard_id } => present(
+                "shard show",
+                chain::cmd_shard_show(daemon_client, shard_id),
+                chain::show_shard,
+            ),
+            ResolvedCommand::ShardFetch { shard_id } => present(
+                "shard fetch",
+                chain::cmd_shard_fetch(daemon_client, shard_id),
+                chain::show_fetch,
+            ),
 
             ResolvedCommand::Fee {
                 n_inputs,
                 n_outputs,
-            } => fees::cmd_fee(&rpc, n_inputs, n_outputs),
-            ResolvedCommand::ChainHealth => chain::cmd_chain_health(daemon_client),
+            } => present(
+                "fee",
+                fees::cmd_fee(&rpc, n_inputs, n_outputs),
+                fees::show_fee,
+            ),
+            ResolvedCommand::ChainHealth => present(
+                "chain",
+                chain::cmd_chain_health(daemon_client),
+                chain::show_chain,
+            ),
 
-            ResolvedCommand::MineStart { threads } => {
-                mine::cmd_mine_start(&rpc, daemon_client, network, threads)
-            }
-            ResolvedCommand::MineStop => mine::cmd_mine_stop(&rpc, daemon_client, network),
-            ResolvedCommand::MineStatus => mine::cmd_mine_status(&rpc, daemon_client, network),
+            ResolvedCommand::MineStart { threads } => present(
+                "mine start",
+                mine::cmd_mine_start(&rpc, daemon_client, network, threads),
+                mine::show_mine_start,
+            ),
+            ResolvedCommand::MineStop => present(
+                "mine stop",
+                mine::cmd_mine_stop(&rpc, daemon_client, network),
+                mine::show_mine_stop,
+            ),
+            ResolvedCommand::MineStatus => present(
+                "mine status",
+                mine::cmd_mine_status(&rpc, daemon_client, network),
+                mine::show_mine_status,
+            ),
 
             ResolvedCommand::GetTxProof {
                 txid,
                 address,
                 message,
-            } => proofs::cmd_get_tx_proof(&rpc, &txid, &address, message.as_deref()),
+            } => present(
+                "prove payment",
+                proofs::cmd_get_tx_proof(&rpc, &txid, &address, message.as_deref()),
+                proofs::show_tx_proof,
+            ),
             ResolvedCommand::CheckTxProof {
                 txid,
                 address,
                 proof,
                 message,
-            } => proofs::cmd_check_tx_proof(&rpc, &txid, &address, &proof, message.as_deref()),
-            ResolvedCommand::GetReserveProof { amount, message } => {
-                proofs::cmd_get_reserve_proof(&rpc, amount, message.as_deref())
-            }
+            } => present(
+                "check payment",
+                proofs::cmd_check_tx_proof(&rpc, &txid, &address, &proof, message.as_deref()),
+                proofs::show_tx_check,
+            ),
+            ResolvedCommand::GetReserveProof { amount, message } => present(
+                "prove reserve",
+                proofs::cmd_get_reserve_proof(&rpc, amount, message.as_deref()),
+                proofs::show_reserve_proof,
+            ),
             ResolvedCommand::CheckReserveProof {
                 address,
                 proof,
                 message,
-            } => proofs::cmd_check_reserve_proof(&rpc, &address, &proof, message.as_deref()),
+            } => present(
+                "check reserve",
+                proofs::cmd_check_reserve_proof(&rpc, &address, &proof, message.as_deref()),
+                proofs::show_reserve_check,
+            ),
 
-            ResolvedCommand::Sign { message } => signing::cmd_sign(&rpc, &message),
+            ResolvedCommand::Sign { message } => present(
+                "sign",
+                signing::cmd_sign(&rpc, &message),
+                signing::show_signature,
+            ),
             ResolvedCommand::Verify {
                 address,
                 signature,
                 message,
-            } => signing::cmd_verify(&rpc, &address, &signature, &message),
+            } => present(
+                "verify",
+                signing::cmd_verify(&rpc, &address, &signature, &message),
+                signing::show_verify,
+            ),
 
-            ResolvedCommand::Version => cmd_version(&rpc),
-            ResolvedCommand::Wallet => balance::cmd_wallet(&rpc),
+            ResolvedCommand::Version => present("version", cmd_version(&rpc), show_version),
+            ResolvedCommand::Wallet => {
+                present("wallet", balance::cmd_wallet(&rpc), balance::show_wallet)
+            }
 
-            ResolvedCommand::Unknown { cmd } => {
-                eprintln!("Unknown command: {cmd}. Type \"help\" for available commands.");
-                failed()
-            }
-            ResolvedCommand::Diagnostic { message } => {
-                eprintln!("{message}");
-                failed()
-            }
+            ResolvedCommand::Unknown { cmd } => present(
+                "unknown",
+                failed(format!(
+                    "Unknown command: {cmd}. Type \"help\" for available commands."
+                )),
+                |_| {},
+            ),
+            ResolvedCommand::Diagnostic { message } => present("refused", failed(message), |_| {}),
         };
-        if script && outcome.is_err() {
+        if !ok && script {
             rpc.shutdown();
             std::process::exit(1);
+        }
+        if oneshot {
+            break;
         }
     }
 
@@ -306,22 +526,32 @@ fn sync_view(rpc: &RpcSession) -> crate::status::SyncView {
 
 /// CLI version, plus the connected wallet-RPC server's version when reachable.
 fn cmd_version(rpc: &RpcSession) -> CommandResult {
-    println!("shekyl-cli {}", env!("CARGO_PKG_VERSION"));
     match rpc.call("get_version", serde_json::json!({})) {
-        Ok(val) => {
-            let server = val.get("version").and_then(|v| v.as_str()).unwrap_or("?");
-            let api = val
-                .get("api_version")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(0);
-            println!("shekyl-wallet-rpc {server} (api v{api})");
-            Ok(())
+        Ok(mut val) => {
+            if let Some(object) = val.as_object_mut() {
+                object.insert(
+                    "cli_version".to_owned(),
+                    serde_json::json!(env!("CARGO_PKG_VERSION")),
+                );
+            }
+            Ok(val)
         }
-        Err(e) => {
-            eprintln!("wallet RPC unreachable: {e}");
-            failed()
-        }
+        Err(e) => failed(format!("wallet RPC unreachable: {e}")),
     }
+}
+
+fn show_version(val: &serde_json::Value) {
+    let cli = val
+        .get("cli_version")
+        .and_then(|v| v.as_str())
+        .unwrap_or(env!("CARGO_PKG_VERSION"));
+    println!("shekyl-cli {cli}");
+    let server = val.get("version").and_then(|v| v.as_str()).unwrap_or("?");
+    let api = val
+        .get("api_version")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+    println!("shekyl-wallet-rpc {server} (api v{api})");
 }
 
 /// Standard confirmation: "Type 'yes' to confirm: "
@@ -337,29 +567,48 @@ pub(crate) fn confirm(prompt: &str) -> bool {
 
 /// Confirmation for a money-moving command.
 ///
-/// `--yes` is honored only when stdin is not a terminal. On a terminal the
-/// flag is ignored and the prompt still runs. A pipe without `--yes` refuses
-/// without reading the next line.
-pub(crate) fn confirm_money(prompt: &str, action: &str, yes: bool) -> CommandResult {
+/// Confirmation for a money-moving command.
+///
+/// A one-shot or a script honors `--yes` and refuses without it, without
+/// reading the next line. On an interactive terminal `--yes` is ignored and
+/// the prompt still runs.
+pub(crate) fn confirm_money(
+    prompt: &str,
+    action: &str,
+    yes: bool,
+) -> Result<(), crate::outcome::CommandFailed> {
+    if crate::outcome::noninteractive() {
+        return if yes {
+            Ok(())
+        } else {
+            Err(crate::outcome::refusal(format!(
+                "Refusing to {action} without confirmation on non-interactive \
+                 input. Re-run with --yes, or run interactively."
+            )))
+        };
+    }
     let tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
     if yes && !tty {
         return Ok(());
     }
     if yes && tty {
         eprintln!("--yes is only honored for non-interactive input; confirming.");
-        return if confirm(prompt) { Ok(()) } else { failed() };
+        return if confirm(prompt) {
+            Ok(())
+        } else {
+            Err(crate::outcome::refusal("Not confirmed."))
+        };
     }
     if !tty {
-        eprintln!(
+        return Err(crate::outcome::refusal(format!(
             "Refusing to {action} without confirmation on non-interactive \
              input. Re-run with --yes, or run interactively."
-        );
-        return failed();
+        )));
     }
     if confirm(prompt) {
         Ok(())
     } else {
-        failed()
+        Err(crate::outcome::refusal("Not confirmed."))
     }
 }
 
@@ -376,21 +625,21 @@ fn history_path() -> Option<String> {
     })
 }
 
-pub(crate) fn require_open(rpc: &RpcSession) -> CommandResult {
+pub(crate) fn require_open(rpc: &RpcSession) -> Result<(), crate::outcome::CommandFailed> {
     if rpc.is_open() {
         Ok(())
     } else {
-        eprintln!(
-            "No wallet is open. Use \"wallet open <name>\" or \"wallet create <name>\" first."
-        );
-        failed()
+        Err(crate::outcome::refusal(
+            "No wallet is open. Use \"wallet open <name>\" or \"wallet create <name>\" first.",
+        ))
     }
 }
 
-pub(crate) fn require_closed(rpc: &RpcSession) -> CommandResult {
+pub(crate) fn require_closed(rpc: &RpcSession) -> Result<(), crate::outcome::CommandFailed> {
     if rpc.is_open() {
-        eprintln!("A wallet is already open. Use \"wallet close\" first.");
-        failed()
+        Err(crate::outcome::refusal(
+            "A wallet is already open. Use \"wallet close\" first.",
+        ))
     } else {
         Ok(())
     }

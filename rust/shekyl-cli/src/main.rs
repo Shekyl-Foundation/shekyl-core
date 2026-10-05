@@ -42,6 +42,11 @@ enum Commands {
     /// automation). Connection flags are global: before or after the
     /// subcommand name.
     Restore(commands::scripted::RestoreArgs),
+
+    /// One wallet command, in the same words as the prompt. Parsed by the
+    /// prompt grammar, not a second flag set.
+    #[command(external_subcommand)]
+    Words(Vec<String>),
 }
 
 /// Shared connection flags. Every arg is `global`, so they parse before or
@@ -120,6 +125,16 @@ pub struct ReplArgs {
     /// `--complete-tree-foundation` when stdin is not a terminal.
     #[arg(long, global = true, hide = true, value_name = "PHRASE")]
     acknowledge: Option<String>,
+
+    /// Print one JSON object per command instead of human text.
+    /// Seeds and passwords are never included.
+    #[arg(long, global = true, default_value_t = false)]
+    json: bool,
+
+    /// Run the commands in this file as one wallet session. `#` starts a
+    /// comment. The first failure stops the file.
+    #[arg(long, global = true, value_name = "PATH")]
+    script: Option<std::path::PathBuf>,
 }
 
 impl ReplArgs {
@@ -251,6 +266,11 @@ impl Endpoints {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    let oneshot = matches!(cli.command, Some(Commands::Words(_)));
+    let scripted = cli.repl.script.is_some()
+        || oneshot
+        || !std::io::IsTerminal::is_terminal(&std::io::stdin());
+    shekyl_cli::outcome::set_mode(cli.repl.json, scripted, cli.repl.debug);
 
     match &cli.command {
         Some(Commands::DerivationFreezeSelfCheck) => {
@@ -263,7 +283,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Restore(args)) => {
             run_scripted(&cli.repl, |rpc| commands::scripted::run_restore(rpc, args))
         }
-        None => run_repl(&cli.repl),
+        Some(Commands::Words(words)) => {
+            if cli.repl.script.is_some() {
+                eprintln!("Pass either --script or one command, not both.");
+                std::process::exit(1);
+            }
+            run_repl_command(&cli.repl, Some(words.join(" ")), None)
+        }
+        None => {
+            let lines = match &cli.repl.script {
+                Some(path) => Some(
+                    std::fs::read_to_string(path)
+                        .map_err(|e| format!("cannot read script {}: {e}", path.display()))?
+                        .lines()
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>(),
+                ),
+                None => None,
+            };
+            run_repl_command(&cli.repl, None, lines)
+        }
     }
 }
 
@@ -371,7 +410,17 @@ where
     let outcome = run(&rpc);
     rpc.shutdown();
     if let Err(e) = outcome {
-        eprintln!("Error: {e}");
+        if conn.json {
+            println!(
+                "{}",
+                shekyl_cli::outcome::failure_line(
+                    "scripted",
+                    &shekyl_cli::outcome::refusal(e.to_string())
+                )
+            );
+        } else {
+            eprintln!("Error: {e}");
+        }
         std::process::exit(1);
     }
     Ok(())
@@ -426,7 +475,11 @@ fn daemon_down_hint(cli: &ReplArgs, address: &str) -> Option<String> {
     ))
 }
 
-fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn run_repl_command(
+    cli: &ReplArgs,
+    oneshot: Option<String>,
+    file_lines: Option<Vec<String>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
 
     let endpoints = Endpoints::resolve(cli, true)?;
@@ -476,7 +529,7 @@ fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(ref filename) = cli.wallet {
-        let script = !std::io::IsTerminal::is_terminal(&std::io::stdin());
+        let script = shekyl_cli::outcome::noninteractive();
         if script && cli.password_file.is_none() {
             eprintln!(
                 "A script must pass --password-file with --wallet. \
@@ -504,13 +557,31 @@ fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
             },
         );
         if let Err(e) = opened {
-            let _reported = rpc.report("Failed to open wallet", &e);
+            let reported = rpc.report("Failed to open wallet", &e);
+            if cli.json {
+                println!(
+                    "{}",
+                    shekyl_cli::outcome::failure_line("wallet open", &reported)
+                );
+            } else {
+                eprintln!("{}", reported.message);
+            }
             drop(password);
             rpc.shutdown();
             std::process::exit(1);
         }
         rpc.set_open(filename);
-        println!("Opened wallet: {filename}");
+        if cli.json {
+            println!(
+                "{}",
+                shekyl_cli::outcome::success_line(
+                    "wallet open",
+                    &serde_json::json!({"name": filename})
+                )
+            );
+        } else {
+            println!("Opened wallet: {filename}");
+        }
         if cli.complete_tree_foundation {
             let staked = commands::post_foundation_stake(&rpc, &password);
             drop(password);
@@ -521,7 +592,13 @@ fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    commands::repl(rpc, daemon_client.as_ref(), cli.network_name())
+    if let Some(line) = oneshot {
+        commands::run_one(rpc, daemon_client.as_ref(), cli.network_name(), &line)
+    } else if let Some(lines) = file_lines {
+        commands::run_file(rpc, daemon_client.as_ref(), cli.network_name(), lines)
+    } else {
+        commands::repl(rpc, daemon_client.as_ref(), cli.network_name())
+    }
 }
 
 #[cfg(test)]
