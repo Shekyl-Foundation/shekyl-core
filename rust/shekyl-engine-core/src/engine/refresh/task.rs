@@ -403,7 +403,8 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         // The registration set is read under the same guard: everything the
         // wallet will hold once this result merges, which the ingest offers
         // to the tree between its rollback and its first fold
-        // (`engine/ownership.rs`).
+        // (`engine/ownership.rs`). That read opens the persona's scan seal —
+        // one small synchronous file read, the only I/O this guard spans.
         let (curve_tree, daemon, owned) = {
             let g = engine_arc.read().await;
             (
