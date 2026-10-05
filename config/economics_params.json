@@ -3,7 +3,7 @@
   "emission_curve_asymptote": 4294967296000000000,
   "coin": 1000000000,
   "display_decimal_point": 9,
-  "emission_speed_factor_per_minute": 22,
+  "emission_speed_factor_per_block": 22,
   "final_subsidy_per_minute": 300000000,
   "shekyl_fixed_point_scale": 1000000,
   "shekyl_release_min": 800000,

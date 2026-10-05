@@ -359,7 +359,7 @@ pub mod refresh;
 pub(crate) mod refresh_slot;
 /// Track-2 end-to-end FAKECHAIN regtest (C++↔Rust FCMP++ verify parity). Spawns
 /// a real `shekyld --regtest` and drives the production [`Engine`] against it;
-/// all tests are `#[ignore]`d and require `SHEKYLD_BIN`.
+/// every live-daemon test is `#[ignore]`d and requires `SHEKYLD_BIN`.
 #[cfg(test)]
 mod regtest_e2e;
 /// Finality comparison shared by the producer fork walk and curve-tree ingest.

@@ -41,7 +41,8 @@ use shekyl_economics::params::SCALE;
 use shekyl_economics::{
     base_block_reward, base_emission_at, calc_burn_pct_from_activity,
     calc_effective_emission_share, calc_release_multiplier, compute_burn_split_at,
-    effective_emission, params_digest, split_block_emission, ClosedShardCount, TxVolume,
+    effective_emission, neutral_height_reaching, params_digest, split_block_emission,
+    ClosedShardCount, EconomicParams, TxVolume,
 };
 
 use crate::engine::SimParams;
@@ -128,6 +129,14 @@ fn sample_heights(blocks_per_year: u64, sim_years: u64) -> Vec<u64> {
         heights.push(year * blocks_per_year + (blocks_per_year - 1));
     }
     heights
+}
+
+/// The first height at which the owner's neutral trajectory has emitted half
+/// the asymptote — the owner's inverse of `projected_already_generated`,
+/// not a figure restated here.
+fn half_emitted_height(params: &EconomicParams) -> u64 {
+    neutral_height_reaching(params.emission_curve_asymptote / 2, params)
+        .expect("the neutral trajectory reaches half the asymptote")
 }
 
 /// Record the `baseline_steady_state` scenario into a
@@ -268,7 +277,10 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         (blocks_per_year, "≈1 yr — early neutral trajectory"),
         (5 * blocks_per_year, "≈5 yr"),
         (10 * blocks_per_year, "≈10 yr"),
-        (5_788_000, "≈50% emitted, ~yr 22 (ESF-22 milestone)"),
+        (
+            half_emitted_height(&params),
+            "first height with half the asymptote emitted (≈ yr 11 at ESF 22 per block)",
+        ),
     ]
     .into_iter()
     .map(|(height, note)| NeutralMilestone {

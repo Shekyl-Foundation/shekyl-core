@@ -43,7 +43,7 @@
 //! round-trip test and the C4 fixtures (which call this same function —
 //! there is no second encoder).
 //!
-//! # Canonical byte layout (format version `0x03`)
+//! # Canonical byte layout (format version `0x04`)
 //!
 //! **`0x01` → `0x02` (Stage 3a):** the D2 escalation added
 //! `escalation_knee_n` and `escalation_asymptote_share`. They are appended, so
@@ -66,7 +66,7 @@
 //!
 //! | Offset | Width | Field                              | Notes               |
 //! |--------|-------|------------------------------------|---------------------|
-//! | 0      | 1     | format version tag                 | `0x03`              |
+//! | 0      | 1     | format version tag                 | `0x04`              |
 //! | 1      | 8     | `release_min`                      | u64 LE              |
 //! | 9      | 8     | `release_max`                      | u64 LE              |
 //! | 17     | 8     | `tx_volume_baseline`               | u64 LE              |
@@ -74,7 +74,7 @@
 //! | 33     | 8     | `burn_cap`                         | u64 LE              |
 //! | 41     | 8     | `staker_pool_share`                | u64 LE              |
 //! | 49     | 8     | `emission_curve_asymptote`                     | u64 LE              |
-//! | 57     | 8     | `emission_speed_factor_per_minute` | u64 LE              |
+//! | 57     | 8     | `emission_speed_factor_per_block`  | u64 LE              |
 //! | 65     | 8     | `final_subsidy_per_minute`         | u64 LE              |
 //! | 73     | 8     | `daa_target_seconds`               | u64 LE              |
 //! | 81     | 8     | `escalation_knee_n`                | u64 LE              |
@@ -82,12 +82,18 @@
 //! | 97     | 8     | `full_reward_zone`                 | u64 LE              |
 //!
 //! The field order is the [`EconomicParams`] declaration order.
-//! `full_reward_zone` is the struct's last field, so format `0x03` appends
-//! it and every earlier offset is unchanged.
+//! `full_reward_zone` is the struct's last field: format `0x03` appended
+//! it and left every earlier offset unchanged. The current format, `0x04`,
+//! keeps that layout and redefines offset 57 from a per-minute to a
+//! per-block factor.
 //! **Adding, removing, or reordering a field is a breaking layout
 //! change** and must bump [`DIGEST_FORMAT_VERSION`] (so a stale fixture
 //! produced under the old layout fails the staleness guard rather than
-//! silently matching).
+//! silently matching). So is **redefining a field at an unchanged value**:
+//! format `0x04` (2026-10-04) records offset 57 changing from a per-minute
+//! emission speed factor, which the curve converted to 21 per block, to a
+//! per-block factor of 22. Both encode as 22, and a digest of values alone
+//! could not see the curve change.
 
 use blake2::digest::consts::U32;
 use blake2::{Blake2b, Digest};
@@ -97,7 +103,7 @@ use crate::params::EconomicParams;
 /// Format-version tag prefixed to the digest preimage. Bump on any
 /// change to the field set, order, or widths in the [module
 /// docs](self) byte-layout table.
-pub const DIGEST_FORMAT_VERSION: u8 = 0x03;
+pub const DIGEST_FORMAT_VERSION: u8 = 0x04;
 
 /// Length in bytes of the canonical digest preimage (`1` version tag +
 /// `13 × 8` u64 fields = **105**). Exposed for the round-trip test's
@@ -132,7 +138,7 @@ fn canonical_preimage(params: &EconomicParams) -> [u8; DIGEST_PREIMAGE_LEN] {
     put(params.burn_cap);
     put(params.staker_pool_share);
     put(params.emission_curve_asymptote);
-    put(params.emission_speed_factor_per_minute);
+    put(params.emission_speed_factor_per_block);
     put(params.final_subsidy_per_minute);
     put(params.daa_target_seconds);
     put(params.escalation_knee_n);
@@ -173,7 +179,7 @@ mod tests {
             burn_cap: 0x4142_4344_4546_4748,
             staker_pool_share: 0x5152_5354_5556_5758,
             emission_curve_asymptote: 0x6162_6364_6566_6768,
-            emission_speed_factor_per_minute: 0x7172_7374_7576_7778,
+            emission_speed_factor_per_block: 0x7172_7374_7576_7778,
             final_subsidy_per_minute: 0x8182_8384_8586_8788,
             daa_target_seconds: 0x9192_9394_9596_9798,
             escalation_knee_n: 0xA1A2_A3A4_A5A6_A7A8,
@@ -256,8 +262,8 @@ mod tests {
         let buf = canonical_preimage(&EconomicParams::default());
         assert_eq!(buf.len(), DOCUMENTED_LEN);
         assert_eq!(
-            buf[0], 0x03,
-            "the byte-layout table advertises 0x03; the encoder must write it"
+            buf[0], 0x04,
+            "the byte-layout table advertises 0x04; the encoder must write it"
         );
     }
 }
