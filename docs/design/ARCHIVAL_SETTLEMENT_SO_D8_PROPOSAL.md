@@ -1408,6 +1408,14 @@ authorized").
 (grace-tail, P2B-7 Pin 2 — ratified: no drop sub-state, no
 `bond_event_log` row), so it answers not-held for every height."
 
+*(UPDATE 2026-10-04 — the voluntary per-shard drop quoted above is gone:
+`HoldingsUpdate` was REJECTED 2026-09-20 under the immutable-bond ruling.
+The finding survives on the remaining causes — a `Release` clears
+`held_shard_ids` at tip (next list, second bullet) and a slash erases one
+shard — so the point query is still retroactively falsified, by whole-bond
+exit or by slash rather than by drop. The construction below is unchanged;
+one of its sources is now empty by construction, marked where it is listed.)*
+
 The point query is therefore **retroactively falsified by a later drop**.
 Build the drawable set by enumerating at tip and filtering with
 `holds_shard_of(h_open(E))` and a node computing at `h_open + 100` gets a
@@ -1434,7 +1442,9 @@ rows only):
 
 - `archival_bond_holdings_update_log` — stores `pre_shard_ids`,
   `pre_shard_add_epochs`, `pre_bonded_total`, keyed `(block_height, seq)`
-  (`db_lmdb.cpp:6834–6847`).
+  (`db_lmdb.cpp:6834–6847`) *[never written since 2026-09-20 — the kind is
+  REJECTED and its appliers throw; the table is empty by construction and
+  contributes nothing here]*.
 - `archival_bond_unbond_log` — required: on release the record survives
   at tip but `held_shard_ids` is cleared (`db_lmdb.cpp:6626–6627`), so
   tip state no longer says what it held. `bad_intervals` on the record
