@@ -20,9 +20,11 @@
 //! not loopback. Loopback is the silent default and the recommended posture;
 //! a remote daemon the operator named is a valid advanced configuration.
 
+use serde_json::{json, Value};
+
 use crate::daemon::{DaemonClient, DaemonInfo};
 use crate::display::short_address;
-use crate::outcome::{failed, CommandResult};
+use crate::outcome::{failed, refusal, CommandFailed, CommandResult};
 use crate::rpc_client::RpcSession;
 
 /// The wallet-convenience default thread count: `min(available cores, 4)`.
@@ -42,63 +44,54 @@ fn gate<'a>(
     rpc: &RpcSession,
     daemon: Option<&'a DaemonClient>,
     network: &str,
-) -> Option<(&'a DaemonClient, DaemonInfo)> {
+) -> Result<(&'a DaemonClient, DaemonInfo), CommandFailed> {
     // F5 — mining verbs are wallet verbs: the payout address is this
     // wallet's. The daemon console is the wallet-less path.
     if rpc.open_wallet_name().is_none() {
-        eprintln!(
+        return Err(refusal(
             "No wallet is open. Mining pays to this wallet's address — \
-             open <name> (or create <name>) first."
-        );
-        return None;
+             open <name> (or create <name>) first.",
+        ));
     }
 
     let Some(dc) = daemon else {
-        eprintln!("Daemon not configured. Use --daemon-address to set the daemon endpoint.");
-        return None;
+        return Err(refusal(
+            "Daemon not configured. Use --daemon-address to set the daemon endpoint.",
+        ));
     };
 
     // One get_info answers F2, F3, and the sync fields. A refused
     // connection carries the F1 "start shekyld" hint via DaemonClient.
-    let info = match dc.get_info() {
-        Ok(info) => info,
-        Err(e) => {
-            eprintln!("{e}");
-            return None;
-        }
-    };
+    let info = dc.get_info().map_err(|e| refusal(e.to_string()))?;
 
     // F3 — restricted listener: admin RPCs are not served there.
     if info.restricted {
-        eprintln!(
+        return Err(refusal(
             "The daemon's RPC listener is restricted (view-only); mining control \
-             needs the unrestricted RPC listener."
-        );
-        return None;
+             needs the unrestricted RPC listener.",
+        ));
     }
 
     // F2 — network mismatch: a testnet wallet pointing at a mainnet daemon
     // would mine (and pay out) on the wrong network. An omitted/empty nettype
     // is a malformed reply, not a skip.
     if info.nettype.is_empty() {
-        eprintln!(
+        return Err(refusal(format!(
             "The daemon at {} did not report its network; refusing mining control.",
             dc.url()
-        );
-        return None;
+        )));
     }
     if info.nettype != network {
-        eprintln!(
+        return Err(refusal(format!(
             "Network mismatch: this CLI is on {network} but the daemon at {} reports {}.\n\
              Restart shekyl-cli or shekyld so both use the same \
              --testnet/--stagenet flag.",
             dc.url(),
             info.nettype
-        );
-        return None;
+        )));
     }
 
-    Some((dc, info))
+    Ok((dc, info))
 }
 
 /// F4 — reminder, not a force. Loopback is the silent default; a named
@@ -134,27 +127,20 @@ pub fn cmd_mine_start(
     network: &str,
     threads: Option<u64>,
 ) -> CommandResult {
-    let Some((dc, info)) = gate(rpc, daemon, network) else {
-        return failed();
-    };
+    let (dc, info) = gate(rpc, daemon, network)?;
     remind_if_remote(dc);
 
     // F6 — already mining: relay the daemon's state, no error tone.
     match dc.mining_status() {
-        Ok(status) => {
-            if status.active {
-                println!(
-                    "The daemon is already mining with {} thread(s). \
-                     Run \"mine stop\" first to change the thread count.",
-                    status.threads_count
-                );
-                return Ok(());
-            }
+        Ok(status) if status.active => {
+            return Ok(json!({
+                "started": false,
+                "already_mining": true,
+                "threads": status.threads_count,
+            }));
         }
-        Err(e) => {
-            eprintln!("{e}");
-            return failed();
-        }
+        Ok(_) => {}
+        Err(e) => return failed(e.to_string()),
     }
 
     // F7 — not synced: `/start_mining` is CHECK_CORE_READY and will return
@@ -165,37 +151,49 @@ pub fn cmd_mine_start(
         } else {
             format!("height {}", info.height)
         };
-        eprintln!(
+        return failed(format!(
             "The daemon is still syncing ({of_target}) and will not start mining \
              until it is caught up."
-        );
-        return failed();
+        ));
     }
 
-    let Some(address) = super::balance::primary_address(rpc, "Failed to get the payout address")
-    else {
-        return failed();
-    };
+    let address = super::balance::primary_address(rpc, "Failed to get the payout address")?;
 
     let threads = threads.unwrap_or_else(default_threads);
     match dc.start_mining(&address, threads) {
-        Ok(()) => {
-            println!(
-                "Mining started: {threads} thread(s) on the daemon, paying to {}.",
-                short_address(&address)
-            );
-            println!(
-                "The daemon owns the mining threads — they keep running after this \
-                 CLI exits. \"mine stop\" stops them."
-            );
-            println!("{BUILT_IN_MINER_NOTICE}");
-        }
-        Err(e) => {
-            eprintln!("Failed to start mining: {e}");
-            return failed();
-        }
-    };
-    Ok(())
+        Ok(()) => Ok(json!({
+            "started": true,
+            "threads": threads,
+            "address": address,
+        })),
+        Err(e) => failed(format!("Failed to start mining: {e}")),
+    }
+}
+
+pub(crate) fn show_mine_start(val: &Value) {
+    if val
+        .get("already_mining")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        let threads = val.get("threads").and_then(Value::as_u64).unwrap_or(0);
+        println!(
+            "The daemon is already mining with {threads} thread(s). \
+             Run \"mine stop\" first to change the thread count."
+        );
+        return;
+    }
+    let threads = val.get("threads").and_then(Value::as_u64).unwrap_or(0);
+    let address = val.get("address").and_then(|v| v.as_str()).unwrap_or("");
+    println!(
+        "Mining started: {threads} thread(s) on the daemon, paying to {}.",
+        short_address(address)
+    );
+    println!(
+        "The daemon owns the mining threads — they keep running after this \
+         CLI exits. \"mine stop\" stops them."
+    );
+    println!("{BUILT_IN_MINER_NOTICE}");
 }
 
 /// `mine stop` — stop mining on the daemon.
@@ -204,31 +202,26 @@ pub fn cmd_mine_stop(
     daemon: Option<&DaemonClient>,
     network: &str,
 ) -> CommandResult {
-    let Some((dc, _info)) = gate(rpc, daemon, network) else {
-        return failed();
-    };
+    let (dc, _info) = gate(rpc, daemon, network)?;
 
     match dc.mining_status() {
-        Ok(status) => {
-            if !status.active {
-                println!("The daemon is not mining.");
-                return Ok(());
-            }
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            return failed();
-        }
+        Ok(status) if !status.active => return Ok(json!({"stopped": false, "idle": true})),
+        Ok(_) => {}
+        Err(e) => return failed(e.to_string()),
     }
 
     match dc.stop_mining() {
-        Ok(()) => println!("Mining stopped."),
-        Err(e) => {
-            eprintln!("Failed to stop mining: {e}");
-            return failed();
-        }
-    };
-    Ok(())
+        Ok(()) => Ok(json!({"stopped": true})),
+        Err(e) => failed(format!("Failed to stop mining: {e}")),
+    }
+}
+
+pub(crate) fn show_mine_stop(val: &Value) {
+    if val.get("idle").and_then(Value::as_bool).unwrap_or(false) {
+        println!("The daemon is not mining.");
+    } else {
+        println!("Mining stopped.");
+    }
 }
 
 /// `mine status` — the daemon's mining state. The daemon's `pow_algorithm`
@@ -239,32 +232,43 @@ pub fn cmd_mine_status(
     daemon: Option<&DaemonClient>,
     network: &str,
 ) -> CommandResult {
-    let Some((dc, _info)) = gate(rpc, daemon, network) else {
-        return failed();
-    };
+    let (dc, _info) = gate(rpc, daemon, network)?;
 
     match dc.mining_status() {
-        Ok(status) => {
-            if !status.active {
-                println!("Mining: idle.");
-                return Ok(());
-            }
-            println!("Mining: active");
-            println!("  Threads:    {}", status.threads_count);
-            println!("  Hash rate:  {} H/s", status.speed);
-            if !status.address.is_empty() {
-                println!("  Paying to:  {}", short_address(&status.address));
-            }
-            if status.difficulty > 0 {
-                println!("  Difficulty: {}", status.difficulty);
-            }
+        Ok(status) => Ok(json!({
+            "active": status.active,
+            "threads": status.threads_count,
+            "speed": status.speed,
+            "address": status.address,
+            "difficulty": status.difficulty,
+        })),
+        Err(e) => failed(e.to_string()),
+    }
+}
+
+pub(crate) fn show_mine_status(val: &Value) {
+    if !val.get("active").and_then(Value::as_bool).unwrap_or(false) {
+        println!("Mining: idle.");
+        return;
+    }
+    println!("Mining: active");
+    println!(
+        "  Threads:    {}",
+        val.get("threads").and_then(Value::as_u64).unwrap_or(0)
+    );
+    println!(
+        "  Hash rate:  {} H/s",
+        val.get("speed").and_then(Value::as_u64).unwrap_or(0)
+    );
+    if let Some(address) = val.get("address").and_then(|v| v.as_str()) {
+        if !address.is_empty() {
+            println!("  Paying to:  {}", short_address(address));
         }
-        Err(e) => {
-            eprintln!("{e}");
-            return failed();
-        }
-    };
-    Ok(())
+    }
+    let difficulty = val.get("difficulty").and_then(Value::as_u64).unwrap_or(0);
+    if difficulty > 0 {
+        println!("  Difficulty: {difficulty}");
+    }
 }
 
 #[cfg(test)]

@@ -21,6 +21,7 @@ use crate::params::{parse_optional_object, parse_required_object, require_empty_
 use crate::project::{
     attribution_matches, get_balance_result, outgoing_block_height, outgoing_transfer_state,
     outgoing_transfer_view, parse_lookup_id, transfer_state, transfer_view, TransferLookupId,
+    LOOKUP_ID_GRAMMAR,
 };
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
@@ -371,13 +372,8 @@ pub(crate) async fn get_transfer_by_id(
     // never have emitted is a malformed request, and answering it with
     // "unknown transfer" would tell a user whose send does exist that
     // it does not (rule 82).
-    let lookup = parse_lookup_id(&p.id).ok_or_else(|| {
-        WalletRpcError::InvalidParams(
-            "id must be `{tx_hash}:{output_index}` for a receive, or a bare 64 \
-             lowercase-hex `{tx_hash}` for a send"
-                .into(),
-        )
-    })?;
+    let lookup = parse_lookup_id(&p.id)
+        .ok_or_else(|| WalletRpcError::InvalidParams(LOOKUP_ID_GRAMMAR.to_owned()))?;
 
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;

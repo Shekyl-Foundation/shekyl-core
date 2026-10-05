@@ -16,7 +16,6 @@ use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 
 use crate::error::WalletRpcError;
-use crate::params::parse_hex32;
 use crate::types::{
     BuildPendingTxResult, GetBalanceResult, ReceiveAttributionKind, ReceiveAttributionView,
     RefreshResult, RescanBlockchainResult, SubmitPendingTxResult, SubmitVerdictView,
@@ -41,76 +40,17 @@ pub fn get_balance_result(view: &BalanceView) -> GetBalanceResult {
 }
 
 /// Stable transfer id: `{tx_hash_hex}:{internal_output_index}`.
+///
+/// The grammar's parser lives in `shekyl-wallet-contract` (re-exported
+/// below) so the RPC server and the desktop wallet accept the same
+/// strings. This function is what that parser accepts.
 pub fn transfer_id(td: &TransferDetails) -> String {
     format!("{}:{}", td.tx_hash, td.internal_output_index)
 }
 
-/// Parse a transfer id back into its `(tx_hash, internal_output_index)`
-/// parts — the inverse of [`transfer_id`], kept beside it so the id format
-/// has a single home.
-///
-/// Accepts exactly the canonical form `transfer_id` emits (64 lowercase hex
-/// chars per the crate's shared `params::parse_hex32` rule, `:`, decimal index
-/// with no leading zeros or sign). Anything else returns `None` — the same
-/// ids that per-row string equality against [`transfer_id`] output would
-/// have failed to match, so lookups by the parsed parts preserve match
-/// semantics while comparing typed fields instead of formatting a fresh id
-/// string for every ledger row scanned.
-pub fn parse_transfer_id(id: &str) -> Option<(TxHash, u64)> {
-    let (hash_hex, idx_str) = id.split_once(':')?;
-    let bytes = parse_hex32(hash_hex)?;
-    // Canonical decimal only: `u64::from_str` also accepts `+` and leading
-    // zeros, which `transfer_id` never emits and string equality would
-    // therefore never have matched.
-    if idx_str.is_empty()
-        || !idx_str.bytes().all(|b| b.is_ascii_digit())
-        || (idx_str.len() > 1 && idx_str.starts_with('0'))
-    {
-        return None;
-    }
-    let idx: u64 = idx_str.parse().ok()?;
-    Some((TxHash::from_bytes(bytes), idx))
-}
-
-/// Which side of the history a `get_transfer_by_id` id names.
-///
-/// The two id grammars are disjoint — INCOMING ids carry a `:`
-/// separator, OUTGOING ids are bare 64-char hex — so a well-formed id
-/// resolves to exactly one lookup with no ambiguity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransferLookupId {
-    /// `{tx_hash_hex}:{internal_output_index}` — a scan-ledger output.
-    Incoming {
-        /// Transaction the output belongs to.
-        tx_hash: TxHash,
-        /// Index of the output within that transaction.
-        output_index: u64,
-    },
-    /// Bare `{tx_hash_hex}` — a send-journal row (txid-keyed, SJ-DQ-7).
-    Outgoing {
-        /// Transaction the send record is keyed by.
-        tx_hash: TxHash,
-    },
-}
-
-/// Parse a client-supplied `get_transfer_by_id` id.
-///
-/// `None` means the string is not an id this wallet ever emits, which
-/// is a malformed *request* — the caller reports invalid params rather
-/// than "unknown transfer". The distinction is user-visible: a person
-/// who pastes an uppercase txid must be told the id is not in canonical
-/// form, not that the send they are looking at does not exist (rule 82).
-pub fn parse_lookup_id(id: &str) -> Option<TransferLookupId> {
-    if let Some((tx_hash, output_index)) = parse_transfer_id(id) {
-        return Some(TransferLookupId::Incoming {
-            tx_hash,
-            output_index,
-        });
-    }
-    parse_hex32(id).map(|bytes| TransferLookupId::Outgoing {
-        tx_hash: TxHash::from_bytes(bytes),
-    })
-}
+pub use shekyl_wallet_contract::transfer_id::{
+    parse_lookup_id, parse_transfer_id, TransferLookupId, LOOKUP_ID_GRAMMAR,
+};
 
 /// Confirmation / spend state of a ledger row.
 ///
@@ -485,27 +425,6 @@ mod tests {
         assert_eq!(zero_idx, 0);
     }
 
-    #[test]
-    fn parse_transfer_id_rejects_non_canonical_forms() {
-        let hash_hex = "0a".repeat(32);
-        // Everything here would also have failed per-row string equality
-        // against transfer_id output, so rejecting keeps match semantics.
-        for bad in [
-            String::new(),
-            "no-colon".to_owned(),
-            format!("{hash_hex}:"),                     // empty index
-            format!("{hash_hex}:+7"),                   // sign not emitted
-            format!("{hash_hex}:07"),                   // leading zero not emitted
-            format!("{hash_hex}:1x"),                   // non-digit
-            format!("{}:1", "0A".repeat(32)),           // uppercase hex not emitted
-            format!("{}:1", "0a".repeat(31)),           // short hash
-            format!("{}:1", "0a".repeat(33)),           // long hash
-            format!("{hash_hex}:99999999999999999999"), // > u64::MAX
-        ] {
-            assert!(parse_transfer_id(&bad).is_none(), "accepted {bad:?}");
-        }
-    }
-
     /// The three Engine verdicts project 1:1 onto the OpenAPI verdict
     /// strings, with `confirmed_height` verdict-scoped: absent on
     /// `ACCEPTED` / `ALREADY_IN_POOL` (the negative control — nothing
@@ -819,45 +738,5 @@ mod tests {
         let err = outgoing_transfer_view(&TxHash::from_bytes([0xab; 32]), &row, &empty)
             .expect_err("overflowing recipient sum must not project");
         assert!(matches!(err, WalletRpcError::InternalError(_)), "{err:?}");
-    }
-
-    /// The two id grammars are disjoint, so a well-formed id names
-    /// exactly one side of the history.
-    #[test]
-    fn lookup_id_routes_each_shape_to_its_own_side() {
-        let hash_hex = "0a".repeat(32);
-        assert_eq!(
-            parse_lookup_id(&format!("{hash_hex}:7")),
-            Some(TransferLookupId::Incoming {
-                tx_hash: TxHash::from_bytes([0x0a; 32]),
-                output_index: 7,
-            })
-        );
-        assert_eq!(
-            parse_lookup_id(&hash_hex),
-            Some(TransferLookupId::Outgoing {
-                tx_hash: TxHash::from_bytes([0x0a; 32]),
-            })
-        );
-    }
-
-    /// Ids this wallet never emits are rejected as malformed rather
-    /// than answered with "unknown transfer" — including the uppercase
-    /// txid a user gets by pasting from a block explorer, where saying
-    /// "no such transfer" would be an outright wrong answer about a
-    /// send that does exist (rule 82).
-    #[test]
-    fn lookup_id_rejects_ids_this_wallet_never_emits() {
-        for bad in [
-            String::new(),
-            "no-colon-not-hex".to_owned(),
-            "0A".repeat(32),                   // uppercase txid
-            "0a".repeat(31),                   // short
-            "0a".repeat(33),                   // long
-            format!("{}:07", "0a".repeat(32)), // leading zero in index
-            format!("{}:", "0a".repeat(32)),   // empty index
-        ] {
-            assert!(parse_lookup_id(&bad).is_none(), "accepted {bad:?}");
-        }
     }
 }

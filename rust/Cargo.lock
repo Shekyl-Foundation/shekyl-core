@@ -5034,6 +5034,7 @@ version = "3.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "shekyl-crypto-pq",
  "shekyl-engine-core",
  "shekyl-engine-file",
  "shekyl-engine-prefs",
