@@ -1,8 +1,8 @@
 # Benchmark alignment — inventory, gaps, proposed tracked set, rulings needed
 
-**Status: OPEN — round 0, assessment only (2026-10-05).** Nothing in this
-document is ruled. Every disposition in §2 and every row of §5 is a
-*proposal*; §6 is the list the maintainer rules on. No benchmark, workflow,
+**Status: OPEN — round 0, assessment (2026-10-05).** Ruled so far: BA-Q1,
+BA-Q8, BA-Q21 and BA-Q23 (§6). Everything else is unruled: every other
+disposition in §2 and row of §5 is a *proposal*. No benchmark, workflow,
 baseline or threshold changes with this document.
 
 **Pins.** `shekyl-core`: verified at `dev` `63e456fb95`. `shekyl-gui-wallet`:
@@ -83,7 +83,7 @@ floor device.
 
 ### 1.1 Defects — the design or a document says A, the code does B
 
-These are reported as defects. None is fixed here; §6 asks for the ruling
+These are reported as defects. None is fixed here; §6 holds the ruling
 that fixes or retires each.
 
 | Id | A (stated) | B (at the pin) |
@@ -95,7 +95,7 @@ that fixes or retires each.
 | **BA-D5** | `docs/benchmarks/shekyl_rust_v0.json` is described as "frozen numbers" for the Rust baseline (`docs/benchmarks/README.md:13`) | Captured at `a2bf417e4b` on an x86 dev laptop with `iai_callgrind_runner` v0.16.1; six entries name the crate `shekyl-wallet-state`, which no longer exists under `rust/` (`docs/benchmarks/shekyl_rust_v0.json:206`). It holds 15 gungraun entries against the gate's 20. The gate does not read it (`docs/benchmarks/README.md:180`) |
 | **BA-D6** | `docs/benchmarks/README.md:84`: the committed baseline is provisional "until a reference machine is provisioned", after which a re-capture replaces it | No document names the reference machine that sentence waits for, and the rolling baseline is captured on whichever CI runner the job lands on |
 | **BA-D7** | [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §72.2: on pool admission "No ML-DSA verification occurs"; the relay bench header repeats it (`rust/shekyl-ffi/benches/relay_admission_verify.rs:26`) | Pool admission calls `check_tx_inputs` (`src/cryptonote_core/tx_pool.cpp:309`), which verifies one hybrid Ed25519 + ML-DSA-65 signature per input (`src/cryptonote_core/blockchain.cpp:4283`, `src/cryptonote_core/tx_pqc_verify.cpp:148`), after a Bulletproofs+ verify (`src/cryptonote_core/tx_pool.cpp:234`). Both relay benches and the gated count time commitment masks and FCMP++ verify only. Size, from the floor capture `gap7_block_verify_pi4_rust_20260905T181144Z.txt`: 0.97 ms per signature against 126 ms for the admission pair at 1-in/2-out |
-| **BA-D8** | `engine_trait_bench_key_dispatch` and its gungraun sibling are gated (`scripts/bench/capture_rust_baseline.sh:102`); the merge path says claims are "re-routed through `KeyEngine::try_claim_output`" at M3c+ (`rust/shekyl-engine-core/src/engine/merge.rs:252`) | `try_claim_output` has no production caller: every call site outside its definitions (`rust/shekyl-engine-core/src/engine/local_keys.rs:365`, `rust/shekyl-engine-core/src/engine/key_actor.rs:542`) is in a test module or the bench harness. Checked with `grep -rn try_claim_output rust --include=*.rs`, excluding `_tests.rs`, `/tests/`, `/benches/` and `key_dispatch_bench` |
+| **BA-D8** | The merge path says claims are re-routed through `KeyEngine::try_claim_output` at M3c+ (`rust/shekyl-engine-core/src/engine/merge.rs:252`, `:1090`), and the send and subaddress designs build on that claim path (`docs/design/PHASE_2A_SEND_PATH.md:759`, `docs/design/SUBADDRESS_UNDER_PQC.md:149`) | The re-route has no carrier. `try_claim_output` has no production caller at the pin (every call site outside its definitions at `rust/shekyl-engine-core/src/engine/local_keys.rs:365` and `rust/shekyl-engine-core/src/engine/key_actor.rs:542` is a test or the bench harness), and no `docs/FOLLOWUPS.md` row names M3c+ (`grep -n M3c docs/FOLLOWUPS.md` returns nothing). The gated bench (BA-I8) is not the defect: it holds the cost of the designed path until the caller lands. The defect is a staged step with nothing that says when it lands ([`22-no-lazy-deferral`](../../.cursor/rules/22-no-lazy-deferral.mdc)) |
 | **BA-D9** | The three ungated `engine_trait_bench_*_iai` files each say "This is the bench whose `instructions` value the CI gate … uses" (`rust/shekyl-engine-core/benches/engine_trait_bench_economics_base_emission_at_iai.rs:17`); `docs/PERFORMANCE_BASELINE.md:97` says their numbers arrive "via CI" | No `BENCHES` row exists for them (BA-D3), so CI has never produced a number |
 | **BA-D10** | `scripts/bench/capture_rust_baseline.sh:14`: "This script is run by humans, not CI" | It is the capture step of both CI jobs (`.github/workflows/benchmarks.yml:168`, `:452`) |
 | **BA-D11** | `rust/shekyl-engine-file/benches/open.rs:22`: the bidirectional threshold catches a "silent `m_log2` demotion" of the Argon2id default | The gated sibling pins the KAT profile `m_log2 = 0x08` itself (`rust/shekyl-engine-file/benches/open_iai.rs:9`) and never runs `KdfParams::default()`. A change to the default cost moves no gated count |
@@ -123,13 +123,13 @@ Every gated row's last run is the baseline refresh of 2026-10-05 from
 | Id | Target and path | Measures | Production path? | Consumer | Proposed |
 | --- | --- | --- | --- | --- | --- |
 | **BA-I1** | `shekyl-engine-state::ledger` / `ledger_iai` — `rust/shekyl-engine-state/benches/ledger_iai.rs` | `WalletLedger` postcard serialize and deserialize at 100 / 1 000 / 10 000 transfers | Yes: `rust/shekyl-engine-file/src/handle.rs:637`, `:537` | Wallet save and open. No stated latency found (searched `docs/` for the bench ids and `postcard`) | **Rewrite** — the fixture leaves each transfer's ciphertext and handle empty (`rust/shekyl-engine-state/benches/ledger.rs:38`); a real transfer carries about 1.1 KiB of them (`rust/shekyl-engine-core/benches/refresh_snapshot.rs:60`) |
-| **BA-I2** | `shekyl-engine-state::balance` / `balance_iai` | `BalanceSummary::compute` at 100 / 1 000 / 10 000 transfers | Yes: `rust/shekyl-scanner/src/ledger_ext.rs:208` | None found (searched `docs/` for `hot_path_bench_balance_compute`: manifests and plan docs only). 23 µs at 10 000 transfers on the CI runner | **Retire** — no decision rests on the number |
+| **BA-I2** | `shekyl-engine-state::balance` / `balance_iai` | `BalanceSummary::compute` at 100 / 1 000 / 10 000 transfers | Yes: `rust/shekyl-scanner/src/ledger_ext.rs:208` | The body `LedgerEngine::balance` runs, which the trait spec names as a hot path under measurement (BA-I7). 23 µs at 10 000 transfers on the CI runner | **Keep, gated** |
 | **BA-I3** | `shekyl-engine-file::open` / `open_iai` | Cold `WalletFile::open` of an empty ledger; the gated arm at the KAT KDF profile, the criterion arm at the default | Yes: `rust/shekyl-engine-core/src/engine/lifecycle/open.rs:137` | The Argon2id default's target, "under ~500 ms on a commodity desktop" (`rust/shekyl-crypto-pq/src/wallet_envelope.rs:132`). Never measured on the floor | **Rewrite** — BA-D11; the gated arm cannot see the default cost, and the wall-clock arm has no floor run |
 | **BA-I4** | `shekyl-scanner::scan_block` / `scan_block_iai` | `process_scanned_outputs` bookkeeping for 0 / 5 / 50 owned outputs; no cryptography | Yes: `rust/shekyl-engine-core/src/engine/merge.rs:995` | Sync rate, indirectly. No stated budget | **Rewrite** — the unit a user waits on is a scanned block: scan plus merge. This times the bookkeeping part alone while the cryptographic part (BA-I15) is ungated |
 | **BA-I5** | `shekyl-tx-builder::transfer_e2e` / `transfer_e2e_iai` | Bulletproofs+ prove for 2 outputs and one hybrid signature. Not `sign_transaction`; the gated arm signs through a bench-only entry (`rust/shekyl-crypto-pq/src/signature.rs:479`) | Components only | Send latency. No stated budget | **Rewrite** — named end-to-end, measures two components. FCMP++ proving, 6.05 s on the floor for a 2-input spend (`docs/benchmarks/wss-q1b/spend_edge_20260927T195848Z.txt`), is absent |
-| **BA-I6** | `shekyl-engine-core::engine_trait_bench_ledger_synced_height` (+ `_iai`) | A height read behind a lock; about 10 instructions | The `Engine` accessor it calls has no production caller; the body does | The Stage 0–1 trait-extraction threshold (`docs/PERFORMANCE_BASELINE.md:71`). Those plans are closed under `docs/completed/` | **Retire** — its purpose, guarding the extraction, is discharged |
-| **BA-I7** | `shekyl-engine-core::engine_trait_bench_ledger_balance` (+ `_iai`) | `BalanceSummary::compute` over 1 024 transfers through a bench-only shim (`rust/shekyl-engine-core/src/engine/bench_support.rs:45`) | Body only; duplicates BA-I2 | As BA-I6 | **Retire** — as BA-I6 |
-| **BA-I8** | `shekyl-engine-core::engine_trait_bench_key_dispatch` / `_baseline_iai` | `try_claim_output` on `LocalKeys` and through the key actor, one synthetic output | No — BA-D8 | The B9 dispatch ratio ≤ 1.05 ([`PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md), key-dispatch section) | **Retire** — gated on a path nothing calls. BA-Q6 asks whether the re-route is still the design; if it is, the bench stays |
+| **BA-I6** | `shekyl-engine-core::engine_trait_bench_ledger_synced_height` (+ `_iai`) | A height read behind a lock; about 10 instructions | The trait body is production; the `Engine` accessor the bench enters through has no caller yet | [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §3.3.1 names `LedgerEngine::synced_height` among the hot paths under measurement (`docs/V3_ENGINE_TRAIT_BOUNDARIES.md:3129`) | **Keep, gated** |
+| **BA-I7** | `shekyl-engine-core::engine_trait_bench_ledger_balance` (+ `_iai`) | `BalanceSummary::compute` over 1 024 transfers through a bench-only shim (`rust/shekyl-engine-core/src/engine/bench_support.rs:45`) | Body yes (BA-I2); the entry is a bench-only shim | [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §3.3.1 names `LedgerEngine::balance` (`docs/V3_ENGINE_TRAIT_BOUNDARIES.md:3129`) | **Keep, gated** |
+| **BA-I8** | `shekyl-engine-core::engine_trait_bench_key_dispatch` / `_baseline_iai` | `try_claim_output` on `LocalKeys` and through the key actor, one synthetic output | Not yet: the caller is designed and unwritten (BA-D8) | The B9 dispatch ratio ≤ 1.05 ([`PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md), key-dispatch section); the claim path the send and subaddress designs build on (`docs/design/PHASE_2A_SEND_PATH.md:759`) | **Keep, gated** — it holds the cost of a designed path until its caller lands (BA-Q6) |
 | **BA-I9** | `shekyl-engine-core::engine_trait_bench_key_merge_projection` (+ `_iai`) | `populate_engine_handle_fields` over 256 outputs | Yes: `rust/shekyl-engine-core/src/engine/merge.rs:256` | Evidence for keeping eager projection at merge (`docs/PERFORMANCE_BASELINE.md:577`) | **Keep, gated** |
 | **BA-I10** | `shekyl-ffi::relay_admission_verify_iai` — `rust/shekyl-ffi/benches/relay_admission_verify_iai.rs` | `shekyl_check_commitment_masks` + `shekyl_fcmp_verify` at 1-in/2-out, depth 2 | Yes: `src/cryptonote_core/blockchain.cpp:3239`, `:4224` | The hop term and the embargo derived from it (`rust/shekyl-relay-privacy/src/verify_cost.rs:349`) | **Keep, gated** — after BA-D1 (trigger) and BA-D7 (omitted terms) are ruled |
 
@@ -145,12 +145,12 @@ criterion-only and have no instruction count to gate.
 
 | Id | Target and path | Measures | Production path? | Last run | Consumer | Proposed |
 | --- | --- | --- | --- | --- | --- | --- |
-| **BA-I11** | `engine_trait_bench_key_account_public_address` (+ `_iai`), `shekyl-engine-core` | `LocalKeys::account_public_address` | No: production reads the address through the actor handle (`rust/shekyl-engine-core/src/engine/mod.rs:1018`) | none recorded (`docs/PERFORMANCE_BASELINE.md:451`) | None | **Retire** — BA-D3, BA-D9 |
-| **BA-I12** | `engine_trait_bench_economics_base_emission_at` (+ `_iai`) | `base_emission_at` at height 262 800 through a bench shim | No wallet caller: only a `cfg(test)` differential and the shim (`rust/shekyl-engine-core/src/engine/bench_support.rs:143`) | none recorded | None | **Retire** — BA-D3, BA-D9 |
-| **BA-I13** | `engine_trait_bench_economics_parameters_snapshot` (+ `_iai`) | `parameters_snapshot` through a bench shim | As BA-I12 (`rust/shekyl-engine-core/src/engine/bench_support.rs:175`) | none recorded | None | **Retire** — BA-D3, BA-D9 |
+| **BA-I11** | `engine_trait_bench_key_account_public_address` (+ `_iai`), `shekyl-engine-core` | `LocalKeys::account_public_address` | No: production reads the address through the actor handle (`rust/shekyl-engine-core/src/engine/mod.rs:1018`) | none recorded (`docs/PERFORMANCE_BASELINE.md:451`) | [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §3.3.1 names `KeyEngine::account_public_address` (`docs/V3_ENGINE_TRAIT_BOUNDARIES.md:3128`) | **Rewrite** — time the actor handle, which is the path production reads, and add the `BENCHES` row (BA-D3, BA-D9) |
+| **BA-I12** | `engine_trait_bench_economics_base_emission_at` (+ `_iai`) | `base_emission_at` at height 262 800 through a bench shim | Not yet in the wallet: only a `cfg(test)` differential and the shim call it (`rust/shekyl-engine-core/src/engine/bench_support.rs:143`) | none recorded | [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §3.3.1 names `EconomicsEngine::base_emission_at` (`docs/V3_ENGINE_TRAIT_BOUNDARIES.md:3130`) | **Keep, gated** — add the `BENCHES` row it has never had (BA-D3, BA-D9) |
+| **BA-I13** | `engine_trait_bench_economics_parameters_snapshot` (+ `_iai`) | `parameters_snapshot` through a bench shim | As BA-I12 (`rust/shekyl-engine-core/src/engine/bench_support.rs:175`) | none recorded | [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §3.3.1 names `EconomicsEngine::parameters_snapshot` (`docs/V3_ENGINE_TRAIT_BOUNDARIES.md:3131`); the stake and archival engines are designed to read it (`docs/V3_ENGINE_TRAIT_BOUNDARIES.md:2316`) | **Keep, gated** — add the `BENCHES` row it has never had (BA-D3, BA-D9) |
 | **BA-I14** | `shekyl-engine-core::refresh_snapshot` | `LedgerSnapshot::from_ledger` and clone at 1 000 / 10 000 / 50 000 production-shaped transfers | Yes, through a shim: `rust/shekyl-engine-core/src/engine/local_ledger.rs:360` | none recorded | The per-scan cost that [`PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md`](PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md) investigates | **Keep, tracked** (T2) |
 | **BA-I15** | `shekyl-scanner::scan_transaction` (+ `_iai`) | `Scanner::scan` over 1 / 4 / 8 / 16 outputs, worst case and view-tag-filtered, warm and cold | Yes: `rust/shekyl-engine-core/src/engine/local_refresh.rs:907` | 2026-05-20, x86 dev: 12.95 ms cold p99 (`docs/completed/STAGE_1_PR_4_REFRESH_ENGINE.md:4773`) | The per-output safe-point decision in that plan; sync rate | **Keep, gated** — needs a routing prefix and a `BENCHES` row (BA-D3) |
-| **BA-I16** | `shekyl-multisig::multisig_v31` | Intent hash, envelope encode and decode, 1 KiB payload encrypt and decrypt, a 16-input fingerprint | No caller outside the crate's own tests | none recorded | None found (`grep -rn multisig_v31 docs` finds one archived plan) | **Retire** — no consumer; a multisig latency budget, once ruled, brings its own bench |
+| **BA-I16** | `shekyl-multisig::multisig_v31` | Intent hash, envelope encode and decode, 1 KiB payload encrypt and decrypt, a 16-input fingerprint | Not yet: no caller outside the crate's own tests | none recorded | The multisig engine design ([`V3_1_MULTISIG_RUST_ENGINE.md`](../V3_1_MULTISIG_RUST_ENGINE.md)); no latency budget is stated | **Keep, tracked** (T2) — a designed path not yet wired |
 | **BA-I17** | `shekyl-crypto-pq::fa6_decap_prefilter`, with the classifier `rust/shekyl-crypto-pq/examples/fa6_decap_prefilter_gate.rs` | `ml_kem_decap_prefilter_with_parsed_dk`, reject path, per output | Yes: `rust/shekyl-scanner/src/scan.rs:670` | 2026-06-08, floor: 266 684 ns per output, outcome `fail` (BA-I72) | The FA-6 budgets, 45 s per app open and 20 min for a restore (`rust/shekyl-crypto-pq/examples/fa6_decap_prefilter_gate.rs:42`) | **Keep, tracked** (T3) |
 | **BA-I18** | `shekyl-crypto-pq::pqc_rederivation` | Hybrid decapsulation (id says `ml_kem_768_decapsulate`), leaf derivation, key scalar, and their sum | Mixed: the decapsulate entry is not on the wallet scan path | none recorded | The "PQC Rederivation Benchmark" section of [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md), which quotes no number | **Rewrite** — mislabelled id, and the composition is not the one scan runs |
 | **BA-I19** | `shekyl-timing-engine::wake_hints` | `Engine::arm` / `clear` / `poll` at 1 to 262 144 armed deadlines | Yes: `rust/shekyl-timing-engine/src/service/mod.rs:652` | 2026-09-26, floor (BA-I90) | The engine-thread budget, which is not yet written (`docs/design/P2P_TIMING_ENGINE.md:204`) | **Keep, tracked** (T3) |
@@ -160,7 +160,7 @@ criterion-only and have no instruction count to gate.
 | **BA-I23** | `shekyl-pow-randomx::cache_derive` | `PreparedCache::derive` for one seed | Yes: `rust/shekyl-pow-randomx/src/cache_store.rs:535` | 2026-05-22, x86 dev: 341 ms (`rust/shekyl-pow-randomx/BENCH_RESULTS.md:32`) | The 150–200 ms cache-miss budget (`docs/design/RANDOMX_V2_RUST.md:398`) | **Keep, tracked** — and a floor run is a gap (BA-G9) |
 | **BA-I24** | `shekyl-pow-randomx::compute_hash_alloc` | `compute_hash` under two names, and a pooled variant that never ships | `compute_hash` yes: `rust/shekyl-ffi/src/pow_randomx_ffi.rs:228` | 2026-05-22, x86 dev: 296 ms per hash. Its record sets that against the ≤ 100 µs target, which bounds VM allocation and not a hash (`rust/shekyl-pow-randomx/BENCH_RESULTS.md:262`) | Per-block PoW verify cost; no per-hash budget is stated | **Rewrite** — two arms time one function, and there is no per-hash budget for it to report against |
 | **BA-I25** | `shekyl-pow-randomx::per_call_alloc` | Mirrors of the VM's two allocations, through `std` directly | No: it does not call the crate's functions | 2026-05-24, x86 dev: 47.75 µs. Never on the floor | The per-call allocation target of ≤ 100 µs, which decides whether a VM pool is added (`docs/design/RANDOMX_V2_RUST.md:500`) | **Retire** — the target is met and the pooling decision is made |
-| **BA-I26** | `helioselene` — `rust/shekyl-oxide/crypto/helioselene/benches/helioselene.rs` | Selene point add and field operations, printed from a hand-rolled timer | Indirect, through FCMP++ | none recorded | None found (`grep -rn benches/helioselene docs` finds one audit-trail note) | **Retire** from the tracked set. The file is vendored; whether it leaves the fork is a [`10-shekyl-first`](../../.cursor/rules/10-shekyl-first.mdc) question |
+| **BA-I26** | `helioselene` — `rust/shekyl-oxide/crypto/helioselene/benches/helioselene.rs` | Selene point add and field operations, printed from a hand-rolled timer | Indirect, through FCMP++ | none recorded | None found (`grep -rn benches/helioselene docs` finds one audit-trail note) | `n/a` — vendored with the fork and kept or dropped with it ([`10-shekyl-first`](../../.cursor/rules/10-shekyl-first.mdc)); no tracked row is proposed |
 
 ### 2.3 Bench-like code outside `benches/`
 
@@ -328,7 +328,7 @@ moving; at the pin only the first row has one.
 | FA-6 budgets: 45 s, 20 min, margin 0.20 | `rust/shekyl-crypto-pq/examples/fa6_decap_prefilter_gate.rs:42` | User-facing sync time | floor, 2026-06-08, outcome `fail` | No | BA-G15, BA-T16 |
 | Argon2id default: 64 MiB, t = 3 | `rust/shekyl-crypto-pq/src/wallet_envelope.rs:135` | "under ~500 ms on a commodity desktop" | Not on the floor | No | BA-G12, BA-T17 |
 | Spend edge ≤ max(2 s, 15 % of proving); open edge ≤ 5 s | `docs/design/WALLET_SIDE_STORE.md:815`, `:816` | Maintainer judgment, stated as such | floor, 2026-09-27, ungraded | No | `docs/FOLLOWUPS.md:1253`, BA-T19 |
-| Key-dispatch ratio ≤ 1.05 | [`PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md) | Mailbox overhead against decapsulation | CI runner | The baseline arm only | BA-D8, BA-Q6 |
+| Key-dispatch ratio ≤ 1.05 | [`PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md) | Mailbox overhead against decapsulation | CI runner | The baseline arm only | BA-I8, BA-T28 |
 | Serve-side `MAX_INFLIGHT = 64` | `rust/shekyl-p-serve/src/serve.rs:122` | Nothing: a declared placeholder | Did not bind at ≤ 32 readers on x86 hosts, on the spike's serve loop | No | BA-G1, BA-T5 |
 | Fetch-side `MAX_INFLIGHT = 8` | `rust/shekyl-p-fetch/src/client.rs:60` | Largest non-churning width, and floor memory by arithmetic | 2026-09-16; device not recorded; pre-#954 | No | BA-G2, BA-T6 |
 | `archival_shard_length_bytes = 3 000 000` | `config/consensus_constants.json:40` | Fetch time and miss rate by size | internal node and floor, pre-#954 | No | BA-G3, BA-T7 |
@@ -420,6 +420,8 @@ a live node.
 | **BA-T25** | Inbound connection cost: RSS and descriptors per peer, startup peak | T3, floor | Per `docs/FOLLOWUPS.md:1290` | BA-I29 | P2P transport |
 | **BA-T26** | Per-refresh ledger snapshot at 1 000 / 10 000 / 50 000 transfers | T2, CI runner | Criterion | BA-I14 | wallet engine |
 | **BA-T27** | RandomX Rust-to-C latency ratio, typical and adversarial | Gated on a CI runner by exception (BA-Q22); daily and weekly cron | As `rust/shekyl-randomx-differential` runs it today | BA-I33, BA-I52, BA-I53 | PoW |
+| **BA-T28** | The engine-trait hot paths the trait spec names: `synced_height`, `balance` and its body, `account_public_address` through the actor handle, `base_emission_at`, `parameters_snapshot`; and key dispatch | T1, CI runner | gungraun; the thresholds `scripts/bench/compare.py` already routes | BA-I2, BA-I6, BA-I7, BA-I8, BA-I11, BA-I12, BA-I13 | wallet engine |
+| **BA-T29** | Multisig intent and envelope operations | T2, CI runner | Criterion | BA-I16 | wallet engine |
 
 The gate's machinery (BA-I37 to BA-I40, BA-I44, BA-I46 to BA-I50, BA-I54,
 BA-I59) persists with the tiers it serves and has no row of its own. The
@@ -429,25 +431,25 @@ capture kept in §2.8 is the evidence for a constant until the first run of
 the T3 row that replaces it; it is then superseded by that run's capture.
 
 **What happens to the gate's coverage.** The gate holds 20 entries today.
-At the defaults, 6 leave with their rows (BA-I2: 3; BA-I6, BA-I7, BA-I8: 1
-each), 12 are re-fixtured in place (BA-I1: 6; BA-I3: 1; BA-I4: 3; BA-I5: 2),
-and 2 stay as they are (BA-I9, BA-I10). The T1 rows BA-T2, BA-T3, BA-T4,
-BA-T12, BA-T15 and BA-T20 add subjects the gate has none of today: block
-connect, archival serve, archival fetch, the Rust validator, scan
-cryptography and proving. BA-Q7 asks that no row leaves before its
-replacement gates.
+At the defaults none leaves: 12 are re-fixtured in place (BA-I1: 6; BA-I3:
+1; BA-I4: 3; BA-I5: 2) and 8 stay as they are (BA-I2: 3; BA-I6 to BA-I10: 1
+each). BA-T28 adds the three trait paths that were registered and never
+captured. The T1 rows BA-T2, BA-T3, BA-T4, BA-T12, BA-T15 and BA-T20 add
+subjects the gate has none of today: block connect, archival serve,
+archival fetch, the Rust validator, scan cryptography and proving.
 
 ## 6. Rulings needed
 
-Each has a default. Nothing above depends on a default being taken: every
-disposition in §2 and every row in §5 is conditional on the ruling named
-here.
+Each open question has a default, and a ruled one says so in its heading.
+Nothing above depends on a default being taken: every disposition in §2
+and every row in §5 is conditional on the ruling named here.
 
-**BA-Q1 — Adopt the three tiers of §0.2 as the meaning of "tracked", and
-§5 as the target set.** Default: adopt; each **Rewrite** in §2 is carried
-out by the §5 row that names it. T1 gates per PR; T2 is trended and never gates; T3 runs per
-release and on any PR that touches the path, and a breach of a ruled
-constant's margin reopens that constant.
+**BA-Q1 — RULED 2026-10-05: the three tiers of §0.2 are the meaning of
+"tracked", and §5 is the target set.** T1 gates per PR; T2 is trended and
+never gates; T3 runs per release and on any PR that touches the path, and a
+breach of a ruled constant's margin reopens that constant. Each **Rewrite**
+in §2 is carried out by the §5 row that names it. Ruled by the maintainer
+on review of PR #964.
 
 **BA-Q2 — Land the 2026-10-05 serve-cost A/B as a dated capture.** Its
 observations exist only where the run left them. Default: land them under
@@ -464,7 +466,24 @@ makes `MAX_INFLIGHT` a whole-shard memory budget
 (`rust/shekyl-p-serve/src/serve.rs:531`). The digest is salted by the
 request nonce, so it cannot be cached per shard; signing after the send is
 excluded because a signing refusal must be the same 404 as a missing shard.
-Neither the ruling nor the documents that record it state what the second read and the digest cost. Default: two passes stand
+Neither the ruling nor the documents that record it state what the second
+read and the digest cost.
+
+A third form, raised on review of PR #964 and not evaluated here: compute
+the digest over a root of chunk hashes. The store computes a
+domain-separated, length-bound root over the shard's chunks when it fills
+the shard and keeps it beside it; per request the persona signs
+`H(nonce ‖ root)` without reading the body, then streams the body once; the
+client recomputes the root from the bytes it received, so the signature
+still binds what was delivered. One read, no whole-shard memory. Two things
+must be settled before it is a candidate. First, where the added serve cost
+goes: that it is mostly the digest pass is a hypothesis until BA-T5 splits
+read, digest and sign. Second, what salting the whole body with the nonce
+buys that `H(nonce ‖ root)` does not; if it serves a property beyond
+binding the delivered bytes, the tree form fails. It changes `D` on the
+consensus wire, so it is a design ruling and not a benchmark result.
+
+Default: two passes stand
 until BA-T5 reports capacity per epoch on the v3 path at the ruled cap; the
 question is then decided against that figure and the 4 096-pair list bound.
 
@@ -479,21 +498,25 @@ v3 path.** Default: BA-T7 runs before the Round-2 gate re-pins them, with an
 owner and a date entered beside the reopen condition in
 [`CLIENT_VERSION_CONSTANTS_VALIDATION.md`](CLIENT_VERSION_CONSTANTS_VALIDATION.md).
 
-**BA-Q6 — Is routing claims through `KeyEngine::try_claim_output` still the
-design?** Default: no row gates a path nothing calls; retire BA-I8, and the
-bench returns with the re-route if it lands. If the answer is yes, BA-I8
-stays gated and the re-route gets a carrier.
+**BA-Q6 — The key-dispatch gate and the re-route it waits on (BA-D8).**
+The design routes claims through `KeyEngine::try_claim_output`; the caller
+is not written. Default: BA-I8 stays gated, since a gate on a designed path
+keeps its cost from drifting before the caller lands, and the M3c+ re-route
+gets a carrier: a `docs/FOLLOWUPS.md` row owned by the engine-trait
+contract. The bench is retired only if the re-route is ruled out of the
+design.
 
-**BA-Q7 — Retire the rows no decision rests on.** Benches: BA-I2, BA-I6,
-BA-I7, BA-I8, BA-I11, BA-I12, BA-I13, BA-I16, BA-I25, BA-I26, BA-I28.
-Superseded captures: BA-I74, BA-I76, BA-I87. Default: retire. A gated row
-leaves in the same change that lands a T1 replacement from §5, so the
-gate's entry count does not fall between merges.
+**BA-Q7 — Retire what is superseded or dead.** Captures superseded by a
+later capture of the same subject: BA-I74, BA-I76, BA-I87. Benches whose
+decision is made and whose arm no longer times production code: BA-I25,
+BA-I28. Default: retire these five. A row that only lacks a production
+caller is not on this list; a designed path keeps its bench.
 
-**BA-Q8 — Close the trigger hole (BA-D1).** Default: the workflow triggers on
-`rust/**`, `scripts/bench/**` and itself, for both the PR and the push job.
-The alternative, a path list derived from each bench's dependency closure,
-needs a gate of its own to stay true.
+**BA-Q8 — RULED 2026-10-05: the workflow triggers on `rust/**`,
+`scripts/bench/**` and itself, for both the PR and the push job** (closes
+BA-D1). The alternative, a path list derived from each bench's dependency
+closure, would need a gate of its own to stay true. Ruled by the maintainer
+on review of PR #964; the change lands in its own PR.
 
 **BA-Q9 — Scope of the pool-admission bench (BA-D7).** Default: correct
 §72.2 to what admission runs, add the hybrid-signature and Bulletproofs+
@@ -552,9 +575,9 @@ a standing breach. The allocation target stands.
 **BA-Q20 — Figures in documents that no measurement supports** (BA-D14).
 Default: replace them with floor-measured values that cite their capture.
 
-**BA-Q21 — The comparator's tests (BA-D16).** Default: run
-`scripts/bench/test_compare.py` in the workflow that runs
-`scripts/bench/test_drs_bench.py`.
+**BA-Q21 — RULED 2026-10-05: `scripts/bench/test_compare.py` runs in the
+workflow that runs `scripts/bench/test_drs_bench.py`** (closes BA-D16).
+Ruled by the maintainer on review of PR #964; the change lands with BA-Q8's.
 
 **BA-Q22 — Wall-clock checks that gate today** (BA-I32 with BA-I51; BA-I33
 with BA-I52 and BA-I53). Under BA-Q1 wall-clock never gates. The shard
@@ -563,6 +586,21 @@ same-machine ratio on a schedule. Default: both stay gated as named
 exceptions, the ratio because both arms share a machine and the smoke
 because its thresholds sit far above the measured figures; any further
 wall-clock gate needs its own ruling.
+
+**BA-Q23 — RULED 2026-10-05: a machine-readable measurement ledger and a
+staleness check.** The failure behind most of §3 is one pattern: a constant
+is derived from a capture at one revision, the code under it changes later,
+and nothing notices, because the link between constant, capture and code
+path is prose. Each cost-justified constant gets a ledger row naming where
+the constant is defined, the §5 row that measures it, the capture and its
+revision, and the code paths whose cost it budgets. One deterministic CI
+check asks of every row whether any commit touching those paths is newer
+than the capture, and names the commit when one is. A declared path that no
+longer exists fails the check. Staleness is cleared in the ledger itself:
+by a newer capture, by a reviewed note that the change is cost-neutral, or
+by marking the row stale with the carrier of its re-measurement. The check
+needs no hardware and no timing data. Seeded from §4. Ruled by the
+maintainer on review of PR #964; it lands in its own PR.
 
 ## 7. What this round examined, and what it did not
 
