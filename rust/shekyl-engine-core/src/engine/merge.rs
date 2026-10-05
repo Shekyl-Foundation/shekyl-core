@@ -77,7 +77,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
-use shekyl_curve_tree::{ClientError, REORG_HASH_WINDOW_BLOCKS};
+use shekyl_curve_tree::{ClientError, OwnershipSync, REORG_HASH_WINDOW_BLOCKS};
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
@@ -91,7 +91,7 @@ use crate::{
         curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError},
         curve_tree_decode,
         local_ledger::LocalLedger,
-        ownership::{owned_outputs_among, OwnedOutput},
+        ownership::{curve_tree_sync_owned, OwnedOutput},
         reorg_finality::{overlap_disagreed, overlap_record_ended, rollback_past_finality},
         traits::{DaemonEngine, LedgerEngine},
         CurveTreeIngestFault, Engine, EngineSignerKind, RefreshError,
@@ -211,10 +211,7 @@ impl<
     /// post-population ledger, never an intermediate state with
     /// freshly-merged transfers whose `output_handle` field is
     /// transiently `None`.
-    pub fn apply_scan_result(
-        &self,
-        mut result: ScanResult,
-    ) -> Result<Vec<OwnedOutput>, RefreshError> {
+    pub fn apply_scan_result(&self, mut result: ScanResult) -> Result<(), RefreshError> {
         // §3 reroute (M3b): pre-collect the public on-chain residue
         // from the scan result *before* `apply_scan_result_to_state`
         // consumes it. The post-pass below uses this map to bind
@@ -305,14 +302,7 @@ impl<
         // journal's lifecycle states hold atomically with the scan merge
         // (see `WalletLedger::reconcile_after_scan_merge`).
         state.ledger.reconcile_after_scan_merge(reorg_fork_height);
-        // The outputs this merge made the wallet's, as `(gindex, O)`, for the
-        // caller to register with the curve tree once this guard is released —
-        // this path is synchronous under the ledger write lock and cannot
-        // `ask` the actor (6-ii). Unspent only: capture serves spending, and
-        // a spent output's chunks are plaintext rows for nothing. An output
-        // a reorg makes unspent again is picked up by the next refresh's mass
-        // pass, which re-offers everything held.
-        Ok(owned_outputs_among(&state.ledger.ledger, &inserted))
+        Ok(())
     }
 
     /// Feed the curve tree the heights carried by `result` **before** the
@@ -365,10 +355,17 @@ impl<
     pub(crate) async fn ingest_scan_result_into_curve_tree(
         &self,
         result: &mut ScanResult,
-    ) -> Result<(), RefreshError> {
+    ) -> Result<OwnershipSync, RefreshError> {
         let producer_leaves = index_block_leaves(std::mem::take(&mut result.block_leaves))?;
-        curve_tree_ingest_scan_result(&self.curve_tree, &self.daemon, result, &producer_leaves)
-            .await
+        let owned = self.owned_outputs(result);
+        curve_tree_ingest_scan_result(
+            &self.curve_tree,
+            &self.daemon,
+            result,
+            &producer_leaves,
+            &owned,
+        )
+        .await
     }
 
     /// Ingest a scan result into the curve tree, healing a single fail-stop /
@@ -402,13 +399,15 @@ impl<
     pub(crate) async fn ingest_scan_result_with_respawn(
         &self,
         result: &mut ScanResult,
-    ) -> Result<(), RefreshError> {
+    ) -> Result<OwnershipSync, RefreshError> {
         let producer_leaves = index_block_leaves(std::mem::take(&mut result.block_leaves))?;
+        let owned = self.owned_outputs(result);
         curve_tree_ingest_scan_result_with_respawn(
             &self.curve_tree,
             &self.daemon,
             result,
             &producer_leaves,
+            &owned,
         )
         .await
     }
@@ -455,9 +454,9 @@ pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits:
     daemon: &D,
     result: &ScanResult,
     producer_leaves: &BTreeMap<BlockHeight, Arc<Vec<OwnedTxLeaves>>>,
-) -> Result<(), RefreshError> {
-    match curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await {
-        Ok(()) => Ok(()),
+    owned: &[OwnedOutput],
+) -> Result<OwnershipSync, RefreshError> {
+    match curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves, owned).await {
         Err(RefreshError::CurveTreeIngest { fault }) if fault.recoverable_by_respawn() => {
             // Engine-side respawn (clause 2): runs after the failed `ask`
             // returned, never inside a handler under the engine guard.
@@ -465,9 +464,9 @@ pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits:
                 .respawn()
                 .await
                 .map_err(|_| CurveTreeIngestFault::RespawnFailed)?;
-            curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await
+            curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves, owned).await
         }
-        Err(other) => Err(other),
+        other => other,
     }
 }
 
@@ -594,7 +593,8 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     daemon: &D,
     result: &ScanResult,
     producer_leaves: &BTreeMap<BlockHeight, Arc<Vec<OwnedTxLeaves>>>,
-) -> Result<(), RefreshError> {
+    owned: &[OwnedOutput],
+) -> Result<OwnershipSync, RefreshError> {
     // Range well-formedness (O5/O2). This pre-pass runs *before* the ledger
     // merge's own `end >= start` check (`apply_scan_result_to_state`), so guard
     // the same property here: an inverted range would otherwise drive
@@ -661,6 +661,10 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     // agree, or the append loop below would treat an orphaned fork as caught
     // up and leave it in place.
     reconcile_overlapping_tree(curve_tree, &producer_roots, range_start, range_end).await?;
+
+    // Ownership: after any rollback, before the first fold (`ownership.rs`).
+    // Returned, because what it cost is the only evidence of when it ran.
+    let ownership = curve_tree_sync_owned(curve_tree, owned).await?;
 
     loop {
         let tip = curve_tree
@@ -743,7 +747,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
             .await
             .map_err(|e| map_curve_tree_handle_error(&e))?;
     }
-    Ok(())
+    Ok(ownership)
 }
 
 /// Merge body shared between [`Engine::apply_scan_result`] and the

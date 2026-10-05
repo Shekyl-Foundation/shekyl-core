@@ -7,20 +7,42 @@
 //!
 //! The tree captures membership-path material only for outputs it has been
 //! told about (`CT6_PROVING_STATE.md` §11.9, §11.12), and the wallet is the
-//! only party that knows. "The wallet's" is two sets, because two things
-//! spend through one tree: the principal's ledger transfers, and the funding
-//! outputs the staking persona `P` holds, which live in `P`'s sealed scan
-//! state and never enter the ledger. Three sites offer them, all through
-//! [`curve_tree_sync_owned`] or the actor's own sync:
+//! only party that knows. Two sites tell it, both through the client's one
+//! batch call:
 //!
-//! - the refresh, after the respawn-aware ingest: everything held
-//!   ([`Engine::owned_outputs`]), both sets — a resume is a mass late
-//!   registration, and a re-offer of a held pair costs a map lookup;
-//! - the refresh, after the merge: what the merge inserted
-//!   ([`owned_outputs_among`]), handed back because the merge runs under the
-//!   ledger write lock and cannot `ask` the actor;
-//! - the curve-tree actor's `AssembleTx` handler: a spend's own inputs, which
-//!   is what makes the capture path total.
+//! - **the refresh's ingest**, between its rollback and its first fold
+//!   (`merge::curve_tree_ingest_scan_result`), with
+//!   [`Engine::owned_outputs`] — everything the wallet will hold once this
+//!   refresh has merged;
+//! - **the curve-tree actor's `AssembleTx` handler**, with a spend's own
+//!   inputs, which is what makes the capture path total.
+//!
+//! # Why inside the ingest
+//!
+//! Capture rides the fold: a chunk that closes over a registered output is
+//! written as it closes, for nothing, and one that closed before the
+//! registration has to be rebuilt from its leaves. So the registration has
+//! to be in place before the fold reaches the output's leaf, and one scan
+//! result spans everything from the ledger's height to the tip — after a
+//! day offline, or on a restore, that is every output the scan found, most
+//! of them drained inside the same result. Registering after the ingest
+//! makes every one of those late.
+//!
+//! - *After the rollback*, because a reorg rebinds gindexes: offered before
+//!   it, the new chain's pair would be judged against the old chain's leaf
+//!   and reported stale.
+//! - *Before the first fold*, for the reason above.
+//! - *Inside the respawn-aware wrapper*, because a respawned actor starts
+//!   with an empty registry: the retry re-offers the set before it folds
+//!   the rest of the range, and a dead actor fails this call with the same
+//!   respawn-recoverable fault the ingest's own calls do.
+//!
+//! # Whose outputs
+//!
+//! "The wallet's" is two sets, because two identities spend through one
+//! tree: the principal's ledger transfers, and the funding outputs the
+//! staking persona `P` holds, which live in `P`'s sealed scan state and
+//! never enter the ledger.
 //!
 //! `P`'s scan has no site of its own, and cannot usefully have one: it sweeps
 //! only blocks `ARCHIVAL_REORG_DEPTH_BLOCKS` behind the tip
@@ -28,18 +50,15 @@
 //! window after its block, so `P` learns of an output long after the drain
 //! and its first registration is late wherever it is made. What a site there
 //! could not do is survive a restart — the registry is not persisted and the
-//! scan names each output once — so the refresh's mass pass is the one that
-//! has to carry them.
-//!
-//! Carved out of `merge.rs`, where it sat beside the ingest it follows: the
-//! registration is its own concern, and that file is at the engine's
-//! god-file line.
+//! scan names each output once — so the refresh's pass is the one that has
+//! to carry them.
 
 use crate::engine::{
     curve_tree_actor::CurveTreeHandle, local_ledger::LocalLedger,
     merge::map_curve_tree_handle_error, traits::DaemonEngine, Engine, EngineSignerKind,
     RefreshError,
 };
+use crate::scan::{DetectedTransfer, ScanResult};
 
 /// One owned output as the curve tree registers it: `(gindex, O)`.
 ///
@@ -83,47 +102,45 @@ pub(crate) fn owned_p_output(
     (input.gindex, input.output_key)
 }
 
-/// The registration pairs for the transfers at `inserted`, unspent only.
+/// The registration pair for an output the scan has just detected.
 ///
-/// Pure, so the merge's one new fact can be tested on a `LedgerBlock`
-/// without an engine: the pairs it returns are exactly the unspent rows the
-/// merge appended, in insertion order, and nothing else.
-pub(crate) fn owned_outputs_among(
-    ledger: &shekyl_engine_state::LedgerBlock,
-    inserted: &[usize],
-) -> Vec<OwnedOutput> {
-    inserted
-        .iter()
-        .filter_map(|&i| ledger.transfers().get(i))
-        .filter(|td| !td.spent)
-        .map(owned_output)
-        .collect()
+/// The merge will build this output's ledger row from the same two
+/// accessors (`TransferDetails::from_wallet_output`), and
+/// `merge::tests::a_detection_and_its_ledger_row_name_one_pair` holds the two
+/// derivations equal — a pair registered from the detection has to be the
+/// pair [`owned_output`] re-offers from the row on every later refresh, or
+/// the second would read as a different output.
+pub(crate) fn detected_output(detected: &DetectedTransfer) -> OwnedOutput {
+    (
+        shekyl_curve_tree::Gindex::from_raw(detected.output.wallet_output().index_on_blockchain()),
+        shekyl_curve_tree::OneTimePubkey::from_bytes(
+            detected.output.wallet_output().key().compress().to_bytes(),
+        ),
+    )
 }
 
 /// Register `outputs` with the curve tree, reconciling once if any is owed.
 ///
-/// A stale pair — the tree holds a different output at that gindex — is the
-/// normal outcome of a scan lagging the tree across a reorg; it is logged,
-/// not an error, and the rescan re-offers the right key. Actor faults map
-/// as the ingest's do, so an unavailable actor is classified
-/// respawn-recoverable; the caller orders this **after** the respawn-aware
-/// ingest so a dead actor has already been healed by the time it is asked.
+/// A stale pair — the tree holds a different output at that gindex — means
+/// the caller's view is behind the chain the tree is on; it is logged, not
+/// an error, and the rescan re-offers the right key. Actor faults map as the
+/// ingest's do, so an unavailable actor is respawn-recoverable.
 pub(crate) async fn curve_tree_sync_owned(
     curve_tree: &CurveTreeHandle,
-    outputs: Vec<OwnedOutput>,
+    outputs: &[OwnedOutput],
 ) -> Result<shekyl_curve_tree::OwnershipSync, RefreshError> {
     if outputs.is_empty() {
         return Ok(shekyl_curve_tree::OwnershipSync::default());
     }
     let sync = curve_tree
-        .sync_owned(outputs)
+        .sync_owned(outputs.to_vec())
         .await
         .map_err(|e| map_curve_tree_handle_error(&e))?;
     if !sync.stale.is_empty() {
         tracing::warn!(
             stale = sync.stale.len(),
             "curve tree: registrations whose key disagrees with the tree; the \
-             scan's view is behind the chain and the rescan will re-offer them"
+             wallet's view is behind the chain and the rescan will re-offer them"
         );
     }
     if let Some(report) = sync.reconciliation {
@@ -147,20 +164,36 @@ impl<
         P: super::traits::PendingTxEngine,
     > Engine<S, D, LocalLedger, E, R, P>
 {
-    /// Every output the wallet can still spend, as registration pairs: the
-    /// ledger's unspent transfers and `P`'s held funding outputs.
+    /// Every output the wallet will hold once `result` has merged, as
+    /// registration pairs, for the ingest of that same result.
     ///
-    /// This is the mass pass a refresh sends on every run: a resume is a
-    /// mass late registration (the registry does not persist), and a
-    /// re-offer of a held pair is `AlreadyHeld` and costs a map lookup, so
-    /// sending it every time is what keeps the tree's view of ownership from
-    /// drifting after a rollback or a rescan.
+    /// Three sources, in this order:
+    ///
+    /// 1. **The ledger's unspent transfers below the result's range.** A row
+    ///    at or above the range start is one this result re-derives — the
+    ///    range starts at the fork on a reorg, and one past the ledger's
+    ///    height otherwise — so offering it would register a pair the merge
+    ///    is about to rewind.
+    /// 2. **`P`'s held funding outputs** ([`Self::p_funding_outputs`]).
+    /// 3. **What `result` detected**, less what it also saw spent. These are
+    ///    not in the ledger yet — the merge follows the ingest — and they
+    ///    are the outputs the fold is about to reach.
+    ///
+    /// Unspent only, throughout: capture serves spending, and a spent
+    /// output's chunks are rows for nothing. An output a reorg makes unspent
+    /// again is offered by the next refresh, when its flag has flipped.
+    ///
+    /// Sent whole on every refresh. The registry does not persist, so the
+    /// first refresh after open is a mass late registration; a re-offer of a
+    /// held pair is `AlreadyHeld` and costs a map lookup, and sending it
+    /// every time is what keeps the tree's view of ownership from drifting.
     ///
     /// The ledger is read under a brief guard that is released before the
     /// seal is opened: the lock is not re-entrant, and nothing here needs
     /// the two reads to be one instant — a pair missed by a moment is
     /// offered by the next refresh.
-    pub(crate) fn owned_outputs(&self) -> Vec<OwnedOutput> {
+    pub(crate) fn owned_outputs(&self, result: &ScanResult) -> Vec<OwnedOutput> {
+        let range_start = result.processed_height_range.start;
         let mut outputs: Vec<OwnedOutput> = {
             let guard = self.ledger.read();
             guard
@@ -168,11 +201,23 @@ impl<
                 .ledger
                 .transfers()
                 .iter()
-                .filter(|td| !td.spent)
+                .filter(|td| !td.spent && td.block_height < range_start)
                 .map(owned_output)
                 .collect()
         };
         outputs.extend(self.p_funding_outputs());
+        outputs.extend(
+            result
+                .new_transfers
+                .iter()
+                .filter(|detected| {
+                    !result
+                        .spent_key_images
+                        .iter()
+                        .any(|spent| spent.key_image == *detected.output.key_image())
+                })
+                .map(detected_output),
+        );
         outputs
     }
 
@@ -221,14 +266,6 @@ impl<
             }
         }
     }
-
-    /// Register `outputs` with the curve tree ([`curve_tree_sync_owned`]).
-    pub(crate) async fn sync_owned_outputs(
-        &self,
-        outputs: Vec<OwnedOutput>,
-    ) -> Result<shekyl_curve_tree::OwnershipSync, RefreshError> {
-        curve_tree_sync_owned(&self.curve_tree, outputs).await
-    }
 }
 
 #[cfg(test)]
@@ -252,6 +289,11 @@ mod tests {
     const PER_BLOCK: u64 = SELENE_CHUNK_WIDTH as u64;
     /// The persona's output: block 0, so its gindex is its index.
     const P_GINDEX: u64 = 10;
+
+    /// A refresh that scanned nothing: the set is then what is already held.
+    fn nothing_new() -> ScanResult {
+        ScanResult::empty_at(BlockHeight::from_raw(1), None)
+    }
 
     /// Seal a persona scan state holding `records` through the engine's own
     /// persistence, as the persona scan does after a sweep.
@@ -318,15 +360,21 @@ mod tests {
         seal_funding(&engine, vec![record.clone()]);
 
         let pair = owned_p_output(&record);
+        let offered = engine.owned_outputs(&nothing_new());
         assert_eq!(
-            engine.owned_outputs(),
+            offered,
             vec![pair],
             "the pass offers the sealed funding output and, the ledger being empty, nothing else"
         );
+        // The next refresh finds no new block: its ingest folds nothing and
+        // still makes the offer.
         let first = engine
-            .sync_owned_outputs(engine.owned_outputs())
+            .ingest_scan_result_into_curve_tree(&mut ScanResult::empty_at(
+                BlockHeight::from_raw(28),
+                None,
+            ))
             .await
-            .expect("the registration pass runs");
+            .expect("a refresh with nothing new ingests");
         assert_eq!(
             first.after_drain, 1,
             "the output drained before it was known"
@@ -390,7 +438,7 @@ mod tests {
     async fn an_undecodable_persona_seal_is_read_as_empty() {
         let (_tmp, engine) = non_staker_engine(SEED_MULT.wrapping_add(1));
         assert!(
-            engine.owned_outputs().is_empty(),
+            engine.owned_outputs(&nothing_new()).is_empty(),
             "an absent seal is a wallet that never scanned as the persona"
         );
 
@@ -403,6 +451,274 @@ mod tests {
             .persistence()
             .save_pscan_state(engine.state_wrap_key().as_bytes(), &garbage)
             .expect("the seal itself is well-formed; its body is not");
-        assert!(engine.owned_outputs().is_empty());
+        assert!(engine.owned_outputs(&nothing_new()).is_empty());
+    }
+
+    // ---- Registration inside the ingest ------------------------------------
+
+    /// The fork the reorg fixture replaces [`CHAIN`] with.
+    const OTHER_CHAIN: u8 = 2;
+    /// One past the last height the scan-result fixtures cover. Blocks 1 and
+    /// 2 carry outputs, and both have drained by the tip.
+    const END: u64 = 16;
+
+    /// The scan's detection of output `index` of block 1 as `fork` mined it.
+    /// Genesis carries one full chunk, so the output's gindex follows it.
+    fn detection(fork: u8, index: u64) -> DetectedTransfer {
+        use curve25519_dalek::{edwards::CompressedEdwardsY, Scalar};
+        use shekyl_scanner::{RecoveredWalletOutput, WalletOutput};
+
+        let key = CompressedEdwardsY(seeded_output_key(fork, 1, index))
+            .decompress()
+            .expect("a seeded key is a point");
+        let base = WalletOutput::new_for_test(
+            shekyl_types::TxHash::from_bytes([fork; 32]),
+            index,
+            PER_BLOCK + index,
+            key,
+            Scalar::ZERO,
+            shekyl_curve_primitives::Commitment {
+                mask: Scalar::ONE,
+                amount: 1_000,
+            },
+        );
+        DetectedTransfer {
+            block_height: BlockHeight::from_raw(1),
+            output: RecoveredWalletOutput::new_for_test(base, 1_000),
+        }
+    }
+
+    /// A scan result over `1..END` on `fork`, reporting the outputs of block
+    /// 1 at `detected` as the wallet's.
+    ///
+    /// The ingest verifies every height against the header's root, so the
+    /// roots are what a second tree reconstructs from the same leaves.
+    async fn scan_result(fork: u8, detected: &[u64]) -> ScanResult {
+        let leaves = |height: u64| {
+            let n = if height <= 2 { PER_BLOCK } else { 0 };
+            seeded_tx_leaves(fork, height, n)
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shadow = CurveTreeHandle::spawn(
+            shekyl_curve_tree::CurveTreeClient::open(dir.path().join("shadow.redb"))
+                .expect("open the shadow tree"),
+        );
+        shadow
+            .ingest(BlockHeight::ZERO, genesis_leaves())
+            .await
+            .expect("the genesis ingests");
+        for height in 1..END {
+            shadow
+                .ingest(BlockHeight::from_raw(height), leaves(height))
+                .await
+                .expect("a seeded block ingests");
+        }
+
+        let mut result = ScanResult::empty_at(BlockHeight::from_raw(1), None);
+        result.processed_height_range = BlockHeight::from_raw(1)..BlockHeight::from_raw(END);
+        for height in 1..END {
+            let at = BlockHeight::from_raw(height);
+            let (root, _) = shadow
+                .reference_root_and_depth(at)
+                .await
+                .expect("the shadow tree answers below its tip");
+            result
+                .block_curve_tree_roots
+                .push((at, shekyl_types::CurveTreeRoot::from_bytes(root)));
+            result.block_leaves.push((at, (*leaves(height)).clone()));
+        }
+        result.new_transfers = detected.iter().map(|&i| detection(fork, i)).collect();
+        result
+    }
+
+    /// The genesis both forks share. Not empty: a store whose only block is
+    /// an empty genesis resumes as a fresh one, and the ingest would then
+    /// ask the fixture's unreachable daemon for it after a rollback or a
+    /// respawn.
+    fn genesis_leaves() -> std::sync::Arc<Vec<crate::scan::OwnedTxLeaves>> {
+        seeded_tx_leaves(CHAIN, 0, PER_BLOCK)
+    }
+
+    /// An engine whose tree holds the genesis, so the ingest under test
+    /// starts at the scan's own range and asks the daemon for nothing.
+    async fn engine_at_genesis(seed: u8) -> (tempfile::TempDir, Engine<SoloSigner>) {
+        let (tmp, engine) = non_staker_engine(seed);
+        engine
+            .curve_tree
+            .ingest(BlockHeight::ZERO, genesis_leaves())
+            .await
+            .expect("the genesis ingests");
+        (tmp, engine)
+    }
+
+    /// What the tree says of `pair` now — the sync a spend would make.
+    async fn probe(
+        engine: &Engine<SoloSigner>,
+        pair: OwnedOutput,
+    ) -> shekyl_curve_tree::OwnershipSync {
+        engine
+            .curve_tree
+            .sync_owned(vec![pair])
+            .await
+            .expect("sync on a live actor")
+    }
+
+    /// One scan result spans everything from the ledger's height to the tip,
+    /// so an output can be found and drained inside it. The ingest registers
+    /// what the result detected before it folds, and the fold captures the
+    /// output's chunk as it closes: afterwards the pair is held and served,
+    /// and nothing is owed.
+    ///
+    /// Registered after the ingest instead, the same output is a late
+    /// registration — `after_drain == 1` here, and a rebuild of its chunk.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_output_found_and_drained_within_one_scan_result_is_captured_as_it_folds() {
+        let (_tmp, engine) = engine_at_genesis(SEED_MULT.wrapping_add(2)).await;
+        let mut result = scan_result(CHAIN, &[5]).await;
+        let pair = detected_output(&result.new_transfers[0]);
+
+        let ingest = engine
+            .ingest_scan_result_into_curve_tree(&mut result)
+            .await
+            .expect("the scan result ingests");
+        assert_eq!(
+            (ingest.before_drain, ingest.after_drain),
+            (1, 0),
+            "offered before its leaf was in the tree"
+        );
+        assert_eq!(ingest.reconciliation, None, "so nothing was owed");
+
+        // And the fold did capture it: held, drained and served, with
+        // nothing left for a reconciliation to write.
+        let after = probe(&engine, pair).await;
+        assert_eq!(after.already_held, 1);
+        assert_eq!(after.reconciliation, None);
+    }
+
+    /// A detection the same result saw spent is not offered: its chunks
+    /// would be rows for an output that can never be spent again.
+    ///
+    /// The control is the test above — the same result without the spend
+    /// leaves the pair held.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_detection_spent_within_the_same_result_is_not_registered() {
+        let (_tmp, engine) = engine_at_genesis(SEED_MULT.wrapping_add(3)).await;
+        let mut result = scan_result(CHAIN, &[5]).await;
+        let pair = detected_output(&result.new_transfers[0]);
+        result.spent_key_images.push(crate::scan::KeyImageObserved {
+            block_height: BlockHeight::from_raw(3),
+            key_image: *result.new_transfers[0].output.key_image(),
+            containing_tx_hash: shekyl_types::TxHash::from_bytes([0x33; 32]),
+        });
+        assert!(engine.owned_outputs(&result).is_empty());
+
+        engine
+            .ingest_scan_result_into_curve_tree(&mut result)
+            .await
+            .expect("the scan result ingests");
+        let after = probe(&engine, pair).await;
+        assert_eq!(after.after_drain, 1, "the probe is its first registration");
+    }
+
+    /// A ledger row at or above the result's range is one the result
+    /// re-derives, so it is left to the result's own detections: offered
+    /// from the ledger it would be a pair the merge is about to rewind.
+    /// Below the range it is offered, which is the control.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_ledger_row_the_result_supersedes_is_not_offered_from_the_ledger() {
+        let (_tmp, engine) = non_staker_engine(SEED_MULT.wrapping_add(6));
+        let detected = detection(CHAIN, 5);
+        let pair = detected_output(&detected);
+        let mut merged = ScanResult::empty_at(BlockHeight::from_raw(1), None);
+        merged.processed_height_range = BlockHeight::from_raw(1)..BlockHeight::from_raw(2);
+        merged.block_hashes = vec![(
+            BlockHeight::from_raw(1),
+            shekyl_types::BlockHash::from_bytes([0x11; 32]),
+        )];
+        merged.new_transfers = vec![detected];
+        engine.apply_scan_result(merged).expect("the row merges");
+
+        let from = |start: u64| {
+            engine.owned_outputs(&ScanResult::empty_at(BlockHeight::from_raw(start), None))
+        };
+        assert_eq!(from(2), vec![pair], "a row below the range is held");
+        assert!(
+            from(1).is_empty(),
+            "a row at the range start is the result's to re-derive"
+        );
+    }
+
+    /// A reorg rebinds gindexes, so the registration is made after the
+    /// ingest's rollback: the new chain's pair is judged against the chain
+    /// being kept, registers, and is captured as it folds.
+    ///
+    /// Offered before the rollback it would be compared with the old
+    /// chain's leaf at that gindex, reported stale and dropped, and the
+    /// probe would read `after_drain == 1`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_reorged_result_registers_against_the_chain_it_keeps() {
+        let (_tmp, engine) = engine_at_genesis(SEED_MULT.wrapping_add(4)).await;
+        let mut before = scan_result(CHAIN, &[5]).await;
+        let old = detected_output(&before.new_transfers[0]);
+        engine
+            .ingest_scan_result_into_curve_tree(&mut before)
+            .await
+            .expect("the first chain ingests");
+
+        let mut reorg = scan_result(OTHER_CHAIN, &[5]).await;
+        reorg.reorg_rewind = Some(crate::scan::ReorgRewind {
+            fork_height: BlockHeight::from_raw(1),
+        });
+        let new = detected_output(&reorg.new_transfers[0]);
+        assert_eq!(old.0, new.0, "one gindex");
+        assert_ne!(old.1, new.1, "two outputs");
+        let ingest = engine
+            .ingest_scan_result_into_curve_tree(&mut reorg)
+            .await
+            .expect("the reorg rolls back and ingests the new chain");
+        assert!(
+            ingest.stale.is_empty(),
+            "judged once the old chain's leaf was gone"
+        );
+        assert_eq!((ingest.before_drain, ingest.after_drain), (1, 0));
+        assert_eq!(ingest.reconciliation, None);
+
+        let after = probe(&engine, new).await;
+        assert_eq!(
+            after.already_held, 1,
+            "and captured as the new chain folded"
+        );
+        assert_eq!(after.reconciliation, None);
+        assert_eq!(
+            probe(&engine, old).await.stale,
+            vec![old.0],
+            "the old chain's pair is what is stale now"
+        );
+    }
+
+    /// A respawned actor starts with an empty registry. The registration is
+    /// inside the respawn-aware ingest, so the retry re-offers the set to
+    /// the fresh actor before it folds anything.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_respawned_actor_is_re_offered_the_set_before_it_folds() {
+        let (_tmp, engine) = engine_at_genesis(SEED_MULT.wrapping_add(5)).await;
+        let mut result = scan_result(CHAIN, &[5]).await;
+        let pair = detected_output(&result.new_transfers[0]);
+
+        engine.curve_tree.kill_and_wait_for_test().await;
+        let ingest = engine
+            .ingest_scan_result_with_respawn(&mut result)
+            .await
+            .expect("the dead actor is respawned and the retry ingests");
+        assert_eq!(
+            (ingest.before_drain, ingest.after_drain),
+            (1, 0),
+            "the retry offered the set to the fresh actor before folding"
+        );
+        assert_eq!(ingest.reconciliation, None);
+
+        let after = probe(&engine, pair).await;
+        assert_eq!(after.already_held, 1);
+        assert_eq!(after.reconciliation, None);
     }
 }

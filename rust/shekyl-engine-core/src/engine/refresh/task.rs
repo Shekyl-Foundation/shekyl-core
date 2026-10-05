@@ -400,9 +400,17 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         // curve-tree handle and daemon under a brief read guard, then
         // drop the guard before the long-running ingest `.await`s so
         // close / mutation paths are not blocked during backfill.
-        let (curve_tree, daemon) = {
+        // The registration set is read under the same guard: everything the
+        // wallet will hold once this result merges, which the ingest offers
+        // to the tree between its rollback and its first fold
+        // (`engine/ownership.rs`).
+        let (curve_tree, daemon, owned) = {
             let g = engine_arc.read().await;
-            (g.curve_tree.clone(), g.daemon.clone())
+            (
+                g.curve_tree.clone(),
+                g.daemon.clone(),
+                g.owned_outputs(&result),
+            )
         };
         let producer_leaves = match crate::engine::merge::index_block_leaves(std::mem::take(
             &mut result.block_leaves,
@@ -418,24 +426,10 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
             &daemon,
             &result,
             &producer_leaves,
+            &owned,
         )
         .await
         {
-            _ = completion.send(Err(e));
-            return;
-        }
-
-        // Ownership, after the respawn-aware ingest has healed a dead actor
-        // and before the merge: everything the wallet already holds, so the
-        // tree captures for it from here on. On the first refresh after
-        // open this is the mass late registration — one reconcile, zero
-        // hashing when the captures are already there — and on every later
-        // refresh it is all `AlreadyHeld`.
-        let held = {
-            let g = engine_arc.read().await;
-            g.owned_outputs()
-        };
-        if let Err(e) = crate::engine::ownership::curve_tree_sync_owned(&curve_tree, held).await {
             _ = completion.send(Err(e));
             return;
         }
@@ -446,17 +440,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         };
 
         match merge {
-            Ok(new_owned) => {
-                // What this merge made the wallet's: registered now, outside
-                // the ledger guard, so the fold captures for these from the
-                // next block. Usually `BeforeDrain` — the tree ingested these
-                // blocks a moment ago and the lock window has not elapsed.
-                if let Err(e) =
-                    crate::engine::ownership::curve_tree_sync_owned(&curve_tree, new_owned).await
-                {
-                    _ = completion.send(Err(e));
-                    return;
-                }
+            Ok(()) => {
                 // Final `Merging`-phase frame carrying the per-attempt
                 // pending-incoming summary with `rebuilding_membership:
                 // false` — the ingest pre-pass above acked the full range

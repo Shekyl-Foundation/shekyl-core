@@ -636,7 +636,7 @@ async fn refresh_registration_reconciles_once_then_is_held_and_spends_from_captu
     };
     assert_eq!(pairs.len(), 2, "the fixture funds two outputs");
 
-    let first = curve_tree_sync_owned(&tree, pairs.clone())
+    let first = curve_tree_sync_owned(&tree, &pairs)
         .await
         .expect("the registration pass runs");
     assert_eq!(
@@ -650,7 +650,7 @@ async fn refresh_registration_reconciles_once_then_is_held_and_spends_from_captu
     let report = first.reconciliation.expect("late registrations reconcile");
     assert_eq!(report.positions_resolved, 2);
 
-    let second = curve_tree_sync_owned(&tree, pairs.clone())
+    let second = curve_tree_sync_owned(&tree, &pairs)
         .await
         .expect("the registration pass runs");
     assert_eq!(second.already_held, 2, "a re-offer is held and served");
