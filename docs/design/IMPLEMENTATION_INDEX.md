@@ -24,7 +24,24 @@ the 2D2 plan §2/§12, the WI-1 "made the chain live" comment — PR #333 and th
 Round-0 exit.)
 
 **Verification stamp.** Statuses below were verified against landed code.
-The unified stamp is `dev` = `ad557ac5a` + the DRS-E3 tree (PR #878) as of
+The unified stamp is `dev` = `241bc4eb9c` + the E6 slice 8 PR-a tree
+(PR #953, the merge of that `dev` into the branch) as of 2026-10-05 — moved
+by E6 slice 8 PR-a, whose rows changed status (DRS-E6 / `CHAIN_RULES_SLICE_8.md`
+§5 rows 1–5; CEN-J17 to bucket 3 and the census denominator `154 → 153`;
+the `ARW-14` re-key) in `shekyl-chain-rules` (`rules/tx_bond.rs`:
+`judge_serve_credit_bond`, `judge_bond_post`; `rules/tx_inputs.rs`: J11,
+J12; coverage `implemented 97 → 106 / 151`), `shekyl-chain-ingest`
+(`archival_admission_tests.rs`, `fixture::persona`), `shekyl-chain-store`
+(the slash bench's derived personas and re-pinned `0x04` body) and
+`shekyl-archival-retention` (`Persona::reinstate`, `release_post`). Re-run
+at that tree from a fresh clone: `cargo test -p shekyl-chain-rules` **334**
++ 17, `-p shekyl-chain-store` **419** + 16, `-p shekyl-chain-ingest` **117**
++ 5; workspace `cargo clippy --all-targets -- -D warnings` clean (413
+crates); every `scripts/ci/check_*` gate (41; `check_chain_rules_coverage`
+`implemented 106 / validator-enforced 151`, `check_conformance_coverage`
+125 / 2 / 5 over 132, `check_store_invariant_register` 22 ↔ 22 built,
+`check_inland_height_u64` 167 grandfathered and none new). *Superseded
+stamp:* `dev` = `ad557ac5a` + the DRS-E3 tree (PR #878) as of
 2026-09-27 — moved by DRS-E3, whose rows changed status (`CTW-`, `CTW-Q`,
 `DRS_E3_CURVE_WRITER.md`, `DRS_E1_SCURVE.md`, SI-17 / SI-18 in the
 store-invariant register) in `shekyl-chain-rules` (`drain.rs`,
