@@ -198,15 +198,19 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
         curve_tree_root: tree_root,
         block_hash: BlockHash::from_bytes([0xAB; 32]),
     };
+    let target = AssembleInput {
+        gindex: Gindex::from_raw(spent_index),
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
+        commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(spent.commitment),
+    };
+    // The wallet tells its tree which output is its own before it asks for
+    // the path, as the engine's curve-tree actor does: assembly reads what
+    // was captured for a registered output and has no other route.
+    client
+        .sync_owned(&[(target.gindex, target.output_key)])
+        .expect("register the spent output");
     let path = client
-        .assemble_path(
-            &AssembleInput {
-                gindex: Gindex::from_raw(spent_index),
-                output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
-                commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(spent.commitment),
-            },
-            &reference,
-        )
+        .assemble_path(&target, &reference)
         .expect("assemble membership path");
     let leaf_chunk: Vec<LeafEntry> = path
         .leaf_chunk
