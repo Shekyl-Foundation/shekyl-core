@@ -386,11 +386,11 @@ fn owned_outputs_among_are_the_inserted_unspent_pairs() {
     let inserted = apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
     assert_eq!(inserted, vec![0, 1]);
 
-    let pairs = crate::engine::merge::owned_outputs_among(&ledger, &inserted);
+    let pairs = crate::engine::ownership::owned_outputs_among(&ledger, &inserted);
     let expected: Vec<_> = ledger
         .transfers()
         .iter()
-        .map(crate::engine::merge::owned_output)
+        .map(crate::engine::ownership::owned_output)
         .collect();
     assert_eq!(
         pairs, expected,
@@ -411,7 +411,7 @@ fn owned_outputs_among_are_the_inserted_unspent_pairs() {
 
     // A spent row is left out.
     ledger.transfers[1].spent = true;
-    let pairs = crate::engine::merge::owned_outputs_among(&ledger, &inserted);
+    let pairs = crate::engine::ownership::owned_outputs_among(&ledger, &inserted);
     assert_eq!(pairs.len(), 1, "a spent output is not registered");
     assert_eq!(pairs[0].0, ledger.transfers()[0].global_output_index);
 }

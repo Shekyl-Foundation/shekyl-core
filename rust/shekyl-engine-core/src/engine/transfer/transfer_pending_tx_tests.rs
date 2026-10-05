@@ -621,7 +621,7 @@ async fn funded_pending_tx_one() -> (TestPendingTx, Arc<LocalLedger>, TempDir) {
 /// one reconciliation the first time and a map lookup per output after.
 #[tokio::test]
 async fn refresh_registration_reconciles_once_then_is_held_and_spends_from_captures() {
-    use crate::engine::merge::{curve_tree_sync_owned, owned_output};
+    use crate::engine::ownership::{curve_tree_sync_owned, owned_output};
     use crate::engine::traits::LedgerEngine as _;
 
     let (ledger, _dir, tree) = funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;

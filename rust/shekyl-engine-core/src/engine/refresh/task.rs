@@ -435,7 +435,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
             let g = engine_arc.read().await;
             g.owned_outputs()
         };
-        if let Err(e) = crate::engine::merge::curve_tree_sync_owned(&curve_tree, held).await {
+        if let Err(e) = crate::engine::ownership::curve_tree_sync_owned(&curve_tree, held).await {
             _ = completion.send(Err(e));
             return;
         }
@@ -452,7 +452,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 // next block. Usually `BeforeDrain` — the tree ingested these
                 // blocks a moment ago and the lock window has not elapsed.
                 if let Err(e) =
-                    crate::engine::merge::curve_tree_sync_owned(&curve_tree, new_owned).await
+                    crate::engine::ownership::curve_tree_sync_owned(&curve_tree, new_owned).await
                 {
                     _ = completion.send(Err(e));
                     return;

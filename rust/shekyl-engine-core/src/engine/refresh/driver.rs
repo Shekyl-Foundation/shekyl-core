@@ -410,7 +410,7 @@ impl<
         &self,
         opts: &RefreshOptions,
         mut produce: F,
-    ) -> Result<(RefreshSummary, Vec<super::super::merge::OwnedOutput>), RefreshError>
+    ) -> Result<(RefreshSummary, Vec<super::super::ownership::OwnedOutput>), RefreshError>
     where
         F: FnMut(u32, &LedgerSnapshot) -> Result<ScanResult, RefreshError>,
     {
