@@ -16,6 +16,13 @@
 # This job runs the wallet's own drift check against *this* branch, so the
 # change that would break it fails here first. It is not a substitute for
 # the GUI's CI; it is the direction that was missing.
+#
+# The wallet source is `dev`, unless this branch's name also exists on
+# shekyl-gui-wallet — the same rule `shekyl-gui-wallet`'s `ci.yml` uses
+# in the other direction. A pair of pull requests that share a branch
+# name are built against each other; a core-only branch still builds
+# wallet `dev`. The called workflow stays pinned to wallet `dev`: that
+# is where the recipe lives, not which wallet commit is compiled.
 name: ci/gh-actions/gui-drift
 
 on:
@@ -45,8 +52,42 @@ permissions:
   contents: read
 
 jobs:
+  wallet-ref:
+    name: wallet ref
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.pick.outputs.ref }}
+    steps:
+      - name: Same-named wallet branch, else dev
+        id: pick
+        env:
+          # pull_request: the head branch. merge_group: the branch being
+          # queued. push: dev or main, which the case below keeps on
+          # wallet dev — wallet main is expected to lag core dev.
+          CANDIDATE: ${{ github.head_ref || github.event.merge_group.head_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$CANDIDATE" in
+            main|dev|gh-readonly-queue/*|"")
+              REF=dev
+              ;;
+            *)
+              # No pipe. `grep -q` under `pipefail` can take SIGPIPE from
+              # ls-remote and report a branch that exists as absent.
+              hits=$(git ls-remote --heads https://github.com/Shekyl-Foundation/shekyl-gui-wallet.git "$CANDIDATE")
+              if [ -n "$hits" ]; then
+                REF="$CANDIDATE"
+              else
+                REF=dev
+              fi
+              ;;
+          esac
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Wallet ref: $REF (candidate: ${CANDIDATE:-<empty>})"
+
   gui-builds-against-core:
     name: shekyl-gui-wallet builds against this branch
+    needs: wallet-ref
     # The wallet repository owns the recipe (system libraries, toolchain,
     # what "builds" means for a Tauri crate); this repository owns only the
     # ref to test it against. One definition, called from both sides.
@@ -58,6 +99,10 @@ jobs:
     uses: Shekyl-Foundation/shekyl-gui-wallet/.github/workflows/core-drift.yml@dev
     with:
       core_repository: ${{ github.repository }}
+      # Resolved above: the same branch name on shekyl-gui-wallet when
+      # that head exists, otherwise wallet dev. The reusable workflow
+      # on wallet `dev` already accepts this input.
+      wallet_ref: ${{ needs.wallet-ref.outputs.ref }}
       # The MERGE ref on a pull request, not the branch head. The wallet
       # builds against core's `dev`, so testing a branch tip asks "does the
       # wallet build against this branch *as if dev did not exist*" — and any
