@@ -48,11 +48,12 @@ later the same day — the second amendment is the one that landed: both
 callers send requester-random bytes plus a **chain anchor**
 `anchor_height ‖ anchor_hash` at `tip − archival_reorg_depth_blocks`;
 `P` gates `anchor_height` against its own height (±`L`) and signs the
-decoded 72-byte header ‖ `shard_id_le[8]`; admission looks the anchor
-hash up on the connecting chain inside `[h−720−L, h−720]`; the
+decoded 72-byte header ‖ `shard_id_le[8]` ‖ a nonce-salted digest of the
+delivered response (the digest term AMENDED 2026-10-04); admission looks
+the anchor hash up on the connecting chain inside `[h−720−L, h−720]`; the
 challenge tuple and `cb_out_key` are not in the fetch signature; the
-response body is an outer binary envelope carrying the canonical
-`HybridSignature` followed by the unchanged `RF-D4` frame) — the
+response body is the unchanged `RF-D4` frame followed by an outer binary
+envelope carrying the canonical `HybridSignature`) — the
 things an implementer would otherwise have decided silently at the
 keyboard. Crate home is `SF-D4` (RULED). Virt-port is `SF-D5` (RULED:
 80, home `shekyl-curve-tree`). Outbound SOCKS reuse is `SF-D2`. SOCKS
@@ -977,7 +978,7 @@ test and does not in release). Not an environment variable a deployed
 
 This ruling selects the **key only**. The signed transcript is
 `SF-D8`'s — `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖
-shard_id_le[8]`, LANDED by (a0) in `verify_pass_countersignature`
+shard_id_le[8] ‖ D[32]`, verified by `verify_pass_countersignature`
 (`shekyl-archival-retention/src/attestation_wire.rs`, transcript in
 `pass_anchor.rs`). The v1 nonce-only message that function verified
 before (a0) is RETIRED: caller-supplied opaque nonces invalidated its
@@ -1026,8 +1027,9 @@ checks:
    daemon's local `FrozenSegmentRecord`;
 3. verify P's hybrid countersignature under `SF-D13` against the ruled
    transcript `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖
-   shard_id_le[8]` — the decoded 72-byte header this request sent,
-   followed by the `u64` this request asked for.
+   shard_id_le[8] ‖ D[32]` — the decoded 72-byte header this request
+   sent, the `u64` this request asked for, and the delivery digest
+   recomputed from the bytes received.
 
 No store handle exists at verify time (TJ-F liveness). The two
 verification refusals are distinct typed errors — `RootMismatch` and

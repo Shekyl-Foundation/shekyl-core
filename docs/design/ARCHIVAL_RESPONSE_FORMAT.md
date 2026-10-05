@@ -116,7 +116,7 @@ ruling, and it was wrong in a way that produced a test of the wrong claim. See
 | 1 | **Leaf chunk is pruned-side by construction** | RULED | `ARCHIVAL_PASS_RECORD_CARRIER.md` CR-D2 |
 | 2 | **Reserved padding field; no padding scheme** | RULED 2026-08-08 (TJ-H) | `ARCHIVAL_CHALLENGE_MECHANISM.md:1065` |
 | 3 | **Nonce anchor = `cb_out_key` of block `h`** | RULED 2026-08-10 (fork 2 closed) | `ARCHIVAL_CHALLENGE_MECHANISM.md:40-43` |
-| 4 | **`r` deleted**; nonce `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` — **as the countersignature message, SUPERSEDED 2026-09-13 by `SF-D8`** (requester-random `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`, anchor at `tip − 720`; verifier LANDED by (a0)) | **RULED 2026-08-10** — `RF-D3` resolved, see §2 | `ARCHIVAL_CHALLENGE_MECHANISM.md:48`, `:820-850` |
+| 4 | **`r` deleted**; nonce `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` — **as the countersignature message, SUPERSEDED 2026-09-13 by `SF-D8`** (requester-random `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ D[32]`, anchor at `tip − 720`, `D` the nonce-salted delivery digest) | **RULED 2026-08-10** — `RF-D3` resolved, see §2 | `ARCHIVAL_CHALLENGE_MECHANISM.md:48`, `:820-850` |
 | 5 | **`CR-F2`'s `prefix_hash` / tx-id change** | priced, **lands here** | `ARCHIVAL_PASS_RECORD_CARRIER.md` CR-F2 |
 
 ### 1.1 The carrier's answer, which this format must express
@@ -992,7 +992,8 @@ both callers, so they do not name the assignment. Signing them without the
 parsed route id still lets a witness request a held decoy and file the
 signature as a pass for an unheld target. `SF-D8` therefore binds the header
 to the server-parsed shard id (`nonce ‖ anchor_height ‖ anchor_hash ‖
-shard_id`, RULED 2026-09-13, LANDED by (a0)). The
+shard_id`, RULED 2026-09-13; the message ends in the delivery digest `D`
+since 2026-10-04). The
 opening still destroys indistinguishability because its preimage is not
 opaque: it names a leaf.
 
@@ -1290,8 +1291,8 @@ after the frame this section defines, as the response's last bytes.)*
 
 **Draft: one length field, ahead of the body.** *(SCOPE SUPERSEDED
 2026-09-13: this grammar is the **inner frame**, not the whole HTTP body.
-Per `SF-D8` the body is `HybridSignature ‖ <this frame>`; the frame's bytes
-are unchanged. Rewritten by the implementation PR.)*
+Per `SF-D8` the body is `<this frame> ‖ HybridSignature`; the frame's bytes
+are unchanged.)*
 
 ```text
 inner frame     := leaf_count  varint    (≤ leaves_per_segment = 25 992)
@@ -1300,7 +1301,7 @@ inner frame     := leaf_count  varint    (≤ leaves_per_segment = 25 992)
                  ‖ padding_bytes         (padding_len, exactly)
 
 hashed against R_k: segment_bytes ONLY
-HTTP body (SF-D8, 2026-09-13; message half LANDED (a0), this envelope lands with SF (a)) := HybridSignature ‖ inner frame
+HTTP body (SF-D8) := inner frame ‖ HybridSignature
 ```
 
 **`varint` names one encoding, and this document has to say which.** It is the
