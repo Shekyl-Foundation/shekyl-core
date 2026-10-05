@@ -8,7 +8,10 @@
 //! Each one is the rules harness's balanced shape with the vin the census
 //! row collides on. They live beside [`crate::mutation`] rather than inside
 //! it: the mutation enum is one exhaustive match, and these builders are
-//! the fixtures that match feeds.
+//! the fixtures that match feeds. Every `p` is a fixture-persona **tag**
+//! (`fixture::persona`): the body carries the persona's derived keys and
+//! the id those recompute to (CEN-J11), so a credit for `p` names the
+//! record a join for `p` opened.
 
 use shekyl_archival_retention::{
     ArchivalRewardEmissionVin, ArchivalServeCreditResponse, HoldingsDescriptor, HoldingsKind,
@@ -16,7 +19,6 @@ use shekyl_archival_retention::{
 };
 use shekyl_chain_rules::harness::fixture;
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
-use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
 use shekyl_wire::{BondPost, BondPostKind, Holdings, Input, Transaction};
 
 /// A **serve-credit-only** body (CEN-H20's shape, the harness's
@@ -27,7 +29,7 @@ use shekyl_wire::{BondPost, BondPostKind, Holdings, Input, Transaction};
 /// landed row (the countersignature is CEN-J10's, pending).
 pub fn serve_credit_body(p: [u8; 32], shard: u64, epoch: u64) -> Transaction {
     let kept = ArchivalServeCreditResponse {
-        p_canonical_id: p,
+        p_canonical_id: *fixture::persona(p).id.as_bytes(),
         shard_id: shard,
         settlement_epoch: epoch,
         ed25519_countersignature: [0x5c; 64],
@@ -48,16 +50,20 @@ pub fn join_body(key_image: [u8; 32], p: [u8; 32]) -> Transaction {
     fixture::join_market(key_image, p)
 }
 
-/// A spend of `key_image` that also posts a bond for `p` — the harness's
-/// balanced bond post (CEN-H21's shape), unanchored and unsigned like every
-/// body `chain_listing_with` places: anchoring signs it. Two calls with two
-/// key images and one `p` are the pair CEN-G10 refuses.
+/// A spend of `key_image` that also posts a **Release** for `p` — the
+/// harness's balanced bond post (CEN-H21's shape) with the persona's key
+/// and recompute, unanchored and unsigned like every body
+/// `chain_listing_with` places: anchoring signs it, with the persona's
+/// bond-spend key (the Release slot's, CEN-J13). Two calls with two key
+/// images and one `p` are the pair CEN-G10 refuses; over a chain holding
+/// no record for `p` the release itself is not J13's to refuse.
 pub fn bond_post_body(key_image: [u8; 32], p: [u8; 32]) -> Transaction {
+    let who = fixture::persona(p);
     fixture::balanced_bond_post(
         key_image,
         BondPost {
-            hybrid_public_key: vec![0xb1; PQC_HYBRID_SINGLE_KEY_LEN],
-            p_canonical_id: shekyl_types::PCanonicalId::from_bytes(p),
+            hybrid_public_key: who.identity,
+            p_canonical_id: who.id,
             kind: BondPostKind::Other(2),
             holdings: Holdings::CompleteTree,
             bonded_total_atomic: 0,
@@ -68,14 +74,14 @@ pub fn bond_post_body(key_image: [u8; 32], p: [u8; 32]) -> Transaction {
 }
 
 /// A spend of `key_image` that also carries an emission claim by the
-/// persona whose hybrid pubkey is `p_pubkey_fill` repeated, for `epochs` —
+/// persona tagged `[p_pubkey_fill; 32]` (the harness's `claimant`), for `epochs` —
 /// one `(P, E)` pair per epoch, CEN-G9's keys — the harness's balanced
 /// emission (CEN-H22's shape) paying a reward of one atomic unit. The vin
 /// is the `emission_wire` round-trip shape, one work claim and one amount
 /// per epoch; the emission rows that judge its content are slice 8's.
 pub fn emission_claim_body(key_image: [u8; 32], p_pubkey_fill: u8, epochs: &[u64]) -> Transaction {
     let vin = ArchivalRewardEmissionVin {
-        p_pubkey: vec![p_pubkey_fill; SINGLE_KEY_CANONICAL_LEN],
+        p_pubkey: fixture::persona([p_pubkey_fill; 32]).identity,
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![7]).expect("one shard"),

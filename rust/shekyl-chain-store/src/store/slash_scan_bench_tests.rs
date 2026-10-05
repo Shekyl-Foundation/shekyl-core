@@ -132,10 +132,26 @@ fn personas() -> u64 {
         .unwrap_or(64)
 }
 
+/// The fixture-persona **tag** of the `i`-th bench persona: what the
+/// joins are built with ([`fixture::persona`] derives the keys and the id).
 fn persona(i: u64) -> [u8; 32] {
     let mut p = [0x50; 32];
     p[..8].copy_from_slice(&i.to_le_bytes());
     p
+}
+
+/// The `personas` bench personas' ids **in bond-table order** — the order
+/// the deadline scan walks them, so the order the slash log's `seq` and
+/// the snapshot's rows are in. Ids are recomputes over derived keys
+/// (CEN-J11), so tag order and id order are unrelated; *records-was:*
+/// until E6 slice 8 row 4 the tag *was* the id, and `i` order was table
+/// order.
+fn ids_in_table_order(personas: u64) -> Vec<PCanonicalId> {
+    let mut ids: Vec<PCanonicalId> = (0..personas)
+        .map(|i| fixture::persona(persona(i)).id)
+        .collect();
+    ids.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    ids
 }
 
 /// A spend whose opaque proof is padded to `SPEND_PAD` bytes: no landed
@@ -287,8 +303,7 @@ impl SlashedChain {
         );
         let floor = AtomicUnits::from_raw(ARCHIVAL_BOND_FLOOR_ATOMIC);
         let mut burned = AtomicUnits::ZERO;
-        for i in 0..self.personas {
-            let p = PCanonicalId::from_bytes(persona(i));
+        for p in ids_in_table_order(self.personas) {
             let record = snap
                 .bond_record(&p)
                 .expect("read")
@@ -302,12 +317,12 @@ impl SlashedChain {
             assert!(
                 snap.slash_applied(&p, ShardId::from_raw(0), slashing_epoch)
                     .expect("read"),
-                "slash_applied({i}, 0, {m})"
+                "slash_applied({p:?}, 0, {m})"
             );
             let log = snap
                 .slash_log_after(&p, BlockHeight::from_raw(0))
                 .expect("read");
-            assert_eq!(log.len(), 1, "one slash logged for {i}: {log:?}");
+            assert_eq!(log.len(), 1, "one slash logged for {p:?}: {log:?}");
             assert_eq!(log[0].shard, ShardId::from_raw(0));
             assert_eq!(log[0].epoch, slashing_epoch);
             assert!(
@@ -331,14 +346,13 @@ impl SlashedChain {
     /// was filling, not full.
     fn assert_nothing_slashed_before_m(&self) {
         let snap = self.store.begin_read().expect("read");
-        for i in 0..self.personas {
-            let p = PCanonicalId::from_bytes(persona(i));
+        for p in ids_in_table_order(self.personas) {
             for e in 0..self.m {
                 assert!(
                     !snap
                         .slash_applied(&p, ShardId::from_raw(0), SettlementEpoch::from_raw(e))
                         .expect("read"),
-                    "epoch {e} < M slashed persona {i}: the window was not yet full"
+                    "epoch {e} < M slashed persona {p:?}: the window was not yet full"
                 );
             }
         }
@@ -359,12 +373,12 @@ impl SlashedChain {
             .expect("the slashed state snapshots");
 
         // The rows, as the constructors spell them: one log row per persona
-        // at the connecting height (`ARW-Q17`), `seq` in persona order —
+        // at the connecting height (`ARW-Q17`), `seq` in bond-table order —
         // the deadline scan walks the bond table — one `slash_applied`
         // member each, and the watermark at the slashing epoch.
+        let ids = ids_in_table_order(self.personas);
         let mut want = ArchivalSnapshot::empty();
-        for i in 0..self.personas {
-            let persona = PCanonicalId::from_bytes(persona(i));
+        for (i, persona) in ids.iter().copied().enumerate() {
             let seq = u32::try_from(i).expect("fits");
             want.push_slash_log(
                 at,
@@ -399,16 +413,16 @@ impl SlashedChain {
         let n = self.personas.to_le_bytes();
         let mut slash_log = n.to_vec();
         let mut slash_applied = n.to_vec();
-        for i in 0..self.personas {
+        for (i, persona) in ids.iter().enumerate() {
             slash_log.extend_from_slice(&(8u32 + 4 + 32 + 8 + 8 + 1).to_le_bytes());
             slash_log.extend_from_slice(&at.to_raw().to_le_bytes());
             slash_log.extend_from_slice(&u32::try_from(i).expect("fits").to_le_bytes());
-            slash_log.extend_from_slice(&persona(i));
+            slash_log.extend_from_slice(persona.as_bytes());
             slash_log.extend_from_slice(&0u64.to_le_bytes());
             slash_log.extend_from_slice(&self.m.to_le_bytes());
             slash_log.push(0x01);
             slash_applied.extend_from_slice(&(32u32 + 8 + 8).to_le_bytes());
-            slash_applied.extend_from_slice(&persona(i));
+            slash_applied.extend_from_slice(persona.as_bytes());
             slash_applied.extend_from_slice(&0u64.to_le_bytes());
             slash_applied.extend_from_slice(&self.m.to_le_bytes());
         }
@@ -462,9 +476,13 @@ impl SlashedChain {
 /// accrual, and the slash families above. A fingerprint of bytes, not a
 /// domain: the plain hash, so the pin registers nothing in
 /// `CRYPTO_DOMAIN_REGISTRY.tsv` and moves no cSHAKE count-pin. Pinned
-/// 2026-10-02 (`ARW-Q18`).
+/// 2026-10-02 (`ARW-Q18`); re-pinned 2026-10-04 (E6 slice 8 row 4) when
+/// the fixture personas gained derived keys and recomputed ids — same
+/// byte count, same row count, the bond rows' keys and ids moved, the
+/// codec did not (*records-was:*
+/// `6b1d14e89834bee02ad080ca3e9809ef3bd39e4411513d9ee474c1f2c501f76a`).
 const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
-    "6b1d14e89834bee02ad080ca3e9809ef3bd39e4411513d9ee474c1f2c501f76a";
+    "283d9d1e126bfed44003d412e2e93b65652e56929038ddb549d56e30db7a1e2d";
 
 /// Each family's byte range inside a body, walked by the record framing
 /// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own

@@ -46,11 +46,13 @@ use crate::codec::SettlementEpochBlocks;
 use crate::ids::ServeCreditKey;
 use crate::schema::ARCHIVAL_SERVE_CREDIT;
 
-/// The persona every join here opens a record for.
+/// The fixture-persona tag every join here opens a record for.
 const P: [u8; 32] = [0x5a; 32];
 
+/// The id the persona tagged `p` is recorded under — the recompute over
+/// its derived identity key (CEN-J11), not the tag.
 fn persona(p: [u8; 32]) -> PCanonicalId {
-    PCanonicalId::from_bytes(p)
+    fixture::persona(p).id
 }
 
 fn epoch(n: u64) -> SettlementEpoch {
@@ -618,11 +620,12 @@ fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_l7() {
     for _ in 0..FIRST_SPEND_HEIGHT {
         connect_empty(&store, &mut hashes, RuleSet::GENESIS);
     }
-    let claimant = fixture::claimant(0xc1);
+    // The join is built from the tag `[0xc1; 32]`; `emission_vin(0xc1, …)`
+    // claims as the same persona, whose id is `fixture::claimant(0xc1)`.
     connect_one(
         &store,
         &mut hashes,
-        vec![fixture::join_market(fixture::point(14), claimant)],
+        vec![fixture::join_market(fixture::point(14), [0xc1; 32])],
         RuleSet::GENESIS,
         None,
     );
@@ -630,7 +633,7 @@ fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_l7() {
         store
             .begin_read()
             .expect("read")
-            .bond_record(&persona(claimant))
+            .bond_record(&PCanonicalId::from_bytes(fixture::claimant(0xc1)))
             .expect("read")
             .is_some(),
         "the record is persisted before the claim is judged"
