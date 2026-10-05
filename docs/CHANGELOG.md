@@ -2,10 +2,11 @@
 
 ## [Unreleased]
 
+## [3.1.0-alpha.9] - 2026-10-05
+
+- Docs: `V3_ROLLOUT.md` says what the LMDB daemon does today: it keeps every transaction whole. Uniform pruning is the contract (`ARCHIVAL_PRUNED_DAEMON_MODE.md`) and lands with the Rust store (`PDM-Q-S0`), so budget disk for an unpruned chain. The CLI's daemon-session test runs against a `--testnet --offline` daemon, since the shipped wallet refuses a `--regtest` one on identity (PR #963).
 - Docs: the delivery digest (`SF-D8`, PR #954) costs a Pi 4 78 ms of CPU per served shard, 0.5 % of a Tor read; record in `docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md`.
 - Docs: `BENCHMARK_ALIGNMENT.md` (`BA-`) inventories every benchmark, gate script and dated capture, lists the measurements that ruled constants rest on with nothing tracking them, and proposes a tracked set for ruling. No benchmark, workflow or baseline changes.
-
-## [3.1.0-alpha.9] - 2026-10-05
 
 - **CLI scripting.** `shekyl-cli --json` prints one JSON object per command (`ok`, `command`, `result` or `error`). `--script FILE` runs many commands in one wallet session and does not combine with a subcommand. A one-shot is the same prompt words after the global flags (`shekyl-cli --json balance`); the shell's quoting is kept, and `help` is that command (`--help` is the invocation summary). Seeds and passwords are not in the JSON. `--yes` is honored for a script or a one-shot, and ignored on an interactive terminal. Narration stays off a JSON transcript: stderr when a person is there, omitted for a script (including a human `--script` without `--json`). A generated payment or reserve proof's disclosure is not narration: it follows the proof, and under `--json` it goes to stderr, including in a script. `wallet open` and `wallet password` refuse in a script. `create` / `restore` failures use those command names. `version` reports the CLI version even when wallet-RPC is down (`wallet_rpc_error`). `--complete-tree-foundation` is the envelope `complete-tree-foundation`; under `--json` its terms go to stderr.
 - **CLI `stake release`.** The terminal bond exit is `stake release`. `stake exit` and `unstake` are retired spellings that point at it. The wallet-rpc method remains `unstake`. `stake collect` is unchanged.
