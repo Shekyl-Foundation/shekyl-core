@@ -16,25 +16,47 @@ use crate::resolve::{
     reject_removed_flags, unix_now, FeePriority, FlagValue, RequestFilter, ResolvedCommand,
 };
 
-/// Parse one line. Empty input is an unknown command with an empty name,
-/// which the prompt loop never submits.
-pub fn parse(input: &str) -> ResolvedCommand {
-    let tokens: Vec<&str> = input.split_whitespace().collect();
+/// How a free-form tail is recovered.
+///
+/// A line keeps the spacing between words: `sign hello  world` is one
+/// message with two spaces. Argv words already have shell boundaries, and
+/// one word may contain spaces because the shell quoted it.
+#[derive(Clone, Copy)]
+enum Tail<'a> {
+    Line(&'a str),
+    Argv(&'a [&'a str]),
+}
+
+/// Parse one prompt, script, or pipe line. Empty input is an unknown
+/// command with an empty name, which the prompt loop never submits.
+pub fn parse(line: &str) -> ResolvedCommand {
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    parse_words(&tokens, Tail::Line(line))
+}
+
+/// Parse one-shot argv. The shell has already split the words, so joining
+/// them and splitting the line again would throw away a quoted space.
+pub fn parse_argv(argv: &[String]) -> ResolvedCommand {
+    let tokens: Vec<&str> = argv.iter().map(String::as_str).collect();
+    parse_words(&tokens, Tail::Argv(&tokens))
+}
+
+fn parse_words(tokens: &[&str], tail: Tail<'_>) -> ResolvedCommand {
     if tokens.is_empty() {
         return ResolvedCommand::Unknown { cmd: String::new() };
     }
     if let Some(msg) = reject_removed_command(tokens[0], &tokens[1..]) {
         return diag(msg);
     }
-    if let Some(msg) = catalog::retired_message(&tokens) {
+    if let Some(msg) = catalog::retired_message(tokens) {
         return diag(msg);
     }
-    match catalog::walk(&tokens) {
+    match catalog::walk(tokens) {
         Walk::Ready { id, rest } => {
-            if let Some(msg) = removed_flag_in_options(id, &tokens) {
+            if let Some(msg) = removed_flag_in_options(id, tokens) {
                 return diag(msg);
             }
-            parse_ready(id, input, rest)
+            parse_ready(id, tail, rest)
         }
         Walk::NeedVerb { id } => diag(catalog::need_verb(id)),
         Walk::UnknownVerb { id, word } => diag(catalog::unknown_verb(id, word)),
@@ -63,8 +85,18 @@ fn removed_flag_in_options(id: CommandId, tokens: &[&str]) -> Option<String> {
     None
 }
 
+fn message_after(tail: Tail<'_>, skip: usize) -> Option<String> {
+    match tail {
+        Tail::Line(line) => raw_remainder(line, skip).map(str::to_owned),
+        Tail::Argv(tokens) => {
+            let rest = tokens.get(skip..).filter(|rest| !rest.is_empty())?;
+            Some(rest.join(" "))
+        }
+    }
+}
+
 #[allow(clippy::enum_glob_use)]
-fn parse_ready(id: CommandId, input: &str, args: &[&str]) -> ResolvedCommand {
+fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
     use CommandId::*;
     match id {
         Help => parse_help(args),
@@ -93,7 +125,7 @@ fn parse_ready(id: CommandId, input: &str, args: &[&str]) -> ResolvedCommand {
         TxShow => one_word(id, args, |txid| ResolvedCommand::ShowTransfer {
             txid: txid.to_string(),
         }),
-        TxNote => parse_tx_note(input, args),
+        TxNote => parse_tx_note(tail, args),
         TxAbandon => one_word(id, args, |txid| ResolvedCommand::Abandon {
             txid: txid.to_string(),
         }),
@@ -114,7 +146,7 @@ fn parse_ready(id: CommandId, input: &str, args: &[&str]) -> ResolvedCommand {
             amount,
             yes,
         }),
-        StakeExit => parse_yes_only(id, args, |yes| ResolvedCommand::Unstake { yes }),
+        StakeRelease => parse_yes_only(id, args, |yes| ResolvedCommand::Unstake { yes }),
         StakeCollect => parse_yes_only(id, args, |yes| ResolvedCommand::CollectUnstaked { yes }),
         StakeJoin => parse_stake_join(args),
         ShardListAll => bare(id, args, ResolvedCommand::ShardListAll),
@@ -126,12 +158,12 @@ fn parse_ready(id: CommandId, input: &str, args: &[&str]) -> ResolvedCommand {
         MineStart => parse_mine_start(args),
         MineStop => bare(id, args, ResolvedCommand::MineStop),
         MineStatus => bare(id, args, ResolvedCommand::MineStatus),
-        ProvePayment => parse_prove_payment(input, args),
-        ProveReserve => parse_prove_reserve(input, args),
-        CheckPayment => parse_check_payment(input, args),
-        CheckReserve => parse_check_reserve(input, args),
-        Sign => parse_sign(input),
-        Verify => parse_verify(input, args),
+        ProvePayment => parse_prove_payment(tail, args),
+        ProveReserve => parse_prove_reserve(tail, args),
+        CheckPayment => parse_check_payment(tail, args),
+        CheckReserve => parse_check_reserve(tail, args),
+        Sign => parse_sign(tail),
+        Verify => parse_verify(tail, args),
         // Subjects. `walk` asks for a verb before this match; the arm keeps
         // the match exhaustive if that ever changes.
         Tx | Request | Uri | Shard | ShardList | Mine | Prove | Check => {
@@ -304,15 +336,15 @@ fn parse_tx_list(args: &[&str]) -> ResolvedCommand {
     }
 }
 
-fn parse_tx_note(input: &str, args: &[&str]) -> ResolvedCommand {
+fn parse_tx_note(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
     match args {
         [txid] => ResolvedCommand::GetTxNote {
             txid: (*txid).to_string(),
         },
-        [txid, ..] => match raw_remainder(input, 3) {
+        [txid, ..] => match message_after(tail, 3) {
             Some(note) => ResolvedCommand::SetTxNote {
                 txid: (*txid).to_string(),
-                note: note.to_string(),
+                note,
             },
             None => diag(usage(CommandId::TxNote)),
         },
@@ -479,7 +511,7 @@ fn parse_mine_start(args: &[&str]) -> ResolvedCommand {
     ResolvedCommand::MineStart { threads }
 }
 
-fn parse_prove_payment(input: &str, args: &[&str]) -> ResolvedCommand {
+fn parse_prove_payment(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
     if let Some(message) = refuse_flag("prove", args) {
         return diag(message);
     }
@@ -487,14 +519,14 @@ fn parse_prove_payment(input: &str, args: &[&str]) -> ResolvedCommand {
         ResolvedCommand::GetTxProof {
             txid: args[0].to_string(),
             address: args[1].to_string(),
-            message: raw_remainder(input, 4).map(str::to_owned),
+            message: message_after(tail, 4),
         }
     } else {
         diag(usage(CommandId::ProvePayment))
     }
 }
 
-fn parse_prove_reserve(input: &str, args: &[&str]) -> ResolvedCommand {
+fn parse_prove_reserve(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
     if let Some(message) = refuse_flag("prove", args) {
         return diag(message);
     }
@@ -502,11 +534,11 @@ fn parse_prove_reserve(input: &str, args: &[&str]) -> ResolvedCommand {
         Some(first) => match crate::commands::parse_amount(first) {
             Some(amount) => ResolvedCommand::GetReserveProof {
                 amount: Some(amount),
-                message: raw_remainder(input, 3).map(str::to_owned),
+                message: message_after(tail, 3),
             },
             None => ResolvedCommand::GetReserveProof {
                 amount: None,
-                message: raw_remainder(input, 2).map(str::to_owned),
+                message: message_after(tail, 2),
             },
         },
         None => ResolvedCommand::GetReserveProof {
@@ -516,7 +548,7 @@ fn parse_prove_reserve(input: &str, args: &[&str]) -> ResolvedCommand {
     }
 }
 
-fn parse_check_payment(input: &str, args: &[&str]) -> ResolvedCommand {
+fn parse_check_payment(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
     if let Some(message) = refuse_flag("check", args) {
         return diag(message);
     }
@@ -525,14 +557,14 @@ fn parse_check_payment(input: &str, args: &[&str]) -> ResolvedCommand {
             txid: args[0].to_string(),
             address: args[1].to_string(),
             proof: args[2].to_string(),
-            message: raw_remainder(input, 5).map(str::to_owned),
+            message: message_after(tail, 5),
         }
     } else {
         diag(usage(CommandId::CheckPayment))
     }
 }
 
-fn parse_check_reserve(input: &str, args: &[&str]) -> ResolvedCommand {
+fn parse_check_reserve(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
     if let Some(message) = refuse_flag("check", args) {
         return diag(message);
     }
@@ -540,7 +572,7 @@ fn parse_check_reserve(input: &str, args: &[&str]) -> ResolvedCommand {
         ResolvedCommand::CheckReserveProof {
             address: args[0].to_string(),
             proof: args[1].to_string(),
-            message: raw_remainder(input, 4).map(str::to_owned),
+            message: message_after(tail, 4),
         }
     } else {
         diag(usage(CommandId::CheckReserve))
@@ -555,24 +587,22 @@ fn refuse_flag(verb: &str, args: &[&str]) -> Option<String> {
     })
 }
 
-fn parse_sign(input: &str) -> ResolvedCommand {
-    match raw_remainder(input, 1) {
-        Some(message) => ResolvedCommand::Sign {
-            message: message.to_string(),
-        },
+fn parse_sign(tail: Tail<'_>) -> ResolvedCommand {
+    match message_after(tail, 1) {
+        Some(message) => ResolvedCommand::Sign { message },
         None => diag(usage(CommandId::Sign)),
     }
 }
 
-fn parse_verify(input: &str, args: &[&str]) -> ResolvedCommand {
+fn parse_verify(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
     if args.len() < 3 {
         return diag(usage(CommandId::Verify));
     }
-    match raw_remainder(input, 3) {
+    match message_after(tail, 3) {
         Some(message) => ResolvedCommand::Verify {
             address: args[0].to_string(),
             signature: args[1].to_string(),
-            message: message.to_string(),
+            message,
         },
         None => diag(usage(CommandId::Verify)),
     }
@@ -638,6 +668,22 @@ mod tests {
             parse("stake join 4 --yes"),
             ResolvedCommand::Diagnostic { .. }
         ));
+        assert!(matches!(
+            parse("stake release --yes"),
+            ResolvedCommand::Unstake { yes: true }
+        ));
+        match parse("stake exit") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("stake release"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse("unstake") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("stake release"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
         match parse("stake foundation") {
             ResolvedCommand::Diagnostic { message } => {
                 assert!(message.contains("startup flag"), "{message}");
@@ -812,6 +858,25 @@ mod tests {
             ResolvedCommand::Diagnostic { message } => {
                 assert!(message.contains("removed flag"), "{message}");
             }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn one_shot_words_keep_a_space_the_shell_quoted() {
+        match parse_argv(&[
+            "address".to_owned(),
+            "--out".to_owned(),
+            "/tmp/my address.txt".to_owned(),
+        ]) {
+            ResolvedCommand::Address { full, out } => {
+                assert!(!full);
+                assert_eq!(out.as_deref(), Some("/tmp/my address.txt"));
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse_argv(&["sign".to_owned(), "hello  world".to_owned()]) {
+            ResolvedCommand::Sign { message } => assert_eq!(message, "hello  world"),
             other => panic!("{other:?}"),
         }
     }

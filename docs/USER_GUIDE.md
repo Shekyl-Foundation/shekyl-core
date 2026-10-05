@@ -546,9 +546,8 @@ There are **no duration tiers, no lock period, no claim transactions, and no
 minimum stake** — those belonged to an earlier claim-based design that was
 retired before genesis. Your principal stays yours the whole time; the bond
 is an honesty anchor (slashable for misbehavior), not a custody transfer.
-When you are done staking, `stake exit` posts the permanent exit and
-`stake collect` returns the released collateral to your balance (PR-C,
-2026-09-03).
+When you are done staking, `stake release` posts the permanent release and
+`stake collect` returns the released collateral to your balance.
 
 For the economic model, see
 [`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md) §Component 3–4 and the canonical
@@ -595,9 +594,9 @@ The full staking surface is live in interactive `shekyl-cli` (type
 - **Principal movement:** `stake add <amount>` adds funds to the staking
   balance; `stake available` shows what can move back; `stake return <amount>`
   moves it back (fee and destination are automatic).
-- **Exit:** `stake exit` posts the permanent exit and `stake collect`
-  returns the released collateral, each with the irreversibility
-  confirmation the exit warrants (PR-C).
+- **Release:** `stake release` posts the permanent release and `stake collect`
+  returns the released collateral. `stake exit` and `unstake` name `stake release`
+  and do not run. The wallet-rpc method is still `unstake`.
 
 **Wallet RPC** exposes the same verbs (`stake`, `get_staked_balance`,
 `get_staked_outputs`, `staking_info`, `stake_in`, `drain`,

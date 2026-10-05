@@ -157,10 +157,11 @@ pub use emission_verify::{
     EmissionEpochSource, EmissionVerified, EmissionVerifyContext, EmissionVerifyError,
 };
 pub use pass_anchor::{
-    pass_countersignature_message, pass_request_header_bytes, PassAnchorWindow,
-    PassAnchorWindowError, PassRequestHeader, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN,
-    PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS, PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT,
-    PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_NONCE_LEN,
+    pass_countersignature_message, pass_delivery_digest, pass_request_header_bytes,
+    PassAnchorWindow, PassAnchorWindowError, PassDeliveryHasher, PassRequestHeader,
+    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
+    PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+    PASS_DELIVERY_DIGEST_CUSTOMIZATION, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
     PASS_REQUEST_HEADER_LEN,
 };
 pub use settlement_row::{

@@ -1,0 +1,13 @@
+# Pattern for a daemon-backed CLI session. Open is `--wallet` on the
+# invocation, so the password never sits in this file.
+#
+#   shekyl-cli --json --script tests/scripts/regtest_session.txt \
+#     --network mainnet --daemon-address 127.0.0.1:<rpc> \
+#     --wallet-dir <dir> --wallet <name> --password-file <path>
+#
+# `send` is expected to refuse on an empty wallet. The envelope is the
+# assertion. A funded send adds `--yes` on that line.
+balance
+wallet refresh
+chain
+send 0.001 not-an-address --yes

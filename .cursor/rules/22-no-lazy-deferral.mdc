@@ -5,10 +5,9 @@ alwaysApply: true
 
 # No lazy deferral
 
-Work that is scoped to a PR lands in that PR. Deferring scoped work is
-sometimes necessary — but it is a **decision with required form**, never
-a default an implementer reaches for because the commit grew, the item
-is tedious, or the consumer "can land later."
+Work scoped to a PR lands in that PR. A deferral is a decision with a
+required form. It is not the default when a commit grew, an item is
+tedious, or a consumer "can land later."
 
 ## The rule
 
@@ -16,210 +15,85 @@ A deferral of scoped work is legitimate only when all three hold:
 
 1. **A named blocking reason exists.** "Blocked on X" where X is a
    concrete, checkable dependency: an unlanded harness, an external
-   standardization, a gated upstream PR, a review decision not yet
-   made. "The commit was getting big" is a *split* reason, not a
-   *deferral* reason — a split re-schedules the work inside the same
-   PR; a deferral moves it out. "It felt separable" is neither.
-2. **The deferral is tagged and scheduled — and its owner resolves.** A
-   `docs/FOLLOWUPS.md` entry (or an amendment to the PR's own plan doc)
-   with the blocker named, a target version/PR, the reopening criterion
-   per `21-reversion-clause-discipline.mdc`, and an **`Owner:`** that
-   resolves to a live plan document or a registered identifier family
-   (gated: `check_followups_owners.py`). "Scheduled" means an owner
-   exists in some form — a doc, a family, a plan slot — not a name.
-   Observed (2026-09-19): six deferrals named "the E2 lane" as owner; no
-   doc, branch or PR of that name existed, so each was rule-22-legal on
-   its face and the six together were an unchosen queue. An
-   allow-comment pointing at a future consumer is *not* a deferral
-   record — it is a residue marker that a deferral record must exist
-   elsewhere to justify.
-3. **The deferral is disclosed in the flow that made it.** The commit
-   message or the report to the reviewer for the commit that sheds the
-   work states: what was scoped, what is deferred, why, and where it
-   lands. A deferral discovered later by a re-scope audit — instead of
-   disclosed by the commit that made it — is a process failure even
-   when the deferral itself would have been approved.
+   standard, a gated upstream PR, a review decision not yet made. "The
+   commit was getting big" is a split reason: a split stays inside the
+   same PR. "It felt separable" is neither a split nor a deferral.
+2. **The deferral is tagged, and its owner resolves.** A
+   `docs/FOLLOWUPS.md` entry (or an amendment to the PR's own plan) names
+   the blocker, a `Target:` (`95-documentation-lifecycle.mdc`), the
+   reopening criterion (`21-reversion-clause-discipline.mdc`), and an
+   **`Owner:`** that resolves to a live `docs/design/` document or a
+   registered identifier family. Gated by `check_followups_owners.py`.
+   An owner is a doc, a family, or a plan slot. A person's name, a lane
+   name, or a PR number is not an owner. An allow-comment pointing at a
+   future consumer is a residue marker, not the deferral record.
+3. **The deferral is disclosed where it was made.** The commit message
+   or the review report for the commit that sheds the work states what
+   was scoped, what is deferred, why, and where it lands. A deferral
+   found later by audit, rather than disclosed by the commit that made
+   it, is a process failure even when the deferral would have been approved.
 
-## The motivating example
+Silent deferrals accumulate a queue nobody decided. The decision belongs
+to the reviewer, on disclosure.
 
-PR-3 commit 4 (`AssembleEmissionClaim`, 2026-07-11): the plan scoped
-the claim orchestration into commit 4 ("the C-4 claim orchestration is
-the sole production construction site," `backing_set.rs`, written at
-commit 3). Commit 4 grew, the handler was split out — a defensible
-split — but the orchestration half was silently re-pointed to "the
-PR-3 Engine-side claim orchestrator" in allow comments, with no plan
-amendment, no FOLLOWUPS entry, and no disclosure in the commit report.
-The deferral surfaced only in the commit-5 re-scope audit. The PR row's
-own deliverable ("first live consumer — un-deadens GF-4b §5 item 1")
-was false in the interim. The disposition: the orchestrator lands in
-the same PR, as its own commit; the deferral-without-disclosure is the
-anti-pattern this rule names.
+## Callee without caller
 
-## Why lazy deferral compounds
+A PR that lands a callee whose production caller is "a future commit" has
+deferred integration. Inert-until-wired is legitimate when the plan names
+the commits and the consumer. It is a silent deferral when the caller was
+scoped here and became "later" without a plan change. The tell is an allow
+comment whose named consumer shifted between commits.
 
-Each silent deferral looks small. In aggregate they produce a FOLLOWUPS
-queue that is months of work whose items nobody decided to defer — the
-queue *accumulated* rather than being *chosen*. Per
-`15-deletion-and-debt.mdc`, FOLLOWUPS is not a graveyard: the V3.0
-pre-genesis queue is load-bearing, and every silent addition to it is
-un-reviewed scope movement on the critical path. The deferral decision
-belongs to the human reviewer, made on disclosure — not to the
-implementer, made by omission.
+## Name the falsifier
 
-## Callee-without-caller is the canonical smell
+A blocker is named when the entry says how a reader would discover it had
+lifted. Write *"blocked on X — falsify by `<check>`"*.
 
-A PR that lands a callee (handler, verifier, type, message) whose
-production caller is "a future commit" has deferred integration work.
-Sometimes staged landing is the plan (inert-until-wired is a legitimate
-pattern in this repo — see the 2c-2a/2c-2b chain). The difference is
-whether the staging is **in the plan** (named commits, named consumers,
-reviewed sequence) or **emerged silently** (the caller was scoped here
-and quietly became "later"). Staging allows with named consumers are
-the marker of the first; allow comments whose named consumer shifted
-between commits without a plan change are the marker of the second.
+A falsifier is a test, a command whose output would change, a PR whose
+merge lifts the block, or a named decision. It is not a restatement of the
+blocker. *"Blocked until the builder exists"* is the claim, not a check.
 
-## A deferral's CONDITION can expire, and expiry looks exactly like pending
+It is also not a **state** some other change could reach. "The manifests
+are at `format_version: 3`" goes green when any writer bumps that number.
+A **field-shaped** falsifier — "every manifest carries this injection's
+`height` and `persona`" — can be satisfied only by the change that
+produces those fields. Name the fields the work produces, not the number
+the work would also happen to move.
 
-A disclosed deferral is usually written as *"skip this if X lands first"*.
-That is the right shape. What it does not carry is a way to notice that
-**X never landed** — because a condition that has expired and a condition
-that is still pending read identically. The deferral just sits there, and
-the next reader takes "blocked" from a line that only ever said "blocked
-on X".
+If no falsifier can be written, the item is not deferred. Nobody knows
+what would unblock it. That is closer to REJECTED-with-reasoning
+(`23-disposition-visibility.mdc`) than to DEFERRED: a permanent rejection
+wearing a conditional's clothes.
 
-Observed: `COVER_TRAFFIC_RESTORATION.md` §2.9 step 4 deferred wiring the
-carrier shim with *"or skip if step 5 lands first"*. Step 5 was then ruled
-blocked on a daemon/p2p cutover that has no design doc. Nobody re-read the
-skip, so a deferral taken on a condition that never fired became a permanent
-block on the mechanism — and "the carrier is blocked" was read off a line
-whose actual subject was *deleting the C++ relay path*, which is a different
-thing that really is blocked. (Corrected in that file's §3 status table,
-2026-08-25: the skip survives on an independent ground, and what the expiry
-left owed is named. Naming the instance without repairing it would have left
-the exact stale conclusion this section warns about.)
+An unfalsifiable threshold eventually gets contradicted. An unfalsifiable
+blocker never does. The parked work just sits.
 
-### The operational form: name the falsifier, not just the blocker
+- State the condition so it can be observed to have **failed**. *"Skip if
+  X lands first"* has no failure reading. *"Skip if X lands first; if X
+  is still open when this file is next touched, the skip is void"* does.
+- A deferral is not discharged by time. When you touch a file that carries
+  one, re-check the condition before you inherit the conclusion.
+- Do not read a block off a neighbouring sentence. "Deleting A is blocked"
+  is not "A cannot run." Check what the blocked item's subject is.
 
-A blocker is **not adequately named until the entry says how a reader would
-discover it had lifted.** Write it as *"blocked on X — falsify by `<check>`"*.
+## Two deferrals that pass the form and were still unchosen
 
-A falsifier may be a test to run, a command whose output would change, a PR or
-issue whose merge lifts it, or a named person's decision. It may **not** be a
-restatement of the blocker: *"blocked until the builder exists"* is the claim
-itself, not a check on it.
+**The blocker is itself a deferral.** A register row that excludes a
+deletion as "retires with item N" is a chain when item N is ruled or
+deferred and not scheduled. Ask what the item is blocked on in code. If
+the answer is nothing, it is deletable now.
 
-Nor may it be a **state** that something other than the owed work could reach.
-A *state-shaped* falsifier — "the six manifests at `format_version: 3`", "the
-schema at v12", "the flag flipped" — goes green when **anything** arrives at
-that state, and a version number is reached by any writer with a reason to
-bump it. A *field-shaped* falsifier — "every manifest carries the injection's
-`height` and `persona`" — can be satisfied only by the change it is about,
-because only that change produces the field. Observed (2026-10-01,
-`DRS_E4_ARCHIVAL_WRITER.md` §6.2 `ARW-16`): PR-b's falsifier was the version;
-an unrelated ruling moved the same files to that version by edit the day
-before PR-b began, and the check reported done for six generator runs that
-had not started. Name the fields the work produces, not the number the work
-would also happen to move.
+**A parity artifact outlives the rule it pins.** A retirement ruling that
+names the mechanism and not the mirrors, KATs, fixtures, fuzz targets, and
+equivalence tests leaves those green after the rule is gone. A green gate
+whose subject has vanished is rule 47. The retirement names the artifacts
+that die with it. Once the code stops doing the thing, the FOLLOWUPS row
+is the only remaining statement of what is owed.
 
-**If no falsifier can be written, that is the finding.** It means nobody knows
-what would unblock the item, which puts it closer to REJECTED-with-reasoning
-(`23-disposition-visibility.mdc`) than to DEFERRED — a permanent rejection wearing a
-conditional's clothes, which is the shape the section above already names.
+## Related rules
 
-Note the asymmetry, because it is why this one hides: an unfalsifiable
-**threshold** costs false confidence, and something eventually contradicts it.
-An unfalsifiable **blocker** costs *parked work*, and nothing ever contradicts
-it — no test fails, no gate goes red, the item simply sits. Same defect, opposite
-direction, and only the second is invisible.
-
-Observed (2026-09-07). `docs/FOLLOWUPS.md:38`, its `:39` `Target:` line
-inheriting the claim by reference, `docs/CHANGELOG.md:197` and
-`tests/unit_tests/txpool_ref_age.cpp:491` all carried "no daemon-accepted
-FCMP++ spend builder" from June 2026. The test that refutes it —
-`e2e_fcmp_spend_accepted_by_daemon`, `rust/shekyl-engine-core/src/engine/regtest_e2e.rs:798`
-— existed the whole time, and passes in about eighty seconds once the daemon is
-built (measured by the lane that finally ran it). Four surfaces asserted a block
-for two and a half months about something that worked, and what closed it was
-somebody running the thing. Had the entry read *"blocked — falsify by running
-`e2e_fcmp_spend_accepted_by_daemon`"*, any of several readers could have closed
-it in a minute, and the work it parked would not have been parked.
-
-**So:**
-
-- **State the condition as something that can be observed to have failed**,
-  not only to have succeeded. *"Skip if X lands first"* has no failure
-  reading; *"skip if X lands first; if X is still open when this file is
-  next touched, the skip is void"* does.
-- **A deferral is not discharged by the passage of time.** When you touch a
-  file carrying one, re-check its condition before you inherit its
-  conclusion — the condition, not the conclusion.
-- **Do not read a block off a neighbouring statement.** "Deleting A is
-  blocked" is not "A cannot run". Check what the blocked item's subject
-  actually is before scoping around it.
-
-Every `21-reversion-clause-discipline.mdc` reopening criterion has this
-shape, which is why the check belongs in the rule rather than in one
-document: a reopen criterion that nobody re-evaluates is a permanent
-rejection wearing a conditional's clothes.
-
-## Two forms a deferral takes when nobody chose it
-
-Both observed 2026-10-02 on one row (`DAEMON_REDB_STORE.md` `DEL-008`, DRS-E4
-commit 9 → 10d), and both pass the checks above on their face: a blocker was
-named, a falsifier could be written. What they fail is the question of
-whether anyone *decided*.
-
-**A deferral inherits whatever blocker is nearest to hand.** The register
-row excluded a Rust mirror of a C++ gate from the cutover deletion as
-*"retires with `PDM-Q6` item 4's re-key"*. The re-key is ruled, not scheduled
-— it is itself a deferral. The mirror had no caller, so its deletion was
-blocked on nothing; the writer reached for the adjacent open item because a
-deferral needs a blocker and that one was lying there. The check that
-catches it is not "is a blocker named" but **is the thing blocking it a
-deferral too** — a blocker that is itself DEFERRED or merely RULED is a
-chain, and a chain's falsifier is the *first* link's, which usually does not
-exist. When the blocker is a deferral, ask what the item is blocked on *in
-code*. If the answer is nothing, the item is deletable now, and "defer" is
-the wrong disposition.
-
-**A parity artifact outlives its rule unless something retires it with the
-rule.** The mirror, its equivalence KAT, the shared fixture, the C++ leg and
-two fuzz targets all stayed green for a month after `PDM-Q6` (2026-09-18)
-retired the preimage they pin — because the retirement ruling named the
-*mechanism* it retired (`segment_freeze.rs`, the freeze half of
-`challenge.rs`) and not the *tests of agreement* about it. A KAT or
-cross-language mirror is a claim that two implementations agree; when the
-rule they implement is retired, the claim's protected quantity is zero, and
-a green gate on it is the rule-47 failure in another coat — a gate whose
-subject is gone and which cannot notice. Worse, the artifact *reads* as the
-rule: `census.rs` said CEN-J8–J10 were pending while a decision function
-with arms and refusal codes sat in the tree for anyone grepping to find. **A
-retirement ruling names the parity artifacts that die with it** — mirrors,
-KATs, fixtures, fuzz targets, equivalence tests — or they survive as green
-tests nobody can explain, and the next lane builds the successor from them.
-The deletion is the disclosure: once the code stops doing it badly, the
-FOLLOWUPS row is the only thing that says what is owed, and the tree says
-what is true.
-
-## Interaction with existing rules
-
-- **`23-disposition-visibility.mdc`** — defines what each disposition leaves
-  visible; this rule decides what a DEFERRED one must contain and disclose. An
-  item that cannot name a blocker, or whose blocker carries no falsifier, is
-  not deferred at all — it is undisposed, sitting on the surface agents grep
-  to find deferred work.
-- **`15-deletion-and-debt.mdc`** — "while we're here" governs scope
-  *additions*; this rule governs scope *sheddings*. Both move work
-  across the PR boundary without review; both are named so the review
-  catches them.
-- **`21-reversion-clause-discipline.mdc`** — a legitimate deferral is
-  a reversion-clause-shaped record: rejected-for-now with named
-  reopening criteria. A lazy deferral is the "we'll think about it
-  later" anti-pattern that rule already forbids; this rule adds the
-  disclosure-in-flow requirement.
-- **`06-branching.mdc`** — the 5-day/10-commit ceiling creates the
-  pressure to shed scope. The sanctioned relief valves are splitting
-  the PR (with a plan) or an explicit, disclosed deferral — never a
-  silent one.
-- **`90-commits.mdc`** — the commit that defers references what it
-  defers, the same way it references the spec section it implements.
+`23-disposition-visibility.mdc` (what a DEFERRED item leaves visible),
+`15-deletion-and-debt.mdc` (scope additions; this rule is scope sheddings),
+`21-reversion-clause-discipline.mdc` (the reopening-criterion shape),
+`06-branching.mdc` (split the PR, or defer in the form above),
+`90-commits.mdc` (the deferring commit names what it defers).

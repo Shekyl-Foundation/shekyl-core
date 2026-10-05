@@ -6,13 +6,14 @@
 //! The serve side of the SF-D8 pass countersignature.
 //!
 //! A `P` answering a shard request binds the daemon's 72-byte request
-//! header and the shard id under `SCHEME_DOMAIN_ATTESTATION`; the daemon
-//! verifies that binding against the `P` public key it already holds from
-//! the bond record. The transcript both ends agree on —
-//! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` —
-//! and the anchor-gate constants are consensus values owned by
-//! `shekyl_archival_retention::pass_anchor`; this module only pairs them
-//! with a signer.
+//! header, the shard id and a nonce-salted digest of the response it
+//! delivers under `SCHEME_DOMAIN_ATTESTATION`; the daemon verifies that
+//! binding against the `P` public key it already holds from the bond
+//! record. The transcript both ends agree on —
+//! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ delivery_digest[32]` —
+//! the digest construction and the anchor-gate constants are consensus
+//! values owned by `shekyl_archival_retention::pass_anchor`; this module
+//! only pairs them with a signer.
 //!
 //! ## Who holds the key
 //!
@@ -50,8 +51,9 @@ use shekyl_crypto_pq::signature::{
 use shekyl_crypto_pq::CryptoError;
 use shekyl_types::BlockHeight;
 
-/// Length of the countersignature envelope that precedes the frame on the
-/// wire: the canonical `HybridSignature` encoding, and nothing else.
+/// Length of the countersignature envelope that closes the response, after
+/// the frame: the canonical `HybridSignature` encoding, and nothing else.
+/// It is last so that holding it means the whole frame was delivered.
 pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
 
 /// Where the persona's attestation signing key lives.
@@ -65,7 +67,7 @@ pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
 /// for the pre-sign gate is [`PassSigner::own_height`] — a signer is a
 /// key plus a height source, not a second `sign_pass`.
 pub trait PassKey: Send + Sync {
-    /// Sign the 80-byte SF-D8 transcript under the attestation domain.
+    /// Sign the 112-byte SF-D8 transcript under the attestation domain.
     ///
     /// # Errors
     ///
@@ -268,7 +270,8 @@ mod tests {
     fn test_key_signer_round_trips_through_the_consensus_verifier() {
         let signer = TestKeySigner::ephemeral(bh(DEPTH + 50));
         let f = PassRequestHeader::from_parts([7; 32], bh(49), [8; 32]);
-        let sig = signer.sign_pass(&f.transcript(7)).expect("sign");
+        let digest = [9u8; 32];
+        let sig = signer.sign_pass(&f.transcript(7, &digest)).expect("sign");
         assert_eq!(
             sig.to_canonical_bytes().unwrap().len(),
             SIGNATURE_ENVELOPE_LEN
@@ -279,9 +282,21 @@ mod tests {
             f.anchor_height(),
             f.anchor_hash(),
             7,
+            &digest,
             &sig,
         );
         assert!(ok.is_ok());
+        // The delivery digest is bound: another digest does not verify.
+        assert!(verify_pass_transcript(
+            signer.public_key(),
+            f.nonce(),
+            f.anchor_height(),
+            f.anchor_hash(),
+            7,
+            &[10u8; 32],
+            &sig,
+        )
+        .is_err());
         // Shard id is bound: a neighbouring id does not verify.
         let bad = verify_pass_transcript(
             signer.public_key(),
@@ -289,6 +304,7 @@ mod tests {
             f.anchor_height(),
             f.anchor_hash(),
             8,
+            &digest,
             &sig,
         );
         assert!(bad.is_err());

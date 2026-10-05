@@ -22,24 +22,31 @@ use shekyl_transport_layer::{
 pub const TOR_HOST_MAX: usize = 62;
 
 /// What the connector observed, and what `established` posts.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Endpoint {
     /// A clearnet host and the direction of the socket.
     Clearnet {
         /// The peer address.
         ip: IpAddr,
-        /// The port the union carries.
+        /// The port of this socket.
+        ///
+        /// On an accept, this is the peer's ephemeral source port, not
+        /// the port the peer advertised. The advertised port is a claim,
+        /// and it is not this field.
         port: u16,
         /// Accepted or dialed.
         direction: Direction,
     },
     /// Tor inbound. This zone, no peer address.
     TorInbound,
-    /// Tor outbound. The onion we dialed.
+    /// Tor outbound. The v3 service that was dialed.
+    ///
+    /// The hostname is not stored. A dial re-encodes [`shekyl_onion_v3::v3_onion_hostname`].
+    /// A host that is not a v3 onion never becomes this variant.
     Tor {
-        /// Hostname, including `.onion` when it is a hostname.
-        host: String,
-        /// The port the union carries.
+        /// The service key.
+        key: [u8; 32],
+        /// The port that was dialed.
         port: u16,
     },
 }
@@ -95,15 +102,10 @@ pub fn admit(
             ..
         } => sockets.accept_clearnet(*ip, ceiling, now),
         Endpoint::TorInbound => sockets.accept_tor(ceiling),
-        Endpoint::Tor { host, port } => {
-            if host.is_empty() || host.len() > TOR_HOST_MAX {
-                return Err(CloseCause::new(CloseKind::DialFailed));
-            }
-            sockets.open_tor(&NetworkAddress::Tor {
-                host: host.clone(),
-                port: *port,
-            })
-        }
+        Endpoint::Tor { key, port } => sockets.open_tor(&NetworkAddress::Tor {
+            host: shekyl_onion_v3::v3_onion_hostname(key),
+            port: *port,
+        }),
     };
     match opened {
         Ok(open) => Ok(open),

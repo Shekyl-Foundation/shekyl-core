@@ -59,7 +59,9 @@ struct GetTxNoteParams {
 /// Parse the `tx_hash` param shared by both methods.
 fn parse_txid(tx_hash: &str) -> Result<TxHash, WalletRpcError> {
     parse_hex32(tx_hash).map(TxHash::from_bytes).ok_or_else(|| {
-        WalletRpcError::InvalidParams("tx_hash must be 64 lowercase hex characters".into())
+        WalletRpcError::InvalidParams(
+            shekyl_wallet_contract::canonical_hex::invalid_hex32_message("tx_hash"),
+        )
     })
 }
 

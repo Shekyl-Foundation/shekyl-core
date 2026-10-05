@@ -787,9 +787,16 @@ fn endpoint_from_c(addr: &ShekylSeamAddress, inbound: bool) -> Option<Endpoint> 
         (connector, ADDR_TOR, 0, Direction::Outbound)
             if u32::from(connector) == SHEKYL_CONNECTOR_TOR && len > 0 =>
         {
-            let host = std::str::from_utf8(&addr.bytes[..len]).ok()?;
+            let Ok(host) = std::str::from_utf8(&addr.bytes[..len]) else {
+                tracing::error!("tor dial refused: host is not a v3 onion");
+                return None;
+            };
+            let Some(key) = shekyl_onion_v3::v3_pubkey(host) else {
+                tracing::error!("tor dial refused: host is not a v3 onion");
+                return None;
+            };
             Some(Endpoint::Tor {
-                host: host.to_owned(),
+                key,
                 port: addr.port,
             })
         }
@@ -827,13 +834,14 @@ fn observed_c(endpoint: &Endpoint) -> ShekylSeamObserved {
             out.address_type = ADDR_TOR;
             out.zone_only = 1;
         }
-        Endpoint::Tor { host, port } => {
-            let raw = host.as_bytes();
-            let len = raw.len().min(TOR_HOST_MAX);
+        Endpoint::Tor { key, port } => {
+            let raw = shekyl_onion_v3::v3_onion_hostname(key);
+            let bytes = raw.as_bytes();
+            debug_assert_eq!(bytes.len(), TOR_HOST_MAX);
             out.address_type = ADDR_TOR;
             out.port = *port;
-            out.len = u16::try_from(len).expect("tor host fits");
-            out.bytes[..len].copy_from_slice(&raw[..len]);
+            out.len = u16::try_from(bytes.len()).expect("tor host fits");
+            out.bytes[..bytes.len()].copy_from_slice(bytes);
         }
     }
     out

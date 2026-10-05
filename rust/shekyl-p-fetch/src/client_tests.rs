@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::ServingEndpoint;
+use shekyl_archival_retention::pass_delivery_digest;
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
     SCHEME_DOMAIN_ATTESTATION,
@@ -241,12 +242,14 @@ fn keys() -> Keys {
     Keys { public, secret }
 }
 
+/// `P`'s countersignature for a response whose body is [`CONTENT`]: over the
+/// header, the shard id, and the digest of `CONTENT` under the header's nonce.
 fn sign(keys: &Keys, header: &RequestHeader, shard_id: u64) -> HybridSignature {
     HybridEd25519MlDsa
         .sign(
             &keys.secret,
             SCHEME_DOMAIN_ATTESTATION,
-            &header.transcript(shard_id),
+            &header.transcript(shard_id, &pass_delivery_digest(header.nonce(), CONTENT)),
         )
         .expect("sign")
 }
@@ -283,8 +286,8 @@ fn ok_response(envelope: &[u8], content: &[u8]) -> Vec<u8> {
         envelope.len() + content.len()
     )
     .into_bytes();
-    out.extend_from_slice(envelope);
     out.extend_from_slice(content);
+    out.extend_from_slice(envelope);
     out
 }
 
@@ -346,8 +349,14 @@ async fn a_signed_shard_comes_back_verified_and_the_proxy_got_the_onion_name() {
         shard.signature().to_canonical_bytes().unwrap().len(),
         SIGNATURE_ENVELOPE_LEN
     );
-    // The hole saw exactly the bytes after the envelope, for this shard.
+    // The hole saw exactly the bytes ahead of the envelope, for this shard.
     assert_eq!(hole.shown(), vec![(SHARD, CONTENT.to_vec())]);
+    // The digest handed on for the pass record is this client's own
+    // recomputation over the bytes it received.
+    assert_eq!(
+        shard.delivery_digest(),
+        &pass_delivery_digest(header().nonce(), CONTENT)
+    );
 
     // SF-D3: ATYP=DOMAIN, the `.onion` name, port 80; nothing resolved here.
     let [s] = seen.as_slice() else {
@@ -601,6 +610,68 @@ async fn an_envelope_that_is_not_a_canonical_signature_is_malformed() {
     )
     .await;
     assert_eq!(malformed(out), Malformed::Envelope);
+    assert!(hole.shown().is_empty());
+}
+
+#[tokio::test]
+async fn a_signature_sent_ahead_of_the_body_is_refused() {
+    // The order is the contract: `P` releases the countersignature after
+    // the frame, so the client takes it from the body's tail. A response
+    // that leads with a perfectly valid signature is a `P` handing out the
+    // receipt before the delivery, and it is refused — the tail is content
+    // bytes, not a signature — without the hole ever seeing the body.
+    let keys = keys();
+    let hole = Hole::accepting();
+    let header = header();
+    let sig = sign(&keys, &header, SHARD).to_canonical_bytes().unwrap();
+    let mut leading = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: {}\r\ncontent-length: {}\r\n\r\n",
+        shekyl_curve_tree::serving_route::CONTENT_TYPE,
+        sig.len() + CONTENT.len()
+    )
+    .into_bytes();
+    leading.extend_from_slice(&sig);
+    leading.extend_from_slice(CONTENT);
+
+    let (out, _) = run(Script::Respond(leading), Arc::clone(&hole), &keys).await;
+    assert!(
+        matches!(
+            out,
+            Err(FetchError::Malformed(Malformed::Envelope) | FetchError::BadCountersignature)
+        ),
+        "a leading signature must not be accepted"
+    );
+    assert!(hole.shown().is_empty());
+}
+
+#[tokio::test]
+async fn garbage_with_a_valid_signature_appended_is_refused() {
+    // `P` signs the digest of the real body and then sends other bytes of
+    // the same length with that signature behind them. The client hashes
+    // what it received, so the signature does not verify, and the hole never
+    // sees the garbage.
+    let keys = keys();
+    let hole = Hole::accepting();
+    let sig = sign(&keys, &header(), SHARD).to_canonical_bytes().unwrap();
+    let garbage = vec![0xEEu8; CONTENT.len()];
+    let (out, _) = run(
+        Script::Respond(ok_response(&sig, &garbage)),
+        Arc::clone(&hole),
+        &keys,
+    )
+    .await;
+    assert!(matches!(out, Err(FetchError::BadCountersignature)));
+
+    // One flipped byte is enough.
+    let mut flipped = CONTENT.to_vec();
+    flipped[0] ^= 1;
+    let (out, _) = run(
+        Script::Respond(ok_response(&sig, &flipped)),
+        Arc::clone(&hole),
+        &keys,
+    )
+    .await;
+    assert!(matches!(out, Err(FetchError::BadCountersignature)));
     assert!(hole.shown().is_empty());
 }
 

@@ -17,6 +17,10 @@ use shekyl_types::BlockHeight;
 
 const H: u64 = 5000;
 
+/// The delivery digest a fixture record carries when the digest is not the
+/// test's subject. Not derived from any body: admission never sees one.
+const DIGEST: [u8; PASS_DELIVERY_DIGEST_LEN] = [0xD1; PASS_DELIVERY_DIGEST_LEN];
+
 fn bh(n: u64) -> BlockHeight {
     BlockHeight::from_raw(n)
 }
@@ -72,6 +76,7 @@ fn pass_record(
         settlement_epoch,
         nonce,
         anchor_height,
+        delivery_digest: DIGEST,
         signature,
     }
 }
@@ -91,6 +96,7 @@ fn signed_pass(
             anchor_height,
             &chain_hash(anchor_height.to_raw()),
             shard_id,
+            &DIGEST,
         ),
     );
     pass_record(p_id, shard_id, settlement_epoch, nonce, anchor_height, sig)
@@ -143,7 +149,13 @@ fn pass_record_message_matches_free_function() {
     let hash = [0xDDu8; 32];
     assert_eq!(
         rec.countersignature_message(&hash),
-        pass_countersignature_message(&rec.nonce, bh(77), &hash, rec.shard_id)
+        pass_countersignature_message(
+            &rec.nonce,
+            bh(77),
+            &hash,
+            rec.shard_id,
+            &rec.delivery_digest
+        )
     );
 }
 
@@ -176,6 +188,14 @@ fn a_valid_countersignature_verifies_and_a_wrong_key_or_term_fails() {
         verify_pass_countersignature(&w, &pubkey, &moved_anchor),
         Err(PassCountersignatureError::InvalidSignature)
     );
+    // The carried digest is a signed term: a record filed with another
+    // digest than the one `P` signed does not verify.
+    let mut other_digest = rec.clone();
+    other_digest.delivery_digest = [0xD2; PASS_DELIVERY_DIGEST_LEN];
+    assert_eq!(
+        verify_pass_countersignature(&w, &pubkey, &other_digest),
+        Err(PassCountersignatureError::InvalidSignature)
+    );
     let mut other_epoch = rec.clone();
     other_epoch.settlement_epoch = 1001;
     assert_eq!(
@@ -197,7 +217,7 @@ fn a_fabricated_anchor_hash_fails_against_the_chains_hash() {
     let anchor = H - 722;
     let lied = att_sign(
         &secret,
-        &pass_countersignature_message(&[0x55u8; 32], bh(anchor), &[0xFFu8; 32], 42),
+        &pass_countersignature_message(&[0x55u8; 32], bh(anchor), &[0xFFu8; 32], 42, &DIGEST),
     );
     let rec = pass_record(p_id, 42, 1000, [0x55u8; 32], bh(anchor), lied);
     assert_eq!(
@@ -268,23 +288,82 @@ fn a_signature_over_one_shard_cannot_be_replayed_against_another() {
 }
 
 #[test]
-fn v1_domain_signature_does_not_verify_under_v2() {
+fn a_retired_domain_signature_does_not_verify_under_v3() {
+    // One label never names two messages. A signature made over the
+    // current transcript under either retired label is refused, so the
+    // refusal is the domain's and not the layout's.
     let (pubkey, secret) = keypair();
     let p_id = p_id_of(&pubkey);
     let nonce = [0x44u8; 32];
     let anchor = H - 720;
-    let msg = pass_countersignature_message(&nonce, bh(anchor), &chain_hash(anchor), 42);
-    let v1_sig = HybridEd25519MlDsa
-        .sign(&secret, b"shekyl/archival-attestation-scheme-v1", &msg)
-        .expect("sign");
-    let rec = pass_record(p_id, 42, 1000, nonce, bh(anchor), v1_sig);
+    let msg = pass_countersignature_message(&nonce, bh(anchor), &chain_hash(anchor), 42, &DIGEST);
+    for retired in [
+        &b"shekyl/archival-attestation-scheme-v1"[..],
+        &b"shekyl/archival-attestation-scheme-v2"[..],
+    ] {
+        let sig = HybridEd25519MlDsa
+            .sign(&secret, retired, &msg)
+            .expect("sign");
+        let rec = pass_record(p_id, 42, 1000, nonce, bh(anchor), sig);
+        assert_eq!(
+            verify_pass_countersignature(&window_at(H), &pubkey, &rec),
+            Err(PassCountersignatureError::InvalidSignature)
+        );
+    }
     assert_eq!(
-        verify_pass_countersignature(&window_at(H), &pubkey, &rec),
+        shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
+        b"shekyl/archival-attestation-scheme-v3"
+    );
+}
+
+#[test]
+fn a_signature_over_the_delivered_bytes_refuses_any_other_bytes() {
+    // The requester's check, as `shekyl-p-fetch` runs it: recompute the
+    // digest from the body in hand and verify the transcript over it.
+    use crate::pass_anchor::pass_delivery_digest;
+    let (pubkey, secret) = keypair();
+    let nonce = [0x66u8; 32];
+    let anchor = H - 720;
+    let hash = chain_hash(anchor);
+    let body: Vec<u8> = (0u8..200).collect();
+    let digest = pass_delivery_digest(&nonce, &body);
+    let sig = att_sign(
+        &secret,
+        &pass_countersignature_message(&nonce, bh(anchor), &hash, 42, &digest),
+    );
+    let check = |n: &[u8; 32], b: &[u8]| {
+        verify_pass_transcript(
+            &pubkey,
+            n,
+            bh(anchor),
+            &hash,
+            42,
+            &pass_delivery_digest(n, b),
+            &sig,
+        )
+    };
+    assert_eq!(check(&nonce, &body), Ok(()));
+
+    // Garbage in place of the body, with the valid signature appended.
+    assert_eq!(
+        check(&nonce, &[0xFFu8; 200]),
+        Err(PassCountersignatureError::InvalidSignature)
+    );
+    // One flipped byte, and a body cut short.
+    let mut flipped = body.clone();
+    flipped[100] ^= 1;
+    assert_eq!(
+        check(&nonce, &flipped),
         Err(PassCountersignatureError::InvalidSignature)
     );
     assert_eq!(
-        shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-        b"shekyl/archival-attestation-scheme-v2"
+        check(&nonce, &body[..199]),
+        Err(PassCountersignatureError::InvalidSignature)
+    );
+    // The right bytes under another request's nonce.
+    assert_eq!(
+        check(&[0x67u8; 32], &body),
+        Err(PassCountersignatureError::InvalidSignature)
     );
 }
 
@@ -367,11 +446,13 @@ fn witness_roundtrips_including_empty() {
             PassWitness {
                 nonce: [5u8; 32],
                 anchor_height: bh(0x0102_0304_0506_0708),
+                delivery_digest: [0x0D; PASS_DELIVERY_DIGEST_LEN],
                 signature: s0,
             },
             PassWitness {
                 nonce: [6u8; 32],
                 anchor_height: bh(4277),
+                delivery_digest: DIGEST,
                 signature: s1,
             },
         ],
@@ -386,6 +467,12 @@ fn witness_roundtrips_including_empty() {
     assert_eq!(
         &bytes[WITNESS_PREFIX_LEN + PASS_NONCE_LEN..WITNESS_PREFIX_LEN + PASS_NONCE_LEN + 8],
         &[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01],
+    );
+    const DIGEST_START: usize = WITNESS_PREFIX_LEN + PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN;
+    assert_eq!(
+        &bytes[DIGEST_START..DIGEST_START + PASS_DELIVERY_DIGEST_LEN],
+        &[0x0D; PASS_DELIVERY_DIGEST_LEN],
+        "the delivery digest sits between the anchor height and the signature"
     );
     assert_eq!(
         BlockAttestationWitness::from_canonical_bytes(&bytes).unwrap(),
@@ -409,12 +496,14 @@ fn witness_decode_rejects_malformed() {
         passes: vec![PassWitness {
             nonce: [0u8; 32],
             anchor_height: bh(1),
+            delivery_digest: DIGEST,
             signature: s0,
         }],
     }
     .to_canonical_bytes()
     .unwrap();
-    const SIG_START: usize = WITNESS_PREFIX_LEN + PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN;
+    const SIG_START: usize =
+        WITNESS_PREFIX_LEN + PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN + PASS_DELIVERY_DIGEST_LEN;
 
     assert!(matches!(
         BlockAttestationWitness::from_canonical_bytes(&[0u8; WITNESS_PREFIX_LEN - 1]),
@@ -432,9 +521,13 @@ fn witness_decode_rejects_malformed() {
         })
     ));
 
+    // An entry in any earlier layout is the wrong length: the v1 entry
+    // (signature alone), a nonce-less one, and the v2 entry, which had no
+    // delivery digest.
     for skip in [
-        PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN,
-        PASS_ANCHOR_HEIGHT_LEN,
+        PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN + PASS_DELIVERY_DIGEST_LEN,
+        PASS_ANCHOR_HEIGHT_LEN + PASS_DELIVERY_DIGEST_LEN,
+        PASS_DELIVERY_DIGEST_LEN,
     ] {
         let mut stale = Vec::new();
         stale.extend_from_slice(&1u64.to_le_bytes());
@@ -469,6 +562,7 @@ fn witness_encode_rejects_over_cap() {
             PassWitness {
                 nonce: [0u8; 32],
                 anchor_height: bh(0),
+                delivery_digest: DIGEST,
                 signature: sig,
             };
             MAX_ATTESTATION_RECORDS + 1
@@ -513,6 +607,7 @@ fn pairing_zips_pass_headers_and_reproduces_the_root() {
     let entry = |r: &PassRecord| PassWitness {
         nonce: r.nonce,
         anchor_height: r.anchor_height,
+        delivery_digest: r.delivery_digest,
         signature: r.signature.clone(),
     };
     let witness = BlockAttestationWitness {

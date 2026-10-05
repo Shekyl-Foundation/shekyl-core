@@ -30,7 +30,7 @@ rulings into bytes:
 | Ruling (elsewhere) | What it fixes for the wire |
 |---|---|
 | Miner-chosen set, coinbase-revealed | The attester is the block producer; no schedule, no beacon |
-| Block-bound nonce `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` — **SUPERSEDED twice:** `r` → `block_hash(h−1)` (`RF-D3`/`RF-D5`, 2026-08-19, landed); then the countersignature message became requester-random `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` with `cb_out_key` dropped (`SF-D8`, 2026-09-13; verifier LANDED by the (a0) PR the same day — admission verifies over the carried nonce and anchor height, with the anchor hash read from the connecting chain inside `[h−720−L, h−720]`) | The record's authenticity binds to *this* block's coinbase — *(v1 property; `SF-D8` binds to a chain anchor 720 deep instead and accepts same-height reuse)* |
+| Block-bound nonce `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` — **SUPERSEDED twice:** `r` → `block_hash(h−1)` (`RF-D3`/`RF-D5`, 2026-08-19, landed); then the countersignature message became requester-random `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` with `cb_out_key` dropped, and since 2026-10-04 closes with a nonce-salted delivery digest `D[32]` (`SF-D8`, 2026-09-13; verifier LANDED by the (a0) PR the same day — admission verifies over the carried nonce and anchor height, with the anchor hash read from the connecting chain inside `[h−720−L, h−720]`) | The record's authenticity binds to *this* block's coinbase — *(v1 property; `SF-D8` binds to a chain anchor 720 deep instead and accepts same-height reuse)* |
 | Non-transferable / self-crediting killed | v1 recomputed the nonce from chain terms. **SUPERSEDED `SF-D8` (LANDED (a0)):** the nonce is requester-random and **carried**; admission does not trust a carried *hash* — it looks the hash up from the connecting chain at the carried height |
 | Miss fact (three-valued) | The record carries a pass/miss discriminant; "neither" is off-wire |
 | Coinbase-output-key uniqueness (epoch-windowed) | A consensus check the wire's verify path must invoke |
@@ -118,18 +118,23 @@ manipulation surface).** Applied hard, they collapse most of a first draft:
   cover `H(nonce ‖ transfer_digest)`, but that is not consensus-verifiable:
   `transfer_digest` would digest the transferred shard bytes, which are
   off-chain, so admission could never reconstruct the signed message. The
-  countersignature covers **the nonce alone** (§3.3) — **SUPERSEDED 2026-09-13
-  by `SF-D8` (LANDED by (a0)): the signed message is
-  `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`, the
-  nonce requester-random and the anchor the requester's chain at `tip − 720`.
-  The completeness argument below was v1's** — `s` (`shard_id`) was a nonce
-  term, so a content digest would have added no binding `s` did not carry. Read-content binding comes from
-  §9.4's topology, not from a signed artifact; nothing of the sort is on the wire.
+  countersignature covers **the nonce alone** (§3.3) — **SUPERSEDED by
+  `SF-D8` (2026-09-13, amended 2026-10-04; LANDED): the signed message is
+  `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ D[32]`,
+  the nonce requester-random, the anchor the requester's chain at
+  `tip − 720`, and `D` a cSHAKE256 digest of the delivered response salted
+  with the nonce. The pass record carries `D`; admission does not
+  reconstruct it — it verifies `P`'s signature over the carried value, and
+  the fetch client is the party that compared `D` to bytes.** `D` commits
+  `P` to what it delivered under this request; it is not a possession
+  proof, and whether the bytes came from `P`'s own store is still §9.4's
+  topology to price.
 - **The nonce is NOT stored** — **REVERSED 2026-09-13 by `SF-D8` (RULED and
-  LANDED by the (a0) PR): the pass record carries the 32-byte requester-random
-  nonce and the 8-byte `anchor_height`, because neither is recomputable; on
-  the wire they ride the prunable witness as
-  `nonce[32] ‖ anchor_height_le[8] ‖ HybridSignature[3385]` per pass, and the
+  LANDED by the (a0) PR; `D` added 2026-10-04): the pass record carries the
+  32-byte requester-random nonce, the 8-byte `anchor_height` and the 32-byte
+  delivery digest `D`, because none is recomputable; on the wire they ride
+  the prunable witness as
+  `nonce[32] ‖ anchor_height_le[8] ‖ D[32] ‖ HybridSignature[3385]` per pass, and the
   kept header is unchanged. The anchor HASH is not carried — admission reads
   it from its own chain at `anchor_height`, which is what makes a fabricated
   hash fail.** v1 reasoning follows: `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` is recomputable
@@ -326,8 +331,9 @@ reads the anchor **hash** from the connecting chain at that height, requiring
 nonce from `r ‖ cb_out_key ‖ P ‖ s ‖ E` — RETIRED, never carried a record)*,
 (b) for a **pass** (`kind = pass`) checks the side-table `HybridSignature` is
 `P`'s valid countersignature over
-`nonce ‖ anchor_height_le ‖ chain_hash(anchor_height) ‖ shard_id_le` under
-`shekyl/archival-attestation-scheme-v2`; for a **miss** (`kind = miss`)
+`nonce ‖ anchor_height_le ‖ chain_hash(anchor_height) ‖ shard_id_le ‖ D`
+(`D` the carried delivery digest) under
+`shekyl/archival-attestation-scheme-v3`; for a **miss** (`kind = miss`)
 requires no signature, (c) binds the attester to the block producer (the
 coinbase authorship *is* the attestation — no separate witness key), and
 (d) invokes the **epoch-windowed coinbase-output-key uniqueness** check (the
@@ -421,11 +427,11 @@ fixes two lifecycle points on the same records:
 
 - **Admission (block validation, per-block, PRE-prune).** Recompute
   `attestation_root` over the side-table signatures and check it equals the
-  stored block field; for each **pass** take the carried nonce and anchor
-  height, require the height inside `[h − 720 − L, h − 720]` for validated
+  stored block field; for each **pass** take the carried nonce, anchor
+  height and delivery digest `D`, require the height inside `[h − 720 − L, h − 720]` for validated
   predecessor `h`, and verify `P`'s signature over
-  `nonce ‖ anchor_height_le ‖ chain_hash(anchor_height) ‖ shard_id_le` under
-  `shekyl/archival-attestation-scheme-v2`; refuse every pass record while
+  `nonce ‖ anchor_height_le ‖ chain_hash(anchor_height) ‖ shard_id_le ‖ D` under
+  `shekyl/archival-attestation-scheme-v3`; refuse every pass record while
   `h < 720 + L` *(`SF-D8` (a0), 2026-09-13; v1 recomputed a block-bound nonce
   from `r ‖ cb_out_key ‖ P ‖ s ‖ E` — RETIRED)*; require **miss**
   records carry none; check each `kind` bit matches signature-presence; run the

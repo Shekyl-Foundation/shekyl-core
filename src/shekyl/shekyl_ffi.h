@@ -2001,7 +2001,7 @@ uint8_t shekyl_archival_attestation_pass_p_ids(
     size_t* out_len);
 
 /// Verify a block's attestation set against its mined attestation_root. `witness` is the opaque
-/// `count || (nonce || anchor_height || signature)*` blob (connect.attestation_witness); an empty
+/// `count || (nonce || anchor_height || delivery_digest || signature)*` blob (connect.attestation_witness); an empty
 /// blob is the zero-record set. Returns a SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_* code; reject on any non-OK.
 uint8_t shekyl_archival_verify_attestation(
     const uint8_t* witness_ptr,

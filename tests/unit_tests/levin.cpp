@@ -105,6 +105,11 @@ namespace
             return io_service_;
         }
 
+        virtual void post(std::function<void()> fn) override final
+        {
+            fn();
+        }
+
         virtual bool add_ref() override final
         {
             ++ref_count_;

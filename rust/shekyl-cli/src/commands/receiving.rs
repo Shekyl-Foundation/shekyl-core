@@ -14,7 +14,7 @@
 use serde_json::{json, Value};
 use shekyl_types::Timestamp;
 
-use super::{format_amount, format_amount_str, opt_amount, require_open};
+use super::{format_amount_str, opt_amount, require_open};
 use crate::outcome::{failed, CommandResult};
 use crate::rpc_client::RpcSession;
 
@@ -35,40 +35,56 @@ pub fn cmd_request_new(
         params["expiry"] = json!(ts.to_raw());
     }
     match rpc.call("create_payment_request", params) {
-        Ok(val) => {
-            let id = val.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-            let uri = val.get("uri").and_then(|v| v.as_str()).unwrap_or("?");
-            println!("Payment request created.");
-            println!("  Request id: {id}");
-            println!("  Amount:     {} SKL", format_amount(amount));
-            println!("  URI:        {uri}");
-            println!("Share the URI with the payer; \"requests list\" tracks its state.");
+        Ok(mut val) => {
+            // The contract result is id + uri. The amount the operator named
+            // is what the human line reports.
+            if let Some(object) = val.as_object_mut() {
+                object
+                    .entry("amount")
+                    .or_insert_with(|| json!(amount.to_string()));
+            }
+            Ok(val)
         }
-        Err(e) => return Err(rpc.report("Failed to create payment request", &e)),
-    };
-    Ok(())
+        Err(e) => Err(rpc.report("Failed to create payment request", &e)),
+    }
+}
+
+pub(crate) fn show_request_new(val: &Value) {
+    let id = val.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+    let uri = val.get("uri").and_then(|v| v.as_str()).unwrap_or("?");
+    let amount = val
+        .get("amount")
+        .and_then(|v| v.as_str())
+        .map(format_amount_str)
+        .unwrap_or_else(|| "?".to_owned());
+    println!("Payment request created.");
+    println!("  Request id: {id}");
+    println!("  Amount:     {amount} SKL");
+    println!("  URI:        {uri}");
+    println!("Share the URI with the payer; \"requests list\" tracks its state.");
 }
 
 pub fn cmd_requests_list(rpc: &RpcSession, filter: crate::resolve::RequestFilter) -> CommandResult {
     require_open(rpc)?;
     match rpc.call("list_payment_requests", json!({ "filter": filter.wire() })) {
-        Ok(val) => {
-            let requests = val.get("payment_requests").and_then(|v| v.as_array());
-            let Some(requests) = requests.filter(|a| !a.is_empty()) else {
-                println!("No payment requests.");
-                return Ok(());
-            };
-            println!(
-                "{:<16} {:<10} {:>18} {:>10}  Label",
-                "Request id", "State", "Amount (SKL)", "Created"
-            );
-            for r in requests {
-                print_request_row(r);
-            }
-        }
-        Err(e) => return Err(rpc.report("Failed to list payment requests", &e)),
+        Ok(val) => Ok(val),
+        Err(e) => Err(rpc.report("Failed to list payment requests", &e)),
+    }
+}
+
+pub(crate) fn show_requests(val: &Value) {
+    let requests = val.get("payment_requests").and_then(|v| v.as_array());
+    let Some(requests) = requests.filter(|a| !a.is_empty()) else {
+        println!("No payment requests.");
+        return;
     };
-    Ok(())
+    println!(
+        "{:<16} {:<10} {:>18} {:>10}  Label",
+        "Request id", "State", "Amount (SKL)", "Created"
+    );
+    for r in requests {
+        print_request_row(r);
+    }
 }
 
 fn print_request_row(r: &Value) {
@@ -112,42 +128,45 @@ pub fn cmd_make_uri(
     }
     match rpc.call("make_uri", params) {
         Ok(val) => match val.get("uri").and_then(|v| v.as_str()) {
-            Some(uri) => println!("{uri}"),
-            None => {
-                eprintln!("Malformed make_uri response.");
-                return failed();
-            }
+            Some(_) => Ok(val),
+            None => failed("Malformed make_uri response."),
         },
-        Err(e) => return Err(rpc.report("Failed to make URI", &e)),
-    };
-    Ok(())
+        Err(e) => Err(rpc.report("Failed to make URI", &e)),
+    }
+}
+
+pub(crate) fn show_uri(val: &Value) {
+    if let Some(uri) = val.get("uri").and_then(|v| v.as_str()) {
+        println!("{uri}");
+    }
 }
 
 pub fn cmd_parse_uri(rpc: &RpcSession, uri: &str) -> CommandResult {
     require_open(rpc)?;
     match rpc.call("parse_uri", json!({ "uri": uri })) {
-        Ok(val) => {
-            // Every string field here is decoded from an attacker-controlled
-            // URI, so neutralize control chars before printing.
-            use crate::display::sanitize_for_terminal as safe;
-            let address = val.get("address").and_then(|v| v.as_str()).unwrap_or("?");
-            println!("Address: {}", safe(address));
-            if let Some(amount) = val.get("amount").and_then(|v| v.as_str()) {
-                println!("Amount:  {} SKL", safe(&format_amount_str(amount)));
-            }
-            if let Some(label) = val.get("label").and_then(|v| v.as_str()) {
-                println!("Label:   {}", safe(label));
-            }
-            if let Some(rid) = val.get("rid").and_then(|v| v.as_str()) {
-                println!("Request: {}", safe(rid));
-            }
-            if let Some(expiry) = val.get("expiry").and_then(serde_json::Value::as_i64) {
-                println!("Expiry:  unix {expiry}");
-            }
-        }
-        Err(e) => return Err(rpc.report("Failed to parse URI", &e)),
-    };
-    Ok(())
+        Ok(val) => Ok(val),
+        Err(e) => Err(rpc.report("Failed to parse URI", &e)),
+    }
+}
+
+pub(crate) fn show_parsed_uri(val: &Value) {
+    // Every string field here is decoded from an attacker-controlled
+    // URI, so neutralize control chars before printing.
+    use crate::display::sanitize_for_terminal as safe;
+    let address = val.get("address").and_then(|v| v.as_str()).unwrap_or("?");
+    println!("Address: {}", safe(address));
+    if let Some(amount) = val.get("amount").and_then(|v| v.as_str()) {
+        println!("Amount:  {} SKL", safe(&format_amount_str(amount)));
+    }
+    if let Some(label) = val.get("label").and_then(|v| v.as_str()) {
+        println!("Label:   {}", safe(label));
+    }
+    if let Some(rid) = val.get("rid").and_then(|v| v.as_str()) {
+        println!("Request: {}", safe(rid));
+    }
+    if let Some(expiry) = val.get("expiry").and_then(Value::as_i64) {
+        println!("Expiry:  unix {expiry}");
+    }
 }
 
 #[cfg(test)]

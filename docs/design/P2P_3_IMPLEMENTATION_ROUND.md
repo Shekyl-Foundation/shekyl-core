@@ -204,6 +204,11 @@ ceiling was generalised into the whole round's ordering.**
    ([`net_node.h:404`](../../src/p2p/net_node.h#L404)). **The 85/409 ceiling was
    a property of the per-host cap, not of admission** — so this round's own
    ruling removes the reason LV-3 looked like it had to be first.
+   **UPDATE 2026-10-04.** `m_current_number_of_in_peers` and
+   `m_current_number_of_out_peers` are deleted. The dial cap recounts
+   through `get_outgoing_connections_count` (`net_node.inl:1576`) and
+   does not store the recount. *Records-was: the atomic at
+   `net_node.h:404`, and `is_host_limit` at `net_node.inl:232`.*
 3. **The eviction site's walk is GONE — this one has landed.**
    `should_drop_connection` was wholly stripe logic, and PR #821 removed it with
    its unconditional `for_each_connection` tally. **Verified at `fdf17b729`:
@@ -588,7 +593,7 @@ which is right depends on §7.3's scope call, which is steering's.
 | # | Item | Why it qualifies |
 | --- | --- | --- |
 | 1 | **Delete the per-host inbound cap** — `is_host_limit` becomes the ceiling check and nothing else | ruled §2.9.4, no blocker. **Four independent arms now**, and §2.9.4c's four-job walk leaves it with no job: PWD-E4 (no Sybil resistance), the inverted ratio (no `k` works), §6.5 (the measured adversary is compliant at `1`), and the promotion boundary (§2.9.4a, sharing no premise with §6.5). **It is a redundant branch standing in for the disabled ceiling six lines above it**, so the cut is a simplification rather than a removal of protection |
-| 2 | **`--in-peers` measured default** | the ceiling exists and is checked; a **measurement** at the rule-76 floor, not a ruling. **UPDATE 2026-10-04:** admission reads `shekyl_seam_inbound_held()`, not the one-second recount. That recount is `net_node.inl:1174` at `684673611e` and writes an in-count atomic with no reader in `src/`. The staleness that remains is the out-count cache at `:1605`. Deleting the thread is recorded in `LV3_CONNECTION_OBJECT.md` §6.2.1 as removing this measurement input. *Records-was: the ceiling was enforced against `net_node.inl:1112`, up to a second stale, and a Pi 4 run had to price a second of accepts or the measured value was off by that burst.* |
+| 2 | **`--in-peers` measured default** | the ceiling exists and is checked; a **measurement** at the rule-76 floor, not a ruling. **UPDATE 2026-10-04:** admission reads `shekyl_seam_inbound_held()`, not the one-second recount. That recount is `net_node.inl:1174` at `684673611e` and writes an in-count atomic with no reader in `src/`. The peer-count caches are deleted. The dial cap recounts through `get_outgoing_connections_count` (`net_node.inl:1576`) and does not store the recount. *Records-was: the staleness that remained was the out-count cache at `:1605`.* Deleting the thread is recorded in `LV3_CONNECTION_OBJECT.md` §6.2.1 as removing this measurement input. *Records-was: the ceiling was enforced against `net_node.inl:1112`, up to a second stale, and a Pi 4 run had to price a second of accepts or the measured value was off by that burst.* |
 | 3 | ~~**The `pruning_seed` receiver**~~ **DELIVERED 2026-09-22, PR #821** — removed outright rather than ignored, both halves of `PDM-Q7` discharged | re-verified at `fdf17b729`: 4 sites remain, all comments |
 | 4 | **E1 tier-1, diagnostic half** | *"no wire, no amplifier and no ruling owed,"* and it **closes the operator-diagnostic gap that started the lane** — the merit that earns it a place beside three ready items |
 

@@ -73,19 +73,11 @@ pub(crate) fn parse_rid(s: &str) -> Result<PaymentRequestId, WalletRpcError> {
         .map_err(|e| WalletRpcError::InvalidParams(e.to_string()))
 }
 
-/// Parse a contract `Hex32` value (exactly 64 **lowercase** hex chars) into
-/// its 32 bytes.
+/// Parse a contract `Hex32` value into its 32 bytes.
 ///
-/// One home for the canonical-hex rule shared by the txid params surface
-/// (`proofs::parse_txid`) and the transfer-id format
-/// (`project::parse_transfer_id`). Returns `None` on any non-canonical
-/// form; callers shape their own error per surface (the messages there are
-/// load-bearing and stable).
+/// The rule lives in [`shekyl_wallet_contract::canonical_hex`]; this is
+/// the name the RPC params surface already calls. Returns `None` on any
+/// non-canonical form; callers shape their own error per surface.
 pub(crate) fn parse_hex32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 || !s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
-        return None;
-    }
-    let mut bytes = [0u8; 32];
-    hex::decode_to_slice(s, &mut bytes).ok()?;
-    Some(bytes)
+    shekyl_wallet_contract::canonical_hex::parse_lowercase_hex32(s)
 }

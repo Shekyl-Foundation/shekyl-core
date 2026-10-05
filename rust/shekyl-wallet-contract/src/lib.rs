@@ -19,7 +19,11 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod canonical_hex;
 pub mod error;
+mod message_sig_errors;
+mod proof_errors;
+pub mod transfer_id;
 mod transfer_state;
 
 pub use transfer_state::{outgoing_transfer_state_of, TransferState};

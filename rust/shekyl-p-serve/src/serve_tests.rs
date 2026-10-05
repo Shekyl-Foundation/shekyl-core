@@ -5,7 +5,8 @@
 
 //! Endpoint tests for [`crate::serve`]. Lives beside the production loop so
 //! the file that answers the wire stays under a thousand lines; private
-//! items remain visible via `#[path]` from `serve.rs`.
+//! items remain visible via `#[path]` from `serve.rs`. The two-read seal
+//! cases live in [`seal`], for the same reason.
 
 use super::*;
 use crate::countersign::{PassKey, SignRefused, TestKeySigner};
@@ -14,7 +15,7 @@ use shekyl_archival_retention::pass_anchor::{
     pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
     PASS_REQUEST_HEADER_LEN,
 };
-use shekyl_archival_retention::verify_pass_transcript;
+use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{ServedFrameHeader, LEAF_BYTES};
@@ -129,12 +130,15 @@ fn leaves(n: usize, seed: u8) -> Vec<u8> {
 struct Served {
     head: String,
     signature: HybridSignature,
+    /// The body ahead of the envelope, byte for byte: frame header, then
+    /// payload. What the countersignature's delivery digest is over.
+    framed: Vec<u8>,
     frame: ServedFrameHeader,
     body: Vec<u8>,
 }
 
-/// Split a 200 response into head, countersignature envelope, frame
-/// header, payload.
+/// Split a 200 response into head, frame header, payload, and the
+/// countersignature envelope that closes it.
 fn parse_served(response: &[u8]) -> Served {
     let end = response
         .windows(4)
@@ -142,13 +146,15 @@ fn parse_served(response: &[u8]) -> Served {
         .expect("response has a head");
     let head = String::from_utf8_lossy(&response[..end]).to_string();
     let after_head = &response[end + 4..];
-    let (sig, mut body) = after_head.split_at(SIGNATURE_ENVELOPE_LEN);
+    let (mut body, sig) = after_head.split_at(after_head.len() - SIGNATURE_ENVELOPE_LEN);
     let signature =
-        HybridSignature::from_canonical_bytes(sig).expect("served body leads with a signature");
+        HybridSignature::from_canonical_bytes(sig).expect("served body ends with a signature");
+    let framed = body.to_vec();
     let frame = ServedFrameHeader::read(&mut body).expect("served body carries a frame header");
     Served {
         head,
         signature,
+        framed,
         frame,
         body: body.to_vec(),
     }
@@ -198,6 +204,13 @@ fn good_get_shard_0() -> String {
     )
 }
 
+/// The `len` payload bytes a 200 response carries: the ones immediately
+/// ahead of the countersignature envelope that closes it.
+fn payload_tail(response: &[u8], len: usize) -> &[u8] {
+    let end = response.len() - SIGNATURE_ENVELOPE_LEN;
+    &response[end - len..end]
+}
+
 fn head_of(response: &[u8]) -> String {
     let end = response
         .windows(4)
@@ -233,10 +246,10 @@ async fn serves_each_shard_by_its_own_id() {
 
     let ra = fetch(ep.addr(), "/shard/7").await;
     assert!(head_of(&ra).starts_with("HTTP/1.1 200 OK"));
-    assert_eq!(&ra[ra.len() - a.len()..], &a[..], "shard 7 serves a-bytes");
+    assert_eq!(payload_tail(&ra, a.len()), &a[..], "shard 7 serves a-bytes");
 
     let rb = fetch(ep.addr(), "/shard/9").await;
-    assert_eq!(&rb[rb.len() - b.len()..], &b[..], "shard 9 serves b-bytes");
+    assert_eq!(payload_tail(&rb, b.len()), &b[..], "shard 9 serves b-bytes");
 
     assert_eq!(ep.served_count(), 2);
     assert_eq!(ep.lookup_failure_count(), 0);
@@ -427,7 +440,7 @@ async fn unread_request_bytes_do_not_truncate_the_served_shard() {
     s.read_to_end(&mut out).await.expect("read response");
     assert!(head_of(&out).starts_with("HTTP/1.1 200 OK"));
     assert_eq!(
-        &out[out.len() - payload.len()..],
+        payload_tail(&out, payload.len()),
         &payload[..],
         "the whole shard must arrive intact"
     );
@@ -475,7 +488,7 @@ async fn a_slow_reader_is_not_reset_before_it_reads_the_shard() {
         .expect("a peer with unread request bytes must still receive its response");
     assert!(head_of(&out).starts_with("HTTP/1.1 200 OK"));
     assert_eq!(
-        &out[out.len() - payload.len()..],
+        payload_tail(&out, payload.len()),
         &payload[..],
         "the whole shard must arrive intact for a reader that was slow to start"
     );
@@ -509,11 +522,13 @@ async fn a_multi_chunk_body_arrives_whole_and_in_order() {
 }
 
 #[tokio::test]
-async fn the_served_body_leads_with_the_countersignature_then_the_frame() {
-    // SF-D8 then RF-D4 on the wire. The signature binds the response to
-    // the request the witness made (nonce, anchor, shard id); the frame
-    // tells it where the segment bytes stop, so a padded response is not
-    // mistaken for a longer segment. One `content-length` covers both.
+async fn the_served_body_is_the_frame_then_the_countersignature() {
+    // RF-D4 then SF-D8 on the wire. The frame tells the witness where the
+    // segment bytes stop, so a padded response is not mistaken for a
+    // longer segment. The signature binds the response to the request the
+    // witness made (nonce, anchor, shard id) and comes last, so it is in
+    // hand only once the frame has been delivered. One `content-length`
+    // covers both.
     let payload = leaves(9, 0x40);
     let (ep, signer) = bind(FixtureProvider::new([(0, payload.clone())])).await;
     let r = fetch(ep.addr(), "/shard/0").await;
@@ -521,9 +536,11 @@ async fn the_served_body_leads_with_the_countersignature_then_the_frame() {
     let Served {
         head,
         signature,
+        framed,
         frame,
         body,
     } = parse_served(&r);
+    let digest = pass_delivery_digest(&NONCE, &framed);
     assert!(head.starts_with("HTTP/1.1 200 OK"));
     // The countersignature verifies through the consensus verifier the
     // daemon runs, against exactly the header the request carried.
@@ -533,9 +550,10 @@ async fn the_served_body_leads_with_the_countersignature_then_the_frame() {
         BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,
         0,
+        &digest,
         &signature,
     )
-    .expect("the served signature covers the request header and shard id");
+    .expect("the served signature covers the request header, shard id and delivered bytes");
     // ...and is bound to *this* shard id and *this* nonce.
     assert!(verify_pass_transcript(
         signer.public_key(),
@@ -543,6 +561,7 @@ async fn the_served_body_leads_with_the_countersignature_then_the_frame() {
         BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,
         1,
+        &digest,
         &signature
     )
     .is_err());
@@ -552,9 +571,29 @@ async fn the_served_body_leads_with_the_countersignature_then_the_frame() {
         BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,
         0,
+        &digest,
         &signature
     )
     .is_err());
+    // ...and to *these* bytes: the digest of a body one byte different, or
+    // of this body under another request's nonce, does not verify.
+    let mut tampered = framed.clone();
+    *tampered.last_mut().expect("a served shard is not empty") ^= 1;
+    for other in [
+        pass_delivery_digest(&NONCE, &tampered),
+        pass_delivery_digest(&[0u8; 32], &framed),
+    ] {
+        assert!(verify_pass_transcript(
+            signer.public_key(),
+            &NONCE,
+            BlockHeight::from_raw(IN_GATE_ANCHOR),
+            &ANCHOR_HASH,
+            0,
+            &other,
+            &signature
+        )
+        .is_err());
+    }
 
     assert_eq!(frame.leaf_count(), 9);
     assert_eq!(frame.segment_bytes(), payload.len() as u64);
@@ -919,3 +958,6 @@ fn request_header_parsing_is_http_lenient_and_value_strict() {
         None
     );
 }
+
+#[path = "serve_seal_tests.rs"]
+mod seal;

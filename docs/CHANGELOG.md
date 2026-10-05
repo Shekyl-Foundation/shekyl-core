@@ -2,7 +2,40 @@
 
 ## [Unreleased]
 
+## [3.1.0-alpha.9] - 2026-10-05
+
+- **CLI scripting.** `shekyl-cli --json` prints one JSON object per command (`ok`, `command`, `result` or `error`). `--script FILE` runs many commands in one wallet session and does not combine with a subcommand. A one-shot is the same prompt words after the global flags (`shekyl-cli --json balance`); the shell's quoting is kept, and `help` is that command (`--help` is the invocation summary). Seeds and passwords are not in the JSON. `--yes` is honored for a script or a one-shot, and ignored on an interactive terminal. Narration stays off a JSON transcript: stderr when a person is there, omitted for a script (including a human `--script` without `--json`). A generated payment or reserve proof's disclosure is not narration: it follows the proof, and under `--json` it goes to stderr, including in a script. `wallet open` and `wallet password` refuse in a script. `create` / `restore` failures use those command names. `version` reports the CLI version even when wallet-RPC is down (`wallet_rpc_error`). `--complete-tree-foundation` is the envelope `complete-tree-foundation`; under `--json` its terms go to stderr.
+- **CLI `stake release`.** The terminal bond exit is `stake release`. `stake exit` and `unstake` are retired spellings that point at it. The wallet-rpc method remains `unstake`. `stake collect` is unchanged.
+
 - Docs: the economy's umbrella plan (`ECONOMY_UMBRELLA_PLAN.md`, `EUP-`); `DESIGN_CONCEPTS.md` records F-D, its design home's archival rationale, and its April tables' inputs.
+
+### Archival serving — `P`'s countersignature covers the response it delivered
+
+- `P`'s pass countersignature now signs a digest of the response body as
+  well as the request: the message is
+  `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ D[32]`,
+  with `D = cSHAKE256("shekyl/archival-pass-delivery-digest-v1", nonce ‖ framed)[..32]`
+  over every body byte ahead of the signature. The nonce salts the digest,
+  so it is not a function of the shard alone. The signature says `P`
+  delivered these bytes for this request; it does not say `P` stores them
+  (`ARCHIVAL_SHARD_FETCH.md` `SF-D8`).
+- The signing-scheme domain moves to `shekyl/archival-attestation-scheme-v3`;
+  v2 is retired and no v2 signature verifies.
+- **Consensus wire change.** A pass record and its witness entry carry `D`
+  (entry `nonce ‖ anchor_height ‖ D ‖ signature`, 3,457 B), and
+  `attestation_root` commits to it. The witness maximum is 885,000 B. The
+  empty-set root is unchanged.
+- **Wire change to the serving route** (`ARCHIVAL_SERVING_ROUTE.md`): the
+  signature is the body's last bytes, after the `RF-D4` frame;
+  `content-length` is unchanged. `shekyl-p-serve` reads a shard twice, once
+  to digest and sign and once to send, and appends the signature only if
+  the bytes it sent match the digest it signed. `shekyl-p-fetch` recomputes
+  `D` from the bytes it received and refuses a response that does not
+  verify. A serving persona and a fetching daemon must be on the same side
+  of this change.
+- The pinned vector is regenerated as
+  `attestation_pass_countersignature_v3_pinned.json`, authorised by the
+  decision-log entry of 2026-10-04.
 
 ### Consensus — the emission speed factor is per block, as designed
 
