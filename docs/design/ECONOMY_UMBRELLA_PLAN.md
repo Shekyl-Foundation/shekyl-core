@@ -148,6 +148,11 @@ third does not: both chains run 120-second blocks, so a count of blocks is
 the same duration here, and what remains of that class is a per-minute
 convention (A).
 
+The walk found a fourth operand: **the hard-fork version.** Monero gates
+behaviour on its fork numbers; Shekyl's block version is 1 on every network
+(`src/hardforks/hardforks.cpp`), so a branch gated on a Monero number at 2
+or above never runs here, and its `else` arm is what ships.
+
 **The walk.** Each row is answered from its record, read at source at
 `e9b41e3115`. "Derived" means a ruling on record used Shekyl's operand.
 
@@ -157,9 +162,12 @@ convention (A).
 | Fee floor's basis, `F = R·C·w_ref/M²` | Reward | **Not derived.** Reward-proportional, so highest at genesis and decaying 1,707× | FL-V11; FL-R13 open; EUP-5 G |
 | `w_ref` = 3,000 | Transaction weight | **Not derived.** No examination record as a choice | CEN-M3; `FOLLOWUPS.md`; EUP-5 G |
 | Zone, 300,000 B | Transaction weight (capacity leg); verification time (cost leg) | **Split.** The cost leg is measured on the device floor. The capacity leg was ratified on an estimate of 4–8 KB a spend; measured, 13.6 KB, so about 22 spends | C2-R2 Q1; `FOLLOWUPS.md`; EUP-5 G |
-| Coinbase reserve, 600 B | Coinbase weight | **Not derived, and ratified on a statement that is false.** C2-R2 Q7 records that a Shekyl coinbase "serializes well under 600 bytes". The minimal one, a single output with no attestation, weighs 1,331 B, of which 1,232 B is `extra` (measured: `shekyl-block-template`, the genesis-era template's `miner_transaction.weight()`) | **New.** `FOLLOWUPS.md`; rule it with the zone |
-| Transaction weight cap, 149,400 = zone/2 − reserve | The two rows above | **Formula derived; its stated guarantee does not hold.** Two maximal transactions and a coinbase are 300,131 B, over the zone | C2-R2 Q7; rides the two rows above |
-| Tail, 0.6 per block | Reward against supply | **Not derived.** The same 0.6 as Monero's, on an asymptote of 2³² SKL: 157,680 SKL a year is 0.0037 % of it, where Monero's is about 0.86 % of its supply. FL-R12′ ruled the tail perpetual; no record sizes it | FL-V11 ("inherited-unexamined"); §4 goal 2 grades the security budget it leaves; EUP-5 |
+| Coinbase reserve, 600 B | Coinbase weight | **Not derived, and ratified on a statement that is false.** C2-R2 Q7 records that a Shekyl coinbase "serializes well under 600 bytes". The minimal one, a single output with no attestation, weighs 1,331 B, of which 1,232 B is `extra`. Bodies the fill's bound allows then make a block over the limit, and the builder returns no template (`bodies_at_the_fills_bound_make_a_block_past_the_limit_while_the_reserve_is_600`) | **New.** `FOLLOWUPS.md`; rule it with the zone, derived from the largest coinbase the grammar allows, attestation included, plus a stated margin |
+| Transaction weight cap, 149,400 = zone/2 − reserve | The two rows above | **Formula derived; its stated guarantee is 131 B short.** Two maximal transactions and a coinbase are 300,131 B: a sliver of penalty, not a failure | C2-R2 Q7; rides the two rows above |
+| Tail, 0.6 per block | Reward against supply | **Not derived, and not derivable: its size is a ruling.** The same 0.6 as Monero's, on an asymptote of 2³² SKL: 157,680 SKL a year is 0.0037 % of it, where Monero's is about 0.86 % of its supply. FL-R12′ ruled the tail perpetual; no record sizes it. What a tail buys in hash depends on SKL's price, so no chain-internal quantity sizes it. The governance-free form of the choice is a ratio, the tail as a fraction of the asymptote per year, and Rick chooses it. §4's goal 2 is a share test and cannot | FL-V11 ("inherited-unexamined"); EUP-5 |
+| Template fill, `tx_pool.cpp` `version >= 5` | Hard-fork version | **Not derived: the reward-aware fill never runs.** At block version 1 the daemon takes Monero's pre-v5 arm: list bodies in fee order until their weight passes the median, bounded at `1.3·median − 600`. The arm that admits a body only if it does not lower the coinbase, bounded at `2·median − 600`, is dead code | **New.** Below; `FOLLOWUPS.md`; EUP-5 G |
+| Cumulative output count, `db_lmdb.cpp` `major_version >= 4` | Hard-fork version | **Not derived.** `bi_cum_rct` accumulates only from version 4, so at version 1 each block stores its own count. `get_output_distribution` reads it; whether anything in Shekyl consumes that is not established here | **New.** `FOLLOWUPS.md` |
+| Peer top-version check, `cryptonote_protocol_handler.inl` `version >= 6` | Hard-fork version | **Not derived.** A peer advertising a block version other than the ideal one is refused only from version 6, so never | **New.** `FOLLOWUPS.md` |
 | Input cap, 8 | Verifier time per input | **Not derived.** Carried as inherited and unjustified | CEN-I4; `FOLLOWUPS.md` |
 | Coinbase unlock, 60 blocks | Block time | **Not re-derived**; the operand is unchanged | CEN-F6, `pinned-not-re-derived` |
 | Long-term clamp 1.7×, 100,000-block window | Block time; growth rate | **Derived.** Traced on Shekyl's machinery, two-regime rationale countersigned, checked against the retention horizon | C2-R2 Q2 |
@@ -170,15 +178,39 @@ convention (A).
 | `tx_extra` relay cap, 24,576 B | Transaction weight | **Derived**; Shekyl's own value | C2-R2 Q10 |
 | Fee correction `C` and the three rungs | Shekyl's `σ`, `M_r`, `b` | **Derived**, given the floor they multiply | FL-R11, FL-R17, FL-R20 |
 
-**What the walk adds.** One row is new: the coinbase reserve. The fill
-admits bodies up to `2·median − 600`, so a block filled to that bound
-carries a coinbase 731 B past the limit it was reserved for; that is
-arithmetic from the measured weight, not yet a test. Changing the reserve
-moves the transaction weight cap, which is consensus (CEN-H3), so it is a
-ruling and travels with the zone's. One row sharpens an old name: the tail's
-size has never been examined against Shekyl's supply. The rest were already
-on record, and the block-weight governors (the clamps, the surge factor, the
-penalty) come out derived: C2-R2 did that work.
+**The sim's fill is not the daemon's.** ESR-6 lifted the reward-aware
+comparison into `shekyl_block_template::Fill` and named it the production
+fill rule; the sim's blocks are built by it, and finding 1 (22 of 50
+transactions a block until `ρ` crosses) is a property of it. The daemon does
+not run that comparison. Its live rule lists one body past the median in
+every block that has the demand, whatever the fee, so the median can move
+without the fee ever covering the penalty. Read at source, three facts: the
+hard-fork tables hold version 1 alone, the template takes its version from
+them (`blockchain.cpp`, `b.major_version`), and the comparison sits under
+`version >= 5`. The one live observation agrees and cannot discriminate: the
+`median-full` capture stopped one transaction past the median, which both
+arms predict at Standard fees. The live rule has not been simulated, so no
+number is claimed for it.
+
+Two consequences, both decisions. **Which rule is the design** is G's first
+question, ahead of `w_ref` and the zone, because the capacity finding and the
+reading registered in §4.1 were both measured on a rule the daemon does not
+execute. Under the cycle ruling the sim is the plan and the code follows; if
+the reward-aware fill is the plan, the daemon's gate goes and the fill moves
+to its Rust owner (`DRS_E1_SPOOL.md`). **And the coinbase reserve is ruled
+first.** On the live arm the bound is `1.3·median − 600` and the loop stops
+a body past the median, so no template reaches the limit and the reserve's
+shortfall is unreachable. On the reward-aware arm the bound is
+`2·median − 600`: a pool of high-fee bodies fills to it, the block is 731 B
+over, and an honest miner has no block to mine while the pool stays full,
+at the cost to an attacker of fee offers that are never collected. Making
+the plan's fill live before the reserve is derived arms that.
+
+**What the walk adds.** Four rows are new: the coinbase reserve and the three
+version gates. One row sharpens an old name: the tail's size is a ruling
+nobody has made. The rest were already on record, and the block-weight
+governors (the clamps, the surge factor, the penalty) come out derived:
+C2-R2 did that work.
 
 **Not walked.** The difficulty algorithm's constants (`daa_*`), the staking
 and archival constants and the FCMP++ reference ages are Shekyl's own, with
@@ -251,6 +283,11 @@ reward does not cancel. If the reading holds when the production tables run,
 G (`w_ref` and the zone) is the first decision of EUP-5 rather than one of
 six: the purse, the knee, the onset and the stuffer's cost are not readable
 on a chain capped at the zone.
+
+*Amended 2026-10-04 (§3.1).* "The production arm" here is the sim's fill, the
+reward-aware comparison. The daemon runs a different rule, so this reading
+is about the plan's fill and is decided on it only once G has ruled that it
+is the design.
 
 ---
 

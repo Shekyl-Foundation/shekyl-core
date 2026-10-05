@@ -848,6 +848,80 @@ fn a_reward_exactly_on_a_varint_boundary_in_the_penalty_zone_is_refused_not_loop
 // Refusals by design — caller conditions, never consensus verdicts
 // ---------------------------------------------------------------------------
 
+/// The coinbase reserve is smaller than the coinbase. The fill lets bodies
+/// reach `2·median − COINBASE_BLOB_RESERVED_SIZE` (600); a coinbase weighs
+/// more than twice that, so bodies the fill's bound allows make a block
+/// over the consensus limit and the builder has no template to give. One
+/// body fewer builds, so it is the last 731 bytes of the bound that are
+/// not there.
+///
+/// This pins the defect, not a contract. The reserve is a ruling
+/// (`docs/FOLLOWUPS.md`, C2-R2 Q7 reopened): when it is derived from the
+/// largest coinbase the grammar allows, bodies at the bound build and this
+/// test is rewritten to say so.
+#[test]
+fn bodies_at_the_fills_bound_make_a_block_past_the_limit_while_the_reserve_is_600() {
+    let params = EconomicParams::default();
+    let miner = miner();
+    let chain = chain_of(2);
+    let bound = crate::fill::Fill::empty(FULL_REWARD_ZONE, 0, TxVolume::ZERO, &params)
+        .expect("priced")
+        .bodies_weight_bound();
+    assert_eq!(bound, 2 * FULL_REWARD_ZONE - 600);
+
+    let empty = build(&context(&chain, &params, &miner, &[])).expect("builds");
+    let coinbase = u64::try_from(empty.block.miner_transaction.weight()).expect("fits");
+    assert!(
+        coinbase > 600,
+        "a coinbase of {coinbase} B fits the reserve"
+    );
+    let shortfall = coinbase - 600;
+
+    // Bodies whose weight lands in the last `shortfall` bytes under the
+    // bound: sixteen-output spends, and three of any output count to
+    // trim the sum.
+    let weight_of =
+        |outputs: usize| u64::try_from(spend(point_at(1_000), outputs).weight()).expect("fits");
+    let wide = weight_of(16);
+    let trims =
+        (2..=16usize).flat_map(|a| (a..=16).flat_map(move |b| (b..=16).map(move |c| [a, b, c])));
+    let (count, trim) = trims
+        .filter_map(|trim| {
+            let trimmed: u64 = trim.iter().map(|&n| weight_of(n)).sum();
+            let count = bound.checked_sub(trimmed)? / wide;
+            let total = count * wide + trimmed;
+            (bound - total < shortfall).then_some((count, trim))
+        })
+        .next()
+        .expect("some body set lands in the reserve's shortfall");
+    let mut listed: Vec<Transaction> = (0..count).map(|k| spend(point_at(1_000 + k), 16)).collect();
+    listed.extend(
+        trim.iter()
+            .zip(0u64..)
+            .map(|(&n, k)| spend(point_at(500_000 + k), n)),
+    );
+    let bodies: u64 = listed
+        .iter()
+        .map(|tx| u64::try_from(tx.weight()).expect("fits"))
+        .sum();
+    assert!(bodies <= bound, "the fill's bound allows these bodies");
+    assert!(bodies + coinbase > 2 * FULL_REWARD_ZONE);
+
+    assert!(
+        matches!(
+            build(&context(&chain, &params, &miner, &listed)),
+            Err(TemplateError::Emission(
+                shekyl_economics::EmissionError::BlockTooBig
+            ))
+        ),
+        "bodies of {bodies} B under a bound of {bound} B, coinbase {coinbase} B"
+    );
+
+    // The control: the same set less one body is a block under the limit.
+    listed.remove(0);
+    build(&context(&chain, &params, &miner, &listed)).expect("one body fewer builds");
+}
+
 /// A coinbase-shaped body: `Ct::Null`, no fee.
 fn coinbase_shaped() -> Transaction {
     shekyl_chain_rules::harness::fixture::coinbase(0)
