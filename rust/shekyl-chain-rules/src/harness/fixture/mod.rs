@@ -29,6 +29,8 @@ use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
 use shekyl_types::{ArchivalLength, SigningPayloadHash};
 
+use crate::archival::BondArm;
+
 mod archival;
 pub use archival::{
     claimant, emission_vin, join_market, persona, serve_credit_only, serve_credit_vin,
@@ -646,14 +648,16 @@ const FIXTURE_OUTPUT_INDEX: u64 = 0;
 /// derived from: the key image doubled for a `ToKey`, so the same spend
 /// always signs with the same key and two spends never share one; the
 /// **persona's** seed for a bond post — the identity key's for a credit
-/// (JoinMarket, Reinstate), the bond-spend key's for a Release — found
-/// from the post's `hybrid_public_key` through the persona table
-/// ([`archival::persona_by_identity`]), since by the time a body is
-/// signed ([`anchored_at`]) the tag that built it is gone and the key is
-/// what the verifier reads (CEN-J13). A post whose key no persona owns —
-/// hand-built, a key filled by hand — signs by position as before; J13
-/// refuses it, and a test that signs such a post is asking for that; a
-/// constant per position for the other archival arms.
+/// (JoinMarket, Reinstate, or a kind no arm names), the bond-spend key's
+/// for a Release — found from the post's `hybrid_public_key` through the
+/// seed map [`persona`](archival::persona) fills, since by the time a body
+/// is signed ([`anchored_at`]) the tag that built it is gone and the key is
+/// what the verifier reads (CEN-J13). Which seed is [`BondArm::of`]: the
+/// same classifier the sequence and the fold use, so a test that edits the
+/// kind and then signs is signed as the kind it became. A post whose key
+/// no persona owns — hand-built, a key filled by hand — signs by position
+/// as before; J13 refuses it, and a test that signs such a post is asking
+/// for that; a constant per position for the other archival arms.
 fn fixture_signing_seed(index: usize, input: &Input) -> [u8; 64] {
     let mut seed = [0u8; 64];
     match input {
@@ -662,10 +666,10 @@ fn fixture_signing_seed(index: usize, input: &Input) -> [u8; 64] {
             seed[32..].copy_from_slice(key_image);
         }
         Input::BondPost(post) => {
-            if let Some(who) = archival::persona_by_identity(&post.hybrid_public_key) {
-                return match post.kind {
-                    shekyl_wire::BondPostKind::Other(RELEASE_KIND) => who.bond_spend_seed(),
-                    _ => who.identity_seed(),
+            if let Some(seeds) = archival::slot_seeds_for(&post.hybrid_public_key) {
+                return match BondArm::of(post) {
+                    Some(BondArm::Release { .. }) => seeds.bond_spend,
+                    _ => seeds.identity,
                 };
             }
             seed.fill(0xE0 ^ u8::try_from(index).expect("a fixture has few inputs"));
@@ -674,11 +678,6 @@ fn fixture_signing_seed(index: usize, input: &Input) -> [u8; 64] {
     }
     seed
 }
-
-/// The wire kind byte of a Release post (`shekyl_archival_retention::
-/// BondPostKind::Release as u8`): the one kind whose slot is the
-/// bond-spend key's, not the identity's.
-const RELEASE_KIND: u8 = shekyl_archival_retention::BondPostKind::Release as u8;
 
 fn fcmp_auths(tx: &Transaction) -> Option<&Vec<PqcAuth>> {
     match &tx.ct {

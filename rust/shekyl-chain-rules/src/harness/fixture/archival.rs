@@ -42,8 +42,10 @@ use super::{balanced_bond_post, FIXTURE_OUTPUT_INDEX, UNRECORDED_REFERENCE};
 /// A fixture **persona**: the keys the archival bodies for one `tag` are
 /// built with, and the id they are recorded under. The identity key and
 /// the GF-1 bond-spend key are each derived from a seed the tag fixes
-/// ([`FixturePersona::identity_seed`], [`FixturePersona::bond_spend_seed`]);
-/// the id is [`p_canonical_id_from_hybrid_pubkey`] over the identity key.
+/// ([`seed_of`], [`IDENTITY_HALF`], [`BOND_SPEND_HALF`]); the id is
+/// [`p_canonical_id_from_hybrid_pubkey`] over the identity key. The seeds
+/// are stored beside the persona, keyed by the identity key, so a later
+/// sign can find them without the tag.
 /// So a join for `tag`, a credit naming `tag`, and the slot that signs
 /// either agree by construction, and a test that mis-pairs them is a
 /// test of J11 or J13, not a fixture accident.
@@ -61,19 +63,6 @@ pub struct FixturePersona {
     pub id: PCanonicalId,
 }
 
-impl FixturePersona {
-    /// The seed the identity key is derived from: the tag over a constant
-    /// half, distinct from a `ToKey`'s doubled key image.
-    pub(super) fn identity_seed(&self) -> [u8; 64] {
-        seed_of(self.tag, IDENTITY_HALF)
-    }
-
-    /// The seed the bond-spend key is derived from.
-    pub(super) fn bond_spend_seed(&self) -> [u8; 64] {
-        seed_of(self.tag, BOND_SPEND_HALF)
-    }
-}
-
 /// The constant half of an identity seed.
 const IDENTITY_HALF: u8 = 0x1D;
 /// The constant half of a bond-spend seed.
@@ -87,9 +76,25 @@ fn seed_of(tag: [u8; 32], half: u8) -> [u8; 64] {
 
 type Personas = HashMap<[u8; 32], FixturePersona>;
 
+/// The two seeds a persona signs with, keyed by its identity-key bytes.
+/// [`signed`](super::signed) has the post and not the tag, and the key the
+/// post carries is what the verifier reads (CEN-J13).
+#[derive(Clone, Copy)]
+pub(super) struct SlotSeeds {
+    pub(super) identity: [u8; 64],
+    pub(super) bond_spend: [u8; 64],
+}
+
+type SeedsByIdentity = HashMap<Vec<u8>, SlotSeeds>;
+
 fn personas() -> &'static Mutex<Personas> {
     static PERSONAS: OnceLock<Mutex<Personas>> = OnceLock::new();
     PERSONAS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn seeds_by_identity() -> &'static Mutex<SeedsByIdentity> {
+    static SEEDS: OnceLock<Mutex<SeedsByIdentity>> = OnceLock::new();
+    SEEDS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// The persona for `tag` — derived once per process and memoized (two
@@ -103,12 +108,23 @@ pub fn persona(tag: [u8; 32]) -> FixturePersona {
     table
         .entry(tag)
         .or_insert_with(|| {
-            let identity =
-                derive_pqc_public_key(&seed_of(tag, IDENTITY_HALF), FIXTURE_OUTPUT_INDEX)
-                    .expect("a fixture seed derives an identity key");
-            let bond_spend =
-                derive_pqc_public_key(&seed_of(tag, BOND_SPEND_HALF), FIXTURE_OUTPUT_INDEX)
-                    .expect("a fixture seed derives a bond-spend key");
+            let identity_seed = seed_of(tag, IDENTITY_HALF);
+            let bond_spend_seed = seed_of(tag, BOND_SPEND_HALF);
+            let identity = derive_pqc_public_key(&identity_seed, FIXTURE_OUTPUT_INDEX)
+                .expect("a fixture seed derives an identity key");
+            let bond_spend = derive_pqc_public_key(&bond_spend_seed, FIXTURE_OUTPUT_INDEX)
+                .expect("a fixture seed derives a bond-spend key");
+            let displaced = seeds_by_identity()
+                .lock()
+                .expect("the fixture seed table is not poisoned")
+                .insert(
+                    identity.clone(),
+                    SlotSeeds {
+                        identity: identity_seed,
+                        bond_spend: bond_spend_seed,
+                    },
+                );
+            assert!(displaced.is_none(), "a tag's identity key is derived once");
             let id = p_canonical_id_from_hybrid_pubkey(&identity);
             FixturePersona {
                 tag,
@@ -120,17 +136,16 @@ pub fn persona(tag: [u8; 32]) -> FixturePersona {
         .clone()
 }
 
-/// The persona whose identity key is `identity`, if [`persona`] derived
-/// one — how [`signed`](super::signed) finds the seed a bond slot signs
-/// with. `None` for a key no persona owns: a hand-built post, which no
-/// fixture seed can sign for.
-pub(super) fn persona_by_identity(identity: &[u8]) -> Option<FixturePersona> {
-    personas()
+/// The seeds for the persona whose identity key is `identity`, if [`persona`]
+/// derived one. `None` for a key no persona owns: a hand-built post, which
+/// no fixture seed can sign for. The lookup is the key, not a scan of every
+/// persona the process has built.
+pub(super) fn slot_seeds_for(identity: &[u8]) -> Option<SlotSeeds> {
+    seeds_by_identity()
         .lock()
-        .expect("the fixture persona table is not poisoned")
-        .values()
-        .find(|who| who.identity == identity)
-        .cloned()
+        .expect("the fixture seed table is not poisoned")
+        .get(identity)
+        .copied()
 }
 
 /// The id of the persona tagged `[fill; 32]` — the record a [`join_market`]
