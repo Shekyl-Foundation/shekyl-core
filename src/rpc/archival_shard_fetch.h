@@ -14,10 +14,12 @@ namespace rpc
 
 /// Operator view-fetch: names `shard_id` only (`ARCHIVAL_SHARD_FETCH.md` SF-D1).
 ///
-/// Every node prunes. This is a marshal over
-/// `shekyl_daemon_operator_shard_fetch` (staker hold, view-cache, or Tor
-/// fetch when that scheduler is wired). Typed miss until then. Returns
-/// false on miss.
+/// The answer never comes from this node's chain store: under archival
+/// pruning (`ARCHIVAL_PRUNED_DAEMON_MODE.md`) no node is assumed to hold a
+/// shard body there, whether or not its store has discarded yet. This is a
+/// marshal over `shekyl_daemon_operator_shard_fetch` (staker hold,
+/// view-cache, or Tor fetch when that scheduler is wired). Typed miss until
+/// then. Returns false on miss.
 bool fill_request_archival_shard(
     uint64_t shard_id, COMMAND_RPC_REQUEST_ARCHIVAL_SHARD::response& res);
 

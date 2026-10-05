@@ -496,7 +496,7 @@ a Release leaves the row, endpoint included).
 | Flags | `MDB_CREATE` |
 | Key | `P_id[32]` (`P_canonical_id`) |
 | Value | versioned `ArchivalBondValue` blob (v7 at genesis: hybrid pubkey, **`bond_spend_pk`** (GF-1 debit authorizer, gate-4 §4.1), **`endpoint`** (32-byte serving endpoint, `EU-D3`), `E_join`, `bonded_total_atomic`, `holdings_kind`, shard set or CompleteTree sentinel with the index-parallel per-shard add-epochs (v6), bad intervals, claimed settlement epochs, `first_paying_emission_height`; every earlier version is rejected at decode) |
-| Writers | `put_archival_bond_record` (JoinMarket connect), `put_archival_bond_value` (every load-modify-store writer: slash apply/revert, Release, HoldingsUpdate, Reinstate), `remove_archival_bond_record` (JoinMarket pop) |
+| Writers | `put_archival_bond_record` (JoinMarket connect), `put_archival_bond_value` (every load-modify-store writer: slash apply/revert, Release, Reinstate — `HoldingsUpdate`'s two appliers throw, kind REJECTED 2026-09-20), `remove_archival_bond_record` (JoinMarket pop) |
 | Readers | `get_archival_bond_value`, `get_archival_bond_hybrid_pubkey`, `archival_bond_join_epoch`, `archival_bond_good_through`, `archival_bond_holds_shard` |
 | Encoder | `shekyl::db::ArchivalBondValue` in `blockchain_db/shekyl_types.h` |
 | Introduced | HF1 (gate-4 substrate; gate-2 §5.3 steps 2–3 reads) |
@@ -506,7 +506,10 @@ the claimed-epoch set and `first_paying_emission_height`; v5 (`ARCHIVAL_BOND_GAT
 §4.1, 2026-06-16) inserted `bond_spend_pk` — committed at JoinMarket, immutable,
 and bound into the bond-post sig-preimage (gate-4 §3.4.1), so the persisted
 record must carry it; v6 (gate-4 §4.4, HoldingsUpdate) added the per-shard
-add-epochs under the holdings count; v7 (`ARCHIVAL_ENDPOINT_UPDATE.md`
+add-epochs under the holdings count *(carried by the layout; since the kind
+was REJECTED 2026-09-20 every shard's add-epoch equals the join epoch, and
+the column is enumerated for deletion at `PRINCIPAL_STAKE_LIFECYCLE.md`
+§5.3.2 row 7)*; v7 (`ARCHIVAL_ENDPOINT_UPDATE.md`
 `EU-D3`, 2026-09-12) inserted the serving `endpoint` after `bond_spend_pk`.
 Every bump is pre-genesis: no migration, reset the data-dir; `decode` rejects
 any other version byte.
@@ -695,7 +698,8 @@ Per-block revert journal for slash connect / `pop_block` (gate-2 §8).
 ### The four pre-image journals
 
 `archival_emission_claim_log`, `archival_bond_unbond_log`,
-`archival_bond_holdings_update_log`, and `archival_bond_reinstate_log` share
+`archival_bond_holdings_update_log` (empty by construction since the kind
+was REJECTED 2026-09-20 — see its section), and `archival_bond_reinstate_log` share
 the slash log's row layout and the height-keyed journal scaffold in
 `db_lmdb.cpp` (`archival_journal_{next_seq,put,read,delete}`): key
 `BE(block_height) ‖ BE(seq)` (12 bytes; each key type is an alias of
@@ -747,16 +751,25 @@ fields, so the two reverts compose in any order).
 | Writers | `apply_archival_unbond` (append), the revert's clear |
 | Readers | `revert_archival_unbonds_at_height` (reverse-order restore through the Rust pop fold) |
 
-### `archival_bond_holdings_update_log`
+### `archival_bond_holdings_update_log` — kind REJECTED 2026-09-20; table empty by construction, deletion owed
 
-Per-block journal for the HoldingsUpdate connect's record pre-image
-(`ARCHIVAL_BOND_GATE4.md` §4.4, the add/drop grace-tail path). A
-HoldingsUpdate stays `Bonded` (no Exited transition, no clean
-interval-close), so it cannot share the Unbond journal or pop path; its
-connect mutates a strict subset of Unbond's fields, and the pre-image here
-is smaller than the Unbond value by exactly the two never-mutated fields
-(`holdings_kind`, `bad_intervals`) — an honest minimal journal, not the
-Unbond superset reused.
+**Status (2026-10-04):** `HoldingsUpdate` is REJECTED under the immutable-bond
+ruling (`PRINCIPAL_STAKE_LIFECYCLE.md` §5.3; `BondPostKind::from_u8(3)` is
+`InvalidPostKind`). The table is still opened by the X-macro, but no row can
+reach it: both appliers throw (`db_lmdb.cpp:6275`), the journal put helper
+was deleted with the kind (DRS-E4 `ARW-14`), and the revert is a named no-op
+kept for pop order. Removing the table is a layout bump on both stores and
+rides the next DRS layout increment — the row is in `FOLLOWUPS.md`
+(*"Catalogue rows for a REJECTED post kind and a renamed one"*, owner
+`DAEMON_REDB_STORE.md` §7). The description below is the table **as
+designed**, kept so the layout a v13+ datadir still names is readable.
+
+*As designed (gate-4 §4.4, 2026-06):* per-block journal for the HoldingsUpdate
+connect's record pre-image (the add/drop grace-tail path). A HoldingsUpdate
+stayed `Bonded` (no Exited transition, no clean interval-close), so it could
+not share the Unbond journal or pop path; its connect mutated a strict subset
+of Unbond's fields, and the pre-image here was smaller than the Unbond value
+by exactly the two never-mutated fields (`holdings_kind`, `bad_intervals`).
 
 | Property | Value |
 |---|---|
@@ -764,8 +777,8 @@ Unbond superset reused.
 | Flags | `MDB_CREATE` |
 | Key | `BE(block_height) \|\| BE(seq)` (12 bytes) |
 | Value | `ArchivalBondHoldingsUpdateRevertValue` v1, variable: `version[1] \|\| p_id[32] \|\| BE(pre_bonded_total)[8] \|\| BE32(shard_count) \|\| BE(pre_shard_ids[]) \|\| BE(pre_shard_add_epochs[])` (45 + 16·shards bytes; zero `pre_bonded_total` refused both ways) |
-| Writers | `apply_archival_holdings_update_add` / `_drop` via the single-sourced `apply_archival_bond_record_update` scaffold and `put_archival_holdings_update_journal`, the revert's clear |
-| Readers | `revert_archival_holdings_updates_at_height` |
+| Writers | **none** — `apply_archival_holdings_update_add` / `_drop` throw (`db_lmdb.cpp:6275`); the `put_archival_holdings_update_journal` helper and the `apply_archival_bond_record_update` scaffold they wrote through are deleted |
+| Readers | `revert_archival_holdings_updates_at_height` — a named no-op (`db_lmdb.cpp:6289`), kept so the pop order slash → this slot → reinstate stays explicit |
 
 ### `archival_bond_reinstate_log`
 

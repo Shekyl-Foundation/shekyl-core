@@ -251,11 +251,12 @@ design-review material awaiting a ruling, and is marked so.
     **verified**). §5 gate 1 still presents the `GF-4` output-count rule as an
     open design gate with its retirement appended as an `UPDATE`, and the
     `GF-4b` note of 2026-09-11 says outright that it was *"annotated rather
-    than edited"* — the pattern the current-only principle forbids. *(One row
-    checked and **sound**: §5 item 2 is still accurate — reinstate and
+    than edited"* — the pattern the current-only principle forbids. *(Records-was,
+    checked at the round-0 pin: §5 item 2 then said reinstate and
     `HoldingsUpdate` have verify arms at `bond_post.rs:255`, `:324`, `:440`
-    and no builder; `shekyl-archival-bond-builder` has only
-    `build_join_market_vin` and `build_release_vin`.)*
+    and no builder. The arms were deleted 2026-09-20 (PR #808, kind
+    **REJECTED**); §5 item 2 now names the three live verifiers, and only
+    `Reinstate`'s producer is owed.)*
 
 ---
 
@@ -521,26 +522,24 @@ to satisfy both storage policies; neither is why the answer is what it is.
 
 ### 6.2 `P`'s serving store — what the disk reveals, and what that justifies (**`WSS-Q8` / `Q12` / `Q13` RULED 2026-09-19**)
 
-**Erasure is per shard, and later than the drop.** Granularity is **per
-shard** — a `HoldingsUpdate` drop
-releases one shard while the bond continues. Timing is the **landed pin-release gate** — the
-second consecutive epoch open at which the shard is absent from the bond record
-(`WSS-Q8`) — and **not** `drop-connect + D_max`, which this round proposed and
-then rejected, because a dropped pair stays **drawable** for the rest of its
-epoch. The reorg reasoning that formula rested on is subsumed rather than lost:
-under [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md)
-Pin 3 (`:488-497`) the slash scheduler challenges **currently-held** shards and
-exit forgiveness applies only once the drop **connects**, and a connected drop
-can be **reorged out**, which puts the obligation back — and two epoch
-boundaries sit far deeper than that. Erasing at *post* time
-would risk a slash for a shard `P` destroyed and was then obligated for again.
-**And the erasure point is later still, and is already implemented:** a dropped
-pair stays in the epoch's drawable set until that epoch closes, and a challenge
-issued in its last drawable block still has to resolve — so the horizon is the
-**second consecutive epoch open at which the shard is absent from the bond
-record** (`EPOCHS_BEFORE_PIN_RELEASE = 2`, `WSS-16`). Two epoch boundaries sit
-far deeper than `ARCHIVAL_REORG_DEPTH_BLOCKS`, so Pin 3's reorg protection is
-subsumed rather than replaced.
+**Erasure is per shard, and later than the departure.** A slash erases one
+shard from a compact record while the bond continues (`SlashedHolding::Shard`;
+`archival_slash_removed_holding_after`). The departure ledger stays per-shard
+(`departure_ledger.rs`, `EPOCHS_BEFORE_PIN_RELEASE = 2`, `WSS-16`): the horizon
+is the second consecutive epoch open at which the shard is absent from the
+bond record (`WSS-Q8`). A reorg can still restore a shard and erase it again.
+Two epoch boundaries sit deeper than `ARCHIVAL_REORG_DEPTH_BLOCKS`. The
+voluntary cause is gone — a `HoldingsUpdate` drop, **REJECTED 2026-09-20** —
+and so is the `drop-connect + D_max` alternative. *Records-was, the lead this
+subsection carried until 2026-10-05:* erasure was justified by Pin 3's
+drop-connect forgiveness, a connected drop the slash scheduler could reorg
+back into obligation. That cause does not post. The two-epoch-open rule and
+its reopening criterion on `W₂` are unchanged.
+
+The lifecycle doc's row 5 predicted this tracking would collapse to "the
+record exists with `S`, or it does not". **Read against code, it does not.**
+Nothing here is owed deletion. Row 5 is recorded as refuted in
+[`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2.
 
 #### 6.2.1 What the disk actually reveals
 
@@ -998,15 +997,19 @@ store a shard before posting the bond that obligates it**. That makes
 epoch-boundary race entirely. A failed fill simply means the post is not made,
 and the operator is told.
 
-The ordering fits both entry points:
+The ordering fits the one entry point *(two when ruled — see the struck
+bullet)*:
 
 - **JoinMarket** has a builder (`build_join_market_vin`,
   `shekyl-archival-bond-builder/src/lib.rs:158`): fill the whole initial serve
-  set, then post.
-- **A `HoldingsUpdate` add has verify arms but no builder** — the crate has
-  only `build_join_market_vin` and `build_release_vin` (`:158`, `:310`),
-  confirming `PRINCIPAL_STAKE_LIFECYCLE.md` §5 item 2. **So this ordering can
-  be designed into it from the start** rather than retrofitted.
+  set, then post. Since 2026-09-20 this is the **only** event that puts a
+  shard into a bond, so fill-then-post is the whole rule, not its first case.
+- ~~**A `HoldingsUpdate` add has verify arms but no builder**~~ — *REJECTED
+  2026-09-20 with the kind (immutable bond,
+  [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3); the
+  arms this bullet cited were deleted in PR #808. The ordering it wanted
+  designed in has nothing to be designed into — a shard joins a bond at
+  `JoinMarket` or never.*
 
 **This is also what makes §6.4.3's boundary refusal free.** A fill refused
 because shard `k` does not close at `SHARD_BYTES` happens **before anything is

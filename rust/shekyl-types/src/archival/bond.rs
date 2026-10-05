@@ -30,10 +30,19 @@ use super::{
 /// allocate for.
 pub const MAX_BOND_KEY_BYTES: usize = 2048;
 
-/// One held shard with the settlement epoch it was acquired in — join-time
-/// shards carry `E_join`; a `HoldingsUpdate` add carries its `E_add`. The
-/// add-epoch powers the drop-eligibility gate (gate-4 §4.4) and per-shard
-/// `E_add + 1` serve-credit counting (P2B-7 Pin 5).
+/// One held shard and the settlement epoch stored as its add epoch.
+///
+/// On the production join path since the immutable-bond ruling (2026-09-20)
+/// that epoch is the bond's join epoch: a shard joins at `JoinMarket` or
+/// never. The type does not enforce the equality. Slash-log reconstruction,
+/// the held-at-height bound, and per-shard `E_add + 1` serve-credit counting
+/// (P2B-7 Pin 5) still read the stored field. Collapsing the column into the
+/// bond's join epoch is enumerated, not ruled, at
+/// `PRINCIPAL_STAKE_LIFECYCLE.md` §5.3.2 row 7 — a collapse-to-record-field
+/// candidate, not a deletion.
+///
+/// *Records-was:* a `HoldingsUpdate` add carried its own `E_add`, and the
+/// field powered the drop-eligibility gate. That kind is REJECTED 2026-09-20.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeldShard {
     /// Which shard.
@@ -81,7 +90,8 @@ pub enum Holdings {
     /// An explicit, bounded, duplicate-free list — insertion order
     /// preserved, as the wire's [`ShardSet`] is.
     ShardSet(HeldShards),
-    /// Every shard; a foundation record. Cannot `HoldingsUpdate`.
+    /// Every shard; a foundation record. Like every record since the
+    /// immutable-bond ruling (2026-09-20), its holdings cannot change.
     CompleteTree,
 }
 
@@ -160,8 +170,10 @@ impl Holdings {
         }
     }
 
-    /// The add-epoch of `shard`, if held. `None` for a complete tree, which
-    /// has no per-shard epochs (it cannot `HoldingsUpdate`).
+    /// The stored add epoch of `shard` if the shard is held. `None` for a
+    /// complete tree, which has no per-shard epochs. On the production join
+    /// path since 2026-09-20 this equals the bond's join epoch; the type
+    /// does not enforce it (`PRINCIPAL_STAKE_LIFECYCLE.md` §5.3.2 row 7).
     #[must_use]
     pub fn add_epoch(&self, shard: ShardId) -> Option<SettlementEpoch> {
         match self {

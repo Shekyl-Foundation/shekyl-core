@@ -30,15 +30,22 @@
 //!
 //! # Three sources, one answer
 //!
-//! Holdings at `h` are the **post-connect** state of block `h`. Under
+//! Holdings at `h` are the **post-connect** state of block `h`. They only
+//! shrink (slash) since the immutable-bond ruling (2026-09-20,
+//! `PRINCIPAL_STAKE_LIFECYCLE.md` §5.3): a shard joins at `JoinMarket` or
+//! never, so a compact record's per-shard add epoch is its join epoch and
+//! "held at tip" reaches back exactly that far. The bound below is written
+//! against the add epoch rather than the join epoch because the record
+//! field is per shard and a slash's log row carries the add epoch of the
+//! tenure it ended; it degenerates to the join epoch, and is the add-epoch
+//! substrate enumerated at §5.3.2 row 7. *(As written: "Under
 //! `HoldingsUpdate` they grow (add) as well as shrink (drop, slash), so
-//! "held at tip" does not reach back to join — it reaches back to the
-//! shard's latest **add**, and a slash's log row carries the add epoch of
-//! the tenure it ended so a *previous* tenure reconstructs the same way:
+//! 'held at tip' … reaches back to the shard's latest **add**". That kind
+//! is REJECTED; there is no later add and no voluntary drop.)*
 //!
 //! - **Held at tip, complete tree** ⇒ held at every height. A foundation
-//!   record cannot `HoldingsUpdate`, and every caller's record-epoch gating
-//!   puts the fire height after join.
+//!   record's holdings cannot change, and every caller's record-epoch
+//!   gating puts the fire height after join.
 //! - **Held at tip, compact** ⇒ held for every height in epochs **strictly
 //!   after** the shard's add epoch. The add connected at an unknown height
 //!   *within* its epoch, so holding is epoch-guaranteed only from the next
@@ -294,11 +301,14 @@ mod tests {
         assert!(!held(&record, &log, 42, h(slash_height - 1)));
     }
 
-    /// `holds_shard_bounds_added_shard_by_its_add_epoch` (:1756), the
-    /// `HoldingsUpdate`-add case: joined at epoch 2 with shard 7, shard 9
-    /// added at epoch 5 — held from its *own* add epoch's close, not from
-    /// join, so a fire height before or inside the add epoch reads
-    /// not-held and no unjust slash or add-epoch credit is possible.
+    /// `holds_shard_bounds_added_shard_by_its_add_epoch` (:1756): a record
+    /// whose shard 9 carries add epoch 5 against a join at epoch 2 — held
+    /// from its *own* add epoch's close, not from join, so a fire height
+    /// before or inside the add epoch reads not-held and no unjust slash
+    /// or add-epoch credit is possible. No connect path produces such a
+    /// record since `HoldingsUpdate` was REJECTED (2026-09-20); the test
+    /// pins the bound's per-shard reading of the field, which is what a
+    /// slash log row relies on.
     #[test]
     fn an_added_shard_is_held_only_from_the_epoch_after_its_add() {
         let record = record(compact(&[(7, 2), (9, 5)]));

@@ -46,7 +46,13 @@ a shape change requires the L10 reversion clause.
 The HoldingsUpdate slice-A freeze (2026-07-14, `bond_duration.rs`) sealed the **shape**
 (`BASE·(1 + SCALE·age)`) and the **age-realization** (`shard_age_milli @ H_close(add)`,
 shared with reward). It did **not** seal `4/4` — do not read "slice A shipped" as "the
-numerics are final." **Reopen criterion (rule-21):** the testnet
+numerics are final." *(The freeze is history; its subject is not. `HoldingsUpdate`
+was REJECTED 2026-09-20, so the only "add" a shard has is its bond's `JoinMarket` and
+`H_close(add)` reads as `H_close(join)` for every shard; and production
+`bond_duration(age)` has no consumer — enumerated at
+`PRINCIPAL_STAKE_LIFECYCLE.md` §5.3.2 row 8. The reward curve's use of the shared age
+normalization is what keeps the invariant below live.)*
+**Reopen criterion (rule-21):** the testnet
 `fetch_latency_per_unit` measurement re-confirms or re-pins the pair; a value within the
 plateau band `scale ∈ [2,8]` amends this table only (no code change — the constant is
 config-generated), while a change outside the band, or to the shape, invokes the L10

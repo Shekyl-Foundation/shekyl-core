@@ -5,9 +5,12 @@
 Numeric cluster pinned in [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md);
 slash trigger interface pinned in [`ARCHIVAL_RETENTION_GATE2.md`](../completed/ARCHIVAL_RETENTION_GATE2.md) §6.
 
-**Scope:** Consensus objects and vin wire for **bond posture** — **join-Market**, **re-bond**,
-**clean release** (collateral return), holdings updates — **distinct** from reward **mint**
-(emission leg).
+**Scope:** Consensus objects and vin wire for **bond posture** — **join-Market**, **reinstate**
+(standing after a partial slash), **clean release** (collateral return) — **distinct** from
+reward **mint** (emission leg). *Holdings are fixed at join for the record's life (immutable
+bond, ratified 2026-09-20 — [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md)
+§5.3); the voluntary `HoldingsUpdate` post kind this doc once specified (§4.4) is REJECTED and
+its discriminant is unrepresentable on the wire (PR #808).*
 
 **Authority chain:**
 
@@ -213,10 +216,9 @@ Emission already ships a loud cleartext **source** term (mint) inflation-checked
 | `post_kind` | `bond_credit` | `bond_debit` | Notes |
 |-------------|---------------|--------------|-------|
 | `JoinMarket` | yes (`== bond_floor`) | no | Creates record |
-| `Reinstate` | yes (`== bond_floor(post) − bonded_total`; **0 legal**) | no | Restores standing after slash; credit = growth only (P2B-9 Pin 2) |
+| `Reinstate` | **no** (`== 0`) | **no** (`== 0`) | Restores standing after a partial slash; zero-money, `post == current` (P2B-9 Pins 1–2 as amended by PR #808; `BondTerm::Unmoved`). *Records-was: credit `== bond_floor(post) − bonded_total`, growth only — the growth path is REJECTED* |
 | `Release` | no | yes (`== bonded_total`) | After release cooldown |
-| `HoldingsUpdate` add shard | yes (`+FLOOR`) | no | V3.0 |
-| `HoldingsUpdate` drop shard | no | yes (`FLOOR`) | V3.0; per-shard cooldown (§4.4) |
+| ~~`HoldingsUpdate` add / drop shard~~ | — | — | **REJECTED 2026-09-20** (immutable bond): discriminant `3` is `InvalidPostKind` on the wire (PR #808); verify/connect/pop arms deleted (E4 `ARW-14`). Holdings change by persona rotation, §4.4 |
 
 **Forbidden:** `bond_credit` or `bond_debit` on `txin_archival_reward_emission`; both
 directions in one bond-post tx; either term on a paying emission tx.
@@ -249,8 +251,8 @@ ArchivalBondPostVin {
   bond_spend_pk:         Option<HybridPublicKey>, // present iff post_kind == JoinMarket (commits the debit authorizer, §4.1)
   p_canonical_id:        [u8; 32],             // hint; verifier recomputes (emission §6.1)
   post_kind:             BondPostKind,         // §3.5
-  holdings:              HoldingsDescriptor,   // POST-connect state (empty for full Release; §3.5 debit-path note)
-  bonded_total_atomic:   u64,                  // == bond_floor(holdings): the post-connect record total (0 for full Release)
+  holdings:              HoldingsDescriptor,   // POST-connect state (empty for Release; == current for Reinstate; §3.5 debit-path note)
+  bonded_total_atomic:   u64,                  // == bond_floor(holdings): the post-connect record total (0 for Release)
   bond_credit:           u64,                  // cleartext; 0 unless credit path (§3.2 table)
   bond_debit:            u64,                  // cleartext; 0 unless debit path (§3.2 table)
   pqc_auths:             [...],                // bond-vin auth: identity key on credit, bond_spend_pk on debit (gate-6 §9.6)
@@ -260,7 +262,8 @@ enum BondPostKind {
   JoinMarket,
   Reinstate,
   Release,
-  HoldingsUpdate,        // V3.0 wire; credit/debit directions §3.2
+  // 3 = HoldingsUpdate: REJECTED 2026-09-20 — not a variant; `from_u8(3)` is `InvalidPostKind`
+  // (PR #808). The slot is held in this table so the name is not re-minted (rule 23).
 }
 ```
 
@@ -275,7 +278,7 @@ u8                      vin_type = 5
 varint                  hybrid_pubkey_len   (≤ 2048)
 [hybrid_pubkey_len]     HybridPublicKey::to_canonical_bytes()   // P_pubkey (identity)
 [32]                    p_canonical_id      (hint; verifier recomputes)
-u8                      post_kind           (0=JoinMarket, 1=Reinstate, 2=Release, 3=HoldingsUpdate)
+u8                      post_kind           (0=JoinMarket, 1=Reinstate, 2=Release; 3 REJECTED — InvalidPostKind)
 // if post_kind == 0 (JoinMarket): the dedicated bond-spend key is committed into the record
 varint                  bond_spend_pk_len   (≤ 2048)            // present iff post_kind == 0
 [bond_spend_pk_len]     bond_spend_pk.to_canonical_bytes()      // present iff post_kind == 0
@@ -331,12 +334,12 @@ a key-swap at join.
 **Bond-vin authorizing key (GF-1, gate-6 §9.6).** The `pqc_auths[]` entry aligned with the bond
 vin verifies against:
 
-- **credit / identity-establishing paths** (`bond_debit == 0`: `JoinMarket`, `Reinstate`,
-  `HoldingsUpdate` add-shard) — the **identity key `P_pubkey`** (`= hybrid_sign_pk`). The funded
-  value arrives via standard `txin_to_key` inputs (key images, self-authorizing); the bond-vin
-  signature only proves control of `P_canonical_id`.
-- **debit paths** (`bond_debit > 0`: `Release`, `HoldingsUpdate` drop-shard) — the record's
-  committed **`bond_spend_pk`**, never `P_pubkey`.
+- **credit / identity-establishing paths** (`bond_debit == 0`: `JoinMarket`, and the zero-money
+  `Reinstate`) — the **identity key `P_pubkey`** (`= hybrid_sign_pk`). The funded value arrives
+  via standard `txin_to_key` inputs (key images, self-authorizing); the bond-vin signature only
+  proves control of `P_canonical_id`.
+- **debit paths** (`bond_debit > 0`: `Release` — the only one left since the `HoldingsUpdate`
+  drop was REJECTED, 2026-09-20) — the record's committed **`bond_spend_pk`**, never `P_pubkey`.
 
 The account identity key therefore **never authorizes a value-out**, preserving the Round-1
 identity-only invariant (gate-6 §9.6 GF-1).
@@ -346,17 +349,21 @@ require the `bond_spend_pk` field present (`scheme_id = 1`) and **commit it into
 (immutable debit authorizer, §4.1); `bond_credit == bond_floor(holdings)`; credit
 `bonded_total_atomic` and `total_bonded_atomic`.
 
-**Reinstate path (reinstatement, not re-entry — P2B-9):** require existing record with an
-**open bad interval** (`good_standing == false`, both slash severities); the vin's holdings
-must be `ShardSetCompact`, **non-empty**, and a **superset of the record's current holdings**
-(shedding stays `HoldingsUpdate`-drop's gated job — Pin 1); `bond_credit ==
-bond_floor(post) − bonded_total == |added|·FLOOR`, **zero legal and common** (the landed
-slash preserves floor-equality, so standing-only reinstatement carries no credit — Pin 2,
-amending the earlier "restores `== bond_floor`" wording); interval-cap headroom
-`bad_intervals.size() ≤ 254` (one slot reserved for the next slash + one for `Release`'s
-clean close, so exit is always reachable — Pin 6); **close** the open bad interval
-(`end_exclusive = E_reinstate + 1`, F3 / Pin 3). Carried shards keep their add-epochs; added
-shards take `E_reinstate` (Pin 7).
+**Reinstate path (reinstatement, not re-entry — P2B-9, as amended by PR #808 under the
+immutable bond):** require existing record with an **open bad interval** (`good_standing ==
+false`); the vin's holdings must be `ShardSetCompact`, **non-empty**, and **equal to the
+record's current holdings** (`bond_post.rs`: *"post-holdings must equal the record's current
+holdings"* — growth, shed and swap all refuse at this one check; Pin 1); **`bond_credit ==
+bond_debit == 0`** (zero-money, `BondTerm::Unmoved` — the landed slash preserves
+floor-equality, so there is no deficit to restore and no growth to credit; Pin 2); interval-cap
+headroom `bad_intervals.size() ≤ 254` (one slot reserved for the next slash + one for
+`Release`'s clean close, so exit is always reachable — Pin 6); **close** the open bad interval
+(`end_exclusive = E_reinstate + 1`, F3 / Pin 3). No add-epoch is written — every shard is a
+carried shard (Pin 7). A slash-emptied record (`bonded_total == 0`) cannot reinstate — it has
+nothing to restate (`ShardSetCompactEmpty`) and re-enters via `JoinMarket` under a new
+persona. *Records-was (2026-07-14 → 2026-09-20): `post ⊇ current`, credit `== |added|·FLOOR`,
+added shards taking `E_reinstate`, both slash severities recoverable — the superset's permitted
+direction was in-place growth, which the ruling forbids.*
 
 **Release path (G4-1):** clean release of bonded balance when:
 
@@ -391,41 +398,44 @@ post-release** within `W`.
 |--------|----------|---------|
 | Release cooldown | ~one grace window after last serve | When collateral may **Release** |
 | Backlog claim (`W`) | `MAX_CLAIM_AGE_W` epochs | When reward epochs **forfeit** (E-3) |
-| Retention commitment | `bond_duration(age)` per shard (below) | When a held shard may be **voluntarily dropped** |
+| ~~Retention commitment~~ | ~~`bond_duration(age)` per shard~~ | **REJECTED with its subject, 2026-09-20** — governed when a held shard could be voluntarily dropped; there is no voluntary drop |
 
 Collateral return and reward mint are **independent value flows**.
 
-**Retention-commitment horizon (sim L9/L10; decided 2026-06-11).** Each held shard carries a
-minimum commitment of `bond_duration(age) = BOND_DURATION_BASE_EPOCHS · (1 +
-BOND_DURATION_AGE_SCALE · age)` settlement epochs from acquisition (normalized shard age
-`age ∈ [0,1]`; constants in [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §1,
-shape pinned / numerics provisional). Before the horizon elapses, the shard is ineligible for
-voluntary drop via `HoldingsUpdate` (V3.0 wire) or `Release`-with-remaining-holdings; slash and
-full exit (`Release` of the entire record after release cooldown) are unaffected — duration
-deters *shard-drop while staying*, not capital flight
-([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*L10 hardening* disposition and
-reversion clause).
+**Retention-commitment horizon — REJECTED with the voluntary drop (2026-09-20).** *Records-was
+(decided 2026-06-11; frozen as slice A, 2026-07-14):* each held shard carried a minimum
+commitment `bond_duration(age) = BOND_DURATION_BASE_EPOCHS · (1 + BOND_DURATION_AGE_SCALE ·
+age)` settlement epochs from acquisition, before which it was ineligible for voluntary drop —
+"duration deters *shard-drop while staying*, not capital flight." Under the immutable bond
+there is no shard-drop-while-staying to deter: a persona holds its set until it releases
+whole, and the whole-bond `Release` cooldown is the one exit gate. The production
+`bond_duration` function has no consumer left and is enumerated for deletion at
+[`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2 row 8; the sim keeps
+its own copy for the age-stratified harm model
+([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*L10 hardening*, now a records-was).
 
 ### 3.5 Verify order (consensus) — bond-post tx
 
 1. Structural — tx type, single bond vin, `P_canonical_id` recomputation matches. On
    `JoinMarket`, `bond_spend_pk` field present and well-formed (`scheme_id = 1`); on every other
    `post_kind`, `bond_spend_pk` field **absent** (it lives in the record).
-2. `post_kind` preconditions — join / re-bond / release / holdings-update paths.
+2. `post_kind` preconditions — join / reinstate / release paths (`post_kind = 3` already failed
+   step 1 as `InvalidPostKind`).
 3. **Term rigidity** — `bond_credit` / `bond_debit` match §3.2 allowed-terms table (one
    direction only).
 4. **Floor equality** — `bonded_total_atomic == bond_floor(holdings)` on the vin's **post-connect**
-   state (holdings is the *resulting* set — empty for full `Release`; see the debit-path note below).
+   state (holdings is the *resulting* set — empty for `Release`, equal to the record's current set
+   for `Reinstate`; see the debit-path note below).
 5. **Bond-vin authorization (GF-1, gate-6 §9.6)** — the `pqc_auths[]` entry aligned with the
    bond vin verifies against the **dedicated bond-spend key on debit paths** and the **identity
    key on credit paths**. *(The block-level fast-path re-pin of this step — census CEN-G8 — was
    retired 2026-09-02 with the per-block-checkpoint mechanism, C2-R1a: per-tx verify is now
    unconditional at block connect, so this step's per-tx enforcement is the sole and always-on
    site; [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) §3.1.)*:
-   - `bond_debit > 0` (`Release`, `HoldingsUpdate` drop) → verify against the record's committed
+   - `bond_debit > 0` (`Release`) → verify against the record's committed
      `bond_spend_pk`. The account identity key `P_pubkey` (`= hybrid_sign_pk`) **must not**
      authorize a debit (identity-only invariant).
-   - `bond_debit == 0` (`JoinMarket`, `Reinstate`, `HoldingsUpdate` add) → verify against
+   - `bond_debit == 0` (`JoinMarket`, `Reinstate`) → verify against
      `P_pubkey`; on `JoinMarket` this signature also binds the committed `bond_spend_pk` —
      the vin rides inside the signed tx prefix of the surface-A whole-tx payload
      (§3.4.1; SA-2b retired the separate sig-preimage).
@@ -433,26 +443,31 @@ reversion clause).
    When `bulletproofs_plus` is non-empty, layout must be canonical (exactly one aggregated
    proof, `1 ≤ V.size() ≤ BULLETPROOF_PLUS_MAX_OUTPUTS`); credit-only join may omit proofs.
 
-**Debit-path vin semantics (`Release` / `HoldingsUpdate` drop) — RATIFIED (2026-07-12, maintainer, P2B-8).**
+**Post-state vin semantics — RATIFIED (2026-07-12, maintainer, P2B-8).**
 The vin's `holdings` and `bonded_total_atomic` are the **post-connect** state, so step 4's floor
 equality reads uniformly across every path — `vin.bonded_total_atomic == bond_floor(vin.holdings)` is
 the *resulting* record. (The §3.4 field comment and the §4.3 refund line are now disambiguated to
 match — `holdings` there means the record's *current* set — so this note is a consolidated summary,
 not an ambiguity patch.) Consequences:
 
-- **`HoldingsUpdate` drop** carries the **reduced** holdings; the connect diffs it against the record's
-  current set to identify the dropped shard (which is why the vin must carry the post-state, not the
-  current set — there is no separate drop-shard field).
-- **Full `Release`** carries **empty holdings** (`bond_floor(∅) = 0`, so `bonded_total_atomic = 0`). The
-  `ShardSetCompactEmpty` rejection is a **credit / identity-path** check (`JoinMarket` / `Reinstate` /
-  add / drop-with-remaining hold ≥ 1 shard), **not** a full-`Release` check.
+- **`Release`** carries **empty holdings** (`bond_floor(∅) = 0`, so `bonded_total_atomic = 0`). The
+  `ShardSetCompactEmpty` rejection is a **credit / identity-path** check (`JoinMarket` / `Reinstate`
+  hold ≥ 1 shard), **not** a `Release` check.
+- **`Reinstate`** carries holdings **equal to** the record's current set (P2B-9 Pin 1 as amended);
+  the post-state reading makes that a direct set comparison.
 - **Debit amount:** `bond_debit == record.bonded_total(current) − vin.bonded_total_atomic` (= the full
-  `record.bonded_total` for `Release`). §4.3's `bond_debit == bonded_total == bond_floor(holdings)`
-  refers to the **record's current** holdings (the refund amount), *not* the vin's post-state field —
-  so there is no contradiction with step 4.
+  `record.bonded_total` for `Release`, the only debit path). §4.3's `bond_debit == bonded_total ==
+  bond_floor(holdings)` refers to the **record's current** holdings (the refund amount), *not* the
+  vin's post-state field — so there is no contradiction with step 4.
+
+*Records-was:* this note was ratified for `Release` **and** the `HoldingsUpdate` drop, whose vin
+carried the *reduced* holdings for the connect to diff against the current set — the reason the
+post-state form was chosen over a current-set echo with a separate drop-shard field. The drop is
+REJECTED (2026-09-20); the post-state form stays because `Release` and `Reinstate` read uniformly
+under it.
 
 Rust-native verify: `shekyl-archival-retention::bond_post` (rule 20). **Ratified by the maintainer;**
-the current-set-echo alternative (which would need a separate drop-shard field) is declined.
+the current-set-echo alternative is declined.
 
 On block connect for **JoinMarket:** create `ArchivalBondRecord` (§4.1); credit
 `total_bonded_atomic`.
@@ -512,7 +527,8 @@ key (`tx.pqc_auths[bond_index].hybrid_public_key`, whose signature over the
 whole-tx payload `verify_transaction_pqc_auth` checks) pinned kind-dependently:
 **credit paths → the identity key `P_pubkey`; debit paths → the record's
 COMMITTED `bond_spend_pk`** — the shared debit authorizer both flip pins asked
-for (`HoldingsUpdate`-drop rides the same selection when it lands). The wire
+for (`Release` is the sole debit path since the `HoldingsUpdate` drop was REJECTED,
+2026-09-20; the selection is kind-generic regardless). The wire
 divergence is reconciled: the C++ `txin_archival_bond_post` (binary, boost, and
 JSON serializers) carries the §9.11 JoinMarket-coupled field with the exact
 canonical length enforced both directions, matching `shekyl-wire` and the
@@ -535,8 +551,9 @@ vin↔auth **index mapping** (`pqc_auths[bond_index]` is the bond input's auth;
 **signature verification itself** (`verify_transaction_pqc_auth` over the
 whole-tx payload against that entry's key). The GF-1 check only pins *which*
 key must be that authorizer. Any change to the pqc-auth indexing or payload
-shape must re-check this seam; the `HoldingsUpdate`-drop slice inherits the
-same preconditions when its `bond_debit > 0` rides this selection.
+shape must re-check this seam; any future debit path would inherit the same
+preconditions when its `bond_debit > 0` rides this selection (none is planned —
+the one other debit path, the `HoldingsUpdate` drop, is REJECTED).
 
 **Block-level bond-post pass (LANDED end-to-end):** at most **one bond-post vin
 per `P_canonical_id` per block**, keyed on
@@ -546,7 +563,7 @@ the emission `(P,E)` pass's sibling, same decision-placement pin: C++ marshals t
 block's ids, Rust decides). Per-tx verify runs against pre-block DB state, so
 **every** same-`P` same-block pair passes it independently — JoinMarket+JoinMarket
 (double `total_bonded_atomic` credit), Release+Release (double debit),
-JoinMarket+Release, and every future `HoldingsUpdate` combination — and the §4.5
+JoinMarket+Release, and every Reinstate pairing — and the §4.5
 conservation audit is **not** a backstop (a double-credit doubles both sides of
 `total_bonded == Σ_P bonded_P` consistently, so it passes on corrupt state).
 Reject, not serialize: lifecycle transitions have no legitimate
@@ -604,7 +621,7 @@ view of this log, never a stored flag.
 labels (gate-6 §9.3 `shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1`). It is committed
 **once, at `JoinMarket`** (bound into the surface-A signed payload via the tx prefix, §3.4.1;
 SA-2b retired the separate sig-preimage) and is **immutable for the
-record's life**; it authorizes every later `bond_debit` (`Release`, `HoldingsUpdate` drop, §3.5
+record's life**; it authorizes every later `bond_debit` (`Release` — the one debit path, §3.5
 step 5). This keeps `P_pubkey` (`= hybrid_sign_pk`) **identity-only** — its compromise reveals
 nothing spendable — rather than carving the Round-1 identity-only invariant by letting the
 account key authorize value-out. It is **not** a custody-model change: the bond stays a
@@ -633,7 +650,8 @@ applies `slash(P, s)`.
 1. `bonded_total_atomic -= FLOOR` (or **whole balance** for `CompleteTree` — FOUNDATION §3.2)
 2. `holdings` loses shard *s* (or full release for foundation)
 3. Re-establish `bonded_total_atomic == bond_floor(holdings)` — **`==` pin prevents
-   partial-slash theater**; last-shard slash → `0` → out of Market until re-bond
+   partial-slash theater**; last-shard slash → `0` → out of Market for good on this record
+   (re-entry is a new persona's `JoinMarket`; a `0`-record cannot `Reinstate`, P2B-9 Pin 1)
 4. `total_bonded_atomic -= slashed_amount`; `burned_total += slashed_amount` (§4.5)
 5. Append slash interval to `bond_event_log` (F3)
 
@@ -657,55 +675,45 @@ item 6 ("graceful-exit return") — now spec'd here.
 action; sub-condition **collateral in cooldown** until release cooldown elapses. Full
 retirement = **bond released** ∧ backlog exhausted or lapsed (`W`). `p_slot` burn follows.
 
-### 4.4 HoldingsUpdate — partial release principle (G4-6)
+### 4.4 HoldingsUpdate — partial release principle (G4-6) — REJECTED 2026-09-20 (immutable bond)
 
-**Wire:** **V3.0** (`HoldingsUpdate` vin). Promoted from deferred-V3.1 (decided
-2026-06-15): the bond lifecycle is consensus-state-machine balance, so adding mid-life
-shard adjustment post-genesis would be a hard fork; and without it the only way to add or
-shed a single shard is `Release` + re-`JoinMarket` — tearing down a working multi-shard
-operation (all collateral into release cooldown, all serving interrupted, all serve-credit
-continuity reset) to swap one slot. The full lifecycle
-(`JoinMarket / Reinstate / HoldingsUpdate / Release`) ships at genesis. Sim reconciliation of
-the resulting age-stratified mobility friction is a pre-seal dependency
-([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*steady-state frame* item 6).
+**This section is the record of a rejection, not a mechanism.** `HoldingsUpdate` — a bonded
+persona's voluntary add or drop of one held shard, `post_kind = 3` — was promoted to genesis on
+2026-06-15 on the argument that without it the only way to change one slot was
+`Release` + re-`JoinMarket`, tearing down a working multi-shard operation to swap one shard.
+Its principle (grace-tail drop: the per-shard release cooldown and slash settlement as verify
+*preconditions*, the `FLOOR` returned at connect, P2B-7 Pins 2–3), its retention-horizon gate
+(`bond_duration(ShardAgeAtAdd(s))`, slice A, 2026-07-14) and its verify/connect/pop arms were
+all built and wired by 2026-07-14. The **immutable-bond ruling** then rejected the mechanism
+whole: a bond's holdings are fixed for the record's life; an operator who wants different
+holdings **rotates** — a new persona bonds the new set and the old one releases, under the
+§10.1 two-active overlap of [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md)
+§5.3.1 — rather than posting an *n*-th update under one pseudonym. The tear-down this section
+once called the problem is the designed path. Ruling and reason:
+[`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md) (2026-09-20),
+[`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §"A bond is immutable for its life".
 
-**Principle (grace-tail, ratified 2026-07-15):** dropping shard *s* from `ShardSetCompact`
-reduces `bond_floor(holdings)` by `ARCHIVAL_BOND_FLOOR`. The **release cooldown is a verify
-precondition on the drop**, not a post-drop state (the same model as `Release`): the drop of
-*s* cannot be posted until *s*'s release cooldown has elapsed (`release_cooldown_elapsed` on
-*s*'s per-shard last-served epoch) **and** the slash scheduler has settled through that
-anchor (`slashes_settled_through`). At connect the shard leaves `holdings`, `bonded_total −=
-FLOOR`, and the `FLOOR` returns immediately via the `bond_debit` source term (§3.2) — no
-`collateral-in-cooldown` sub-state, no `bond_event_log` drop interval, no clean-close marker
-(`P` stays `Bonded` with ≥1 shard). The drop is additionally gated by the **retention-horizon**
-(`bond_duration(ShardAgeAtAdd(s))`, §4.4 slice-A freeze / P2B-7 Pin 3): a shard younger than
-its horizon is ineligible for voluntary drop at all. (Supersedes the earlier
-"cannot withdraw immediately" drop-then-cool wording — the same fossil as the `Release` "stays
-slashable" language; see `PHASE_2B_FSM_RETOOL.md` P2B-7 Pin 2/3.)
+**What is gone, and where the record is.** The wire discriminant is unrepresentable —
+`BondPostKind::from_u8(3)` is `InvalidPostKind` (PR #808; the slot is held in §3.4's table so the
+name is not re-minted, rule 23); the verify/connect/pop arms and their FFI are deleted (E4
+`ARW-14`); the HU error codes 24–36 are RETIRED in `shekyl-ffi::archival_ffi::codes`. The
+deletion set is enumerated **with per-row status** at
+[`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3.2, and the statuses
+are not one word. Pin 5's add-half, Pin 3's per-shard anti-dodge (subsumed by the
+whole-bond `Release` cooldown), and the drop-last-shard rule landed as doc-side
+deletions. The wallet-side per-shard absence tracking was **refuted**: a slash still
+removes one shard. The add-epoch substrate is a collapse-to-record-field candidate,
+and production `bond_duration(age)` is delete-or-keep; both are enumerated, not ruled.
+The grace-tail text and
+the retention-horizon freeze are in git history at the commit that wrote this paragraph.
 
-**Retention-horizon freeze (LANDED — slice A, 2026-07-14).** The `bond_duration(age)`
-drop-eligibility gate (§3.4 asymmetry table; P2B-7 Pin 3 / P2B-8 Q3) is
-`current_epoch − add_epoch(s) ≥ bond_duration(ShardAgeAtAdd(s))`, both operands
-powered by the one v3.0 per-shard add-epoch record field (landed in slice B). The
-formula is genesis-frozen in `shekyl-archival-retention::bond_duration`:
-`bond_duration(age) = BASE·(1 + SCALE·age)` (integer-canonical, round-half-up, floored
-at 1; `BOND_DURATION_{BASE_EPOCHS,AGE_SCALE}` = 4/4 provisional, config-generated), with
-`age = shard_age_milli` **evaluated at the shard's add-epoch settlement close**
-`H_close(add_epoch)`. **Age-realization invariant (STATED, genesis-frozen):** the sim
-feeds one age variable into both the scarcity/reward curve and the retention lock, and
-consensus already realizes that age as `shard_age_milli` in the reward path
-(`scarcity_milli`), so retention **consumes the same realization** — `bond_duration` and
-`scarcity` read one age, `shard_age_milli @ H_close(add)`; forking a separate age for
-retention would split a normalization the sim never split. The freeze rests on this
-stated invariant, not on the implementation (full statement + the sim source trace:
-`ARCHIVAL_TIMING_CONSTANTS.md` §1). The `ShardAgeAtAdd` newtype makes age-at-drop and
-raw-block-height evaluation unrepresentable at the type; the integer formula is proven
-bit-identical to the sim's f64 model over the full age sweep (integer authoritative). The
-drop verify/connect that *consumes* this gate lands in slice C.
-
-**Safety for deferral:** `work_P(E)` is derived from per-`(P,s,E)` **retention bits**, not
-the mutable holdings descriptor. HoldingsUpdate cannot corrupt historical work; descriptor =
-current membership, bits = per-epoch ground truth.
+**What survives.** The **age-realization invariant** the freeze rested on — one age,
+`shard_age_milli @ H_close(add)`, read by the reward curve's `scarcity_milli` — is a property of
+the reward path and still binds there; its statement lives at
+[`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §1. And the **safety argument**
+holds in the direction that remains: `work_P(E)` is derived from per-`(P,s,E)` retention bits,
+not the holdings descriptor, so a slash-shrunk descriptor cannot corrupt historical work
+(descriptor = current membership, bits = per-epoch ground truth).
 
 ### 4.5 Supply conservation law (G4-3 — closed)
 
@@ -761,8 +769,8 @@ On block disconnect at height `H`:
 
 1. **JoinMarket** in block: delete `ArchivalBondRecord` iff `join_market_height == H`;
    revert `bond_credit`, `total_bonded_atomic`, same-block gate-2 writes for `P`.
-2. **Reinstate / Release / HoldingsUpdate** in block: revert record + balance terms in reverse
-   connect order.
+2. **Reinstate / Release** in block: revert record + balance terms in reverse connect order
+   (the `HoldingsUpdate` pop twin went with its connect arm, E4 `ARW-14`).
 3. Emission leg §8: paying-emission dedup + mint undo (separate vin path).
 
 Wallet ([`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-5): `Bonded` →
@@ -799,7 +807,7 @@ Pin joint disposition in gate-6 Round 2+ with this doc's join event as the named
 | Bond recovery via drain only | Rejected — §4.3 G4-1 |
 | Slash wire bytes | Deferred — gate-4 round 1+ |
 | `total_bonded_atomic` LMDB placement | Deferred — with archival state schema (§4.5) |
-| `HoldingsUpdate` wire | **V3.0** — promoted from deferred-V3.1 (2026-06-15); principle §4.4 |
+| `HoldingsUpdate` wire (`post_kind = 3`) | **REJECTED 2026-09-20** — immutable bond; discriminant `InvalidPostKind` (PR #808); §4.4 is the record. *Records-was: promoted deferred-V3.1 → V3.0 on 2026-06-15, built 2026-07-14* |
 
 ---
 
@@ -817,8 +825,10 @@ law (§4.5); `== bond_floor`; UTXO framings rejected.
 - [x] C++ / Rust `txin_archival_bond_post` vin registration (`tag 0x05`, `bond_wire`, §3.4.1).
 - [x] `bond_credit`/`bond_debit` in RCT balance verifier (`verCtSemanticsBondPost`; NIC path).
 - [x] JoinMarket connect: `put_archival_bond_record` + `total_bonded_atomic`.
-- [ ] Reinstate / Release / HoldingsUpdate connect paths — **V3.0 scope** (promoted 2026-06-15;
-      FSM actions in [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md)).
+- [x] Reinstate / Release connect paths — landed (`Release` 2026-07-13, `Reinstate` PR #307;
+      FSM actions in [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md)). The third path this
+      item named, `HoldingsUpdate`, landed alongside and was then REJECTED and deleted
+      (2026-09-20; §4.4).
 - [ ] **Dedicated bond-spend key (GF-1, gate-6 §9.6)** — commit `bond_spend_pk` into the record
       on `JoinMarket` connect (§4.1); verify `bond_debit` paths' bond-vin `pqc_auths` against the
       committed `bond_spend_pk` and **reject** the account `P_pubkey` as a debit authorizer (§3.5

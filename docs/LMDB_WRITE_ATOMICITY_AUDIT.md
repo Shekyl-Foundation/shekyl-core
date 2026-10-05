@@ -605,7 +605,7 @@ chain height *after* the block. The tx-connect journals key on the block's
 | `archival_epoch_close_log` revert (+ boundary prune floor) | `removed_block_height` | hook at `prev_height + 1` |
 | `archival_emission_claim_log` revert | `removed_block_height − 1` | tx-connect at block index `N` |
 | `archival_bond_unbond_log` revert | `removed_block_height − 1` | tx-connect at `N` |
-| `archival_bond_holdings_update_log` revert | `removed_block_height − 1` | tx-connect at `N` |
+| `archival_bond_holdings_update_log` revert | `removed_block_height − 1` | tx-connect at `N` — *no writer since 2026-09-20 (kind REJECTED; the revert is a named no-op in this slot, `db_lmdb.cpp:6289`)* |
 | `archival_bond_reinstate_log` revert | `removed_block_height − 1` | tx-connect at `N` |
 | `archival_budget_accrual` remove | `removed_block_height − 1` | funnel step 6 at `prev_height` |
 | attestation witness remove | `removed_block_height` | store at key `prev_height` (`archival_attestation_witness_key` adds the +1) |
@@ -1094,7 +1094,7 @@ every row of the table that follows:
 | `archival_alt_attestation_witness` | `store/remove_archival_alt_attestation_witness`; `drop_alt_blocks` | §5 | excluded | excluded |
 | `archival_attestation_witness` | `store/remove_…_at_height`; `delete_…_before_height` (prune) | §2/§3/§5a | excluded | small |
 | `archival_bond` | `put_archival_bond_value` / `remove_archival_bond_record` | §2/§3 | excluded | set-shaped |
-| `archival_bond_holdings_update_log` | journal helpers | §2/§3/§7/§8 | excluded | append-mostly |
+| `archival_bond_holdings_update_log` | journal helpers *(none reachable since 2026-09-20 — kind REJECTED, appliers throw, table empty by construction, so the class below is the design-time grade; deletion owed, `FOLLOWUPS.md`)* | §2/§3/§7/§8 | excluded | append-mostly |
 | `archival_bond_reinstate_log` | journal helpers | §2/§3/§7/§8 | excluded | append-mostly |
 | `archival_bond_unbond_log` | journal helpers (`archival_journal_put/delete`, param dbi) | §2/§3/§7/§8 | excluded | append-mostly |
 | `archival_budget` | epoch-close put; `delete_archival_budget_for_epoch` — the **pop-side** revert (`revert_archival_epoch_close_at_height`, `:8536`); `delete_archival_budget_before_epoch` — the retention prune | §2/§3/§5a | excluded | small |
@@ -1801,7 +1801,8 @@ comparator becomes digest-relevant and this row must be revisited.*
    unbounded**. The six genuinely append-only journals
    (`archival_slash_log`, `archival_epoch_close_log`,
    `archival_emission_claim_log`, `archival_bond_unbond_log`,
-   `archival_bond_holdings_update_log`, `archival_bond_reinstate_log`) have no
+   `archival_bond_holdings_update_log` — *empty by construction since
+   2026-09-20, its kind REJECTED* — and `archival_bond_reinstate_log`) have no
    prune and are graded `append-mostly`, not `small`. Three further archival
    tables (`archival_bond`, `archival_slash_applied`,
    `archival_shard_segment`) are live keyed state, not journals, and are
