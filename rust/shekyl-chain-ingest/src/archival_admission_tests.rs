@@ -72,7 +72,7 @@ use shekyl_chain_rules::{
     SettlementSchedule, TxSlot,
 };
 use shekyl_types::archival::{BadInterval, Holdings};
-use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{BondPostKind, Holdings as WireHoldings};
 use shekyl_wire::Input;
@@ -93,10 +93,12 @@ const ENDPOINT: [u8; 32] = [0xEE; 32];
 /// holds it (`scenario_tests`: unlock window + spendable age + 1). The same
 /// under every regtest rule set here: the lever moves the settlement
 /// schedule, not the unlock window.
-fn first_spending_height() -> u64 {
-    RuleSet::GENESIS.mined_money_unlock_window().to_raw()
-        + RuleSet::GENESIS.tx_spendable_age().to_raw()
-        + 1
+fn first_spending_height() -> BlockHeight {
+    let rules = &RuleSet::GENESIS;
+    let wait = rules.mined_money_unlock_window() + rules.tx_spendable_age() + BlockCount::ONE;
+    BlockHeight::ZERO
+        .checked_add(wait)
+        .expect("a regtest unlock window is a small span")
 }
 
 fn at_post(slot: usize) -> Locus {
@@ -129,7 +131,7 @@ enum Archival {
     /// is the recompute over its `hybrid_public_key` (J11's clause), and
     /// the money terms J14 reads.
     Post {
-        height: u64,
+        height: BlockHeight,
         slot: usize,
         kind: &'static str,
         hint_recomputes: bool,
@@ -141,17 +143,21 @@ enum Archival {
     /// A serve-credit **vin** (none in the corpus today — the injected
     /// credit is a record, below).
     CreditVin {
-        height: u64,
+        height: BlockHeight,
         slot: usize,
         shard: u64,
         epoch: u64,
     },
     /// An `Inject` record: a credit no block produced, attributed to the
     /// tip it was written at. Not a vin: J4–J6 never see it.
-    Injected { at_tip: u64, shard: u64, epoch: u64 },
+    Injected {
+        at_tip: BlockHeight,
+        shard: u64,
+        epoch: u64,
+    },
     /// An emission vin: the claimant and the epochs claimed (J19's parse).
     Claim {
-        height: u64,
+        height: BlockHeight,
         slot: usize,
         epochs: Vec<u64>,
     },
@@ -171,8 +177,8 @@ fn enumerate(dir: &Path) -> (Vec<(PCanonicalId, Archival)>, SettlementSchedule) 
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let mut reader =
         CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
-    let mut height = reader.first_height().to_raw();
-    let mut tip: Option<u64> = None;
+    let mut height = reader.first_height();
+    let mut tip: Option<BlockHeight> = None;
     let mut found = Vec::new();
     while let Some(event) = reader.next().expect("corpus reads") {
         match event.event {
@@ -247,11 +253,11 @@ fn enumerate(dir: &Path) -> (Vec<(PCanonicalId, Archival)>, SettlementSchedule) 
                     }
                 }
                 tip = Some(height);
-                height += 1;
+                height = height.saturating_add(BlockCount::ONE);
             }
             IngestEvent::Rewind { to } => {
-                tip = Some(to.to_raw());
-                height = to.to_raw() + 1;
+                tip = Some(to);
+                height = to.saturating_add(BlockCount::ONE);
             }
             IngestEvent::Inject(credit) => found.push((
                 credit.persona,
@@ -294,7 +300,7 @@ fn enumerate(dir: &Path) -> (Vec<(PCanonicalId, Archival)>, SettlementSchedule) 
 fn expected(shape: &str) -> Vec<Archival> {
     match shape {
         "bond-post" => vec![Archival::Post {
-            height: 98,
+            height: BlockHeight::from_raw(98),
             slot: 0,
             kind: "JoinMarket",
             hint_recomputes: true,
@@ -305,7 +311,7 @@ fn expected(shape: &str) -> Vec<Archival> {
         }],
         "emission-claim" => vec![
             Archival::Post {
-                height: 98,
+                height: BlockHeight::from_raw(98),
                 slot: 0,
                 kind: "JoinMarket",
                 hint_recomputes: true,
@@ -315,12 +321,12 @@ fn expected(shape: &str) -> Vec<Archival> {
                 debit: 0,
             },
             Archival::Injected {
-                at_tip: 115,
+                at_tip: BlockHeight::from_raw(115),
                 shard: 0,
                 epoch: 1,
             },
             Archival::Claim {
-                height: 1025,
+                height: BlockHeight::from_raw(1025),
                 slot: 0,
                 epochs: vec![1],
             },
@@ -439,7 +445,9 @@ async fn record_of(
 async fn a_slashed_persona_reinstates_and_the_fold_agrees_with_the_wallet_side_verify() {
     let schedule = levered_schedule();
     let mut scenario = Scenario::open_under("slice-8-reinstate", FreeHash, levered_rules());
-    let mut chain: Vec<Mined> = scenario.mine(first_spending_height()).await;
+    let mut chain: Vec<Mined> = scenario
+        .mine(ChainCount::from_next_height(first_spending_height()).to_raw())
+        .await;
     let next = |chain: &Vec<Mined>| chain.len() as u64;
 
     // The join, at the first spending height.
@@ -806,7 +814,9 @@ async fn a_slashed_persona_reinstates_and_the_fold_agrees_with_the_wallet_side_v
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_post_is_keyed_by_the_recompute_and_a_release_by_the_record_key() {
     let mut scenario = Scenario::open("slice-8-hint");
-    let mut chain: Vec<Mined> = scenario.mine(first_spending_height()).await;
+    let mut chain: Vec<Mined> = scenario
+        .mine(ChainCount::from_next_height(first_spending_height()).to_raw())
+        .await;
     let next = |chain: &Vec<Mined>| chain.len() as u64;
     let (bonded, stranger, signer) = (Persona::at(21), Persona::at(22), Persona::at(23));
     let total = ARCHIVAL_BOND_FLOOR_ATOMIC;
