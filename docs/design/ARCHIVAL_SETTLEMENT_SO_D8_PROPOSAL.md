@@ -2267,6 +2267,13 @@ not wait on them; building does.
    FOLLOWUPS row *Bond admission's shard predicate*): ruled and unbuilt,
    and its listed blocker (the A4 rows, `b_*`) dissolved by `PDM-Q6` item 5
    and `SHT-Q2`. It carries the job of the freeze clause J8 loses.
+   *Cross-reference, not a ruling of this document*
+   ([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md) §B
+   family 2, class B, 2026-10-04): CEN-J8's clause *"the shard's frozen
+   segment must exist at `H_fire`"* is stated on the leaf segment, which
+   dies with the engine swap. This round re-bases it on the ruled partition
+   (`SHT-Q1`, `SHT-Q2`), with possession proved on transaction bodies, not
+   leaf chunks.
 
 Also owed with the census change that lands the rows (`SCV-Q6`): a
 `RowStatus` arm for a row retired by ruling, carrying its citation, so the
