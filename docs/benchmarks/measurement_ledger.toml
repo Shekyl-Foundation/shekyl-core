@@ -209,7 +209,7 @@ status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
 stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose; the one floor A/B of it is not in the tree (BA-G1, BA-Q2)." },
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (the runs PR #968 lands; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
 ]
 capture = "docs/benchmarks/w2_ladder_interleaved_pow_on_20261001.tsv"
@@ -231,7 +231,7 @@ status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
 stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose; the one floor A/B of it is not in the tree (BA-G1, BA-Q2)." },
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (the runs PR #968 lands; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
 ]
 capture = "docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv"
@@ -253,7 +253,7 @@ status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
 stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose; the one floor A/B of it is not in the tree (BA-G1, BA-Q2)." },
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (the runs PR #968 lands; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
 ]
 capture = "docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv"
@@ -275,7 +275,7 @@ status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
 stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose; the one floor A/B of it is not in the tree (BA-G1, BA-Q2)." },
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (the runs PR #968 lands; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
 ]
 capture = "docs/benchmarks/w2_ladder_interleaved_pow_on_20261001.tsv"
@@ -295,9 +295,9 @@ needle = "18,229 pairs"
 measured_by = ["BA-T5"]
 status = "stale"
 stale_since = "2ebb1da607"
-carrier = "BA-T5 (BA-G1). Measured with one read in flight, before PR #954; the first v3 measurement is not in the tree (BA-Q2)."
+carrier = "BA-T5 (BA-G1). Measured with one read in flight, before PR #954. PR #968 prices the v3 serve path over loopback and does not re-run this reading."
 stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose; the one floor A/B of it is not in the tree (BA-G1, BA-Q2)." },
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (the runs PR #968 lands; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
 ]
 capture = "docs/benchmarks/u1b_floor_device_20261002.tsv"
