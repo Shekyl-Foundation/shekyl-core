@@ -1429,6 +1429,9 @@ the leading header and a decision needing leaf bytes could not be made in time.
 A scheme requiring one is a format change, not an implementation detail — the
 same move as the *validated-predecessor* constraint on `RF-D5`'s nonce term, and
 for the same reason: an invariant held by circumstance has no name and no test.
+The same field carries `SF-D8`'s recomputation constraint
+(`ARCHIVAL_SHARD_FETCH.md`): a later holder of the shard must be able to
+rebuild the padded frame from the shard and the pass record.
 
 **`RF-D7`'s bound is unforgettable rather than merely documented.** Both checks
 run inside `ServedFrameHeader::read`, before it returns, so **the only way to

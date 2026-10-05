@@ -290,19 +290,12 @@ impl PassRequestHeader {
 /// answers no other. It leads the preimage and has a fixed width, so the
 /// split between salt and body is unambiguous without a length field.
 ///
-/// **What it leaves behind.** The pass record carries the nonce and this
-/// digest, and `framed` is a function of the shard for as long as writers
-/// emit no padding (`RF-D4`'s write-zero rule). Anyone who later holds the
-/// shard can therefore recompute the digest of a recorded pass. A recorded
-/// digest that does not match is evidence that `P` signed for bytes that
-/// were not the shard, and it lasts as long as the record does. This is why
-/// the digest is a flat hash of the whole body and not a hash of a
-/// precomputable summary of it, such as a root of chunk hashes: a `P`
-/// holding only the summary could sign a digest consistent with a shard it
-/// had discarded, and no later reader could tell. A padding scheme keeps
-/// the property only if a later reader can still rebuild the padded frame:
-/// either the padding is a function of the shard, or its exact bytes are
-/// carried with the pass record.
+/// **The whole framed body.** Every byte of `framed` enters the preimage.
+/// `SF-D8` (`ARCHIVAL_SHARD_FETCH.md`) relies on that flat hash: a later
+/// holder of the shard recomputes a recorded pass, and a hash of a
+/// precomputable summary can be signed after the bytes are gone and still
+/// match. Whether a padding scheme still allows that recomputation is
+/// `ServedFrameHeader::padding_len`'s constraint, stated in `SF-D8`.
 ///
 /// **What this does not claim.** It does not show that `P` stores the bytes:
 /// a `P` that fetches them from a co-holder on demand produces the same

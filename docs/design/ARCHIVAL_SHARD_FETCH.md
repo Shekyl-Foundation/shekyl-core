@@ -152,7 +152,7 @@ inherited as "the client waits."
 | Pin | Where | What it fixes |
 | --- | --- | --- |
 | Serve route | `rust/shekyl-p-serve/src/serve.rs:57` — `ROUTE_PREFIX = "/shard/"` | The path the client dials (`RF-R1`) |
-| Served body | `rust/shekyl-curve-tree/src/served_frame.rs:274` — `ServedFrameHeader::read` | Frame parse incl. the `RF-D7` padding bound, enforced before the lengths are obtainable |
+| Served body | `rust/shekyl-curve-tree/src/served_frame.rs:282` — `ServedFrameHeader::read` | Frame parse incl. the `RF-D7` padding bound, enforced before the lengths are obtainable |
 | Content-verify function | `rust/shekyl-curve-tree/src/store/ops.rs:139` — `recompute_segment_r_k(&[[u8; 128]]) -> Result<[u8; 32], _>` | Content-authentication half only; today its only non-store caller is `p-serve/tests/store_axis.rs` — no production fetcher |
 | Serve virt port | `rust/shekyl-engine-core/src/engine/stake_engine/serving/task.rs:52` — `pub(crate) SERVING_VIRTUAL_PORT = 80`; `:58` — `SERVING_MAX_STREAMS = 8` | **Number RULED 80** (`SF-D5`). `MAX_STREAMS` stays SPIKE-PIN. **Home** is `shekyl-curve-tree` (`SF-D4`); this `pub(crate)` is the current location, not the home — the implementation PR moves the declaration |
 | Challenge deadline | `rust/shekyl-archival-retention/src/constants.rs:147` — `CHALLENGE_RESPONSE_BLOCKS = SEB / 20 = 500` | The consensus clock the challenge caller answers to (`SF-D6`) |
@@ -1109,17 +1109,21 @@ response is hashed the same way whoever asked, so a challenge read stays
 indistinguishable from an organic one.
 
 **What the record leaves behind.** The pass record carries `nonce` and
-`D`, and the framed body is a function of the shard for as long as
-`RF-D4`'s write-zero padding rule holds. Anyone who later holds the shard
-can therefore recompute `D` for a recorded pass. A recorded `D` that does
-not match is evidence that `P` signed for bytes that were not the shard,
-and it lasts as long as the record. Two things follow. `D` must stay a
-flat hash of the whole body: over a precomputable summary of the shard, a
-root of chunk hashes for instance, a `P` holding only the summary could
-sign a `D` consistent with a shard it had discarded, and a witness that
-skipped the byte check would file a pass no later reader could fault. And
-a padding scheme keeps the property only if the padded frame stays
-recomputable from the shard, or the padding is carried.
+`D`. While `RF-D4` writers emit `padding_len == 0`, the framed body is
+the canonical header for the shard's leaf count followed by the shard,
+so anyone who later holds the shard recomputes `D` for a recorded pass.
+A recorded `D` that does not match is evidence that `P` signed for bytes
+that were not the shard, and it lasts as long as the record. `D` is a
+flat hash of that whole body. That hash is the byte check: a matching
+`D` takes the framed bytes under this nonce. A hash of a precomputable
+summary — a root of chunk hashes — can be signed from the summary
+alone, and a later holder of the shard who recomputes it finds a match
+and cannot tell the bytes were gone. A padding scheme keeps the
+property only when that reader can rebuild the padded frame from the
+shard and the pass record. Padding fixed by the pre-read inputs (leaf
+count and shard id, never the leaves — `padding_len` is encoded before
+the store read) is recomputable from the shard. Any other padding keeps
+the property only when the pass record carries its exact bytes.
 
 The pass record **carries** the 32-byte `nonce`, the 8-byte
 `anchor_height` and the 32-byte `D` — the random cannot be recomputed
