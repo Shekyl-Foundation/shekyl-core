@@ -33,6 +33,9 @@ const ANCHOR: u64 = HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw();
 /// The requester-random nonce the pass record carries (SF-D8). Fixed here so each test perturbs
 /// exactly one field.
 const NONCE: [u8; PASS_NONCE_LEN] = [7u8; PASS_NONCE_LEN];
+/// The delivery digest the fixture record carries. Admission never sees a
+/// body, so any 32 bytes `P` signed are a well-formed record.
+const DIGEST: [u8; 32] = [0xD1; 32];
 
 /// A deterministic stand-in for the connecting chain: the block hash at `height`. The verifier
 /// never reads a chain — the test plays C++ and fills the window table from this.
@@ -90,6 +93,7 @@ fn one_pass(
         BlockHeight::from_raw(ANCHOR),
         &chain_hash(ANCHOR),
         SHARD,
+        &DIGEST,
     );
     let sig = HybridEd25519MlDsa
         .sign(
@@ -104,6 +108,7 @@ fn one_pass(
         settlement_epoch: EPOCH,
         nonce: NONCE,
         anchor_height: BlockHeight::from_raw(ANCHOR),
+        delivery_digest: DIGEST,
         signature: sig.clone(),
     };
     let header = AttestationHeader {
@@ -117,6 +122,7 @@ fn one_pass(
             passes: vec![PassWitness {
                 nonce: NONCE,
                 anchor_height: BlockHeight::from_raw(ANCHOR),
+                delivery_digest: DIGEST,
                 signature: sig,
             }],
         }
@@ -799,18 +805,18 @@ fn pass_ids_feeds_step2_coverage() {
     );
 }
 
-/// The deterministic SF-D8 v2 fixture, shared with `shekyl-archival-retention`'s
+/// The deterministic SF-D8 v3 fixture, shared with `shekyl-archival-retention`'s
 /// `attestation_wire_kat.rs` and the C++ cross-language test
 /// (`tests/unit_tests/archival_attestation_verify.cpp`), which reads the same file. Rule-50
 /// oracle tier: **self-pinned (3)** — a drift tripwire, not a KAT, hence `pinned_*` names
 /// throughout. Regenerated only by the armed regenerator in
 /// `shekyl-archival-retention/tests/attestation_wire_kat.rs` (rule 50 decision-log citation).
-const V2_FIXTURE: &str = include_str!(
-    "../../../shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v2_pinned.json"
+const V3_FIXTURE: &str = include_str!(
+    "../../../shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v3_pinned.json"
 );
 
 fn fixture() -> serde_json::Value {
-    serde_json::from_str(V2_FIXTURE).expect("fixture parses")
+    serde_json::from_str(V3_FIXTURE).expect("fixture parses")
 }
 
 fn fixture_hex(kat: &serde_json::Value, key: &str) -> Vec<u8> {
@@ -826,7 +832,7 @@ fn fixture_32(kat: &serde_json::Value, key: &str) -> [u8; 32] {
 /// this is the C ABI half of the cross-language pin — the same bytes the C++ test marshals through
 /// the `#[repr(C)]` mirrors must reach `OK` here first.
 #[test]
-fn pinned_v2_fixture_verifies_through_ffi() {
+fn pinned_v3_fixture_verifies_through_ffi() {
     let kat = fixture();
     let headers = fixture_hex(&kat, "header_hex");
     let witness = fixture_hex(&kat, "witness_hex");

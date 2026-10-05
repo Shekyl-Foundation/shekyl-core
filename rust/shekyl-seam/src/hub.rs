@@ -28,6 +28,7 @@ use shekyl_transport_layer::{
 use crate::dial::Dial;
 use crate::endpoint::Endpoint;
 use crate::loopback::Loopback;
+use crate::registry::{Board, Row};
 
 /// What the strand is asked to run. The post returns before the strand does.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,9 +100,12 @@ struct Conn {
     send: Option<SendHalf>,
     cause: Option<CloseCause>,
     phase: Phase,
-    /// The connector of the endpoint this row was adopted with. Every post
-    /// for the row names it.
-    connector: ConnectorId,
+    /// The endpoint this row was adopted with. Posts name its connector.
+    /// The address is the one observed at adopt and is not rewritten.
+    endpoint: Endpoint,
+    /// The Levin handshake has finished. Distinct from [`Phase`]: a row can
+    /// be open to frames before the handshake, and closed after it.
+    established: bool,
     /// Wakes this row's inbound drive, and only it. A hub-wide wake would
     /// wake every waiting driver on every strand answer, O(N) per delivery
     /// on the zone whose N is adversarial. `notify_one` stores a permit when
@@ -123,6 +127,8 @@ struct Inner {
     sockets: Sockets,
     conns: HashMap<SocketId, Conn>,
     ceiling: InboundCeiling,
+    /// The last board published. Readers clone this. They do not lock the table.
+    board: Board,
 }
 
 /// What one locked look at a row told [`Hub::deliver_async`].
@@ -169,6 +175,7 @@ impl Hub {
                 sockets,
                 conns: HashMap::new(),
                 ceiling,
+                board: Board::empty(),
             })),
             ready: Arc::new(Condvar::new()),
             post,
@@ -288,15 +295,42 @@ impl Hub {
                 send: Some(send),
                 cause: None,
                 phase: Phase::Arming,
-                connector: endpoint.connector(),
+                endpoint,
+                established: false,
                 notify: Arc::new(tokio::sync::Notify::new()),
                 posted_deliveries: 0,
                 strand_closed: false,
                 gap,
             },
         );
+        Self::republish(&mut inner);
         poster(Post::Established { id, endpoint });
         Ok(Attached { id, session })
+    }
+
+    /// The sessions as of the last publish. The returned board does not
+    /// change when a later session arrives or closes.
+    #[must_use]
+    pub fn board(&self) -> Board {
+        self.lock().board.clone()
+    }
+
+    /// Rebuild the published board from rows that are still connected.
+    ///
+    /// The live table is a hash map, keyed for lookup by admission id.
+    /// Publish sorts the copy. This is O(N) per accept. Under an accept
+    /// flood that is O(N²) across the flood. D5's thread-budget flood leg
+    /// measures that cost; it is not a reason to hand a reader the live
+    /// row. A closed row stays in the table until [`Self::reap`] and is
+    /// not on the board.
+    fn republish(inner: &mut Inner) {
+        let rows = inner
+            .conns
+            .iter()
+            .filter(|(_, conn)| !matches!(conn.phase, Phase::Closed))
+            .map(|(&id, conn)| Row::new(id, conn.endpoint, conn.established))
+            .collect();
+        inner.board = Board::from_rows(rows);
     }
 
     /// Block until the handler is armed, or until the id has closed.
@@ -442,7 +476,7 @@ impl Hub {
                 }
                 conn.phase = Phase::Delivering;
                 conn.posted_deliveries = conn.posted_deliveries.saturating_add(1);
-                let connector = conn.connector;
+                let connector = conn.endpoint.connector();
                 let frame = bytes.take().expect("checked above");
                 (self.post)(Post::Deliver {
                     id,
@@ -557,11 +591,27 @@ impl Hub {
     }
 
     /// The Levin handshake finished. Fires this row's gap sender, if it
-    /// still has one. A row that already closed has nothing to fire.
+    /// still has one.
+    ///
+    /// A missing row, and a row already in [`Phase::Closed`], are left
+    /// alone. A close is not a handshake, and the closed row stays until
+    /// [`Self::reap`].
     pub fn session_established(&self, id: SocketId) {
         let sender = {
             let mut inner = self.lock();
-            inner.conns.get_mut(&id).and_then(|conn| conn.gap.take())
+            let mut sender = None;
+            let mut publish = false;
+            if let Some(conn) = inner.conns.get_mut(&id) {
+                if !matches!(conn.phase, Phase::Closed) {
+                    conn.established = true;
+                    sender = conn.gap.take();
+                    publish = true;
+                }
+            }
+            if publish {
+                Self::republish(&mut inner);
+            }
+            sender
         };
         if let Some(sender) = sender {
             match sender.send(()) {
@@ -593,6 +643,7 @@ impl Hub {
             if let Some(conn) = inner.conns.remove(&id) {
                 Self::wake_row(&conn);
             }
+            Self::republish(&mut inner);
             self.wake();
         }
         if let Some(dial) = dial {
@@ -682,7 +733,7 @@ impl Hub {
             let open = conn.open.take();
             let send = conn.send.take();
             let gap = conn.gap.take();
-            let connector = conn.connector;
+            let connector = conn.endpoint.connector();
             poster(Post::Closed {
                 id,
                 connector,
@@ -690,6 +741,7 @@ impl Hub {
             });
             Self::wake_row(conn);
             self.wake();
+            Self::republish(&mut inner);
             (open, send, gap)
         };
         // The sender is dropped off the table lock: the connector task it

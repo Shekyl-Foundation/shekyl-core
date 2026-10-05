@@ -46,81 +46,58 @@ assume something is needed because it exists.
 
 ## The C++ is a template, not a source
 
-Shekyl is built to its design specifications. The inherited C++ shows
-*one* way the specification was once met; it is read for what it reveals
-about the problem — the facts a validator needs, the read points, the
-failure modes it met — and never transcribed. A field name in the C++ is
+Shekyl is built to its specifications. The inherited C++ shows one way a
+specification was once met. Read it for the facts a validator needs, the
+read points, and the failure modes. Do not transcribe it. A field name is
 not a definition: `cumulative_tx_count` counts a block's **listed**
-transactions, while the shard partition (`consensus_constants.json`) is
-over **storage ids**, which the C++ issues to coinbases too. A lane that
-read the C++ carefully and took the field as the quantity wrote
-`⌊cumulative_tx_count / T⌋` for the closed-shard frontier — off by the
-coinbases — in a pre-flight otherwise right. Derive from the spec; check
-the C++ against it; where they differ, the spec is what Shekyl builds and
-the C++ is a finding to record (`16-architectural-inheritance.mdc`).
+transactions, while the shard partition is over **storage ids**, which
+include coinbases. Dividing the listed count by `T` drops the coinbases.
+Derive from the spec. Check the C++ against it. Where they differ, build
+the spec and record the C++ as a finding
+(`16-architectural-inheritance.mdc`).
 
 ## A formula two lanes need is a function, not a row
 
-A recorded formula does not propagate. S-PRUNE corrected the frontier
-above at build (`DRS_E1_SPRUNE.md` SPR-1, 2026-09-25: `first_tx_id(h)` is
-`storage_ids_through(cumulative_tx_count(h−1), h−1)`, the reason written
-down, the charter ratified) — and E4's pre-flight, four days later,
-re-derived the same quantity with the same coinbase term dropped. E4's
-author read the C++ and the census; nothing pointed at S-PRUNE's row, and
-a row saying "remember the coinbases" is found only by someone who already
-suspects they need it. The correction was right, recorded, ratified, and
-did not reach the next author. That is unusually clean evidence that
-documentation is the wrong remedy for this class.
+A recorded formula does not propagate. The next lane reads the C++ and
+re-derives, and a row that says "remember the coinbases" is found only by
+someone who already suspects they need it.
 
 What propagates is a function nobody can avoid calling.
-`shekyl_types::closed_shards(storage_ids)` sits beside `T` and
-`storage_ids_through`; the validator, the prune's slash scan and the C++
-(through one FFI) all call it, and no site divides by `T` for a frontier.
-The formula cannot be gotten wrong because nobody writes it. The close
-heights the evening before took the same shape — two quantities with one
-name became two names, and the collision became unrepresentable.
+`shekyl_types::closed_shards` sits beside `T` and `storage_ids_through`.
+The validator, the prune, and the C++ (through one FFI) call it. No site
+divides by `T` for a frontier. Two quantities that shared a name became
+two names, and the collision became unrepresentable.
 
-So, when a derivation is needed by more than one lane, crate or language:
+When a derivation is needed by more than one lane, crate, or language:
 
-1. **Give it one home** — a function in the crate that owns its inputs
-   (`shekyl-types` for the partition; the rules crate for a rule), with
-   its inputs' definitions in the same place.
+1. **Give it one home** — a function in the crate that owns its inputs,
+   with those inputs' definitions in the same place.
 2. **Make the other sites call it**, including the C++ through the FFI.
    A second site that re-derives is the defect, whatever value it
-   currently produces; the gate is `rg` for the operator on the operand
+   currently produces. The gate is `rg` for the operator on the operand
    (`/ T`, `/ SEGMENT_LEAF_COUNT`) finding one site.
-3. **Then write the row**, pointing at the function. The row records why;
-   the function is what the next lane cannot miss.
+3. **Then write the row**, pointing at the function. The row records why.
+   The function is what the next lane cannot miss.
 
 A FOLLOWUPS row, a charter finding, or a census cell that carries a
-formula and no function is a deferral of this step, and the next lane will
-re-derive.
+formula and no function has deferred this step.
 
 ### A name defends the crate it is in; a type defends the call
 
-The function above reaches as far as its callers can see it. What crosses
-a crate boundary, an FFI, or a `pub` signature is its **return type**, and
-a `u64` arriving at the far side is a formula again — nothing says which
-quantity it was. DRS-E4 commit 4 (2026-09-30) found the two archival close
-heights one apart, predicted that *"the boundary the two close heights sat
-on is exactly where a `height`/`count` slip would hide,"* and defended the
-class with a name: `Transition::count()`, every schedule comparison reading
-it. The name held in its crate. One crate over, the store's writer took
-`height: u64`, the count was passed as a height, and the slash log was
-keyed one block off (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-26`, 2026-10-01) —
-the third one-apart defect in that lane in three days, each found by a
-test and none by a reader. The type pair that makes the slip not compile
-(`shekyl_types::{BlockHeight, ChainCount}`) had existed for ten days under
-a ratified contract (`HEIGHT_SEMANTICS.md` §3.1 C2/C7); it had not been
-applied to that surface (`ARW-Q16`).
+The function reaches as far as its callers can see it. What crosses a
+crate boundary, an FFI, or a `pub` signature is its **return type**. A
+`u64` on the far side is a formula again. A name like
+`Transition::count()` holds inside its crate. The next crate that takes
+`height: u64` will pass the count as a height, and the slip will not
+compile only if the signature is `BlockHeight` or `ChainCount`.
 
-So the step above has a fourth clause: **the function's inputs and output
-are the domain's types, not the integers under them.** A derivation two
-lanes need is a function; a quantity two crates need is a type; and a
-function that returns the bare integer has done the first and skipped the
-second. This generalises past heights — any pair of quantities that share
-a representation and differ by a convention (an index and a count, a
-nominal and a net, a byte length and a record length) is the same class.
+Fourth clause: **the function's inputs and output are the domain's
+types, not the integers under them.** A derivation two lanes need is a
+function. A quantity two crates need is a type. A function that returns
+the bare integer has done the first and skipped the second. Any pair that
+shares a representation and differs by a convention — an index and a
+count, a nominal and a net, a byte length and a record length — is the
+same class.
 
 ## One mechanism, one job
 

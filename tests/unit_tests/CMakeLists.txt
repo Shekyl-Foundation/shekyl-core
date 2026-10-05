@@ -215,7 +215,7 @@ SET_PROPERTY(SOURCE tx_extra_pqc_field_shape.cpp PROPERTY COMPILE_DEFINITIONS
 SET_PROPERTY(SOURCE archival_substrate_lmdb.cpp PROPERTY COMPILE_DEFINITIONS
   GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json")
 SET_PROPERTY(SOURCE archival_attestation_verify.cpp PROPERTY COMPILE_DEFINITIONS
-  ATTESTATION_V2_PINNED_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v2_pinned.json")
+  ATTESTATION_V3_PINNED_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v3_pinned.json")
 SET_PROPERTY(SOURCE archival_bond_record_v7_corpus.cpp PROPERTY COMPILE_DEFINITIONS
   ARCHIVAL_BOND_RECORD_V7_CORPUS_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json")
 SET_PROPERTY(SOURCE mtp_boundary.cpp PROPERTY COMPILE_DEFINITIONS

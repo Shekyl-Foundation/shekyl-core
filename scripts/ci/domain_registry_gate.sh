@@ -279,7 +279,12 @@ count_pattern() {
 # rust/shekyl-p2p-transport/src/prefix.rs -- `network_id_from_genesis`
 # (shekyl/p2p-network-id-v1, first 16 bytes). The KAT calls that function;
 # it does not add a second cSHAKE site.
-MECH1_EXPECTED=58
+# SF-D8 v3 (2026-10-04): 58 -> 59. One production site in
+# rust/shekyl-archival-retention/src/pass_anchor.rs -- `PassDeliveryHasher::new`
+# (shekyl/archival-pass-delivery-digest-v1, the nonce-salted digest of the
+# response P delivered). `pass_delivery_digest` is that hasher run once, and
+# the tests call those two; none adds a site.
+MECH1_EXPECTED=59
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

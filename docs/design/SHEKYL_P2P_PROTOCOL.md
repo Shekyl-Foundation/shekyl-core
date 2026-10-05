@@ -4140,10 +4140,10 @@ rather than a release.
 not one.** A `block_complete_entry` is **not** bounded by block weight alone: it
 also carries `attestation_witness`, an opaque blob capped **independently of
 `pruned` and of weight** at `ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` =
-`8 + ARCHIVAL_MAX_ATTESTATION_RECORDS × (ARCHIVAL_ATTESTATION_PASS_NONCE_BYTES + ARCHIVAL_ATTESTATION_PASS_ANCHOR_HEIGHT_BYTES + PQC_HYBRID_SINGLE_SIG_LEN)` = **876,808
-bytes** (v2 since `SF-D8` 2026-09-13, when the per-pass 32-byte nonce and
-8-byte anchor height joined the witness; the figures below are recomputed
-from that; was 866,568)
+`8 + ARCHIVAL_MAX_ATTESTATION_RECORDS × (ARCHIVAL_ATTESTATION_PASS_NONCE_BYTES + ARCHIVAL_ATTESTATION_PASS_ANCHOR_HEIGHT_BYTES + ARCHIVAL_ATTESTATION_PASS_DELIVERY_DIGEST_BYTES + PQC_HYBRID_SINGLE_SIG_LEN)` = **885,000
+bytes** (`8 + 256 × 3,457`; per pass the witness carries `SF-D8`'s 32-byte
+nonce, 8-byte anchor height and 32-byte delivery digest ahead of the
+signature; the figures below are computed from that)
 (`src/cryptonote_config.h`, bounded at the codec by
 `archival_attestation_witness_within_transport_cap`).
 
@@ -4179,7 +4179,7 @@ inventing a consensus constant from a p2p round.
 
 > **The witness term dominates at batch size, and that is a design consequence,
 > not a footnote.** At the inherited request bound of 100 blocks, the witness
-> alone contributes 100 × 876,808 ≈ **87.7 MB** — so **PWD-T6's session-established
+> alone contributes 100 × 885,000 = **88.5 MB** — so **PWD-T6's session-established
 > limit is set primarily by the attestation witness, not by block weight.** Any
 > future change to `ARCHIVAL_MAX_ATTESTATION_RECORDS` moves the p2p packet
 > limit with it.
@@ -4261,7 +4261,7 @@ own value is owed to sync measurements instead (FOLLOWUPS).*
 > `:6543` anchors were written against a superseded tree and now land on a
 > blank line and an unrelated statement — substance unchanged, citation
 > refreshed.*). So even at `margin = 1`,
-> `100 × (600,000 + 876,808)` = **147,680,800 bytes**, above
+> `100 × (600,000 + 885,000)` = **148,500,000 bytes**, above
 > `DECOMPRESSED_MAX_SIZE` = 128 MiB = **134,217,728**
 > (`rust/shekyl-levin/src/compress.rs:29`). PWD-T6 requires the plaintext
 > ceiling to sit **above** the session-established limit; this inverts it, so a

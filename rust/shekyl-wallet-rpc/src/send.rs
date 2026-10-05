@@ -169,7 +169,9 @@ pub(crate) async fn abandon_tx(
 ) -> Result<Value, WalletRpcError> {
     let p: AbandonTxParams = parse_required_object(params, "abandon_tx")?;
     let txid = parse_hex32(&p.tx_hash).ok_or_else(|| {
-        WalletRpcError::InvalidParams("tx_hash must be 64 lowercase hex characters".into())
+        WalletRpcError::InvalidParams(
+            shekyl_wallet_contract::canonical_hex::invalid_hex32_message("tx_hash"),
+        )
     })?;
 
     let shared = require_open_engine(tenants).await?;

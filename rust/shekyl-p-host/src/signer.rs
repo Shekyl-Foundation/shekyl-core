@@ -64,6 +64,13 @@ use crate::daemon_tip::DaemonTipCache;
 /// `sign_failure_count`) rather than serving bytes a daemon cannot verify.
 /// This is the SH-2 placeholder made a type: there is no unsigned code path
 /// to fall back to, only a key that says no.
+///
+/// The refusal comes late, and that is expected: the transcript covers a
+/// digest of the body, so the serving loop reads and hashes the whole shard
+/// before it asks for a signature. A keyless persona therefore does that
+/// work for every servable request and then answers 404. A rising
+/// `sign_failure_count` with no `lookup_failure_count` is this state, not a
+/// store fault.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoResidentKey;
 

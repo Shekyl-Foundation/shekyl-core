@@ -12,6 +12,9 @@ publish = false
 # SHA3-256 for the v3 checksum (rend-spec-v3 §6). Same crate and feature
 # set the rest of the workspace hashes with.
 sha3 = { version = "0.10", default-features = false }
+# Point check on the decoded key. Same feature set the other crates use,
+# so the workspace builds one copy.
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 
 [lints]
 workspace = true

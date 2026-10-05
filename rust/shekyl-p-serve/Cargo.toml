@@ -18,7 +18,7 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # hardening shape this crate productionizes: net + io-util for the loopback
 # listener, sync for the in-flight semaphore, time for the per-step bounds.
 tokio = { version = "1", default-features = false, features = ["net", "io-util", "rt", "time", "sync"] }
-# SF-D8 countersignature: the 80-byte transcript and the ±2-block anchor
+# SF-D8 countersignature: the 112-byte transcript and the ±2-block anchor
 # gate are consensus constants owned by the retention crate (`pass_anchor`);
 # the serve side builds the same bytes the verifier recomputes. Retention
 # is a pure consensus library — it does not depend back on any serving

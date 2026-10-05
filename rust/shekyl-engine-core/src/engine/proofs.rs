@@ -106,7 +106,8 @@ const LOCATOR_BYTES: usize = 32 + 4;
 
 /// Failures across the four proof workflows. Variants map one-to-one
 /// onto the contract's error codes (`docs/api/wallet_rpc.yaml` §error
-/// registry); the RPC layer performs that mapping.
+/// registry). That map lives in `shekyl-wallet-contract`, so the RPC
+/// server and the desktop wallet cannot answer a different code.
 #[derive(Debug, thiserror::Error)]
 pub enum ProofsError {
     /// The proof string failed Bech32m decode, carried the wrong HRP,
