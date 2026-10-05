@@ -159,13 +159,13 @@ or above never runs here, and its `else` arm is what ships.
 | Constant | Operand | Answer | Record, and where it goes |
 | --- | --- | --- | --- |
 | Emission speed factor | Block time, via the per-minute convention | **Was not; fixed** | A; #951 |
-| Fee floor's basis, `F = R·C·w_ref/M²` | Reward | **Not derived.** Reward-proportional, so highest at genesis and decaying 1,707× | FL-V11; FL-R13 open; EUP-5 G |
+| Fee floor's basis, `F = R·C·w_ref/M²` | Reward | **Not derived.** Reward-proportional, so highest at genesis and decaying 1,707× | FL-V11. **Direction RULED** (§3.2, 4): decoupled from the reward; the basis is FL-R13's round, EUP-5 G |
 | `w_ref` = 3,000 | Transaction weight | **Not derived.** No examination record as a choice | CEN-M3; `FOLLOWUPS.md`; EUP-5 G |
 | Zone, 300,000 B | Transaction weight (capacity leg); verification time (cost leg) | **Split.** The cost leg is measured on the device floor. The capacity leg was ratified on an estimate of 4–8 KB a spend; measured, 13.6 KB, so about 22 spends | C2-R2 Q1; `FOLLOWUPS.md`; EUP-5 G |
-| Coinbase reserve, 600 B | Coinbase weight | **Not derived, and ratified on a statement that is false.** C2-R2 Q7 records that a Shekyl coinbase "serializes well under 600 bytes". The minimal one, a single output with no attestation, weighs 1,331 B, of which 1,232 B is `extra`. Bodies the fill's bound allows then make a block over the limit, and the builder returns no template (`bodies_at_the_fills_bound_make_a_block_past_the_limit_while_the_reserve_is_600`) | **New.** `FOLLOWUPS.md`; rule it with the zone, derived from the largest coinbase the grammar allows, attestation included, plus a stated margin |
+| Coinbase reserve, 600 B | Coinbase weight | **Not derived, and ratified on a statement that is false.** C2-R2 Q7 records that a Shekyl coinbase "serializes well under 600 bytes". The minimal one, a single output with no attestation, weighs 1,331 B, of which 1,232 B is `extra`. Bodies the fill's bound allows then make a block over the limit, and the builder returns no template (`bodies_at_the_fills_bound_make_a_block_past_the_limit_while_the_reserve_is_600`) | **New. RULED** (§3.2, 2): derived, with a compile-time assertion; `FOLLOWUPS.md` |
 | Transaction weight cap, 149,400 = zone/2 − reserve | The two rows above | **Formula derived; its stated guarantee is 131 B short.** Two maximal transactions and a coinbase are 300,131 B: a sliver of penalty, not a failure | C2-R2 Q7; rides the two rows above |
-| Tail, 0.6 per block | Reward against supply | **Not derived, and not derivable: its size is a ruling.** The same 0.6 as Monero's, on an asymptote of 2³² SKL: 157,680 SKL a year is 0.0037 % of it, where Monero's is about 0.86 % of its supply. FL-R12′ ruled the tail perpetual; no record sizes it. What a tail buys in hash depends on SKL's price, so no chain-internal quantity sizes it. The governance-free form of the choice is a ratio, the tail as a fraction of the asymptote per year, and Rick chooses it. §4's goal 2 is a share test and cannot | FL-V11 ("inherited-unexamined"); EUP-5 |
-| Template fill, `tx_pool.cpp` `version >= 5` | Hard-fork version | **Not derived: the reward-aware fill never runs.** At block version 1 the daemon takes Monero's pre-v5 arm: list bodies in fee order until their weight passes the median, bounded at `1.3·median − 600`. The arm that admits a body only if it does not lower the coinbase, bounded at `2·median − 600`, is dead code | **New.** Below; `FOLLOWUPS.md`; EUP-5 G |
+| Tail, 0.6 per block | Reward against supply | **Not derived, and not derivable: its size is a ruling.** The same 0.6 as Monero's, on an asymptote of 2³² SKL: 157,680 SKL a year is 0.0037 % of it, where Monero's is about 0.86 % of its supply. FL-R12′ ruled the tail perpetual; no record sizes it. What a tail buys in hash depends on SKL's price, so no chain-internal quantity sizes it. The governance-free form of the choice is a ratio, the tail as a fraction of the asymptote per year, and Rick chooses it. §4's goal 2 is a share test and cannot | FL-V11 ("inherited-unexamined"). **RULED** (§3.2, 3): a criterion, in §4 |
+| Template fill, `tx_pool.cpp` `version >= 5` | Hard-fork version | **Not derived: the reward-aware fill never runs.** At block version 1 the daemon takes Monero's pre-v5 arm: list bodies in fee order until their weight passes the median, bounded at `1.3·median − 600`. The arm that admits a body only if it does not lower the coinbase, bounded at `2·median − 600`, is dead code | **New. RULED** (§3.2, 1): the reward-aware fill is the design; the fill moves to Rust; `FOLLOWUPS.md` |
 | Cumulative output count, `db_lmdb.cpp` `major_version >= 4` | Hard-fork version | **Not derived.** `bi_cum_rct` accumulates only from version 4, so at version 1 each block stores its own count. `get_output_distribution` reads it; whether anything in Shekyl consumes that is not established here | **New.** `FOLLOWUPS.md` |
 | Peer top-version check, `cryptonote_protocol_handler.inl` `version >= 6` | Hard-fork version | **Not derived.** A peer advertising a block version other than the ideal one is refused only from version 6, so never | **New.** `FOLLOWUPS.md` |
 | Input cap, 8 | Verifier time per input | **Not derived.** Carried as inherited and unjustified | CEN-I4; `FOLLOWUPS.md` |
@@ -192,23 +192,19 @@ them (`blockchain.cpp`, `b.major_version`), and the comparison sits under
 arms predict at Standard fees. The live rule has not been simulated, so no
 number is claimed for it.
 
-Two consequences, both decisions. **Which rule is the design** is G's first
-question, ahead of `w_ref` and the zone, because the capacity finding and the
-reading registered in §4.1 were both measured on a rule the daemon does not
-execute. Under the cycle ruling the sim is the plan and the code follows; if
-the reward-aware fill is the plan, the daemon's gate goes and the fill moves
-to its Rust owner (`DRS_E1_SPOOL.md`). **And the coinbase reserve is ruled
-first.** On the live arm the bound is `1.3·median − 600` and the loop stops
-a body past the median, so no template reaches the limit and the reserve's
-shortfall is unreachable. On the reward-aware arm the bound is
-`2·median − 600`: a pool of high-fee bodies fills to it, the block is 731 B
-over, and an honest miner has no block to mine while the pool stays full,
-at the cost to an attacker of fee offers that are never collected. Making
-the plan's fill live before the reserve is derived arms that.
+Both consequences were decisions, and both are ruled (§3.2): the
+reward-aware fill is the design and moves to its Rust owner, and the
+coinbase reserve is derived and lands first. The order matters. On the live
+arm the bound is `1.3·median − 600` and the loop stops a body past the
+median, so no template reaches the limit and the reserve's shortfall is
+unreachable. On the reward-aware arm the bound is `2·median − 600`: a pool
+of high-fee bodies fills to it, the block is 731 B over, and an honest miner
+has no block to mine while the pool stays full, at the cost to an attacker
+of fee offers that are never collected.
 
 **What the walk adds.** Four rows are new: the coinbase reserve and the three
-version gates. One row sharpens an old name: the tail's size is a ruling
-nobody has made. The rest were already on record, and the block-weight
+version gates. One row sharpens an old name: the tail's size, which is now
+ruled as a criterion. The rest were already on record, and the block-weight
 governors (the clamps, the surge factor, the penalty) come out derived:
 C2-R2 did that work.
 
@@ -216,6 +212,53 @@ C2-R2 did that work.
 and archival constants and the FCMP++ reference ages are Shekyl's own, with
 their own rounds. Peer-to-peer timeouts and sync batch sizes read none of
 the three operands.
+
+### 3.2 Rulings on the walk (Rick, 2026-10-05)
+
+1. **Fill rule.** "The reward-aware (post-v5) fill is the intended
+   mechanism. The live pre-v5 rule is a missed item from the Monero
+   constants reset, not a design." The fill moves to its Rust owner
+   (`shekyl-block-template`); the C++ fill and its version gate are deleted
+   with it; the gate is not flipped. ESR-6's model stands as the design's
+   fill. Finding 1 and §4.1's registered reading are relabelled "the
+   design's behaviour once the fill lands", not withdrawn. `w_ref` and the
+   zone (G) stay where they are in EUP-5.
+2. **Coinbase reserve.** "Derived, never pinned": the largest coinbase the
+   grammar allows, attestation included, plus a stated margin, with a
+   compile-time assertion that the reserve covers it. C2-R2 Q7 is reopened
+   on that basis, ruled together with the zone's capacity leg, and lands
+   before the reward-aware fill goes live.
+3. **Tail.** "A criterion, not a number": at maturity the tail is at least
+   `k` times the median per-block fee revenue on the baseline demand
+   scenario, `k ≥ 1` ("Carlsten: the fixed reward must dominate fee
+   variance"). It is in §4 as a PROPOSED criterion. The
+   ratio-of-asymptote figure is derived from EUP-4's tables and then
+   ratified as the inflation Rick is willing to carry. The structural arms
+   carry a per-block fee revenue and variance column to about year 135.
+4. **Fee basis: direction ruled, derivation open.** Fees are decoupled from
+   the block reward. `F = R·C·w_ref/M²` keeps only the job it was derived
+   for, the price of growing a block past the median, which is the penalty
+   and is correctly in reward units. The admission floor, the user-facing
+   rungs and any retention charge get a basis of their own; the arms (fixed
+   atomic per byte, a utilization-indexed base fee, hash-denominated) are
+   FL-R13's round in EUP-5 G. "Fees and reward may still interact; nothing
+   like the present derivation." No code changes now.
+
+**Approved with them, in the order they run:**
+
+| # | Work | Gate |
+| --- | --- | --- |
+| a | The version-gate sweep: every `version >= N` in the C++, each marked dead or live, as its own PR | before EUP-4 |
+| b | `Fill::admit_up_to` batches the penalty zone, held to the single-offer walk | EUP-4 prep; the 135-year arms wait on it |
+| c | The coinbase reserve, derived, with its compile-time assertion | with the zone's capacity leg; before (d) |
+| d | The fill moves to `shekyl-block-template`; the C++ fill and gate are deleted | after (c) |
+| e | Q9, the floor in consensus (D) | after (d): both land in the template and admission path, and the enforced case's arithmetic depends on the fill |
+
+Unchanged and stated so they are not re-asked: `total_staked` stays as bonded
+principal (B); the knee stays held; nothing in EUP-5 moves before EUP-4's
+tables. Still Rick's and not yet given: the §4 ratifications (the criteria,
+the year-1 Standard-rung fee, the horizon), the GF-7 asymptote (EUP-5 F), and
+the authorization to start EUP-3 once ESR-8 and ESR-10 close.
 
 ---
 
@@ -235,6 +278,7 @@ prevent.
 | 6. Self-regulating balance | Staker yield; A1 clearance; onset year; coverage | Staker yield 4–6 % years 1–5, ~1.7 % at year 10 | **PROPOSED:** yields within a factor of two of April's in years 1–10; A1 flat-25 clearance ≥ 1 through year 20 at 10 % on the baseline |
 | Capacity (no April row) | Transactions carried per block against demand; years to carry the baseline's 50 | — (April assumed blocks carry demand) | **PROPOSED:** the default rung carries the baseline's demand from genesis, or the deviation is a ruled choice |
 | Usability (no April row) | Standard-rung fee for an ordinary transaction, by year | — | **PROPOSED:** a year-1 figure Rick sets before EUP-4 |
+| Tail (no April row; ruled a criterion, §3.2) | Per-block fee revenue, median and variance, on the baseline, in the structural arms to about year 135 | — | **PROPOSED:** at maturity the tail is at least `k` × the median per-block fee revenue, `k ≥ 1`; Rick sets `k`. The tail's ratio of the asymptote per year is read off this table and then ratified |
 | Stuffing (§6) | The ESR-7 envelope minimum, in floors per byte, by era | "Marginally profitable short-term" | **PROPOSED:** the cheapest archival byte is no cheaper than the relay floor in any era, after D is decided |
 
 Goals 1 (denomination) and 4 (`uint64_t` safety) are code properties, held by
@@ -260,7 +304,9 @@ is 64 s. The growth schedule is not affordable that far as the fill stands —
 63 years is 337 s and 66 years exceeds 500 s — because
 `Fill::admit_up_to` batches only the penalty-free part of a block and walks
 the penalty zone one body at a time. Long growth arms wait on that zone being
-closed in form, held to the single-offer walk as the free part is.
+closed in form, held to the single-offer walk as the free part is (approved
+2026-10-05 as EUP-4 prep, §3.2 b). The structural arms carry a per-block fee
+revenue and variance column for the tail criterion (§3.2, 3).
 
 Scenario 9 (high history, low activity) is the first of the structural arms.
 It was built to be the fee-era case, and its 60 years no longer reach that
@@ -284,10 +330,10 @@ G (`w_ref` and the zone) is the first decision of EUP-5 rather than one of
 six: the purse, the knee, the onset and the stuffer's cost are not readable
 on a chain capped at the zone.
 
-*Amended 2026-10-04 (§3.1).* "The production arm" here is the sim's fill, the
-reward-aware comparison. The daemon runs a different rule, so this reading
-is about the plan's fill and is decided on it only once G has ruled that it
-is the design.
+*Amended 2026-10-04 (§3.1), ruled 2026-10-05 (§3.2, 1).* "The production
+arm" here is the sim's fill, the reward-aware comparison, which is the
+design's fill. The daemon runs the pre-v5 rule until the fill moves to Rust,
+so this reading is the design's behaviour once the fill lands.
 
 ---
 

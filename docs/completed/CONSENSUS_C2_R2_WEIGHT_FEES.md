@@ -613,7 +613,16 @@ falsifies the premise and re-opens the ruling. (Construction verified at
 the pin: `get_transaction_weight` returns `blob_size` or `blob_size +
 bp_clawback`, never less — `cryptonote_format_utils.cpp:321–331`.)
 
-### Q7 — the tx weight cap 149 400 = zone/2 − 600 (CEN-H3)
+### Q7 — the tx weight cap 149 400 = zone/2 − 600 (CEN-H3) — RULED 2026-09-06; the coinbase reserve REOPENED 2026-10-05
+
+**REOPENED 2026-10-05 (Rick), the reserve only.** The ruling below ratified
+600 on "a Shekyl coinbase serializes well under 600 bytes". The minimal
+coinbase weighs 1,331 B (measured 2026-10-04;
+[`ECONOMY_UMBRELLA_PLAN.md`](../design/ECONOMY_UMBRELLA_PLAN.md) §3.1). The
+reserve is to be derived, never pinned: the largest coinbase the grammar
+allows, attestation included, plus a stated margin, with a compile-time
+assertion that the reserve covers it. It is ruled together with Q1's
+capacity leg. The formula and its two-maximal-transactions rationale stand.
 
 **Formula, not literal:** `get_transaction_weight_limit` computes
 `get_min_block_weight()/2 − CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE`

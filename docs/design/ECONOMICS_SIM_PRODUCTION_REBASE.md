@@ -20,6 +20,8 @@ fee-share verdict in
 
 ## Reading-pass finding 1: the production default carries 22 of 50 (2026-10-03, ESR-6)
 
+*Relabelled 2026-10-05 (Rick's ruling, [`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2).* "The production block-template fill rule" below is the reward-aware fill, which is the design's. The daemon runs Monero's pre-v5 rule until the fill moves to Rust, so this finding is the design's behaviour once the fill lands, not what the daemon does today.
+
 **What the run says.** On the baseline schedule, 50 ordinary transactions a
 block, at the production Standard rung and under the production
 block-template fill rule:

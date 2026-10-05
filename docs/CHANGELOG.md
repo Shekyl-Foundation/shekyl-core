@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- `ECONOMY_UMBRELLA_PLAN.md` §3.1 walks the inherited constants that read the reward, a weight, the block time or the hard-fork version. New: the coinbase reserve (600 B against a measured 1,331 B, pinned by a `shekyl-block-template` test) and three Monero fork-number gates that never fire at block version 1, among them the daemon's template fill, which runs the pre-v5 rule and not the reward-aware one the sim models. `FOLLOWUPS.md` carries each.
+- `ECONOMY_UMBRELLA_PLAN.md` §3.1 walks the inherited constants that read the reward, a weight, the block time or the hard-fork version. New: the coinbase reserve (600 B against a measured 1,331 B, pinned by a `shekyl-block-template` test) and three Monero fork-number gates that never fire at block version 1, among them the daemon's template fill, which runs the pre-v5 rule and not the reward-aware one the sim models. `FOLLOWUPS.md` carries each. Rick's rulings of 2026-10-05 are recorded with them (§3.2): the reward-aware fill is the design and moves to Rust, the reserve is derived, the tail is a criterion, and fees are to be decoupled from the block reward.
 - Docs: the economy's umbrella plan (`ECONOMY_UMBRELLA_PLAN.md`, `EUP-`); `DESIGN_CONCEPTS.md` records F-D, its design home's archival rationale, and its April tables' inputs.
 
 ### Consensus — the emission speed factor is per block, as designed
