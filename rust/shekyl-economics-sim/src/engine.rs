@@ -118,9 +118,18 @@ pub struct ScenarioConfig {
     pub archival_lock: Option<ArchivalLockModel>,
 }
 
+/// Knobs of one sim run.
+///
+/// The default incorporates the shipped economics. Consensus quantities are
+/// read from [`EconomicParams`] and its crate constants, so this struct
+/// never carries a second curve. A design under test replaces fields and
+/// the same fold prices it. [`Self::economic`] writes those knobs onto
+/// production [`EconomicParams`]; the fold calls the production functions.
+/// An escalation alternative is an [`crate::escalation::EscalationCurve`],
+/// which owns the candidate and delegates the ramp.
 pub struct SimParams {
     pub emission_curve_asymptote: u64,
-    pub emission_speed_factor_per_minute: u64,
+    pub emission_speed_factor_per_block: u64,
     pub final_subsidy_per_minute: u64,
     pub blocks_per_year: u64,
     pub tx_volume_baseline: u64,
@@ -138,33 +147,33 @@ pub struct SimParams {
 
 impl Default for SimParams {
     fn default() -> Self {
+        // Shipped config. The fields stay public so a run replaces one
+        // without a second fold.
+        let shipped = EconomicParams::default();
         Self {
-            emission_curve_asymptote: 4_294_967_296_000_000_000,
-            emission_speed_factor_per_minute: 22,
-            final_subsidy_per_minute: 300_000_000,
-            blocks_per_year: 262_800,
-            tx_volume_baseline: 50,
-            release_min: 800_000,
-            release_max: 1_300_000,
-            burn_base_rate: 500_000,
-            burn_cap: 900_000,
-            // The consensus share (the escalation floor) deps the shipped
-            // config rather than mirroring it: a literal here could drift
-            // from what consensus actually pays (dep-don't-mirror).
-            staker_pool_share: EconomicParams::default().staker_pool_share,
-            staker_emission_share: 150_000,
-            staker_emission_decay: 900_000,
+            emission_curve_asymptote: shipped.emission_curve_asymptote,
+            emission_speed_factor_per_block: shipped.emission_speed_factor_per_block,
+            final_subsidy_per_minute: shipped.final_subsidy_per_minute,
+            blocks_per_year: shekyl_economics::BLOCKS_PER_YEAR,
+            tx_volume_baseline: shipped.tx_volume_baseline,
+            release_min: shipped.release_min,
+            release_max: shipped.release_max,
+            burn_base_rate: shipped.burn_base_rate,
+            burn_cap: shipped.burn_cap,
+            staker_pool_share: shipped.staker_pool_share,
+            staker_emission_share: shekyl_economics::STAKER_EMISSION_SHARE,
+            staker_emission_decay: shekyl_economics::STAKER_EMISSION_DECAY,
             fee: FeeModel::PRODUCTION_DEFAULT,
         }
     }
 }
 
 impl SimParams {
-    /// The production parameter set this run prices against: the shipped
-    /// [`EconomicParams`] with this run's emission, release, burn and staker
-    /// knobs. Escalation numerics come from the shipped config; the sim
-    /// never invents them, since the asymptote is ceremony-gated and
-    /// unpinned (§11.4). The one construction every fold uses.
+    /// Production [`EconomicParams`] with this run's emission, release, burn
+    /// and staker knobs written over the shipped values. Escalation stays
+    /// shipped here: a candidate knee or asymptote is an
+    /// [`crate::escalation::EscalationCurve`]. The one construction every
+    /// fold uses.
     #[must_use]
     pub fn economic(&self) -> EconomicParams {
         EconomicParams {
@@ -175,7 +184,7 @@ impl SimParams {
             burn_cap: self.burn_cap,
             staker_pool_share: self.staker_pool_share,
             emission_curve_asymptote: self.emission_curve_asymptote,
-            emission_speed_factor_per_minute: self.emission_speed_factor_per_minute,
+            emission_speed_factor_per_block: self.emission_speed_factor_per_block,
             final_subsidy_per_minute: self.final_subsidy_per_minute,
             daa_target_seconds: EconomicParams::default().daa_target_seconds,
             ..EconomicParams::default()
@@ -479,8 +488,8 @@ mod tests {
             cfg_u64(&cfg, "emission_curve_asymptote")
         );
         assert_eq!(
-            p.emission_speed_factor_per_minute,
-            cfg_u64(&cfg, "emission_speed_factor_per_minute")
+            p.emission_speed_factor_per_block,
+            cfg_u64(&cfg, "emission_speed_factor_per_block")
         );
         assert_eq!(
             p.final_subsidy_per_minute,
@@ -507,5 +516,38 @@ mod tests {
             p.staker_emission_decay,
             cfg_u64(&cfg, "shekyl_staker_emission_decay")
         );
+    }
+
+    /// A replaced knob is the curve the run prices. Untouched fields stay
+    /// shipped, including the escalation the fold does not sweep from here,
+    /// and the production reward function sees the replacement.
+    #[test]
+    fn a_replaced_factor_is_the_curve_the_run_prices() {
+        use shekyl_economics::base_block_reward;
+        use shekyl_economics::params::EconomicParams;
+
+        let shipped = EconomicParams::default();
+        let alternative = shipped.emission_speed_factor_per_block - 1;
+        let run = SimParams {
+            emission_speed_factor_per_block: alternative,
+            ..SimParams::default()
+        };
+        let priced = run.economic();
+        assert_eq!(priced.emission_speed_factor_per_block, alternative);
+        assert_eq!(
+            priced.emission_curve_asymptote,
+            shipped.emission_curve_asymptote
+        );
+        assert_eq!(priced.staker_pool_share, shipped.staker_pool_share);
+        assert_eq!(priced.escalation_knee_n, shipped.escalation_knee_n);
+        assert_eq!(
+            priced.escalation_asymptote_share,
+            shipped.escalation_asymptote_share
+        );
+        let reward = base_block_reward(0, &priced).expect("genesis reward on the alternative");
+        assert_eq!(reward, shipped.emission_curve_asymptote >> alternative);
+        let shipped_reward =
+            base_block_reward(0, &shipped).expect("genesis reward on the shipped curve");
+        assert!(reward > shipped_reward);
     }
 }

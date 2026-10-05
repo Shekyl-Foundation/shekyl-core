@@ -30,8 +30,7 @@ fn main() {
     // config/consensus_constants.json (the same JSON that drives the C++ header
     // generator and shekyl-difficulty/build.rs). Reading it here rather than
     // literal-coding it keeps the emission curve's DAA target from silently
-    // drifting from consensus — the constant feeds emission_speed_factor and
-    // tail_subsidy_per_block, so a mismatch would break C2a′ dual-leg equivalence.
+    // drifting from consensus — the constant feeds tail_subsidy_per_block, so a mismatch would break C2a′ dual-leg equivalence.
     // Per the 2026-05-05 FFI constant-drift audit (Bug 3).
     let consensus_path = config_dir.join("consensus_constants.json");
     println!("cargo:rerun-if-changed={}", consensus_path.display());
@@ -79,7 +78,7 @@ fn main() {
          pub const GENERATED_ESCALATION_KNEE_N: u64 = {escalation_knee_n};\n\
          pub const GENERATED_ESCALATION_ASYMPTOTE_SHARE: u64 = {escalation_asymptote};\n\
          pub const GENERATED_EMISSION_CURVE_ASYMPTOTE: u64 = {emission_curve_asymptote};\n\
-         pub const GENERATED_EMISSION_SPEED_FACTOR_PER_MINUTE: u64 = {esf};\n\
+         pub const GENERATED_EMISSION_SPEED_FACTOR_PER_BLOCK: u64 = {esf};\n\
          pub const GENERATED_FINAL_SUBSIDY_PER_MINUTE: u64 = {final_subsidy};\n\
          pub const GENERATED_DAA_TARGET_SECONDS: u64 = {daa_target};\n\
          pub const GENERATED_STAKER_EMISSION_SHARE: u64 = {staker_emission_share};\n\
@@ -96,7 +95,7 @@ fn main() {
         escalation_knee_n = get_u64(&map, "shekyl_escalation_knee_n"),
         escalation_asymptote = get_u64(&map, "shekyl_escalation_asymptote_share"),
         emission_curve_asymptote = get_u64(&map, "emission_curve_asymptote"),
-        esf = get_u64(&map, "emission_speed_factor_per_minute"),
+        esf = get_u64(&map, "emission_speed_factor_per_block"),
         final_subsidy = get_u64(&map, "final_subsidy_per_minute"),
         daa_target = daa_target_seconds,
         staker_emission_share = get_u64(&map, "shekyl_staker_emission_share"),

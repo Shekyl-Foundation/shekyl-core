@@ -36,7 +36,7 @@
 //! [`shekyl_fcmp::tree::chunk_width`] and the depth the tree can reach.
 
 use shekyl_fcmp::tree::{
-    chunk_width, hash_grow_selene, layer_count_for_leaves, selene_hash_init,
+    chunk_width, hash_grow_selene, layer_count_for_leaves, outputs_per_node, selene_hash_init,
     try_build_upper_layers, try_promote_to_layer, LEAF_CHUNK_SCALARS, SCALARS_PER_LEAF,
     SELENE_CHUNK_WIDTH,
 };
@@ -90,6 +90,58 @@ pub struct Frontier {
     /// currently being built; folds at `chunk_width(k + 1)`.
     partial: Vec<Vec<[u8; 32]>>,
     leaf_count: u64,
+}
+
+/// A chunk that **finalized** during a push: the complete child set of a node
+/// that just closed, with the coordinates that identify it.
+///
+/// A chunk is final once its last child has arrived, and from that moment its
+/// contents never change — which is what makes it capturable. Before that it
+/// is the rightmost partial chunk at its layer, which is what the frontier
+/// itself holds.
+///
+/// # The two shapes, and why layer 0 is reported anyway
+///
+/// At `layer >= 1` the children are tree **nodes**, and they are everything a
+/// membership path needs at that layer.
+///
+/// At `layer == 0` the children are leaf **scalars** — four per leaf. A path
+/// needs the siblings as compressed *points* (`O`, `I`, `C`) beside `CM.x`,
+/// and `O.x` is a one-way projection of `O`, so the points cannot be
+/// recovered from here. Layer 0 is still reported, because the *event* is what
+/// a capturing caller needs: it says which leaf chunk closed and at which
+/// index, and the caller assembles the identities from the leaf entries it
+/// already holds.
+#[derive(Clone, Copy, Debug)]
+pub struct FoldedChunk<'a> {
+    /// Absolute tree layer of the node whose children these are.
+    pub layer: u8,
+    /// That node's index within its layer.
+    pub index: u64,
+    /// Inclusive leaf position at which the chunk closed — its **finality
+    /// coordinate**.
+    ///
+    /// A truncation un-finalizes this chunk when its **first removed leaf
+    /// position** is `<= end_leaf`; the chunk survives when that position is
+    /// `> end_leaf`. The store's truncation takes exactly that quantity
+    /// (`delete_pos_keys_batched` deletes `range(start..)`, so `start` is the
+    /// first removed position), and it is also the surviving leaf **count**,
+    /// because positions `0..start` are what remain.
+    ///
+    /// So one comparison serves twice, and the units cannot be mixed:
+    /// `end_leaf < surviving_leaf_count` is both *"this chunk survived the
+    /// cut"* and *"this chunk is usable at that tip"* — the same test the
+    /// reference-height rule applies as `end_leaf < drained_leaf_count_at(h)`.
+    ///
+    /// Stated this precisely because the coordinate is where a fencepost
+    /// hides: "a rollback at this position" is ambiguous between the first
+    /// removed leaf and the new leaf count, and the ring's own
+    /// `(h - horizon, h]` boundary was found in that kind of seam. What
+    /// matters is the chunk's own end, never the owned leaf's position — leaf
+    /// 100 survives a cut to 150 while its layer-1 chunk (`0..683`) does not.
+    pub end_leaf: u64,
+    /// The children, in order. Scalars at layer 0, nodes above it.
+    pub children: &'a [[u8; 32]],
 }
 
 impl Frontier {
@@ -182,6 +234,30 @@ impl Frontier {
     /// fails hash growth; [`FrontierError::TooDeep`] past
     /// [`MAX_PARTIAL_LAYERS`].
     pub fn push_leaf(&mut self, leaf: &[u8; LEAF_BYTES]) -> Result<(), FrontierError> {
+        self.push_leaf_observed(leaf, &mut |_| {})
+    }
+
+    /// [`Self::push_leaf`], reporting every chunk that **finalized** during
+    /// the push.
+    ///
+    /// Zero, one, or several chunks close on a single leaf: none for most
+    /// pushes, and a cascade when a leaf completes a run of nested chunks at
+    /// once. They are reported bottom-up, in the order they closed.
+    ///
+    /// The observer takes a borrow of the chunk the frontier is about to
+    /// consume, so a caller that wants to keep it copies it; one that does not
+    /// pays nothing. [`Self::push_leaf`] passes a no-op, which is why adding
+    /// this did not move any of its callers — and why the fold logic stays in
+    /// one place rather than being duplicated into a capturing variant.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::push_leaf`].
+    pub fn push_leaf_observed(
+        &mut self,
+        leaf: &[u8; LEAF_BYTES],
+        observe: &mut impl FnMut(FoldedChunk<'_>),
+    ) -> Result<(), FrontierError> {
         for chunk in leaf.chunks_exact(32) {
             let mut scalar = [0u8; 32];
             scalar.copy_from_slice(chunk);
@@ -192,12 +268,35 @@ impl Frontier {
             return Ok(());
         }
         let node = hash_leaf_chunk(&self.leaf_chunk)?;
+        observe(FoldedChunk {
+            layer: 0,
+            index: Self::closed_node_index(self.leaf_count, 0),
+            end_leaf: self.leaf_count - 1,
+            children: &self.leaf_chunk,
+        });
         self.leaf_chunk.clear();
-        self.carry(0, node)
+        self.carry(0, node, observe)
+    }
+
+    /// Index of the layer-`layer` node that closes when the tree reaches
+    /// `leaf_count` leaves.
+    ///
+    /// Each node at that layer covers [`outputs_per_node`] leaves and they
+    /// fill left to right, so the one that just closed is the last complete
+    /// one. Derived rather than counted: a running tally would be a second
+    /// copy of the fold schedule.
+    fn closed_node_index(leaf_count: u64, layer: u8) -> u64 {
+        let covered = u64::try_from(outputs_per_node(layer)).expect("node capacity fits u64");
+        leaf_count / covered - 1
     }
 
     /// Fold `node` into `partial[k]`, cascading while chunks fill.
-    fn carry(&mut self, mut k: usize, mut node: [u8; 32]) -> Result<(), FrontierError> {
+    fn carry(
+        &mut self,
+        mut k: usize,
+        mut node: [u8; 32],
+        observe: &mut impl FnMut(FoldedChunk<'_>),
+    ) -> Result<(), FrontierError> {
         loop {
             if k >= MAX_PARTIAL_LAYERS {
                 return Err(FrontierError::TooDeep);
@@ -210,6 +309,16 @@ impl Frontier {
                 return Ok(());
             }
             let full = std::mem::take(&mut self.partial[k]);
+            // `partial[k]` is the child set of a layer-`k + 1` node, so that
+            // is the node which just closed. Reported before `promote_one`
+            // consumes the chunk.
+            let layer = u8::try_from(k + 1).expect("frontier layer fits u8");
+            observe(FoldedChunk {
+                layer,
+                index: Self::closed_node_index(self.leaf_count, layer),
+                end_leaf: self.leaf_count - 1,
+                children: &full,
+            });
             node = promote_one(full, k)?;
             k += 1;
         }
@@ -230,6 +339,58 @@ impl Frontier {
             // `build_layers(&[])` (`CT2_DRAIN_ORDER.md` §5).
             return Ok(selene_hash_init());
         }
+        let branches = self.open_branches()?;
+        let top = branches.len() - 1;
+        let combined = branches
+            .into_iter()
+            .last()
+            .ok_or(FrontierError::EmptyWithLeaves)?;
+        if combined.is_empty() {
+            return Err(FrontierError::EmptyWithLeaves);
+        }
+        // At the topmost non-empty layer `combined` IS that whole layer, so
+        // the batch composition's own stop condition decides the root rather
+        // than a second copy of it.
+        let layers = try_build_upper_layers(
+            combined,
+            u8::try_from(top).expect("frontier layer index fits u8"),
+        )
+        .ok_or(FrontierError::InvalidNodeScalars)?;
+        layers
+            .last()
+            .and_then(|layer| layer.first().copied())
+            .ok_or(FrontierError::EmptyWithLeaves)
+    }
+
+    /// The children of the rightmost — still **open** — node at every layer
+    /// above the leaves, bottom-up: entry `k` is the child set of the
+    /// layer-`k + 1` node currently being built.
+    ///
+    /// This is what a membership path needs wherever its chunk has *not*
+    /// closed: a closed chunk's children are fixed and captured, an open
+    /// chunk's are exactly these. Each entry is `partial[k]` — the closed
+    /// layer-`k` nodes carried so far — followed by the node of the open
+    /// chunk below it, hashed as it stands, because that node is a child of
+    /// this one too even though it is not final. [`Self::root`] is this
+    /// vector's last entry composed upward; the two share one computation so
+    /// a path's open branch and the root it must hash to cannot be read from
+    /// different states.
+    ///
+    /// Layer 0 is **not** here. The open leaf chunk holds scalars, and a path
+    /// needs its siblings as points; those come from the leaf rows.
+    ///
+    /// The last entry is never empty on a non-empty frontier; lower entries
+    /// can be — a layer whose open node has no children yet, because the
+    /// chunk below it is also just starting. A reader that consults an empty
+    /// entry is asking about a chunk that has closed, and should have read
+    /// the capture.
+    ///
+    /// # Errors
+    ///
+    /// [`FrontierError::InvalidNodeScalars`] on a hash failure;
+    /// [`FrontierError::EmptyWithLeaves`] on bytes the advance cannot
+    /// produce.
+    pub fn open_branches(&self) -> Result<Vec<Vec<[u8; 32]>>, FrontierError> {
         let mut carry: Option<[u8; 32]> = if self.leaf_chunk.is_empty() {
             None
         } else {
@@ -240,31 +401,19 @@ impl Frontier {
             .iter()
             .rposition(|layer| !layer.is_empty())
             .unwrap_or(0);
+        let mut branches = Vec::with_capacity(top + 1);
         for k in 0..=top {
             let mut combined = self.partial.get(k).cloned().unwrap_or_default();
             combined.extend(carry.take());
-            if k == top {
-                if combined.is_empty() {
-                    return Err(FrontierError::EmptyWithLeaves);
-                }
-                // At the topmost non-empty layer `combined` IS that whole
-                // layer, so the batch composition's own stop condition
-                // decides the root rather than a second copy of it.
-                let layers = try_build_upper_layers(
-                    combined,
-                    u8::try_from(k).expect("frontier layer index fits u8"),
-                )
-                .ok_or(FrontierError::InvalidNodeScalars)?;
-                return layers
-                    .last()
-                    .and_then(|layer| layer.first().copied())
-                    .ok_or(FrontierError::EmptyWithLeaves);
+            if k < top && !combined.is_empty() {
+                carry = Some(promote_one(combined.clone(), k)?);
             }
-            if !combined.is_empty() {
-                carry = Some(promote_one(combined, k)?);
-            }
+            branches.push(combined);
         }
-        Err(FrontierError::EmptyWithLeaves)
+        if self.leaf_count > 0 && branches.last().is_none_or(Vec::is_empty) {
+            return Err(FrontierError::EmptyWithLeaves);
+        }
+        Ok(branches)
     }
 
     /// Serialize for the snapshot ring.
@@ -364,271 +513,7 @@ impl Cursor<'_> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use shekyl_fcmp::tree::{try_build_layers, HELIOS_CHUNK_WIDTH, SELENE_CHUNK_WIDTH};
-
-    /// Distinct, valid leaf bytes: four copies of a Selene scalar derived
-    /// from `i`. Canonical by construction (the high byte stays clear).
-    fn leaf(i: u64) -> [u8; LEAF_BYTES] {
-        let mut out = [0u8; LEAF_BYTES];
-        for (s, slot) in out.chunks_exact_mut(32).enumerate() {
-            let index = u64::try_from(s).expect("scalar index fits u64");
-            let mixed = i.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(index);
-            slot[..8].copy_from_slice(&mixed.to_le_bytes());
-            slot[8] = u8::try_from(s).expect("scalar index fits u8");
-        }
-        out
-    }
-
-    fn oracle_root(n: u64) -> [u8; 32] {
-        if n == 0 {
-            return selene_hash_init();
-        }
-        let mut scalars = Vec::new();
-        for i in 0..n {
-            for chunk in leaf(i).chunks_exact(32) {
-                let mut s = [0u8; 32];
-                s.copy_from_slice(chunk);
-                scalars.push(s);
-            }
-        }
-        let layers = try_build_layers(&scalars).expect("oracle builds");
-        *layers.last().unwrap().first().unwrap()
-    }
-
-    fn frontier_through(n: u64) -> Frontier {
-        let mut f = Frontier::new();
-        for i in 0..n {
-            f.push_leaf(&leaf(i)).expect("advance");
-        }
-        f
-    }
-
-    /// The derivation in [`Frontier::expected_shape`] is written from the
-    /// fold rule, so it is graded against frontiers the fold actually built
-    /// — never against a second copy of the same reasoning.
-    #[test]
-    fn expected_shape_matches_every_frontier_the_advance_builds() {
-        let selene = u64::try_from(SELENE_CHUNK_WIDTH).expect("width fits u64");
-        let helios = u64::try_from(HELIOS_CHUNK_WIDTH).expect("width fits u64");
-        // Both layer-count discontinuities (`0 -> 1` and the first cascade),
-        // their neighbours, and a dense run that crosses the leaf fold many
-        // times. A flat region alone cannot see a shape error.
-        let mut counts: Vec<u64> = (0..=(selene * 3)).collect();
-        for edge in [selene * helios, selene * helios * selene] {
-            counts.extend([edge - 1, edge, edge + 1]);
-        }
-        for n in counts {
-            let f = frontier_through(n);
-            let (scalars, widths) =
-                Frontier::expected_shape(n).expect("production counts are in range");
-            assert_eq!(
-                scalars,
-                f.leaf_chunk.len(),
-                "leaf-chunk scalars disagree at n = {n}"
-            );
-            assert_eq!(
-                widths,
-                f.partial.iter().map(Vec::len).collect::<Vec<_>>(),
-                "partial widths disagree at n = {n}"
-            );
-        }
-    }
-
-    /// The body length is the shape of the count. Rewriting the count over a
-    /// body built for a different count is a short or long buffer, which is
-    /// [`FrontierError::Malformed`]. There is no width byte that could keep
-    /// the old boundaries under the new count.
-    #[test]
-    fn decode_refuses_a_count_whose_body_belongs_to_another_shape() {
-        let selene = u64::try_from(SELENE_CHUNK_WIDTH).expect("width fits u64");
-        let n = selene * 3;
-        let bytes = frontier_through(n).encode();
-        assert_eq!(
-            Frontier::decode(&bytes).expect("the unmutated encoding decodes"),
-            frontier_through(n),
-            "the control must decode before a mutation of it means anything"
-        );
-        let (scalars, widths) = Frontier::expected_shape(n).expect("production count is in range");
-        let implied = Frontier::HEADER_LEN
-            + scalars * 32
-            + widths.iter().map(|width| width * 32).sum::<usize>();
-        assert_eq!(
-            bytes.len(),
-            implied,
-            "encode wrote a length the shape does not name"
-        );
-
-        let successor = n + 1;
-        let (next_scalars, next_widths) =
-            Frontier::expected_shape(successor).expect("the successor is in range");
-        let successor_len = Frontier::HEADER_LEN
-            + next_scalars * 32
-            + next_widths.iter().map(|width| width * 32).sum::<usize>();
-        assert_ne!(
-            bytes.len(),
-            successor_len,
-            "this count's successor must change the layout, or the mutation below is a no-op"
-        );
-        let mut forged = bytes.clone();
-        forged[..Frontier::HEADER_LEN].copy_from_slice(&successor.to_le_bytes());
-        assert_eq!(Frontier::decode(&forged), Err(FrontierError::Malformed));
-    }
-
-    /// A chunk at capacity folds in the same [`Frontier::push_leaf`], so no
-    /// reachable count has a full leaf chunk or a full partial chunk. The
-    /// encoding has no way to claim one: the layout never asks for it.
-    #[test]
-    fn a_reachable_shape_never_holds_a_full_chunk() {
-        let selene = u64::try_from(SELENE_CHUNK_WIDTH).expect("width fits u64");
-        let helios = u64::try_from(HELIOS_CHUNK_WIDTH).expect("width fits u64");
-        let mut counts: Vec<u64> = (0..=(selene * 3)).collect();
-        for edge in [selene * helios, selene * helios * selene] {
-            counts.extend([edge - 1, edge, edge + 1]);
-        }
-        for n in counts {
-            let (scalars, widths) =
-                Frontier::expected_shape(n).expect("production counts are in range");
-            assert!(
-                scalars < LEAF_CHUNK_SCALARS,
-                "n = {n} asks for a full leaf chunk, which push_leaf folds away"
-            );
-            for (k, width) in widths.iter().enumerate() {
-                assert!(
-                    *width < Frontier::partial_capacity(k),
-                    "n = {n} layer {k} asks for a full chunk, which the carry folds away"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn partial_capacity_is_the_parent_layers_width() {
-        // `partial[0]` holds layer-0 nodes chunked into a layer-1 (Helios)
-        // parent, so its capacity is the parent's width. Reading layer 0's
-        // own width here is the off-by-one this asserts against.
-        assert_eq!(Frontier::partial_capacity(0), HELIOS_CHUNK_WIDTH);
-        assert_ne!(HELIOS_CHUNK_WIDTH, SELENE_CHUNK_WIDTH);
-        assert_eq!(Frontier::partial_capacity(1), SELENE_CHUNK_WIDTH);
-    }
-
-    #[test]
-    fn root_matches_the_batch_oracle_across_every_fold_boundary() {
-        // Graded at every count through the first two leaf-chunk folds, and
-        // then at the three counts around the first *cascade* — where a full
-        // Helios chunk of layer-0 nodes folds into a layer-1 node. The dense
-        // low range catches a partial-chunk error; the cascade triple catches
-        // the carry. Re-deriving the oracle at all 684 counts is quadratic in
-        // curve hashes and buys no case these do not cover.
-        let selene = u64::try_from(SELENE_CHUNK_WIDTH).expect("width fits u64");
-        let cascade =
-            u64::try_from(SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH).expect("boundary fits u64");
-        // Past the first cascade the layer-0 fold has to happen REPEATEDLY
-        // for the root to stay right, and `folded` is the first count at
-        // which a partial chunk sized by the WRONG layer's width stops being
-        // invisible: the closure computes the correct root from an unfolded
-        // chunk, so an over-wide chunk agrees with the oracle until it
-        // finally fills and promotes to more than one node. `selene * selene`
-        // is where a chunk sized by layer 0's own width (38) would fill;
-        // correct code has folded twice by then, at 18 and 36 layer-0 nodes.
-        let folded = selene * selene + 1;
-        let dense_through = selene * 2 + 1;
-        let graded: Vec<u64> = (0..=dense_through)
-            .chain([cascade - 1, cascade, cascade + 1, folded])
-            .collect();
-
-        let mut f = Frontier::new();
-        let mut next = 0u64;
-        let mut folds = 0usize;
-        let mut cascades = 0usize;
-        for n in graded {
-            while next < n {
-                f.push_leaf(&leaf(next)).expect("advance");
-                next += 1;
-            }
-            assert_eq!(f.leaf_count(), n, "leaf count at n={n}");
-            assert_eq!(
-                f.root().expect("close"),
-                oracle_root(n),
-                "frontier root disagrees with build_layers at n={n}"
-            );
-            assert_eq!(f.depth(), layer_count_for_leaves(n), "depth at n={n}");
-            if n > 0 && n.is_multiple_of(selene) {
-                folds += 1;
-            }
-            if n == cascade {
-                cascades += 1;
-            }
-        }
-        assert!(folds > 1, "no leaf-chunk fold was graded");
-        assert_eq!(cascades, 1, "the layer-1 cascade was not graded");
-        assert!(
-            folded > cascade * 2,
-            "the graded range never reaches a second layer-1 fold, so a partial chunk \
-             sized by the wrong layer's width would agree with the oracle at every \
-             count here — the closure computes the right root from an unfolded chunk"
-        );
-        // The two depths in the graded set differ, so a depth taken from the
-        // wrong leaf count is visible rather than coincidentally equal.
-        assert_ne!(
-            layer_count_for_leaves(1),
-            layer_count_for_leaves(cascade + 1),
-            "the graded range spans no depth step"
-        );
-    }
-
-    #[test]
-    fn closing_does_not_consume_the_frontier() {
-        let mut f = frontier_through(5);
-        let before = f.clone();
-        let first = f.root().expect("close");
-        assert_eq!(f, before, "root() mutated the frontier");
-        assert_eq!(f.root().expect("close"), first, "root() is not idempotent");
-        f.push_leaf(&leaf(5)).expect("advance");
-        assert_ne!(f.root().expect("close"), first, "advance changed no root");
-    }
-
-    #[test]
-    fn encode_round_trips_at_each_shape() {
-        let boundary =
-            u64::try_from(SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH).expect("boundary fits u64");
-        let selene_width = u64::try_from(SELENE_CHUNK_WIDTH).expect("width fits u64");
-        for n in [
-            0,
-            1,
-            selene_width - 1,
-            selene_width,
-            selene_width + 1,
-            boundary,
-            boundary + 1,
-        ] {
-            let f = frontier_through(n);
-            let bytes = f.encode();
-            assert!(
-                bytes.len() <= Frontier::max_encoded_len(),
-                "n={n} encodes to {} bytes, past the derived bound {}",
-                bytes.len(),
-                Frontier::max_encoded_len()
-            );
-            let back = Frontier::decode(&bytes).expect("round trip");
-            assert_eq!(back, f, "round trip at n={n}");
-            assert_eq!(back.root().expect("close"), f.root().expect("close"));
-        }
-    }
-
-    #[test]
-    fn decode_refuses_trailing_bytes_and_short_input() {
-        let bytes = frontier_through(3).encode();
-        let mut longer = bytes.clone();
-        longer.push(0);
-        assert_eq!(Frontier::decode(&longer), Err(FrontierError::Malformed));
-        assert_eq!(
-            Frontier::decode(&bytes[..bytes.len() - 1]),
-            Err(FrontierError::Malformed)
-        );
-    }
-}
+mod tests;
 
 #[cfg(test)]
 mod sizing {

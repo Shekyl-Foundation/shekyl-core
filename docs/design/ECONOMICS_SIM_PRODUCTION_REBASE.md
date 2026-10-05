@@ -1113,7 +1113,7 @@ Status column: **V** = definition and use both read; **I** = inferred.
 | A11 | `proxy.rs:474`; `mn_feasibility.rs:57`; literal 131 in tests `proxy.rs:825-1018`, `mn_feasibility.rs:1065-1067` | 131-epoch reward horizon, reused as "bond life". Production `bond_duration` (`bond_duration.rs:142`) is not consulted. | Silently pinned | I (owner mapping) |
 | A12 | `mn_feasibility.rs:370-375,386-388`; `challenge_coverage.rs:223-225` | False-slash target 1e-3, free-ride 0.80, 40,000 pairs, `p_attempt` 0.30, pair counts 4,096 / 324,000. `k_cap` is 6 in one arm and 30 in the other. | Declared provisional; the `k_cap` disagreement is silent | V |
 | A13 | `calibration.rs:57-61` | Rucknium March-2024 anchors | Declared | V |
-| A14 | `stage2.rs:57,817,1613`; `record.rs:263`; `admission.rs:46`; `fee_ladder.rs:123` | Ramp years 2, response lag 2, reward at asymptote/2, milestone height 5_788_000, safety multiple 2, gap placeholder 5 | Mostly declared | V |
+| A14 | `stage2.rs:57,817,1613`; `record.rs:137,280`; `admission.rs:46`; `fee_ladder.rs:123` | Ramp years 2, response lag 2, reward at asymptote/2, half-emission height from `neutral_height_reaching` (2_907_270 at ESF 22; the removed ESF-23 literal was 5_788_000), safety multiple 2, gap placeholder 5 | Mostly declared | V |
 | A15 | `fee_ladder.rs:1708,2574-2581`; `fee_floor.rs:408` | Demand elasticity model, tier-usage shares | Declared (registered grid) | V |
 
 ### (D) Dead or stale referent
@@ -1166,10 +1166,10 @@ Status column: **V** = definition and use both read; **I** = inferred.
 - **`cartel.rs:81-85`** — `bond_floor_of`, `reinstate_connect`, `BadInterval`, `FAILURE_WINDOW_M/N`, `MAX_HOLDINGS_SHARDS`, `SLASH_GRACE_EPOCHS`.
 - **`challenge_coverage.rs:36`** — `SETTLEMENT_EPOCH_BLOCKS`.
 - **`distribution.rs:43`** — `curve_milli`, `scarcity_micro`, `work_milli_from_micro`.
-- **`engine.rs:2-7,146,166-169`** — the burn, emission and release functions, `calc_stake_ratio`; `staker_pool_share`, DAA target and escalation fields from `EconomicParams::default()`.
+- **`engine.rs:2-7,148,178`** — the burn, emission and release functions, `calc_stake_ratio`. `SimParams::default` incorporates the shipped curve, release, burn, `staker_pool_share`, and `BLOCKS_PER_YEAR`, `STAKER_EMISSION_SHARE`, `STAKER_EMISSION_DECAY`. A run replaces fields to price an alternative; `economic()` writes those knobs onto `EconomicParams::default()` and leaves the DAA target and the escalation fields shipped. An escalation alternative is an `EscalationCurve`.
 - **`escalation.rs:35-38,237`** — `staker_pool_share_at`, `EscalationParams`, `SCALE`, floor from the shipped config, `SHARD_LENGTH`. Nothing computes a ramp locally.
 - **`fee_floor.rs:65-69`** — `TX_VOLUME_WINDOW`, `base_block_reward`, `BLOCKS_PER_YEAR`, `RELAY_ADMISSION_SLACK_BP`, `RELAY_FLOOR_LOOKBACK`.
-- **`fee_ladder.rs:44-56`** — `corrected_fee_ladder`, `relay_fee_floor`, `hysteresis_step/fold/settled`, `paid_block_reward`, `effective_emission`, `projected_already_generated`, `tail_subsidy_per_block`, `emission_speed_factor`, `STAKER_EMISSION_SHARE/DECAY`, `BLOCKS_PER_YEAR`, `FULL_REWARD_ZONE`.
+- **`fee_ladder.rs:44-56`** — `corrected_fee_ladder`, `relay_fee_floor`, `hysteresis_step/fold/settled`, `paid_block_reward`, `effective_emission`, `projected_already_generated`, `tail_subsidy_per_block`, `EconomicParams::emission_speed_factor_per_block`, `STAKER_EMISSION_SHARE/DECAY`, `BLOCKS_PER_YEAR`, `FULL_REWARD_ZONE`.
 - **`main.rs`** — none.
 - **`mn_feasibility.rs:46-48`** — `FAILURE_WINDOW_M/N`, `MAX_HOLDINGS_SHARDS`, `SETTLEMENT_EPOCH_BLOCKS`.
 - **`onset.rs:69-72,584,746`** — `ARCHIVAL_BOND_FLOOR_ATOMIC`, `calc_burn_pct`, `calc_effective_emission_share`, `SHARD_LENGTH`.

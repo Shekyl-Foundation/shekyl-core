@@ -817,7 +817,8 @@ against a client/daemon mismatch" is currently *nothing*.
 before this PR merges; canonical form `v2`, one re-pin — built.** The file
 settled it: `economics_params.json` carries `money_supply`,
 `final_subsidy_per_minute: 300000000` and
-`emission_speed_factor_per_minute: 22` — genesis-frozen emission constants,
+`emission_speed_factor_per_minute: 22` (since 2026-10-04
+`emission_speed_factor_per_block: 22`, read per block) — genesis-frozen emission constants,
 and the final subsidy *is* the perpetual tail Rick signed in `FL-R12′`
 (0.3 SKL/min × 2 min/block = the 0.6/block rail). "A digest pinning
 `consensus_constants.json` while leaving the emission curve's own authority
@@ -936,7 +937,7 @@ recorded so §3.7 is checkable by a reviewer rather than aspirational:
 
 | Key(s) | Does a different value make a different chain? |
 | --- | --- |
-| `emission_curve_asymptote`, `emission_speed_factor_per_minute`, `final_subsidy_per_minute` | **Yes** — the emission curve and the perpetual tail (`FL-R12′`) |
+| `emission_curve_asymptote`, `emission_speed_factor_per_block`, `final_subsidy_per_minute` | **Yes** — the emission curve and the perpetual tail (`FL-R12′`) |
 | `coin` | **Yes** — the atomic-unit denominator |
 | `display_decimal_point` | **Yes, but only through a coupling that was nowhere written down** — see below |
 | `shekyl_fixed_point_scale` | **Yes** — the denominator every ppm share is read against |

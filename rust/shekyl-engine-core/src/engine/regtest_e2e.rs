@@ -4696,6 +4696,71 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
     reopened.close(&creds).expect("close");
 }
 
+/// The build a captured chain names: the daemon's own, held to the checkout
+/// the replay tests compile against.
+///
+/// The checkout's `HEAD` alone says nothing about the binary in
+/// `SHEKYLD_BIN`: a daemon built from another tree, or from this tree before
+/// its change was committed (cmake fixes the version tag at configure time),
+/// would stamp a corpus with a commit that did not mine it. The daemon
+/// reports `<version>-<sha9>`; that SHA is the build. A capture refuses
+/// unless it is the checkout's `HEAD` and the checkout is clean outside the
+/// vectors being written, so the record cannot name code that is not what
+/// ran.
+fn capture_build_identity(daemon_version: &str) -> String {
+    let git = |args: &[&str]| -> String {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("git runs in the checkout");
+        assert!(out.status.success(), "git {args:?} failed in the checkout");
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    let built = daemon_version.rsplit_once('-').map_or("", |(_, sha)| sha);
+    assert!(
+        built.len() == 9 && built.chars().all(|c| c.is_ascii_hexdigit()),
+        "the daemon reports version `{daemon_version}`, which names no commit; a capture is \
+         a development artifact and must come from a daemon built at a commit"
+    );
+    let head = git(&["rev-parse", "--short=9", "HEAD"]);
+    assert_eq!(
+        built, head,
+        "SHEKYLD_BIN was built at {built} but the checkout is at {head}: re-run cmake \
+         (the version tag is fixed at configure time) and rebuild the daemon at HEAD \
+         before capturing, so the vector names the code that mined it"
+    );
+    let dirty = git(&[
+        "status",
+        "--porcelain",
+        "--",
+        ":(top)",
+        ":(top,exclude)rust/shekyl-chain-ingest/tests/vectors",
+    ]);
+    assert!(
+        dirty.is_empty(),
+        "the checkout has uncommitted or untracked files, so HEAD does not describe what \
+         was built; commit or remove them and rebuild the daemon before capturing:\n{dirty}"
+    );
+    head
+}
+
+/// A daemon whose version names no commit cannot vouch for a capture. No
+/// daemon needed: the refusal precedes every probe of the checkout.
+#[test]
+#[should_panic(expected = "names no commit")]
+fn a_capture_refuses_a_daemon_version_naming_no_commit() {
+    capture_build_identity("3.1.0-release");
+}
+
+/// A daemon built at another commit than the checkout's `HEAD` would stamp
+/// the vector with code that did not mine it.
+#[test]
+#[should_panic(expected = "but the checkout is at")]
+fn a_capture_refuses_a_daemon_built_at_another_commit() {
+    capture_build_identity("3.1.0-000000000");
+}
+
 /// Capture the regtest chain as the **E2 replay pair** — a corpus and a
 /// trace — for the consensus validator's verification-era fixtures
 /// (`CHAIN_RULES_SLICE_6.md` §5.2, Q1 (ii)), under
@@ -4888,14 +4953,8 @@ async fn maybe_capture_chain_vector(
         .as_str()
         .expect("block 0's hash")
         .to_owned();
-    let built_at_dev_sha = Command::new("git")
-        .args(["rev-parse", "--short=9", "HEAD"])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-        .unwrap_or_else(|| "unknown".to_owned());
+    let daemon_version = daemon.version().await;
+    let built_at_dev_sha = capture_build_identity(&daemon_version);
 
     // The schedule the chain was mined under — the daemon's levers when the
     // harness pulled them, the genesis pair otherwise. The replay opens
@@ -4930,7 +4989,7 @@ async fn maybe_capture_chain_vector(
              SHEKYL_E2_TRACE_EXPORT_BIN set, running the named generator --ignored.",
         "shape": shape,
         "generator": generator,
-        "captured_by_daemon_version": daemon.version().await,
+        "captured_by_daemon_version": daemon_version,
         "tip_height": tip,
         "block_count": count,
         "spend_txid": spend_txid.map(|h| h.to_string()),

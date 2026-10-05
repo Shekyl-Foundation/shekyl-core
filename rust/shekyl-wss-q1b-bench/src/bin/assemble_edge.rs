@@ -265,10 +265,11 @@ fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
     Ok(AssembleEdgeRecord {
         schema_version: SCHEMA_VERSION,
         measurement: "path assembly — CurveTreeClient::assemble_paths across leaf populations",
-        grading: "baseline — capture is unbuilt, so a same-rung slope is the EXPECTED reading \
-                  and is the evidence for why capture must exist. The criterion carried here \
-                  was fixed before capture existed; CT-6 increment 6 re-grades these same arms \
-                  against it. A cross-rung pass is a ceiling (no dearer than one layer), not \
+        grading: "baseline — this harness registers nothing, so assembly takes the rebuild \
+                  it keeps for an unregistered input and a same-rung slope is the EXPECTED \
+                  reading: the before-figure capture exists to remove. The criterion carried \
+                  here was fixed before capture existed; CT-6 increment 6 re-grades these \
+                  same arms, registered, against it. A cross-rung pass is a ceiling (no dearer than one layer), not \
                   evidence the step matched the uniform-layer model. The integrity gate's \
                   verdict is green by construction (the reference root is taken from the \
                   client); root agreement is graded in-crate by shekyl-curve-tree's \
