@@ -555,9 +555,12 @@ ordering dependence (reopen per rule 21 only if a real use case emerges).
 *Records-was:* this paragraph read "**every** same-`P` same-block pair …
 JoinMarket+Release" until 2026-10-04; a JoinMarket+Release pair does not
 pass per-tx verify — the Release reads no record pre-block and refuses
-`RecordMissing` in the slot loop, before this pass, in the C++ and the Rust
-validator alike (E6 slice 8 row 5, `CHAIN_RULES_SLICE_8.md` §5, drove the
-pair; the block-level pass still refuses it, one layer later, by `P`).
+`RecordMissing` in the slot loop, and that refusal returns the block before
+this pass runs, in the C++ (`blockchain.cpp` per-tx check at `:5643`; the
+uniqueness pass at `:5805` is never reached) and the Rust validator alike
+(E6 slice 8 row 5, `CHAIN_RULES_SLICE_8.md` §5, drove the pair; its scenario
+witness pins J16, not G10 — this pass has no same-`P` mixed-kind witness,
+and needs none).
 
 ---
 
