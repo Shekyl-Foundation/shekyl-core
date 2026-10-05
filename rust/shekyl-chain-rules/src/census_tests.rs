@@ -274,7 +274,9 @@ fn registries_are_the_expected_size_at_this_increment() {
     // predicate, an R8-class placement row minted by S-ARCH's pre-flight,
     // DRS_E1_SARCH.md SAR-2 / SAR-7) — pending here until E4 moves the fold
     // to shekyl-archival-retention and slice 8 judges through it.
-    assert_eq!(CenRow::ALL.len(), 154);
+    // 154 → 153 on 2026-10-05: CEN-J17 (HoldingsUpdate) moved to bucket 3.
+    // The census keeps the id marked REJECTED; the registry does not.
+    assert_eq!(CenRow::ALL.len(), 153);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }
 
