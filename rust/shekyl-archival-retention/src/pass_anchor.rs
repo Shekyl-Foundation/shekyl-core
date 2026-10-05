@@ -290,6 +290,18 @@ impl PassRequestHeader {
 /// answers no other. It leads the preimage and has a fixed width, so the
 /// split between salt and body is unambiguous without a length field.
 ///
+/// **What it leaves behind.** The pass record carries the nonce and this
+/// digest, and `framed` is a function of the shard for as long as writers
+/// emit no padding (`RF-D4`'s write-zero rule). Anyone who later holds the
+/// shard can therefore recompute the digest of a recorded pass. A recorded
+/// digest that does not match is evidence that `P` signed for bytes that
+/// were not the shard, and it lasts as long as the record does. This is why
+/// the digest is a flat hash of the whole body and not a hash of a
+/// precomputable summary of it, such as a root of chunk hashes: a `P`
+/// holding only the summary could sign a digest consistent with a shard it
+/// had discarded, and no later reader could tell. A padding scheme keeps
+/// the property only if the padded frame stays recomputable from the shard.
+///
 /// **What this does not claim.** It does not show that `P` stores the bytes:
 /// a `P` that fetches them from a co-holder on demand produces the same
 /// digest (`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §9.4 (ii)); the route's

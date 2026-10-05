@@ -1108,6 +1108,19 @@ same thing, and that residual is topology's to price
 response is hashed the same way whoever asked, so a challenge read stays
 indistinguishable from an organic one.
 
+**What the record leaves behind.** The pass record carries `nonce` and
+`D`, and the framed body is a function of the shard for as long as
+`RF-D4`'s write-zero padding rule holds. Anyone who later holds the shard
+can therefore recompute `D` for a recorded pass. A recorded `D` that does
+not match is evidence that `P` signed for bytes that were not the shard,
+and it lasts as long as the record. Two things follow. `D` must stay a
+flat hash of the whole body: over a precomputable summary of the shard, a
+root of chunk hashes for instance, a `P` holding only the summary could
+sign a `D` consistent with a shard it had discarded, and a witness that
+skipped the byte check would file a pass no later reader could fault. And
+a padding scheme keeps the property only if the padded frame stays
+recomputable from the shard, or the padding is carried.
+
 The pass record **carries** the 32-byte `nonce`, the 8-byte
 `anchor_height` and the 32-byte `D` — the random cannot be recomputed
 from chain terms, the height is the requester's choice inside a window,
