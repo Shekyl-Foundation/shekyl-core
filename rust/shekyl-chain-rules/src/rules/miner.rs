@@ -676,32 +676,78 @@ pub fn tx_volume_window<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
 ) -> Result<TxVolume, ViewRead<V::Fault>> {
-    let h = connecting.to_raw();
-    let Some(parent) = h.checked_sub(1) else {
+    let span = tx_volume_span(connecting);
+    let Some(upper_at) = span.upper else {
         return Ok(TxVolume::window(0, 0));
     };
-    let blocks = h.min(TX_VOLUME_WINDOW);
-    let prefix_sum = |at: u64| -> Result<u64, ViewRead<V::Fault>> {
-        Ok(recorded(view, BlockHeight::from_raw(at))?.cumulative_tx_count)
+    let prefix_sum = |at: BlockHeight| -> Result<u64, ViewRead<V::Fault>> {
+        Ok(recorded(view, at)?.cumulative_tx_count)
     };
-    let upper = prefix_sum(parent)?;
+    let upper = prefix_sum(upper_at)?;
+    let lower = match span.lower {
+        None => 0,
+        Some(at) => prefix_sum(at)?,
+    };
+    span.volume(upper, lower)
+        .ok_or(ViewRead::Corrupt(Corrupt::TxCountNotMonotone {
+            at: upper_at,
+        }))
+}
+
+/// Where CEN-F20's window lies at a connecting height: how many blocks it
+/// spans and whose prefix sums it subtracts. [`tx_volume_window`] is this
+/// plus two reads of the store; [`tx_volume_span`] is the definition
+/// without the store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TxVolumeSpan {
+    /// Blocks in the window: `min(h, W)`, `0` at genesis.
+    pub blocks: u64,
+    /// The height whose prefix sum is the upper term, `h − 1`; `None` at
+    /// genesis, where the window is empty.
+    pub upper: Option<BlockHeight>,
+    /// The height whose prefix sum is the lower term, `h − n − 1`; `None`
+    /// when the window reaches genesis and the lower term is `0`.
+    pub lower: Option<BlockHeight>,
+}
+
+impl TxVolumeSpan {
+    /// The operand from the prefix sums read at [`Self::upper`] and
+    /// [`Self::lower`], `0` for an absent term. `None` when the upper sum
+    /// is below the lower.
+    ///
+    /// A prefix sum is non-decreasing along a conforming chain (the store
+    /// folds it under SI-8). A decrease is not a small window, it is a
+    /// record that does not hold what it claims — a fault for the caller to
+    /// raise, never a saturated zero that `calc_release_multiplier` would
+    /// price as a dormant chain.
+    #[must_use]
+    pub fn volume(self, upper_sum: u64, lower_sum: u64) -> Option<TxVolume> {
+        upper_sum
+            .checked_sub(lower_sum)
+            .map(|sum| TxVolume::window(sum, self.blocks))
+    }
+}
+
+/// [`TxVolumeSpan`] at `connecting`: `n = min(h, W)` blocks, `[h − n, h − 1]`.
+#[must_use]
+pub fn tx_volume_span(connecting: BlockHeight) -> TxVolumeSpan {
+    let h = connecting.to_raw();
+    let Some(parent) = h.checked_sub(1) else {
+        return TxVolumeSpan {
+            blocks: 0,
+            upper: None,
+            lower: None,
+        };
+    };
+    let blocks = h.min(TX_VOLUME_WINDOW);
     // `h >= blocks`, so `h - blocks` is the first height in the window;
-    // its predecessor's prefix sum is the lower term, `0` when the
+    // its predecessor's prefix sum is the lower term, absent when the
     // window starts at genesis.
     let first_in_window = h - blocks;
-    let lower = match first_in_window.checked_sub(1) {
-        None => 0,
-        Some(before) => prefix_sum(before)?,
-    };
-    // A prefix sum is non-decreasing along a conforming chain (the store
-    // folds it under SI-8). A decrease is not a small window, it is a
-    // store that does not hold what it claims — a fault, never a saturated
-    // zero that `calc_release_multiplier` would price as a dormant chain.
-    match upper.checked_sub(lower) {
-        Some(sum) => Ok(TxVolume::window(sum, blocks)),
-        None => Err(ViewRead::Corrupt(Corrupt::TxCountNotMonotone {
-            at: BlockHeight::from_raw(parent),
-        })),
+    TxVolumeSpan {
+        blocks,
+        upper: Some(BlockHeight::from_raw(parent)),
+        lower: first_in_window.checked_sub(1).map(BlockHeight::from_raw),
     }
 }
 

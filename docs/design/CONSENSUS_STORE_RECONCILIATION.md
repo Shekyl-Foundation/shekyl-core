@@ -521,10 +521,13 @@ two-implementation mirror** (C++ predicate sequence + Rust
 `serve_credit_decisions`) kept honest by the equivalence KAT. **Retired
 2026-10-02 (DRS-E4 commit 10d), and not in the shape this note anticipated:**
 the KAT did not survive as the successor's pinning vectors, because the
-successor is a different rule — `PDM-Q6` item 4 signs `shard_id` and the
-shard's bounds, not the leaf preimage the vectors pin. Mirror and KAT were
-deleted together; the rewrite builds CEN-J8–J10 from the ruling, with its own
-vectors.
+successor is a different rule, not the leaf preimage the vectors pin. Mirror
+and KAT were deleted together. The successor is SO-D8 Slice C, authorized
+2026-10-04 (`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §8.0), with its own
+vectors; it retires CEN-J8–J10 by ruling. *Was: "`PDM-Q6` item 4 signs
+`shard_id` and the shard's bounds" — that term was struck 2026-10-04
+(`SERVE_CREDIT_VERIFIER.md` `SCV-Q2`), and `P`'s signed message is
+`SF-D8`'s.*
 
 > **On REWRITE-NOTE markers (ruled 2026-09-26, E6 slice 6 commit 10). The
 > register records what *is*; what the rewrite *owes* belongs in a plan.** A

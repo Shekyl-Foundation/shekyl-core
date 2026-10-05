@@ -37,15 +37,15 @@
 //! forgotten regen cannot silently pass.
 
 use serde::{Deserialize, Serialize};
-use shekyl_economics::params::{EconomicParams, SCALE};
+use shekyl_economics::params::SCALE;
 use shekyl_economics::{
     base_block_reward, base_emission_at, calc_burn_pct_from_activity,
     calc_effective_emission_share, calc_release_multiplier, compute_burn_split_at,
-    effective_emission, params_digest, split_block_emission, ClosedShardCount, TxVolume,
+    effective_emission, neutral_height_reaching, params_digest, split_block_emission,
+    ClosedShardCount, EconomicParams, TxVolume,
 };
 
 use crate::engine::SimParams;
-use crate::fee_model::ChargedBlock;
 use crate::scenarios::scenario_1_baseline;
 
 /// One recorded per-block row (integer observables + integer
@@ -131,18 +131,32 @@ fn sample_heights(blocks_per_year: u64, sim_years: u64) -> Vec<u64> {
     heights
 }
 
+/// The first height at which the owner's neutral trajectory has emitted half
+/// the asymptote — the owner's inverse of `projected_already_generated`,
+/// not a figure restated here.
+fn half_emitted_height(params: &EconomicParams) -> u64 {
+    neutral_height_reaching(params.emission_curve_asymptote / 2, params)
+        .expect("the neutral trajectory reaches half the asymptote")
+}
+
 /// Record the `baseline_steady_state` scenario into a
 /// [`RecordedChainFixture`] using the canonical `shekyl-economics`
-/// primitives.
+/// primitives the wallet engine replays.
 ///
-/// The per-block accumulation loop mirrors
-/// [`crate::engine::run_scenario`]'s integer reward/emission math (so
-/// `already_generated` tracks identically). It deliberately does **not**
-/// adopt that modeling tool's emitted-minus-burned `circulating`: the
-/// recorded `circulating_supply` is the **consensus burn-site quantity** —
-/// prev-block `already_generated` (== `ag_start`) — per §5.3 R1 / design
-/// §608–612, **not** `already_generated − total_burned`. Rows are captured
-/// at [`sample_heights`].
+/// This loop does not step [`crate::chain_cursor::ChainCursor`]. The
+/// scenario folds price CEN-F20's window and the fill rule's penalised
+/// reward; this fixture's `tx_volume` column is the schedule's per-block
+/// demand, which is the input the differential feeds back in. The two
+/// `already_generated` paths answer different questions, and this one is
+/// the wallet engine's composition (`effective_emission` of that demand,
+/// no weight penalty).
+///
+/// The recorded `circulating_supply` is the quantity the burn reads in
+/// consensus: `coins_generated − total_burned` at parent state (FL-R16c,
+/// CEN-F17), derived by its owner ([`crate::engine::net_supply`]) over the
+/// burn this loop folds. Until ESR-5 it recorded gross `already_generated`,
+/// after a C++ burn site that no longer reads it. Rows are captured at
+/// [`sample_heights`].
 #[must_use]
 pub fn record_baseline_fixture() -> RecordedChainFixture {
     // The fee here is a test-vector input, not a model of what users pay:
@@ -156,27 +170,14 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         .flat_per_tx_atomic()
         .expect("the recorder runs on the flat arm");
 
-    let params = EconomicParams {
-        release_min: sim.release_min,
-        release_max: sim.release_max,
-        tx_volume_baseline: sim.tx_volume_baseline,
-        burn_base_rate: sim.burn_base_rate,
-        burn_cap: sim.burn_cap,
-        staker_pool_share: sim.staker_pool_share,
-        emission_curve_asymptote: sim.emission_curve_asymptote,
-        emission_speed_factor_per_minute: sim.emission_speed_factor_per_minute,
-        final_subsidy_per_minute: sim.final_subsidy_per_minute,
-        daa_target_seconds: EconomicParams::default().daa_target_seconds,
-        // Escalation numerics come from the shipped config: the sim must never
-        // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
-        ..EconomicParams::default()
-    };
+    let params = sim.economic();
 
     let blocks_per_year = sim.blocks_per_year;
     let total_blocks = blocks_per_year * config.sim_years;
     let samples = sample_heights(blocks_per_year, config.sim_years);
 
     let mut already_generated: u128 = 0;
+    let mut total_burned: u128 = 0;
     let mut records: Vec<RecordedRow> = Vec::with_capacity(samples.len());
 
     for block in 0..total_blocks {
@@ -188,13 +189,12 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             .expect("sim neutral trajectory stays within the arithmetic domain");
 
         let tx_volume = (config.volume.get_volume)(block, blocks_per_year);
-        // `circulating_supply` is the consensus burn-site quantity:
-        // prev-block `already_generated` (== `ag_start`), matching
-        // `validate_miner_transaction` — NOT `already_generated −
-        // total_burned` (§5.3 R1 / design §608–612). stake_ratio,
-        // total_staked, burn input, and the recorded row all use this
-        // same quantity so the fixture exercises the consensus input.
-        let circulating = ag_start;
+        // `circulating_supply` is the burn's consensus operand, net of what
+        // this loop has destroyed. stake_ratio, total_staked, the burn input
+        // and the recorded row all use this one quantity, so the fixture
+        // exercises the consensus input.
+        let supply = crate::engine::net_supply(already_generated, total_burned);
+        let circulating = supply.to_raw();
         let stake_ratio = (config.stake.get_stake_ratio)(block, blocks_per_year, circulating);
 
         let multiplier = calc_release_multiplier(
@@ -229,13 +229,21 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         // `LocalEconomics::burn_amount`'s composition (Bug-2 class). Burn no
         // longer consumes stake (F-D); `total_staked` is recorded below as a
         // scenario observable only.
+        // The engine-core differential composes the burn through
+        // `calc_burn_pct_from_activity`; the recorder calls the same
+        // primitive (module docs), fed the derived supply.
         let burn_pct = calc_burn_pct_from_activity(
             TxVolume::per_block(tx_volume),
             sim.tx_volume_baseline,
             circulating,
             &params,
         );
-        let total_fees = ChargedBlock::of_uniform(vector_fee_per_tx, tx_volume).total_atomic;
+        // The fixture's fee is a flat per-transaction input times the
+        // schedule's demand, saturated at the `u64` the burn takes. The
+        // scenario folds charge the fill's own fees instead.
+        let total_fees =
+            u64::try_from(u128::from(vector_fee_per_tx).saturating_mul(u128::from(tx_volume)))
+                .unwrap_or(u64::MAX);
         let fee_split =
             compute_burn_split_at(total_fees, burn_pct, ClosedShardCount::ZERO, &params);
 
@@ -262,13 +270,17 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         }
 
         already_generated += u128::from(effective_reward);
+        total_burned += u128::from(fee_split.actually_destroyed);
     }
 
     let neutral_milestones = [
         (blocks_per_year, "≈1 yr — early neutral trajectory"),
         (5 * blocks_per_year, "≈5 yr"),
         (10 * blocks_per_year, "≈10 yr"),
-        (5_788_000, "≈50% emitted, ~yr 22 (ESF-22 milestone)"),
+        (
+            half_emitted_height(&params),
+            "first height with half the asymptote emitted (≈ yr 11 at ESF 22 per block)",
+        ),
     ]
     .into_iter()
     .map(|(height, note)| NeutralMilestone {

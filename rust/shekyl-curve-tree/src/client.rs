@@ -70,6 +70,13 @@ use crate::types::{
     ReferenceBlock, TargetKind,
 };
 
+mod capture;
+
+pub(crate) use capture::{
+    ChunkSpan, CAPTURED_IDENTITY_BYTES, CAPTURED_IDENTITY_CM_X_AT, CAPTURED_IDENTITY_COMMITMENT_AT,
+    CAPTURED_IDENTITY_OUTPUT_KEY_AT, CURVE_ELEMENT_BYTES, NODE_CHILD_BYTES,
+};
+
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
 /// **before** `h_pqc` resolution. The client resolves `h_pqc` from the
 /// transaction's `0x07` blob (recon-owned) and builds the full
@@ -126,11 +133,15 @@ pub enum ClientError {
     ///
     /// Raised after assembly, from `verify_path_against_its_branches`.
     /// The store gate above it compares two store reads and cannot see this:
-    /// [`crate::types::TreeContext::tree_root`] is copied from the gated reference while the
-    /// branches come from replay. [`crate::assemble::PathRootFault`] names
-    /// which step refused. [`crate::assemble::PathRootFault::ChildAbsent`] is
-    /// the membership link. [`crate::assemble::PathRootFault::RootDisagrees`]
-    /// is the final comparison.
+    /// [`crate::types::TreeContext::tree_root`] is copied from the gated
+    /// reference, and the branches come from the route that assembled the
+    /// path — the capture table and the frontier snapshot, or the rebuild of
+    /// `entries`. [`crate::assemble::PathRootFault`] names which step refused.
+    /// [`crate::assemble::PathRootFault::ChildAbsent`] is the membership link.
+    /// [`crate::assemble::PathRootFault::RootDisagrees`] is the final
+    /// comparison. [`crate::assemble::PathRootFault::ShortPath`] and
+    /// [`crate::assemble::PathRootFault::LongPath`] are also how a rebuilt
+    /// layer count that disagrees with the gate's depth is reported.
     ///
     /// This is a defect, not a user condition: the wallet's two views of one
     /// tree disagree. Refusing is the point — an inconsistent path yields a
@@ -141,6 +152,102 @@ pub enum ClientError {
         claimed: CurveTreeRoot,
         /// Which step of the fold refused.
         fault: crate::assemble::PathRootFault,
+    },
+    /// A registration names an output this client does not hold at that
+    /// `gindex`.
+    ///
+    /// The wallet says it owns `O` at `gindex`; the client's chain view has
+    /// a different output there. One of the two is reading a different
+    /// chain, which is the same inter-component invariant
+    /// [`ClientError::IdentityMismatch`] guards at assembly — raised here so
+    /// it surfaces at registration rather than at the spend that needed the
+    /// capture.
+    ///
+    /// Refused rather than stored: a registration this client cannot match
+    /// would capture nothing and report nothing, and the remedy is the
+    /// wallet's own rescan, which re-registers with the key its scan of the
+    /// current chain found (rule 82).
+    RegistrationIdentityMismatch {
+        /// The global output index the registration named.
+        gindex: Gindex,
+        /// The output key the registration carried.
+        expected: OneTimePubkey,
+        /// The output key this client holds at that `gindex`.
+        got: OneTimePubkey,
+    },
+    /// The reference height has no frontier snapshot, so the open chunks of
+    /// a captured path cannot be read at it.
+    ///
+    /// The ring holds `[tip - horizon, tip]` with the horizon at
+    /// `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` (720), and the daemon rejects a
+    /// reference older than `REFERENCE_BLOCK_MAX_AGE` (100) blocks. A
+    /// reference past that horizon is one the daemon would refuse, and
+    /// rebuilding the tree from every drained leaf to serve it is not worth
+    /// the read. A miss *inside* the horizon is a hole: the height was
+    /// ingested, and reading it again does not write the row. Re-anchor
+    /// treats both as terminal. The unregistered route never reaches this
+    /// error; it rebuilds before the snapshot is consulted.
+    ReferenceOutsideSnapshotRing {
+        /// The reference height asked for.
+        height: BlockHeight,
+    },
+    /// A chunk a captured path needs has closed, and the capture table does
+    /// not hold it.
+    ///
+    /// The owned position was resolved, so every chunk over it should have
+    /// been written — by the fold as it closed, or by reconciliation for the
+    /// ones that closed before registration. One missing means that did not
+    /// happen, and the remedy is [`CurveTreeClient::reconcile_captures`],
+    /// which writes exactly what is due and absent. Not a fallback to the
+    /// rebuild: that would serve the spend while hiding that the mechanism
+    /// it relies on has a hole.
+    CaptureMissing {
+        /// Leaf position the chunk closed at — the capture row's key.
+        end_leaf: u64,
+        /// The layer the row lacks.
+        layer: u8,
+    },
+    /// A held owned position is not one the canonical drain order produces.
+    ///
+    /// `owned_positions` is written by the fold, leaf by leaf, as the
+    /// frontier counts. [`CurveTreeClient::reconcile_captures`] recomputes
+    /// the same set from `drained_sorted` — the order assembly resolves
+    /// against — and the two must agree, with the recomputed set a superset
+    /// (it also covers registrations the fold never saw). A held position
+    /// the recomputation does not produce means the two orders have
+    /// diverged, and every capture keyed on the fold's coordinate is then
+    /// keyed on the wrong leaf.
+    ///
+    /// Reported rather than repaired: reconciliation would otherwise
+    /// silently overwrite one order's coordinates with the other's, and
+    /// nothing says which is right.
+    ///
+    /// Classified [`StoreOpenFault::Internal`], not `Corrupt`. The store may
+    /// be sound — the disagreement is in memory — and `Corrupt`'s remedy is
+    /// to delete the store.
+    OwnedPositionDrift {
+        /// The held position the canonical order does not produce.
+        position: u64,
+    },
+    /// Capture needed the leaf identities under a closing layer-0 chunk and
+    /// the store did not hold all of them.
+    ///
+    /// The chunk's siblings come from the leaf rows at `end_leaf + 1 -
+    /// SELENE_CHUNK_WIDTH ..= end_leaf`: the rows below this block's first
+    /// drain from [`LeafStore::read_drained_range`], the rest from the block
+    /// being ingested. A short count means a leaf row is gone from a position
+    /// the store still counts — which only [`LeafStore::prune_frozen`]
+    /// produces, by dropping non-owned frozen leaf bytes. Resume already
+    /// refuses such a store ([`ClientError::ResumeFromPrunedStore`], F5);
+    /// this is the same refusal for a store pruned while open, and it refuses
+    /// the block rather than writing a short chunk the merge would accept.
+    CaptureIdentitiesIncomplete {
+        /// Leaf position at which the chunk closed — the capture row's key.
+        end_leaf: u64,
+        /// Siblings the chunk has, which is [`shekyl_fcmp::tree::SELENE_CHUNK_WIDTH`].
+        want: usize,
+        /// Siblings the leaf rows yielded.
+        got: usize,
     },
     /// The requested output is not a drained leaf at the reference height,
     /// so no membership path exists for it there (the §4.3 lookup miss).
@@ -336,11 +443,30 @@ impl ClientError {
             ClientError::Store(e) => e.open_fault(),
             // Pruned-store resume is unbuilt (F5): a shape this build cannot
             // resume, not a broken store.
-            ClientError::ResumeFromPrunedStore { .. } => StoreOpenFault::Unsupported,
+            ClientError::ResumeFromPrunedStore { .. }
+            // Same cause, same verdict: leaf bytes capture needs are gone
+            // from a position the store counts. Pruned-store *support* is
+            // F5 work, so this build cannot proceed over one.
+            | ClientError::CaptureIdentitiesIncomplete { .. } => StoreOpenFault::Unsupported,
             ClientError::ResumeFromCorruptStore { .. }
             | ClientError::Frontier { .. }
             | ClientError::SnapshotLeafCountMismatch { .. } => StoreOpenFault::Corrupt,
-            ClientError::RootMismatch { .. }
+            // Not `Corrupt`: that fault's stated remedy is *delete the
+            // store and let the wallet rebuild it*, and drift is the
+            // client's in-memory positions disagreeing with the canonical
+            // drain order — the store may be entirely sound. Destroying a
+            // good store over a memory defect is naming a remedy that costs
+            // more than the fault (rule 82). It is also not an open-time
+            // outcome at all, which is what `Internal` says here, exactly
+            // as `PathRootMismatch` does.
+            // A registration disagreeing with the chain view is the same
+            // family as `IdentityMismatch` below it: a caller-vs-client
+            // disagreement, not an open-time outcome.
+            ClientError::RegistrationIdentityMismatch { .. }
+            | ClientError::OwnedPositionDrift { .. }
+            | ClientError::ReferenceOutsideSnapshotRing { .. }
+            | ClientError::CaptureMissing { .. }
+            | ClientError::RootMismatch { .. }
             | ClientError::PathRootMismatch { .. }
             | ClientError::OutputNotDrained { .. }
             | ClientError::IdentityMismatch { .. }
@@ -372,7 +498,8 @@ pub struct CurveTreeClient {
     /// inside a [`WriterRecovery`] — so a fail-stop recovery does not open
     /// a second database beside a serving host that is still holding the
     /// first, and the read-only wrapper stays unable to mint a writer.
-    store: Arc<LeafStore>,
+    // `pub(crate)` for the sibling `assemble` module's capture reads.
+    pub(crate) store: Arc<LeafStore>,
     // `pub(crate)` so the sibling `assemble` module and unit tests read leaf
     // candidates. Drained leaves are mirrored into `store` on each ingest.
     pub(crate) entries: Vec<LeafEntry>,
@@ -406,6 +533,99 @@ pub struct CurveTreeClient {
     /// in-memory state ([`Self::resume`], [`Self::rollback_to_fork`])
     /// re-derives it from the store rather than adjusting it.
     frontier: Frontier,
+    /// Outputs whose membership-path material this client captures, as
+    /// `gindex -> O`.
+    ///
+    /// **Both halves, because a `gindex` is a name and not an identity.** It
+    /// is a position in the chain's output sequence, and a reorg re-derives
+    /// it: the same number can name a different output on the new chain. A
+    /// registry keyed on the number alone would then mark a stranger's leaf
+    /// as owned and capture its chunks, and no rule evaluated on the rebuilt
+    /// state can tell the two apart — see [`Self::rollback_to_fork`] for the
+    /// two inequalities that tried. `O` is a one-time key, so the pair names
+    /// one specific output and the question stops being answerable only in
+    /// hindsight.
+    ///
+    /// Registered by the wallet ([`Self::register_owned`]), never derived:
+    /// the curve-tree client sees every output on the chain and cannot tell
+    /// which are the wallet's — that is the scanner's knowledge, and keeping
+    /// it on this side would mean either a second view-key consumer or a
+    /// guess.
+    ///
+    /// **Session-scoped on purpose.** [`Self::resume`] starts empty, because
+    /// a registry persisted here would be a second copy of the wallet's own
+    /// output list — the thing that would silently rot when the two diverge.
+    /// The wallet re-registers what it holds; what that leaves owed is the
+    /// captures for chunks that closed before the registration, which
+    /// reconciliation discharges.
+    owned_outputs: BTreeMap<Gindex, OneTimePubkey>,
+    /// Drain positions of owned leaves, as the fold assigned them.
+    ///
+    /// Not derived from [`Self::owned_outputs`] on demand: a position is
+    /// the leaf's index in drain order, which is what the frontier counts as
+    /// it pushes. Recording it there is the one instrument; resolving it
+    /// again from the maturity index would be a second.
+    ///
+    /// Keyed by **position**, because the fold's intersection test is a
+    /// range over positions; the value is the gindex it resolved, which is
+    /// what assembly reverses to find an input's position. That reverse
+    /// lookup is a scan — the registry is the wallet's own output count and
+    /// a batch holds at most `MAX_INPUTS`.
+    ///
+    /// A rollback **retains** the positions below the surviving leaf count
+    /// and drops the rest — see [`Self::rollback_to_fork`].
+    pub(crate) owned_positions: BTreeMap<u64, Gindex>,
+}
+
+/// What registering an owned output means for the captures it needs
+/// ([`CurveTreeClient::register_owned`]).
+///
+/// The distinction is not cosmetic: capture rides the **fold**, and a fold
+/// happens once. Registering before the leaf drains puts every chunk over it
+/// on the capture path; registering after means the chunks that already
+/// closed were folded without a reason to keep them, and no future fold
+/// reports them again.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OwnedRegistration {
+    /// The leaf has not drained at the ingested tip. Every chunk over it is
+    /// captured as the fold closes it; nothing is owed.
+    BeforeDrain,
+    /// The leaf had already drained. Chunks over it that closed before this
+    /// call are **not** captured, and are owed to reconciliation; chunks
+    /// that have yet to close are captured as normal.
+    ///
+    /// This is the state a resumed client leaves every held output in, since
+    /// the registry does not persist
+    /// ([`CurveTreeClient::register_owned`]).
+    AfterDrain,
+}
+
+/// What one [`CurveTreeClient::reconcile_captures`] call did.
+///
+/// Reported rather than returned as a bare count because the three numbers
+/// answer different questions: whether the call found work it did not know
+/// about, how many rows it touched, and how much it wrote. A reconcile that
+/// resolves positions but writes nothing is the normal steady state; one
+/// that writes on every call would mean the delta check is not working.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CaptureReconciliation {
+    /// Owned positions this call resolved that were not already held — the
+    /// late registrations it picked up.
+    pub positions_resolved: usize,
+    /// Capture rows (`end_leaf` keys) written.
+    pub rows_written: usize,
+    /// Chunks written across those rows. Higher than `rows_written` wherever
+    /// a cascade put two layers under one key.
+    pub chunks_written: usize,
+    /// Leaves read and hashed to rebuild the missing chunks.
+    ///
+    /// The cost figure, and the one a caller should watch. **Zero** when
+    /// every due capture is already present, which is the normal resume —
+    /// reconciliation then costs a table read per due coordinate and no
+    /// hashing at all. A non-zero value is bounded by the spans of the
+    /// chunks actually missing (`outputs_per_node(layer)` each), never by
+    /// the chain's length.
+    pub leaves_rebuilt: u64,
 }
 
 /// The authority to rebuild the single writer over an already-open store —
@@ -513,6 +733,8 @@ impl CurveTreeClient {
             ingested_tip_height: None,
             poisoned: false,
             frontier: Frontier::new(),
+            owned_outputs: BTreeMap::new(),
+            owned_positions: BTreeMap::new(),
         })
     }
 
@@ -703,6 +925,11 @@ impl CurveTreeClient {
             ingested_tip_height: rebuilt.ingested_tip_height,
             poisoned: false,
             frontier: rebuilt.frontier,
+            // A resumed client holds no registrations: the wallet's output
+            // list is the wallet's, and re-registering is what tells this
+            // client what to capture. See `owned_outputs`.
+            owned_outputs: BTreeMap::new(),
+            owned_positions: BTreeMap::new(),
         })
     }
 
@@ -869,12 +1096,77 @@ impl CurveTreeClient {
         // client poisoned, which is the contract.
         self.poisoned = true;
         self.store.verify_frozen_tail().map_err(ClientError::from)?;
+        // Which registrations name an output this client holds *now* — read
+        // before the rebuild, because staleness is a set difference **across**
+        // the rollback and neither side alone answers it. See the retain
+        // below for why no inequality on `gindex` can.
+        let named_a_held_output: Vec<(Gindex, OneTimePubkey)> = self
+            .owned_outputs
+            .iter()
+            .filter(|(gindex, key)| Self::held_output(&self.entries, **gindex) == Some(**key))
+            .map(|(gindex, key)| (*gindex, *key))
+            .collect();
         let rebuilt = Self::rebuild_from_store(&self.store)?;
         self.entries = rebuilt.entries;
         self.next_gindex = rebuilt.next_gindex;
         self.drained_through_counts = Vec::new();
         self.entries_by_maturity = rebuilt.entries_by_maturity;
         self.ingested_tip_height = rebuilt.ingested_tip_height;
+        // The two holders a rollback has to trim, one event in two units.
+        //
+        // **Positions**, in drained-leaf coordinates: truncation deletes
+        // `range(start..)` and shifts nothing, so a surviving leaf keeps its
+        // position and a removed one re-resolves through the fold when it
+        // drains again. `start` is the surviving leaf count, which is the
+        // rebuilt frontier's — the same coordinate `FoldedChunk::end_leaf`
+        // is compared against.
+        let surviving = rebuilt.frontier.leaf_count();
+        self.owned_positions
+            .retain(|position, _| *position < surviving);
+
+        // **Registrations**, in `(gindex, O)`. This is now *cleanup*, not
+        // the correctness rule: ownership is tested by identity at the fold
+        // and in reconciliation, so a rebound gindex simply does not match
+        // and a stranger's chunks are never captured, whatever this does.
+        // What it buys is a registry that does not accumulate dead rows
+        // across reorgs.
+        //
+        // A registration is dropped iff the output it names *was* here and
+        // is now absent **or different** — the set difference taken above
+        // and below the rebuild, over the pair rather than the number. The
+        // identity half is load-bearing even here: a rollback that rebinds a
+        // gindex leaves it present, so a gindex-only difference keeps the
+        // dead row. Three rules were tried before this one, and the first
+        // two were not merely untidy but wrong:
+        //
+        // `gindex >= surviving_leaf_count` mixes units (a gindex is not a
+        // position; `TargetKind::Other` consumes one without draining a
+        // leaf) — `a_gindex_is_not_a_position`.
+        //
+        // `gindex < next_gindex && !entries.contains(gindex)` typechecks and
+        // still fails, in the case it was written for. A rollback removes
+        // the chain's tail, so every output it removes holds a gindex at or
+        // above the **rebuilt** `next_gindex`, which is `entries.last() + 1`
+        // over what survived. The clause meant to protect a registration for
+        // a not-yet-ingested output therefore protects every removed one too,
+        // and the rule drops nothing — `a_removed_gindex_sits_above_the_
+        // rebuilt_next_gindex`.
+        //
+        // *Candidate 3 — the same difference on `gindex` alone.* Shipped,
+        // then found to miss the rebinding case: a rollback that gives the
+        // gindex to a different output leaves it present, so the difference
+        // sees nothing gone.
+        //
+        // None of the three could answer the question from the rebuilt state,
+        // because a `gindex` is a name. Binding the registration to `O` at
+        // registration time is what makes it answerable at all — see
+        // `owned_outputs`. Nothing persists the registry (`resume` starts
+        // empty), so there is no stale trace to re-derive on a later open.
+        for (gindex, key) in named_a_held_output {
+            if Self::held_output(&self.entries, gindex) != Some(key) {
+                self.owned_outputs.remove(&gindex);
+            }
+        }
         self.frontier = rebuilt.frontier;
         self.poisoned = false;
         Ok(())
@@ -897,7 +1189,9 @@ impl CurveTreeClient {
     ///
     /// **Store-write-before-commit (B5).** The block's full delta — newly
     /// drained bucket, newly created pending leaves, drained pending
-    /// removals, tip advance, and the frontier snapshot — lands in one ACID
+    /// removals, tip advance, the frontier snapshot, and the path material
+    /// captured for registered outputs ([`Self::register_owned`]) — lands in
+    /// one ACID
     /// [`LeafStore::append_block_with_snapshot`] transaction *before* any
     /// in-memory state changes. On `Err` the client is unchanged on both
     /// sides and the same block can be re-ingested; on `Ok` the in-memory
@@ -979,19 +1273,11 @@ impl CurveTreeClient {
         let drained = self.newly_drained_from_index(through);
         let removed: Vec<Gindex> = drained.iter().map(|entry| entry.gindex).collect();
 
-        // The frontier advances on a CLONE, before the transaction opens.
-        // A fold is fallible, and B5 puts every fallible step ahead of the
-        // commit: a leaf whose bytes will not hash refuses the block with
-        // both sides untouched, exactly as a bad published point does.
+        // The frontier advances on a clone, and capture is collected with
+        // it, before the transaction opens. A hash failure or a short
+        // layer-0 read refuses the block with both sides untouched.
         let mut advanced = self.frontier.clone();
-        for entry in &drained {
-            advanced
-                .push_leaf(&entry.leaf)
-                .map_err(|source| ClientError::Frontier {
-                    height: block.height,
-                    source,
-                })?;
-        }
+        let captured = self.fold_block_captures(block.height, &drained, &mut advanced)?;
         // C3 in production, not only in a test: the snapshot this block
         // captures must carry exactly the drain index's count for the
         // cutoff, because root and depth are both read back off it.
@@ -1017,6 +1303,7 @@ impl CurveTreeClient {
             &removed,
             block.height,
             &snapshot,
+            &captured.rows,
         )?;
 
         // Store committed — the in-memory commit below is infallible.
@@ -1031,6 +1318,7 @@ impl CurveTreeClient {
         self.next_gindex = next_gindex;
         self.ingested_tip_height = Some(block.height);
         self.frontier = advanced;
+        self.owned_positions.extend(captured.pending_owned);
         self.record_drained_count(through, canonical);
         Ok(())
     }
@@ -1103,7 +1391,7 @@ impl CurveTreeClient {
         canonical
     }
 
-    fn drained_leaf_count_at(&self, through: BlockHeight) -> u64 {
+    pub(crate) fn drained_leaf_count_at(&self, through: BlockHeight) -> u64 {
         if let Ok(i) = self
             .drained_through_counts
             .binary_search_by_key(&through, |(t, _)| *t)
@@ -1201,11 +1489,11 @@ impl CurveTreeClient {
     ///
     /// The CT-5c send path needs both before assembling: the depth sizes the
     /// FCMP++ proof weight for fee estimation (which runs *before* path
-    /// assembly), and the root binds the [`ReferenceBlock`]. The depth equals
-    /// the assembler's `AssembledPath.tree.tree_depth` (which `assemble_path`
-    /// takes from `build_layers(..).len()`) by the `layer_count_for_leaves`
-    /// drift KAT, so the engine can assert their equality as a consistency
-    /// check that never fires benignly.
+    /// assembly), and the root binds the [`ReferenceBlock`]. Both assembly
+    /// routes stamp this depth onto `AssembledPath.tree.tree_depth`. The
+    /// rebuild compares it with `build_layers(..).len()` and refuses when
+    /// they disagree; the `layer_count_for_leaves` drift KAT is why that
+    /// comparison holds on a sound tree.
     pub fn root_and_depth_at(
         &self,
         reference_height: BlockHeight,
@@ -1302,7 +1590,7 @@ impl CurveTreeClient {
     }
 
     /// Decode the ring's row at `height`, if it has one.
-    fn snapshot_at(&self, height: BlockHeight) -> Result<Option<Frontier>, ClientError> {
+    pub(crate) fn snapshot_at(&self, height: BlockHeight) -> Result<Option<Frontier>, ClientError> {
         Self::snapshot_at_in(&self.store, height)
     }
 
@@ -1436,91 +1724,22 @@ impl From<StoreError> for ClientError {
 #[cfg(test)]
 mod ct6_oracle;
 
+// The leaf fixtures every test under this module builds its chains from.
+#[cfg(test)]
+pub(crate) mod test_fixtures;
+
 #[cfg(test)]
 mod tests {
+    use super::test_fixtures::{
+        coinbase_block, ingest_coinbase_blocks, ingest_outputs_at, leaf_blob_at, leaf_entry_at,
+        leaves_pairwise_distinct, raw_output_at, raw_outputs_at,
+    };
     use super::*;
     use crate::recon::{
         assemble_leaf_stream, drained_sorted, newly_drained_at_cutoff, root_from_scalars,
     };
     use crate::types::{BlockHash, CurveTreeRoot};
     use shekyl_consensus::COINBASE_LOCK_WINDOW;
-
-    /// Standard Ed25519 basepoint, compressed — a valid, torsion-free
-    /// point `construct_leaf` accepts for both `O` and `C`.
-    const ED25519_BASEPOINT: [u8; 32] = [
-        0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-        0x66, 0x66,
-    ];
-
-    pub(super) fn coinbase_raw() -> RawOutput {
-        RawOutput {
-            output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
-            commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
-            target: TargetKind::TaggedKey,
-        }
-    }
-
-    /// One conforming `0x07` entry: `CM` is a valid, torsion-free point
-    /// derived deterministically from `seed` (`Hp` over a seed-filled key,
-    /// via the crate's existing point primitive), followed by an opaque
-    /// record. Distinct seeds give byte-distinct commitment points and so
-    /// byte-distinct leaves — which is what lets an ordering test tell two
-    /// leaves apart.
-    fn leaf_entry(seed: u8) -> [u8; 64] {
-        let mut entry = [0x07u8; 64];
-        entry[..32].copy_from_slice(&shekyl_fcmp::tree::key_image_generator(&[seed; 32]));
-        entry
-    }
-
-    /// One conforming `0x07` entry per output, as a V3 chain always emits
-    /// (`PL-D3`); entry `i` is seeded `i + 1`, so entries within one blob
-    /// are byte-distinct.
-    fn leaf_blob(n: usize) -> Vec<u8> {
-        (0..n)
-            .flat_map(|i| leaf_entry(u8::try_from(i + 1).expect("test blob fits u8")))
-            .collect()
-    }
-
-    /// One coinbase tx carrying a per-output `0x07` blob of `n` × 64 bytes.
-    fn coinbase_block<'a>(outputs: &'a [RawOutput], blob: &'a [u8]) -> Vec<TxLeafInputs<'a>> {
-        vec![TxLeafInputs {
-            is_miner: true,
-            leaf_entry_blob: Some(blob),
-            outputs,
-        }]
-    }
-
-    /// Ingest consecutive single-coinbase blocks at heights `from..=to` — the
-    /// production chain shape (every real block carries a coinbase).
-    fn ingest_coinbase_blocks(client: &mut CurveTreeClient, from: u64, to: u64) {
-        let outs = [coinbase_raw()];
-        let blob = leaf_blob(1);
-        for height in from..=to {
-            let txs = coinbase_block(&outs, &blob);
-            client
-                .ingest_block(BlockLeaves {
-                    height: BlockHeight::from_raw(height),
-                    txs: &txs,
-                })
-                .unwrap();
-        }
-    }
-
-    pub(super) fn ingest_outputs_at(
-        client: &mut CurveTreeClient,
-        height: u64,
-        outputs: &[RawOutput],
-    ) {
-        let blob = leaf_blob(outputs.len());
-        let txs = coinbase_block(outputs, &blob);
-        client
-            .ingest_block(BlockLeaves {
-                height: BlockHeight::from_raw(height),
-                txs: &txs,
-            })
-            .unwrap();
-    }
 
     fn ingest_class_b_fixture_prefix(client: &mut CurveTreeClient, tip: u64) {
         for height in 0..=tip {
@@ -1530,45 +1749,64 @@ mod tests {
                 // = 124, far past the test's 66-block window). Post claim-era
                 // cutover the coinbase lock is the longest wire-real maturity,
                 // so a near-tip coinbase replaces the old staked fixture.
-                let outputs = [coinbase_raw(), coinbase_raw()];
-                ingest_outputs_at(client, height, &outputs);
+                ingest_outputs_at(client, height, &raw_outputs_at(height, 2));
             } else {
-                let outputs = [coinbase_raw()];
-                ingest_outputs_at(client, height, &outputs);
+                ingest_outputs_at(client, height, &raw_outputs_at(height, 1));
             }
         }
     }
 
     #[test]
     fn newly_drained_from_index_matches_oracle() {
-        let outs = [coinbase_raw()];
-        let blob = leaf_blob(1);
-        let txs0 = coinbase_block(&outs, &blob);
-        let txs1 = coinbase_block(&outs, &blob);
-        let client = CurveTreeClient::from_blocks(&[
-            BlockLeaves {
-                height: BlockHeight::from_raw(0),
-                txs: &txs0,
-            },
-            BlockLeaves {
-                height: BlockHeight::from_raw(1),
-                txs: &txs1,
-            },
-        ])
-        .unwrap();
-        for through in 0..=61u64 {
+        // Two coinbase outputs (m = h+60) and two regular outputs (m = h+10)
+        // per block, so a maturity bucket holds leaves from two blocks and
+        // two leaves from each. A one-leaf bucket has one order, and neither
+        // side's ordering could be wrong on it.
+        let mut client = CurveTreeClient::new();
+        for height in 0..=80u64 {
+            let cb_outs = [raw_output_at(height, 0), raw_output_at(height, 1)];
+            let reg_outs = [raw_output_at(height, 2), raw_output_at(height, 3)];
+            let cb_blob = leaf_blob_at(height, 2);
+            let reg_blob: Vec<u8> = [leaf_entry_at(height, 2), leaf_entry_at(height, 3)].concat();
+            let txs = [
+                TxLeafInputs {
+                    is_miner: true,
+                    leaf_entry_blob: Some(&cb_blob),
+                    outputs: &cb_outs,
+                },
+                TxLeafInputs {
+                    is_miner: false,
+                    leaf_entry_blob: Some(&reg_blob),
+                    outputs: &reg_outs,
+                },
+            ];
+            client
+                .ingest_block(BlockLeaves {
+                    height: BlockHeight::from_raw(height),
+                    txs: &txs,
+                })
+                .unwrap();
+        }
+        let mut widest = 0;
+        for through in 0..=80u64 {
+            let from_index = client.newly_drained_from_index(BlockHeight::from_raw(through));
+            widest = widest.max(from_index.len());
             assert_eq!(
-                client.newly_drained_from_index(BlockHeight::from_raw(through)),
+                from_index,
                 newly_drained_at_cutoff(&client.entries, BlockHeight::from_raw(through)),
                 "through={through}"
             );
         }
+        assert_eq!(
+            widest, 4,
+            "a bucket must hold both blocks' pairs, or no ordering was compared"
+        );
     }
 
     #[test]
     fn ingest_block_rejects_non_consecutive_heights() {
-        let outs = [coinbase_raw()];
-        let blob = leaf_blob(1);
+        let outs = raw_outputs_at(0, 1);
+        let blob = leaf_blob_at(0, 1);
         let txs = coinbase_block(&outs, &blob);
         let block0 = BlockLeaves {
             height: BlockHeight::from_raw(0),
@@ -1648,22 +1886,8 @@ mod tests {
 
     #[test]
     fn duplicate_drained_through_updates_cache_in_place() {
-        let outs = [coinbase_raw()];
-        let blob = leaf_blob(1);
-        let txs = coinbase_block(&outs, &blob);
         let mut client = CurveTreeClient::new();
-        client
-            .ingest_block(BlockLeaves {
-                height: BlockHeight::from_raw(0),
-                txs: &txs,
-            })
-            .unwrap();
-        client
-            .ingest_block(BlockLeaves {
-                height: BlockHeight::from_raw(1),
-                txs: &txs,
-            })
-            .unwrap();
+        ingest_coinbase_blocks(&mut client, 0, 1);
         assert_eq!(client.drained_through_counts.len(), 1);
         assert_eq!(client.drained_through_counts[0].0, BlockHeight::from_raw(0));
         assert_eq!(
@@ -1714,26 +1938,21 @@ mod tests {
         // holds two entries from two different blocks. The O(1) incremental
         // count in ingest_block must agree with the maturity-index scan at
         // every cutoff (the ingest-path debug_assert also checks each step).
-        let cb = coinbase_raw();
-        let regular = RawOutput {
-            output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
-            commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
-            target: TargetKind::TaggedKey,
-        };
-        let blob = leaf_blob(1);
-        let cb_outs = [cb];
-        let reg_outs = [regular];
         let mut client = CurveTreeClient::new();
         for height in 0..=100u64 {
+            let cb_outs = [raw_output_at(height, 0)];
+            let reg_outs = [raw_output_at(height, 1)];
+            let cb_blob = leaf_entry_at(height, 0);
+            let reg_blob = leaf_entry_at(height, 1);
             let txs = [
                 TxLeafInputs {
                     is_miner: true,
-                    leaf_entry_blob: Some(&blob),
+                    leaf_entry_blob: Some(&cb_blob),
                     outputs: &cb_outs,
                 },
                 TxLeafInputs {
                     is_miner: false,
-                    leaf_entry_blob: Some(&blob),
+                    leaf_entry_blob: Some(&reg_blob),
                     outputs: &reg_outs,
                 },
             ];
@@ -1766,40 +1985,23 @@ mod tests {
         // lower-maturity regular output (m=11). Insertion order differs from
         // canonical `(maturity, gindex)` drain order; the store mirror must
         // produce the canonical-order root anyway.
-        let outs_cb = [coinbase_raw()];
-        let regular = RawOutput {
-            output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
-            commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
-            target: TargetKind::TaggedKey,
-        };
-        // Three byte-distinct entries (distinct commitment points), so the
-        // three leaves are byte-distinct and the root comparison below can
-        // actually fail if the store mirror routes two of them in the wrong
-        // order — identical leaves would make every ordering produce the
-        // same root.
-        let blob0 = leaf_entry(1).to_vec();
-        let blob1_cb = leaf_entry(2).to_vec();
-        let blob1_reg = leaf_entry(3).to_vec();
-        {
-            // The test observes its own setup: the discrimination claim
-            // rests on pairwise-distinct commitment points.
-            let points = [&blob0[..32], &blob1_cb[..32], &blob1_reg[..32]];
-            assert!(
-                points[0] != points[1] && points[0] != points[2] && points[1] != points[2],
-                "setup: the three 0x07 commitment points must be pairwise distinct"
-            );
-        }
-        let txs0 = coinbase_block(&outs_cb, &blob0);
+        let outs0 = [raw_output_at(0, 0)];
+        let outs1_cb = [raw_output_at(1, 0)];
+        let outs1_reg = [raw_output_at(1, 1)];
+        let blob0 = leaf_entry_at(0, 0);
+        let blob1_cb = leaf_entry_at(1, 0);
+        let blob1_reg = leaf_entry_at(1, 1);
+        let txs0 = coinbase_block(&outs0, &blob0);
         let txs1 = [
             TxLeafInputs {
                 is_miner: true,
                 leaf_entry_blob: Some(&blob1_cb),
-                outputs: &outs_cb,
+                outputs: &outs1_cb,
             },
             TxLeafInputs {
                 is_miner: false,
                 leaf_entry_blob: Some(&blob1_reg),
-                outputs: &[regular],
+                outputs: &outs1_reg,
             },
         ];
         let mut client = CurveTreeClient::new();
@@ -1821,6 +2023,11 @@ mod tests {
         // m=61 (cb 1) — none of the later coinbases.
         let drained = drained_sorted(&client.entries, BlockHeight::from_raw(61));
         assert_eq!(drained.len(), 3);
+        // The test observes its own setup. With identical leaves every
+        // ordering produces the same root, and the comparison below could
+        // not fail.
+        let drained_leaves: Vec<LeafEntry> = drained.iter().map(|entry| **entry).collect();
+        assert_eq!(leaves_pairwise_distinct(&drained_leaves), Ok(()));
         assert!(drained
             .windows(2)
             .all(|w| (w[0].maturity, w[0].gindex) <= (w[1].maturity, w[1].gindex)));
@@ -1876,10 +2083,10 @@ mod tests {
         // The entry's commitment point yields the leaf's 4th scalar (its
         // x-coordinate, always a canonical Selene scalar) and the store
         // validates pending rows at write time.
-        let outs = [coinbase_raw()];
-        let blob = leaf_blob(1);
-        let txs0 = coinbase_block(&outs, &blob);
-        let txs1 = coinbase_block(&outs, &blob);
+        let (outs0, blob0) = (raw_outputs_at(0, 1), leaf_blob_at(0, 1));
+        let (outs1, blob1) = (raw_outputs_at(1, 1), leaf_blob_at(1, 1));
+        let txs0 = coinbase_block(&outs0, &blob0);
+        let txs1 = coinbase_block(&outs1, &blob1);
         let blocks = [
             BlockLeaves {
                 height: BlockHeight::from_raw(0),
@@ -1901,8 +2108,8 @@ mod tests {
     fn ingest_resolves_h_pqc_from_blob() {
         // The entry's commitment point must land in the leaf's 4th scalar as
         // its Wei25519 x-coordinate (`construct_leaf` extracts it).
-        let outs = [coinbase_raw()];
-        let blob = leaf_blob(1);
+        let outs = raw_outputs_at(0, 1);
+        let blob = leaf_blob_at(0, 1);
         let mut cm = [0u8; 32];
         cm.copy_from_slice(&blob[..32]);
         let txs = coinbase_block(&outs, &blob);
@@ -1915,7 +2122,7 @@ mod tests {
             .unwrap();
         assert_eq!(client.entries.len(), 1);
         let cm_x = shekyl_fcmp::tree::ed25519_point_to_selene_scalar(&cm)
-            .expect("leaf_blob commitment point decompresses");
+            .expect("fixture commitment point decompresses");
         assert_eq!(&client.entries[0].leaf[96..128], &cm_x);
         assert_eq!(client.entries[0].identity.cm, cm);
     }
@@ -1923,10 +2130,10 @@ mod tests {
     #[test]
     fn other_target_consumes_index_but_is_not_a_leaf() {
         // [Other, valid]: the Other output advances gindex but is no leaf.
-        let mut other = coinbase_raw();
+        let mut other = raw_output_at(0, 0);
         other.target = TargetKind::Other;
-        let outs = [other, coinbase_raw()];
-        let blob = leaf_blob(2); // one entry per vout
+        let outs = [other, raw_output_at(0, 1)];
+        let blob = leaf_blob_at(0, 2); // one entry per vout
         let txs = coinbase_block(&outs, &blob);
         let client = CurveTreeClient::from_blocks(&[BlockLeaves {
             height: BlockHeight::from_raw(0),
@@ -2134,11 +2341,11 @@ mod tests {
     fn from_blocks_pending_matches_explicit_replay() {
         // CT-3c's fresh-build oracle is meaningful only because
         // from_blocks replays the same per-block delta path.
-        let out0 = [coinbase_raw()];
-        let blob0 = leaf_blob(1);
+        let out0 = raw_outputs_at(0, 1);
+        let blob0 = leaf_blob_at(0, 1);
         let txs0 = coinbase_block(&out0, &blob0);
-        let out1 = [coinbase_raw(), coinbase_raw()];
-        let blob1 = leaf_blob(2);
+        let out1 = raw_outputs_at(1, 2);
+        let blob1 = leaf_blob_at(1, 2);
         let txs1 = coinbase_block(&out1, &blob1);
         let blocks = [
             BlockLeaves {
@@ -2205,8 +2412,7 @@ mod tests {
             "long-maturity coinbase row stays pending and directly compared"
         );
 
-        let output = [coinbase_raw()];
-        ingest_outputs_at(&mut orphaned, 66, &output);
+        ingest_outputs_at(&mut orphaned, 66, &raw_outputs_at(66, 1));
         let mut fresh_redrain = CurveTreeClient::new();
         ingest_class_b_fixture_prefix(&mut fresh_redrain, 66);
         assert_eq!(
@@ -2459,8 +2665,8 @@ mod tests {
         // Resume picks the persisted tip up directly: a genesis replay is
         // structurally rejected as a non-consecutive ingest.
         assert_eq!(resumed.ingested_tip_height, Some(BlockHeight::from_raw(70)));
-        let outs = [coinbase_raw()];
-        let blob = leaf_blob(1);
+        let outs = raw_outputs_at(0, 1);
+        let blob = leaf_blob_at(0, 1);
         let genesis_txs = coinbase_block(&outs, &blob);
         assert!(matches!(
             resumed.ingest_block(BlockLeaves {

@@ -23,9 +23,10 @@
 //!
 //! Every economics quantity comes from canonical `shekyl-economics`
 //! functions or build-generated params (drift-pair ban, §1.9): the reward
-//! family, `emission_speed_factor` / `tail_subsidy_per_block`, and
-//! `TX_VOLUME_WINDOW` are all imported; the block-policy zone is
-//! [`shekyl_economics::FULL_REWARD_ZONE`].
+//! family, `tail_subsidy_per_block`, and `TX_VOLUME_WINDOW` are imported;
+//! the shift is
+//! [`shekyl_economics::EconomicParams::emission_speed_factor_per_block`];
+//! the block-policy zone is [`shekyl_economics::FULL_REWARD_ZONE`].
 //! Two deliberate exceptions, marked at their definitions: the ArticMine
 //! ladder transliteration (the round's *subject* — porting it faithfully is
 //! the point of the comparison column) and `REF_TX_WEIGHT` (a C++ constant
@@ -41,14 +42,15 @@ use core::fmt::Write as _;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::Serialize;
+use shekyl_chain_rules::REFERENCE_BLOCK_MAX_AGE;
 use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
     calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
-    effective_emission, emission_speed_factor, hysteresis_fold, hysteresis_settled,
-    hysteresis_step, paid_block_reward, projected_already_generated, relay_fee_floor,
-    tail_subsidy_per_block, EconomicParams, FeeCorrection, FeeLadder, TxVolume, BLOCKS_PER_YEAR,
-    RELAY_ADMISSION_SLACK_BP, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    effective_emission, fee_correction, hysteresis_fold, hysteresis_settled, hysteresis_step,
+    paid_block_reward, projected_already_generated, quantize_pow2_ceil, relay_fee_floor,
+    round_money_up_2, tail_subsidy_per_block, EconomicParams, FeeCorrection, FeeLadder, TxVolume,
+    BLOCKS_PER_YEAR, RELAY_ADMISSION_SLACK_BP, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 /// Penalty-free zone. [`shekyl_economics::FULL_REWARD_ZONE`], generated from
@@ -102,7 +104,7 @@ const FL_R18_MIN_DWELL_BLOCKS: u64 = 240;
 ///   `FCMP_REFERENCE_BLOCK_MAX_AGE` (100) is the oldest reference a
 ///   proof may carry at admission, so no conforming transaction can be
 ///   quoted more than 100 blocks before it is submitted.
-const RACE_LAGS: [u64; 4] = [1, 3, 25, 100];
+const RACE_LAGS: [u64; 4] = [1, 3, 25, REFERENCE_BLOCK_MAX_AGE.to_raw()];
 
 /// Blocks per day at the 120 s target — the unit §10.14.4's C10-6/7/8
 /// report in, beside blocks. `BLOCKS_PER_YEAR / 365` would silently
@@ -178,12 +180,14 @@ pub(crate) fn correction_factor_ratio(
         STAKER_EMISSION_DECAY,
         BLOCKS_PER_YEAR,
     );
-    let c = u128::from(SCALE - sigma) * u128::from(m_r) / u128::from(SCALE - b);
+    // `C = (1 − σ)·M_r/(1 − b)`, composed by its owner (which also clamps
+    // σ and b); the three operands are reported beside it.
+    let c = fee_correction(volume, sigma, b, params);
     Correction {
         release_multiplier: m_r,
         burn_pct: b,
         emission_share_sigma: sigma,
-        c_scaled: u64::try_from(c).expect("C fits u64"),
+        c_scaled: c.as_scaled(),
     }
 }
 
@@ -215,26 +219,6 @@ fn articmine_ladder_raw(base_reward: u64, mnw: u64, mlw: u64) -> [u64; 4] {
     let fm = 16 * base_reward * REF_TX_WEIGHT / (FULL_REWARD_ZONE * mfw);
     let fh = (4 * fm).max(4 * fm * mfw / (32 * REF_TX_WEIGHT * mnw / FULL_REWARD_ZONE));
     [fl, fn_, fm, fh]
-}
-
-/// `cryptonote::round_money_up(v, CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES=2)`:
-/// round UP to 2 significant decimal digits. The C++ throws on overflow in
-/// the final multiply (`cryptonote_format_utils.cpp`, pinned by
-/// `scaling_2021.cpp`'s overflow case); the `expect` here is the same
-/// fail-loud semantics.
-fn round_money_up_2(v: u64) -> u64 {
-    if v < 100 {
-        return v;
-    }
-    let mut unit = 1u64;
-    let mut head = v;
-    while head >= 100 {
-        head /= 10;
-        unit *= 10;
-    }
-    v.div_ceil(unit)
-        .checked_mul(unit)
-        .expect("round_money_up overflow (C++ throws here)")
 }
 
 /// Served-ladder arity, derived from the production owner so a slot-count
@@ -389,6 +373,11 @@ fn in_boundary_zone(c_scaled: u64) -> bool {
 }
 
 fn quantize_c_pow2(c_scaled: u64, rule: SnapRule) -> u64 {
+    // The ceiling snap has an owner; only the nearest-pow2 alternative this
+    // instrument measures against it is computed here.
+    if rule == SnapRule::Ceiling {
+        return quantize_pow2_ceil(c_scaled);
+    }
     assert!(c_scaled > 0, "C is structurally positive");
     let c = u128::from(c_scaled);
     let s = u128::from(SCALE);
@@ -1957,7 +1946,7 @@ pub struct DegeneratePins {
 
 fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
     let ratio_09 = params.emission_curve_asymptote / 10 * 9;
-    let esf = emission_speed_factor(params);
+    let esf = params.emission_speed_factor_per_block;
     let tail = tail_subsidy_per_block(params).expect("tail subsidy");
     let s = params.emission_curve_asymptote;
     let est_reward = base_block_reward(s, params).expect("base at exhaustion");
@@ -1988,7 +1977,7 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
             params.release_max,
         ),
         release_at_double_baseline: calc_release_multiplier(
-            TxVolume::per_block(100),
+            TxVolume::per_block(2 * params.tx_volume_baseline),
             params.tx_volume_baseline,
             params.release_min,
             params.release_max,
@@ -2146,9 +2135,10 @@ pub fn report() -> FeeLadderReport {
             u128::from(st.ag) * u128::from(SCALE) / u128::from(params.emission_curve_asymptote);
         for &ratio in &ratios {
             // §1.8 reachability: the release multiplier bounds the real
-            // trajectory within [0.8, 1.3]× of the neutral one.
-            let lo = proj_ratio * 8 / 10;
-            let hi = (proj_ratio * 13 / 10).min(u128::from(SCALE));
+            // trajectory within [release_min, release_max]× of the neutral one.
+            let lo = proj_ratio * u128::from(params.release_min) / u128::from(SCALE);
+            let hi = (proj_ratio * u128::from(params.release_max) / u128::from(SCALE))
+                .min(u128::from(SCALE));
             let reachable = u128::from(ratio) >= lo && u128::from(ratio) <= hi;
             let circ = u64::try_from(
                 u128::from(params.emission_curve_asymptote) * u128::from(ratio) / u128::from(SCALE),
@@ -3055,14 +3045,16 @@ mod tests {
     ///
     /// What remains true, and is all this asserts: the four-rung ArticMine
     /// transliteration, rounded the way the pre-FL-R20 daemon rounded it,
-    /// puts genesis `Fh` at 14,000,000.
+    /// puts genesis `Fh` at 6,900,000: `2·R₀/Zm` = 6,826,666 at the design's
+    /// `R₀` = 1 024 SKL, rounded up to two significant digits. (14,000,000
+    /// at the per-minute convention's 2 048 SKL, until 2026-10-04.)
     #[test]
     fn genesis_fh_of_the_legacy_transliteration() {
         let params = EconomicParams::default();
         let base = base_block_reward(0, &params).expect("genesis base");
         let fees = rounded(articmine_ladder_raw(base, 300_000, 300_000));
         // `fees[2]` is priority.
-        assert_eq!(fees[2], 14_000_000);
+        assert_eq!(fees[2], 6_900_000);
     }
 
     /// Pin the relay-floor transliteration against

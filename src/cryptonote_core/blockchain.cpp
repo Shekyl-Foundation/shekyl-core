@@ -4747,8 +4747,8 @@ bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_cano
 // ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md) and its equivalence KAT were
 // deleted 2026-10-02 (DRS-E4 commit 10d): they pinned this gate to a copy
 // nothing called, and the leaf preimage they both check is retired
-// (PDM-Q6 item 4; the successor signs shard_id and the shard's bounds under
-// the SHT-Q2 key). This gate and the FFI it calls (segment_freeze.rs,
+// (PDM-Q6 item 4; the successor is SO-D8 Slice C,
+// ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md §8). This gate and the FFI it calls (segment_freeze.rs,
 // challenge.rs) retire together at the LMDB cutover, DEL-008
 // (DAEMON_REDB_STORE.md §12). Do not rebuild the successor from this
 // function; build it from the ruling — docs/FOLLOWUPS.md "Serve-credit

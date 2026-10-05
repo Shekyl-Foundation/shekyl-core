@@ -4146,11 +4146,13 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-archival-retention",
+ "shekyl-block-template",
  "shekyl-chain-rules",
  "shekyl-curve-tree",
  "shekyl-economics",
  "shekyl-tx-weight",
  "shekyl-types",
+ "shekyl-units",
 ]
 
 [[package]]

@@ -9,7 +9,6 @@ KEYS = [
     "emission_curve_asymptote",
     "coin",
     "display_decimal_point",
-    "emission_speed_factor_per_minute",
     "final_subsidy_per_minute",
     "shekyl_fixed_point_scale",
     "shekyl_release_min",
@@ -48,7 +47,6 @@ def main() -> int:
 #define SHEKYL_EMISSION_CURVE_ASYMPTOTE                 UINT64_C({data["emission_curve_asymptote"]})
 #define COIN                                            ((uint64_t){data["coin"]})
 #define CRYPTONOTE_DISPLAY_DECIMAL_POINT                {data["display_decimal_point"]}
-#define EMISSION_SPEED_FACTOR_PER_MINUTE                ({data["emission_speed_factor_per_minute"]})
 #define FINAL_SUBSIDY_PER_MINUTE                        ((uint64_t){data["final_subsidy_per_minute"]})
 
 #define SHEKYL_FIXED_POINT_SCALE                        UINT64_C({data["shekyl_fixed_point_scale"]})
