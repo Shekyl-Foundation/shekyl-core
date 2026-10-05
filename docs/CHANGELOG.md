@@ -21,6 +21,20 @@
   `CLIENT_VERSION_CONSTANTS_VALIDATION.md`, and reading B is the gate 4/5
   owner's participation-floor input.
 
+### Chain rules — a bond post is keyed by its key, and a Release by the record's (CEN-J11, J12, J13)
+
+- The Rust validator now refuses a bond post whose `p_canonical_id` is not
+  the recompute over its hybrid public key, or whose key (or a JoinMarket's
+  `bond_spend_pk`) is not canonical length — and a post whose slot carries
+  the wrong key: the identity key on a JoinMarket or Reinstate, the
+  record's committed `bond_spend_pk` on a Release, judged before the
+  slot's signature is verified. Until this change the Rust side trusted
+  the hint and verified the slot against whatever key it carried, so a
+  Release of another persona's bonded record, signed by the poster's own
+  key, connected and paid that record's collateral to the poster; the C++
+  refused both (`CHAIN_RULES_SLICE_8.md` §2, §5 row 4). No corpus block
+  carries either.
+
 ### Chain rules — the serve credit's bond state is judged before the block (CEN-J4, J5, J6)
 
 - The Rust validator now refuses a serve-credit input whose persona has no

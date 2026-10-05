@@ -3,11 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Census 4.J, the bond-state rows on a serve-credit vin
-//! (`CHAIN_RULES_SLICE_8.md` §5 row 3): the named persona has a bond record
+//! Census 4.J, the bond-state rows: on a serve-credit vin
+//! (`CHAIN_RULES_SLICE_8.md` §5 row 3) the named persona has a bond record
 //! (CEN-J4), the credited epoch is at or past the first the persona may
 //! serve (CEN-J5, `E ≥ join + 1`), and the persona is `good_through` it
-//! (CEN-J6). Three rows over **one view read per vin**,
+//! (CEN-J6); on a bond post (§5 row 4) the slot's key is the one the
+//! post's kind selects (CEN-J13, [`judge_bond_post_key`] below).
+//!
+//! The serve-credit rows are three over **one view read per vin**,
 //! [`ChainView::bond_record`], in the C++'s order — `check_tx_inputs`
 //! reads the record (`get_archival_bond_hybrid_pubkey`), then its join
 //! epoch against `shekyl_archival_serve_credit_epoch_ok`, then
@@ -42,9 +45,12 @@
 //! (`tx_bond_tests.rs`); the store witnesses J4 over a `Bond`-stubbed
 //! session (`archival_write_tests`, ARW-9).
 
-use shekyl_archival_retention::{good_through, serve_credit_epoch_ok};
+use shekyl_archival_retention::{
+    cold_authority_pin, good_through, serve_credit_epoch_ok, BondPostKind as RetentionKind,
+};
 use shekyl_types::PCanonicalId;
-use shekyl_wire::Input;
+use shekyl_wire::transaction::PqcAuth;
+use shekyl_wire::{BondPostKind, Ct, Input};
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
@@ -134,6 +140,106 @@ pub(crate) fn judge_serve_credit_bond<'id, V: ChainView<'id>>(
     }
     Ok(Ok(()))
 }
+
+// ---- CEN-J13, the key-selection rule on a bond post (slice 8 row 4) -----
+
+/// CEN-J13: the bond slot's `pqc_auths[i].hybrid_public_key` is the key
+/// the post's kind selects. A **Release** (the debit arm) authorizes only
+/// against the record's committed `bond_spend_pk` — the retention crate's
+/// [`cold_authority_pin`], the function the C++ calls through
+/// `shekyl_archival_cold_authority_pin`, which also refuses a record that
+/// commits no key (`RecordCommitsNoKey`: the identity key never authorizes
+/// a value-out). A **JoinMarket** or **Reinstate** (the credit arms)
+/// authorizes with the identity key, `P_pubkey` — the post's own
+/// `hybrid_public_key` (`blockchain.cpp`, *"credit-path pqc auth key does
+/// not match the identity key P_pubkey"*).
+///
+/// The slot's signature is I18's; this row asks **which key** signed, and
+/// without it I18 verifies a Release against whatever key the slot carries
+/// — another persona's Release of a bonded record, signed by the poster's
+/// own identity key, connected and H21 paid the record's collateral to the
+/// poster (slice 8 row 2's finding, the hint finding's money form; the pin
+/// at `archival_admission_tests.rs` flips with this rule). The pool
+/// refused the relayed form through the submit verifier; a block carrying
+/// one did not meet this pin anywhere in `shekyl-chain-rules`.
+///
+/// Reads the record **off the view before the block**, as J4 does and as
+/// the C++ reads the DB: a Release for a persona with **no record** is not
+/// this row's — the C++ gates the pin on `have_record` and falls through
+/// to the semantic verify's `RECORD_MISSING`, which here is the fold's L7.
+/// A kind no arm names (`Other(k)`, neither Release nor Reinstate) is
+/// likewise L7's; the row judges the three kinds the C++ function has arms
+/// for.
+pub(crate) struct J13;
+
+impl Rule for J13 {
+    const ROW: CenRow = CenRow::J13;
+}
+
+/// CEN-J13 over the one bond post of a [`TxClass::BondPost`] transaction;
+/// vacuous on every other class. A refusal names the post's vin
+/// ([`Locus::Input`]). The slot H21 pairs with the vin is read by
+/// position; a transaction whose `pqc_auths` is shorter is H21's and is not
+/// judged here.
+///
+/// # Errors
+///
+/// The view's fault, from the record read on a Release.
+pub(crate) fn judge_bond_post_key<'id, V: ChainView<'id>>(
+    cx: &TxContext<'_>,
+    view: &V,
+    coverage: &mut RuleCoverage,
+) -> Result<Verdict<()>, V::Fault> {
+    if matches!(cx.class, TxClass::BondPost { .. }) {
+        let pqc_auths: &[PqcAuth] = match &cx.tx.ct {
+            Ct::Fcmp { pqc_auths, .. } => pqc_auths,
+            _ => &[],
+        };
+        for (input, item) in cx.tx.prefix.inputs.iter().enumerate() {
+            let Input::BondPost(post) = item else {
+                continue;
+            };
+            let Some(auth) = pqc_auths.get(input) else {
+                continue;
+            };
+            let locus = Locus::Input {
+                slot: cx.slot,
+                input,
+            };
+            let selected_key_signs = match post.kind {
+                BondPostKind::JoinMarket { .. } => auth.hybrid_public_key == post.hybrid_public_key,
+                BondPostKind::Other(kind) if kind == REINSTATE_KIND => {
+                    auth.hybrid_public_key == post.hybrid_public_key
+                }
+                BondPostKind::Other(kind) if kind == RELEASE_KIND => {
+                    match view.bond_record(&post.p_canonical_id)? {
+                        // No record: the fold's `RECORD_MISSING` arm (L7).
+                        None => true,
+                        Some(record) => cold_authority_pin(
+                            RetentionKind::Release,
+                            post.bond_debit,
+                            &record.bond_spend_pk,
+                            &auth.hybrid_public_key,
+                        )
+                        .is_ok(),
+                    }
+                }
+                // No arm names the kind; L7 refuses it at the fold.
+                BondPostKind::Other(_) => true,
+            };
+            if !selected_key_signs {
+                return Ok(Err(InvalidBlock::new(J13::ROW, locus)));
+            }
+        }
+    }
+    coverage.insert(J13::ROW);
+    Ok(Ok(()))
+}
+
+/// The retention crate's tags for the two `Other` kinds J13 has arms for,
+/// as the wire carries them.
+const RELEASE_KIND: u8 = RetentionKind::Release as u8;
+const REINSTATE_KIND: u8 = RetentionKind::Reinstate as u8;
 
 #[cfg(test)]
 #[path = "tx_bond_tests.rs"]

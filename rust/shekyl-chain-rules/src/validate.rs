@@ -61,9 +61,9 @@ use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
 use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
-use crate::rules::tx_bond::judge_serve_credit_bond;
+use crate::rules::tx_bond::{judge_bond_post_key, judge_serve_credit_bond};
 use crate::rules::tx_extra::{I19, I20};
-use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9, J2};
+use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9, J11, J12, J2};
 use crate::rules::{self, BlockContext, FormContext};
 use crate::substrate::Substrate;
 use crate::trust::Trust;
@@ -581,15 +581,18 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //    `check_tx_inputs`). Pulling I1 or I4 ahead of H21 would hide the
     //    class failure. H19's verification half is the later `validate`
     //    fold (slice 6 commit 8), so this call stays unrecorded.
-    // 3. The stateless input-path rows, and J2 (the serve credit's pass
-    //    records against its vins, after H20 has required the region). The
-    //    cap does not have to precede the shape rules to bound proof work:
-    //    I15 and the H19 batch verify run after `tx_form` returns, so I4 has
-    //    already refused.
+    // 3. The stateless input-path rows, and 4.J's stateless rows: J2 (the
+    //    serve credit's pass records against its vins, after H20 has
+    //    required the region), J11 and J12 (the bond post's key, hint and
+    //    JoinMarket coupling, after H21 has required the shape — the first
+    //    two arms of the C++ `check_archival_bond_post_input`). The cap does
+    //    not have to precede the shape rules to bound proof work: I15 and
+    //    the H19 batch verify run after `tx_form` returns, so I4 has already
+    //    refused.
     judge_tx!(cx, coverage; H1, H3, H4, H7, I19, I20, H9, H10, H11, H14, H15, H16, H17, H18);
     judge_tx!(cx, coverage; H20, H21, H22);
     rules::run_tx_unrecorded::<H19>(&cx)?;
-    judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16, J2);
+    judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16, J2, J11, J12);
     Ok(coverage)
 }
 
@@ -651,6 +654,16 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     // one (J5), `good_through` (J6) — one read per vin, in that order. J7's
     // window joins the sequence in `judge_serve_credit_bond` (Slice C).
     match judge_serve_credit_bond(&cx, view, &mut coverage).map_err(ViewRead::View)? {
+        Ok(()) => {}
+        Err(refused) => return Ok(Err(refused)),
+    }
+    // The bond-post arm of `check_tx_inputs`, its key-selection rule (J13):
+    // a Release's slot against the record's committed `bond_spend_pk`
+    // (`cold_authority_pin`, one record read), a credit's against the
+    // post's identity key. Before the signatures, as the C++ pins the key
+    // before `verify_transaction_pqc_auth` verifies it — I18 asks whether
+    // the slot's key signed; J13 asks whether it is the right key.
+    match judge_bond_post_key(&cx, view, &mut coverage).map_err(ViewRead::View)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }

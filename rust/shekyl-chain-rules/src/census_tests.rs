@@ -193,6 +193,11 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::J4,
             CenRow::J5,
             CenRow::J6,
+            // Slice 8 row 4: the bond post's key and hint, its JoinMarket
+            // coupling, and the key its kind selects.
+            CenRow::J11,
+            CenRow::J12,
+            CenRow::J13,
             CenRow::L1,
             // DRS-E4 commit 4: the archival transition on the verdict
             // (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 4); L8 and L9 below.

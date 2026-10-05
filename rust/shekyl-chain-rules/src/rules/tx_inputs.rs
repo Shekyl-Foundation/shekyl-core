@@ -4,8 +4,9 @@
 // BSD-3-Clause
 
 //! Census 4.I, the stateless rows — input-path predicates decidable from
-//! the bytes alone (`CHAIN_RULES_SLICE_6.md` commit 2) — and the one
-//! stateless row of the serve-credit family in 4.J, CEN-J2.
+//! the bytes alone (`CHAIN_RULES_SLICE_6.md` commit 2) — and the stateless
+//! rows of 4.J: CEN-J2 on the serve credit, CEN-J11 and CEN-J12 on the
+//! bond post (`CHAIN_RULES_SLICE_8.md` §5 row 4).
 //!
 //! These run in `tx_form` **after** the 4.H line, the archival shape arms
 //! (H20–H22) and H19's layout check. A transaction that fails its shape and
@@ -22,6 +23,7 @@ use crate::census::CenRow;
 use crate::rules::tx::TxClass;
 use crate::rules::{Rule, TxContext, TxRule, TxScope};
 use crate::verdict::{InvalidBlock, Verdict};
+use shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey;
 use shekyl_crypto_pq::multisig::HYBRID_SCHEME_ID_MULTISIG;
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
 use shekyl_wire::transaction::{
@@ -360,6 +362,89 @@ impl TxRule for J2 {
                 .any(|r| r.is_empty() || r.len() > ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES)
         {
             return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        }
+        Ok(())
+    }
+}
+
+// ---- census 4.J, the stateless bond-post rows (slice 8 row 4) -----------
+//
+// The first two arms of the C++ `check_archival_bond_post_input`
+// (`blockchain.cpp`, the `reject_drop(…ATTRIBUTABLE_FORM)` arms before the
+// Release branch reads the DB): the post's key and its hint, then the
+// JoinMarket coupling. Both decidable from the bytes, so both `tx_form`'s,
+// after H21 has required the class's shape — a post with no auth slot is
+// H21's, never these rows'. The key-selection rule the same C++ function
+// states afterwards reads the bond record and the slot's key, and is
+// CEN-J13's in `tx_bond` (`tx_against`).
+
+/// The one bond post of a [`TxClass::BondPost`] transaction. H5/H6 have
+/// classified it, so a class of `BondPost` holds exactly one.
+fn the_bond_post<'tx>(cx: &TxContext<'tx>) -> Option<&'tx shekyl_wire::BondPost> {
+    if !matches!(cx.class, TxClass::BondPost { .. }) {
+        return None;
+    }
+    cx.tx.prefix.inputs.iter().find_map(|item| match item {
+        Input::BondPost(post) => Some(post.as_ref()),
+        _ => None,
+    })
+}
+
+/// CEN-J11: the post's `hybrid_public_key` is canonical-length
+/// ([`PQC_HYBRID_SINGLE_KEY_LEN`]) and its `p_canonical_id` **is the
+/// recompute over it** ([`p_canonical_id_from_hybrid_pubkey`], the function
+/// the C++ calls through `shekyl_archival_p_canonical_id_from_pubkey`).
+/// The hint is what every later read keys on — the fold's record write,
+/// J13's record read, G10's block uniqueness — so a post whose hint names
+/// another persona would insert the poster's key under the other's id;
+/// until this row the Rust validator connected one (slice 8 row 2's pin,
+/// `archival_admission_tests.rs`, the hint chain).
+pub(crate) struct J11;
+
+impl Rule for J11 {
+    const ROW: CenRow = CenRow::J11;
+}
+
+impl TxRule for J11 {
+    const SCOPE: TxScope = TxScope::NonCoinbase;
+
+    fn check(cx: &TxContext<'_>) -> Verdict<()> {
+        let Some(post) = the_bond_post(cx) else {
+            return Ok(());
+        };
+        if post.hybrid_public_key.len() != PQC_HYBRID_SINGLE_KEY_LEN
+            || p_canonical_id_from_hybrid_pubkey(&post.hybrid_public_key) != post.p_canonical_id
+        {
+            return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        }
+        Ok(())
+    }
+}
+
+/// CEN-J12: a JoinMarket commits a canonical-length `bond_spend_pk`
+/// (GF-1's debit authorizer, gate-4 §9.11); every other kind carries none.
+/// The second half is the wire type's — [`shekyl_wire::BondPostKind::Other`]
+/// has no key and no endpoint to carry, which is the C++'s
+/// `join_market_coupled_fields_absent` made unrepresentable — so this rule
+/// judges the length the type cannot, as the retention crate's own writer
+/// does (`BondPostVin::check_couplings`).
+pub(crate) struct J12;
+
+impl Rule for J12 {
+    const ROW: CenRow = CenRow::J12;
+}
+
+impl TxRule for J12 {
+    const SCOPE: TxScope = TxScope::NonCoinbase;
+
+    fn check(cx: &TxContext<'_>) -> Verdict<()> {
+        let Some(post) = the_bond_post(cx) else {
+            return Ok(());
+        };
+        if let shekyl_wire::BondPostKind::JoinMarket { bond_spend_pk, .. } = &post.kind {
+            if bond_spend_pk.len() != PQC_HYBRID_SINGLE_KEY_LEN {
+                return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+            }
         }
         Ok(())
     }

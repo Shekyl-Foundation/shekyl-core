@@ -73,7 +73,6 @@ use shekyl_chain_rules::{
 };
 use shekyl_types::archival::{BadInterval, Holdings};
 use shekyl_types::{BlockCount, PCanonicalId, SettlementEpoch, ShardId};
-use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{BondPostKind, Holdings as WireHoldings};
 use shekyl_wire::Input;
 
@@ -675,23 +674,27 @@ async fn a_slashed_persona_reinstates_and_the_fold_agrees_with_the_wallet_side_v
 /// Three personas on a genesis-schedule chain: `bonded` joins; `stranger`
 /// and `signer` never do. Then:
 ///
-/// - **J11, pinned:** `signer`'s JoinMarket with its `p_canonical_id`
-///   overwritten to `stranger`'s connects today and inserts a record
-///   **under `stranger`'s id carrying `signer`'s key** — `signer` has no
-///   record, `stranger` has one it never posted. Flips at §5 row 4.
-/// - **J13, pinned (the money form of J11's finding):** `signer` posts a
-///   Release whose fields are `bonded`'s — key and id consistent, so a J11
-///   recompute would pass — with the slot signed by `signer`'s identity
-///   key. It connects today: `bonded`'s record empties, and CEN-H21 has
-///   balanced `bonded`'s collateral onto `signer`'s outputs. I18 checks the
-///   slot's signature against the key the slot carries; **which** key a
-///   debit arm must carry is J13. Flips at §5 row 4.
+/// - **J11:** `signer`'s JoinMarket with its `p_canonical_id` overwritten
+///   to `stranger`'s is refused on CEN-J11 at the transaction — the hint
+///   is the recompute over the key, not a field the poster addresses the
+///   store with. Neither `signer` nor `stranger` gains a record.
+/// - **J13 (the money form of J11's finding):** `signer` posts a Release
+///   whose fields are `bonded`'s — key and id consistent, so J11 passes —
+///   with the slot signed by `signer`'s identity key. I18 would accept
+///   it: the slot's signature verifies against the key the slot carries.
+///   **Which** key a Release's slot must carry is CEN-J13 — the record's
+///   `bond_spend_pk` — and the Release is refused at the post's vin before
+///   the fold writes and before CEN-H21 would balance `bonded`'s
+///   collateral onto `signer`'s outputs. `bonded`'s record is untouched.
 ///
-/// This is the row the slice's §2 finding predicted and the reason PR-b
-/// leads with the hint rows: today the store's record is addressed by a
-/// field the poster writes, and the money follows the address.
+/// Records-was (pinned until §5 row 4, 2026-10-04): both connected. The
+/// join inserted a record under `stranger`'s id carrying `signer`'s key;
+/// the Release emptied `bonded`'s record and the debit followed. That is
+/// the finding the slice's §2 predicted and the reason PR-b leads with
+/// the hint rows: the store's record was addressed by a field the poster
+/// wrote, and the money followed the address.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_post_is_keyed_by_the_hint_it_carries_and_the_debit_follows_the_hint() {
+async fn a_post_is_keyed_by_the_recompute_and_a_release_by_the_record_key() {
     let mut scenario = Scenario::open("slice-8-hint");
     let mut chain: Vec<Mined> = scenario.mine(first_spending_height()).await;
     let next = |chain: &Vec<Mined>| chain.len() as u64;
@@ -737,34 +740,23 @@ async fn a_post_is_keyed_by_the_hint_it_carries_and_the_debit_follows_the_hint()
             FEE,
             Some(&signer.post_by_hand(post)),
         );
-        let block = scenario.mine_listing(vec![riding]).await.expect(
-            "PIN (J11, flips at §5 row 4): a join whose hint names a stranger connects today",
+        refused_at(
+            scenario.mine_listing(vec![riding]).await,
+            CenRow::J11,
+            Locus::Tx {
+                slot: TxSlot::Listed(0),
+            },
         );
-        let write = &block.archival.records()[0];
-        assert_eq!(write.kind(), RecordWriteKind::Insert);
-        assert_eq!(write.persona(), &stranger.id(), "keyed by the hint");
-        assert_eq!(
-            write.record().hybrid_pubkey,
-            signer.identity(),
-            "carrying the signer's key"
-        );
-        chain.push(block);
-        assert!(
-            scenario
-                .bond_record(signer.id())
-                .await
-                .expect("answers")
-                .is_none(),
-            "the signer has no record"
-        );
-        assert!(
-            scenario
-                .bond_record(stranger.id())
-                .await
-                .expect("answers")
-                .is_some(),
-            "the stranger has one"
-        );
+        for (who, name) in [(&signer, "the signer"), (&stranger, "the stranger")] {
+            assert!(
+                scenario
+                    .bond_record(who.id())
+                    .await
+                    .expect("answers")
+                    .is_none(),
+                "{name} has no record"
+            );
+        }
     }
 
     // J13: signer releases bonded's bond.
@@ -782,22 +774,19 @@ async fn a_post_is_keyed_by_the_hint_it_carries_and_the_debit_follows_the_hint()
             FEE,
             Some(&signer.post_by_hand(post)),
         );
-        let block = scenario.mine_listing(vec![riding]).await.expect(
-            "PIN (J13, flips at §5 row 4): another persona's Release of this record, \
-             signed by its own key, connects today and the debit follows",
+        refused_at(
+            scenario.mine_listing(vec![riding]).await,
+            CenRow::J13,
+            at_post(0),
         );
-        let write = &block.archival.records()[0];
-        assert_eq!(write.kind(), RecordWriteKind::Update);
-        assert_eq!(write.persona(), &bonded.id());
-        assert_eq!(write.record().bonded_total, AtomicUnits::ZERO, "emptied");
-        chain.push(block);
     }
     let after = record_of(&scenario, &bonded).await;
-    assert_eq!(after.bonded_total, AtomicUnits::ZERO);
     assert_eq!(
-        after.holdings,
-        Holdings::shard_set(Vec::new()).expect("empty")
+        after.bonded_total.to_raw(),
+        total,
+        "the debit did not follow"
     );
+    assert_eq!(after.holdings, before.holdings);
 
     scenario.close().await;
 }
