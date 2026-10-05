@@ -81,8 +81,8 @@ pub enum CommandSource {
     Stdin,
     /// `--script`. The file has already been read.
     File(Vec<String>),
-    /// One-shot argv, already joined into one prompt line.
-    One(String),
+    /// One-shot argv. The shell already split the words.
+    One(Vec<String>),
 }
 
 /// Run the command source against one wallet session.
@@ -119,7 +119,7 @@ pub fn run(
         }
         CommandSource::Stdin => LineReader::Stdin(std::io::stdin().lines()),
         CommandSource::File(lines) => LineReader::Lines(lines.into_iter()),
-        CommandSource::One(line) => LineReader::One(Some(line)),
+        CommandSource::One(words) => LineReader::One(Some(words)),
     };
 
     if matches!(reader, LineReader::Terminal { .. }) && presentation.human() {
@@ -128,8 +128,24 @@ pub fn run(
 
     loop {
         let prompt = crate::session::prompt(network, rpc.open_wallet_name().as_deref());
-        let raw = match next_line(&mut reader, &presentation, &rpc, &prompt) {
-            Line::Command(line) => line,
+        let resolved = match next_line(&mut reader, &presentation, &rpc, &prompt) {
+            Line::Prompt(raw) => {
+                let line = raw.trim();
+                // A script file and a pipe use `#` as a comment. The terminal
+                // does not: a person who types `#` gets the unknown-command
+                // refusal. A one-shot has no line to comment.
+                if line.is_empty() || (!presentation.interactive() && line.starts_with('#')) {
+                    continue;
+                }
+                if let LineReader::Terminal { editor, hist } = &mut reader {
+                    if !crate::catalog::omit_from_history(line) {
+                        drop(editor.add_history_entry(line));
+                        drop(editor.save_history(hist));
+                    }
+                }
+                parse(line)
+            }
+            Line::Argv(words) => crate::grammar::parse_argv(&words),
             Line::Skip => continue,
             Line::Done => break,
             Line::Broken(error) => {
@@ -137,20 +153,8 @@ pub fn run(
                 return Err(error);
             }
         };
-        let line = raw.trim();
-        // A script file and a pipe use `#` as a comment. The terminal does
-        // not: a person who types `#` gets the unknown-command refusal.
-        if line.is_empty() || (!presentation.interactive() && line.starts_with('#')) {
-            continue;
-        }
-        if let LineReader::Terminal { editor, hist } = &mut reader {
-            if !crate::catalog::omit_from_history(line) {
-                drop(editor.add_history_entry(line));
-                drop(editor.save_history(hist));
-            }
-        }
 
-        let ok = match parse(line) {
+        let ok = match resolved {
             ResolvedCommand::Help => {
                 let text = crate::catalog::help_listing();
                 present(
@@ -193,7 +197,7 @@ pub fn run(
             ResolvedCommand::Open { filename } => present(
                 &presentation,
                 "wallet open",
-                lifecycle::cmd_open(&rpc, &filename),
+                lifecycle::cmd_open(&rpc, &presentation, &filename),
                 lifecycle::show_opened,
             ),
             ResolvedCommand::Close => present(
@@ -226,7 +230,7 @@ pub fn run(
             ResolvedCommand::Password => present(
                 &presentation,
                 "wallet password",
-                lifecycle::cmd_password(&rpc),
+                lifecycle::cmd_password(&rpc, &presentation),
                 lifecycle::show_password,
             ),
             ResolvedCommand::Rescan { hard } => present(
@@ -558,7 +562,10 @@ fn sync_view(rpc: &RpcSession) -> crate::status::SyncView {
 }
 
 enum Line {
-    Command(String),
+    /// A prompt, script, or pipe line. Parsed by [`crate::grammar::parse`].
+    Prompt(String),
+    /// One-shot argv. Parsed by [`crate::grammar::parse_argv`].
+    Argv(Vec<String>),
     /// Empty read that is not the end of the source. The prompt continues.
     Skip,
     Done,
@@ -572,7 +579,7 @@ enum LineReader {
     },
     Stdin(std::io::Lines<std::io::StdinLock<'static>>),
     Lines(std::vec::IntoIter<String>),
-    One(Option<String>),
+    One(Option<Vec<String>>),
 }
 
 fn next_line(
@@ -582,16 +589,16 @@ fn next_line(
     prompt: &str,
 ) -> Line {
     match reader {
-        LineReader::One(line) => match line.take() {
-            Some(line) => Line::Command(line),
+        LineReader::One(words) => match words.take() {
+            Some(words) => Line::Argv(words),
             None => Line::Done,
         },
         LineReader::Lines(lines) => match lines.next() {
-            Some(line) => Line::Command(line),
+            Some(line) => Line::Prompt(line),
             None => Line::Done,
         },
         LineReader::Stdin(lines) => match lines.next() {
-            Some(Ok(line)) => Line::Command(line),
+            Some(Ok(line)) => Line::Prompt(line),
             Some(Err(error)) => Line::Broken(error.into()),
             None => Line::Done,
         },
@@ -605,7 +612,7 @@ fn next_line(
                 ));
             }
             match editor.readline(prompt) {
-                Ok(line) => Line::Command(line),
+                Ok(line) => Line::Prompt(line),
                 Err(ReadlineError::Interrupted) => Line::Skip,
                 Err(ReadlineError::Eof) => Line::Done,
                 Err(error) => {

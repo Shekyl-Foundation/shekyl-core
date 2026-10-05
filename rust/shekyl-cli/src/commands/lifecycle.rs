@@ -86,7 +86,14 @@ pub fn open_with_password(rpc: &RpcSession, filename: &str, password: &str) -> C
     }
 }
 
-pub fn cmd_open(rpc: &RpcSession, filename: &str) -> CommandResult {
+pub fn cmd_open(rpc: &RpcSession, presentation: &Presentation, filename: &str) -> CommandResult {
+    require_closed(rpc)?;
+    if !presentation.interactive() {
+        return failed(
+            "A script cannot prompt for a wallet password. \
+             Start with --wallet <name> --password-file <path>.",
+        );
+    }
     let password = read_password("Wallet password: ")?;
     open_with_password(rpc, filename, &password)
 }
@@ -315,8 +322,13 @@ pub(crate) fn show_status(val: &Value) {
     }
 }
 
-pub fn cmd_password(rpc: &RpcSession) -> CommandResult {
+pub fn cmd_password(rpc: &RpcSession, presentation: &Presentation) -> CommandResult {
     require_open(rpc)?;
+    if !presentation.interactive() {
+        return failed(
+            "Changing the password asks three questions. Run \"wallet password\" at the terminal.",
+        );
+    }
     let old_password = read_password("Current password: ")?;
     let new_password = read_password("New password: ")?;
     let confirm = read_password("Confirm new password: ")?;

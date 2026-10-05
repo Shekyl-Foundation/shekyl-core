@@ -18,7 +18,12 @@ use shekyl_rpc_transport::network_posture::{self, ProxyResolution};
 use shekyl_wallet_rpc::Network;
 
 #[derive(Parser)]
-#[command(name = "shekyl-cli", about = "Shekyl interactive CLI wallet", version)]
+#[command(
+    name = "shekyl-cli",
+    about = "Shekyl interactive CLI wallet",
+    version,
+    disable_help_subcommand = true
+)]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -308,6 +313,13 @@ fn main() {
     // Create, restore, a one-shot, and a script file are not a conversation.
     // Only a terminal with no command and no script file is.
     let scripted = presentation_for(false, json, debug);
+    if cli.repl.script.is_some() && cli.command.is_some() {
+        stop(
+            &scripted,
+            "session",
+            refusal("Pass either --script or a subcommand, not both."),
+        );
+    }
     let (presentation, outcome) = match &cli.command {
         Some(Commands::DerivationFreezeSelfCheck) => {
             run_derivation_freeze_self_check();
@@ -325,23 +337,14 @@ fn main() {
                 commands::scripted::present_restore(&scripted, rpc, args)
             }),
         ),
-        Some(Commands::Words(words)) => {
-            if cli.repl.script.is_some() {
-                stop(
-                    &scripted,
-                    "session",
-                    refusal("Pass either --script or one command, not both."),
-                );
-            }
-            (
-                scripted,
-                run_repl_command(
-                    &scripted,
-                    &cli.repl,
-                    commands::CommandSource::One(words.join(" ")),
-                ),
-            )
-        }
+        Some(Commands::Words(words)) => (
+            scripted,
+            run_repl_command(
+                &scripted,
+                &cli.repl,
+                commands::CommandSource::One(words.clone()),
+            ),
+        ),
         None => {
             let source = match &cli.repl.script {
                 Some(path) => match std::fs::read_to_string(path) {

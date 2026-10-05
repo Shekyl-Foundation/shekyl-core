@@ -115,10 +115,16 @@ impl Presentation {
         self.interactive() && self.human()
     }
 
-    /// Progress and explanation. Omitted when stdout is a JSON transcript.
+    /// Progress and explanation.
+    ///
+    /// Human mode prints it on stdout. Interactive JSON prints it on stderr:
+    /// a person still sees the summary before confirming, and the JSON
+    /// transcript stays one object per line. A script prints nothing.
     pub fn say(&self, line: impl std::fmt::Display) {
         if self.human() {
             println!("{line}");
+        } else if self.interactive() {
+            eprintln!("{line}");
         }
     }
 

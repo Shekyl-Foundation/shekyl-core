@@ -269,12 +269,22 @@ reason. `status` and `balance` remain the checks that stop a script.
 
 `--script FILE` runs the file as one wallet session. A one-shot is the
 same words as the prompt, after the global flags: `shekyl-cli --json
-balance`. Both are non-interactive: `--yes` is honored, and a money
-move without it fails without reading the next line. The refusal says
-that nothing was sent. An interactive terminal still ignores `--yes`
-and prompts. Prompt `wallet create` / `wallet restore` refuse under
+balance`. The shell's quoting is the token boundary, so
+`address --out "/tmp/my address.txt"` keeps the space. A prompt line
+still splits on whitespace. `--script` does not combine with a
+subcommand. `help` is the prompt command; `--help` is the invocation
+summary.
+
+Both are non-interactive: `--yes` is honored, and a money move without
+it fails without reading the next line. The refusal says that nothing
+was sent. An interactive terminal still ignores `--yes` and prompts.
+Narration (the summary before that prompt, the release warning) is on
+stdout for a person and on stderr when that person asked for JSON. A
+script omits it. Prompt `wallet create` / `wallet restore` refuse under
 `--json`, because the one-time seed is shown on stdout and stdout is
-the JSON transcript.
+the JSON transcript. `wallet open` and `wallet password` refuse in a
+script: the password prompt would read the script. Open with
+`--wallet` and `--password-file` instead.
 
 `--complete-tree-foundation` prints its terms on stderr when stdout is
 JSON, and its result is an envelope named `complete-tree-foundation`.

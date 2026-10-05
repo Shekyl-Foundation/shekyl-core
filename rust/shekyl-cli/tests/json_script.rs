@@ -143,6 +143,53 @@ fn a_failed_create_names_create() {
     assert!(!rows[0]["error"]["message"].as_str().unwrap().is_empty());
 }
 
+/// `--script` and a subcommand are two invocations. Neither runs.
+#[test]
+fn script_and_a_subcommand_are_refused_before_either_runs() {
+    let (code, stdout, stderr) = run(&[
+        "--json",
+        "--script",
+        "/no/such/script",
+        "--network",
+        "stagenet",
+        "create",
+        "ignored",
+        "--seed-out",
+        "/tmp/shekyl-should-not-create",
+    ]);
+    assert_eq!(code, 1, "stderr:\n{stderr}\nstdout:\n{stdout}");
+    let rows = lines(&stdout);
+    assert_eq!(rows.len(), 1, "{stdout}");
+    assert_eq!(rows[0]["command"], "session");
+    assert_eq!(rows[0]["ok"], false);
+    assert!(rows[0]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("--script"));
+}
+
+/// `help` is the prompt command. Clap's help subcommand must not take it.
+#[test]
+fn one_shot_help_is_the_prompt_command() {
+    let (code, stdout, stderr) = run(&[
+        "--json",
+        "--network",
+        "stagenet",
+        "--daemon-address",
+        "127.0.0.1:1",
+        "help",
+    ]);
+    assert_eq!(code, 0, "stderr:\n{stderr}\nstdout:\n{stdout}");
+    let rows = lines(&stdout);
+    assert_eq!(rows.len(), 1, "{stdout}");
+    assert_eq!(rows[0]["command"], "help");
+    assert_eq!(rows[0]["ok"], true);
+    assert!(rows[0]["result"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("stake"));
+}
+
 /// The same words, one command, then exit.
 #[test]
 fn a_one_shot_uses_the_prompt_grammar_and_exits() {
