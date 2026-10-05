@@ -498,7 +498,9 @@ census_rows! {
         J14 pending,
         J15 pending,
         J16 pending,
-        J17 pending,
+        // J17 is bucket 3 (REJECTED, immutable-bond 2026-09-20; slice 8 Q1
+        // (a) 2026-10-04). The census keeps the id marked REJECTED; this
+        // registry does not. CEN-F12 is the precedent.
         J18 pending,
         J19 pending,
         J20 pending,

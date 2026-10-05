@@ -430,7 +430,9 @@ pub trait ChainView<'id> {
     /// its latest epoch; empty for a persona that never served. The
     /// last-served marshal in its complete-tree form (such a record stores
     /// no shard list, so the served set is the only list there is) —
-    /// CEN-J16's cooldown over every shard, CEN-J17's drop-arm grace tail.
+    /// CEN-J16's cooldown over every shard. The HoldingsUpdate drop arm
+    /// that also read this list is REJECTED (2026-09-20); CEN-J17 left the
+    /// registry for bucket 3.
     fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, Self::Fault>;
 
     /// **A5.** Pass bits recorded for `(persona, shard, epoch)`;

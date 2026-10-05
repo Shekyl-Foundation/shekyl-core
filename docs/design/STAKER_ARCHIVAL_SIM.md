@@ -3648,7 +3648,8 @@ but four things bound the result; the first two change the meaning, not just the
 - **The 600 is *per seam*; the symmetric ±600 envelope is the entry seam only.** The entry standoff
   (announce↔bond) is order-symmetric and inversion-eligible: ±600 around the bond-post, 1200-block
   adversary search width, 600-block max entry latency (caveat geometry above). The **exit seam**
-  (terminal drain, and now the *recurring* partial-release `HoldingsUpdate`) is a **separate standoff
+  (terminal drain — and, as written, "the *recurring* partial-release `HoldingsUpdate`", a kind
+  REJECTED 2026-09-20; the exit seam is now whole-bond `Release` only) is a **separate standoff
   with its own envelope and its own latency budget** — and it differs structurally on two axes:
   (i) it is **one-sided** (no inversion: collateral is not spendable before the **20_000-block
   release cooldown**, so the drain cannot precede the release), so a 600-block exit window buys a
@@ -3670,7 +3671,25 @@ but four things bound the result; the first two change the meaning, not just the
   and (b) **leaning on the inversion** (the proven thin-regime lever, finding 3). Neither widens the
   window; both stay off the economic axis.
 
-## L18 — `HoldingsUpdate` release-cooldown freeze (R-3 reconciliation, 2026-06-16)
+## L18 — `HoldingsUpdate` release-cooldown freeze (R-3 reconciliation, 2026-06-16) — SUBJECT REJECTED 2026-09-20; records-was
+
+*(UPDATE 2026-10-04 — this layer's subject no longer exists. `HoldingsUpdate` was
+REJECTED 2026-09-20 under the immutable-bond ruling
+([`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3; `from_u8(3)`
+is `InvalidPostKind`, PR #808): a bond's holdings are fixed at post and change
+only by persona rotation — whole-bond `Release` plus a new `JoinMarket`. The
+friction this layer modelled — freed collateral frozen for `RELEASE_COOLDOWN` —
+survives in a stronger form (a rotation freezes the **whole** bond's collateral,
+and a pure shrink pays the full cooldown, §5.3.3 of the lifecycle doc), so the
+layer's conclusion that `r_target_deep` need not rise is a lower bound on the
+friction now in force rather than a measurement of it. Its mechanism — in-place
+per-shard add/drop with per-shard escrow (`sim/model.rs:356-372`,
+`sim/agent.rs:131-151`, the `holdingsupdate_cooldown` axis) — is the
+`ECONOMICS_SIM_PRODUCTION_REBASE.md` D2 divergence; the sim has not been
+re-based on rotation. The economics question the ruling leaves open is a
+different one and is carried in `FOLLOWUPS.md`: the pull latency for a freshly
+frozen shard when no operator can add it incrementally. Everything below is
+kept as the record of what was measured and why, under its own date.)*
 
 **Why.** `HoldingsUpdate` (voluntary partial-release / reinstate) is promoted to genesis
 (V3.0). The prior layers modeled mobility as *frictionless* re-allocation: an actor

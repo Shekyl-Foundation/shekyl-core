@@ -1,7 +1,7 @@
 # Benchmark alignment — inventory, gaps, proposed tracked set, rulings needed
 
 **Status: OPEN — round 0, assessment (2026-10-05).** Ruled so far: BA-Q1,
-BA-Q8, BA-Q21 and BA-Q23 (§6). Everything else is unruled: every other
+BA-Q8, BA-Q21 and BA-Q23; BA-Q2 is done (§6). Everything else is unruled: every other
 disposition in §2 and row of §5 is a *proposal*. No benchmark, workflow,
 baseline or threshold changes with this document.
 
@@ -235,6 +235,10 @@ No script, workflow or schedule re-runs any measurement in this table. Where
 a "reopen if p99 exceeds X" rule exists it is prose; nothing evaluates it.
 Devices are as each file, or the document that summarises it, records them.
 
+Landed after the pin and so not rows here: the 2026-10-05 serve-cost record
+and its two observation files (BA-G1). They are the first evidence for
+BA-T5.
+
 | Id | File | Measures (n) | Device | Consumer | Proposed |
 | --- | --- | --- | --- | --- | --- |
 | **BA-I69** | `drs_bench_ibd_lmdb_h2000_x86_64_20260913T192136Z.json` | IBD to height 2 001, LMDB, coinbase-only, one peer: 226.8 s wall | x86 dev, NVMe | The first LMDB baseline for the IBD floor ([`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.4) | **Keep, tracked** |
@@ -288,9 +292,9 @@ capture counts as a gap until a tracked T3 run reproduces it.
 
 | Id | What is not measured | The decision it feeds | Code path | State of the evidence |
 | --- | --- | --- | --- | --- |
-| **BA-G1** | Serve cost per response on the v3 path: CPU and wall-clock, by shard size and by responses in flight | Serve-side `MAX_INFLIGHT` (`rust/shekyl-p-serve/src/serve.rs:122`); the read capacity one device sustains per epoch (`docs/FOLLOWUPS.md:109`); the inputs to `W` and `L` | `digest_body`, `resolve_body`, `write_response` (`rust/shekyl-p-serve/src/serve.rs:505`, `:542`, `:642`) | Two floor runs on 2026-10-05, landed by PR #968 and not on `dev` at the pin. One full segment over loopback from an on-disk store, warm cache, arms alternating: median per response 24.8 ms before #954 and 104.2 ms after, 103.1 ms after #961; CPU per response 30–36 ms against 110–113 ms; at 8 in flight, 74–84 responses per second against 37–38. The digest alone is 23.9 ms per pass and runs twice; the other 30 ms or so, the second read among it, is not separately timed. Not covered: a cold cache, Tor, a daemon alongside, other shard sizes, more than 8 in flight. No bench of the serve path exists in `rust/shekyl-p-serve`, `shekyl-p-fetch` or `shekyl-p-host`; the probe was built on the device and is recorded in that PR, not committed as a target. `ci/benchmarks` ran on #954's head and passed. At the pin every production response pays this cost and is then refused: the persona key is not yet wired (BA-Q3) |
+| **BA-G1** | Serve cost per response on the v3 path: CPU and wall-clock, by shard size and by responses in flight | Serve-side `MAX_INFLIGHT` (`rust/shekyl-p-serve/src/serve.rs:122`); the read capacity one device sustains per epoch (`docs/FOLLOWUPS.md:109`); the inputs to `W` and `L` | `digest_body`, `resolve_body`, `write_response` (`rust/shekyl-p-serve/src/serve.rs:505`, `:542`, `:642`) | Two floor runs on 2026-10-05, recorded in [`sfd8_serve_cost_floor_device_20261005.md`](../benchmarks/sfd8_serve_cost_floor_device_20261005.md) (landed after this document's pin, by PR #968). One full segment over loopback from an on-disk store, warm cache, arms alternating: median per response 24.8 ms before #954 and 104.2 ms after, 103.1 ms after #961; CPU per response 30–36 ms against 110–113 ms; at 8 in flight, 74–84 responses per second against 37–38. The digest alone is 23.9 ms per pass and runs twice; the other 30 ms or so, the second read among it, is not separately timed. Not covered: a cold cache, Tor, a daemon alongside, other shard sizes, more than 8 in flight. No bench of the serve path exists in `rust/shekyl-p-serve`, `shekyl-p-fetch` or `shekyl-p-host`; the probe was built on the device and is quoted in that record, not committed as a target. `ci/benchmarks` ran on #954's head and passed. At the pin every production response pays this cost and is then refused: the persona key is not yet wired (BA-Q3) |
 | **BA-G2** | Client verify cost per fetched shard: the delivery digest, the hybrid countersignature check, and content verification | Fetch-side `MAX_INFLIGHT = 8` (`rust/shekyl-p-fetch/src/client.rs:60`); the cost every witness pays per assigned pair | `rust/shekyl-p-fetch/src/client.rs:297`, `:298`, `:308`; the `ContentVerify` trait (`rust/shekyl-p-fetch/src/target.rs:96`) | Never measured. No production `ContentVerify` exists; the only implementation accepts everything (`rust/shekyl-sp-t3-spike/src/harness.rs:460`), so no archival latency figure includes it. The digest pass is new in #954. The cap's memory argument compares against the floor by arithmetic (`rust/shekyl-p-fetch/src/client.rs:45`), and its design has since changed to a streaming verify that is not built (`docs/design/ARCHIVAL_SHARD_FETCH.md:850`) |
-| **BA-G3** | Whole-shard fetch time and miss rate over Tor on the v3 serve path | `archival_shard_length_bytes = 3 000 000` and `archival_attestation_anchor_lag_blocks = 4` (`config/consensus_constants.json:40`, `:37`); the two-retry budget (`docs/completed/ARCHIVAL_SHARD_T_DERIVATION.md:2110`); `p_attempt = 0.30`; the 18 229-pair capacity | BA-G1's serve path and `PFetchClient::fetch` (`rust/shekyl-p-fetch/src/client.rs:225`) | BA-I91 to BA-I95, all before #954. The ladder ran on an internal node, not the floor. PR #968 sets the 78 ms that #954 added beside the same device's Tor reads of the same object (median 14.8 s): 0.5 % of a read, so the fetch-time inputs to `W` and `L` are unlikely to have moved, while serve throughput at 8 in flight halved. Neither was re-measured over Tor. A re-measurement "at the gate" is named as a reopen condition (`docs/design/CLIENT_VERSION_CONSTANTS_VALIDATION.md:947`) with no date, rig or owner |
+| **BA-G3** | Whole-shard fetch time and miss rate over Tor on the v3 serve path | `archival_shard_length_bytes = 3 000 000` and `archival_attestation_anchor_lag_blocks = 4` (`config/consensus_constants.json:40`, `:37`); the two-retry budget (`docs/completed/ARCHIVAL_SHARD_T_DERIVATION.md:2110`); `p_attempt = 0.30`; the 18 229-pair capacity | BA-G1's serve path and `PFetchClient::fetch` (`rust/shekyl-p-fetch/src/client.rs:225`) | BA-I91 to BA-I95, all before #954. The ladder ran on an internal node, not the floor. The 2026-10-05 record (BA-G1) sets the 78 ms that #954 added beside the same device's Tor reads of the same object (median 14.8 s): 0.5 % of a read, so the fetch-time inputs to `W` and `L` are unlikely to have moved, while serve throughput at 8 in flight halved. Neither was re-measured over Tor. A re-measurement "at the gate" is named as a reopen condition (`docs/design/CLIENT_VERSION_CONSTANTS_VALIDATION.md:947`) with no date, rig or owner |
 | **BA-G4** | Transaction and block verify cost on the floor after `PL-D3` | The surge factor 4 and the 300 000-byte zone (`config/consensus_constants.json:16`, `:17`); `SPEC_VERIFY_COST`, the hop and the embargo (`rust/shekyl-relay-privacy/src/verify_cost.rs:349`); the input cap (`src/cryptonote_config.h:316`) | `shekyl_fcmp_verify` (`rust/shekyl-ffi/src/legacy_fcmp.rs:390`), called at `src/cryptonote_core/blockchain.cpp:4224` | BA-I77 was captured at `8af70a60a`, 2026-09-05; `PL-D3` (`20738bf714`, 2026-09-14) is not an ancestor of it and "moved every shape" (`rust/shekyl-relay-privacy/src/verify_cost.rs:346`). The depth-24 cost `S = 4` is signed on is composed from per-layer slopes, not measured. Carriers already open: `docs/FOLLOWUPS.md:65`, `:917`, `:964` |
 | **BA-G5** | The validation path the cutover makes consensus: Rust `validate` and store `connect`, with proof verification in it | The cutover itself; its only performance acceptance is the DRS-BENCH suite ([`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §8.1, `docs/design/DAEMON_REDB_STORE.md:2079`) | `rust/shekyl-chain-rules/src/validate.rs:355`, `:558`, `:622`; `rust/shekyl-chain-store/src/store/connect.rs:170` | The FCMP++ and Bulletproofs+ rows are still pending in the Rust validator (`rust/shekyl-chain-rules/src/census.rs:445`, `:476`). The Rust batch verifier it would use has never run on the floor. BA-I27 and BA-I28 are the only timings, on a fixture with no proofs |
 | **BA-G6** | Chain store on redb: write and read per block, IBD rate | The IBD floor, redb ≤ 1.25× LMDB (`docs/design/DAEMON_REDB_STORE.md:398`) | `rust/shekyl-chain-store/src/store/connect.rs:170` | BA-I69 to BA-I71: LMDB only, x86 dev, coinbase-only. The redb arm waits on a build target (`docs/FOLLOWUPS.md:179`). The floor is specified on x86 by design (`docs/design/DAEMON_REDB_STORE.md:396`); no floor-device IBD figure exists. Reorg cost has no threshold, deliberately (`docs/design/DAEMON_REDB_STORE.md:430`) |
@@ -397,7 +401,7 @@ a live node.
 | **BA-T2** | Block-connect verify terms: admission pair, hybrid signature, Bulletproofs+, parse, at the modal and the cost-densest shape | T1, CI runner | gungraun over the pinned fixtures | new; subject of BA-I20 | chain rules |
 | **BA-T3** | Serve one response: digest pass, send pass, countersignature, at three shard sizes from an in-memory store | T1, CI runner | gungraun | new (BA-G1) | archival serve |
 | **BA-T4** | Verify one fetched shard: delivery digest, hybrid check, content verification once it exists | T1, CI runner | gungraun | new (BA-G2) | archival fetch |
-| **BA-T5** | Serve cost per response, **split by phase: read, hash, sign**; CPU and wall-clock by shard size (smallest, `W`, heaviest) and by responses in flight (1, 8, 32, 64) | T3, floor | Loopback, on-disk store, no Tor and no daemon; cold and warm; n ≥ 100 per cell. Two arms in one session, alternating: the two-pass path at `b5e7dbfed5` and option S (BA-Q3). Extends PR #968's two runs, which have no S arm, no phase split beyond the digest, one shard size and at most 8 in flight. Falsifier for S: it recovers under 24 ms of the 78 ms #954 added | new (BA-G1) | archival serve |
+| **BA-T5** | Serve cost per response, **split by phase: read, hash, sign**; CPU and wall-clock by shard size (smallest, `W`, heaviest) and by responses in flight (1, 8, 32, 64) | T3, floor | Loopback, on-disk store, no Tor and no daemon; cold and warm; n ≥ 100 per cell. Two arms in one session, alternating: the two-pass path at `b5e7dbfed5` and option S (BA-Q3). Extends the 2026-10-05 runs (BA-G1), which have no S arm, no phase split beyond the digest, one shard size and at most 8 in flight. Falsifier for S: it recovers under 24 ms of the 78 ms #954 added | new (BA-G1) | archival serve |
 | **BA-T6** | Client verify per shard, by shard size | T3, floor | n ≥ 100 per size | new (BA-G2) | archival fetch |
 | **BA-T7** | Whole-shard fetch over Tor on the production serve and fetch path: time and miss rate by object size, with and without mining | T3, floor serving and an internal node reading | The size-ladder and one-device protocols already written in [`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §10 | BA-I35, BA-I91 to BA-I95 | archival serve |
 | **BA-T8** | P2P span distributions: clearnet dial, handshake, gap on a LAN and a long path; Tor dial; Tor inbound; write-stall samples | T3, floor | n = 100 per leg; each reopen rule evaluated and its verdict recorded | BA-I80 to BA-I88 | P2P transport |
@@ -451,11 +455,11 @@ breach of a ruled constant's margin reopens that constant. Each **Rewrite**
 in §2 is carried out by the §5 row that names it. Ruled by the maintainer
 on review of PR #964.
 
-**BA-Q2 — Land the 2026-10-05 serve-cost runs as a dated capture.** PR #968
-does this: a record and two observation files under `docs/benchmarks/`, and
-it points the read-capacity row in `docs/FOLLOWUPS.md` at the result.
-Default: merge it; BA-G1 and the ledger's archival rows then cite the file
-in place of the pull request.
+**BA-Q2 — DONE 2026-10-05: the serve-cost runs are landed as a dated
+capture.** PR #968 merged a record and two observation files,
+[`sfd8_serve_cost_floor_device_20261005.md`](../benchmarks/sfd8_serve_cost_floor_device_20261005.md),
+and pointed the read-capacity row in `docs/FOLLOWUPS.md` at the result.
+Nothing is left to rule.
 
 **BA-Q3 — The order of read, digest and sign on the serve path.** As ruled
 on 2026-10-04 (`SF-D8`, `docs/design/ARCHIVAL_SHARD_FETCH.md:1292`), the
@@ -554,7 +558,7 @@ the pin:
 So the pre-flight is mandatory under S unless `SH-2` makes the serving
 task's life a subset of the key's by construction.
 
-*What S is expected to buy.* PR #968's floor runs put the cost #954 added
+*What S is expected to buy.* The floor runs (BA-G1) put the cost #954 added
 at 78 ms per response, of which the digest is 23.9 ms per pass, twice: 48
 ms, about three fifths. The other 30 ms or so was not separately timed and
 includes the second read. S drops one digest pass and the second read, so

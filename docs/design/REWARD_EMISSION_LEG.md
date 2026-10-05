@@ -674,8 +674,11 @@ create records. Precondition for any paying emission: record exists with
 **Requires** existing `ArchivalBondRecord` for `P_canonical_id`. Reject if missing
 (operator must join-Market first).
 
-1. Verify `holdings` compatible with stored record (no silent portfolio swap without
-   gate-4 `HoldingsUpdate` / re-bond flow).
+1. Verify `holdings` compatible with stored record (no silent portfolio swap —
+   *as written: "without gate-4 `HoldingsUpdate` / re-bond flow"; since
+   2026-09-20 there is no such flow at all: a bond's holdings are immutable for
+   its life and `HoldingsUpdate` is REJECTED, so the only compatible
+   `holdings` is the stored set itself*).
 2. For each claimed epoch `E`: require `E ≥ E_join + 1`; `good_through(E)`; dedup; lagged
    `Σwork(E)` read (§4.5).
 3. On first paying emission: set `first_paying_emission_height = current_height` if `None`.
